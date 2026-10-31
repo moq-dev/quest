@@ -48,6 +48,15 @@ wasting CI on bisection?"
   field beside `requeue`, `fixed`, and `handback` in `src/cli/land-fix.ts`.
 - Keep the fixer's untrusted-input rules: a PR's content cannot make the
   fixer blame another PR or skip the base check.
+- A collateral ejection never counts as the PR's one fix attempt
+  (user, 2026-10-31). Today `handbackRepeated` (`src/cli/land-fixer.ts`)
+  hands back any PR whose pick or fixer requeue is unchanged, so a PR that
+  shared two broken batches in a row was handed back unexamined:
+  [moq-dev/moq#7257](https://github.com/moq-dev/moq/pull/7257),
+  [#7306](https://github.com/moq-dev/moq/pull/7306),
+  [#7284](https://github.com/moq-dev/moq/pull/7284) and
+  [#7312](https://github.com/moq-dev/moq/pull/7312). Only the blamed PR's
+  attempt is spent.
 
 ## Related
 
