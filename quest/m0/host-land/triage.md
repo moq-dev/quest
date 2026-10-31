@@ -57,6 +57,13 @@ wasting CI on bisection?"
   [#7284](https://github.com/moq-dev/moq/pull/7284) and
   [#7312](https://github.com/moq-dev/moq/pull/7312). Only the blamed PR's
   attempt is spent.
+- Collect a finished fixer's result without waiting for the running batch
+  (user, 2026-10-31). On 2026-10-31 moq's fixer finished at 14:55, having
+  fixed [moq-dev/moq#7383](https://github.com/moq-dev/moq/pull/7383) and
+  cleared seven collateral PRs, but the daemon collects results only between
+  batches, so those PRs stayed out of the queue behind a check that started
+  at 14:54 and ran about 45 minutes. Requeued PRs then join the next batch
+  as soon as they are collected.
 
 ## Related
 
