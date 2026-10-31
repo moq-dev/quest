@@ -1861,7 +1861,7 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		writeFileSync(fixture.fifo, "continue\n");
 		await fixture.finished;
 	});
-	test("bounds a fixer's import by what it added, not the history fetched at launch", () => {
+	test("bounds a fixer's import by what it added, not the history fetched at launch or its submodules", () => {
 		const root = tempDir();
 		const commit = (cwd: string, message: string) =>
 			git(cwd, "-c", "user.name=t", "-c", "user.email=t@localhost", "commit", "-qam", message);
@@ -1888,6 +1888,11 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		truncateSync(join(checkout, ".git", "objects", "pack", `${large}.pack`), 101 * 1024 * 1024);
 		writeFileSync(join(checkout, ".git", "objects", "pack", `${large}.idx`), "");
 		expect(() => importFixer(root, tempDir(), checkout, 1, fixed, packs)).toThrow("exceeds 100 MiB");
+		// A submodule the host initialized for the dev shell keeps its own history under .git/modules.
+		const submodule = join(checkout, ".git", "modules", "moq", "objects", "pack");
+		mkdirSync(submodule, { recursive: true });
+		writeFileSync(join(submodule, `${large}.pack`), "");
+		truncateSync(join(submodule, `${large}.pack`), 101 * 1024 * 1024);
 		importFixer(root, tempDir(), checkout, 1, fixed, [...packs, `${large}.pack`]);
 		expect(git(root, "show", `${fixed}:kept.txt`)).toBe("unchanged");
 		expect(git(root, "rev-parse", `${fixed}^`)).toBe(pinned);
