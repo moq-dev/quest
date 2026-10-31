@@ -487,10 +487,19 @@ interface Chain {
 }
 
 /**
+ * How the next batch is chosen. Batches alternate between the oldest and the newest queued PR as their base, and a
+ * failed batch halves the next one's size, which each landed batch grows back toward 1 + floor(log2 n).
+ */
+export interface BatchPolicy {
+	order: "oldest" | "newest";
+	size: number;
+}
+
+/**
  * Fetch the base and every queued head, then screen each head and squash the
  * rest in turn onto the chain in a scratch worktree inside the git directory,
- * resolving quest files with `quest resolve`. Stop at the batch limit, skipping
- * conflicting additions; a conflicting base stops the batch.
+ * resolving quest files with `quest resolve`, in `policy`'s order. Stop at its batch
+ * limit, skipping conflicting additions; a conflicting base stops the batch.
  *
  * Screening squashes each head alone onto the base and rejects one that fails
  * `quest check` there with findings the base lacks. Each head `fresh` accepts is
@@ -501,6 +510,7 @@ export async function build(
 	plan: Plan,
 	read: RemoteRead = readRemote,
 	fresh: (entry: Entry) => boolean = () => false,
+	policy: BatchPolicy = { order: "oldest", size: Number.POSITIVE_INFINITY },
 ): Promise<Chain> {
 	await read(root, [
 		"fetch",
@@ -513,9 +523,11 @@ export async function build(
 	return mergeWorktree(root, plan.base.sha, (dir, driver) => {
 		const chain: Chain = { links: [], ...screen(dir, driver, plan, fresh) };
 		const queue = plan.queue.filter((entry) => !chain.rejected.some((rejection) => rejection.entry === entry));
+		const ordered = policy.order === "newest" ? [...queue].reverse() : queue;
+		const limit = Math.max(1, Math.min(policy.size, 1 + Math.floor(Math.log2(queue.length))));
 		git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
-		for (const entry of queue) {
-			if (chain.links.length >= 1 + Math.floor(Math.log2(queue.length))) break;
+		for (const entry of ordered) {
+			if (chain.links.length >= limit) break;
 			const files = squash(dir, driver, entry);
 			if (files !== null) {
 				if (chain.links.length > 0) continue;
