@@ -24,7 +24,9 @@ mechanical fix on its own branch, or hand it back with diagnosis and recommendat
 Allowed fixes: preserve both sides' intent in conflicts, format/lint, regenerate
 lockfiles/generated files, or follow a base rename. Merge base where practical.
 Never edit flake.nix, flake.lock, shell.nix, default.nix, nix/, .envrc, .github/,
-.gitmodules, or gitlinks (submodule entries) anywhere. Never push or contact
+.gitmodules, or gitlinks (submodule entries) anywhere. Merging the base may carry
+the base's own changes to those paths: that is allowed when they come out exactly as
+a plain `git merge` of the base leaves them, with no conflict there for you to edit. Never push or contact
 GitHub. Anything needing behavior changes or review must be handed back.
 
 Write `quest-land-result.json` in the repository root: a JSON array with exactly
