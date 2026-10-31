@@ -232,7 +232,7 @@ describe("GraphQL", () => {
 		expect(await github.graphql(disable, { id: "PR_1" })).toEqual({});
 		expect(calls).toHaveLength(2);
 		expect(calls[1].body?.query).toContain(
-			"node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } }",
+			"node(id: $id) { ... on PullRequest { headRefOid autoMergeRequest { enabledAt } } }",
 		);
 		expect(calls[1].body?.variables).toEqual({ id: "PR_1" });
 	});
@@ -251,13 +251,17 @@ describe("GraphQL", () => {
 		["mergePullRequest", { merged: true }],
 		["enablePullRequestAutoMerge", { merged: false, autoMergeRequest: null, mergeQueueEntry: { state: "QUEUED" } }],
 		["markPullRequestReadyForReview", { isDraft: false }],
-	])("%s is confirmed from the pull request", async (mutation, node) => {
-		const { github, calls } = fixture([bad(502), json({ data: { node } })]);
-		await github.graphql(
-			`mutation($id: ID!, $sha: GitObjectID!) { ${mutation}(input: { pullRequestId: $id, expectedHeadOid: $sha }) { clientMutationId } }`,
-			{ id: "PR_1", sha: HEAD },
-		);
-		expect(calls).toHaveLength(2);
+	])("%s is confirmed from the pull request at its pinned head", async (mutation, node) => {
+		const query = `mutation($id: ID!, $sha: GitObjectID!) { ${mutation}(input: { pullRequestId: $id, expectedHeadOid: $sha }) { clientMutationId } }`;
+		const confirmed = fixture([bad(502), json({ data: { node: { ...node, headRefOid: HEAD } } })]);
+		await confirmed.github.graphql(query, { id: "PR_1", sha: HEAD });
+		expect(confirmed.calls).toHaveLength(2);
+
+		// Another head took effect, not this mutation: the repeat gets GitHub's refusal.
+		const refusal = json({ errors: [{ message: "Head sha didn't match expected head" }] });
+		const moved = fixture([bad(502), json({ data: { node: { ...node, headRefOid: SQUASH } } }), refusal]);
+		await expect(moved.github.graphql(query, { id: "PR_1", sha: HEAD })).rejects.toThrow("Head sha didn't match");
+		expect(moved.calls).toHaveLength(3);
 	});
 
 	test("a mutation without a confirmation never repeats", async () => {

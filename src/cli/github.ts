@@ -328,16 +328,25 @@ export class GitHub {
 		return object(body.data);
 	}
 
-	/** Repeat a query; confirm a pull request mutation `PULL_MUTATIONS` knows; never repeat another. */
+	/**
+	 * Repeat a query; confirm a pull request mutation `PULL_MUTATIONS` knows; never repeat another.
+	 * One pinned to `expectedHeadOid` is confirmed only at that head; at any other, its repeat gets
+	 * GitHub's refusal for the caller.
+	 */
 	private mutationRepeat(query: string, variables: ObjectValue): Repeat {
 		if (!/^\s*mutation\b/.test(query)) return true;
 		const call = /^\s*mutation\b[^{]*\{\s*(\w+)\s*\(\s*input:\s*\{\s*pullRequestId:\s*\$(\w+)\b/.exec(query);
 		const effect = call && Object.hasOwn(PULL_MUTATIONS, call[1]) ? PULL_MUTATIONS[call[1]] : undefined;
 		const id = call && variables[call[2]];
 		if (!effect || typeof id !== "string") return false;
-		const read = `query($id: ID!) { node(id: $id) { ... on PullRequest { ${effect.fields} } } }`;
-		return async () =>
-			effect.landed(object((await this.graphql(read, { id })).node)) ? Response.json({ data: {} }) : undefined;
+		const pinned = /\bexpectedHeadOid:\s*\$(\w+)\b/.exec(query);
+		const head = pinned ? variables[pinned[1]] : undefined;
+		const read = `query($id: ID!) { node(id: $id) { ... on PullRequest { headRefOid ${effect.fields} } } }`;
+		return async () => {
+			const pull = object((await this.graphql(read, { id })).node);
+			const landed = (head === undefined || pull.headRefOid === head) && effect.landed(pull);
+			return landed ? Response.json({ data: {} }) : undefined;
+		};
 	}
 }
 
