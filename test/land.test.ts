@@ -1072,6 +1072,19 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(linking.labels).toEqual([]);
 	});
 
+	test("screens only the PRs a batch reaches, leaving the rest of a long queue for later", async () => {
+		const forge = new Forge();
+		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		for (let i = 0; i < 4; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
+		forge.pull("Link b", { "quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n` });
+		// The base finishes b, so the last PR's link dangles, but an oldest-first batch of three never reaches it.
+		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
+		const { checked, landing } = await forge.round();
+		expect(checked).toEqual([[1, 2, 3]]);
+		expect(landing.map((line) => line.split(" ")[0])).toEqual(["landed", "landed", "landed"]);
+		expect(forge.repo.pulls[4].landing).toBe(true);
+	});
+
 	test("blames no PR for a finding the base already has", async () => {
 		const forge = new Forge();
 		forge.advance({ "quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [Gone](/quest/m0/gone.md) - gone\n` });

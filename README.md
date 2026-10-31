@@ -561,15 +561,16 @@ PR in that batch, without bisection. Ejection disables auto-merge, removes
 `$STATE_DIRECTORY` or the XDG state home, never inside the checkout. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
-Before batching, each queued PR is squashed alone onto the current base, and
-`quest check` runs on the result. A PR with findings the base lacks, such as
+As a batch is filled, each PR it reaches is squashed alone onto the current
+base, and `quest check` runs on the result; PRs the batch does not reach wait
+for a later round, so a long queue costs only each batch's candidates. A PR with findings the base lacks, such as
 a link to a quest the base has since finished, is ejected alone as
 `failed_checks` with those findings, so it never fails a batch; a configured
 fixer receives it as it would a failed batch, starting from that squash. This check runs
 in the daemon, never the sandbox: it parses quest files read from git objects
 and executes nothing from the tree. A base without a `quest/` directory skips
-it. A newly queued PR is also squashed onto each PR ahead of it; if any
-conflict, the daemon comments once with their numbers and files, so its author
+it. A newly queued PR the batch reaches is also squashed onto the four PRs
+landing soonest ahead of it; if any conflict, the daemon comments once with their numbers and files, so its author
 can resolve the overlap before its turn. It is screened again only once
 requeued.
 

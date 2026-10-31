@@ -496,14 +496,12 @@ export interface BatchPolicy {
 }
 
 /**
- * Fetch the base and every queued head, then screen each head and squash the
- * rest in turn onto the chain in a scratch worktree inside the git directory,
- * resolving quest files with `quest resolve`, in `policy`'s order. Stop at its batch
- * limit, skipping conflicting additions; a conflicting base stops the batch.
- *
- * Screening squashes each head alone onto the base and rejects one that fails
- * `quest check` there with findings the base lacks. Each head `fresh` accepts is
- * also squashed onto each PR ahead of it, to report which ones it conflicts with.
+ * Fetch the base and every queued head, then fill a batch in `policy`'s order in a scratch
+ * worktree inside the git directory, resolving quest files with `quest resolve`. Each candidate
+ * is first squashed alone onto the base: one that fails `quest check` there with findings the
+ * base lacks is rejected, and a fresh one is also squashed onto the PRs landing soonest ahead of
+ * it, to report which ones it conflicts with. Stop at the policy's batch limit, skipping
+ * conflicting additions; a conflicting base stops the batch.
  */
 export async function build(
 	root: string,
@@ -521,19 +519,28 @@ export async function build(
 		...plan.queue.map((entry) => entry.head),
 	]);
 	return mergeWorktree(root, plan.base.sha, (dir, driver) => {
-		const chain: Chain = { links: [], ...screen(dir, driver, plan, fresh) };
-		const queue = plan.queue.filter((entry) => !chain.rejected.some((rejection) => rejection.entry === entry));
-		const ordered = policy.order === "newest" ? [...queue].reverse() : queue;
-		const limit = Math.max(1, Math.min(policy.size, 1 + Math.floor(Math.log2(queue.length))));
-		git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+		const chain: Chain = { links: [], rejected: [], overlaps: [] };
+		const ordered = policy.order === "newest" ? [...plan.queue].reverse() : plan.queue;
+		const limit = Math.max(1, Math.min(policy.size, 1 + Math.floor(Math.log2(plan.queue.length))));
+		const screening = screener(dir, driver, plan);
+		// Screen each head only as the batch reaches it, so a long queue costs this batch's
+		// candidates, not every queued PR on every round.
 		for (const entry of ordered) {
 			if (chain.links.length >= limit) break;
-			const files = squash(dir, driver, entry);
-			if (files !== null) {
+			const alone = screening.alone(entry);
+			if (alone === null) {
 				if (chain.links.length > 0) continue;
-				chain.conflict = { entry, files };
+				git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+				chain.conflict = { entry, files: squash(dir, driver, entry)! };
 				break;
 			}
+			if (alone.findings.length > 0) {
+				chain.rejected.push({ entry, commit: alone.commit, findings: alone.findings.map(formatFinding) });
+				continue;
+			}
+			if (fresh(entry)) chain.overlaps.push({ entry, ahead: screening.overlaps(entry) });
+			git(dir, ["reset", "--quiet", "--hard", chain.links.at(-1)?.commit ?? plan.base.sha]);
+			if (squash(dir, driver, entry) !== null) continue;
 			chain.links.push({
 				entry,
 				commit: git(dir, ["rev-parse", "HEAD"]),
@@ -557,51 +564,52 @@ function squash(dir: string, driver: string, entry: Entry): string[] | null {
 	return null;
 }
 
+/** How many queued PRs ahead of a newly queued one its conflict report covers: those landing soonest. */
+const OVERLAP_AHEAD = 4;
+
 /**
- * Squash each queued head alone onto the base, reject those failing `quest check` there, and
- * squash each fresh head onto each one ahead of it. A head conflicting with the base is left to
- * the chain, which ejects it once it is the batch's base PR.
+ * Screening for one batch: each head squashed alone onto the base, with `quest check` findings
+ * the base lacks, and a fresh head's conflicts with the PRs landing soonest ahead of it. Results are
+ * memoized, since a head is squashed alone once per batch however often it is needed.
  */
-function screen(
-	dir: string,
-	driver: string,
-	plan: Plan,
-	fresh: (entry: Entry) => boolean,
-): Pick<Chain, "rejected" | "overlaps"> {
+function screener(dir: string, driver: string, plan: Plan) {
 	// A base without quests is a repository that does not use them.
 	const known =
 		git(dir, ["ls-tree", "--name-only", plan.base.sha, "quest"]) === "" ? null : questCheck(dir, plan.base.sha);
-	const alone = new Map<Entry, string>();
-	const rejected: Rejection[] = [];
-	for (const entry of plan.queue) {
+	const cache = new Map<Entry, { commit: string; findings: Finding[] } | null>();
+	const alone = (entry: Entry) => {
+		if (cache.has(entry)) return cache.get(entry)!;
 		git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
-		if (squash(dir, driver, entry) !== null) continue;
-		const commit = git(dir, ["rev-parse", "HEAD"]);
-		// A finding the base already has is not this PR's, even on a line the PR moved.
-		const findings =
-			known === null
-				? []
-				: questCheck(dir, commit).filter(
-						(finding) => !known.some((old) => old.path === finding.path && old.message === finding.message),
-					);
-		if (findings.length > 0) rejected.push({ entry, commit, findings: findings.map(formatFinding) });
-		else alone.set(entry, commit);
-	}
-	const overlaps: Overlap[] = [];
-	const ahead: Entry[] = [];
-	for (const entry of plan.queue) {
-		if (!alone.has(entry)) continue;
-		if (fresh(entry)) {
-			const conflicts = ahead.flatMap((earlier) => {
-				git(dir, ["reset", "--quiet", "--hard", alone.get(earlier)!]);
+		let result: { commit: string; findings: Finding[] } | null = null;
+		if (squash(dir, driver, entry) === null) {
+			const commit = git(dir, ["rev-parse", "HEAD"]);
+			// A finding the base already has is not this PR's, even on a line the PR moved.
+			const findings =
+				known === null
+					? []
+					: questCheck(dir, commit).filter(
+							(finding) =>
+								!known.some((old) => old.path === finding.path && old.message === finding.message),
+						);
+			result = { commit, findings };
+		}
+		cache.set(entry, result);
+		return result;
+	};
+	const overlaps = (entry: Entry) => {
+		const index = plan.queue.indexOf(entry);
+		return plan.queue
+			.slice(0, Math.max(0, index))
+			.slice(0, OVERLAP_AHEAD)
+			.flatMap((earlier) => {
+				const base = alone(earlier);
+				if (base === null || base.findings.length > 0) return [];
+				git(dir, ["reset", "--quiet", "--hard", base.commit]);
 				const files = squash(dir, driver, entry);
 				return files === null ? [] : [{ entry: earlier, files }];
 			});
-			overlaps.push({ entry, ahead: conflicts });
-		}
-		ahead.push(entry);
-	}
-	return { rejected, overlaps };
+	};
+	return { alone, overlaps };
 }
 
 /**
