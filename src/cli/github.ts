@@ -35,6 +35,29 @@ export class GitHubDeadline extends Error {
 
 export type ObjectValue = Record<string, unknown>;
 
+/** Retries of a 5xx or a dropped connection, waiting 1, 2, 4, then 8 seconds unless GitHub says how long. */
+const TRANSIENT_RETRIES = 4;
+/** How far GitHub's clock may run behind ours when looking for what a lost request created. */
+const CLOCK_SKEW = 60_000;
+/** Statuses whose response has no body. */
+const NULL_BODY = [204, 205, 304];
+
+/**
+ * Whether a request may repeat after a 5xx or a dropped connection, after which GitHub may have
+ * acted anyway: `true` when repeating leaves the same state, or a check, run before each repeat,
+ * for the response of an earlier attempt that took effect (undefined if none did).
+ */
+export type Repeat = boolean | ((started: number) => Promise<Response | undefined>);
+
+export interface RequestOptions {
+	etag?: string;
+	body?: unknown;
+	method?: "POST" | "PUT" | "PATCH" | "DELETE";
+	allow?: number[];
+	/** Overrides how the request repeats; the default follows its method and endpoint. */
+	repeat?: Repeat;
+}
+
 /** Accept a GitHub PR URL, or a number in the origin repository. */
 export function pullRequest(value: string, root: string): PullRequest {
 	if (/^[1-9]\d*$/.test(value)) {
@@ -132,22 +155,25 @@ export class GitHub {
 	}
 
 	/**
-	 * A 2xx or 304 response; anything else fails after rate-limit retries, with
-	 * GitHub's reason when it gives one, unless `allow` lists its status. `body` makes it a POST
-	 * unless `method` says otherwise.
+	 * A 2xx or 304 response, its body already read; anything else fails, with GitHub's reason when
+	 * it gives one, unless `allow` lists its status. Rate limits are waited out. A 5xx or a
+	 * connection dropped before the body is in, after which GitHub may or may not have acted, is
+	 * retried with bounded backoff as `repeat` allows, then fails with the last error. `body` makes
+	 * it a POST unless `method` says otherwise.
 	 */
-	async request(
-		path: string,
-		options: { etag?: string; body?: unknown; method?: "POST" | "PUT" | "PATCH" | "DELETE"; allow?: number[] } = {},
-	): Promise<Response> {
+	async request(path: string, options: RequestOptions = {}): Promise<Response> {
 		// Follow only same-origin pagination links; never send a token to another host.
 		const url = new URL(path, API);
 		if (url.origin !== API || url.username || url.password) throw new Error("invalid GitHub pagination URL");
-		let attempts = 0;
+		const repeat = options.repeat ?? this.repeatable(url, options);
+		const started = this.deps.now();
+		let limits = 0;
+		let failures = 0;
 		for (;;) {
 			const remaining = this.deadline - this.deps.now();
 			if (remaining <= 0) throw new GitHubDeadline();
-			let response: Response;
+			let response: Response | undefined;
+			let failure: unknown;
 			try {
 				response = await this.deps.fetch(url, {
 					...(options.body === undefined
@@ -164,32 +190,131 @@ export class GitHub {
 				});
 			} catch (error) {
 				if (this.deps.now() >= this.deadline) throw new GitHubDeadline();
-				throw error;
+				failure = error;
 			}
-			this.pollInterval = Math.max(this.pollInterval, seconds(response.headers.get("x-poll-interval")) ?? 0);
-			if (response.ok || response.status === 304 || options.allow?.includes(response.status)) return response;
-			const body = await response.text();
-			const limited =
-				response.status === 429 ||
-				(response.status === 403 &&
-					(response.headers.has("retry-after") ||
-						response.headers.get("x-ratelimit-remaining") === "0" ||
-						/rate limit/i.test(body)));
-			if (!limited || attempts >= 6)
-				throw new Error(
-					`GitHub HTTP ${response.status} for ${url.pathname}; ${limited ? "rate limit persisted" : (explanation(body) ?? "check repository access and token permissions")}`,
+			let retry: number | undefined;
+			if (response) {
+				this.pollInterval = Math.max(this.pollInterval, seconds(response.headers.get("x-poll-interval")) ?? 0);
+				// Read the body here, so a connection that drops mid-body is retried like one that drops before it.
+				const read = await response.text().then(
+					(text) => ({ text }),
+					(error: unknown) => ({ error }),
 				);
-			const retry = seconds(response.headers.get("retry-after"));
-			const reset =
-				response.headers.get("x-ratelimit-remaining") === "0"
-					? seconds(response.headers.get("x-ratelimit-reset"))
-					: undefined;
-			const delay =
-				retry ?? (reset === undefined ? 60_000 * 2 ** attempts : Math.max(1000, reset - this.deps.now()));
-			attempts++;
-			this.deps.warn(`GitHub rate limited this request; waiting ${Math.ceil(delay / 1000)} seconds`);
+				if (response.ok || response.status === 304 || options.allow?.includes(response.status)) {
+					const { status, statusText, headers } = response;
+					if ("text" in read)
+						return new Response(NULL_BODY.includes(status) ? null : read.text, {
+							status,
+							statusText,
+							headers,
+						});
+					if (this.deps.now() >= this.deadline) throw new GitHubDeadline();
+					failure = read.error;
+				} else {
+					// A refusal's status still says what to do when its body was cut off.
+					const body = "text" in read ? read.text : "";
+					const limited =
+						response.status === 429 ||
+						(response.status === 403 &&
+							(response.headers.has("retry-after") ||
+								response.headers.get("x-ratelimit-remaining") === "0" ||
+								/rate limit/i.test(body)));
+					if (limited) {
+						// GitHub turned the request away unprocessed, so any request repeats.
+						await this.waitOut(
+							response.headers,
+							limits++,
+							`GitHub HTTP ${response.status} for ${url.pathname}; rate limit persisted`,
+						);
+						continue;
+					}
+					const reason = explanation(body);
+					if (response.status < 500)
+						throw new Error(
+							`GitHub HTTP ${response.status} for ${url.pathname}; ${reason ?? "check repository access and token permissions"}`,
+						);
+					failure = new Error(
+						`GitHub HTTP ${response.status} for ${url.pathname}; ${reason ?? "GitHub server error"}`,
+					);
+					retry = seconds(response.headers.get("retry-after"));
+				}
+			}
+			if (repeat === false || failures >= TRANSIENT_RETRIES) throw failure;
+			const delay = retry ?? 1000 * 2 ** failures;
+			failures++;
+			this.deps.warn(`${message(failure)}; retrying in ${Math.ceil(delay / 1000)} seconds`);
 			await this.pause(delay);
+			if (typeof repeat === "function") {
+				const landed = await repeat(started);
+				if (landed) return landed;
+			}
 		}
+	}
+
+	/**
+	 * Wait out a rate limit, the `limits`th in a row, as its headers say: Retry-After, else the
+	 * primary limit's reset, else a minute doubling each time. Fails with `persisted` after six.
+	 */
+	private async waitOut(headers: Headers, limits: number, persisted: string): Promise<void> {
+		if (limits >= 6) throw new Error(persisted);
+		const retry = seconds(headers.get("retry-after"));
+		const reset =
+			headers.get("x-ratelimit-remaining") === "0" ? seconds(headers.get("x-ratelimit-reset")) : undefined;
+		const delay = retry ?? (reset === undefined ? 60_000 * 2 ** limits : Math.max(1000, reset - this.deps.now()));
+		this.deps.warn(`GitHub rate limited this request; waiting ${Math.ceil(delay / 1000)} seconds`);
+		await this.pause(delay);
+	}
+
+	/**
+	 * How a request may repeat after a 5xx or a dropped connection. A GET reads and a PUT, PATCH, or
+	 * DELETE sets state, so each repeats; so does adding labels. A merge is confirmed first by its
+	 * pinned head, and a POST that creates something by what it created: a comment by its body, a
+	 * pull request by its branch. Any other POST never repeats.
+	 */
+	private repeatable(url: URL, options: RequestOptions): Repeat {
+		const method = options.method ?? (options.body === undefined ? "GET" : "POST");
+		const body = typeof options.body === "object" && options.body !== null ? (options.body as ObjectValue) : {};
+		const merge = /^(\/repos\/[^/]+\/[^/]+\/pulls\/\d+)\/merge$/.exec(url.pathname);
+		if (method === "PUT" && merge) {
+			return async () => {
+				const pull = object(await (await this.request(merge[1])).json());
+				// Merged at another head is not this merge; repeating it gets GitHub's refusal for the caller.
+				if (pull.merged !== true || typeof pull.merge_commit_sha !== "string") return;
+				if (body.sha !== undefined && object(pull.head).sha !== body.sha) return;
+				return Response.json({
+					merged: true,
+					sha: pull.merge_commit_sha,
+					message: "Pull Request successfully merged",
+				});
+			};
+		}
+		if (method !== "POST") return true;
+		const issue = /^\/repos\/[^/]+\/[^/]+\/issues\/\d+\/(labels|comments)$/.exec(url.pathname);
+		if (issue?.[1] === "labels") return true;
+		if (issue?.[1] === "comments" && typeof body.body === "string") {
+			const text = body.body;
+			return async (started) => {
+				const since = new Date(started - CLOCK_SKEW).toISOString();
+				const comments = await this.all(`${url.pathname}?since=${since}&per_page=100`);
+				const found = comments.find((comment) => comment.body === text);
+				return found && Response.json(found, { status: 201 });
+			};
+		}
+		const pulls = /^\/repos\/([^/]+)\/[^/]+\/pulls$/.exec(url.pathname);
+		if (pulls && typeof body.head === "string") {
+			const head = body.head.includes(":") ? body.head : `${pulls[1]}:${body.head}`;
+			return async (started) => {
+				const open = await this.list(
+					`${url.pathname}?state=open&head=${encodeURIComponent(head)}&per_page=100`,
+				);
+				const found = open.rows.find(
+					(pull) =>
+						typeof pull.created_at === "string" && Date.parse(pull.created_at) >= started - CLOCK_SKEW,
+				);
+				return found && Response.json(found, { status: 201 });
+			};
+		}
+		return false;
 	}
 
 	/** One page of a REST listing, and its response for the next link. */
@@ -210,19 +335,64 @@ export class GitHub {
 		return rows;
 	}
 
-	/** Run a GraphQL query and return its data, failing on any reported error. */
+	/**
+	 * Run a GraphQL query and return its data, failing on any reported error. A query repeats after
+	 * a 5xx or a dropped connection; a mutation only once its effect is confirmed missing, and one
+	 * confirmed to have taken effect returns no data. GitHub can report a rate limit as a 200 whose
+	 * errors say `RATE_LIMITED`; that is waited out like a REST one.
+	 */
 	async graphql(query: string, variables: ObjectValue): Promise<ObjectValue> {
-		const response = await this.request("/graphql", { body: { query, variables } });
-		const body = object(await response.json());
-		if (body.errors !== undefined)
-			throw new Error(
-				`GitHub GraphQL error: ${array(body.errors)
-					.map((error) => String(error.message))
-					.join("; ")}`,
-			);
-		return object(body.data);
+		const repeat = this.mutationRepeat(query, variables);
+		for (let limits = 0; ; limits++) {
+			const response = await this.request("/graphql", { body: { query, variables }, repeat });
+			const body = object(await response.json());
+			if (body.errors === undefined) return object(body.data);
+			const errors = array(body.errors);
+			if (!errors.some((error) => error.type === "RATE_LIMITED"))
+				throw new Error(`GitHub GraphQL error: ${errors.map((error) => String(error.message)).join("; ")}`);
+			// GitHub turned the operation away unprocessed, so any operation repeats.
+			await this.waitOut(response.headers, limits, "GitHub GraphQL rate limit persisted");
+		}
+	}
+
+	/**
+	 * Repeat a query; confirm a pull request mutation `PULL_MUTATIONS` knows; never repeat another.
+	 * One pinned to `expectedHeadOid` is confirmed only at that head; at any other, its repeat gets
+	 * GitHub's refusal for the caller.
+	 */
+	private mutationRepeat(query: string, variables: ObjectValue): Repeat {
+		if (!/^\s*mutation\b/.test(query)) return true;
+		const call = /^\s*mutation\b[^{]*\{\s*(\w+)\s*\(\s*input:\s*\{\s*pullRequestId:\s*\$(\w+)\b/.exec(query);
+		const effect = call && Object.hasOwn(PULL_MUTATIONS, call[1]) ? PULL_MUTATIONS[call[1]] : undefined;
+		const id = call && variables[call[2]];
+		if (!effect || typeof id !== "string") return false;
+		const pinned = /\bexpectedHeadOid:\s*\$(\w+)\b/.exec(query);
+		const head = pinned ? variables[pinned[1]] : undefined;
+		const read = `query($id: ID!) { node(id: $id) { ... on PullRequest { headRefOid ${effect.fields} } } }`;
+		return async () => {
+			const pull = object((await this.graphql(read, { id })).node);
+			const landed = (head === undefined || pull.headRefOid === head) && effect.landed(pull);
+			return landed ? Response.json({ data: {} }) : undefined;
+		};
 	}
 }
+
+/**
+ * Pull request mutations whose effect can be read back: the fields that show it, and whether
+ * they do. Each takes its pull request as `pullRequestId`.
+ */
+const PULL_MUTATIONS: Record<string, { fields: string; landed(pull: ObjectValue): boolean }> = {
+	mergePullRequest: { fields: "merged", landed: (pull) => pull.merged === true },
+	enablePullRequestAutoMerge: {
+		fields: "merged autoMergeRequest { enabledAt } mergeQueueEntry { state }",
+		landed: (pull) => pull.merged === true || pull.autoMergeRequest != null || pull.mergeQueueEntry != null,
+	},
+	disablePullRequestAutoMerge: {
+		fields: "autoMergeRequest { enabledAt }",
+		landed: (pull) => pull.autoMergeRequest === null,
+	},
+	markPullRequestReadyForReview: { fields: "isDraft", landed: (pull) => pull.isDraft === false },
+};
 
 /** A check a base branch requires. */
 export interface RequiredCheck {
@@ -343,6 +513,10 @@ function explanation(body: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function message(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function seconds(value: string | null): number | undefined {

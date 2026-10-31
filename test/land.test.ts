@@ -1325,7 +1325,7 @@ mv '${result}.new' '${result}'
 		);
 	});
 
-	test("a lost merge response never re-merges or ejects the merged PR after restart", async () => {
+	test("a lost merge response is confirmed from the PR, never merged again, and the batch goes on", async () => {
 		const forge = new Forge();
 		for (let i = 1; i <= 3; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "yes" });
 		const deps = await forge.deps();
@@ -1334,6 +1334,25 @@ mv '${result}.new' '${result}'
 		deps.fetch = (async (input, init) => {
 			const response = await original(input, init);
 			if (String(input).endsWith("/pulls/1/merge")) throw new Error("lost merge response");
+			return response;
+		}) as typeof fetch;
+		const output = await serveBatch(forge.clone(), plan, sandbox(), deps, async () => deps.token);
+		// A batch of three takes two.
+		const batch = forge.repo.pulls.slice(0, 2);
+		expect(output).toEqual(batch.map((pull) => `landed ${pull.number} ${pull.squash}`));
+		expect(forge.merges.map(({ number }) => number)).toEqual([1, 2]);
+		expect(forge.comment(1)).toBeUndefined();
+	});
+
+	test("a merge response lost past every retry never re-merges or ejects the merged PR after restart", async () => {
+		const forge = new Forge();
+		for (let i = 1; i <= 3; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "yes" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const original = deps.fetch;
+		deps.fetch = (async (input, init) => {
+			const response = await original(input, init);
+			if (/\/pulls\/1(\/merge)?$/.test(String(input))) throw new Error("lost merge response");
 			return response;
 		}) as typeof fetch;
 		await expect(serveBatch(forge.clone(), plan, sandbox(), deps, async () => deps.token)).rejects.toThrow(
@@ -1930,7 +1949,7 @@ ${requeueScript}
 		);
 		await fix(dir, log, [1], agent, ["-"]);
 	});
-	test("hands back a job after losing the enable-auto-merge response", async () => {
+	test("requeues a job after confirming a lost enable-auto-merge response took effect", async () => {
 		const fixture = await fixerFixture(requeueScript);
 		await fixture.finished;
 		let lost = false;
@@ -1946,10 +1965,10 @@ ${requeueScript}
 			}) as typeof fetch,
 		};
 
-		expect(await fixture.collect(broken)).toEqual(["handback 1"]);
-		expect(fixture.pull.landing).toBe(false);
-		expect(fixture.pull.labels).not.toContain("quest:merge");
-		expect(fixture.forge.comment(1)).toContain("lost response");
+		expect(await fixture.collect(broken)).toEqual(["requeued 1"]);
+		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixture.pull.head!));
+		expect(fixture.pull.labels).toContain("quest:merge");
+		expect(fixture.forge.comment(1)).toContain("Requeued unchanged:");
 	});
 
 	test("preserves a refused-push handback across a failed comment and restart", async () => {
