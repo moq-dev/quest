@@ -136,4 +136,3 @@ fixes what it finds:
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs
 - [Land review](/quest/m0/kix/land-review.md) - kix lands only heads with a review that counts on that exact head
 - [Onboarding guide](/quest/m0/kix/guide.md) - a complete maintainer path, from runner setup through a reviewed PR
-- [Fast runner continuation test](/quest/m0/kix/runner-timeout.md) - the conflicted-continuation test passes on a loaded host without a longer timeout
