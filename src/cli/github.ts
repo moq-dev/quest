@@ -39,6 +39,8 @@ export type ObjectValue = Record<string, unknown>;
 const TRANSIENT_RETRIES = 4;
 /** How far GitHub's clock may run behind ours when looking for what a lost request created. */
 const CLOCK_SKEW = 60_000;
+/** Statuses whose response has no body. */
+const NULL_BODY = [204, 205, 304];
 
 /**
  * Whether a request may repeat after a 5xx or a dropped connection, after which GitHub may have
@@ -153,10 +155,11 @@ export class GitHub {
 	}
 
 	/**
-	 * A 2xx or 304 response; anything else fails, with GitHub's reason when it gives one, unless
-	 * `allow` lists its status. Rate limits are waited out. A 5xx or a dropped connection, after
-	 * which GitHub may or may not have acted, is retried with bounded backoff as `repeat` allows,
-	 * then fails with the last error. `body` makes it a POST unless `method` says otherwise.
+	 * A 2xx or 304 response, its body already read; anything else fails, with GitHub's reason when
+	 * it gives one, unless `allow` lists its status. Rate limits are waited out. A 5xx or a
+	 * connection dropped before the body is in, after which GitHub may or may not have acted, is
+	 * retried with bounded backoff as `repeat` allows, then fails with the last error. `body` makes
+	 * it a POST unless `method` says otherwise.
 	 */
 	async request(path: string, options: RequestOptions = {}): Promise<Response> {
 		// Follow only same-origin pagination links; never send a token to another host.
@@ -192,39 +195,49 @@ export class GitHub {
 			let retry: number | undefined;
 			if (response) {
 				this.pollInterval = Math.max(this.pollInterval, seconds(response.headers.get("x-poll-interval")) ?? 0);
-				if (response.ok || response.status === 304 || options.allow?.includes(response.status)) return response;
-				// A body cut off mid-read still leaves the status to act on.
-				const body = await response.text().catch(() => "");
-				retry = seconds(response.headers.get("retry-after"));
-				const limited =
-					response.status === 429 ||
-					(response.status === 403 &&
-						(response.headers.has("retry-after") ||
-							response.headers.get("x-ratelimit-remaining") === "0" ||
-							/rate limit/i.test(body)));
-				if (limited) {
-					// GitHub turned the request away unprocessed, so any request repeats.
-					if (limits >= 6)
-						throw new Error(`GitHub HTTP ${response.status} for ${url.pathname}; rate limit persisted`);
-					const reset =
-						response.headers.get("x-ratelimit-remaining") === "0"
-							? seconds(response.headers.get("x-ratelimit-reset"))
-							: undefined;
-					const delay =
-						retry ?? (reset === undefined ? 60_000 * 2 ** limits : Math.max(1000, reset - this.deps.now()));
-					limits++;
-					this.deps.warn(`GitHub rate limited this request; waiting ${Math.ceil(delay / 1000)} seconds`);
-					await this.pause(delay);
-					continue;
-				}
-				const reason = explanation(body);
-				if (response.status < 500)
-					throw new Error(
-						`GitHub HTTP ${response.status} for ${url.pathname}; ${reason ?? "check repository access and token permissions"}`,
-					);
-				failure = new Error(
-					`GitHub HTTP ${response.status} for ${url.pathname}; ${reason ?? "GitHub server error"}`,
+				// Read the body here, so a connection that drops mid-body is retried like one that drops before it.
+				const read = await response.text().then(
+					(text) => ({ text }),
+					(error: unknown) => ({ error }),
 				);
+				if (response.ok || response.status === 304 || options.allow?.includes(response.status)) {
+					const { status, statusText, headers } = response;
+					if ("text" in read)
+						return new Response(NULL_BODY.includes(status) ? null : read.text, {
+							status,
+							statusText,
+							headers,
+						});
+					if (this.deps.now() >= this.deadline) throw new GitHubDeadline();
+					failure = read.error;
+				} else {
+					// A refusal's status still says what to do when its body was cut off.
+					const body = "text" in read ? read.text : "";
+					const limited =
+						response.status === 429 ||
+						(response.status === 403 &&
+							(response.headers.has("retry-after") ||
+								response.headers.get("x-ratelimit-remaining") === "0" ||
+								/rate limit/i.test(body)));
+					if (limited) {
+						// GitHub turned the request away unprocessed, so any request repeats.
+						await this.waitOut(
+							response.headers,
+							limits++,
+							`GitHub HTTP ${response.status} for ${url.pathname}; rate limit persisted`,
+						);
+						continue;
+					}
+					const reason = explanation(body);
+					if (response.status < 500)
+						throw new Error(
+							`GitHub HTTP ${response.status} for ${url.pathname}; ${reason ?? "check repository access and token permissions"}`,
+						);
+					failure = new Error(
+						`GitHub HTTP ${response.status} for ${url.pathname}; ${reason ?? "GitHub server error"}`,
+					);
+					retry = seconds(response.headers.get("retry-after"));
+				}
 			}
 			if (repeat === false || failures >= TRANSIENT_RETRIES) throw failure;
 			const delay = retry ?? 1000 * 2 ** failures;
@@ -236,6 +249,20 @@ export class GitHub {
 				if (landed) return landed;
 			}
 		}
+	}
+
+	/**
+	 * Wait out a rate limit, the `limits`th in a row, as its headers say: Retry-After, else the
+	 * primary limit's reset, else a minute doubling each time. Fails with `persisted` after six.
+	 */
+	private async waitOut(headers: Headers, limits: number, persisted: string): Promise<void> {
+		if (limits >= 6) throw new Error(persisted);
+		const retry = seconds(headers.get("retry-after"));
+		const reset =
+			headers.get("x-ratelimit-remaining") === "0" ? seconds(headers.get("x-ratelimit-reset")) : undefined;
+		const delay = retry ?? (reset === undefined ? 60_000 * 2 ** limits : Math.max(1000, reset - this.deps.now()));
+		this.deps.warn(`GitHub rate limited this request; waiting ${Math.ceil(delay / 1000)} seconds`);
+		await this.pause(delay);
 	}
 
 	/**
@@ -311,21 +338,21 @@ export class GitHub {
 	/**
 	 * Run a GraphQL query and return its data, failing on any reported error. A query repeats after
 	 * a 5xx or a dropped connection; a mutation only once its effect is confirmed missing, and one
-	 * confirmed to have taken effect returns no data.
+	 * confirmed to have taken effect returns no data. GitHub can report a rate limit as a 200 whose
+	 * errors say `RATE_LIMITED`; that is waited out like a REST one.
 	 */
 	async graphql(query: string, variables: ObjectValue): Promise<ObjectValue> {
-		const response = await this.request("/graphql", {
-			body: { query, variables },
-			repeat: this.mutationRepeat(query, variables),
-		});
-		const body = object(await response.json());
-		if (body.errors !== undefined)
-			throw new Error(
-				`GitHub GraphQL error: ${array(body.errors)
-					.map((error) => String(error.message))
-					.join("; ")}`,
-			);
-		return object(body.data);
+		const repeat = this.mutationRepeat(query, variables);
+		for (let limits = 0; ; limits++) {
+			const response = await this.request("/graphql", { body: { query, variables }, repeat });
+			const body = object(await response.json());
+			if (body.errors === undefined) return object(body.data);
+			const errors = array(body.errors);
+			if (!errors.some((error) => error.type === "RATE_LIMITED"))
+				throw new Error(`GitHub GraphQL error: ${errors.map((error) => String(error.message)).join("; ")}`);
+			// GitHub turned the operation away unprocessed, so any operation repeats.
+			await this.waitOut(response.headers, limits, "GitHub GraphQL rate limit persisted");
+		}
 	}
 
 	/**

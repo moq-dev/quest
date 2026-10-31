@@ -22,6 +22,16 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
 const bad = (status: number, headers: Record<string, string> = {}) =>
 	json({ message: "Server Error" }, status, headers);
 const dropped = () => new TypeError("fetch failed: connection reset");
+/** A response whose connection drops while its body is read. */
+const cut = (status = 200) =>
+	new Response(
+		new ReadableStream({
+			start(controller) {
+				controller.error(new TypeError("body cut off"));
+			},
+		}),
+		{ status },
+	);
 
 /** A client whose fetch answers each request with the next reply, on a clock only its sleeps advance. */
 function fixture(replies: Reply[], deadline = Infinity) {
@@ -83,6 +93,32 @@ describe("transient failures", () => {
 		const persistent = fixture(Array.from({ length: 5 }, dropped));
 		await expect(persistent.github.request(`${repo}/pulls`)).rejects.toThrow("connection reset");
 		expect(persistent.calls).toHaveLength(5);
+	});
+
+	test("a read whose body is cut off retries, and the body returned is already read", async () => {
+		const { github, calls, sleeps, warnings } = fixture([cut(), json([{ id: 1 }])]);
+		const response = await github.request(`${repo}/pulls`);
+		expect(await response.json()).toEqual([{ id: 1 }]);
+		expect(calls).toHaveLength(2);
+		expect(sleeps).toEqual([1000]);
+		expect(warnings).toEqual(["body cut off; retrying in 1 seconds"]);
+	});
+
+	test("an accepted status with no body keeps its status and headers", async () => {
+		const { github } = fixture([new Response(null, { status: 304, headers: { etag: '"x"' } })]);
+		const response = await github.request(`${repo}/pulls`, { etag: '"x"' });
+		expect(response.status).toBe(304);
+		expect(response.headers.get("etag")).toBe('"x"');
+	});
+
+	test("a refusal whose body is cut off still acts on its status", async () => {
+		const notFound = fixture([cut(404)]);
+		await expect(notFound.github.request(`${repo}/pulls/1`)).rejects.toThrow("GitHub HTTP 404");
+		expect(notFound.calls).toHaveLength(1);
+
+		const limited = fixture([cut(429), json({})]);
+		await limited.github.request(`${repo}/pulls/1`);
+		expect(limited.sleeps).toEqual([60_000]);
 	});
 
 	test("a 5xx honours Retry-After", async () => {
@@ -168,6 +204,19 @@ describe("confirmed writes", () => {
 			// A minute before the first attempt, for GitHub's clock.
 			`GET ${repo}/issues/1/comments?since=2026-10-31T11:59:00.000Z&per_page=100`,
 		]);
+	});
+
+	test("a comment whose response body was cut off is confirmed, not posted again", async () => {
+		const { github, calls } = fixture([cut(201), json([{ id: 2, body: text }])]);
+		const response = await github.request(`${repo}/issues/1/comments`, { body: { body: text } });
+		expect(await response.json()).toEqual({ id: 2, body: text });
+		expect(calls.map(({ method }) => method)).toEqual(["POST", "GET"]);
+	});
+
+	test("any other POST whose response body was cut off fails without repeating", async () => {
+		const { github, calls } = fixture([cut(201)]);
+		await expect(github.request(`${repo}/dispatches`, { body: {} })).rejects.toThrow("body cut off");
+		expect(calls).toHaveLength(1);
 	});
 
 	test("a comment that did not post is posted again", async () => {
@@ -262,6 +311,60 @@ describe("GraphQL", () => {
 		const moved = fixture([bad(502), json({ data: { node: { ...node, headRefOid: SQUASH } } }), refusal]);
 		await expect(moved.github.graphql(query, { id: "PR_1", sha: HEAD })).rejects.toThrow("Head sha didn't match");
 		expect(moved.calls).toHaveLength(3);
+	});
+
+	const limited = (headers: Record<string, string> = {}) =>
+		json({ errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] }, 200, headers);
+	const addComment = 'mutation($id: ID!) { addComment(input: { subjectId: $id, body: "x" }) { clientMutationId } }';
+
+	test("a RATE_LIMITED 200 is waited out until the reset, then the operation repeats", async () => {
+		const reset = Date.parse("2026-10-31T12:05:00Z") / 1000;
+		const { github, calls, sleeps, warnings } = fixture([
+			limited({ "x-ratelimit-remaining": "0", "x-ratelimit-reset": `${reset}` }),
+			json({ data: { viewer: { login: "bot" } } }),
+		]);
+		expect(await github.graphql("query { viewer { login } }", {})).toEqual({ viewer: { login: "bot" } });
+		expect(calls).toHaveLength(2);
+		expect(sleeps).toEqual([300_000]);
+		expect(warnings).toEqual(["GitHub rate limited this request; waiting 300 seconds"]);
+	});
+
+	test("a RATE_LIMITED mutation repeats, since GitHub turned it away unprocessed", async () => {
+		const { github, calls, sleeps } = fixture([
+			limited({ "retry-after": "30" }),
+			json({ data: { addComment: { clientMutationId: null } } }),
+		]);
+		await github.graphql(addComment, { id: "PR_1" });
+		expect(calls.map(({ body }) => body?.query)).toEqual([addComment, addComment]);
+		expect(sleeps).toEqual([30_000]);
+	});
+
+	test("a persistent RATE_LIMITED fails loudly, and the deadline cuts its wait", async () => {
+		const persistent = fixture(Array.from({ length: 7 }, () => limited()));
+		await expect(persistent.github.graphql("query { viewer { login } }", {})).rejects.toThrow(
+			"GitHub GraphQL rate limit persisted",
+		);
+		expect(persistent.sleeps).toEqual([60_000, 120_000, 240_000, 480_000, 960_000, 1_920_000]);
+
+		const bounded = fixture([limited()], 10_000);
+		await expect(bounded.github.graphql("query { viewer { login } }", {})).rejects.toBeInstanceOf(GitHubDeadline);
+		expect(bounded.sleeps).toEqual([10_000]);
+	});
+
+	test("other GraphQL errors fail without waiting", async () => {
+		const { github, sleeps } = fixture([json({ errors: [{ type: "NOT_FOUND", message: "Not Found" }] })]);
+		await expect(github.graphql("query { viewer { login } }", {})).rejects.toThrow(
+			"GitHub GraphQL error: Not Found",
+		);
+		expect(sleeps).toEqual([]);
+	});
+
+	test("a mutation whose response body was cut off is confirmed, not sent again", async () => {
+		const disable =
+			"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }";
+		const { github, calls } = fixture([cut(), json({ data: { node: { autoMergeRequest: null } } })]);
+		expect(await github.graphql(disable, { id: "PR_1" })).toEqual({});
+		expect(calls.map(({ body }) => body?.query?.split("(")[0])).toEqual(["mutation", "query"]);
 	});
 
 	test("a mutation without a confirmation never repeats", async () => {
