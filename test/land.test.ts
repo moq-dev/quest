@@ -49,6 +49,7 @@ import {
 	keyPath,
 	lockCheckout,
 	lockRepository,
+	readPolicy,
 	resumeFailure,
 	serveBatch,
 } from "../src/cli/land-serve";
@@ -973,6 +974,43 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect((await build(forge.clone(), plan)).links).toHaveLength(1 + Math.floor(Math.log2(count)));
 	});
 
+	test("orders a batch newest-first and caps it at the policy's size", async () => {
+		const forge = new Forge();
+		for (let i = 0; i < 4; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
+		const plan = await resolveQueue(REPOSITORY, undefined, await forge.deps());
+		const numbers = async (order: "oldest" | "newest", size: number) =>
+			(await build(forge.clone(), plan, undefined, undefined, { order, size })).links.map(
+				({ entry }) => entry.number,
+			);
+		expect(await numbers("newest", Number.POSITIVE_INFINITY)).toEqual([4, 3, 2]);
+		expect(await numbers("newest", 1)).toEqual([4]);
+		expect(await numbers("oldest", 2)).toEqual([1, 2]);
+	});
+
+	test("alternates the batch order, halving after a failure and growing after a pass", async () => {
+		const forge = new Forge();
+		for (let i = 0; i < 8; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
+		const failing = sandbox("exit 1");
+		const round = async (options: ReturnType<typeof sandbox>) => {
+			const deps = await forge.deps();
+			const plan = await resolveQueue(REPOSITORY, undefined, deps);
+			const output = await serveBatch(forge.clone(), plan, options, deps, async () => deps.token);
+			forge.settle();
+			return output.map((line) => line.split(" ").slice(0, 2).join(" "));
+		};
+		// Oldest-first at the full 1 + floor(log2 8): four fail together, and the next batch halves.
+		expect(await round(failing)).toEqual(["ejected 1", "ejected 2", "ejected 3", "ejected 4"]);
+		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 2 });
+		// Newest-first at two.
+		expect(await round(failing)).toEqual(["ejected 8", "ejected 7"]);
+		expect(readPolicy(failing.state)).toEqual({ order: "oldest", size: 1 });
+		// The same state with a passing check: oldest-first at one lands, and the next grows.
+		const passing = { ...sandbox(), state: failing.state };
+		expect(await round(passing)).toEqual(["landed 5"]);
+		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 2 });
+		expect(await round(passing)).toEqual(["landed 6"]);
+	});
+
 	test("skips a conflicting addition and leaves it queued, adding a later clean PR", async () => {
 		const forge = new Forge();
 		forge.pull("One", { "code.txt": "one\nII\nthree\n" });
@@ -1011,7 +1049,11 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 			"2": clash.autoMerge!.enabledAt,
 		});
 		expect(await serveBatch(forge.clone(), plan, options, deps, fail)).not.toContain("overlap 2 1");
-		expect(clash.comments).toHaveLength(1);
+		// The second batch runs newest-first and may eject #2; only the overlap report must not repeat.
+		const overlaps = clash.comments!.filter(({ body }) =>
+			body.includes("conflicts with a pull request queued ahead"),
+		);
+		expect(overlaps).toHaveLength(1);
 	});
 
 	test("ejects alone a PR that fails quest check on the current base, before batching", async () => {
@@ -1487,7 +1529,8 @@ mv '${result}.new' '${result}'
 			(await serveBatch(root, remaining, options, restarted, async () => restarted.token)).map((line) =>
 				line.split(" ").slice(0, 2).join(" "),
 			),
-		).toEqual(["landed 2", "landed 3"]);
+			// The first batch passed its check, so the next one runs newest-first.
+		).toEqual(["landed 4", "landed 3"]);
 	});
 
 	test("refreshes API tokens across a long check and after a 401", async () => {

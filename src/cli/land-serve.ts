@@ -21,6 +21,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
 import { forgetHeads, prepareHead, resolvePreparedQueue, landFallback, finishFallback } from "./land-head";
 import {
+	type BatchPolicy,
 	build,
 	commandEnvironment,
 	eject,
@@ -295,6 +296,26 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 }
 
 /** One batch: check once, then squash through GitHub in order, verifying each resulting tree. */
+const POLICY = "batch-policy.json";
+
+/** The next batch's order and size; a missing or unreadable record starts oldest-first at full size. */
+export function readPolicy(state: string): BatchPolicy {
+	try {
+		const data = JSON.parse(readFileSync(join(state, POLICY), "utf8")) as { order?: unknown; size?: unknown };
+		const order = data.order === "newest" ? "newest" : "oldest";
+		const size = typeof data.size === "number" && data.size >= 1 ? Math.floor(data.size) : Number.POSITIVE_INFINITY;
+		return { order, size };
+	} catch {
+		return { order: "oldest", size: Number.POSITIVE_INFINITY };
+	}
+}
+
+/** After a checked batch of `checked` PRs: flip the order, halve on failure, and grow by one on success. */
+function nextPolicy(state: string, policy: BatchPolicy, checked: number, passed: boolean): void {
+	const size = passed ? checked + 1 : Math.max(1, Math.floor(checked / 2));
+	save(join(state, POLICY), { order: policy.order === "oldest" ? "newest" : "oldest", size });
+}
+
 export async function serveBatch(
 	root: string,
 	plan: Plan,
@@ -316,7 +337,8 @@ export async function serveBatch(
 	}
 	if (plan.queue.length === 0) return output;
 	const screened = readScreened(options.state);
-	const chain = await build(root, plan, read, (entry) => screened[entry.number] !== entry.enabledAt);
+	const policy = readPolicy(options.state);
+	const chain = await build(root, plan, read, (entry) => screened[entry.number] !== entry.enabledAt, policy);
 	// Each rejection is its own failure, so a fixer can repair it as it would a failed batch.
 	for (const { entry, commit, findings } of chain.rejected) {
 		const log = join(options.state, `check-${Date.now()}-${entry.number}.log`);
@@ -379,6 +401,7 @@ export async function serveBatch(
 		} finally {
 			rmSync(checkout, { recursive: true });
 		}
+		nextPolicy(options.state, policy, chain.links.length, code === 0);
 		if (code !== 0) {
 			const tail = readFileSync(log, "utf8").trimEnd().split("\n").slice(-100).join("\n");
 			failure = {

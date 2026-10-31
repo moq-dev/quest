@@ -548,8 +548,11 @@ belong to the host; these commands are executable paths, not shell expressions.
 Wrappers must expose only the supplied tree and log, never the state directory
 or its private bare repository.
 
-The oldest queued PR is the base. Add up to floor(log2 n) further PRs that merge
-cleanly in queue order, resolving quest links with `quest resolve`. Conflicting
+Batches alternate between the oldest and the newest queued PR as the base. Add
+up to floor(log2 n) further PRs that merge cleanly in that order, resolving
+quest links with `quest resolve`. A failed batch halves the next batch's size,
+down to one PR, and each batch that lands grows it back by one; the order and
+size persist in the state directory. Conflicting
 additions stay queued. A base conflict ejects only the base. The sandbox checks
 the tip once: success lands one squash commit per PR, while failure ejects every
 PR in that batch, without bisection. Ejection disables auto-merge, removes
