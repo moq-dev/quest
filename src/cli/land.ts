@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-import { MERGE_LABEL } from "../core";
+import { type Finding, MERGE_LABEL, check, formatFinding } from "../core";
 import { repositoryPath } from "./claims";
 import {
 	GitHub,
@@ -16,6 +16,7 @@ import {
 	string,
 } from "./github";
 import { classifyCheck } from "./status";
+import { snapshot } from "./tree";
 
 /** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
 export const LAND_CHECK = "quest land";
@@ -460,19 +461,47 @@ interface Conflict {
 	files: string[];
 }
 
-/** A bounded batch of squash commits, or a conflict on its base PR. */
-interface Chain {
-	links: Link[];
-	conflict?: Conflict;
+/** A queued PR that fails `quest check` squashed alone onto the base, with the findings the base lacks. */
+export interface Rejection {
+	entry: Entry;
+	/** The squash onto the base that fails, which a fixer starts from. */
+	commit: string;
+	findings: string[];
+}
+
+/** A newly screened PR, and the PRs ahead of it that it conflicts with, each squashed alone onto the base. */
+export interface Overlap {
+	entry: Entry;
+	ahead: Conflict[];
 }
 
 /**
- * Fetch the base and every queued head, then squash each head in turn onto the
- * chain in a scratch worktree inside the git directory, resolving quest files
- * with `quest resolve`. Stop at the batch limit, skipping conflicting additions;
- * a conflicting base stops the batch.
+ * A bounded batch of squash commits, or a conflict on its base PR. Rejected PRs are left out of
+ * it; overlaps only inform.
  */
-export async function build(root: string, plan: Plan, read: RemoteRead = readRemote): Promise<Chain> {
+interface Chain {
+	links: Link[];
+	conflict?: Conflict;
+	rejected: Rejection[];
+	overlaps: Overlap[];
+}
+
+/**
+ * Fetch the base and every queued head, then screen each head and squash the
+ * rest in turn onto the chain in a scratch worktree inside the git directory,
+ * resolving quest files with `quest resolve`. Stop at the batch limit, skipping
+ * conflicting additions; a conflicting base stops the batch.
+ *
+ * Screening squashes each head alone onto the base and rejects one that fails
+ * `quest check` there with findings the base lacks. Each head `fresh` accepts is
+ * also squashed onto each PR ahead of it, to report which ones it conflicts with.
+ */
+export async function build(
+	root: string,
+	plan: Plan,
+	read: RemoteRead = readRemote,
+	fresh: (entry: Entry) => boolean = () => false,
+): Promise<Chain> {
 	await read(root, [
 		"fetch",
 		"--quiet",
@@ -482,20 +511,17 @@ export async function build(root: string, plan: Plan, read: RemoteRead = readRem
 		...plan.queue.map((entry) => entry.head),
 	]);
 	return mergeWorktree(root, plan.base.sha, (dir, driver) => {
-		const chain: Chain = { links: [] };
-		for (const entry of plan.queue) {
-			if (chain.links.length >= 1 + Math.floor(Math.log2(plan.queue.length))) break;
-			const merged = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--squash", entry.head]);
-			if (merged.status !== 0) {
-				const files = lines(git(dir, ["diff", "--name-only", "--diff-filter=U"]));
-				if (files.length === 0)
-					throw new Error(`git merge --squash ${entry.head} failed: ${merged.stderr.trim()}`);
-				if (chain.links.length === 0) chain.conflict = { entry, files };
-				git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
-				if (chain.links.length === 0) break;
-				continue;
+		const chain: Chain = { links: [], ...screen(dir, driver, plan, fresh) };
+		const queue = plan.queue.filter((entry) => !chain.rejected.some((rejection) => rejection.entry === entry));
+		git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+		for (const entry of queue) {
+			if (chain.links.length >= 1 + Math.floor(Math.log2(queue.length))) break;
+			const files = squash(dir, driver, entry);
+			if (files !== null) {
+				if (chain.links.length > 0) continue;
+				chain.conflict = { entry, files };
+				break;
 			}
-			git(dir, ["commit", "--quiet", "--allow-empty", "-m", `${entry.title} (#${entry.number})`]);
 			chain.links.push({
 				entry,
 				commit: git(dir, ["rev-parse", "HEAD"]),
@@ -504,6 +530,82 @@ export async function build(root: string, plan: Plan, read: RemoteRead = readRem
 		}
 		return chain;
 	});
+}
+
+/** Squash `entry` onto `HEAD` and commit it, or return the conflicting files and leave `HEAD` as it was. */
+function squash(dir: string, driver: string, entry: Entry): string[] | null {
+	const merged = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--squash", entry.head]);
+	if (merged.status !== 0) {
+		const files = lines(git(dir, ["diff", "--name-only", "--diff-filter=U"]));
+		if (files.length === 0) throw new Error(`git merge --squash ${entry.head} failed: ${merged.stderr.trim()}`);
+		git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
+		return files;
+	}
+	git(dir, ["commit", "--quiet", "--allow-empty", "-m", `${entry.title} (#${entry.number})`]);
+	return null;
+}
+
+/**
+ * Squash each queued head alone onto the base, reject those failing `quest check` there, and
+ * squash each fresh head onto each one ahead of it. A head conflicting with the base is left to
+ * the chain, which ejects it once it is the batch's base PR.
+ */
+function screen(
+	dir: string,
+	driver: string,
+	plan: Plan,
+	fresh: (entry: Entry) => boolean,
+): Pick<Chain, "rejected" | "overlaps"> {
+	// A base without quests is a repository that does not use them.
+	const known =
+		git(dir, ["ls-tree", "--name-only", plan.base.sha, "quest"]) === "" ? null : questCheck(dir, plan.base.sha);
+	const alone = new Map<Entry, string>();
+	const rejected: Rejection[] = [];
+	for (const entry of plan.queue) {
+		git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+		if (squash(dir, driver, entry) !== null) continue;
+		const commit = git(dir, ["rev-parse", "HEAD"]);
+		// A finding the base already has is not this PR's, even on a line the PR moved.
+		const findings =
+			known === null
+				? []
+				: questCheck(dir, commit).filter(
+						(finding) => !known.some((old) => old.path === finding.path && old.message === finding.message),
+					);
+		if (findings.length > 0) rejected.push({ entry, commit, findings: findings.map(formatFinding) });
+		else alone.set(entry, commit);
+	}
+	const overlaps: Overlap[] = [];
+	const ahead: Entry[] = [];
+	for (const entry of plan.queue) {
+		if (!alone.has(entry)) continue;
+		if (fresh(entry)) {
+			const conflicts = ahead.flatMap((earlier) => {
+				git(dir, ["reset", "--quiet", "--hard", alone.get(earlier)!]);
+				const files = squash(dir, driver, entry);
+				return files === null ? [] : [{ entry: earlier, files }];
+			});
+			overlaps.push({ entry, ahead: conflicts });
+		}
+		ahead.push(entry);
+	}
+	return { rejected, overlaps };
+}
+
+/**
+ * `quest check`'s findings on `commit`, read from git objects by this trusted process, so nothing
+ * from the tree runs. A tree it cannot read, such as one with no quests left, is itself a finding,
+ * as it is for `quest check`.
+ */
+function questCheck(dir: string, commit: string): Finding[] {
+	try {
+		const tree = snapshot(dir, commit, false);
+		return check(tree.docs, tree.exists);
+	} catch (error) {
+		// Its messages name the scratch worktree, a host path the PR comment need not show.
+		const message = (error instanceof Error ? error.message : String(error)).replaceAll(`${dir}/`, "");
+		return [{ path: "quest", line: null, message }];
+	}
 }
 
 /** Trusted merge driver/worktree shared by batch construction and PR-head preparation. */

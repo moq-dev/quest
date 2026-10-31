@@ -20,7 +20,17 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
 import { forgetHeads, prepareHead, resolvePreparedQueue, landFallback, finishFallback } from "./land-head";
-import { build, commandEnvironment, eject, ejection, git, readRemote, type RemoteRead, type Plan } from "./land";
+import {
+	build,
+	commandEnvironment,
+	eject,
+	ejection,
+	git,
+	readRemote,
+	type Overlap,
+	type RemoteRead,
+	type Plan,
+} from "./land";
 
 export interface ServeOptions {
 	base?: string;
@@ -206,6 +216,43 @@ export function excerpt(tail: string): string {
 	return cut.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
 }
 
+/** Queued PRs already screened for conflicts with those ahead: PR number to the queue time screened. */
+function readScreened(state: string): Record<number, string> {
+	const path = join(state, "screened.json");
+	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Record<number, string>) : {};
+}
+
+/**
+ * Comment on each newly screened PR that conflicts with PRs queued ahead of it, so its author can
+ * resolve that before its turn, and remember it as screened until it is queued again.
+ */
+async function reportOverlaps(github: GitHub, plan: Plan, state: string, overlaps: Overlap[]): Promise<string[]> {
+	const screened = readScreened(state);
+	// A PR that left the queue is screened again once it is queued again, at a new queue time.
+	const kept: Record<number, string> = Object.fromEntries(
+		plan.queue.flatMap((entry) => (entry.number in screened ? [[entry.number, screened[entry.number]]] : [])),
+	);
+	const output: string[] = [];
+	for (const { entry, ahead } of overlaps) {
+		if (ahead.length > 0) {
+			const list = ahead.map(
+				(conflict) =>
+					`- [#${conflict.entry.number}](${conflict.entry.url}): ${conflict.files.map((file) => `<code>${excerpt(file)}</code>`).join(", ")}`,
+			);
+			await github.request(`/repos/${plan.repository}/issues/${entry.number}/comments`, {
+				body: {
+					body: `quest land: this pull request conflicts with ${ahead.length === 1 ? "a pull request" : "pull requests"} queued ahead of it, in these files:\n\n${list.join("\n")}\n\nOnce one of them lands, this one conflicts with the base and is ejected when its turn comes. Resolve the overlap before then, such as by coordinating with that author, or by merging the base once it lands.`,
+				},
+			});
+			output.push(`overlap ${entry.number} ${ahead.map((conflict) => conflict.entry.number).join(",")}`);
+		}
+		kept[entry.number] = entry.enabledAt;
+		save(join(state, "screened.json"), kept);
+	}
+	save(join(state, "screened.json"), kept);
+	return output;
+}
+
 type MergeResult =
 	{ sha: string } | { reason: "head_moved" | "merge_conflict" | "merge_refused"; detail: string } | null;
 
@@ -268,8 +315,25 @@ export async function serveBatch(
 		await handbackRepeated(options.state, plan, item, deps);
 	}
 	if (plan.queue.length === 0) return output;
-	const chain = await build(root, plan, read);
+	const screened = readScreened(options.state);
+	const chain = await build(root, plan, read, (entry) => screened[entry.number] !== entry.enabledAt);
+	// Each rejection is its own failure, so a fixer can repair it as it would a failed batch.
+	for (const { entry, commit, findings } of chain.rejected) {
+		const log = join(options.state, `check-${Date.now()}-${entry.number}.log`);
+		writeFileSync(log, `${findings.join("\n")}\n`, { mode: 0o600 });
+		const detail = `\`quest check\` fails with it squashed alone onto the base ${plan.base.sha}.\n\n<pre>${excerpt(findings.join("\n"))}</pre>\n`;
+		save(join(options.state, "failure.json"), {
+			plan,
+			tip: commit,
+			log,
+			numbers: [entry.number],
+			ejections: [ejection(entry, "failed_checks", detail)],
+		} satisfies Failure);
+		output.push(...(await resumeFailure(root, options, deps)));
+	}
+	output.push(...(await reportOverlaps(github, plan, options.state, chain.overlaps)));
 	const conflict = chain.conflict;
+	if (!conflict && chain.links.length === 0) return output;
 	const log = join(options.state, `batch-${Date.now()}-${plan.queue[0].number}.log`);
 	let failure: Failure | undefined;
 	if (conflict) {

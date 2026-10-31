@@ -75,6 +75,8 @@ function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+const QUEST = (title: string) => `# [S] ${title}\n\n## Goal\n\n${title}.\n`;
+
 const EPIC = (entries: string[]) =>
 	`# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
 
@@ -153,7 +155,7 @@ class Forge {
 		return dir;
 	}
 
-	advance(files: Record<string, string>): void {
+	advance(files: Record<string, string | null>): void {
 		git(this.work, "fetch", "--quiet", "origin", "main");
 		git(this.work, "checkout", "--quiet", "-B", "main", this.main());
 		this.write(files);
@@ -171,8 +173,13 @@ class Forge {
 		return git(join(this.hub, `${repository}.git`), "rev-parse", ref);
 	}
 
-	private write(files: Record<string, string>): void {
+	/** Write each file, deleting those whose content is null. */
+	private write(files: Record<string, string | null>): void {
 		for (const [path, content] of Object.entries(files)) {
+			if (content === null) {
+				rmSync(join(this.work, path));
+				continue;
+			}
 			mkdirSync(join(this.work, path, ".."), { recursive: true });
 			writeFileSync(join(this.work, path), content);
 		}
@@ -185,7 +192,7 @@ class Forge {
 	 */
 	pull(
 		title: string,
-		files: Record<string, string>,
+		files: Record<string, string | null>,
 		options: { contributor?: string; edits?: boolean; pull?: Partial<Pull> } = {},
 	): Pull {
 		const number = this.nextPull++;
@@ -412,10 +419,10 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 
 	test("prepares a behind-base PR with quest resolve and the exact tested tree", async () => {
 		const forge = new Forge();
-		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]) });
-		const pull = forge.pull("Remove a", { "quest/m0/README.md": EPIC(["b"]) });
+		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		const pull = forge.pull("Remove a", { "quest/m0/README.md": EPIC(["b"]), "quest/m0/a.md": null });
 		const pin = pull.head!;
-		forge.advance({ "quest/m0/README.md": EPIC(["a"]) });
+		forge.advance({ "quest/m0/README.md": EPIC(["a", "b", "c"]), "quest/m0/c.md": QUEST("C") });
 		const base = forge.main();
 		const deps = await forge.deps();
 		const plan = await resolveQueue(REPOSITORY, undefined, deps);
@@ -432,9 +439,21 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 	test.each(["adding", "deleting"])("two sibling PRs %s their own Required line both land", async (mode) => {
 		const forge = new Forge();
 		const adding = mode === "adding";
-		if (!adding) forge.advance({ "quest/m0/README.md": EPIC(["a", "b", "c"]) });
-		const one = forge.pull("Change b", { "quest/m0/README.md": EPIC(adding ? ["a", "b"] : ["a", "c"]) });
-		const two = forge.pull("Change c", { "quest/m0/README.md": EPIC(adding ? ["a", "c"] : ["a", "b"]) });
+		if (!adding)
+			forge.advance({
+				"quest/m0/README.md": EPIC(["a", "b", "c"]),
+				"quest/m0/b.md": QUEST("B"),
+				"quest/m0/c.md": QUEST("C"),
+			});
+		// Each PR adds or finishes its own quest, so each passes `quest check` alone on the base.
+		const one = forge.pull("Change b", {
+			"quest/m0/README.md": EPIC(adding ? ["a", "b"] : ["a", "c"]),
+			"quest/m0/b.md": adding ? QUEST("B") : null,
+		});
+		const two = forge.pull("Change c", {
+			"quest/m0/README.md": EPIC(adding ? ["a", "c"] : ["a", "b"]),
+			"quest/m0/c.md": adding ? QUEST("C") : null,
+		});
 		expect((await forge.round()).landing).toEqual([`landed 1 ${one.squash}`, `landed 2 ${two.squash}`]);
 		expect(git(forge.origin, "show", "main:quest/m0/README.md")).toBe(
 			EPIC(adding ? ["a", "b", "c"] : ["a"]).trim(),
@@ -961,12 +980,67 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		forge.pull("Clean", { "clean.txt": "ok" });
 		const { checked, landing } = await forge.round();
 		expect(checked).toEqual([[1, 3]]);
-		expect(landing.map((line) => line.split(" ")[0])).toEqual(["landed", "landed"]);
+		// Queueing it already reported the overlap with the PR ahead, without ejecting it.
+		expect(landing.map((line) => line.split(" ")[0])).toEqual(["overlap", "landed", "landed"]);
+		expect(landing[0]).toBe("overlap 2 1");
 		expect(clash.landing).toBe(true);
-		expect(forge.comment(2)).toBeUndefined();
+		expect(forge.comment(2)).toContain("conflicts with a pull request queued ahead of it");
+		expect(forge.comment(2)).toContain("- [#1](https://github.com/upstream/project/pull/1): <code>code.txt</code>");
 		// Once it is the oldest, its own conflict with main ejects it.
 		expect((await forge.round()).landing).toEqual(["ejected 2 merge_conflict"]);
 		expect(clash.labels).toEqual([]);
+	});
+
+	test("reports a queued PR's overlaps once per queue entry", async () => {
+		const forge = new Forge();
+		forge.pull("One", { "code.txt": "one\nII\nthree\n" });
+		const clash = forge.pull("Clash", { "code.txt": "one\n2\nthree\n" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const options = sandbox("exit 1");
+		const fail = async () => {
+			throw new Error("no merge on failure");
+		};
+		expect(await serveBatch(forge.clone(), plan, options, deps, fail)).toEqual([
+			"overlap 2 1",
+			"ejected 1 failed_checks",
+		]);
+		// The same queue entry is not screened again; a requeue, at a new queue time, would be.
+		expect(JSON.parse(readFileSync(join(options.state, "screened.json"), "utf8"))).toEqual({
+			"1": plan.queue[0].enabledAt,
+			"2": clash.autoMerge!.enabledAt,
+		});
+		expect(await serveBatch(forge.clone(), plan, options, deps, fail)).not.toContain("overlap 2 1");
+		expect(clash.comments).toHaveLength(1);
+	});
+
+	test("ejects alone a PR that fails quest check on the current base, before batching", async () => {
+		const forge = new Forge();
+		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		const linking = forge.pull("Link b", {
+			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n`,
+		});
+		forge.pull("Clean", { "clean.txt": "ok" });
+		// The base finishes b after the PR was queued, leaving its link dangling.
+		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
+		const { checked, landing } = await forge.round();
+		expect(landing).toEqual(["ejected 1 failed_checks", `landed 2 ${forge.repo.pulls[1].squash}`]);
+		expect(checked).toEqual([[2]]);
+		expect(forge.comment(1)).toContain("`quest check` fails with it squashed alone onto the base");
+		expect(forge.comment(1)).toMatch(/quest\/m0\/a\.md:\d+: .*\/quest\/m0\/b\.md/);
+		expect(forge.comment(1)).toContain("<!-- quest land: failed_checks -->");
+		expect(linking.labels).toEqual([]);
+	});
+
+	test("blames no PR for a finding the base already has", async () => {
+		const forge = new Forge();
+		forge.advance({ "quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [Gone](/quest/m0/gone.md) - gone\n` });
+		// Moving the finding's line does not make it the PR's.
+		forge.pull("Edit a", {
+			"quest/m0/a.md": `${QUEST("A")}\nMore.\n\n## Related\n\n- [Gone](/quest/m0/gone.md) - gone\n`,
+		});
+		const { landing } = await forge.round();
+		expect(landing).toEqual([`landed 1 ${forge.repo.pulls[0].squash}`]);
 	});
 
 	test("ejects the whole failing batch with a log tail, retaining the complete log", async () => {
@@ -1097,6 +1171,44 @@ mv '${result}.new' '${result}'
 			expect(git(cwd, "remote")).toBe("");
 			expect(git(cwd, "rev-parse", "HEAD")).toBe(plan.queue[0].head);
 			expect(git(cwd, "rev-parse", "base")).toBe(plan.base.sha);
+		} finally {
+			watcher!.close();
+		}
+	});
+
+	test("starts the fixer on a PR that fails quest check alone, from its squash onto the base", async () => {
+		const forge = new Forge();
+		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		forge.pull("Link b", { "quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n` });
+		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const options = { ...sandbox(), fixer: join(tempDir(), "fixer") };
+		const result = join(options.state, "fixer-result");
+		writeFileSync(
+			options.fixer,
+			`#!/bin/sh\nprintf '%s\\n' "$PWD" "$1" "$2" > '${result}.new'\nmv '${result}.new' '${result}'\n`,
+			{ mode: 0o755 },
+		);
+		const trusted = privateRepository(options.state);
+		forge.configure(trusted);
+		let watcher: ReturnType<typeof watch>;
+		const launched = new Promise<void>((done) => {
+			watcher = watch(options.state, (_event, name) => {
+				if (name === "fixer-result" && existsSync(result)) done();
+			});
+		});
+		try {
+			expect(await serveBatch(trusted, plan, options, deps, async () => deps.token)).toEqual([
+				"ejected 1 failed_checks",
+			]);
+			await launched;
+			const [cwd, log, number] = readFileSync(result, "utf8").trim().split("\n");
+			expect(log).toMatch(/check-.*-1\.log$/);
+			expect(readFileSync(log, "utf8")).toMatch(/quest\/m0\/a\.md:\d+: .*\/quest\/m0\/b\.md/);
+			expect(number).toBe("1");
+			expect(git(cwd, "rev-parse", "HEAD^")).toBe(plan.base.sha);
+			expect(git(cwd, "show", "HEAD:quest/m0/a.md")).toContain("/quest/m0/b.md");
 		} finally {
 			watcher!.close();
 		}
