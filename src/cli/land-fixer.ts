@@ -13,6 +13,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { MERGE_LABEL } from "../core";
 import { GitHub, type GitHubDependencies, object, string } from "./github";
@@ -58,6 +59,10 @@ interface Job {
 	terminating?: number;
 	pid?: number;
 	identity?: string;
+	/** The launching daemon's process identity, to tell a restart from a crash. */
+	daemon?: string;
+	/** Packs fetched from the daemon's repository at launch; their objects are already there. */
+	packs?: string[];
 	results?: FixResult[];
 	error?: string;
 	handbacks?: Record<number, string>;
@@ -194,6 +199,8 @@ export async function startFixer(
 		plan: failure.plan,
 		numbers: entries.map((entry) => entry.number),
 		started: deps.now(),
+		daemon: identity(process.pid),
+		packs: readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack")),
 		published: [],
 	};
 	save(path, job);
@@ -327,7 +334,8 @@ export async function collectFixers(
 		try {
 			output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read)));
 		} catch (error) {
-			job.error = `fixer collection failed: ${String(error)}; run /quest-iterate`;
+			// Keep the first reason: a GitHub error while handing back a crash must not replace the crash.
+			job.error ??= `fixer collection failed: ${String(error)}; run /quest-iterate`;
 			try {
 				save(path, job);
 				output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read)));
@@ -337,6 +345,12 @@ export async function collectFixers(
 		}
 	}
 	return output;
+}
+
+/** An exit status as a cause: a signal by name (143 is SIGTERM), or a crash with its code (101 is a Rust panic). */
+function exited(code: string): string {
+	const signal = Object.entries(osConstants.signals).find(([, number]) => 128 + number === Number(code))?.[0];
+	return signal ? `stopped by ${signal} (exit ${code})` : `crashed (exit ${code})`;
 }
 
 async function collectJob(
@@ -352,10 +366,13 @@ async function collectJob(
 	const github = new GitHub(deps);
 	const output: string[] = [];
 	if (!job.results && !job.error) {
+		// A restart stops the daemon's whole unit, fixers included, unless the host keeps them running.
+		const daemon = identity(process.pid);
+		const restarted = job.daemon && daemon && job.daemon !== daemon ? "; the daemon restarted while it ran" : "";
 		if (existsSync(`${path}.exit`)) {
 			const code = readFileSync(`${path}.exit`, "utf8");
 			if (job.terminating !== undefined) job.error = "fixer timed out; run /quest-iterate";
-			else if (code !== "0") job.error = `fixer crashed (exit ${code}); run /quest-iterate`;
+			else if (code !== "0") job.error = `fixer ${exited(code)}${restarted}; run /quest-iterate`;
 			else
 				try {
 					job.results = parseFixResult(readFixResult(job.checkout), job.numbers);
@@ -380,8 +397,10 @@ async function collectJob(
 				} catch {}
 			}
 			job.error = "fixer timed out; run /quest-iterate to diagnose and retry";
-		} else if (job.pid && job.identity && identity(job.pid) === job.identity) return output;
-		else job.error = "fixer disappeared before recording an exit status; run /quest-iterate";
+		}
+		// Without a launch identity (an unreadable /proc), only its exit status or the timeout can end the job.
+		else if (!job.identity || (job.pid && identity(job.pid) === job.identity)) return output;
+		else job.error = `fixer stopped without recording an exit status${restarted}; run /quest-iterate`;
 		save(path, job);
 	}
 	while (job.numbers.length) {
@@ -420,7 +439,7 @@ async function collectJob(
 					if (entry.repository !== job.plan.repository && !entry.maintainerCanModify)
 						throw new FixerRefusal("fork does not allow maintainer edits");
 					try {
-						importFixer(root, state, job.checkout, number, head);
+						importFixer(root, state, job.checkout, number, head, job.packs);
 					} catch (error) {
 						throw new FixerRefusal(String(error));
 					}

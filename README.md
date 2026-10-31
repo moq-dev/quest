@@ -523,18 +523,24 @@ The payload adds `agent` and `model` metadata to each result (`--model <id>`
 selects the default Codex model; unknown models fall back to `Codex`).
 Reasons and diagnoses are single lines. Fixed heads must be committed on `pr-<n>`.
 
-Jobs and attempts persist across daemon restarts. After the wrapper exits, the
+Jobs and attempts persist across daemon restarts. A running fixer outlives a
+restart only where the host leaves its process group alive (under systemd,
+`KillMode=process` on the daemon's unit); otherwise its handback names the signal
+and the restart. After the wrapper exits, the
 daemon validates every result, ancestry, and protected path before lease-pushing
 as the bot. The protected set as a whole must match the pinned head or its merge with the
 current base, including content and mode. It covers `flake.nix`, `flake.lock`,
 `shell.nix`, `default.nix`, `nix/`, `.envrc`, `.github/`, `.gitmodules`, and gitlinks
-anywhere. Collection copies at most 100 MiB of Git metadata into a clean object
-repository, ignores fixer configuration, and never follows Git alternates. Pack indexes are rebuilt with
+anywhere. Collection copies at most 100 MiB of Git metadata the fixer added into a
+clean object repository. It skips the packs fetched at launch, whose objects the clean
+repository borrows from the daemon's own. It ignores fixer configuration and never
+follows the fixer's Git alternates. Pack indexes are rebuilt with
 `git index-pack` rather than trusted; the fetch into the daemon's repository
 checks every object and link, since the import enables `fetch.fsckObjects=true`. It records `mechanical fix by <recorded agent/model>: <reason>` and the new head in
 `## Review`, enables head-pinned auto-merge, and adds `quest:merge`. Healthy PRs
 requeue unchanged. Forks refusing maintainer edits, refused pushes, invalid results,
-crashes, or the 60-minute fixer deadline hand back with a marked comment. A flaky
+crashes, or the 60-minute fixer deadline hand back with a marked comment naming the exit
+status or signal, with the tail of the job's retained log. A flaky
 requeue suggests a follow-up. Each maintainer pick gets one attempt; the daemon
 records the fixer's new auto-merge `enabledAt` so its second ejection hands back.
 A new maintainer pick resets the attempt. Host provisioning and isolation

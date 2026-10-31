@@ -127,7 +127,12 @@ export async function fix(
 		"-",
 	];
 	await new Promise<void>((done, reject) => {
-		const child = spawn(agent, argv, { cwd: root, env, stdio: ["pipe", "inherit", "inherit"] });
+		// Relay the agent's output through pipes of its own rather than letting it inherit ours. Once Bun writes
+		// to a pipe it marks that pipe non-blocking, and an inheriting child shares the flag: Codex then panicked
+		// (exit 101) with EAGAIN as soon as one command's output outran the host's reader.
+		const child = spawn(agent, argv, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
+		child.stdout.pipe(process.stdout, { end: false });
+		child.stderr.pipe(process.stderr, { end: false });
 		child.once("error", reject);
 		child.stdin.on("error", () => {});
 		child.stdin.end(`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs: ${numbers.join(", ")}\n`);

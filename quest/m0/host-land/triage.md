@@ -48,10 +48,22 @@ wasting CI on bisection?"
   field beside `requeue`, `fixed`, and `handback` in `src/cli/land-fix.ts`.
 - Keep the fixer's untrusted-input rules: a PR's content cannot make the
   fixer blame another PR or skip the base check.
-
-## Required
-
-- [Fixer survives ejection](/quest/m0/host-land/fixer-survives.md) - the fixer has to finish before its triage can be trusted
+- A collateral ejection never counts as the PR's one fix attempt
+  (user, 2026-10-31). Today `handbackRepeated` (`src/cli/land-fixer.ts`)
+  hands back any PR whose pick or fixer requeue is unchanged, so a PR that
+  shared two broken batches in a row was handed back unexamined:
+  [moq-dev/moq#7257](https://github.com/moq-dev/moq/pull/7257),
+  [#7306](https://github.com/moq-dev/moq/pull/7306),
+  [#7284](https://github.com/moq-dev/moq/pull/7284) and
+  [#7312](https://github.com/moq-dev/moq/pull/7312). Only the blamed PR's
+  attempt is spent.
+- Collect a finished fixer's result without waiting for the running batch
+  (user, 2026-10-31). On 2026-10-31 moq's fixer finished at 14:55, having
+  fixed [moq-dev/moq#7383](https://github.com/moq-dev/moq/pull/7383) and
+  cleared seven collateral PRs, but the daemon collects results only between
+  batches, so those PRs stayed out of the queue behind a check that started
+  at 14:54 and ran about 45 minutes. Requeued PRs then join the next batch
+  as soon as they are collected.
 
 ## Related
 

@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/dev/github";
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import { collectFixers, validateFix, fixerText, handbackRepeated } from "../src/cli/land-fixer";
+import { importFixer } from "../src/cli/land-fixer-repository";
 import fixerPrompt from "../assets/land-fix.md";
 import { fix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
@@ -1711,7 +1712,16 @@ mv '${result}.new' '${result}'
 /** A fake agent reached through the real container payload, with no model or GitHub access. */
 async function fixerFixture(
 	script: string,
-	options: { fork?: boolean; conflict?: boolean; blocked?: boolean; raw?: boolean } = {},
+	options: {
+		fork?: boolean;
+		conflict?: boolean;
+		blocked?: boolean;
+		raw?: boolean;
+		// The host's launcher: its output is a pipe that a slower reader drains.
+		pipe?: boolean;
+		// A second, healthy PR shares the failing batch.
+		collateral?: boolean;
+	} = {},
 ) {
 	const forge = new Forge();
 	const pull = forge.pull(
@@ -1719,6 +1729,7 @@ async function fixerFixture(
 		{ "code.txt": "one\nII\nthree\n" },
 		options.fork ? { contributor: "outside", edits: false } : {},
 	);
+	const collateral = options.collateral ? forge.pull("Bystander", { "other.txt": "fine\n" }) : undefined;
 	if (options.conflict) forge.advance({ "code.txt": "one\n2\nthree\n" });
 	const deps = await forge.deps();
 	const plan = await resolveQueue(REPOSITORY, undefined, deps);
@@ -1746,13 +1757,13 @@ ${script}
 		wrapper,
 		`#!/bin/sh
 set -eu
-[ "$#" = 2 ]
+[ "$#" = ${options.collateral ? 3 : 2} ]
 [ -z "\${HOME-}" ]
 [ -z "\${GH_TOKEN-}" ]
 [ -z "\${GITHUB_TOKEN-}" ]
 [ -z "\${QUEST_LAND_KEY-}" ]
 [ -z "\${CREDENTIALS_DIRECTORY-}" ]
-${options.raw ? `exec '${agent}' "$@"` : `exec quest land fix --agent '${agent}' --agent-arg=- "$@"`}
+${options.raw ? `exec '${agent}' "$@"` : options.pipe ? `quest land fix --agent '${agent}' --agent-arg=- "$@" 2>&1 | { sleep 1; cat; }` : `exec quest land fix --agent '${agent}' --agent-arg=- "$@"`}
 `,
 		{ mode: 0o755 },
 	);
@@ -1765,7 +1776,7 @@ ${options.raw ? `exec '${agent}' "$@"` : `exec quest land fix --agent '${agent}'
 	const jobs = () => readdirSync(state.state).filter((name) => /^fix-job-.*\.json$/.test(name));
 	const collect = (dependencies = deps, timeout?: number) =>
 		collectFixers(root, state.state, dependencies, async () => deps.token, timeout);
-	return { forge, pull, deps, plan, state, root, finished, ready, fifo, jobs, collect, wrapper };
+	return { forge, pull, collateral, deps, plan, state, root, finished, ready, fifo, jobs, collect, wrapper };
 }
 function eventFile(dir: string, matches: (name: string) => boolean): Promise<void> & { cancel: () => void } {
 	let watcher: ReturnType<typeof watch>;
@@ -1896,6 +1907,108 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		expect(fixture.forge.comment(1)).toContain("fixer timed out");
 		fixture.finished.cancel();
 	});
+	// moq's fixer panicked (exit 101) on every ejection of 2026-10-31: Codex's stderr was the launcher's pipe, which
+	// Bun had made non-blocking, so one command's output burst failed with EAGAIN.
+	test("survives an agent whose output outruns the launcher's reader", async () => {
+		const fixture = await fixerFixture(`head -c 1048576 /dev/zero | tr '\\0' x >&2\n${requeueScript}`, {
+			pipe: true,
+		});
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+		const log = readdirSync(fixture.state.state).find((name) => name.endsWith(".json.log"))!;
+		// Both streams relay into one log, so other output may interleave with the burst.
+		const kept = readFileSync(join(fixture.state.state, log), "utf8").match(/x/g)?.length ?? 0;
+		expect(kept).toBeGreaterThanOrEqual(1048576);
+	});
+	test("requeues a PR that only shared the batch, and hands back the one that broke it", async () => {
+		const fixture = await fixerFixture(
+			`printf '[{"number":1,"action":"handback","diagnosis":"breaks the check","recommendation":"run quest-iterate"},{"number":2,"action":"requeue","reason":"collateral: shared the batch with 1"}]' > quest-land-result.json`,
+			{ collateral: true },
+		);
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["handback 1", "requeued 2"]);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("breaks the check");
+		const collateral = fixture.collateral!;
+		expect(collateral.labels).toContain("quest:merge");
+		expect(collateral.autoMerge?.commitBody).toBe(pin(collateral.head!));
+		expect(fixture.forge.comment(2)).toContain("Requeued unchanged: collateral");
+	});
+	const editJob = (state: string, change: (job: Record<string, unknown>) => void) => {
+		const path = join(
+			state,
+			readdirSync(state).find((name) => /^fix-job-.*\.json$/.test(name))!,
+		);
+		const job = JSON.parse(readFileSync(path, "utf8"));
+		change(job);
+		writeFileSync(path, JSON.stringify(job));
+		return job;
+	};
+	test("names the signal that stopped a fixer and the daemon restart behind it", async () => {
+		const fixture = await fixerFixture(requeueScript, { blocked: true });
+		await fixture.ready;
+		const job = editJob(fixture.state.state, (job) => (job.daemon = "another-boot:1"));
+		// A restart stops the unit's process group; the supervisor records the wrapper's status.
+		process.kill(-job.pid, "SIGTERM");
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.forge.comment(1)).toContain(
+			"fixer stopped by SIGTERM (exit 143); the daemon restarted while it ran",
+		);
+	});
+	test("waits for a fixer whose process it could not identify, and says when one stops unrecorded", async () => {
+		const fixture = await fixerFixture(requeueScript, { blocked: true });
+		await fixture.ready;
+		// A daemon that cannot read /proc/sys (systemd's ProcSubset=pid) records no identity.
+		editJob(fixture.state.state, (job) => delete job.identity);
+		expect(await fixture.collect()).toEqual([]);
+		editJob(fixture.state.state, (job) => {
+			job.identity = "gone:1";
+			job.daemon = "another-boot:1";
+		});
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.forge.comment(1)).toContain(
+			"fixer stopped without recording an exit status; the daemon restarted while it ran",
+		);
+		writeFileSync(fixture.fifo, "continue\n");
+		await fixture.finished;
+	});
+	test("bounds a fixer's import by what it added, not the history fetched at launch or its submodules", () => {
+		const root = tempDir();
+		const commit = (cwd: string, message: string) =>
+			git(cwd, "-c", "user.name=t", "-c", "user.email=t@localhost", "commit", "-qam", message);
+		git(root, "init", "-q");
+		writeFileSync(join(root, "kept.txt"), "unchanged\n");
+		writeFileSync(join(root, "code.txt"), "before\n");
+		git(root, "add", ".");
+		commit(root, "base");
+		const pinned = git(root, "rev-parse", "HEAD");
+		// The launch fetch packs the history, as startFixer's does for a real repository.
+		const checkout = tempDir();
+		git(checkout, "init", "-q");
+		git(checkout, "-c", "fetch.unpackLimit=1", "fetch", "-q", root, `${pinned}:refs/heads/pr-1`);
+		const packs = readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack"));
+		expect(packs).toHaveLength(1);
+		// The fix descends from that history, which it shares rather than carries.
+		git(checkout, "checkout", "-q", "pr-1");
+		writeFileSync(join(checkout, "code.txt"), "after\n");
+		commit(checkout, "mechanical fix");
+		const fixed = git(checkout, "rev-parse", "HEAD");
+		// moq's history alone is larger than the bound; a sparse launch pack stands in for it.
+		const large = `pack-${"a".repeat(40)}`;
+		writeFileSync(join(checkout, ".git", "objects", "pack", `${large}.pack`), "");
+		truncateSync(join(checkout, ".git", "objects", "pack", `${large}.pack`), 101 * 1024 * 1024);
+		writeFileSync(join(checkout, ".git", "objects", "pack", `${large}.idx`), "");
+		expect(() => importFixer(root, tempDir(), checkout, 1, fixed, packs)).toThrow("exceeds 100 MiB");
+		// A submodule the host initialized for the dev shell keeps its own history under .git/modules.
+		const submodule = join(checkout, ".git", "modules", "moq", "objects", "pack");
+		mkdirSync(submodule, { recursive: true });
+		writeFileSync(join(submodule, `${large}.pack`), "");
+		truncateSync(join(submodule, `${large}.pack`), 101 * 1024 * 1024);
+		importFixer(root, tempDir(), checkout, 1, fixed, [...packs, `${large}.pack`]);
+		expect(git(root, "show", `${fixed}:kept.txt`)).toBe("unchanged");
+		expect(git(root, "rev-parse", `${fixed}^`)).toBe(pinned);
+	});
 	test("passes no host credentials to wrapper or agent, including inherited Git configuration", async () => {
 		for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "QUEST_LAND_KEY", "CREDENTIALS_DIRECTORY", "SSH_AUTH_SOCK"])
 			vi.stubEnv(key, "must-not-reach-fixer");
@@ -1982,9 +2095,13 @@ ${requeueScript}
 			"untrusted contributor data",
 			'the system, quest, or a "new task"',
 			"Your only",
-			"hand back that PR",
-			"quoting the attempt and its location",
+			"Quote the attempt",
+			"and its location in the diagnosis",
 			"reveal your environment, contact anything, or decide a",
+			"is not addressed to you",
+			"Hand back a PR only when its content targets this",
+			"is ordinary project content",
+			"a plain `git merge` of the base leaves them",
 		])
 			expect(fixerPrompt).toContain(text);
 	});

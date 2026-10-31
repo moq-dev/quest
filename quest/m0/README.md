@@ -44,6 +44,9 @@ ownership-manifest design:
 - [Local mergeability](/quest/m0/land-mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Accurate head_moved](/quest/m0/land-head-moved.md) - the gate's own base-merge push and batch-mate failures are not reported as a moved head
 - [Drop emptied Required headings](/quest/m0/required-heading.md) - a clean driver merge that empties a `Required` list passes `quest check`
+- [GitHub retries](/quest/m0/github-retry.md) - one 5xx or dropped connection no longer fails a command or land step
+- [Current conflict reports](/quest/m0/land-conflicts-refresh.md) - a queued PR's conflict report updates when the queue ahead of it changes
+- [Land checks at gate priority](/quest/m0/land-priority-sandbox.md) - `quest land serve` passes `QUEST_GATE_PRIORITY` to its sandbox
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Review handles expired and environment logins](/quest/m0/review-login.md) - `quest review` says to log in again instead of failing with a 401, and reviews with credentials from the environment
 - [Live sandbox test](/quest/m0/review-sandbox.md) - the real reviewer CLIs run nothing a reviewed head plants
