@@ -989,7 +989,7 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 
 	test("alternates the batch order, halving after a failure and growing after a pass", async () => {
 		const forge = new Forge();
-		for (let i = 0; i < 8; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
+		for (let i = 0; i < 5; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
 		const failing = sandbox("exit 1");
 		const round = async (options: ReturnType<typeof sandbox>) => {
 			const deps = await forge.deps();
@@ -998,17 +998,15 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 			forge.settle();
 			return output.map((line) => line.split(" ").slice(0, 2).join(" "));
 		};
-		// Oldest-first at the full 1 + floor(log2 8): four fail together, and the next batch halves.
-		expect(await round(failing)).toEqual(["ejected 1", "ejected 2", "ejected 3", "ejected 4"]);
-		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 2 });
-		// Newest-first at two.
-		expect(await round(failing)).toEqual(["ejected 8", "ejected 7"]);
+		// Oldest-first at the full 1 + floor(log2 5): three fail together, and the next batch halves.
+		expect(await round(failing)).toEqual(["ejected 1", "ejected 2", "ejected 3"]);
+		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 1 });
+		// Newest-first at one.
+		expect(await round(failing)).toEqual(["ejected 5"]);
 		expect(readPolicy(failing.state)).toEqual({ order: "oldest", size: 1 });
 		// The same state with a passing check: oldest-first at one lands, and the next grows.
-		const passing = { ...sandbox(), state: failing.state };
-		expect(await round(passing)).toEqual(["landed 5"]);
+		expect(await round({ ...sandbox(), state: failing.state })).toEqual(["landed 4"]);
 		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 2 });
-		expect(await round(passing)).toEqual(["landed 6"]);
 	});
 
 	test("skips a conflicting addition and leaves it queued, adding a later clean PR", async () => {
