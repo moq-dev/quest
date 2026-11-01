@@ -4,6 +4,14 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # A reviewed quest for the dev shell's merge driver, so local merges resolve
+    # link lists without running the checkout's own, possibly unreviewed, code.
+    # Only its source is pinned, so the lock never chains older pins. Bump with
+    # `nix flake update quest-pinned`.
+    quest-pinned = {
+      url = "github:moq-dev/quest";
+      flake = false;
+    };
   };
 
   outputs =
@@ -11,6 +19,7 @@
       self,
       nixpkgs,
       flake-utils,
+      quest-pinned,
       ...
     }:
     # The pinned nixpkgs no longer evaluates on x86_64-darwin; Intel Macs use the release binary.
@@ -29,6 +38,7 @@
             config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "claude-code";
           };
           quest = pkgs.callPackage ./nix/package.nix { };
+          questPinned = pkgs.callPackage "${quest-pinned}/nix/package.nix" { };
           # https://downloads.claude.ai/claude-code-releases/2.1.305/manifest.zst.json
           # Keep the tested runner version independent of nixpkgs.
           claudeCode = pkgs.claude-code.override {
@@ -68,6 +78,8 @@
             packages = with pkgs; [
               # Installs dependencies, runs every script and tool, and compiles the release binaries.
               bun
+              # `quest resolve` for the merge driver; `just` and `bun run quest` run the checkout.
+              questPinned
               just
               jq
               git
