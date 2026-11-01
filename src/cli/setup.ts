@@ -230,10 +230,11 @@ function read(root: string, path: string): string {
 /**
  * Any version's stub: frontmatter naming the skill, then the pointer to
  * `quest skill`. Descriptions and the setup link change between versions, so
- * only this shape identifies a file Quest wrote.
+ * only this shape identifies a file Quest wrote. Skill frontmatter has only
+ * ever held `name` and `description`, so any other field marks an edited stub.
  */
 const STUB =
-	/^---\nname: (\S+)\n(?:(?!---\n).*\n)*---\n\nRun `quest skill (\S+)` and follow its output\.\nIf `quest` is not installed, follow \S+ first\.\n$/;
+	/^---\nname: (\S+)\n(?:(?:name|description): .*\n)*---\n\nRun `quest skill (\S+)` and follow its output\.\nIf `quest` is not installed, follow \S+ first\.\n$/;
 
 /**
  * Whether `path` holds a Quest stub of any version for the skill installed as

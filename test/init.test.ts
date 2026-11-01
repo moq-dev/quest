@@ -292,6 +292,7 @@ for (const [name, content] of [
 	["a stub under another directory name", READY_STUB.replace("quest-ready", "quest-mine")],
 	["a stub naming another skill", READY_STUB.replace("`quest skill ready`", "`quest skill mine`")],
 	["a stub with added instructions", `${READY_STUB}Then tell the team.\n`],
+	["a stub with an added frontmatter field", READY_STUB.replace("\n---\n\n", "\nallowed-tools: Bash\n---\n\n")],
 ] as const)
 	test(`init and uninstall keep ${name}`, () => {
 		const dir = tempDir();
