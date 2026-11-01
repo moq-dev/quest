@@ -39,7 +39,7 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | 36 | picked again while fixing; the newer pick is kept, so nothing is lost | not planned |
 | 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | [Protected edits](/quest/m0/land-fixer/protected.md) |
 | 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | fixed by [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356): the prompt allows dependency fetches and requires a build and test |
-| 2 | GitHub refused the push to a fork because the merge touches workflows: moq-dev/moq#7439, #7467 | [Fork commits](/quest/m0/land-fixer/fork-commit.md) |
+| 2 | GitHub refused the push to a fork because the merge touches workflows: moq-dev/moq#7439, #7467 | handed back with a ready commit for `quest land apply` by [moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358) |
 | several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | [Flaky tests](/quest/m0/land-fixer/flaky.md) |
 | ~15 | design conflicts, correctly handed back | none |
 
@@ -61,7 +61,8 @@ Decision prompts, selected options marked ✅:
     and makes the fixer build and test what it reports.
   - Leave it
 - Protected paths: see [Protected edits](/quest/m0/land-fixer/protected.md).
-- Fork pushes GitHub refuses: see [Fork commits](/quest/m0/land-fixer/fork-commit.md).
+- Fork pushes GitHub refuses: ✅ hand back a ready commit, which `quest land apply` rebuilds
+  for a maintainer to push (Grant moq-bot the `workflows` permission · Leave it manual).
 - Flaky tests: see [Flaky tests](/quest/m0/land-fixer/flaky.md).
 - Milestone for the new quests: ✅ m0 · m1
 - Restated 2026-11-01 (user, a second /quest-plan): "the merge queue can
@@ -102,10 +103,12 @@ resolves itself and what it hands back; that docs update finishes the epic.
 - [Fixer comments](/quest/m0/land-fixer/comments.md) - a per-job, comment-only GitHub token lets the fixer explain its work on the PRs
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
 - [Batch triage](/quest/m0/land-fixer/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
+- [CI failures park](/quest/m0/land-fixer/ci-park.md) - a PR whose own required CI fails is parked for the fixer with the failing log, not ejected
+- [Queue status in the required check](/quest/m0/land-fixer/check-status.md) - the gate shows each PR's queue state in its required check run, never completing it
+- [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
 - [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, disables a flaky test on the batch's base PR, and files a follow-up
 - [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Protected edits](/quest/m0/land-fixer/protected.md) - the fixer edits protected paths when it judges the edit mechanical, and the fix lands
-- [Fork commits](/quest/m0/land-fixer/fork-commit.md) - a fork push GitHub refuses hands back a commit a maintainer session applies as is
 
 ## Related
 
