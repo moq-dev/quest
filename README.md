@@ -599,7 +599,7 @@ request for a maintainer to merge as an administrator. Only when the fixer canno
 fix the base, or there is no fixer, does an issue say the queue is halted. If the
 base moves and still fails, the daemon closes that fix and runs the fixer on the
 new base. Once a check of a moved base passes, the queue resumes, and the daemon
-closes the issue and any fix it no longer needs. The daemon collects a finished fixer job even while a check runs.
+closes the issue and any fix it no longer needs. A job collected while the queue is halted releases its PRs without checking its own, possibly older, base. The daemon collects a finished fixer job even while a check runs.
 Without a fixer, a failure ejects the batch instead: ejection disables auto-merge,
 removes `quest:merge`, and comments with the reason and the failing log, bounded by
 size. When GitHub refuses one PR's squash merge, only that PR stops: a conflict is
@@ -641,8 +641,8 @@ failure ejects `head_moved`. A locally prepared or API squash tree mismatch logs
 CRITICAL and ejects the remaining batch as `tree_mismatch`.
 
 After an API refusal, the daemon re-reads mergeability and briefly retries
-pending mergeability or a base refresh. Confirmed conflicts and moved heads eject
-the remainder; a persistent policy refusal ejects as `merge_refused` without the
+pending mergeability or a base refresh. A confirmed conflict parks only that PR for
+the fixer and a moved head ejects only that PR; the rest stays queued. A persistent policy refusal ejects as `merge_refused` without the
 fixer. Already-merged PRs are skipped. An unexpected API squash parent means the
 base moved: the remainder is rebuilt without ejection.
 

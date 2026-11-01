@@ -2137,6 +2137,19 @@ printf '[{"number":1,"action":"fixed","head":"%s","reason":"preserve both confli
 // The fixer, like the daemon, needs Linux process groups and fifos.
 describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 	afterEach(() => vi.unstubAllEnvs());
+	test("releases a stale job's PRs while a halt stands, never checking its base or replacing the halt", async () => {
+		const fixture = await fixerFixture(requeueScript);
+		await fixture.finished;
+		// The queue halted on a newer base, with a fix proposed for it, while this job ran.
+		const halt = { sha: "f".repeat(40), fix: 99 };
+		writeFileSync(join(fixture.state.state, "halt.json"), JSON.stringify(halt));
+		const stale = async () => {
+			throw new Error("checked the job's stale base");
+		};
+		expect(await fixture.collect(undefined, undefined, stale)).toEqual(["released 1"]);
+		expect(JSON.parse(readFileSync(join(fixture.state.state, "halt.json"), "utf8"))).toEqual(halt);
+		expect(fixture.jobs()).toEqual([]);
+	});
 	test("requeues a parked PR unchanged, and hands back a second failure it is blamed for in the same pick", async () => {
 		const fixture = await fixerFixture(requeueScript);
 		await fixture.finished;

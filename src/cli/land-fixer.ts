@@ -692,7 +692,9 @@ async function collectJob(
 	if (job.parked && job.results && !job.error && !job.blame && !named && job.base === undefined) {
 		if (!checkBase) return output;
 		try {
-			job.base = await checkBase(job.plan.base);
+			// This job's base may be stale. While a halt stands, never let it replace that halt or close
+			// its fix: the queue is halted anyway, so the job's PRs go back unchecked.
+			job.base = readHalt(state) ? false : await checkBase(job.plan.base);
 		} catch (error) {
 			throw new BaseCheckError("base check failed to run", { cause: error });
 		}
