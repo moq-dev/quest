@@ -46,4 +46,4 @@ Decided 2026-10-28 (user, /quest-plan of the follow-ups from
 ## Related
 
 - [Web execution](/quest/m0/kix/execution.md) - merge jobs this rule gates
-- [Require read-only pull-request CI](/quest/m0/kix/ci-read-only.md) - the trust model this completes
+- [Require read-only pull-request CI](/quest/m1/kix/ci-read-only.md) - the trust model this completes

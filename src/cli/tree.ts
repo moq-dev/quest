@@ -69,9 +69,11 @@ export function checkout(root: string): Snapshot {
 /**
  * The quest tree at `commit`, read from git rather than the checkout, with
  * paths relative to `root` as on disk. A symbolic link is a path, not a quest.
+ * With `submodules` false, as in a bare repository with no submodule checkouts,
+ * every path inside a submodule exists rather than being read from it.
  */
-export function snapshot(root: string, commit: string): Snapshot {
-	const tree = committed(root, commit);
+export function snapshot(root: string, commit: string, submodules = true): Snapshot {
+	const tree = committed(root, commit, submodules);
 	const quests = tree.entries.filter(
 		({ mode, type, path }) => type === "blob" && mode !== "120000" && path.startsWith("quest/") && isQuest(path),
 	);
@@ -101,7 +103,11 @@ interface Entry {
 }
 
 /** Committed paths, descending into a gitlink only when a link needs its contents. */
-function committed(root: string, commit: string): { entries: Entry[]; exists(path: string): boolean } {
+function committed(
+	root: string,
+	commit: string,
+	submodules = true,
+): { entries: Entry[]; exists(path: string): boolean } {
 	const entries: Entry[] = [];
 	const paths = new Set<string>();
 	const modules = new Map<string, string>();
@@ -126,6 +132,7 @@ function committed(root: string, commit: string): { entries: Entry[]; exists(pat
 			if (paths.has(path)) return true;
 			for (const [module, oid] of modules) {
 				if (!path.startsWith(`${module}/`)) continue;
+				if (!submodules) return true;
 				let tree = loaded.get(module);
 				if (!tree) {
 					const dir = join(root, module);

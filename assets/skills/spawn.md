@@ -39,8 +39,9 @@ Stop at the PRs, beyond the `/quest-review` each started agent runs itself: neve
 Once every sub-agent has finished, plan the follow-ups the agents suggested, as the guide describes, in the foreground.
 Include quest context, as many quests are concurrently in flight.
 
-Once every sub-agent has finished, remove local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
-Leave the worktree you are running in and any holding uncommitted work; list those in your summary.
+Once every sub-agent has finished, remove each agent checkout `quest worktree status` lists with `quest worktree remove`, since Claude never removes a subagent's checkout; it refuses one holding unpreserved work.
+Remove other local worktrees, and branches, whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
+Leave the worktree you are running in and any holding uncommitted work or refused removal; list those in your summary.
 
 ## API keys
 
