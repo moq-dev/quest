@@ -40,7 +40,7 @@ cloud runners; donor allocations follow working cloud runners separately.
   does not implement a shared monthly cap. Do not present it as one.
   Document provider workspace limits as an independent backstop.
 - Hosting is paid by kix.quest under a separate operator limit until
-  [paid compute](/quest/m1/cloud/billing.md) ships. API-key authorization
+  [paid compute](/quest/m2/cloud/billing.md) ships. API-key authorization
   never silently pays compute charges.
 - Decided 2026-10-15: keep key setup, usage, pause/revocation, and deployment
   instructions in the existing service documentation. No separate guide
@@ -57,4 +57,4 @@ cloud runners; donor allocations follow working cloud runners separately.
 
 ## Related
 
-- [Donor allocations](/quest/m1/cloud/donors.md) - add shared budgets after cloud runners work
+- [Donor allocations](/quest/m2/cloud/donors.md) - add shared budgets after cloud runners work

@@ -19,4 +19,4 @@ with constrained network and filesystem access, without exposing host secrets.
 
 ## Required
 
-- [Shared runners](/quest/m1/donor-runner.md) - the execution path this hardens
+- [Shared runners](/quest/m2/donor-runner.md) - the execution path this hardens

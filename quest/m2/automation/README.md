@@ -13,6 +13,6 @@ No custom review database or git-note approval protocol is introduced.
 
 ## Required
 
-- [Agent reviews](/quest/m1/automation/review.md) - attributed, advisory GitHub reviews
-- [Donated checks](/quest/m1/automation/checks.md) - repository-defined check execution with explicit trust
-- [Nix cache](/quest/m1/automation/cache.md) - optional main-only signed build cache
+- [Agent reviews](/quest/m2/automation/review.md) - attributed, advisory GitHub reviews
+- [Donated checks](/quest/m2/automation/checks.md) - repository-defined check execution with explicit trust
+- [Nix cache](/quest/m2/automation/cache.md) - optional main-only signed build cache

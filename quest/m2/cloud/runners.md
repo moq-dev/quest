@@ -18,7 +18,7 @@ spend cap bounds the free hosting.
   revocable job credential only.
 - Decided 2026-10-15 in the funding interview: the first cloud release uses
   maintainer API keys. Enable production key collection with this hosted
-  integration; [donor allocations](/quest/m1/cloud/donors.md) follow working
+  integration; [donor allocations](/quest/m2/cloud/donors.md) follow working
   cloud runners and do not gate this quest.
 - Reuse the project's Nix devShell and the shared cache where available, so
   cold containers do not rebuild the world.
@@ -33,4 +33,4 @@ spend cap bounds the free hosting.
 
 ## Required
 
-- [API funding](/quest/m1/cloud/funding.md) - maintainer API keys, the credential proxy, and accounting
+- [API funding](/quest/m2/cloud/funding.md) - maintainer API keys, the credential proxy, and accounting

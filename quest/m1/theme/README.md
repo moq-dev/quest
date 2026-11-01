@@ -112,8 +112,8 @@ Decided while planning on 2026-10-05, amended 2026-10-14 where noted:
 
 ## Required
 
-- [Landing page](/quest/m0/theme/landing.md) - the home page's calls to action lead to sign-in, onboarding, and the setup paste
+- [Landing page](/quest/m1/theme/landing.md) - the home page's calls to action lead to sign-in, onboarding, and the setup paste
 
 ## Related
 
-- [Launch material](/quest/m0/launch.md) - posts, quickstart, demo, and comparison written in the same voice
+- [Launch material](/quest/m1/launch.md) - posts, quickstart, demo, and comparison written in the same voice

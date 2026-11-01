@@ -22,4 +22,4 @@ merged default-branch revisions.
 
 ## Required
 
-- [Donated checks](/quest/m1/automation/checks.md) - runner configuration and trust model
+- [Donated checks](/quest/m2/automation/checks.md) - runner configuration and trust model
