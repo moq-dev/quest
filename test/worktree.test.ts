@@ -7,7 +7,6 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	realpathSync,
 	rmSync,
 	symlinkSync,
 	truncateSync,
@@ -20,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from "../src/cli/supervise";
 import { GitHub, mergedHead } from "../src/cli/github";
 import { main } from "../src/cli/main";
-import { Worktrees, derivedDefaults, diskUsage } from "../src/cli/worktree";
+import { Worktrees, canonical, derivedDefaults, diskUsage } from "../src/cli/worktree";
 import { claudeHook } from "../src/cli/worktree-hook";
 import { run } from "./fixture";
 
@@ -654,7 +653,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		git(session, "commit", "-am", "session work");
 		const created = { hook_event_name: "WorktreeCreate", cwd: session, name: "agent-1" };
 		const path = (await claudeHook(created, worktrees, noForge))!.trim();
-		expect(path).toBe(join(realpathSync(repo), ".worktrees", "agent-1"));
+		expect(path).toBe(join(canonical(repo), ".worktrees", "agent-1"));
 		expect(git(path, "rev-parse", "HEAD")).toBe(git(session, "rev-parse", "HEAD"));
 		expect(worktrees.status().records[0]).toMatchObject({ name: "agent-1", scratch: ["cache"] });
 		worktrees.release("agent-1");
@@ -733,7 +732,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		expect(settled).toBe(false);
 		rmSync(lock, { recursive: true });
-		expect((await created)!.trim()).toBe(join(realpathSync(repo), ".worktrees", "agent-wait"));
+		expect((await created)!.trim()).toBe(join(canonical(repo), ".worktrees", "agent-wait"));
 	});
 	it("keeps names unique per repository, and asks for the ID where several share one", async () => {
 		const { root, repo, worktrees } = fixture();
@@ -760,7 +759,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 			);
 		const created = cli(JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-cli" }));
 		expect(created.status).toBe(0);
-		expect(created.stdout).toBe(`${join(realpathSync(repo), ".worktrees", "agent-cli")}\n`);
+		expect(created.stdout).toBe(`${join(canonical(repo), ".worktrees", "agent-cli")}\n`);
 		expect(cli("not json").status).toBe(1);
 		expect(cli(JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-cli/x" })).status).toBe(
 			1,
