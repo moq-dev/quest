@@ -969,8 +969,10 @@ in the repository, for `--worktree`, `EnterWorktree`, isolated subagents, and
 background sessions, and Claude no longer copies `.worktreeinclude` files into
 them.
 
-Each is a `quest worktree` checkout of the session's commit under the main
-checkout's `.worktrees/`, named as Claude names it. With only a name to go on,
+Each is a `quest worktree` checkout under the main checkout's `.worktrees/`,
+named as Claude names it. Like Claude's default, it starts from the remote's
+default branch as last fetched (`origin/HEAD`), or from the session's commit
+when that is unknown; Claude's `worktree.baseRef` setting no longer applies. With only a name to go on,
 it declares the main checkout's top-level ignored entries as scratch, except
 `.worktrees/`, `.claude/`, and entries holding a nested repository, and
 reserves the main checkout's disk usage without `.git` and those checkouts. A

@@ -47,6 +47,18 @@ function toplevel(cwd: string): string | undefined {
 }
 
 /**
+ * Claude's default base for a new worktree: the remote's default branch as last fetched, or the
+ * session's own commit when no remote default branch is known.
+ */
+function base(cwd: string): string {
+	try {
+		return git(cwd, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD^{commit}");
+	} catch {
+		return git(cwd, "rev-parse", "HEAD");
+	}
+}
+
+/**
  * The checkout Claude created for this subagent. Claude names a subagent's worktree `agent-<agent_id>`,
  * so a subagent that runs without isolation in another agent's checkout never matches it.
  */
@@ -58,7 +70,7 @@ function subagentCheckout(worktrees: Worktrees, input: HookInput): WorktreeRecor
 
 /**
  * Handle one hook event and return what it prints on stdout, if anything. WorktreeCreate checks
- * out the session's commit under the main checkout's `.worktrees/`, with derived defaults, and
+ * out Claude's default base under the main checkout's `.worktrees/`, with derived defaults, and
  * prints its path; an existing checkout of that name in the repository is restored instead.
  * WorktreeRemove removes the checkout, never forcing. SubagentStop releases the subagent's own
  * checkout, and SubagentStart restores it, telling the subagent when its scratch was deleted.
@@ -72,7 +84,7 @@ export async function claudeHook(input: unknown, worktrees: Worktrees, merged: M
 			const existing = worktrees.registered(join(main, ".worktrees", name));
 			if (existing?.name === name) return `${worktrees.restore(existing.id).path}\n`;
 			const { reserve, scratch } = derivedDefaults(main);
-			return `${worktrees.create(main, name, reserve, git(hook.cwd, "rev-parse", "HEAD"), scratch).path}\n`;
+			return `${worktrees.create(main, name, reserve, base(hook.cwd), scratch).path}\n`;
 		}
 		case "WorktreeRemove": {
 			const path = canonical(field(hook, "worktree_path"));

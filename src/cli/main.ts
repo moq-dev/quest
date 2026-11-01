@@ -694,8 +694,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				".claude/settings.json for " +
 				HOOK_EVENTS.join(", ") +
 				".\n\n" +
-				"WorktreeCreate checks out the session's commit as a quest worktree under the main checkout's " +
-				".worktrees/ and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
+				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
+				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
+				"and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
 				".worktrees/, .claude/, and entries holding a nested repository; its reserve is the main checkout's disk " +
 				"usage without .git and those checkouts. An existing checkout of that name in the repository is " +
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +

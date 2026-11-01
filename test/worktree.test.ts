@@ -645,7 +645,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		const { root, repo } = fixture();
 		expect(new Worktrees(join(root, "fresh")).create(repo, "work", 1_000_000).phase).toBe("active");
 	});
-	it("creates under the main checkout at the session's commit, and restores a name it already holds", async () => {
+	it("creates under the main checkout at the remote's default branch, or the session's commit without one, and restores a name it already holds", async () => {
 		const { root, repo, worktrees } = fixture();
 		mkdirSync(join(repo, "cache"));
 		const session = join(root, "session");
@@ -661,6 +661,12 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		expect((await claudeHook(created, worktrees, noForge))!.trim()).toBe(path);
 		expect(worktrees.status().records).toHaveLength(1);
 		expect(worktrees.status().records[0].phase).toBe("active");
+		// With a known remote default branch, a new checkout starts there, as Claude's do by default.
+		const initial = git(repo, "rev-parse", "main");
+		git(repo, "update-ref", "refs/remotes/origin/main", initial);
+		git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+		const fresh = (await claudeHook({ ...created, name: "agent-2" }, worktrees, noForge))!.trim();
+		expect(git(fresh, "rev-parse", "HEAD")).toBe(initial);
 	});
 	it("releases a stopped subagent's own checkout and restores it on resume", async () => {
 		const { repo, worktrees } = fixture();
