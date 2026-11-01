@@ -412,7 +412,7 @@ export interface BatchOptions extends Pick<ServeOptions, "state" | "sandbox" | "
 const COLLECT_EVERY = 60_000;
 
 /** The line a check prints to name a module that failed, which the gate reruns once on the same tip. */
-const FAILED_MODULE = /^quest-land-failed: (.+)$/gm;
+const FAILED_MODULE = /^quest-land-failed:(.*)$/gm;
 /** The line the gate writes into a check's log before rerunning it. */
 export const RERUN_MARKER = "quest land: rerunning";
 
@@ -521,32 +521,45 @@ async function runSandbox(
 	}
 }
 
-/** Logs of checks that passed only on their rerun, waiting for a fixer job to disable what flaked. */
+/**
+ * A check that passed only on its rerun, waiting for a fixer job to disable what flaked: its log, and
+ * the PRs it checked, which must land or leave the queue first, so the job starts on a base that holds
+ * whatever of their code will land.
+ */
+interface Flake {
+	log: string;
+	numbers: number[];
+}
 const FLAKY = "flaky.json";
 
-function readFlaky(state: string): string[] {
+function readFlaky(state: string): Flake[] {
 	const path = join(state, FLAKY);
-	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as string[]) : [];
+	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Flake[]) : [];
 }
 
-/** The line that reports a check of `tip` that passed only on its rerun. */
-function flaked(tip: string, modules: string[]): string {
+/**
+ * Report a check of `tip`, holding the PRs `numbers`, that passed only on its rerun. With a fixer, its log
+ * is kept as `flaky-*.log`, the name that tells the fixer to disable the flaky test. Returns the report.
+ */
+function flaked(
+	options: Pick<ServeOptions, "state" | "fixer">,
+	log: string,
+	tip: string,
+	modules: string[],
+	numbers: number[],
+): string {
+	if (options.fixer) {
+		const kept = join(options.state, `flaky-${Date.now()}-${tip.slice(0, 12)}.log`);
+		copyFileSync(log, kept);
+		save(join(options.state, FLAKY), [...readFlaky(options.state), { log: kept, numbers } satisfies Flake]);
+	}
 	return `flaky ${tip} ${modules.length ? modules.join(", ") : "check"}`;
 }
 
 /**
- * Keep the log of a check of `tip` that passed only on its rerun, once the code it checked is on the
- * base, so the fixer finds the flaky test there. With a fixer, it is kept as `flaky-*.log`, a name that
- * tells the fixer to disable the flaky test, until the next round starts that job on the base.
+ * Start a fixer job on each recorded flake whose PRs all landed or left the queue, which proposes a PR
+ * that disables the flaky test and queues it. A flake whose test never reached the base is handed back.
  */
-function keepFlaky(options: Pick<ServeOptions, "state" | "fixer">, log: string, tip: string): void {
-	if (!options.fixer) return;
-	const kept = join(options.state, `flaky-${Date.now()}-${tip.slice(0, 12)}.log`);
-	copyFileSync(log, kept);
-	save(join(options.state, FLAKY), [...readFlaky(options.state), kept]);
-}
-
-/** Start a fixer job on each recorded flake, which proposes a PR that disables the flaky test and queues it. */
 async function disableFlaky(
 	root: string,
 	plan: Plan,
@@ -554,15 +567,18 @@ async function disableFlaky(
 	deps: GitHubDependencies,
 	read: RemoteRead,
 ): Promise<void> {
+	const queued = new Set([...plan.queue, ...(plan.waiting ?? [])].map((entry) => entry.number));
 	const pending = readFlaky(options.state);
-	if (!pending.length) return;
-	if (options.fixer) await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(plan), plan.base.sha]);
-	while (pending.length) {
-		const log = pending.shift()!;
+	const ready = pending.filter((flake) => !flake.numbers.some((number) => queued.has(number)));
+	if (!ready.length || !options.fixer) return;
+	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(plan), plan.base.sha]);
+	for (const flake of ready) {
 		// Forgotten before the launch: a crash loses this flake's PR rather than opening two.
-		save(join(options.state, FLAKY), pending);
-		if (options.fixer)
-			await startBaseFixer(root, options.state, plan.repository, plan.base, log, options.fixer, deps, "flaky");
+		save(
+			join(options.state, FLAKY),
+			readFlaky(options.state).filter((kept) => kept.log !== flake.log),
+		);
+		await startBaseFixer(root, options.state, plan.repository, plan.base, flake.log, options.fixer, deps, "flaky");
 	}
 }
 
@@ -584,10 +600,7 @@ export async function checkBase(
 	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote({ repository }), base.sha]);
 	const log = join(options.state, `base-${Date.now()}-${base.sha.slice(0, 12)}.log`);
 	const checked = await check(root, options, base.sha, 0, base.sha, log);
-	if (checked.flaky) {
-		deps.warn(flaked(base.sha, checked.flaky));
-		keepFlaky(options, log, base.sha);
-	}
+	if (checked.flaky) deps.warn(flaked(options, log, base.sha, checked.flaky, []));
 	if (checked.code === 0) return true;
 	const github = new GitHub(deps);
 	const halt = readHalt(options.state);
@@ -701,7 +714,16 @@ export async function serveBatch(
 	const { code, flaky } = await check(root, options, tip.commit, chain.links.length, plan.base.sha, log);
 	// A flaky failure is no PR's fault: the batch passed, and lands.
 	nextPolicy(options.state, policy, chain.links.length, code === 0);
-	if (flaky) output.push(flaked(tip.commit, flaky));
+	if (flaky)
+		output.push(
+			flaked(
+				options,
+				log,
+				tip.commit,
+				flaky,
+				chain.links.map(({ entry }) => entry.number),
+			),
+		);
 	if (code !== 0) {
 		// The fixer reads the failure first and says which PR broke the batch; until then, all of them
 		// sit out. Without a fixer, the whole batch is ejected.
@@ -822,9 +844,6 @@ export async function serveBatch(
 		appendFileSync(log, `${detail}\n`);
 		return output;
 	}
-	// Every PR landed as tested, so a test that flaked in the batch is on the base now. A batch that
-	// stopped short leaves its PRs to a later batch, whose check observes a flake again.
-	if (flaky) keepFlaky(options, log, tip.commit);
 	return output;
 }
 

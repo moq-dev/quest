@@ -593,10 +593,11 @@ on the same tip before anyone is blamed, and the log keeps both runs. The check
 names each module that failed on a line of its own, `quest-land-failed: <module>`,
 and the rerun receives those names in `QUEST_LAND_RERUN`, one per line, so it can
 run only them; a check that names none, or ignores the variable, reruns whole. A
-check killed at `--timeout` is not rerun. A rerun that passes makes the failure
-flaky: the batch lands, and with a fixer, the next round starts a fixer job on
-the new base with that log, kept as `flaky-*.log`, the name that asks it to
-disable the flaky test. Its fix, which disables each test that failed and then
+check killed at `--timeout` is not rerun, and an empty or oversized name, or
+more than 50, reruns the whole check. A rerun that passes makes the failure
+flaky: the batch lands, and with a fixer, once each of the batch's PRs has
+landed or left the queue, a fixer job starts on the base with that log, kept as
+`flaky-*.log`, the name that asks it to disable the flaky test. Its fix, which disables each test that failed and then
 passed with a reason naming a follow-up quest in the repository's `quest/m0/flaky`
 epic, is validated like a base fix, pushed to a `quest-land/fix-flaky-*` branch,
 opened as a pull request, and queued with `quest:merge` and a head-pinned

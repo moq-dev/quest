@@ -3416,27 +3416,45 @@ describe.skipIf(process.platform === "win32")("flaky checks", () => {
 		const many = (count: number) => Array.from({ length: count }, (_, i) => `quest-land-failed: m${i}`).join("\n");
 		expect(failedModules(many(50))).toHaveLength(50);
 		expect(failedModules(many(51))).toEqual([]);
+		// So does an empty name beside a real one.
+		expect(failedModules("quest-land-failed: unit\nquest-land-failed: ")).toEqual([]);
+		expect(failedModules("quest-land-failed:")).toEqual([]);
 	});
 
-	test("keeps no flake for the fixer when its batch stops short of landing", async () => {
+	test("starts the flaky fixer only once its batch's PRs have all left the queue", async () => {
 		const forge = new Forge();
 		forge.pull("One", { "one.txt": "yes" });
+		forge.pull("Two", { "two.txt": "yes" });
 		const dir = tempDir();
-		const deps = await forge.deps();
-		const plan = await resolveQueue(REPOSITORY, undefined, deps);
-		const old = forge.main();
 		const fixer = join(dir, "fixer");
 		writeFileSync(fixer, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-		// The PR's head moves while its batch is checked, so the test that flaked may never reach the base.
-		const options = {
-			...sandbox(
-				`git -C '${forge.origin}' update-ref refs/heads/topic-1 ${old}\n${flakyCheck(dir, ["test rs"])}`,
-			),
-			fixer,
-		};
-		const output = await serveBatch(forge.clone(), plan, options, deps, async () => deps.token);
-		expect(output).toEqual([expect.stringMatching(/^flaky [0-9a-f]{40} test rs$/), "ejected 1 head_moved"]);
-		expect(readdirSync(options.state).filter((name) => name.startsWith("flaky"))).toEqual([]);
+		const options = { ...sandbox(flakyCheck(dir, ["test rs"])), fixer };
+		// PR 2's head moves while the batch is checked, so it leaves the queue unlanded; PR 1 lands.
+		writeFileSync(
+			options.sandbox,
+			`#!/bin/sh\ngit -C '${forge.origin}' update-ref refs/heads/topic-2 ${forge.main()}\n${flakyCheck(dir, ["test rs"])}\n`,
+			{ mode: 0o755 },
+		);
+		const root = forge.clone();
+		const deps = await forge.deps();
+		const round = async () =>
+			serveBatch(root, await resolveQueue(REPOSITORY, undefined, deps), options, deps, async () => deps.token);
+		const flakes = () => JSON.parse(readFileSync(join(options.state, "flaky.json"), "utf8")) as unknown[];
+		const output = await round();
+		expect(output[0]).toMatch(/^flaky [0-9a-f]{40} test rs$/);
+		expect(output.slice(1)).toEqual(["ejected 2 head_moved"]);
+		expect(flakes()).toEqual([{ log: expect.stringMatching(/\/flaky-\d+-[0-9a-f]{12}\.log$/), numbers: [1, 2] }]);
+		// PR 1 is still queued: the flake waits for it, and PR 1 lands.
+		writeFileSync(options.sandbox, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		expect((await round())[0]).toMatch(/^landed 1 /);
+		expect(flakes()).toHaveLength(1);
+		forge.settle();
+		// Now neither is queued, so the fixer starts on the base that holds PR 1.
+		const finished = eventFile(options.state, (name) => name.endsWith(".exit"));
+		expect(await round()).toEqual([]);
+		await finished;
+		expect(flakes()).toEqual([]);
+		expect(readdirSync(options.state).filter((name) => /^fix-flaky-.*\.json$/.test(name))).toHaveLength(1);
 	});
 
 	test("reruns only the failed modules on the same tip, and lands a batch whose rerun passes", async () => {
@@ -3543,8 +3561,9 @@ printf '{"action":"fixed","head":"%s","reason":"disable the flaky test with a fo
 		const first = await round();
 		expect(first[0]).toMatch(/^flaky [0-9a-f]{40} test rs$/);
 		expect(first[1]).toMatch(/^landed 1 /);
-		const [log] = JSON.parse(readFileSync(join(options.state, "flaky.json"), "utf8")) as string[];
-		expect(log).toMatch(/\/flaky-\d+-[0-9a-f]{12}\.log$/);
+		expect(JSON.parse(readFileSync(join(options.state, "flaky.json"), "utf8"))).toEqual([
+			{ log: expect.stringMatching(/\/flaky-\d+-[0-9a-f]{12}\.log$/), numbers: [1] },
+		]);
 		forge.settle();
 		// The next round starts the fixer on the base that now includes the landed batch.
 		const finished = eventFile(options.state, (name) => name.endsWith(".exit"));
