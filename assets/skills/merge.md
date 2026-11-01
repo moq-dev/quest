@@ -35,5 +35,5 @@ The `quest:merge` label stays on while the PR is queued or auto-merging.
 
 Report once it is queued, and do not wait for it to merge.
 Plan the PR's suggested follow-ups as soon as it is queued, as if it lands, rather than waiting for the merge, unless a coordinator such as `/quest-complete` called this skill and batches them.
-A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`; it needs the user's pick again.
+A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`; it needs the user's pick again, except where `/quest-complete` says an earlier pick still holds.
 Never close a PR to unstick it, and never work around a refused merge; ask instead.
