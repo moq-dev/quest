@@ -7,6 +7,7 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
+	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -26,6 +27,7 @@ import {
 	environment,
 	Opencode,
 	PLUGIN,
+	projectConfig,
 	retryLimit,
 	signedIn,
 	turnExit,
@@ -823,7 +825,8 @@ describe("opencode", () => {
 		const file = join(root, "plugin.mjs");
 		writeFileSync(file, PLUGIN);
 		const { default: plugin } = await import(pathToFileURL(file).href);
-		const hooks = await plugin.server({}, { cwd: checkout, writes: [checkout, tmp], reads: [output] });
+		const config = ["opencode.json", ".opencode"].map((name) => join(checkout, name));
+		const hooks = await plugin.server({}, { cwd: checkout, writes: [checkout, tmp], reads: [output], config });
 		const call = (tool: string, args: Record<string, unknown>) =>
 			hooks["tool.execute.before"]({ tool, sessionID: "s", callID: "c" }, { args });
 		const patch = (...headers: string[]) => ({
@@ -855,6 +858,32 @@ describe("opencode", () => {
 			await expect(call(tool, args), `${tool} ${JSON.stringify(args)}`).rejects.toThrow(/outside the checkout/);
 		// A write would follow a symlink to nothing out of the checkout.
 		await expect(call("write", { filePath: "dangling" })).rejects.toThrow(/symlink to nothing/);
+		// opencode would load its own config from the checkout, outside the sandbox.
+		await call("read", { filePath: "opencode.json" });
+		for (const [tool, args] of [
+			["write", { filePath: "opencode.json" }],
+			["edit", { filePath: ".opencode/plugin/x.js" }],
+			["apply_patch", patch("*** Add File: .opencode/opencode.json")],
+		] as const)
+			await expect(call(tool, args)).rejects.toThrow(/opencode's own config/);
+	});
+
+	posix("refuses a checkout holding opencode's own config, which opencode would load unconfined", () => {
+		const checkout = tempDir();
+		expect(projectConfig(checkout)).toEqual([]);
+		// sandbox-runtime leaves empty files behind as mount points, which opencode ignores.
+		writeFileSync(join(checkout, "opencode.json"), "");
+		writeFileSync(join(checkout, ".opencode"), "");
+		expect(projectConfig(checkout)).toEqual([]);
+		writeFileSync(join(checkout, "opencode.json"), "{}");
+		rmSync(join(checkout, ".opencode"));
+		mkdirSync(join(checkout, ".opencode"));
+		symlinkSync("opencode.json", join(checkout, "opencode.jsonc"));
+		expect(projectConfig(checkout)).toEqual([".opencode", "opencode.json", "opencode.jsonc"]);
+		const launch = { cwd: checkout } as Parameters<Opencode["launch"]>[0];
+		expect(() => new Opencode("/opencode", "/srt").launch(launch)).toThrow(
+			/holds \.opencode and opencode\.json and opencode\.jsonc, which opencode would load outside the sandbox/,
+		);
 	});
 
 	test("reads account limits from retries and errors, not brief rate limits", () => {
@@ -1804,7 +1833,8 @@ describe("quest runner", () => {
 				denyRead: expect.arrayContaining([r.home.dir, "/tmp"]),
 				allowRead: [checkout, repository, tmp],
 				allowWrite: [checkout, tmp],
-				denyWrite: [],
+				// Nor can they write the opencode config the server would load.
+				denyWrite: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
 			},
 			enableWeakerNestedSandbox: false,
 		});
@@ -1835,6 +1865,7 @@ describe("quest runner", () => {
 			cwd: checkout,
 			writes: [checkout, tmp],
 			reads: [join(home, "data", "opencode", "tool-output")],
+			config: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
 		});
 		// The launch's shell, plugin, and settings are gone once it ends.
 		expect(existsSync(dirname(first.config.shell))).toBe(false);

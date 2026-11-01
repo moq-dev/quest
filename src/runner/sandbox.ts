@@ -98,16 +98,17 @@ export function keptEnvironment(env: NodeJS.ProcessEnv): Record<string, string> 
 
 /**
  * sandbox-runtime (`srt`) settings that confine commands as Claude Code's
- * sandbox settings do, which name the checkout's writes implicitly.
+ * sandbox settings do, which name the checkout's writes implicitly, and keep
+ * them from writing `denyWrite`, even where it does not exist yet.
  */
-export function runtimeSettings(sandbox: Sandbox): Record<string, unknown> {
+export function runtimeSettings(sandbox: Sandbox, denyWrite: string[] = []): Record<string, unknown> {
 	return {
 		network: { allowedDomains: sandbox.domains, deniedDomains: [], strictAllowlist: true },
 		filesystem: {
 			denyRead: sandbox.deny,
 			allowRead: [sandbox.cwd, sandbox.repository, sandbox.tmp],
 			allowWrite: [sandbox.cwd, sandbox.tmp],
-			denyWrite: [],
+			denyWrite,
 		},
 		enableWeakerNestedSandbox: false,
 	};

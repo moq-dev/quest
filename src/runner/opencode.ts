@@ -15,10 +15,11 @@
 // environment and runs the command under sandbox-runtime (`srt`) with the
 // policy Claude Code's sandbox gets, the devShell sourced inside. Nothing the
 // checkout holds runs in the server: no project config, plugins, tools, or MCP
-// servers, and no language servers or formatters.
+// servers, and no language servers or formatters. opencode 1.19 still loads the
+// plugins a checkout's own config names, so that config must not exist at all.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -94,6 +95,30 @@ function modelConfig(home: string): string {
 }
 
 /**
+ * opencode's config in a checkout. `OPENCODE_DISABLE_PROJECT_CONFIG` keeps
+ * most of it out, but opencode 1.19's newer config loader still reads these at
+ * the checkout's root and imports the plugins they name, in the server and
+ * outside the sandbox. So the agent cannot create or change them, and a launch
+ * refuses a checkout that holds them. An empty file there is harmless: opencode
+ * ignores an empty config, and finds no plugins in a file named `.opencode`.
+ * It is also what sandbox-runtime leaves behind as a mount point when a
+ * command is killed.
+ */
+export const PROJECT_CONFIG = [".opencode", "opencode.json", "opencode.jsonc"];
+
+/** The opencode config a checkout holds, other than empty files. */
+export function projectConfig(cwd: string): string[] {
+	return PROJECT_CONFIG.filter((name) => {
+		try {
+			const stat = lstatSync(join(cwd, name));
+			return !stat.isFile() || stat.size > 0;
+		} catch {
+			return false;
+		}
+	});
+}
+
+/**
  * An opencode plugin that keeps the file tools inside the checkout and the
  * attempt's private directory, and lets the read-only ones also read
  * opencode's own saved tool output. opencode's `external_directory` check is
@@ -102,7 +127,8 @@ function modelConfig(home: string): string {
  * unconfined. Each path is resolved as the tool resolves it, then through
  * every symlink, and a path that does not exist yet through its nearest
  * existing directory. A dangling symlink is refused, since a write would
- * follow it. `apply_patch` names its files in the patch's headers.
+ * follow it. `apply_patch` names its files in the patch's headers. Nothing
+ * writes the checkout's own opencode config, which opencode would load.
  */
 export const PLUGIN = `import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -140,6 +166,7 @@ export default {
 	server: async (_input, options) => {
 		const writes = options.writes.map(real);
 		const reads = [...writes, ...options.reads.map(real)];
+		const config = options.config.map(real);
 		return {
 			"tool.execute.before": async ({ tool }, { args }) => {
 				if (!(tool in TOOLS)) return;
@@ -150,8 +177,11 @@ export default {
 								.flatMap((line) => HEADER.exec(line)?.[1]?.trim() || [])
 						: [args?.filePath, args?.path].filter((path) => typeof path === "string" && path);
 				for (const path of paths) {
-					if (!inside(real(resolve(options.cwd, path)), TOOLS[tool] ? reads : writes))
+					const target = real(resolve(options.cwd, path));
+					if (!inside(target, TOOLS[tool] ? reads : writes))
 						throw new Error(\`\${path} is outside the checkout, where the runner keeps the file tools\`);
+					if (!TOOLS[tool] && inside(target, config))
+						throw new Error(\`\${path} is opencode's own config, which would run outside the sandbox\`);
 				}
 			},
 		};
@@ -229,7 +259,12 @@ export function jobConfig(options: {
 		plugin: [
 			[
 				pathToFileURL(options.plugin).href,
-				{ cwd: launch.cwd, writes: [launch.cwd, launch.sandbox.tmp], reads: [toolOutput(launch.home)] },
+				{
+					cwd: launch.cwd,
+					writes: [launch.cwd, launch.sandbox.tmp],
+					reads: [toolOutput(launch.home)],
+					config: PROJECT_CONFIG.map((name) => join(launch.cwd, name)),
+				},
 			],
 		],
 	};
@@ -372,6 +407,11 @@ export class Opencode implements Adapter {
 	}
 
 	launch(launch: Launch): Running {
+		const found = projectConfig(launch.cwd);
+		if (found.length)
+			throw new Error(
+				`the checkout holds ${found.join(" and ")}, which opencode would load outside the sandbox; run this job on a Claude Code account`,
+			);
 		const password = randomBytes(32).toString("base64url");
 		// Kept in the account's private home, which commands cannot read or write:
 		// a session ID per kix session, and this launch's plugin, shell, sandbox
@@ -383,7 +423,8 @@ export class Opencode implements Adapter {
 		const plugin = join(dir, "plugin.js");
 		writeFileSync(plugin, PLUGIN, { mode: 0o600 });
 		const settings = join(dir, "srt.json");
-		writeFileSync(settings, JSON.stringify(runtimeSettings(launch.sandbox)), { mode: 0o600 });
+		const denied = PROJECT_CONFIG.map((name) => join(launch.cwd, name));
+		writeFileSync(settings, JSON.stringify(runtimeSettings(launch.sandbox, denied)), { mode: 0o600 });
 		// opencode names the shell in the bash tool's description.
 		const shell = join(dir, "sandboxed-bash");
 		writeFileSync(shell, shellScript(this.srt, settings, launch.sandbox, launch.env), { mode: 0o700 });
