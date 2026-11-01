@@ -27,7 +27,3 @@ each by hand. Once this permission is granted, the refusal that
 `quest land apply` handback handles should stop happening.
 
 Delete this quest once the permission is granted and accepted.
-
-## Related
-
-- [Protected edits](/quest/m0/land-fixer/protected.md) - the fixer edits workflows when the change is mechanical
