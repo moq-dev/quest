@@ -58,6 +58,10 @@ import { tempDir } from "./fixture";
 
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
+// Each daemon test drives many git merges. On the land gate's host under load 28 (2026-10-31),
+// tests that take 1.1-1.8 s unloaded took 5.2-6.8 s and failed vitest's 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
+
 const REPOSITORY = { owner: "upstream", repo: "project" };
 
 const PATH = process.env.PATH;
