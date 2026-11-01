@@ -90,14 +90,16 @@ export async function push(
 	to: string,
 	ref: string,
 	token: (workflows: boolean) => Promise<string>,
+	/** What `ref` must be before the push; empty when it must not exist yet. */
+	lease = from,
 ) {
 	const workflows = git(root, ["diff", "--name-only", from, to, "--", ".github/workflows"]) !== "";
 	const credential = await token(workflows);
-	return tryGit(root, ["push", "--quiet", remote, `${to}:${ref}`, `--force-with-lease=${ref}:${from}`], {
+	return tryGit(root, ["push", "--quiet", remote, `${to}:${ref}`, `--force-with-lease=${ref}:${lease}`], {
 		env: gitAuthentication(credential),
 	});
 }
-async function remoteHead(root: string, remote: string, ref: string, read: RemoteRead): Promise<string | null> {
+export async function remoteHead(root: string, remote: string, ref: string, read: RemoteRead): Promise<string | null> {
 	return (
 		(await read(root, ["ls-remote", remote, ref]))
 			.split("\n")

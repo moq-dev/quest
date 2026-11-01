@@ -7,9 +7,11 @@ inline only when a counted review names its head, or the head is trivial;
 otherwise `/quest-iterate` runs first. A gate on the maintainer's host lands
 small batches: a base PR plus up to floor(log₂ n) others that merge cleanly,
 checked once on the chain's tip and pushed as one squash commit per PR. A
-conflict on the base PR or a failing batch ejects the PRs and hands them to an
-asynchronous Codex fixer, which makes only mechanical fixes and requeues the
-healthy PRs. Bisection goes away.
+conflict on the base PR or a failing batch hands the PRs to an asynchronous
+Codex fixer, which makes only mechanical fixes and requeues the healthy PRs.
+Bisection goes away. Since 2026-11-01 those PRs stay queued and parked while
+the fixer works, and only a handback takes one out of the queue; see the
+[land fixer epic](/quest/m0/land-fixer/README.md).
 
 Non-goals: other repositories adopting the gate (moq-dev/moq, moq-dev/moq.pro
 plan their own; moq.pro needs only `allow_auto_merge` and the ruleset, since
@@ -89,12 +91,12 @@ can hand off instead.
   its fix, and the other is handed back. `CONTRIBUTING.md` and the README's
   landing section describe the host gate.
 - Amended 2026-10-31 (user): the fixer triages a failing batch before
-  anything is ejected, and only the PR it blames is ejected. See
-  [batch triage](/quest/m0/host-land/triage.md).
+  anything is ejected, and only the PR it blames is ejected. Batch triage
+  ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) went further: nothing is ejected for a failure, and the
+  blamed PR is parked for the fixer.
 
 ## Required
 
 - [Gate host](/quest/m0/host-land/host.md) - kixelated/nixos runs the daemon as its own user, checks in nspawn containers, and retires the Actions runner
 - [Fixer proxy access](/quest/m0/host-land/fixer.md) - connect the nixos fixer container to CLIProxyAPI with the gate client key and maintainer login
-- [Fixer survives ejection](/quest/m0/host-land/fixer-survives.md) - the fixer finishes after every ejection and requeues collateral PRs itself
-- [Batch triage](/quest/m0/host-land/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
+- [Daemon restart keeps its check](/quest/m0/host-land/reattach.md) - a deploy no longer reruns the batch it interrupted
