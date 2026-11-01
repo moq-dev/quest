@@ -9,7 +9,13 @@ import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 import { claims, target } from "../src/cli/claims";
-import { type GitHubDependencies, type ObjectValue, githubRepository } from "../src/cli/github";
+import {
+	type GitHubDependencies,
+	type ObjectValue,
+	githubRepository,
+	readRemote,
+	remoteRepository,
+} from "../src/cli/github";
 import { type Output, main } from "../src/cli/main";
 import { Refusal, ago, releaseQuest, startQuest } from "../src/cli/start";
 import { EPIC_README, GIT_SETTINGS, TWO, Tree, configure, initRepository, template, tempDir } from "./fixture";
@@ -786,6 +792,46 @@ test("githubRepository reads HTTPS, ssh://, and scp-like remote URLs", () => {
 	]) {
 		expect(githubRepository(url), url).toBeNull();
 	}
+});
+
+test("readRemote reads configured URLs, and rewritten ones as git uses them", () => {
+	const dir = initRepository();
+	expect(readRemote(dir, "origin")).toBeNull();
+	// A name with regex characters matches only itself.
+	configure(dir, { "remote.a.b+.url": "https://github.com/example/other.git" });
+	expect(readRemote(dir, "a.b")).toBeNull();
+	expect(readRemote(dir, "a.b+")?.used()).toEqual({
+		fetch: "https://github.com/example/other.git",
+		push: "https://github.com/example/other.git",
+	});
+
+	configure(dir, {
+		"remote.origin.url": "https://github.com/example/project.git",
+		"remote.origin.pushurl": "https://github.com/me/project.git",
+	});
+	const plain = readRemote(dir, "origin")!;
+	expect(plain.configured).toEqual({
+		fetch: "https://github.com/example/project.git",
+		push: "https://github.com/me/project.git",
+	});
+	expect(plain.used()).toEqual({
+		fetch: "https://github.com/example/project.git",
+		push: "https://github.com/me/project.git",
+	});
+	expect(remoteRepository(plain).repository).toEqual({ owner: "example", repo: "project" });
+	expect(remoteRepository(plain, true).repository).toEqual({ owner: "me", repo: "project" });
+
+	// A rewrite to another host still names GitHub by the configured URL, and git applies it.
+	configure(dir, { "url.C:\\srv\\git\\.insteadOf": "https://github.com/" });
+	const rewritten = readRemote(dir, "origin")!;
+	expect(rewritten.used()).toEqual({
+		fetch: "C:\\srv\\git\\example/project.git",
+		push: "C:\\srv\\git\\me/project.git",
+	});
+	expect(remoteRepository(rewritten)).toEqual({
+		url: "https://github.com/example/project.git",
+		repository: { owner: "example", repo: "project" },
+	});
 });
 
 test("ago rounds to minutes, hours, then days", () => {
