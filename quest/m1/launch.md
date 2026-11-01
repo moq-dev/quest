@@ -6,7 +6,7 @@ A quickstart, a recorded demo on a real repository other than MoQ, more
 examples, a comparison with alternatives, and launch-post drafts are ready, all
 in the quest-log voice from `design/theme.md`. Publishing the posts is out of
 scope. The README and the landing page belong to
-[the theme epic](/quest/m0/theme/README.md).
+[the theme epic](/quest/m1/theme/README.md).
 
 ## Plan
 
@@ -29,6 +29,6 @@ scope. The README and the landing page belong to
 
 ## Required
 
-- [Quest log theme](/quest/m0/theme/README.md) - the voice the posts build on, and the themed surfaces the demo records
+- [Quest log theme](/quest/m1/theme/README.md) - the voice the posts build on, and the themed surfaces the demo records
 
 - [Web execution](/quest/m0/kix/execution.md) - the working hosted flow for the demo

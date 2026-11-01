@@ -18,4 +18,4 @@ their decision inbox. The standalone Quest setup remains easy to find.
 
 ## Required
 
-- [Deploy kix.quest](/quest/m0/kix/deploy.md) - the live site and setup link
+- [Open kix.quest](/quest/m1/open.md) - the live public site and setup link

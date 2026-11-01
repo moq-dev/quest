@@ -18,7 +18,7 @@ adopted GitHub App sign-in:
 - Each row reuses enrollment's existing checks (live authority, public, OSI
   license, Quest tree) and states why an ineligible repository cannot be
   enabled. A repository without Quest files offers the
-  [setup PR](/quest/m0/kix/setup-pr.md) once that lands; until then it links
+  [setup PR](/quest/m1/kix/setup-pr.md) once that lands; until then it links
   `/setup`.
 - Keep `/projects/select` for an already-enrolled repository's pause and
   disconnect controls.

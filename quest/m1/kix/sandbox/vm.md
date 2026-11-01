@@ -13,7 +13,7 @@ sandbox with no network.
   still run in the OS sandbox afterwards.
 - Verify how to import unsigned store paths without making the runner trust
   arbitrary builders, and never publish them to the
-  [shared cache](/quest/m1/automation/cache.md).
+  [shared cache](/quest/m2/automation/cache.md).
 - The runner refuses untrusted jobs until this ships;
   the trusted-head classifier routes untrusted heads here.
 - Test a PR whose flake or shellHook tries to run on the host, and one whose

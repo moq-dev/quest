@@ -15,4 +15,4 @@ from their own connected accounts.
 
 ## Required
 
-- [Hosted runners](/quest/m1/cloud/runners.md) - the compute being billed
+- [Hosted runners](/quest/m2/cloud/runners.md) - the compute being billed

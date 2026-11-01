@@ -18,4 +18,4 @@ a pinned revision and publish accurately attributed GitHub check results.
 
 ## Required
 
-- [Shared runners](/quest/m1/donor-runner.md) - contributed execution capacity
+- [Shared runners](/quest/m2/donor-runner.md) - contributed execution capacity

@@ -42,7 +42,7 @@ and charge only their explicitly selected allocation.
   from assumptions about promotional funding; verify applicable provider
   terms before making public promotional-credit claims.
 - Hosting stays under the operator's separate limit until
-  [paid compute](/quest/m1/cloud/billing.md) ships. Donor API authorization
+  [paid compute](/quest/m2/cloud/billing.md) ships. Donor API authorization
   never silently pays compute charges.
 - Decided 2026-10-15: extend existing service documentation with donor
   consent, budget estimates, usage, exhaustion, and revocation behavior.
@@ -55,8 +55,8 @@ and charge only their explicitly selected allocation.
 
 ## Required
 
-- [Hosted runners](/quest/m1/cloud/runners.md) - working cloud jobs using maintainer API funding
+- [Hosted runners](/quest/m2/cloud/runners.md) - working cloud jobs using maintainer API funding
 
 ## Related
 
-- [API funding](/quest/m1/cloud/funding.md) - the credential proxy and durable usage ledger
+- [API funding](/quest/m2/cloud/funding.md) - the credential proxy and durable usage ledger

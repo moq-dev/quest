@@ -1,22 +1,48 @@
-# First public release
+# moq-dev adoption
 
 ## Goal
 
-Ship Quest v0.1.0. A developer using Claude Code or Codex with GitHub pastes one
-line into their agent to set Quest up in any repository, plans and runs agent
-work through quests, and can remove it without losing their own content.
-It runs on macOS, Linux, and native Windows.
+moq-dev plans and runs its own work through Quest and kix:
+moq-dev/moq, moq-dev/quest, and moq-dev/moq.pro are enrolled at
+`https://quest.moq.dev`, maintainers answer decisions from a phone-friendly
+web app with push notifications, and their own Linux and macOS runners do
+the work through Claude Code and opencode inside each project's Nix
+devShell. The GitHub App bot publishes ordinary PRs. The standalone CLI
+(v0.1.0 shipped on 2026-10-07) keeps serving the same repositories locally on
+macOS, Linux, and native Windows.
 
-The hosted launch is kix.quest, a cloud for creating software: maintainers
-answer interactive prompts, from a phone-friendly web app with push
-notifications, to plan issues, start ready quests, and act on new PRs. Their
-own Linux and macOS runners do the work through Claude Code and opencode,
-with any number of signed-in accounts, inside each project's Nix devShell.
-The GitHub App bot publishes ordinary PRs. The contest no longer gates launch.
-The standalone v0.1.0 CLI shipped on 2026-10-07; remaining work expands the
-product without changing the core's independence.
+Work that only third-party repositories need, and the public launch, belong
+to [m1](/quest/m1/README.md).
 
 ## Plan
+
+Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
+
+- Should m0 serve moq-dev's repositories before third parties?
+  - ✅ Yes: m0 is adoption on moq-dev/moq, moq-dev/quest, and moq-dev/moq.pro;
+    a new m1 holds the public release, and the old m1 became m2
+  - Fold third-party work into the existing later milestone
+
+  No resources go into a public service before it works for moq-dev.
+- Where does the Worker live until the public launch?
+  - ✅ quest.moq.dev
+  - kix.moq.dev
+
+  [Open kix.quest](/quest/m1/open.md) moves it for the launch.
+- Which kix work leaves m0? ✅ Onboarding (pick repositories, setup PR,
+  guide), ✅ the public face (theme, landing page, launch material), ✅
+  contributor sandboxing (untrusted-head VM, stock-Ubuntu AppArmor, macOS
+  verification), and ✅ the enrollment-time read-only CI check. Head approval
+  and opencode sandboxing stay, since moq-dev's own jobs need them.
+- moq-dev/moq comes first, then private repositories so moq.pro can enroll.
+- Where does Kix rank in m0? Decided 2026-11-01 (user, /quest-complete):
+  - ✅ Land work first (the host gate, the land fixer and the land quests),
+    then Kix, then the rest of m0
+  - Kix first
+  - Kix below the review quests
+
+  The land work is what moq-dev's repositories use every day, and the
+  maintainer ranked it first in the 2026-10-30 and 2026-11-01 sessions.
 
 Decided while planning m0 (2026-09-26), replacing the earlier copied-files and
 ownership-manifest design:
@@ -46,10 +72,10 @@ ownership-manifest design:
 - [GitHub retries](/quest/m0/github-retry.md) - one 5xx or dropped connection no longer fails a command or land step
 - [Current conflict reports](/quest/m0/land-conflicts-refresh.md) - a queued PR's conflict report updates when the queue ahead of it changes
 - [Land checks at gate priority](/quest/m0/land-priority-sandbox.md) - `quest land serve` passes `QUEST_GATE_PRIORITY` to its sandbox
+- [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Review handles expired and environment logins](/quest/m0/review-login.md) - `quest review` says to log in again instead of failing with a 401, and reviews with credentials from the environment
 - [Live sandbox test](/quest/m0/review-sandbox.md) - the real reviewer CLIs run nothing a reviewed head plants
-- [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Agent test environment](/quest/m0/agent-test-env.md) - `just test` passes inside agent sessions
 - [Stale skill stubs](/quest/m0/init-prune.md) - `quest init` and `quest uninstall` remove stubs of retired skills such as `quest-ready`
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - condition: Bun fixes concurrent `rmSync` on Windows; report it, then drop the workaround
@@ -58,6 +84,4 @@ ownership-manifest design:
 - [Gate admission on CI](/quest/m0/gate-ci-admission.md) - gated commands admit on loaded hosted runners like arm64 macOS
 - [Agent lifecycle integration](/quest/m0/worktree-agents.md) - reclaim completed and suspended Claude checkouts through its hooks
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
-- [Quest log theme](/quest/m0/theme/README.md) - an MMO-style identity, copy, board, landing page, and CLI output for the demo and launch
-- [Launch material](/quest/m0/launch.md) - README, quickstart, demo, comparison, and launch-post drafts
 - [Review harness check](/quest/m0/review-harness.md) - recurring each milestone: newest pinned review models, and the live sandbox test passes
