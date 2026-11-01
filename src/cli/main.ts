@@ -401,8 +401,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"landing-stopped, and checks; landing-stopped is the latest exit from the merge queue, auto-merge, or " +
 				"quest land's queue, with the reason (such as merge_conflict, failed_checks, manual, or manually_disabled), " +
 				"actor, and time. Then " +
-				"a check line per failing or pending check, marked required or optional; review-rounds counts distinct " +
-				"submitted review commits since the latest Design change: comment, with its time, author, and URL (or -); a review line per " +
+				"a check line per failing or pending check, marked required or optional; a review line per " +
 				"reviewer's latest review, marked current or stale against the head; a reacted:<content> line per " +
 				"reaction on the PR or a review; and a thread line per unresolved review thread, led by its node ID. " +
 				"A missing value prints as -. --json prints the same facts as one deterministic object.\n\n" +
@@ -992,7 +991,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or zdiff3. Exits 1 when a conflict remains.\n\n" +
 				"quest init registers it for quest/** as the merge.quest driver. Any other command registers the driver " +
 				"in the clone's config when .gitattributes names merge=quest and no config sets it. Without quest on " +
-				"the merge's PATH, the driver falls back to git merge-file. GitHub's merges ignore merge drivers.",
+				"the merge's PATH, the driver falls back to git merge-file, and when conflicts remain it prints to stderr " +
+				"that the file's link lists were not auto-resolved. GitHub's merges ignore merge drivers.",
 		)
 		.argument("<ours>", "Our version, overwritten with the result (git's %A)")
 		.argument("<base>", "The common ancestor (git's %O)")
