@@ -7,9 +7,11 @@ inline only when a counted review names its head, or the head is trivial;
 otherwise `/quest-iterate` runs first. A gate on the maintainer's host lands
 small batches: a base PR plus up to floor(log₂ n) others that merge cleanly,
 checked once on the chain's tip and pushed as one squash commit per PR. A
-conflict on the base PR or a failing batch ejects the PRs and hands them to an
-asynchronous Codex fixer, which makes only mechanical fixes and requeues the
-healthy PRs. Bisection goes away.
+conflict on the base PR or a failing batch hands the PRs to an asynchronous
+Codex fixer, which makes only mechanical fixes and requeues the healthy PRs.
+Bisection goes away. Since 2026-11-01 those PRs stay queued and parked while
+the fixer works, and only a handback takes one out of the queue; see the
+[land fixer epic](/quest/m0/land-fixer/README.md).
 
 Non-goals: other repositories adopting the gate (moq-dev/moq, moq-dev/moq.pro
 plan their own; moq.pro needs only `allow_auto_merge` and the ruleset, since

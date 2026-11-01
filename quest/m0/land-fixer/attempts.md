@@ -26,9 +26,11 @@ before the base moved again.
   - Keep one per pick
 
 The attempt record is `fix-attempt-<n>.json` (`src/cli/land-fixer.ts`): its
-`pick`, `requeued`, and `head` fields, read by `handbackRepeated`. Record the
-kind of each outcome (`unchanged`, `merged`, `fixed`) and stop counting the
-first two. A head the fixer changed beyond a base merge that then fails its
+`pick`, `requeued`, and `head` fields, read by `handbackRepeated`. Add an
+`outcome` field (`unchanged`, `merged`, or `fixed`) and have
+`handbackRepeated` count only `fixed`. A record written before this field
+existed has no `outcome` and counts as spent, as today, so a deploy never
+hands a pick a second attempt it already used. A head the fixer changed beyond a base merge that then fails its
 checks still hands back, so a bad fix cannot loop.
 
 [Batch triage](/quest/m0/land-fixer/triage.md) keeps a collateral ejection

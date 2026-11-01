@@ -28,8 +28,16 @@ wasting CI on bisection?"
   - Bring back bisection
 - The user's refinement: "The fixer reads the failure, tries to identify the
   PR that caused it, and only ejects that PR. If it can't figure it out, it
-  ejects all PRs".
-- Repairing the blamed PR does not change: one attempt, after it is ejected.
+  ejects all PRs". Superseded 2026-11-01 (user): nothing is ejected for a
+  conflict or a failure; the blamed PR, or every PR when blame is unclear,
+  is parked for the fixer and stays queued, as the Goal says.
+- Repairing the blamed PR uses the outcome rule in
+  [Attempt budget](/quest/m0/land-fixer/attempts.md): only a fix that fails
+  again, or a handback, spends the pick's attempt (2026-11-01).
+- A PR whose required checks have not finished stays queued and sits out
+  batches until they pass, instead of being ejected as `checks_pending`
+  (2026-11-01: [moq-dev/quest#354](https://github.com/moq-dev/quest/pull/354)
+  was ejected that way while its CI ran).
 - Blame is unclear, so check the base tip alone. A red base halts the queue
   with one visible notice instead of ejecting PRs that did nothing wrong
   ([moq-dev/moq#7196](https://github.com/moq-dev/moq/pull/7196),

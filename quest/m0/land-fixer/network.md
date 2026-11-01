@@ -4,8 +4,9 @@
 
 The fixer container can fetch dependencies from the package registries a
 repository's lockfiles name, so `cargo`, `bun`, `uv`, and `go` build and test
-a fix before the fixer reports `fixed` or `requeue`. It reaches nothing else:
-not GitHub's API, and no credentials enter the container.
+a fix before the fixer reports `fixed` or `requeue`. It does not use GitHub's
+API or push, and the only credential in the container stays the gate's
+CLIProxyAPI client key ([Fixer proxy access](/quest/m0/host-land/fixer.md)).
 
 ## Plan
 
@@ -22,12 +23,19 @@ three batches), and could not regenerate
   - ✅ Allow registry network
   - Leave it
 
-Host work is in kixelated/nixos `modules/quest-land.nix`. Today the fixer
-image has no caches (`freshFixer`), and its network reaches only CLIProxyAPI.
-The check containers already reach the registries, so reuse that allowlist:
-crates.io, its index and static hosts, npm, PyPI, and the Go proxy. Git
-dependencies come from `github.com` and `codeload.github.com` over HTTPS; keep
-`api.github.com` unreachable.
+Found while starting the work (2026-11-01): the host is not what blocks it.
+kixelated/nixos `modules/ci-egress.nix` gives the fixer container
+(`qland-fix`) the same egress as the check containers, the public internet
+without private ranges, and the fixer runs Codex with
+`--dangerously-bypass-approvals-and-sandbox`. The fixer chooses `--offline`
+itself because `assets/land-fix.md` says "Never push or contact GitHub", and
+a git dependency's fetch from `github.com` is contact. So the change is the
+prompt: fetching dependencies from package registries and from
+`github.com`/`codeload.github.com` for git dependencies is allowed, while
+GitHub's API, pushing, and any other contact stay forbidden.
+[Fixer proxy access](/quest/m0/host-land/fixer.md)'s "network access only to
+CLIProxyAPI" describes the intent, not the host as built; correct it in the
+same PR.
 
 `assets/land-fix.md` then tells the fixer to build and test the packages its
 fix touches, and to report what it ran in the result's reason. A fix it could
