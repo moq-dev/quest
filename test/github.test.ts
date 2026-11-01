@@ -176,6 +176,16 @@ describe("transient failures", () => {
 		expect(calls).toHaveLength(2);
 	});
 
+	test("a rate limit is waited out even when the caller allows its status", async () => {
+		const { github, calls } = fixture([
+			json({ message: "secondary rate limit" }, 403, { "retry-after": "60" }),
+			json({ message: "Resource not accessible by integration" }, 403),
+		]);
+		const response = await github.request(`${repo}/pulls/1/merge`, { method: "PUT", body: {}, allow: [403] });
+		expect(calls).toHaveLength(2);
+		expect(((await response.json()) as { message: string }).message).toBe("Resource not accessible by integration");
+	});
+
 	test("any other POST never repeats after a 5xx or a dropped connection", async () => {
 		for (const failure of [bad(502), dropped()]) {
 			const { github, calls, sleeps } = fixture([failure]);

@@ -671,8 +671,10 @@ fixer repositories remain credential-free. Write installation tokens are scoped
 to this repository, with contents and pull requests write.
 Tokens are minted for each push or API merge and passed only to trusted git
 and GitHub clients, never the sandbox or fixer. A PR-branch push also requests
-workflow write when the head-to-merge range carries workflow changes from the base. Workflow write is requested only when that PR's squash changes
-`.github/workflows`. Queue API tokens, which disable auto-merge on ejection and
+workflow write when the head-to-merge range carries workflow changes from the base. An API
+merge requests workflow write when that PR's squash changes `.github/workflows`, or
+when any commit the PR brings does (including a merge of a base that changed one),
+since GitHub refuses an App's merge of a PR whose commits touch workflows. Queue API tokens, which disable auto-merge on ejection and
 so need contents write, stay in the daemon, refresh before expiry, and are
 replaced on a 401. Batch errors are logged and retried with bounded exponential
 backoff. Grant the App the base ruleset's bypass and the read permissions needed
@@ -841,7 +843,16 @@ and the agent's final reply. It never prints a key. It exits 0 when the agent
 finished, 3 when the provider refused the key for lack of credit, 2 for invalid
 arguments, 128 plus the signal number when interrupted, and 1 otherwise. `stop`
 signals the agent and waits until its `start` or `resume` has reported.
-`quest agent` does not run on native Windows yet; use WSL.
+
+The agent CLI and `op` run from their absolute paths on `PATH`, skipping
+relative entries, so a worktree can never supply its own `claude` and receive
+a key. They also run with only `PATH`'s absolute entries, so neither finds a
+program it starts by name, such as `node`, in the worktree. On native Windows
+the lookup tries `PATHEXT`'s program and batch extensions, a batch shim such as
+npm's `claude.cmd` runs through System32's `cmd.exe` with its arguments
+escaped, `NoDefaultCurrentDirectoryInExePath` stops Windows' implicit search of
+the working directory, and `stop` ends the agent's whole process tree at once,
+since Windows has no `SIGTERM`.
 
 ## Run kix jobs on your machines
 

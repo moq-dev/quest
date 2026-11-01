@@ -20,3 +20,9 @@ Decided 2026-10-31 (user, /quest-plan of the follow-ups from a moq-dev/moq
   A cancelled run and a newer passing run of the same check both count, so
   the check still shows as failing. Count only the newest run of each check
   name.
+
+Moved from m2 to m0 on 2026-11-01 (user, /quest-plan of the follow-ups from
+the 2026-11-01 `/quest-complete` sessions): ✅ m0, beside the land quests ·
+leave it in m2. The moq-dev land gate and the agents picking merges read
+`quest status` every day, so a stale `landing-stopped` line or a superseded
+cancelled check sends them after PRs that are already queued and passing.

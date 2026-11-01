@@ -26,7 +26,13 @@ needs a runner before a project can enroll:
   the Claude hook entries in `.claude/settings.json`. The Worker publishes them
   through the same path as job branches, on a branch outside `quest/`.
 - The enrollment form asks, optionally, what the project is working toward,
-  and writes the answer as `quest/README.md`'s Goal.
+  and writes the answer as `quest/README.md`'s Goal. Amended 2026-11-01
+  (user, /quest-plan): since
+  [moq-dev/quest#349](https://github.com/moq-dev/quest/pull/349), enrolling
+  is one **Enable** button on a row of the `/projects` picker, with no form.
+  On a row with no Quest files, **Enable** opens a short form holding only
+  this optional question, and submitting it opens the setup PR. Rows that
+  already have Quest files enable at once, as now.
 - An init refusal names the conflicting path on the setup page, as the CLI
   does; kix never deletes or renames a repository's files.
 - The pull request body says what the PR leaves out, since those steps need
