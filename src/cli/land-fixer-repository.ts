@@ -48,7 +48,7 @@ export function importFixer(
 			if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile()))
 				throw new Error("fixer git metadata must contain only real files and directories");
 			if (stat.isDirectory()) {
-				// Submodule repositories are never imported, and gitlinks are protected, so a host that initialized
+				// Submodule repositories are never imported (a gitlink is only a commit ID), so a host that initialized
 				// submodules for the dev shell does not count their history (moq.pro's moq) against the bound.
 				if (rel !== "modules") walk(child, rel);
 			} else if (relative === "objects/pack" && launched.has(name.replace(/\.[a-z]+$/, ""))) continue;

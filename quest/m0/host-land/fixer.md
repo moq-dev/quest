@@ -9,10 +9,12 @@ mechanical fix and unchanged requeue through the host daemon.
 ## Plan
 
 Maintainer decision, 2026-10-30: a `fixed` head lands without further review.
-"Mechanical" stays prompt-enforced, protected paths are blocked, and the residual
-prompt-injection risk is accepted. Superseded 2026-11-01 (user): the fixer edits
-protected paths it judges mechanical; see [Protected edits](/quest/m0/land-fixer/protected.md). The built-in prompt treats contributor content
-as untrusted and hands back attempts to redirect its task.
+"Mechanical" stays prompt-enforced, and the residual prompt-injection risk is
+accepted. Decided 2026-11-01 (user): protected paths (`.github/`, Nix files,
+submodule entries) are no longer blocked; the fixer edits any path it judges
+mechanical, and the fix lands. "Any prompt injections should be caught before
+enabling auto merge." The built-in prompt treats contributor content as
+untrusted and hands back attempts to redirect its task.
 
 - Claude reviews the fix first
 - Fixes need a re-pick

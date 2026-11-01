@@ -527,11 +527,10 @@ Jobs and attempts persist across daemon restarts. A running fixer outlives a
 restart only where the host leaves its process group alive (under systemd,
 `KillMode=process` on the daemon's unit); otherwise its handback names the signal
 and the restart. After the wrapper exits, the
-daemon validates every result, ancestry, and protected path before lease-pushing
-as the bot. The protected set as a whole must match the pinned head or its merge with the
-current base, including content and mode. It covers `flake.nix`, `flake.lock`,
-`shell.nix`, `default.nix`, `nix/`, `.envrc`, `.github/`, `.gitmodules`, and gitlinks
-anywhere. Collection copies at most 100 MiB of Git metadata the fixer added into a
+daemon validates every result and its ancestry before lease-pushing as the bot:
+new commits sit on the pinned head, and any other commit comes from the base the
+fixer was given. The prompt holds every path, including `.github/`, Nix files, and
+gitlinks, to the same mechanical bar. Collection copies at most 100 MiB of Git metadata the fixer added into a
 clean object repository. It skips the packs fetched at launch, whose objects the clean
 repository borrows from the daemon's own. It ignores fixer configuration and never
 follows the fixer's Git alternates. Pack indexes are rebuilt with

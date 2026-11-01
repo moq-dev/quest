@@ -17,17 +17,7 @@ import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { MERGE_LABEL } from "../core";
 import { GitHub, type GitHubDependencies, object, string } from "./github";
-import {
-	baseRemote,
-	commandEnvironment,
-	contains,
-	git,
-	tryGit,
-	enqueue,
-	type Entry,
-	type Ejection,
-	type Plan,
-} from "./land";
+import { baseRemote, commandEnvironment, contains, git, enqueue, type Entry, type Ejection, type Plan } from "./land";
 import { readFixResult, parseFixResult, type FixResult } from "./land-fix";
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
@@ -243,7 +233,7 @@ export async function startFixer(
 	child.unref();
 }
 
-/** New commits descend from the pin. Protected content/modes at the head must match the pin or its merge with `base`, the base the fixer was given. */
+/** New commits descend from the pin; any other commit comes from `base`, the base the fixer was given. */
 export function validateFix(root: string, entry: Entry, head: string, base: string): void {
 	if (!contains(root, entry.head, head) || head === entry.head)
 		throw new Error("fixed head must descend from the pinned PR head");
@@ -252,30 +242,6 @@ export function validateFix(root: string, entry: Entry, head: string, base: stri
 		.filter(Boolean)) {
 		if (!contains(root, entry.head, commit)) throw new Error("new fixer commit is not on top of pinned head");
 	}
-
-	const protectedPath = (path: string) =>
-		["flake.nix", "flake.lock", "shell.nix", "default.nix", ".gitmodules", ".envrc", "nix", ".github"].some(
-			(prefix) => path === prefix || path.startsWith(`${prefix}/`),
-		);
-	const merged = tryGit(root, ["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", entry.head, base]);
-	if (merged.status !== 0 && merged.status !== 1) throw new Error("cannot compute protected merge result");
-	const [tree, ...conflicts] = merged.stdout.split("\0");
-	if (!/^[a-f0-9]{40}$/.test(tree)) throw new Error("invalid protected merge tree");
-	const entries = (ref: string) => git(root, ["ls-tree", "-rz", ref]).split("\0").filter(Boolean);
-	const maps = [head, entry.head, tree].map(entries);
-	const gitlinks = new Set(
-		maps.flatMap((list) =>
-			list.filter((line) => line.startsWith("160000 ")).map((line) => line.slice(line.indexOf("\t") + 1)),
-		),
-	);
-	const protectedEntry = (line: string) => {
-		const path = line.slice(line.indexOf("\t") + 1);
-		return protectedPath(path) || gitlinks.has(path);
-	};
-	const sets = maps.map((list) => list.filter(protectedEntry).sort().join("\0"));
-	const protectedConflict = conflicts.some((path) => protectedPath(path) || gitlinks.has(path));
-	if (sets[0] !== sets[1] && (protectedConflict || sets[0] !== sets[2]))
-		throw new Error("off-limits fixer edit: protected set must equal pinned head or base merge result");
 }
 
 /** Contributor prose is quoted data, never GitHub markup, mentions, or issue-closing instructions. */
@@ -444,7 +410,7 @@ async function collectJob(
 						throw new FixerRefusal(String(error));
 					}
 					// Validate against the base the fixer was given, not the current one: other PRs may
-					// land protected changes while the result waits, and the requeue re-merges anyway.
+					// land while the result waits, and the requeue re-merges anyway.
 					await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(job.plan), job.plan.base.sha]);
 					try {
 						validateFix(root, entry, head, job.plan.base.sha);

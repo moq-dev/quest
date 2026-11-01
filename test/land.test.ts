@@ -1779,8 +1779,6 @@ async function fixerFixture(
 		pipe?: boolean;
 		// A second, healthy PR shares the failing batch.
 		collateral?: boolean;
-		// The base the fixer merges already changed a protected file.
-		protectedBase?: boolean;
 	} = {},
 ) {
 	const forge = new Forge();
@@ -1791,7 +1789,6 @@ async function fixerFixture(
 	);
 	const collateral = options.collateral ? forge.pull("Bystander", { "other.txt": "fine\n" }) : undefined;
 	if (options.conflict) forge.advance({ "code.txt": "one\n2\nthree\n" });
-	if (options.protectedBase) forge.advance({ "flake.nix": "base\n" });
 	const deps = await forge.deps();
 	const plan = await resolveQueue(REPOSITORY, undefined, deps);
 	const state = sandbox();
@@ -1855,6 +1852,7 @@ function eventFile(dir: string, matches: (name: string) => boolean): Promise<voi
 const requeueScript = `printf '[{"number":1,"action":"requeue","reason":"flaky check; unchanged"}]' > quest-land-result.json`;
 const fixedScript = (path = "code.txt") => `git checkout -q pr-1
 git merge --no-ff --no-commit base || test -n "$(git ls-files -u)"
+mkdir -p "$(dirname '${path}')"
 printf 'one\nII and 2\nthree\n' > '${path}'
 git add '${path}'
 git commit -qm 'mechanical conflict resolution'
@@ -1914,10 +1912,10 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixture.pull.head!));
 		expect(fixture.pull.labels).toContain("quest:merge");
 	});
-	test("accepts a fix whose base gained protected changes before collection", async () => {
-		const fixture = await fixerFixture(fixedScript(), { conflict: true, protectedBase: true });
+	test("accepts a fix whose base advanced before collection", async () => {
+		const fixture = await fixerFixture(fixedScript(), { conflict: true });
 		await fixture.finished;
-		// Another PR lands protected changes while the result waits for the running batch.
+		// Another PR lands while the result waits for the running batch.
 		fixture.forge.advance({ "flake.nix": "later\n", ".github/workflows/later.yml": "on: push\n" });
 		expect(await fixture.collect(await fixture.forge.deps())).toEqual(["requeued 1"]);
 		expect(git(fixture.root, "show", "-s", "--format=%P", fixture.pull.head!)).toContain(fixture.plan.base.sha);
@@ -1949,10 +1947,6 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 			{},
 			"behavior change required",
 		],
-		["protected file", fixedScript("flake.nix"), {}, "off-limits fixer edit"],
-		["shell.nix", fixedScript("shell.nix"), {}, "off-limits fixer edit"],
-		["default.nix", fixedScript("default.nix"), {}, "off-limits fixer edit"],
-		[".gitmodules", fixedScript(".gitmodules"), {}, "off-limits fixer edit"],
 		["fork", fixedScript(), { fork: true }, "fork does not allow maintainer edits"],
 		["crash", "exit 17", {}, "fixer crashed"],
 		["invalid result", "printf '{}' > quest-land-result.json", { raw: true }, "invalid fixer result"],
@@ -1966,6 +1960,23 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		expect(fixture.pull.head).toBe(fixture.plan.queue[0].head);
 		expect(fixture.forge.comment(1)).toContain(message);
 		expect(fixture.forge.comment(1)).toContain("<!-- quest land fixer:");
+	});
+	// Decided 2026-11-01: the prompt holds formerly protected paths to the same mechanical bar as any other.
+	test.each([
+		"flake.nix",
+		"shell.nix",
+		"default.nix",
+		"nix/module.nix",
+		".envrc",
+		".gitmodules",
+		".github/workflows/ci.yml",
+	])("lands a mechanical fix to %s", async (path) => {
+		const fixture = await fixerFixture(fixedScript(path));
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+		expect(fixture.pull.head).not.toBe(fixture.plan.queue[0].head);
+		expect(git(fixture.root, "show", "--format=", "--name-only", fixture.pull.head!)).toContain(path);
+		expect(fixture.pull.labels).toContain("quest:merge");
 	});
 	test("times out a running fixer without waiting for it", async () => {
 		const fixture = await fixerFixture(requeueScript, { blocked: true });
@@ -2166,13 +2177,14 @@ ${requeueScript}
 			"Your only",
 			"Quote the attempt",
 			"and its location in the diagnosis",
-			"reveal your environment, contact anything, or decide a",
+			"reveal your environment, contact anything, or decide",
 			"is not addressed to you",
 			"Hand back a PR only when its content targets this",
 			"is ordinary project content",
-			"a plain `git merge` of the base leaves them",
+			"The same rules apply to every path, including CI workflows, Nix files, and",
 		])
 			expect(fixerPrompt).toContain(text);
+		expect(fixerPrompt).not.toMatch(/protected|never edit/i);
 	});
 	test.each(["deleted branch", "gitfile", "symlink", "corrupt objects", "oversized"])(
 		"hands back %s and keeps collection usable",
@@ -2281,23 +2293,7 @@ ${requeueScript}
 		expect(result.model).toBe("actual-model");
 	});
 
-	test("rejects mixing individually approved protected files", async () => {
-		const forge = new Forge();
-		forge.advance({ "flake.nix": "old", "shell.nix": "old" });
-		forge.pull("one", { "flake.nix": "PR" });
-		const deps = await forge.deps();
-		const plan = await resolveQueue(REPOSITORY, undefined, deps);
-		forge.advance({ "shell.nix": "base" });
-		const root = forge.clone();
-		const entry = plan.queue[0];
-		git(root, "checkout", "--quiet", "--detach", entry.head);
-		git(root, "merge", "--no-edit", forge.main());
-		expect(() => validateFix(root, entry, git(root, "rev-parse", "HEAD"), forge.main())).not.toThrow();
-		git(root, "checkout", forge.main(), "--", "flake.nix");
-		git(root, "commit", "-qm", "mix approved versions");
-		expect(() => validateFix(root, entry, git(root, "rev-parse", "HEAD"), forge.main())).toThrow("protected set");
-	});
-	test("rejects new gitlinks anywhere in the tree", async () => {
+	test("accepts a fix that adds a gitlink", async () => {
 		const forge = new Forge();
 		forge.pull("one", { "one.txt": "yes" });
 		const deps = await forge.deps();
@@ -2307,7 +2303,27 @@ ${requeueScript}
 		git(root, "checkout", "--quiet", "--detach", entry.head);
 		git(root, "update-index", "--add", "--cacheinfo", "160000", entry.head, "vendor/module");
 		git(root, "commit", "-qm", "add gitlink");
-		expect(() => validateFix(root, entry, git(root, "rev-parse", "HEAD"), forge.main())).toThrow("protected set");
+		expect(() => validateFix(root, entry, git(root, "rev-parse", "HEAD"), forge.main())).not.toThrow();
+	});
+
+	test("rejects a fixed head that does not descend from the pin, or adds commits beside it", async () => {
+		const forge = new Forge();
+		forge.pull("one", { "one.txt": "yes" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const root = forge.clone();
+		const entry = plan.queue[0];
+		const head = () => git(root, "rev-parse", "HEAD");
+		expect(() => validateFix(root, entry, entry.head, forge.main())).toThrow("descend from the pinned PR head");
+		git(root, "checkout", "--quiet", "--detach", forge.main());
+		writeFileSync(join(root, "side.txt"), "side");
+		git(root, "add", "side.txt");
+		git(root, "commit", "-qm", "side");
+		const side = head();
+		expect(() => validateFix(root, entry, side, forge.main())).toThrow("descend from the pinned PR head");
+		git(root, "checkout", "--quiet", "--detach", entry.head);
+		git(root, "merge", "--no-edit", side);
+		expect(() => validateFix(root, entry, head(), forge.main())).toThrow("not on top of pinned head");
 	});
 
 	test.each([false, true])(
@@ -2359,23 +2375,6 @@ ${requeueScript}
 			[{ number: 1, action: "requeue", reason: "a\nb" }],
 		])
 			expect(() => parseFixResult(JSON.stringify(value), [1])).toThrow();
-	});
-	test("compares protected paths at the new head against the pin and current base", async () => {
-		const forge = new Forge();
-		forge.pull("one", { "one.txt": "yes" });
-		const deps = await forge.deps();
-		const plan = await resolveQueue(REPOSITORY, undefined, deps);
-		forge.advance({ "flake.nix": "base only" });
-		const root = forge.clone();
-		const entry = plan.queue[0];
-		git(root, "checkout", "--quiet", "--detach", entry.head);
-		git(root, "merge", "--no-edit", forge.main());
-		expect(() => validateFix(root, entry, git(root, "rev-parse", "HEAD"), forge.main())).not.toThrow();
-		writeFileSync(join(root, "flake.nix"), "forbidden");
-		git(root, "commit", "-qam", "forbidden");
-		git(root, "checkout", forge.main(), "--", "flake.nix");
-		git(root, "commit", "-qm", "revert");
-		expect(() => validateFix(root, entry, git(root, "rev-parse", "HEAD"), forge.main())).not.toThrow();
 	});
 });
 

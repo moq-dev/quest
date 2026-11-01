@@ -32,7 +32,3 @@ against the merge's conflicted result. A command such as `quest land apply
 base, applies the patch, checks the tree hash, and leaves a commit for the
 maintainer to push. Size the comment to GitHub's limit and
 hand back plainly when the patch does not fit.
-
-## Related
-
-- [Protected edits](/quest/m0/land-fixer/protected.md) - the fixer's own workflow edits
