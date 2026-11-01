@@ -37,9 +37,9 @@ import { readFixResult, parseBaseFix, parseFixResult, type BaseFix, type FixResu
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
 import { push, remoteHead } from "./land-head";
-import { BASE_JOB, type Halt, haltNotice, readHalt, saveHalt } from "./land-halt";
+import { BASE_JOB, haltNotice, readHalt, saveHalt } from "./land-halt";
 import { isParked, parked } from "./land-park";
-import { excerpt, type Failure } from "./land-serve";
+import { excerpt, RERUN_MARKER, type Failure } from "./land-serve";
 
 class FixerRefusal extends Error {}
 class BaseCheckError extends Error {}
@@ -296,8 +296,10 @@ interface BaseJob extends Process {
 }
 
 /**
- * Start the fixer on a base that fails its check alone, with only its `base` branch. Its fix is
- * proposed as a PR for a maintainer to merge; without one, the queue's halt gets an issue.
+ * Start the fixer on the base alone, with only its `base` branch. For a base that fails its check
+ * alone, its fix is proposed as a PR for a maintainer to merge; without one, the queue's halt gets an
+ * issue. For a `flaky` job, whose log is a `flaky-*.log` that failed and then passed on its rerun, it
+ * disables the flaky test in a PR the gate queues itself.
  */
 export async function startBaseFixer(
 	root: string,
@@ -307,6 +309,7 @@ export async function startBaseFixer(
 	log: string,
 	fixer: string,
 	deps: Pick<GitHubDependencies, "now">,
+	kind: "base" | "flaky" = "base",
 ): Promise<void> {
 	const checkout = mkdtempSync(join(state, "fix-"));
 	try {
@@ -320,7 +323,7 @@ export async function startBaseFixer(
 			daemon: identity(process.pid),
 			packs,
 		};
-		await launch(join(state, `fix-base-${basename(checkout)}.json`), job, fixer, log, []);
+		await launch(join(state, `fix-${kind}-${basename(checkout)}.json`), job, fixer, log, []);
 	} catch (error) {
 		rmSync(checkout, { recursive: true, force: true });
 		throw error;
@@ -354,9 +357,15 @@ async function collectBaseJob(
 		const result = job.result;
 		let error = job.error?.replace(/; run \/quest-iterate.*$/, "");
 		if (!error && result?.action === "fixed") {
+			const attribution = author(result);
+			const log = existsSync(job.log) ? readFileSync(job.log, "utf8").trimEnd() : "";
 			try {
-				const fix = await proposeFix(root, state, job, result, deps, token, read);
-				saveHalt(state, { ...halt, fix });
+				const fix = await proposeFix(root, state, job, result, deps, token, read, {
+					branch: `quest-land/fix-${job.base.sha.slice(0, 12)}`,
+					title: `quest land: fix ${job.base.ref}, which fails its own check`,
+					body: `${job.base.ref} fails its own check at ${job.base.sha}, so quest land halted its queue. Its land fixer proposes this mechanical fix: ${fixerText(result.reason)}\n\nMerge it as an administrator: the queue resumes once a check of the new ${job.base.ref} passes. If ${job.base.ref} passes without it first, quest land closes this pull request.${log ? `\n\n<pre>${excerpt(log)}</pre>` : ""}${review("", result.head, result.reason, attribution)}\n\n(written by ${attribution})`,
+				});
+				saveHalt(state, { ...halt, fix: { number: fix.number, branch: fix.branch } });
 				if (halt.issue !== undefined)
 					await github.request(`/repos/${job.repository}/issues/${halt.issue}/comments`, {
 						body: {
@@ -386,7 +395,66 @@ async function collectBaseJob(
 	return output;
 }
 
-/** Push a base fix to its own branch, as validated as a PR's, and open it as a PR, once. */
+/** Flaky jobs are `fix-flaky-*.json`: the fixer disables a test that passed only on its rerun. */
+const FLAKY_JOB = /^fix-flaky-.*\.json$/;
+
+/**
+ * Propose a finished flaky job's fix as a PR and queue it, as a maintainer's pick would: a rerun
+ * proved the test flaky, so disabling it needs no decision. The gate checks and lands it like any
+ * other PR. A handback, or a fix the daemon refuses, only reports in its output, and the test stays.
+ */
+async function collectFlakyJob(
+	root: string,
+	state: string,
+	path: string,
+	job: BaseJob,
+	deps: GitHubDependencies,
+	token: (workflows: boolean) => Promise<string>,
+	timeout: number,
+	read: RemoteRead,
+): Promise<string[]> {
+	if (
+		!job.result &&
+		!job.error &&
+		!settle(path, job, deps, timeout, () => (job.result = parseBaseFix(readFixResult(job.checkout))))
+	)
+		return [];
+	const output: string[] = [];
+	const result = job.result;
+	let error = job.error;
+	if (!error && result?.action === "fixed") {
+		const attribution = author(result);
+		// The first run's failure, not the rerun that passed after it.
+		const failed = existsSync(job.log)
+			? readFileSync(job.log, "utf8").split(`\n${RERUN_MARKER} `)[0].trimEnd()
+			: "";
+		try {
+			const fix = await proposeFix(root, state, job, result, deps, token, read, {
+				branch: `quest-land/${basename(path, ".json")}`,
+				title: "quest land: disable a flaky test",
+				body: `A quest land check failed, then passed when the gate reran it on the same tip, so a test it runs is flaky. Its land fixer disables that test, with a follow-up quest to fix or delete it: ${fixerText(result.reason)}\n\nThe rerun proved the test flaky, so quest land queued this pull request itself, and checks it like any other. Close it to keep the test enabled.${failed ? `\n\n<pre>${excerpt(failed)}</pre>` : ""}${review("", result.head, result.reason, attribution)}\n\n(written by ${attribution})`,
+			});
+			const github = new GitHub(deps);
+			await enqueue(github, fix.id, result.head);
+			await github.request(`/repos/${job.repository}/issues/${fix.number}/labels`, {
+				body: { labels: [MERGE_LABEL] },
+			});
+			output.push(`proposed ${fix.number}`);
+		} catch (failure) {
+			if (!(failure instanceof FixerRefusal)) throw failure;
+			error = failure.message;
+		}
+	}
+	if (error) output.push(`flaky unfixed: ${error}`);
+	else if (result?.action === "handback")
+		output.push(`flaky unfixed: ${result.diagnosis}; recommendation: ${result.recommendation}`);
+	rmSync(job.checkout, { recursive: true, force: true });
+	rmSync(`${path}.exit`, { force: true });
+	rmSync(path);
+	return output;
+}
+
+/** Push a base fix to `pr.branch`, as validated as a PR's, and open it as a PR, once. */
 async function proposeFix(
 	root: string,
 	state: string,
@@ -395,7 +463,8 @@ async function proposeFix(
 	deps: GitHubDependencies,
 	token: (workflows: boolean) => Promise<string>,
 	read: RemoteRead,
-): Promise<NonNullable<Halt["fix"]>> {
+	pr: { branch: string; title: string; body: string },
+): Promise<{ number: number; branch: string; id: string }> {
 	const { base, repository } = job;
 	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote({ repository }), base.sha]);
 	try {
@@ -405,7 +474,7 @@ async function proposeFix(
 	} catch (error) {
 		throw new FixerRefusal(String(error));
 	}
-	const branch = `quest-land/fix-${base.sha.slice(0, 12)}`;
+	const { branch } = pr;
 	const remote = `https://github.com/${repository}.git`;
 	const ref = `refs/heads/${branch}`;
 	// A retry after a restart finds its own push already there.
@@ -416,18 +485,12 @@ async function proposeFix(
 	const github = new GitHub(deps);
 	const head = `${repository.split("/")[0]}:${branch}`;
 	const [open] = await github.all(`/repos/${repository}/pulls?head=${encodeURIComponent(head)}&state=open`);
-	if (open) return { number: Number(open.number), branch };
-	const attribution = author(result);
-	const log = existsSync(job.log) ? readFileSync(job.log, "utf8").trimEnd() : "";
+	if (open) return { number: Number(open.number), branch, id: string(open.node_id) };
 	const response = await github.request(`/repos/${repository}/pulls`, {
-		body: {
-			title: `quest land: fix ${base.ref}, which fails its own check`,
-			head,
-			base: base.ref,
-			body: `${base.ref} fails its own check at ${base.sha}, so quest land halted its queue. Its land fixer proposes this mechanical fix: ${fixerText(result.reason)}\n\nMerge it as an administrator: the queue resumes once a check of the new ${base.ref} passes. If ${base.ref} passes without it first, quest land closes this pull request.${log ? `\n\n<pre>${excerpt(log)}</pre>` : ""}${review("", result.head, result.reason, attribution)}\n\n(written by ${attribution})`,
-		},
+		body: { title: pr.title, head, base: base.ref, body: pr.body },
 	});
-	return { number: Number(object(await response.json()).number), branch };
+	const created = object(await response.json());
+	return { number: Number(created.number), branch, id: string(created.node_id) };
 }
 
 /**
@@ -622,6 +685,16 @@ export async function collectFixers(
 		} catch (error) {
 			// The queue stays halted on its base meanwhile; nothing else waits on this job.
 			deps.warn(`quest land fixer: base fix pending for ${name}: ${String(error)}`);
+		}
+	}
+	for (const name of readdirSync(state).filter((name) => FLAKY_JOB.test(name))) {
+		const path = join(state, name);
+		try {
+			const job = JSON.parse(readFileSync(path, "utf8")) as BaseJob;
+			output.push(...(await collectFlakyJob(root, state, path, job, deps, token, timeout, read)));
+		} catch (error) {
+			// Nothing waits on this job: the batch it came from already landed.
+			deps.warn(`quest land fixer: flaky fix pending for ${name}: ${String(error)}`);
 		}
 	}
 	for (const name of readdirSync(state).filter((name) => /^fix-job-.*\.json$/.test(name))) {

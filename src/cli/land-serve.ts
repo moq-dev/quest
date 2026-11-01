@@ -9,6 +9,7 @@ import {
 	accessSync,
 	constants,
 	appendFileSync,
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -410,7 +411,57 @@ export interface BatchOptions extends Pick<ServeOptions, "state" | "sandbox" | "
 /** How often a running check pauses to collect finished fixer jobs. */
 const COLLECT_EVERY = 60_000;
 
-/** Run the sandbox on `tip`, `links` commits above `base`, appending its output to `log`. Returns its exit code. */
+/** The line a check prints to name a module that failed, which the gate reruns once on the same tip. */
+const FAILED_MODULE = /^quest-land-failed: (.+)$/gm;
+/** The line the gate writes into a check's log before rerunning it. */
+export const RERUN_MARKER = "quest land: rerunning";
+
+/**
+ * The modules the check named as failed, in order and once each. A name is check output, so it is
+ * bounded: printable, at most 200 characters, and at most 50 of them.
+ */
+export function failedModules(output: string): string[] {
+	const names = [...output.matchAll(FAILED_MODULE)]
+		.map((match) => match[1].trim())
+		.filter((name) => name && name.length <= 200 && !/[\u0000-\u001f\u007f]/.test(name));
+	return [...new Set(names)].slice(0, 50);
+}
+
+/** A check's outcome: whether it passed, and when only its rerun passed, the modules that flaked. */
+export interface Checked {
+	code: number;
+	/** Set when the first run failed and its rerun on the same tip passed: the modules it named, if any. */
+	flaky?: string[];
+}
+
+/**
+ * Check `tip`, and when it fails, rerun the modules it names once on the same tip before anyone is
+ * blamed: a failure that passes on the rerun is flaky. The log keeps both runs. A check that ran past
+ * its deadline is not rerun, since a rerun would spend the whole deadline again.
+ */
+async function check(
+	root: string,
+	options: BatchOptions,
+	tip: string,
+	links: number,
+	base: string,
+	log: string,
+): Promise<Checked> {
+	const first = await runSandbox(root, options, tip, links, base, log);
+	if (first.code === 0 || first.timedOut) return { code: first.code };
+	const modules = failedModules(readFileSync(log, "utf8"));
+	appendFileSync(
+		log,
+		`\n${RERUN_MARKER} ${modules.length ? modules.join(", ") : "the whole check"} once on the same tip\n`,
+	);
+	const rerun = await runSandbox(root, options, tip, links, base, log, modules);
+	return rerun.code === 0 ? { code: 0, flaky: modules } : { code: first.code };
+}
+
+/**
+ * Run the sandbox on `tip`, `links` commits above `base`, writing its output to `log`. A rerun appends
+ * to the log and names the modules to rerun in `QUEST_LAND_RERUN`, one per line.
+ */
 async function runSandbox(
 	root: string,
 	options: BatchOptions,
@@ -418,9 +469,11 @@ async function runSandbox(
 	links: number,
 	base: string,
 	log: string,
-): Promise<number> {
+	rerun?: string[],
+): Promise<{ code: number; timedOut: boolean }> {
 	const checkout = sandboxTree(root, options.state, tip, links);
-	writeFileSync(log, "", { mode: 0o600 });
+	if (!rerun) writeFileSync(log, "", { mode: 0o600 });
+	let timedOut = false;
 	let collecting: Promise<void> | undefined;
 	const collector = options.collect
 		? setInterval(() => {
@@ -428,15 +481,20 @@ async function runSandbox(
 			}, COLLECT_EVERY)
 		: undefined;
 	try {
-		return await new Promise<number>((done, reject) => {
+		const code = await new Promise<number>((done, reject) => {
 			const child = spawn(options.sandbox, [checkout, base], {
 				cwd: checkout,
 				detached: true,
-				env: { ...commandEnvironment(), QUEST_LAND_BASE: base },
+				env: {
+					...commandEnvironment(),
+					QUEST_LAND_BASE: base,
+					...(rerun?.length ? { QUEST_LAND_RERUN: rerun.join("\n") } : {}),
+				},
 				stdio: ["ignore", "pipe", "pipe"],
 			});
 			// A hung check would stall the queue: kill its whole process group at the deadline.
 			const timer = setTimeout(() => {
+				timedOut = true;
 				appendFileSync(log, `\nquest land: the check ran past ${options.timeout} minutes and was killed\n`);
 				try {
 					process.kill(-child.pid!, "SIGKILL");
@@ -453,11 +511,54 @@ async function runSandbox(
 				done(status ?? 1);
 			});
 		});
+		return { code, timedOut };
 	} finally {
 		clearInterval(collector);
 		// The batch goes on only after a collection in flight finishes, never beside it.
 		await collecting;
 		rmSync(checkout, { recursive: true });
+	}
+}
+
+/** Logs of checks that passed only on their rerun, waiting for a fixer job to disable what flaked. */
+const FLAKY = "flaky.json";
+
+function readFlaky(state: string): string[] {
+	const path = join(state, FLAKY);
+	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as string[]) : [];
+}
+
+/**
+ * A check of `tip` that passed only on its rerun. With a fixer, its log is kept as `flaky-*.log`, a name
+ * that tells the fixer to disable the flaky test, until the next round starts that job on the base as it
+ * then is, which includes the batch that just landed. Returns the line that reports it.
+ */
+function flaked(options: Pick<ServeOptions, "state" | "fixer">, log: string, tip: string, modules: string[]): string {
+	if (options.fixer) {
+		const kept = join(options.state, `flaky-${Date.now()}-${tip.slice(0, 12)}.log`);
+		copyFileSync(log, kept);
+		save(join(options.state, FLAKY), [...readFlaky(options.state), kept]);
+	}
+	return `flaky ${tip} ${modules.length ? modules.join(", ") : "check"}`;
+}
+
+/** Start a fixer job on each recorded flake, which proposes a PR that disables the flaky test and queues it. */
+async function disableFlaky(
+	root: string,
+	plan: Plan,
+	options: Pick<ServeOptions, "state" | "fixer">,
+	deps: GitHubDependencies,
+	read: RemoteRead,
+): Promise<void> {
+	const pending = readFlaky(options.state);
+	if (!pending.length) return;
+	if (options.fixer) await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(plan), plan.base.sha]);
+	while (pending.length) {
+		const log = pending.shift()!;
+		// Forgotten before the launch: a crash loses this flake's PR rather than opening two.
+		save(join(options.state, FLAKY), pending);
+		if (options.fixer)
+			await startBaseFixer(root, options.state, plan.repository, plan.base, log, options.fixer, deps, "flaky");
 	}
 }
 
@@ -478,7 +579,9 @@ export async function checkBase(
 	if (readHalt(options.state)?.sha === base.sha) return false;
 	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote({ repository }), base.sha]);
 	const log = join(options.state, `base-${Date.now()}-${base.sha.slice(0, 12)}.log`);
-	if ((await runSandbox(root, options, base.sha, 0, base.sha, log)) === 0) return true;
+	const checked = await check(root, options, base.sha, 0, base.sha, log);
+	if (checked.flaky) deps.warn(flaked(options, log, base.sha, checked.flaky));
+	if (checked.code === 0) return true;
 	const github = new GitHub(deps);
 	const halt = readHalt(options.state);
 	// A fix proposed for an earlier red base is superseded: the fixer proposes one for this base.
@@ -525,6 +628,7 @@ export async function serveBatch(
 		await handbackRepeated(options.state, plan, item, deps);
 	}
 	output.push(...(await reportStalled(github, plan, options.state, deps.now())));
+	await disableFlaky(root, plan, options, deps, read);
 	// A halted queue waits for its base to move, then resumes once the new base passes alone, even
 	// with no PR ready to batch, so its issue and any fix it no longer needs are closed at once.
 	const halt = readHalt(options.state);
@@ -587,8 +691,10 @@ export async function serveBatch(
 		return output;
 	}
 	const tip = chain.links.at(-1)!;
-	const code = await runSandbox(root, options, tip.commit, chain.links.length, plan.base.sha, log);
+	const { code, flaky } = await check(root, options, tip.commit, chain.links.length, plan.base.sha, log);
+	// A flaky failure is no PR's fault: the batch passed, and lands.
 	nextPolicy(options.state, policy, chain.links.length, code === 0);
+	if (flaky) output.push(flaked(options, log, tip.commit, flaky));
 	if (code !== 0) {
 		// The fixer reads the failure first and says which PR broke the batch; until then, all of them
 		// sit out. Without a fixer, the whole batch is ejected.
@@ -599,7 +705,7 @@ export async function serveBatch(
 				log,
 				entries: chain.links.map(({ entry }) => entry),
 				reason: "failed_checks",
-				detail: `the batch check failed (exit ${code}).\n\n<pre>${excerpt(readFileSync(log, "utf8").trimEnd())}</pre>\n`,
+				detail: `the batch check failed (exit ${code}), and failed again when quest land reran it on the same tip.\n\n<pre>${excerpt(readFileSync(log, "utf8").trimEnd())}</pre>\n`,
 			})),
 		);
 		return output;

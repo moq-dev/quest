@@ -146,7 +146,7 @@ export async function fix(
 	args?: string[],
 	model?: string,
 ): Promise<void> {
-	// No PR numbers fixes the base alone, which fails its check without any PR.
+	// No PR numbers fixes the base alone: one that fails its check without any PR, or a flaky test on it.
 	if (
 		numbers.some((number) => !Number.isSafeInteger(number) || number <= 0) ||
 		new Set(numbers).size !== numbers.length
@@ -212,8 +212,10 @@ export async function fix(
 		child.stderr.pipe(process.stderr, { end: false });
 		child.once("error", reject);
 		child.stdin.on("error", () => {});
+		// The daemon names a log that failed and then passed on its rerun `flaky-*.log`; the wrapper keeps its path.
+		const alone = basename(log).startsWith("flaky-") ? "a flaky test to disable" : "the base fails alone";
 		child.stdin.end(
-			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:${prs.length ? `\n${prs.join("\n")}` : " none; the base fails alone"}\n`,
+			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:${prs.length ? `\n${prs.join("\n")}` : ` none; ${alone}`}\n`,
 		);
 		child.once("close", (code) => (code === 0 ? done() : reject(new FixerAgentError(code ?? 1))));
 	});

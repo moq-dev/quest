@@ -69,6 +69,10 @@ Keep the result file uncommitted.
 
 ## Blame
 
+A log with a `quest land: rerunning` line holds two runs of the check on the same
+tip: quest land reran the failure once before calling you, and it failed again.
+A failure that repeats is rarely a flake.
+
 The supplied PRs stay queued while you work. First decide which of them caused
 the failure, from the failure log and each PR's own changes, and mark each such
 entry `"blame":true`. A blamed PR is fixed or handed back, never requeued; every
@@ -82,13 +86,43 @@ failure log's line numbers that show the failure, and its comment quotes them:
 
 ## The base alone
 
-When no PRs are supplied, the base itself fails its check, with no PR applied,
-and the queue is halted until it passes. The repository has only the `base`
-branch. Fix the failure mechanically under the same rules: commit the fix on
-`base`, build and test it, and name the commands you ran. quest land opens it as
-a pull request for a maintainer to merge. If the failure needs a behavior change,
+When no PRs are supplied and the prompt says the base fails alone, the base
+itself fails its check, with no PR applied, and the queue is halted until it
+passes. The repository has only the `base` branch. Fix the failure mechanically
+under the same rules: commit the fix on `base`, build and test it, and name the
+commands you ran. quest land opens it as a pull request for a maintainer to merge. If the failure needs a behavior change,
 a protected path, or a decision, or you cannot tell why it fails, hand it back.
 Write `quest-land-result.json` as one JSON object, not an array, with no
 `number` and no extra fields:
 {"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason"}
+{"action":"handback","diagnosis":"one line","recommendation":"one line"}
+
+## A flaky test
+
+When no PRs are supplied and the prompt names a flaky test to disable, a check
+failed, then passed when quest land reran it on the same tip: the log holds the
+first run and, after a `quest land: rerunning` line, the rerun that passed. You
+start on `base`, which now includes the code that check ran, and the repository
+has only that branch. Find each test that failed in the first run and passed in
+the rerun, and disable only those tests on `base`, in the test framework's own
+form, with a reason that names the follow-up quest:
+`#[ignore = "flaky: /quest/m0/flaky/<name>.md"]`, `test.skip`,
+`pytest.mark.skip(reason=...)`, and so on. Change nothing else.
+
+For each disabled test, add the quest `quest/m0/flaky/<name>.md`, whose Goal is
+to fix the test or delete it, and which quotes the first run's failing lines and
+names the log file. List it under `Required` in `quest/m0/flaky/README.md`, the
+standing `flaky` epic, creating that epic, linked from `quest/m0/README.md`'s
+`Required`, if it does not exist yet. A disabled test that is another quest's
+acceptance test still counts as that quest's work: leave that quest as it is and
+link it from the new quest's `Related`. Without a `quest/` directory, the reason
+names the failure instead and no quest is added. Run the repository's quest
+check, if it has one, and the disabled tests' suite.
+
+Commit on `base` and write the same one-object result as for the base alone:
+{"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason"}
+quest land opens it as a pull request and queues it to land. Hand it back
+instead when the failure was not a test, such as a build step or a download,
+when you cannot tell which test flaked, or when that test is not on `base` or
+already disabled:
 {"action":"handback","diagnosis":"one line","recommendation":"one line"}

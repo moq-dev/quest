@@ -487,8 +487,10 @@ QUEST_LAND_KEY=/run/credentials/quest-land/key quest land serve --app-id 1039466
 
 The sandbox executable receives `<checkout> <base-sha>` as its two arguments,
 with cwd set to the checkout. The SHA is `plan.base.sha`, the commit the tested
-chain was built on, and is also exported as `QUEST_LAND_BASE`. Its environment
-otherwise contains only `PATH` and `LANG`. The wrapper must isolate PR code from
+chain was built on, and is also exported as `QUEST_LAND_BASE`. A rerun of a
+failed check also exports `QUEST_LAND_RERUN`, the failed modules' names, which
+the wrapper passes on to the check. Its environment otherwise contains only
+`PATH` and `LANG`. The wrapper must isolate PR code from
 the host's credentials and filesystem. Both the sandbox and fixer
 wrappers **must run code as a different user from the App key owner**, for example
 inside nspawn containers. Environment filtering cannot protect the key or later
@@ -508,7 +510,8 @@ PR numbers, with the same restricted environment (`PATH` and `LANG` only).
 Its cwd is the standalone repository, checked out at `base` so the agent loads no
 PR's instructions or tooling, with `batch` and `pr-<n>` branches beside it. The
 prompt names each PR's branch and pinned head. For a base that fails its check
-alone it receives only the log path, and the repository has only `base`.
+alone, or a flaky test to disable, whose log is named `flaky-*.log`, it receives
+only the log path, and the repository has only `base`.
 The wrapper starts an ephemeral container and runs `quest land fix <log> [prs...]`
 there, exposing that repository read/write and the log read-only at the given paths.
 It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses
@@ -585,7 +588,21 @@ additions stay queued. A PR whose required checks are still running stays queued
 and sits out batches until they pass. If any are still pending two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
-bisection: success lands one squash commit per PR. A failure, or a base that
+bisection: success lands one squash commit per PR. A failed check is rerun once
+on the same tip before anyone is blamed, and the log keeps both runs. The check
+names each module that failed on a line of its own, `quest-land-failed: <module>`,
+and the rerun receives those names in `QUEST_LAND_RERUN`, one per line, so it can
+run only them; a check that names none, or ignores the variable, reruns whole. A
+check killed at `--timeout` is not rerun. A rerun that passes makes the failure
+flaky: the batch lands, and with a fixer, the next round starts a fixer job on
+the new base with that log, kept as `flaky-*.log`, the name that asks it to
+disable the flaky test. Its fix, which disables each test that failed and then
+passed with a reason naming a follow-up quest in the repository's `quest/m0/flaky`
+epic, is validated like a base fix, pushed to a `quest-land/fix-flaky-*` branch,
+opened as a pull request, and queued with `quest:merge` and a head-pinned
+auto-merge, as a maintainer's pick would be. A handback leaves the test enabled
+and is reported only in the daemon's output. A base checked alone gets the same
+rerun. A failure that repeats, or a base that
 conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
 auto-merge, `quest:merge`, and place, get no comment, and sit out batches while its
 job runs, so the rest of the queue keeps landing. The fixer reads the log and blames

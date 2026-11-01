@@ -53,6 +53,7 @@ import {
 	apiDependencies,
 	checkBase,
 	daemonLoop,
+	failedModules,
 	privateRepository,
 	defaultState,
 	excerpt,
@@ -3382,5 +3383,194 @@ describe.skipIf(process.platform === "win32")("quest land apply", () => {
 		const plain = resolutionSection(1, resolution, 300);
 		expect(parseResolution(plain)).toBeUndefined();
 		expect(plain).toContain("too large for a comment");
+	});
+});
+
+/**
+ * A check that fails on its first run, naming `modules`, and passes on its rerun, recording the
+ * rerun's `QUEST_LAND_RERUN` and each run's tip in `dir`. `always` fails every run instead.
+ */
+function flakyCheck(dir: string, modules: string[], always = false): string {
+	return `count=$(cat '${dir}/count' 2>/dev/null || echo 0); count=$((count + 1)); echo "$count" > '${dir}/count'
+git -C "$1" rev-parse HEAD >> '${dir}/heads'
+printf '%s' "\${QUEST_LAND_RERUN-unset}" > '${dir}/rerun'
+if [ "$count" = 1 ] || ${always}; then echo 'FAIL first run'; ${modules.map((name) => `echo 'quest-land-failed: ${name}'`).join("; ") || ":"}; exit 1; fi
+echo 'PASS rerun'`;
+}
+
+describe.skipIf(process.platform === "win32")("flaky checks", () => {
+	afterEach(() => vi.unstubAllEnvs());
+
+	test("names the failed modules a check reports, once each and bounded", () => {
+		const output = [
+			"quest-land-failed: test rs",
+			"ci: test rs failed",
+			"quest-land-failed:  check js ",
+			"quest-land-failed: test rs",
+			`quest-land-failed: ${"x".repeat(201)}`,
+			"  quest-land-failed: indented",
+		].join("\n");
+		expect(failedModules(output)).toEqual(["test rs", "check js"]);
+		const many = Array.from({ length: 60 }, (_, i) => `quest-land-failed: m${i}`).join("\n");
+		expect(failedModules(many)).toHaveLength(50);
+	});
+
+	test("reruns only the failed modules on the same tip, and lands a batch whose rerun passes", async () => {
+		const forge = new Forge();
+		forge.pull("Innocent", { "ok.txt": "yes" });
+		forge.pull("Also", { "also.txt": "yes" });
+		const dir = tempDir();
+		const options = sandbox(flakyCheck(dir, ["test rs", "check js", "test rs"]));
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const output = await serveBatch(forge.clone(), plan, options, deps, async () => deps.token);
+		const [tip, again] = readFileSync(join(dir, "heads"), "utf8").trim().split("\n");
+		expect(again).toBe(tip);
+		expect(output[0]).toBe(`flaky ${tip} test rs, check js`);
+		expect(output.slice(1).map((line) => line.split(" ").slice(0, 2).join(" "))).toEqual(["landed 1", "landed 2"]);
+		expect(readFileSync(join(dir, "rerun"), "utf8")).toBe("test rs\ncheck js");
+		// A flaky batch counts as passed, and nothing is left for a fixer that is not configured.
+		expect(readPolicy(options.state)).toEqual({ order: "newest", size: 3 });
+		expect(readdirSync(options.state).filter((name) => name.startsWith("flaky"))).toEqual([]);
+		const log = readdirSync(options.state).find((name) => name.startsWith("batch-"))!;
+		expect(readFileSync(join(options.state, log), "utf8")).toMatch(
+			/FAIL first run[^]*\nquest land: rerunning test rs, check js once on the same tip\nPASS rerun/,
+		);
+	});
+
+	test("blames a failure that repeats on the rerun, and never reruns a check past its deadline", async () => {
+		const forge = new Forge();
+		forge.pull("Broken", { broken: "yes" });
+		const dir = tempDir();
+		const options = sandbox(flakyCheck(dir, [], true));
+		const deps = await forge.deps();
+		const round = async (timeout = 60) =>
+			serveBatch(
+				forge.clone(),
+				await resolveQueue(REPOSITORY, undefined, deps),
+				{ ...options, timeout },
+				deps,
+				async () => deps.token,
+			);
+		expect(await round()).toEqual(["ejected 1 failed_checks"]);
+		// It named no module, so the whole check ran again, once.
+		expect(readFileSync(join(dir, "count"), "utf8").trim()).toBe("2");
+		expect(readFileSync(join(dir, "rerun"), "utf8")).toBe("unset");
+		expect(forge.comment(1)).toContain("failed again when quest land reran it on the same tip");
+		expect(forge.comment(1)).toContain("quest land: rerunning the whole check once on the same tip");
+		// A check killed at its deadline is not rerun.
+		forge.repo.pulls[0].landing = true;
+		forge.repo.pulls[0].autoMerge = {
+			enabledAt: "2099-01-01T00:00:00Z",
+			commitBody: pin(forge.repo.pulls[0].head!),
+		};
+		writeFileSync(options.sandbox, `#!/bin/sh\necho run >> '${dir}/runs'\nsleep 30\n`, { mode: 0o755 });
+		expect(await round(0.005)).toEqual(["ejected 1 failed_checks"]);
+		expect(readFileSync(join(dir, "runs"), "utf8")).toBe("run\n");
+	});
+
+	test("passes a base that fails alone only once, without halting the queue", async () => {
+		const forge = new Forge();
+		const dir = tempDir();
+		const options = sandbox(flakyCheck(dir, ["test rs"]));
+		const deps = await forge.deps();
+		const warnings: string[] = [];
+		const base = { ref: "main", sha: forge.main() };
+		expect(
+			await checkBase(forge.clone(), "upstream/project", base, options, {
+				...deps,
+				warn: (line) => warnings.push(line),
+			}),
+		).toBe(true);
+		expect(warnings).toEqual([`flaky ${base.sha} test rs`]);
+		expect(existsSync(join(options.state, "halt.json"))).toBe(false);
+	});
+
+	test("disables a rerun-proven flaky test in a PR the gate queues itself, on the base the batch landed", async () => {
+		const forge = new Forge();
+		forge.pull("Innocent", { "ok.txt": "yes" });
+		const dir = tempDir();
+		const agent = join(dir, "agent");
+		writeFileSync(
+			agent,
+			`#!/bin/sh
+set -eu
+cat > '${dir}/prompt'
+git checkout -q base
+test -e ok.txt
+printf 'skip\\n' > flaky-disabled.txt
+git add flaky-disabled.txt
+git commit -qm 'disable the flaky test'
+printf '{"action":"fixed","head":"%s","reason":"disable the flaky test with a follow-up quest"}' "$(git rev-parse HEAD)" > quest-land-result.json
+`,
+			{ mode: 0o755 },
+		);
+		const fixer = join(dir, "wrapper");
+		writeFileSync(
+			fixer,
+			`#!/bin/sh\nset -eu\n[ "$#" = 1 ]\nexec quest land fix --agent '${agent}' --agent-arg=- "$@"\n`,
+			{ mode: 0o755 },
+		);
+		const options = { ...sandbox(flakyCheck(dir, ["test rs"])), fixer };
+		const root = forge.clone();
+		const deps = await forge.deps();
+		const round = async () =>
+			serveBatch(root, await resolveQueue(REPOSITORY, undefined, deps), options, deps, async () => deps.token);
+		const first = await round();
+		expect(first[0]).toMatch(/^flaky [0-9a-f]{40} test rs$/);
+		expect(first[1]).toMatch(/^landed 1 /);
+		const [log] = JSON.parse(readFileSync(join(options.state, "flaky.json"), "utf8")) as string[];
+		expect(log).toMatch(/\/flaky-\d+-[0-9a-f]{12}\.log$/);
+		forge.settle();
+		// The next round starts the fixer on the base that now includes the landed batch.
+		const finished = eventFile(options.state, (name) => name.endsWith(".exit"));
+		expect(await round()).toEqual([]);
+		await finished;
+		expect(JSON.parse(readFileSync(join(options.state, "flaky.json"), "utf8"))).toEqual([]);
+		expect(readFileSync(join(dir, "prompt"), "utf8")).toContain("PRs: none; a flaky test to disable");
+		expect(await collectFixers(root, options.state, deps, async () => deps.token)).toEqual(["proposed 2"]);
+		const pull = forge.repo.pulls[1];
+		expect(pull.title).toBe("quest land: disable a flaky test");
+		expect(pull.branch).toMatch(/^quest-land\/fix-flaky-/);
+		const head = forge.ref("upstream/project", `refs/heads/${pull.branch}`);
+		expect(git(forge.origin, "rev-parse", `${head}^`)).toBe(forge.main());
+		// Queued as a maintainer's pick would be: a head-pinned auto-merge and the merge label.
+		expect(pull.autoMerge?.commitBody).toBe(pin(head));
+		expect(pull.labels).toContain("quest:merge");
+		// The body quotes the failing first run, not the rerun that passed.
+		expect(pull.body).toContain("FAIL first run");
+		expect(pull.body).not.toContain("PASS rerun");
+		expect(pull.body).toContain("mechanical fix by agent / Codex: `disable the flaky test with a follow-up quest`");
+		// Collected once.
+		expect(await collectFixers(root, options.state, deps, async () => deps.token)).toEqual([]);
+		expect(readdirSync(options.state).filter((name) => /^fix-flaky-.*\.json$/.test(name))).toEqual([]);
+	});
+
+	test("leaves a flaky test enabled when the fixer hands it back", async () => {
+		const forge = new Forge();
+		forge.pull("Innocent", { "ok.txt": "yes" });
+		const dir = tempDir();
+		const agent = join(dir, "agent");
+		writeFileSync(
+			agent,
+			`#!/bin/sh\ncat > /dev/null\nprintf '{"action":"handback","diagnosis":"the failure was a download","recommendation":"retry the mirror"}' > quest-land-result.json\n`,
+			{ mode: 0o755 },
+		);
+		const fixer = join(dir, "wrapper");
+		writeFileSync(fixer, `#!/bin/sh\nexec quest land fix --agent '${agent}' --agent-arg=- "$@"\n`, { mode: 0o755 });
+		const options = { ...sandbox(flakyCheck(dir, [])), fixer };
+		const root = forge.clone();
+		const deps = await forge.deps();
+		const round = async () =>
+			serveBatch(root, await resolveQueue(REPOSITORY, undefined, deps), options, deps, async () => deps.token);
+		expect((await round())[0]).toMatch(/^flaky [0-9a-f]{40} check$/);
+		forge.settle();
+		const finished = eventFile(options.state, (name) => name.endsWith(".exit"));
+		await round();
+		await finished;
+		expect(await collectFixers(root, options.state, deps, async () => deps.token)).toEqual([
+			"flaky unfixed: the failure was a download; recommendation: retry the mirror",
+		]);
+		expect(forge.repo.pulls).toHaveLength(1);
 	});
 });

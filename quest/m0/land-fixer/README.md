@@ -48,7 +48,7 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | blocked by design; fixer-written protected edits become a ready commit ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)) |
 | 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | fixed by [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356): the prompt allows dependency fetches and requires a build and test |
 | 2 | GitHub refused the push to a fork because the merge touches workflows: moq-dev/moq#7439, #7467 | handed back with a ready commit for `quest land apply` by [moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358) |
-| several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | [Flaky tests](/quest/m0/land-fixer/flaky.md) |
+| several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | the gate reruns a failed check, and the fixer disables a rerun-proven flaky test in a PR the gate queues ([moq-dev/quest#375](https://github.com/moq-dev/quest/pull/375)) |
 | ~15 | design conflicts, correctly handed back | none |
 
 Decision prompts, selected options marked ✅:
@@ -71,7 +71,7 @@ Decision prompts, selected options marked ✅:
 - Protected paths: the fixer first could edit them (moq-dev/quest#357), then not; see the 2026-11-01 audit below.
 - Fork pushes GitHub refuses: ✅ hand back a ready commit, which `quest land apply` rebuilds
   for a maintainer to push (Grant moq-bot the `workflows` permission · Leave it manual).
-- Flaky tests: see [Flaky tests](/quest/m0/land-fixer/flaky.md).
+- Flaky tests: ✅ disable only a rerun-proven flaky test, in a separate PR the gate queues itself; done by [moq-dev/quest#375](https://github.com/moq-dev/quest/pull/375).
 - Milestone for the new quests: ✅ m0 · m1
 - Restated 2026-11-01 (user, a second /quest-plan): "the merge queue can
   autonomously fix most issues. The fixer inspects the batch and tries to
@@ -146,7 +146,6 @@ work, done once the Required quests below have merged.
 - [CI failures park](/quest/m0/land-fixer/ci-park.md) - a PR whose own required CI fails is parked for the fixer with the failing log, not ejected
 - [Queue status in the required check](/quest/m0/land-fixer/check-status.md) - the gate shows each PR's queue state in its required check run, never completing it
 - [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
-- [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, and a rerun-proven flaky test is disabled in a separate PR with a follow-up quest
 - [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - a fixer edit `validateFix` rejects for touching protected paths comes back as a commit the maintainer applies
 
