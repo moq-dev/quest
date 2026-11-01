@@ -731,7 +731,12 @@ execpolicy rules, and Claude Code with only read tools and the Bash commands it
 judges read-only, in `dontAsk` mode. Claude Code loads no settings files, so no
 allow rule, even the user's own, widens that. Codex skips the user's config,
 whose project trust would load the checkout's `.codex/config.toml` and start its
-MCP servers outside the sandbox. The base is fetched first, since
+MCP servers outside the sandbox. Whether those flags isolate is up to each
+CLI's release, so `just review-sandbox`, in this repository, plants project MCP
+servers and hooks for both CLIs on a head, runs `quest review` with the
+installed CLIs and copies of your logins, and fails if any of it runs or the
+review trusts a new directory. It spends real usage, so CI never runs it; run it
+after upgrading either CLI. The base is fetched first, since
 the sandbox has no network. The reviewer follows the base's `AGENTS.md` and `CLAUDE.md`, at the
 root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
