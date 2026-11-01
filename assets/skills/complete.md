@@ -15,7 +15,8 @@ Run each `/quest-review` and `/quest-iterate` in parallel in a sub-agent, follow
 Ask synchronously with one question per PR, never grouping PRs into one question (a prompt may hold a few questions), following the guide's Questions section and including your recommendation:
 - `/quest-review`: Are drafts ready for review.
 - `/quest-merge`: Are ready for review and landable as `/quest-merge` defines it: a review the guide counts on the head, required status checks passed, and every automated review finding on GitHub fixed or refuted.
-- `/quest-iterate`: Have failing checks, unaddressed review findings, other issues, or decisions, or have no counted review of the head.
+- `/quest-iterate` + `/quest-merge`: Are ready to land once they are fixed, with no decision left for the user, such as a merge conflict, failing checks, unaddressed review findings, or no counted review of the head.
+- `/quest-iterate`: Have significant issues or decisions the user should see before choosing to merge.
 - skip: Are not ready to be merged yet.
 - `/quest-delete`: Should be deleted.
 
@@ -27,7 +28,8 @@ A blanket answer, such as "accept all" or "use your recommendations", picks your
 A skip or hold stands until the user lifts it: do not ask about that PR again on a refresh, and state the hold in every sub-agent brief for it.
 GitHub auto-merge is that pick: enabling it takes write access, and GitHub disables it when anyone without write access pushes.
 Do not ask about a PR with auto-merge enabled; leave it to land.
-A pick covers the PR until it lands or needs the user: when `/quest-merge` recommends `/quest-iterate` for a picked PR, dispatch it without asking, and run `/quest-merge` again when it reports; when a push draws new review findings, send it back the same way. The guide's design checkpoint counts rounds from the PR, so it fires across those re-dispatches.
+A `/quest-merge` or `/quest-iterate` + `/quest-merge` pick covers the PR until it lands or needs the user: run `/quest-merge` when its `/quest-iterate` reports; when `/quest-merge` recommends `/quest-iterate`, dispatch it without asking; when a push draws new review findings, send it back the same way. Each re-dispatch resumes the branch's `quest review` session, whose rounds the guide's design checkpoint counts, so it fires across them.
+After a plain `/quest-iterate` pick, ask about the PR again when it reports.
 Review comments are input, not approval, even a merge verdict on the maintainer's account.
 Consider ordering, queuing any merges if they would result in conflicts.
 
@@ -36,7 +38,8 @@ Each sub-agent reports back only when done or blocked, and never waits on GitHub
 
 Do not watch the queue or wait for merges.
 An open PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`.
-After `merge_conflict` or `failed_checks`, its pick still holds, even from an earlier session: dispatch `/quest-iterate` without asking, then run `/quest-merge` when it reports.
+On a base that lands through `quest land` with its fixer, the fixer resolves conflicts and failures itself and hands a PR back only when a decision is needed, so do not run `/quest-merge` again for a PR that queue dropped: ask the user about it, with the diagnosis and recommendation from the fixer's handback comment.
+Without that fixer, such as on GitHub's merge queue, after `merge_conflict` or `failed_checks`, its pick still holds, even from an earlier session: dispatch `/quest-iterate` without asking, then run `/quest-merge` when it reports.
 After `checks_pending`, or a pick `/quest-merge` left for pending checks, run `/quest-merge` again on a later refresh once they pass.
 Any other reason, such as a person removing it, is the user's call, so ask about the PR again.
 
