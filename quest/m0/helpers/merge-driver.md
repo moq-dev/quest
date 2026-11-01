@@ -22,7 +22,3 @@ once `quest` was put on PATH.
   head's code.
 - Rejected: `quest init` writing an absolute binary path, which breaks on
   upgrades and Nix store paths.
-
-## Related
-
-- [Sibling PRs through a server-side merge](/quest/m0/helpers/queue-siblings.md) - the same link-list conflict, but in GitHub's merges, which run no driver
