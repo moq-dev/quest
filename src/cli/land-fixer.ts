@@ -198,7 +198,9 @@ export async function startFixer(
 	]);
 	git(checkout, ["config", "user.name", "quest fixer"]);
 	git(checkout, ["config", "user.email", "quest-fixer@localhost"]);
-	git(checkout, ["checkout", "--quiet", "--detach", failure.tip]);
+	// Start at the base, never the batch: the agent loads its instructions and tooling only from code
+	// already landed, and inspects the PRs through their branches.
+	git(checkout, ["checkout", "--quiet", "--detach", "base"]);
 	const path = join(state, `fix-job-${checkout.split("/").at(-1)}.json`);
 	const job: Job = {
 		checkout,
