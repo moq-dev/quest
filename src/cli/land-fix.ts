@@ -1,5 +1,5 @@
 // Untrusted agent side. The host wrapper supplies only a model endpoint and its client key.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import prompt from "../../assets/land-fix.md";
@@ -91,6 +91,16 @@ export async function fix(
 	if (!args && (!process.env.OPENAI_BASE_URL || !process.env.OPENAI_API_KEY))
 		throw new Error("fix needs OPENAI_BASE_URL and OPENAI_API_KEY from the container wrapper");
 	readFileSync(log); // Fail before starting an agent when the wrapper did not expose the log.
+	// The daemon pinned each PR's head on its pr-<n> branch; name it so the agent need not look it up.
+	const prs = numbers.map((number) => {
+		const ref = `pr-${number}`;
+		const head = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${ref}^{commit}`], {
+			cwd: root,
+			encoding: "utf8",
+		}).stdout.trim();
+		if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error(`fix needs a ${ref} branch`);
+		return `- #${number}: branch ${ref} at ${head}`;
+	});
 	rmSync(join(root, FIX_RESULT), { force: true });
 	const env: NodeJS.ProcessEnv = {
 		PATH: process.env.PATH,
@@ -135,7 +145,7 @@ export async function fix(
 		child.stderr.pipe(process.stderr, { end: false });
 		child.once("error", reject);
 		child.stdin.on("error", () => {});
-		child.stdin.end(`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs: ${numbers.join(", ")}\n`);
+		child.stdin.end(`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:\n${prs.join("\n")}\n`);
 		child.once("close", (code) => (code === 0 ? done() : reject(new FixerAgentError(code ?? 1))));
 	});
 	const results = parseFixResult(readFixResult(root), numbers);
