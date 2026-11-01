@@ -123,9 +123,15 @@ jobs:
       - name: Check the binary's lifecycle
         shell: bash
         run: bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest"
-      # Check's suite runs on Linux and Windows only. The gate's owners run live
-      # here without admission, which can wait out the job on a busy runner.
-      - name: Check that the gate owns its command's descendants
+      # The binary gates real commands. A fresh macOS runner's Spotlight index
+      # holds its load above its CPUs, which must not keep a lone command waiting.
+      # Ubuntu 22.04's systemd 249 is too old for Quest's scopes, so it checks the
+      # process-group fallback.
+      - name: Check that the gate admits and owns its command's descendants
+        shell: bash
+        run: bash scripts/gate-check.sh "$RUNNER_TEMP/quest"
+      # Check's suite runs on Linux and Windows only.
+      - name: Check the gate's owners natively
         if: runner.os == 'macOS'
         run: |
           bun install --frozen-lockfile
@@ -134,48 +140,6 @@ jobs:
   # Hosted macOS runners can queue past the timeout, which then reports a job
   # that never ran as failed. Pull requests skip these; tags, which publish the
   # artifacts, and manual runs still check them. Check covers macOS on main.
-  # TEMPORARY (quest/m0/gate-ci-admission): sample what keeps hosted macOS load high.
-  diagnose-load:
-    name: diagnose load (${{ matrix.runner }})
-    if: github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-14, macos-15, macos-15-intel]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    steps:
-      - name: Describe the host
-        run: |
-          sysctl hw.ncpu hw.activecpu hw.physicalcpu hw.logicalcpu hw.memsize || true
-          sysctl -a | grep -E '^hw\.perflevel[0-9]\.(logicalcpu|name)' || true
-          sysctl kern.hv_vmm_present machdep.cpu.brand_string || true
-          sw_vers; uptime
-          mdutil -a -s || true
-      - name: Sample the load for four minutes
-        run: |
-          for i in $(seq 1 24); do
-            threads=$(ps -M -A -o state= | grep -c '^R' || true)
-            echo "t=$((i * 10))s $(sysctl -n vm.loadavg) running-threads=$threads"
-            if (( i % 6 == 0 )); then
-              ps -M -A -o state=,comm= | awk '$1 ~ /^R/ {c[$2]++} END {for (k in c) print "  R", c[k], k}' | sort -k2 -nr | head -12
-              top -l 2 -s 1 -o cpu -n 8 -stats pid,command,cpu,threads,state | tail -10
-            fi
-            sleep 10
-          done
-      - name: Sample the load with Spotlight off for four minutes
-        run: |
-          sudo mdutil -a -i off || true
-          for i in $(seq 1 24); do
-            threads=$(ps -M -A -o state= | grep -c '^R' || true)
-            echo "t=$((i * 10))s $(sysctl -n vm.loadavg) running-threads=$threads"
-            if (( i % 12 == 0 )); then
-              ps -M -A -o state=,comm= | awk '$1 ~ /^R/ {c[$2]++} END {for (k in c) print "  R", c[k], k}' | sort -k2 -nr | head -12
-              top -l 2 -s 1 -o cpu -n 8 -stats pid,command,cpu,threads,state | tail -10
-            fi
-            sleep 10
-          done
-
   macos:
     name: check (${{ matrix.target }})
     if: github.event_name != 'pull_request'

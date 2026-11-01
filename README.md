@@ -651,6 +651,13 @@ as one more unit of load and takes one budget from available memory. While the
 host has room even counting those, commands start at once: a burst of gated
 test runs on an idle host starts together. Once only the raw load and memory
 have room, commands start one at a time, 5 seconds after the previous admission.
+
+The load limit applies only while a gated command is still running. Otherwise
+the load comes from work the gate cannot wait out, so commands start one at a
+time as if the raw load had room. A freshly booted hosted macOS runner is one
+such host: Spotlight's first index holds its load at several times its CPU
+count for the whole job. Available memory is still required.
+
 A user's admissions on one host are recorded under
 `~/.cache/quest/admissions/<hostname>`, whatever the caller's environment or
 login session. The home directory comes from the user database, not `$HOME`;
@@ -658,7 +665,9 @@ an account missing from it, as in arbitrary-UID containers, uses
 `/tmp/quest-<uid>/admissions/<hostname>`, and refuses that directory unless only
 its UID can write it.
 
-The gate holds no slot or lock while the command runs, but it owns the
+Each admission records the gate's process ID, and counts as running until that
+process exits; a reused process ID only makes a command wait for the load
+again. The gate holds no lock while the command runs, and it owns the
 command's descendants. Once the command exits, or the gate is cancelled and the
 command exits, any descendant still running is killed, so a cancelled build or
 test run leaves nothing behind. A second SIGINT, SIGTERM, or SIGHUP kills them
