@@ -40,10 +40,9 @@ ownership-manifest design:
 ## Required
 
 - [Merge through a host gate](/quest/m0/host-land/README.md) - inline merge picks, small batches landed from the maintainer's host, and a Codex fixer instead of bisection
+- [The land fixer handles every mechanical failure](/quest/m0/land-fixer/README.md) - attempts, registry network, triage, flaky tests, local mergeability, protected edits, and fork commits
 - [Landing priority](/quest/m0/land-priority.md) - cheap checks wait a bounded time and the land daemon's check runs ahead of agent builds
-- [Local mergeability](/quest/m0/land-mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Accurate head_moved](/quest/m0/land-head-moved.md) - the gate's own base-merge push and batch-mate failures are not reported as a moved head
-- [Queue-time checks](/quest/m0/land-queue-checks.md) - queued PRs are checked against each other and `quest check` runs per PR before batching
 - [Drop emptied Required headings](/quest/m0/required-heading.md) - a clean driver merge that empties a `Required` list passes `quest check`
 - [Current conflict reports](/quest/m0/land-conflicts-refresh.md) - a queued PR's conflict report updates when the queue ahead of it changes
 - [Land checks at gate priority](/quest/m0/land-priority-sandbox.md) - `quest land serve` passes `QUEST_GATE_PRIORITY` to its sandbox

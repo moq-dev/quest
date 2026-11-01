@@ -20,7 +20,7 @@ import { git } from "./land";
 
 export const MAX_FIXER_BYTES = 100 * 1024 * 1024;
 /**
- * Import pr-N's objects. `known` names the packs fetched from `root` at launch: their objects are already in `root`,
+ * Import the objects of the fixer's `branch`, such as `pr-<n>` or `base`. `known` names the packs fetched from `root` at launch: their objects are already in `root`,
  * so they are neither copied nor counted, and the size bound applies to what the fixer added rather than to the
  * repository's history (moq's alone exceeds it). A fixer that rewrote one only leaves its objects out of the import.
  */
@@ -28,7 +28,7 @@ export function importFixer(
 	root: string,
 	state: string,
 	checkout: string,
-	number: number,
+	branch: string,
 	head: string,
 	known: string[] = [],
 ): void {
@@ -41,14 +41,20 @@ export function importFixer(
 	const objects: string[] = [];
 	const walk = (path: string, relative = "") => {
 		for (const name of readdirSync(path)) {
+			// Git lock files are transient: a background `git maintenance` or auto-gc can create and remove one
+			// while this walks (moq-dev/moq#6987 crashed on a vanished `objects/maintenance.lock`). None is imported.
+			if (name.endsWith(".lock")) continue;
 			if (++files > 100_000) throw new Error("fixer repository has too many files");
 			const child = join(path, name);
 			const rel = relative ? `${relative}/${name}` : name;
 			const stat = lstatSync(child);
 			if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile()))
 				throw new Error("fixer git metadata must contain only real files and directories");
-			if (stat.isDirectory()) walk(child, rel);
-			else if (relative === "objects/pack" && launched.has(name.replace(/\.[a-z]+$/, ""))) continue;
+			if (stat.isDirectory()) {
+				// Submodule repositories are never imported, and gitlinks are protected, so a host that initialized
+				// submodules for the dev shell does not count their history (moq.pro's moq) against the bound.
+				if (rel !== "modules") walk(child, rel);
+			} else if (relative === "objects/pack" && launched.has(name.replace(/\.[a-z]+$/, ""))) continue;
 			else {
 				bytes += stat.size;
 				if (bytes > MAX_FIXER_BYTES) throw new Error("fixer repository exceeds 100 MiB");
@@ -71,7 +77,7 @@ export function importFixer(
 			closeSync(fd);
 		}
 	};
-	const ref = `refs/heads/pr-${number}`;
+	const ref = `refs/heads/${branch}`;
 	const actual = existsSync(join(source, ref))
 		? read(ref).toString().trim()
 		: existsSync(join(source, "packed-refs"))
@@ -81,7 +87,7 @@ export function importFixer(
 					.find((line) => line.endsWith(` ${ref}`))
 					?.split(" ")[0]
 			: undefined;
-	if (actual !== head) throw new Error("result head differs from PR branch or pr-N is missing");
+	if (actual !== head) throw new Error(`result head differs from ${branch} or it is missing`);
 	const clean = mkdtempSync(join(state, "fix-import-"));
 	try {
 		git(clean, ["init", "--bare", "--quiet"]);

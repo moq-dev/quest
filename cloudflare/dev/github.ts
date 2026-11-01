@@ -830,6 +830,7 @@ export function fakeGitHub(world: World) {
 				return repo.branches[name] ?? (pull ? headOf(repo, pull) : null);
 			},
 			set: (name: string, sha: string) => (repo.branches[name] = sha),
+			delete: (name: string) => delete repo.branches[name],
 		};
 		const git = gitData(repo, branches, tail, method, body, writes);
 		if (git) return git;
@@ -845,6 +846,17 @@ export function fakeGitHub(world: World) {
 			});
 			// Newest first, as GitHub lists them.
 			return json(found.reverse().map((pull) => restPull(repo, pull)));
+		}
+		if (tail === "/issues" && method === "POST") {
+			if (!writes("issues")) return forbidden();
+			const issue: Issue = {
+				number: Math.max(0, ...repo.issues.map((i) => i.number), ...repo.pulls.map((p) => p.number)) + 1,
+				title: String(body.title),
+				author: `${world.app.slug}[bot]`,
+				body: typeof body.body === "string" ? body.body : undefined,
+			};
+			repo.issues.push(issue);
+			return json({ number: issue.number, title: issue.title, state: "open" }, 201);
 		}
 		if (tail === "/pulls" && method === "POST") {
 			if (!writes("pull_requests")) return forbidden();
@@ -876,8 +888,13 @@ export function fakeGitHub(world: World) {
 			const list: Issue[] = item[1] === "pulls" ? repo.pulls : repo.issues;
 			const found = list.find((i) => String(i.number) === item[2]);
 			if (!found) return notFound();
-			if (item[1] === "issues")
+			if (item[1] === "issues") {
+				if (method === "PATCH") {
+					if (!writes("issues")) return forbidden();
+					if (body.state === "closed") found.closed = true;
+				}
 				return json({ number: found.number, title: found.title, state: found.closed ? "closed" : "open" });
+			}
 			const pull = found as Pull;
 			if (method === "PATCH") {
 				if (!writes("pull_requests")) return forbidden();
@@ -1006,6 +1023,7 @@ export function fakeGitHub(world: World) {
 		const branches = {
 			get: (name: string) => upstream.fork[name] ?? null,
 			set: (name: string, sha: string) => (upstream.fork[name] = sha),
+			delete: (name: string) => delete upstream.fork[name],
 		};
 		return gitData(upstream, branches, tail, method, body, writes);
 	}
@@ -1017,7 +1035,11 @@ export function fakeGitHub(world: World) {
 	 */
 	function gitData(
 		network: Repo,
-		branches: { get(name: string): string | null; set(name: string, sha: string): void },
+		branches: {
+			get(name: string): string | null;
+			set(name: string, sha: string): void;
+			delete(name: string): void;
+		},
 		tail: string,
 		method: string,
 		body: Record<string, any>,
@@ -1047,6 +1069,11 @@ export function fakeGitHub(world: World) {
 			if (!body.force && !ancestor(body.sha)) return invalid("Update is not a fast forward");
 			branches.set(branch, body.sha);
 			return json({ ref: `refs/heads/${branch}`, object: { type: "commit", sha: body.sha } });
+		}
+		if (branch && method === "DELETE") {
+			if (!branches.get(branch)) return invalid("Reference does not exist");
+			branches.delete(branch);
+			return new Response(null, { status: 204 });
 		}
 		if (tail === "/git/refs" && method === "POST") {
 			const name = typeof body.ref === "string" && body.ref.startsWith("refs/heads/") && body.ref.slice(11);
