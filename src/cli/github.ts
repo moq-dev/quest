@@ -136,6 +136,17 @@ export function gitHubDependencies(warn: (message: string) => void): GitHubDepen
 	return { fetch, now: Date.now, sleep, token, warn };
 }
 
+/** Whether GitHub turned a request away for a rate limit, which any request may wait out and repeat. */
+function limited(response: Response, body: string): boolean {
+	return (
+		response.status === 429 ||
+		(response.status === 403 &&
+			(response.headers.has("retry-after") ||
+				response.headers.get("x-ratelimit-remaining") === "0" ||
+				/rate limit/i.test(body)))
+	);
+}
+
 /** Authenticated REST and GraphQL requests that wait out rate limits, bounded by an optional deadline. */
 export class GitHub {
 	/** The longest X-Poll-Interval GitHub asked for since the caller last set this, in milliseconds. */
@@ -200,7 +211,12 @@ export class GitHub {
 					(text) => ({ text }),
 					(error: unknown) => ({ error }),
 				);
-				if (response.ok || response.status === 304 || options.allow?.includes(response.status)) {
+				// A rate limit is waited out even when the caller allows its status, such as a 403 refusal.
+				if (
+					response.ok ||
+					response.status === 304 ||
+					(options.allow?.includes(response.status) && !limited(response, "text" in read ? read.text : ""))
+				) {
 					const { status, statusText, headers } = response;
 					if ("text" in read)
 						return new Response(NULL_BODY.includes(status) ? null : read.text, {
@@ -213,13 +229,7 @@ export class GitHub {
 				} else {
 					// A refusal's status still says what to do when its body was cut off.
 					const body = "text" in read ? read.text : "";
-					const limited =
-						response.status === 429 ||
-						(response.status === 403 &&
-							(response.headers.has("retry-after") ||
-								response.headers.get("x-ratelimit-remaining") === "0" ||
-								/rate limit/i.test(body)));
-					if (limited) {
+					if (limited(response, body)) {
 						// GitHub turned the request away unprocessed, so any request repeats.
 						await this.waitOut(
 							response.headers,

@@ -182,6 +182,29 @@ class Forge {
 		this.repo.branches.main = this.main();
 	}
 
+	/** The author merges the current base into a PR's branch, which moves its head and pin. */
+	mergeMain(number: number): string {
+		const pull = this.repo.pulls.find((pull) => pull.number === number)!;
+		git(this.work, "checkout", "--quiet", "-B", pull.branch, pull.head!);
+		git(
+			this.work,
+			"-c",
+			"user.name=Author",
+			"-c",
+			"user.email=author@example.test",
+			"merge",
+			"--quiet",
+			"--no-edit",
+			this.main(),
+		);
+		const head = git(this.work, "rev-parse", "HEAD");
+		git(this.work, "push", "--quiet", "--force", "origin", `${head}:refs/heads/${pull.branch}`);
+		git(this.work, "push", "--quiet", "--force", "origin", `${head}:refs/pull/${number}/head`);
+		pull.head = head;
+		pull.autoMerge = { ...pull.autoMerge!, commitBody: pin(head) };
+		return head;
+	}
+
 	main(): string {
 		return git(this.origin, "rev-parse", "refs/heads/main");
 	}
@@ -1786,10 +1809,10 @@ mv '${result}.new' '${result}'
 		expect(git(forge.origin, "rev-parse", `${forge.repo.pulls[3].squash}^`)).toBe(base);
 	});
 
-	test("scopes each merge token to that PR's squash, preserving it through the queue token cache", async () => {
+	test("scopes each merge token to the workflows its PR changes, preserving it through the queue token cache", async () => {
 		const forge = new Forge();
-		forge.pull("Workflow", { ".github/workflows/one.yml": "one" });
 		forge.pull("Code", { "code-two.txt": "two" });
+		forge.pull("Workflow", { ".github/workflows/one.yml": "one" });
 		forge.pull("Workflow again", { ".github/workflows/three.yml": "three" });
 		forge.pull("Waiting", { "four.txt": "four" });
 		const deps = await forge.deps();
@@ -1803,10 +1826,69 @@ mv '${result}.new' '${result}'
 			tokens.push(minted.token);
 			return minted.token;
 		});
-		expect(scopes).toEqual([true, true, false, true, true]);
+		expect(scopes).toEqual([false, false, true, true, true]);
 		expect(forge.merges.map(({ authorization }) => authorization)).toEqual(
 			[tokens[0], tokens[2], tokens[4]].map((token) => `Bearer ${token}`),
 		);
+	});
+
+	test("scopes the merge token to workflows when the gate's own base merge brings a workflow change", async () => {
+		const forge = new Forge();
+		forge.pull("Behind", { "code.txt": "one" });
+		// The base changes a workflow after the PR branched, so the gate merges it into the PR's head.
+		forge.advance({ ".github/workflows/ci.yml": "on: push\n" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const tokens = new Map<string, boolean>();
+		const output = await serveBatch(forge.clone(), plan, sandbox(), deps, async (workflows) => {
+			const minted = await forge.deps(workflows ? { workflows: "write" } : {});
+			tokens.set(minted.token, workflows);
+			return minted.token;
+		});
+		expect(output).toEqual([`landed 1 ${forge.repo.pulls[0].squash}`]);
+		// The squash changes no workflow, but GitHub refuses an App's merge of a PR whose commits do.
+		expect(forge.merges.map(({ authorization }) => tokens.get(authorization!.replace("Bearer ", "")))).toEqual([
+			true,
+		]);
+	});
+
+	test("scopes the merge token to workflows when the author's own base merge brought a workflow change", async () => {
+		const forge = new Forge();
+		forge.pull("Merged main", { "code.txt": "one" });
+		forge.advance({ ".github/workflows/ci.yml": "on: push\n" });
+		// The head is up to date, so the gate merges nothing; the workflow change is in the PR's own commits.
+		forge.mergeMain(1);
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const tokens = new Map<string, boolean>();
+		const output = await serveBatch(forge.clone(), plan, sandbox(), deps, async (workflows) => {
+			const minted = await forge.deps(workflows ? { workflows: "write" } : {});
+			tokens.set(minted.token, workflows);
+			return minted.token;
+		});
+		expect(output).toEqual([`landed 1 ${forge.repo.pulls[0].squash}`]);
+		expect(forge.merges.map(({ authorization }) => tokens.get(authorization!.replace("Bearer ", "")))).toEqual([
+			true,
+		]);
+	});
+
+	test("a merge GitHub refuses with a 403 stops only that PR, instead of failing every retry", async () => {
+		const forge = new Forge();
+		for (let i = 1; i <= 3; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "yes" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const original = deps.fetch;
+		deps.fetch = (async (input, init) => {
+			if (String(input).endsWith("/pulls/1/merge"))
+				return Response.json({ message: "Resource not accessible by integration" }, { status: 403 });
+			return original(input, init);
+		}) as typeof fetch;
+		const output = await serveBatch(forge.clone(), plan, sandbox(), deps, async () => deps.token);
+		expect(output).toEqual(["ejected 1 merge_refused"]);
+		expect(forge.merges).toEqual([]);
+		expect(forge.comment(1)).toContain("Resource not accessible by integration");
+		// PR 2, which passed the batch check with it, stays queued.
+		expect(forge.repo.pulls[1].autoMerge).not.toBeNull();
 	});
 
 	test("a lost merge response is confirmed from the PR, never merged again, and the batch goes on", async () => {

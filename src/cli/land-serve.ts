@@ -89,9 +89,21 @@ function save(path: string, value: unknown): void {
 	renameSync(`${path}.new`, path);
 }
 
-/** Only this PR's squash changes need workflow write; no PR branch is moved. */
-export function touchesWorkflows(root: string, parent: string, link: Chain["links"][number]): boolean {
-	return git(root, ["diff", "--name-only", parent, link.commit, "--", ".github/workflows"]) !== "";
+/**
+ * The merge needs workflow write when this PR's squash changes a workflow, or when any commit the PR
+ * brings changes one: GitHub refuses an App's merge of a PR whose commits touch workflows, such as a
+ * merge of a base that changed one, whether the gate or the author made it.
+ */
+export function touchesWorkflows(
+	root: string,
+	parent: string,
+	link: Chain["links"][number],
+	base: string,
+	head: string,
+): boolean {
+	if (git(root, ["diff", "--name-only", parent, link.commit, "--", ".github/workflows"]) !== "") return true;
+	// `-m` also lists a merge commit's changes against each parent, so a merged-in workflow change counts.
+	return git(root, ["log", "-m", "--format=", "--name-only", `${base}..${head}`, "--", ".github/workflows"]) !== "";
 }
 
 /** A fresh bare repository with no config, objects, or alternates inherited from the user's checkout. */
@@ -338,8 +350,10 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 		const response = await github.request(`${path}/merge`, {
 			method: "PUT",
 			body: { merge_method: "squash", sha: head },
-			allow: [405, 409],
+			allow: [403, 405, 409],
 		});
+		// The client waits out a rate limit; any other 403 is GitHub refusing this PR, which stops this PR
+		// alone rather than failing the whole batch on every retry.
 		const result = object(await response.json());
 		if (response.ok && result.merged === true) return { sha: string(result.sha) };
 		const pull = object(await (await github.request(path)).json());
@@ -638,7 +652,10 @@ export async function serveBatch(
 		const merge =
 			"reason" in prepared
 				? new GitHub(deps)
-				: new GitHub({ ...deps, token: await token(touchesWorkflows(root, parent, link)) });
+				: new GitHub({
+						...deps,
+						token: await token(touchesWorkflows(root, parent, link, plan.base.sha, prepared.head)),
+					});
 		const result = "reason" in prepared ? prepared : await mergePinned(merge, path, prepared.head, link.entry.head);
 		if (result === null) {
 			forgetHeads(options.state, link.entry.number);
