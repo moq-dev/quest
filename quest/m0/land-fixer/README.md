@@ -12,7 +12,8 @@ before anything else happens. The gate merges locally instead of
 trusting GitHub's mergeability, reruns a failed module before blaming, and
 disables a flaky test with a follow-up quest. The fixer builds and tests
 with access to package registries, edits protected paths when the edit is
-mechanical, and spends a pick's single attempt only on a fix that failed.
+mechanical, rebuilds a conflicted lockfile from the base's copy, and spends
+a pick's single attempt only on a fix that failed.
 When GitHub refuses its push to a fork, it hands back a ready commit.
 
 Non-goals: design conflicts. A PR whose merge needs a behavior decision is
@@ -60,6 +61,10 @@ Decision prompts, selected options marked ✅:
   disables auto-merge. [Batch triage](/quest/m0/land-fixer/triage.md) and
   [Local mergeability](/quest/m0/land-fixer/mergeability.md) follow this
   rule.
+- Amended 2026-11-01 (maintainer, /quest-plan in moq-dev/moq): a fixer merge
+  on [moq-dev/moq#7318](https://github.com/moq-dev/moq/pull/7318) rebuilt
+  `bun.lock` from the PR's side and undid the base's advisory fix; see
+  [Lockfile merges](/quest/m0/land-fixer/lockfile.md).
 
 The README's landing section and `CONTRIBUTING.md` list what the fixer
 resolves itself and what it hands back; that docs update finishes the epic.
@@ -68,6 +73,7 @@ resolves itself and what it hands back; that docs update finishes the epic.
 
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
 - [Registry network](/quest/m0/land-fixer/network.md) - the fixer fetches dependencies, so it builds and tests what it requeues
+- [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
 - [Batch triage](/quest/m0/land-fixer/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
 - [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, disables a flaky test in the next batch, and files a follow-up
 - [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
