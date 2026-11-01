@@ -38,7 +38,3 @@ Mint an installation token for the job's repository with
 keeps every other credential out, as today. GitHub caps a token at one hour,
 so a longer job gets a fresh one or stops commenting. The daemon keeps posting
 its own requeue and handback comments.
-
-## Related
-
-- [Fixer starts from main](/quest/m0/land-fixer/launch.md) - what the fixer sees when it starts
