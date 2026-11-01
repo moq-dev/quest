@@ -24,21 +24,99 @@ export function readFixResult(root: string): string {
 }
 /** The longest Markdown comment a result may ask the daemon to post on its PR. */
 export const COMMENT_LIMIT = 4000;
-export type FixResult = { agent?: string; model?: string; comment?: string } & (
+
+/**
+ * The fixer's verdict on one PR. `blame` names a PR whose own change caused the failure; a blamed PR
+ * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
+ * to last, that show the failure, which its comment quotes.
+ */
+export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string } & (
 	| { number: number; action: "requeue"; reason: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
-	| { number: number; action: "handback"; diagnosis: string; recommendation: string }
+	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
 );
 
-/** Reject extra fields, duplicate/missing PRs, multiline reasons, oversized comments, and oversized output. */
-export function parseFixResult(text: string, numbers: number[]): FixResult[] {
+/**
+ * The fixer's verdict on the base alone, when no PR is supplied: a mechanical fix committed on its
+ * `base` branch, which the daemon opens as a PR, or a handback, which halts the queue with an issue.
+ */
+export type BaseFix = { agent?: string; model?: string } & (
+	| { action: "fixed"; head: string; reason: string }
+	| { action: "handback"; diagnosis: string; recommendation: string }
+);
+
+function json(text: string): unknown {
 	if (text.length > 100_000) throw new Error("fixer result exceeds 100 KB");
-	let value: unknown;
 	try {
-		value = JSON.parse(text);
+		return JSON.parse(text);
 	} catch {
 		throw new Error("fixer result is not valid JSON");
 	}
+}
+
+/** Reject extra fields, multiline reasons, and oversized values in one result entry; `pr` allows a PR's own fields. */
+function validate(item: any, pr: boolean): void {
+	const named = pr ? ["number"] : [];
+	const fields =
+		item.action === "fixed"
+			? [...named, "action", "head", "reason"]
+			: item.action === "requeue" && pr
+				? [...named, "action", "reason"]
+				: item.action === "handback"
+					? [...named, "action", "diagnosis", "recommendation"]
+					: [];
+	const metadata = ["agent", "model"].filter((key) => key in item);
+	if (metadata.some((key) => typeof item[key] !== "string" || !/^[a-zA-Z0-9 ._/-]{1,100}$/.test(item[key])))
+		throw new Error("invalid fixer identity");
+	if (pr && "blame" in item) {
+		if (typeof item.blame !== "boolean") throw new Error("invalid fixer blame");
+		if (item.blame && item.action === "requeue") throw new Error("a blamed PR must be fixed or handed back");
+		metadata.push("blame");
+	}
+	if (pr && "log" in item) {
+		const log = item.log;
+		if (
+			item.action !== "handback" ||
+			!Array.isArray(log) ||
+			log.length !== 2 ||
+			!log.every((line) => Number.isSafeInteger(line) && line >= 1) ||
+			log[0] > log[1]
+		)
+			throw new Error("invalid fixer log lines");
+		metadata.push("log");
+	}
+	// One optional Markdown comment per PR: multiline, but no other control characters.
+	if (pr && "comment" in item) {
+		if (
+			typeof item.comment !== "string" ||
+			!item.comment.trim() ||
+			item.comment.length > COMMENT_LIMIT ||
+			/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(item.comment)
+		)
+			throw new Error("invalid fixer comment");
+		metadata.push("comment");
+	}
+	if (
+		fields.length === 0 ||
+		Object.keys(item).length !== fields.length + metadata.length ||
+		fields.some((key) => !(key in item))
+	)
+		throw new Error("invalid fixer action or fields");
+	for (const key of fields.filter((key) => key !== "number")) {
+		if (
+			typeof item[key] !== "string" ||
+			!item[key].trim() ||
+			item[key].length > 4000 ||
+			/[\u0000-\u001f\u007f]/.test(item[key])
+		)
+			throw new Error(`invalid fixer ${key}`);
+	}
+	if (item.action === "fixed" && !/^[a-f0-9]{40}$/.test(item.head)) throw new Error("invalid fixer head");
+}
+
+/** Reject extra fields, duplicate/missing PRs, multiline reasons, oversized comments, and oversized output. */
+export function parseFixResult(text: string, numbers: number[]): FixResult[] {
+	const value = json(text);
 	if (!Array.isArray(value) || value.length !== numbers.length)
 		throw new Error("fixer must return every PR exactly once");
 	const seen = new Set<number>();
@@ -46,45 +124,18 @@ export function parseFixResult(text: string, numbers: number[]): FixResult[] {
 		if (!item || typeof item !== "object" || !numbers.includes(item.number) || seen.has(item.number))
 			throw new Error("invalid or duplicate fixer PR");
 		seen.add(item.number);
-		const fields =
-			item.action === "fixed"
-				? ["number", "action", "head", "reason"]
-				: item.action === "requeue"
-					? ["number", "action", "reason"]
-					: item.action === "handback"
-						? ["number", "action", "diagnosis", "recommendation"]
-						: [];
-		const metadata = ["agent", "model"].filter((key) => key in item);
-		if (metadata.some((key) => typeof item[key] !== "string" || !/^[a-zA-Z0-9 ._/-]{1,100}$/.test(item[key])))
-			throw new Error("invalid fixer identity");
-		// One optional Markdown comment per PR: multiline, but no other control characters.
-		if (
-			"comment" in item &&
-			(typeof item.comment !== "string" ||
-				!item.comment.trim() ||
-				item.comment.length > COMMENT_LIMIT ||
-				/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(item.comment))
-		)
-			throw new Error("invalid fixer comment");
-		const optional = metadata.length + ("comment" in item ? 1 : 0);
-		if (
-			fields.length === 0 ||
-			Object.keys(item).length !== fields.length + optional ||
-			fields.some((key) => !(key in item))
-		)
-			throw new Error("invalid fixer action or fields");
-		for (const key of fields.filter((key) => key !== "number")) {
-			if (
-				typeof item[key] !== "string" ||
-				!item[key].trim() ||
-				item[key].length > 4000 ||
-				/[\u0000-\u001f\u007f]/.test(item[key])
-			)
-				throw new Error(`invalid fixer ${key}`);
-		}
-		if (item.action === "fixed" && !/^[a-f0-9]{40}$/.test(item.head)) throw new Error("invalid fixer head");
+		validate(item, true);
 	}
 	return value as FixResult[];
+}
+
+/** The base fixer's one result object, as strictly as a PR's. */
+export function parseBaseFix(text: string): BaseFix {
+	const value = json(text);
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error("a base fix result must be one JSON object");
+	validate(value, false);
+	return value as BaseFix;
 }
 
 export async function fix(
@@ -95,8 +146,8 @@ export async function fix(
 	args?: string[],
 	model?: string,
 ): Promise<void> {
+	// No PR numbers fixes the base alone, which fails its check without any PR.
 	if (
-		!numbers.length ||
 		numbers.some((number) => !Number.isSafeInteger(number) || number <= 0) ||
 		new Set(numbers).size !== numbers.length
 	)
@@ -161,14 +212,19 @@ export async function fix(
 		child.stderr.pipe(process.stderr, { end: false });
 		child.once("error", reject);
 		child.stdin.on("error", () => {});
-		child.stdin.end(`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:\n${prs.join("\n")}\n`);
+		child.stdin.end(
+			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:${prs.length ? `\n${prs.join("\n")}` : " none; the base fails alone"}\n`,
+		);
 		child.once("close", (code) => (code === 0 ? done() : reject(new FixerAgentError(code ?? 1))));
 	});
-	const results = parseFixResult(readFixResult(root), numbers);
+	const parse = (text: string) => (numbers.length ? parseFixResult(text, numbers) : parseBaseFix(text));
+	const results = parse(readFixResult(root));
 	const index = argv.findIndex((arg) => arg === "-m" || arg === "--model");
 	const ranModel = index >= 0 ? argv[index + 1] : argv.find((arg) => arg.startsWith("--model="))?.slice(8);
 	const identity = { agent: basename(agent), model: ranModel ?? "Codex" };
-	const result = JSON.stringify(results.map((item) => ({ ...item, ...identity })));
-	parseFixResult(result, numbers);
+	const result = JSON.stringify(
+		Array.isArray(results) ? results.map((item) => ({ ...item, ...identity })) : { ...results, ...identity },
+	);
+	parse(result);
 	writeFileSync(join(root, FIX_RESULT), result);
 }

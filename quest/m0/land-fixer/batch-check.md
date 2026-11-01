@@ -5,7 +5,7 @@
 Before it spends a sandbox check on a batch, `quest land` runs `quest check`
 on the batch's combined squash chain inside the daemon. A failure there is
 blamed on the link that introduced it, the same way
-[Batch triage](/quest/m0/land-fixer/triage.md) blames a failing check: that
+batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) blames a failing check: that
 PR is parked for the fixer, and the batch is rebuilt without it. No sandbox
 time is spent.
 
@@ -19,7 +19,3 @@ alone yet together leave a dangling link or a `Required` cycle. The daemon
 already screens each candidate alone (`screener()` in `src/cli/land.ts`), and
 `quest check` on the chain tip costs well under a second, so check the chain
 too.
-
-## Required
-
-- [Batch triage](/quest/m0/land-fixer/triage.md) - provides parking and blame

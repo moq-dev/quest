@@ -32,7 +32,3 @@ the [epic](/quest/m0/land-fixer/README.md)). Audit findings on moq's 24 hours:
 - Fixer job logs show `reasoning effort: none`. `land-fix.ts` passes a model
   but no `model_reasoning_effort`; set one, defaulting to `medium`, with a
   daemon option to override it.
-
-## Required
-
-- [Batch triage](/quest/m0/land-fixer/triage.md) - the sizing change assumes failures park

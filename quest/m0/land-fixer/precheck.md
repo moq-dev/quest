@@ -25,9 +25,5 @@ so a compile and lint pre-check catches most of these cheaply.
   `land-priority` work already provides the priority classes.
 - Pre-check a PR at most once per (head, base) pair; a moved base re-queues
   it for pre-check only when the PR is next in line.
-- A pre-check failure parks the PR through [Batch triage](/quest/m0/land-fixer/triage.md)'s
-  mechanism, and the fixer gets the pre-check log as its failure.
-
-## Required
-
-- [Batch triage](/quest/m0/land-fixer/triage.md) - provides parking
+- A pre-check failure parks the PR through batch triage's
+  ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) mechanism, and the fixer gets the pre-check log as its failure.

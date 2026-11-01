@@ -35,4 +35,4 @@ landing through its own push or the pinned squash merge, as now.
 ## Related
 
 - [A PR whose own CI fails is parked](/quest/m0/land-fixer/ci-park.md) - one of the states shown
-- [Batch triage](/quest/m0/land-fixer/triage.md) - the parked, waiting, and halted states
+- Batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) - added the parked, waiting, and halted states

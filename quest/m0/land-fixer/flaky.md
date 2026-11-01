@@ -64,9 +64,6 @@ flake.
 
 Flaky verdicts never spend a PR's attempt
 ([Attempt budget](/quest/m0/land-fixer/attempts.md)), and a batch whose only
-failure was flaky lands without ejecting anyone
-([Batch triage](/quest/m0/land-fixer/triage.md)).
-
-## Related
-
-- [Batch triage](/quest/m0/land-fixer/triage.md) - blame runs after the rerun
+failure was flaky lands without ejecting anyone. Since batch triage
+([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)), a failing batch's PRs are parked
+for the fixer rather than ejected; the rerun comes before that.

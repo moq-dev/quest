@@ -17,17 +17,13 @@ Decided 2026-11-01 (user, settling
   - ✅ Park it with the failing check's log for the fixer
   - Keep ejecting it at once
 
-It builds on the parking mechanism from [Batch triage](/quest/m0/land-fixer/triage.md)
+It builds on the parking mechanism from batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
 (`src/cli/land-park.ts`, and `fail(...)` in `src/cli/land-serve.ts`). Fetch
 each failing check run's log through the App's `checks: read` and
 `actions: read`, and trim it the way the batch failure excerpt is trimmed. A
 fix the fixer pushes reruns the PR's CI. The PR rejoins batches once its
 required checks pass, as with
-[triage](/quest/m0/land-fixer/triage.md)'s `checks_pending` rule.
-
-## Required
-
-- [Batch triage](/quest/m0/land-fixer/triage.md) - provides the parking mechanism
+triage's `checks_pending` rule.
 
 ## Related
 
