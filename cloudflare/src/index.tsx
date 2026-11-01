@@ -3,13 +3,14 @@ import type { Child } from "hono/jsx";
 import { secureHeaders } from "hono/secure-headers";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { AccountPage, SignInPage } from "./account";
+import { APIError } from "better-auth/api";
 import { type Provider, createAuth, providers } from "./auth";
 import { type Board, findDoc as findQuest, readBoard } from "./board/model";
 import { BoardPage, QuestPage, SHOWN, questCrumbs } from "./board/pages";
 import { type Project, findProject, home } from "./board/project";
 import { DocIndex, DocPage, findDoc } from "./docs";
 import { Home } from "./home";
-import { type Enrollment, GitHubError, GitHubService } from "./github/service";
+import { type Candidate, type Enrollment, GitHubError, GitHubService } from "./github/service";
 import { readActivity } from "./github/state";
 import { ProjectsPage, ProjectSetupPage, ProjectStopControls, ProjectStatePage, projectURL } from "./projects";
 import { githubWebhooks } from "./github/webhook";
@@ -35,8 +36,12 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 app.get("/setup", (c) => c.redirect("https://github.com/moq-dev/quest/blob/main/SETUP.md"));
 // Installation-initiated authorization has no sign-in state from this site.
 // Discard its code and let the visitor start a state-bound sign-in instead.
-app.get("/api/auth/callback/github", (c, next) => {
-	if (c.req.query("code") && !c.req.query("state")) return c.redirect("/sign-in?next=/projects", 303);
+// Either way the visitor lands on the project picker, which lists what the App can reach.
+app.get("/api/auth/callback/github", async (c, next) => {
+	if (c.req.query("code") && !c.req.query("state")) {
+		const session = await createAuth(c.env).api.getSession({ headers: c.req.raw.headers });
+		return c.redirect(session ? "/projects" : "/sign-in?next=/projects", 303);
+	}
 	return next();
 });
 app.all("/api/auth/*", (c) => createAuth(c.env).handler(c.req.raw));
@@ -108,11 +113,29 @@ app.get("/projects", async (c) => {
 	} catch (error) {
 		if (!(error instanceof GitHubError)) throw error;
 	}
+	// The user's own GitHub App token lists the picker's repositories; it never grants authority.
+	const account = await c.env.DB.prepare("SELECT id FROM account WHERE userId=? AND providerId='github' LIMIT 1")
+		.bind(session.user.id)
+		.first<{ id: string }>();
+	let candidates: Candidate[] | null = null;
+	if (account)
+		try {
+			// Better Auth refreshes an expired token, so a returning maintainer need not sign in again.
+			const { accessToken } = await createAuth(c.env).api.getAccessToken({
+				body: { accountId: account.id },
+				headers: c.req.raw.headers,
+			});
+			if (accessToken) candidates = await github.candidates(accessToken);
+		} catch (error) {
+			if (!(error instanceof GitHubError) && !(error instanceof APIError)) throw error;
+		}
 	return page(
 		c,
 		{ title: "Project setup", description: "Opt your Quest repository into contributions." },
 		<ProjectsPage
 			projects={await github.projects(session.user.id)}
+			candidates={candidates}
+			linked={account !== null}
 			installation={installation}
 			error={c.req.query("error") ? "Use a GitHub owner/repository name." : undefined}
 		/>,

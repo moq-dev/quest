@@ -24,7 +24,8 @@ webhook subscriptions so resolving discussions and replying inline wake merge jo
 selection events automatically. The App also requests the **Email addresses: read**
 user permission, which Better Auth needs to sign in users whose email is private.
 It grants no repository authority: the user token is used only for the sign-in
-profile and email reads, and never for repository writes. No organization,
+profile and email reads and to list the [project picker](#project-enrollment)'s
+repositories, and never for repository writes or authority checks. No organization,
 administration, workflow, or checks-write permissions are requested. These installation grants
 are necessarily broader than individual operations: minted tokens always name
 one repository ID and the particular permissions required. Tokens are never
@@ -294,9 +295,10 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
 Sign-in starts at kix.quest and keeps Better Auth's persisted state and cookie
 checks. An authorization callback started by installing the App directly on
 GitHub has no sign-in state from kix.quest: its code is discarded and the
-visitor returns to the sign-in form, then completes a fresh state-bound flow.
+visitor returns to the sign-in form, then completes a fresh state-bound flow
+that ends on `/projects`. A visitor already signed in goes straight there.
 Installation and sign-in do not enroll a repository; the maintainer still opts
-in on `/projects` after a live authority check.
+in from the project picker after a live authority check.
 
 For local tests, fixtures sign bodies and mock all GitHub API responses. No
 production credentials, GitHub account or installation are required.
@@ -317,10 +319,30 @@ workflow orchestration and repository coordinator design were not reused.
 ## Project enrollment
 
 `/projects` is the short maintainer setup flow, separate from the quest board
-and decision inbox. It resolves the registered App's installation URL, accepts
-an explicit `owner/repository` selection, and verifies the linked GitHub
-identity's current maintain/admin authority through the existing service.
-Installing the App never creates a `github_projects` record or enables work.
+and decision inbox. It links the registered App's installation URL and lists
+the repositories to pick from: those the App's installations reach and the
+user administers or maintains, each with its contribution state, an Enable
+button, or why it cannot be enabled yet (archived, private, no Quest files,
+or no OSI-approved license). A repository without Quest files links `/setup`.
+
+The picker is navigation, built from the user's own GitHub App token so its
+cost does not grow with an installation's size: one read of the user's
+installations, one per hundred repositories in each, one GraphQL read per
+hundred public repositories for their default branch's `quest` directory, and
+one SPDX read per distinct license. GitHub lists each repository with the
+user's role, so repositories they only write to never appear. Installations of
+other Apps, suspended ones, and ones the webhook gate has blocked are skipped.
+Better Auth refreshes an expired user token; when none is available, such as
+for an account without a linked GitHub identity, the page asks the maintainer
+to sign in with GitHub again or link it. Its Enable button posts the same form
+as the project's setup page, so enabling rechecks everything below with an
+installation token, including the whole quest tree with `quest check`.
+
+Selecting `owner/repository` by name remains, to reach an enrolled project's
+pause and disconnect controls once the picker no longer lists it. Both paths
+verify the linked GitHub identity's current maintain/admin authority through
+the existing service. Installing the App never creates a `github_projects`
+record or enables work.
 Repository selection resolves its installation using the App JWT, then reads
 metadata with a token restricted to the named repository and metadata-read
 permission. Subsequent authorized operations scope tokens by repository ID.

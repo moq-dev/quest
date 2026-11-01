@@ -142,6 +142,23 @@ it("seeds a representative inbox through the Worker's own routes", async () => {
 	expect(data.repos[0]!.pulls.find((p) => p.number === 12)!.closed).toBe(true);
 });
 
+it("lists the seeded maintainer's repositories in the project picker", async () => {
+	const { data, request, cookie } = await seeded();
+	// Repositories installed after seeding, which seeding would otherwise enroll.
+	const archive = data.repos.find((repo) => repo.name === "archive")!;
+	data.repos.push({ ...archive, id: 9103, name: "launchpad", issues: [], pulls: [] });
+	data.repos.push({ ...archive, id: 9104, name: "bare", files: [], issues: [], pulls: [] });
+	data.repos.push({ ...archive, id: 9105, name: "others", maintainers: [], issues: [], pulls: [] });
+	const html = await (await request("/projects", { headers: { Cookie: cookie } })).text();
+	const row = (name: string) => html.match(new RegExp(`example/${name}</a>[\\s\\S]*?</li>`))?.[0] ?? "";
+	expect(row("rocket")).toContain("Contributions enabled");
+	expect(row("archive")).toContain("Contributions paused");
+	expect(row("launchpad")).toContain('action="/projects/github/example/launchpad"');
+	expect(row("bare")).toContain("No Quest files on the default branch yet.");
+	// A repository the user does not maintain is not offered.
+	expect(html).not.toContain("example/others");
+});
+
 it("ignores a quest branch left at the head of its merged pull request", async () => {
 	const { request, cookie } = await seeded((data) => {
 		const rocket = data.repos[0]!;

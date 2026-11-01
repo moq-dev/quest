@@ -691,6 +691,257 @@ describe("project setup routes", () => {
 	});
 });
 
+/** A listed repository: public, MIT-licensed, maintained, with a quest directory unless the test says otherwise. */
+type Listed = {
+	id: number;
+	name: string;
+	role?: "admin" | "maintain" | "push";
+	private?: boolean;
+	archived?: boolean;
+	license?: string | null;
+	quest?: { name: string; type: string }[] | null;
+};
+
+/**
+ * GitHub as the picker's user token sees it: the App's installations the user
+ * reaches, their repositories with the user's role, and each default branch's
+ * `quest` directory. Any other request fails the test.
+ */
+function picker(installations: { id: number; app_id?: number; suspended?: boolean; repos: Listed[] }[]) {
+	const calls: { url: string; authorization: string | null }[] = [];
+	const repos = installations.flatMap((installation) => installation.repos);
+	const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = new URL(String(input));
+		calls.push({ url: url.href, authorization: new Headers(init?.headers).get("Authorization") });
+		if (url.hostname === "spdx.org") {
+			const licenseId = decodeURIComponent(
+				url.pathname
+					.split("/")
+					.at(-1)!
+					.replace(/\.json$/, ""),
+			);
+			return Response.json({ licenseId, isOsiApproved: licenseId !== "BUSL-1.1" });
+		}
+		const page = Number(url.searchParams.get("page"));
+		const slice = <T>(items: T[]) => items.slice((page - 1) * 100, page * 100);
+		if (url.pathname === "/app") return Response.json({ id: 123, slug: "quest-test" });
+		if (url.pathname === "/user/installations") {
+			const listed = installations.map((installation) => ({
+				id: installation.id,
+				app_id: installation.app_id ?? 123,
+				suspended_at: installation.suspended ? "2026-10-30" : null,
+				permissions: { metadata: "read" },
+			}));
+			return Response.json({ total_count: listed.length, installations: slice(listed) });
+		}
+		const listing = url.pathname.match(/^\/user\/installations\/(\d+)\/repositories$/);
+		if (listing) {
+			const installation = installations.find((installation) => installation.id === Number(listing[1]))!;
+			const listed = installation.repos.map((repo) => ({
+				id: repo.id,
+				name: repo.name,
+				owner: { login: "upstream" },
+				private: repo.private ?? false,
+				visibility: repo.private ? "private" : "public",
+				archived: repo.archived ?? false,
+				disabled: false,
+				default_branch: "trunk",
+				license: repo.license === null ? null : { spdx_id: repo.license ?? "MIT", name: "License" },
+				permissions: {
+					admin: repo.role === "admin",
+					maintain: (repo.role ?? "maintain") !== "push",
+					push: true,
+					pull: true,
+				},
+			}));
+			return Response.json({ total_count: listed.length, repositories: slice(listed) });
+		}
+		if (url.pathname === "/graphql") {
+			const { query, variables } = JSON.parse(String(init?.body)) as {
+				query: string;
+				variables: Record<string, string>;
+			};
+			const data: Record<string, unknown> = {};
+			for (const [, alias, index] of query.matchAll(/(r(\d+)): repository/g)) {
+				const repo = repos.find((repo) => repo.name === variables[`n${index}`])!;
+				expect(variables[`o${index}`]).toBe("upstream");
+				const entries = repo.quest === undefined ? [{ name: "README.md", type: "blob" }] : repo.quest;
+				data[alias!] = { databaseId: repo.id, object: entries && { entries } };
+			}
+			return Response.json({ data });
+		}
+		throw new Error(`Unexpected GitHub request ${url.pathname}`);
+	});
+	return { calls, request, service: new GitHubService(testEnv, request as typeof fetch) };
+}
+
+describe("project picker", () => {
+	// Write access alone never lists a repository; a hundred of them push the list to a second page.
+	const writers: Listed[] = Array.from({ length: 100 }, (_, i) => ({ id: 1000 + i, name: `w${i}`, role: "push" }));
+	const listed: Listed[] = [
+		{ id: 10, name: "project", role: "admin" },
+		{ id: 12, name: "secret", private: true },
+		{ id: 13, name: "old", archived: true },
+		{ id: 14, name: "bare", quest: null },
+		{ id: 15, name: "instructions", quest: [{ name: "AGENTS.md", type: "blob" }] },
+		{ id: 16, name: "nested", quest: [{ name: "m0", type: "tree" }] },
+		{ id: 17, name: "source", license: "BUSL-1.1" },
+		{ id: 18, name: "unlicensed", license: null },
+		{ id: 19, name: "paused" },
+		{ id: 20, name: "moved" },
+	];
+	const installations = [
+		{ id: 5, repos: [...writers, ...listed] },
+		{ id: 6, app_id: 999, repos: [{ id: 30, name: "other-app" }] },
+		{ id: 7, suspended: true, repos: [{ id: 31, name: "suspended" }] },
+	];
+	beforeEach(async () => {
+		await env.DB.batch([
+			env.DB.prepare(
+				"INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) VALUES(19,'upstream','paused',5,'paused','enrollment-test',0)",
+			),
+			// Enrolled under an earlier installation, so this one still needs an explicit opt-in.
+			env.DB.prepare(
+				"INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) VALUES(20,'upstream','moved',4,'enabled','enrollment-test',0)",
+			),
+		]);
+	});
+
+	it("lists maintained repositories across the App's installations with why each cannot be enabled", async () => {
+		const { service, calls } = picker(installations);
+		const candidates = await service.candidates("user-token");
+		const rows = Object.fromEntries(
+			candidates.map(({ name, state, problems, setup }) => [name, { state, problems, setup }]),
+		);
+		expect(Object.keys(rows)).toEqual([
+			"bare",
+			"instructions",
+			"moved",
+			"nested",
+			"old",
+			"paused",
+			"project",
+			"secret",
+			"source",
+			"unlicensed",
+		]);
+		const eligible = { state: null, problems: [], setup: false };
+		expect(rows.project).toEqual(eligible);
+		expect(rows.nested).toEqual(eligible);
+		expect(rows.moved).toEqual(eligible);
+		expect(rows.paused).toEqual({ state: "paused", problems: [], setup: false });
+		expect(rows.secret).toEqual({
+			state: null,
+			problems: ["Private. Contributions need a public repository."],
+			setup: false,
+		});
+		expect(rows.old).toEqual({ state: null, problems: ["Archived or disabled on GitHub."], setup: false });
+		for (const name of ["bare", "instructions"])
+			expect(rows[name]).toEqual({
+				state: null,
+				problems: ["No Quest files on the default branch yet."],
+				setup: true,
+			});
+		for (const name of ["source", "unlicensed"])
+			expect(rows[name]!.problems).toEqual([
+				expect.stringContaining("GitHub must detect an OSI-approved license"),
+			]);
+		expect(candidates.find((candidate) => candidate.name === "project")).toMatchObject({
+			id: 10,
+			owner: "upstream",
+		});
+
+		// The user's token makes every GitHub read: no installation token, and a few requests in all.
+		const github = calls.filter((call) => call.url.startsWith("https://api.github.com/"));
+		expect(github.every((call) => call.authorization === "Bearer user-token")).toBe(true);
+		expect(github.map((call) => call.url.replace("https://api.github.com", ""))).toEqual([
+			"/user/installations?per_page=100&page=1",
+			"/user/installations/5/repositories?per_page=100&page=1",
+			"/user/installations/5/repositories?per_page=100&page=2",
+			"/graphql",
+		]);
+		// One license lookup per distinct detected license; a missing one needs none.
+		expect(calls.filter((call) => call.url.startsWith("https://spdx.org/")).map((call) => call.url)).toEqual([
+			"https://spdx.org/licenses/MIT.json",
+			"https://spdx.org/licenses/BUSL-1.1.json",
+		]);
+	});
+	it("skips an installation the webhook gate has blocked", async () => {
+		await env.DB.prepare("INSERT INTO github_installations(id,blocked,action) VALUES(5,1,'suspend')").run();
+		const { service, calls } = picker(installations);
+		expect(await service.candidates("user-token")).toEqual([]);
+		expect(calls.map((call) => new URL(call.url).pathname)).toEqual(["/user/installations"]);
+	});
+
+	it("renders rows on the project setup page, whose Enable form opts in through the live checks", async () => {
+		const who = identity("github");
+		const { session } = await oauth(who);
+		const listing = picker([
+			{
+				id: 5,
+				repos: [
+					{ id: 10, name: "project" },
+					{ id: 14, name: "bare", quest: null },
+				],
+			},
+		]);
+		vi.spyOn(globalThis, "fetch").mockImplementation(listing.request as typeof fetch);
+		const response = await app.request(`${origin}/projects`, { headers: { Cookie: session! } }, testEnv);
+		expect(response.status).toBe(200);
+		const html = await response.text();
+		expect(html).toContain("Your repositories");
+		expect(html).toContain('action="/projects/github/upstream/project"');
+		expect(html).toContain("Enable contributions");
+		expect(html).toContain("No Quest files on the default branch yet.");
+		expect(html).toContain('<a href="/setup">Set up Quest</a>');
+		expect(html).not.toContain('action="/projects/github/upstream/bare"');
+		expect(html).toContain("https://github.com/apps/quest-test/installations/new");
+		// The session's GitHub sign-in token lists repositories.
+		expect(
+			listing.calls
+				.filter((call) => new URL(call.url).pathname.startsWith("/user/"))
+				.every((call) => call.authorization === "Bearer mock-token"),
+		).toBe(true);
+		// The row's form is the setup page's: enabling rechecks authority and eligibility with an installation token.
+		vi.mocked(globalThis.fetch).mockImplementation(github({ account: Number(who.id) }).request as typeof fetch);
+		const posted = await app.request(
+			`${origin}/projects/github/upstream/project`,
+			{
+				method: "POST",
+				headers: { Cookie: session!, Origin: origin },
+				body: new URLSearchParams({ id: "10", state: "enabled" }),
+			},
+			testEnv,
+		);
+		expect(posted.status).toBe(303);
+		expect(await state()).toMatchObject({ state: "enabled" });
+	});
+	it("asks to sign in with GitHub again when the user's token cannot list repositories", async () => {
+		const { session } = await oauth(identity("github"));
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const url = new URL(String(input));
+			if (url.pathname === "/app") return Response.json({ id: 123, slug: "quest-test" });
+			return Response.json({ message: "Bad credentials" }, { status: 401 });
+		});
+		const html = await (await app.request(`${origin}/projects`, { headers: { Cookie: session! } }, testEnv)).text();
+		expect(html).toContain("Your GitHub repositories could not be listed");
+		expect(html).toContain("Find an enrolled project");
+	});
+	it("asks a user without a linked GitHub account to link one", async () => {
+		const { session } = await oauth(identity("google"));
+		const outbound = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const url = new URL(String(input));
+			if (url.pathname === "/app") return Response.json({ id: 123, slug: "quest-test" });
+			throw new Error(`Unexpected request ${url.href}`);
+		});
+		const html = await (await app.request(`${origin}/projects`, { headers: { Cookie: session! } }, testEnv)).text();
+		expect(html).toContain(
+			'<a href="/account">Link your GitHub account</a> to list the repositories you maintain.',
+		);
+		expect(outbound.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual(["/app"]);
+	});
+});
+
 function connection<T>(nodes: T[], more = false, cursor: string | null = null) {
 	return { nodes, pageInfo: { hasNextPage: more, endCursor: cursor } };
 }
