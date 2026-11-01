@@ -43,7 +43,7 @@ import { gate } from "./gate";
 import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, remoteRepository, remoteUrl } from "./github";
 import { type Hold, type State, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
-import { apply } from "./land-apply";
+import { apply, pushCommand } from "./land-apply";
 import { fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { landed } from "./landed";
@@ -546,9 +546,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.action((value: string) => {
 			settle(apply(root(), pullRequest(value, root()), gitHubDependencies(warn)), (applied) => {
 				print(applied.commit);
-				print(
-					`review it, then push: git push ${applied.remote} ${applied.commit}:refs/heads/${applied.branch}`,
-				);
+				print(`review it, then push: ${pushCommand(applied)}`);
 			});
 		});
 	landCommand

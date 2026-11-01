@@ -25,7 +25,7 @@ import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/de
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import { collectFixers, validateFix, fixerText, handbackRepeated } from "../src/cli/land-fixer";
 import { importFixer } from "../src/cli/land-fixer-repository";
-import { apply, parseResolution, resolutionSection } from "../src/cli/land-apply";
+import { apply, parseResolution, pushCommand, resolutionSection } from "../src/cli/land-apply";
 import fixerPrompt from "../assets/land-fix.md";
 import { fix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
@@ -2586,6 +2586,15 @@ describe.skipIf(process.platform === "win32")("quest land apply", () => {
 		await expect(apply(fixture.forge.clone(), PR, await fixture.forge.deps())).rejects.toThrow(
 			"differs from the fixer's",
 		);
+	});
+
+	test("quotes a contributor's branch in the push command", () => {
+		const branch = "topic;echo${IFS}injected'x";
+		const command = pushCommand({ commit: "a".repeat(40), remote: "https://github.com/o/r.git", branch });
+		const echoed = execFileSync("sh", ["-c", `eval "set -- $1"; printf '%s\\n' "$@"`, "sh", command], {
+			encoding: "utf8",
+		});
+		expect(echoed).toBe(`git\npush\nhttps://github.com/o/r.git\n${"a".repeat(40)}:refs/heads/${branch}\n`);
 	});
 
 	test("hands back plainly when the resolution does not fit in a comment", () => {

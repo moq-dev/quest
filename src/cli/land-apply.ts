@@ -145,6 +145,12 @@ function userGit(root: string, args: string[], input?: string): string {
 	return result.stdout.trim();
 }
 
+/** The command that pushes `applied`, each argument shell-quoted: a contributor names the branch. */
+export function pushCommand(applied: Applied): string {
+	const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+	return ["git", "push", applied.remote, `${applied.commit}:refs/heads/${applied.branch}`].map(quote).join(" ");
+}
+
 export interface Applied {
 	commit: string;
 	/** Where the maintainer pushes the commit: the PR's head repository and branch. */
