@@ -934,9 +934,7 @@ export function fakeGitHub(world: World) {
 		if (comment && method === "GET") {
 			const item = [...repo.pulls, ...repo.issues].find((i) => String(i.number) === comment[1]);
 			if (!item) return notFound();
-			return json(
-				(item.comments ?? []).map((c) => ({ body: c.body, user: { login: c.author }, created_at: c.at })),
-			);
+			return json((item.comments ?? []).map((c) => ({ body: c.body, user: { login: c.author } })));
 		}
 		if (comment && method === "POST") {
 			if (!writes("issues") && !writes("pull_requests")) return forbidden();
@@ -948,7 +946,7 @@ export function fakeGitHub(world: World) {
 				at: new Date().toISOString(),
 			};
 			item.comments = [...(item.comments ?? []), added];
-			return json({ body: added.body, user: { login: added.author }, created_at: added.at }, 201);
+			return json({ body: added.body, user: { login: added.author } }, 201);
 		}
 		const labels = tail.match(/^\/issues\/(\d+)\/labels(?:\/([^/]+))?$/);
 		if (labels && (method === "POST" || method === "DELETE")) {

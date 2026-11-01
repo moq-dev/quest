@@ -190,54 +190,37 @@ describe("confirmed writes", () => {
 	const text = "landed by quest land";
 
 	test("a comment whose response was lost is found by its body and not posted again", async () => {
-		const posted = { id: 2, body: text, created_at: "2026-10-31T12:00:00Z" };
 		const { github, calls } = fixture([
+			json([{ id: 1, body: "older" }]),
 			bad(502),
-			json([{ id: 1, body: "older", created_at: "2026-10-31T11:59:30Z" }, posted]),
+			json([
+				{ id: 1, body: "older" },
+				{ id: 2, body: text },
+			]),
 		]);
 		const response = await github.request(`${repo}/issues/1/comments`, { body: { body: text } });
-		expect(await response.json()).toEqual(posted);
+		expect(await response.json()).toEqual({ id: 2, body: text });
+		// A minute before the first attempt, for GitHub's clock.
+		const listing = `GET ${repo}/issues/1/comments?since=2026-10-31T11:59:00.000Z&per_page=100`;
 		expect(calls.map(({ method, path }) => `${method} ${path}`)).toEqual([
+			listing,
 			`POST ${repo}/issues/1/comments`,
-			// A minute before the first attempt, since no response has said what GitHub's clock reads.
-			`GET ${repo}/issues/1/comments?since=2026-10-31T11:59:00.000Z&per_page=100`,
+			listing,
 		]);
 	});
 
 	test("an identical comment from before a lost one, as when a PR is ejected again, is posted again", async () => {
-		const date = { date: "Sat, 31 Oct 2026 12:00:00 GMT" };
-		const earlier = { id: 1, body: text, created_at: "2026-10-31T11:59:30Z" };
-		const { github, calls } = fixture([json({}, 200, date), dropped(), json([earlier]), json({ id: 2 }, 201)]);
-		await github.request(`${repo}/pulls/1`);
+		const earlier = { id: 1, body: text };
+		const { github, calls } = fixture([json([earlier]), dropped(), json([earlier]), json({ id: 2 }, 201)]);
 		await github.request(`${repo}/issues/1/comments`, { body: { body: text } });
-		expect(calls.map(({ method, path }) => `${method} ${path}`)).toEqual([
-			`GET ${repo}/pulls/1`,
-			`POST ${repo}/issues/1/comments`,
-			// GitHub's clock, measured from the last response, narrows the window to its whole seconds.
-			`GET ${repo}/issues/1/comments?since=2026-10-31T11:59:58.000Z&per_page=100`,
-			`POST ${repo}/issues/1/comments`,
-		]);
-	});
-
-	test("a lost comment is found on GitHub's clock when it runs behind ours", async () => {
-		const posted = { id: 2, body: text, created_at: "2026-10-31T11:55:00Z" };
-		const { github, calls } = fixture([
-			json({}, 200, { date: "Sat, 31 Oct 2026 11:55:00 GMT" }),
-			bad(502),
-			json([posted]),
-		]);
-		await github.request(`${repo}/pulls/1`);
-		const response = await github.request(`${repo}/issues/1/comments`, { body: { body: text } });
-		expect(await response.json()).toEqual(posted);
-		expect(calls[2].path).toBe(`${repo}/issues/1/comments?since=2026-10-31T11:54:58.000Z&per_page=100`);
+		expect(calls.map(({ method }) => method)).toEqual(["GET", "POST", "GET", "POST"]);
 	});
 
 	test("a comment whose response body was cut off is confirmed, not posted again", async () => {
-		const posted = { id: 2, body: text, created_at: "2026-10-31T12:00:00Z" };
-		const { github, calls } = fixture([cut(201), json([posted])]);
+		const { github, calls } = fixture([json([]), cut(201), json([{ id: 2, body: text }])]);
 		const response = await github.request(`${repo}/issues/1/comments`, { body: { body: text } });
-		expect(await response.json()).toEqual(posted);
-		expect(calls.map(({ method }) => method)).toEqual(["POST", "GET"]);
+		expect(await response.json()).toEqual({ id: 2, body: text });
+		expect(calls.map(({ method }) => method)).toEqual(["GET", "POST", "GET"]);
 	});
 
 	test("any other POST whose response body was cut off fails without repeating", async () => {
@@ -247,9 +230,14 @@ describe("confirmed writes", () => {
 	});
 
 	test("a comment that did not post is posted again", async () => {
-		const { github, calls } = fixture([dropped(), json([{ id: 1, body: "older" }]), json({ id: 2 }, 201)]);
+		const { github, calls } = fixture([
+			json([]),
+			dropped(),
+			json([{ id: 1, body: "older" }]),
+			json({ id: 2 }, 201),
+		]);
 		await github.request(`${repo}/issues/1/comments`, { body: { body: text } });
-		expect(calls.map(({ method }) => method)).toEqual(["POST", "GET", "POST"]);
+		expect(calls.map(({ method }) => method)).toEqual(["GET", "POST", "GET", "POST"]);
 	});
 
 	test("a pull request whose response was lost is found by its branch", async () => {
