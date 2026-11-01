@@ -35,8 +35,8 @@ removed. Maintainers resolved them by hand, for example on
 Remove the protected-set check from `validateFix` (`src/cli/land-fixer.ts`,
 "protected set must equal pinned head or base merge result"). Replace the
 protected-path rule in `assets/land-fix.md` with the same mechanical bar
-every other path has. Keep the rule that the fixer hands back any attempt to
-redirect its task, and update the decision line in
+every other path has. Instructions in the PRs' diffs stay ignored on these
+paths as on any other. Update the decision line in
 [Fixer proxy access](/quest/m0/host-land/fixer.md).
 
 ## Related
