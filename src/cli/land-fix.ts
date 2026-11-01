@@ -1,4 +1,5 @@
-// Untrusted agent side. The host wrapper supplies only a model endpoint and its client key.
+// Untrusted agent side. The host wrapper supplies only a model endpoint and its client key; the agent holds no
+// GitHub credential, and the daemon posts the comments it writes into its result.
 import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -21,13 +22,15 @@ export function readFixResult(root: string): string {
 		closeSync(fd);
 	}
 }
-export type FixResult = { agent?: string; model?: string } & (
+/** The longest Markdown comment a result may ask the daemon to post on its PR. */
+export const COMMENT_LIMIT = 4000;
+export type FixResult = { agent?: string; model?: string; comment?: string } & (
 	| { number: number; action: "requeue"; reason: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string }
 );
 
-/** Reject extra fields, duplicate/missing PRs, multiline reasons, and oversized output. */
+/** Reject extra fields, duplicate/missing PRs, multiline reasons, oversized comments, and oversized output. */
 export function parseFixResult(text: string, numbers: number[]): FixResult[] {
 	if (text.length > 100_000) throw new Error("fixer result exceeds 100 KB");
 	let value: unknown;
@@ -54,9 +57,19 @@ export function parseFixResult(text: string, numbers: number[]): FixResult[] {
 		const metadata = ["agent", "model"].filter((key) => key in item);
 		if (metadata.some((key) => typeof item[key] !== "string" || !/^[a-zA-Z0-9 ._/-]{1,100}$/.test(item[key])))
 			throw new Error("invalid fixer identity");
+		// One optional Markdown comment per PR: multiline, but no other control characters.
+		if (
+			"comment" in item &&
+			(typeof item.comment !== "string" ||
+				!item.comment.trim() ||
+				item.comment.length > COMMENT_LIMIT ||
+				/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(item.comment))
+		)
+			throw new Error("invalid fixer comment");
+		const optional = metadata.length + ("comment" in item ? 1 : 0);
 		if (
 			fields.length === 0 ||
-			Object.keys(item).length !== fields.length + metadata.length ||
+			Object.keys(item).length !== fields.length + optional ||
 			fields.some((key) => !(key in item))
 		)
 			throw new Error("invalid fixer action or fields");

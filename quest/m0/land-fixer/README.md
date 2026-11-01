@@ -90,7 +90,13 @@ Decision prompts, selected options marked ✅:
     disable the flaky test in the base PR then."
   - The flaky commit: ✅ in this batch (on its base PR, per the answer above)
     · in the next batch
-  - GitHub comments: the daemon posts them · ✅ a comment-only token · both
+  - GitHub comments: ✅ the daemon posts them from the fixer's result · a
+    comment-only token in the container · both. The user first picked the
+    token, then reversed it on 2026-11-01 after an independent audit: PR code
+    the fixer builds can read the container's environment, so a token there
+    would let PR code post as moq-bot[bot]. `quest land apply`, the daemon's
+    own comment deduplication, and `quest status`'s ejection reason all trust
+    moq-bot comments.
   - Workflow pushes: ✅ grant moq-bot `workflows` · the fixer avoids
     workflows
 - The user, starting the work: "The fixer is meant to handle conflicts and
@@ -133,7 +139,6 @@ resolves itself and what it hands back; that docs update finishes the epic.
 - [Queue status in the required check](/quest/m0/land-fixer/check-status.md) - the gate shows each PR's queue state in its required check run, never completing it
 - [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
-- [Fixer comments](/quest/m0/land-fixer/comments.md) - the fixer writes comments into its result and the daemon posts them; no token enters the container
 - [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, and a rerun-proven flaky test is disabled in a separate PR with a follow-up quest
 - [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - a fixer edit `validateFix` rejects for touching protected paths comes back as a commit the maintainer applies

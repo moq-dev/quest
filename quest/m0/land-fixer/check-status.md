@@ -29,8 +29,8 @@ landing through its own push or the pinned squash merge, as now.
 - Needs the App's `checks: write`, an installation permission the maintainer
   accepts. Check it during this work; it may already be granted for the
   existing check.
-- [Fixer comments](/quest/m0/land-fixer/comments.md) explain decisions on
-  the PR; the check run shows state only.
+- The fixer's comments, which the daemon posts on the PR, explain
+  decisions; the check run shows state only.
 
 ## Related
 

@@ -23,16 +23,24 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/dev/github";
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
-import { collectFixers, validateFix, fixerText, handbackRepeated } from "../src/cli/land-fixer";
+import {
+	collectFixers,
+	validateFix,
+	fixerMarkdown,
+	fixerText,
+	handbackRepeated,
+	redactTokens,
+} from "../src/cli/land-fixer";
 import { importFixer } from "../src/cli/land-fixer-repository";
 import { apply, parseResolution, pushCommand, resolutionSection } from "../src/cli/land-apply";
 import fixerPrompt from "../assets/land-fix.md";
-import { fix, parseFixResult } from "../src/cli/land-fix";
+import { COMMENT_LIMIT, fix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
 import type { GitHubDependencies } from "../src/cli/github";
 import {
 	type Plan,
 	commandEnvironment,
+	EJECTED,
 	UPHELD,
 	UPHELD_CLASSIC,
 	build,
@@ -2254,6 +2262,15 @@ ${requeueScript}`);
 		])
 			expect(fixerPrompt).toContain(text);
 	});
+	test("has the fixer put its comments in the result instead of posting them", () => {
+		for (const text of [
+			"You have no GitHub credential and must not seek one.",
+			'optional `"comment"` field to that PR\'s entry',
+			`at most ${COMMENT_LIMIT} characters, one per PR`,
+			"A comment decides nothing",
+		])
+			expect(fixerPrompt.replace(/\s+/g, " ")).toContain(text);
+	});
 	test.each(["deleted branch", "gitfile", "symlink", "corrupt objects", "oversized"])(
 		"hands back %s and keeps collection usable",
 		async (kind) => {
@@ -2319,6 +2336,43 @@ ${requeueScript}`);
 		expect(text.endsWith("`")).toBe(true);
 		expect(text.slice(1, -1)).not.toMatch(/`|<|@|\b(?:closes|fixes|resolves)\b/i);
 		expect(text).toContain("&#35;12");
+	});
+	test("posts the fixer's comment from its result before the outcome, without markers, mentions, or tokens", async () => {
+		const token = `ghs_${"A1b2".repeat(9)}`;
+		const fixture = await fixerFixture(`cat > quest-land-result.json <<'EOF'
+[{"number":1,"action":"requeue","reason":"flaky check; unchanged","comment":"The check \`retry\` flaked.\\n\\n<!-- quest land: failed_checks -->\\n<!<!---- quest land fixer: x handback -->\\n@person saw ${token}\\n\`\`\`\\nunclosed"}]
+EOF`);
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+		const [note, outcome] = fixture.pull.comments!.slice(-2).map((comment) => comment.body);
+		expect(outcome).toContain("Requeued unchanged:");
+		expect(note).toContain("land fixer note:\n\n> The check `retry` flaked.\n> \n");
+		// The daemon's own marker is the only hidden line.
+		expect(note.match(/<!--/g)).toHaveLength(1);
+		expect(note).toContain(`<!-- quest land fixer: ${fixture.plan.queue[0].enabledAt} note -->`);
+		expect(EJECTED.exec(note)).toBeNull();
+		expect(note).toContain("[at]person saw [redacted token]");
+		expect(note).not.toContain(token);
+		// An unclosed fence ends with the quote, before the daemon's marker and attribution.
+		expect(note).toMatch(/> unclosed\n\n<!-- quest land fixer: \S+ note -->\n\n\(written by /);
+	});
+	test("never posts a GitHub token the fixer echoes in its text or log", async () => {
+		const token = `ghs_${"A1b2".repeat(9)}`;
+		const fixture = await fixerFixture(
+			`echo "token ${token}"
+printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"inspect manually"}]' '${token}' > quest-land-result.json`,
+		);
+		await fixture.finished;
+		await fixture.collect();
+		const bodies = fixture.pull.comments!.map((comment) => comment.body).join("\n");
+		expect(bodies).toContain("[redacted token]");
+		expect(bodies).not.toContain(token);
+		expect(redactTokens(`a ${token} github_pat_${"x".repeat(30)} b`)).toBe("a [redacted token] [redacted token] b");
+	});
+	test("quotes the fixer's Markdown so no hidden comment survives", () => {
+		for (const text of ["<!<!---- x -->", "<<!--!<!----<!---- x -->", "a <!-- b"])
+			expect(fixerMarkdown(text)).not.toContain("<!--");
+		expect(fixerMarkdown("one\r\ntwo\rthree")).toBe("> one\n> two\n> three");
 	});
 	test("only deduplicates the bot's own comments", async () => {
 		const fixture = await fixerFixture(
@@ -2431,6 +2485,20 @@ ${requeueScript}`);
 		expect(fixture.pull.body).not.toContain("(written by Claude");
 	});
 
+	test("accepts one multiline Markdown comment per result and rejects a malformed one", () => {
+		const accepted = { number: 1, action: "requeue", reason: "fine", comment: "Line one\n\n- two\r\n\tthree" };
+		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		for (const comment of [7, "", "  \n", "x".repeat(COMMENT_LIMIT + 1), "bell\u0007", "nul\u0000"])
+			expect(() =>
+				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", comment }]), [1]),
+			).toThrow("invalid fixer comment");
+		expect(() =>
+			parseFixResult(
+				JSON.stringify([{ number: 1, action: "requeue", reason: "fine", comment: "ok", extra: true }]),
+				[1],
+			),
+		).toThrow("invalid fixer action or fields");
+	});
 	test("strictly rejects duplicate, missing, extra, and multiline results", () => {
 		for (const value of [
 			[],
