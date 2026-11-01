@@ -123,7 +123,7 @@ Decision prompts, selected options marked ✅:
   - Flaky tests: ✅ disable only a rerun-proven flaky test, in a separate PR
     · keep the fixer's judgment and the base PR
   - New work, all picked: ship [Attempt budget](/quest/m0/land-fixer/attempts.md)
-    right after triage; [the batch check](/quest/m0/land-fixer/batch-check.md);
+    right after triage; the batch check (`quest check` on the batch's chain);
     pre-checks (`quest land serve --precheck`; the host wires it up in the
     [gate host](/quest/m0/host-land/host.md)); and
     [tuning](/quest/m0/land-fixer/tuning.md)
