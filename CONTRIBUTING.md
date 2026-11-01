@@ -60,7 +60,9 @@ remaining batch. Transient refusals are retried; a racing base rebuilds the queu
 a log tail in each comment and the full log retained on the host. The optional
 credential-free `quest land fix` container makes one mechanical attempt per
 maintainer pick. The daemon validates and lease-pushes fixes, records the new
-head in Review, and requeues healthy PRs; other results are handed back. The admin bypass of `main`'s
+head in Review, and requeues healthy PRs; other results are handed back. A fix
+whose push GitHub refuses is handed back with its resolution, which
+`quest land apply <pr>` rebuilds as a commit for a maintainer to push. The admin bypass of `main`'s
 ruleset is for emergencies.
 
 Every AI-authored GitHub post must end with `(written by <model>)`, naming the
