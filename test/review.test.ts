@@ -18,19 +18,35 @@ const FINDING = { file: "src/lib.ts", line: 2, severity: "high", title: "Off by 
 
 /**
  * Fake reviewer CLIs. Each logs its argv, stdin, and the variables it was
- * given, then answers as the FAKE_* variables say: FAKE_LOGGED_OUT fails the
- * status check, and FAKE_REPLY replaces the findings reply.
+ * given, then answers as the FAKE_* variables say. FAKE_LOGGED_OUT removes the
+ * stored login, so only a credential variable the real CLI reads
+ * authenticates; like the real ones, `claude auth status` counts such a
+ * variable and `codex login status` does not. FAKE_REJECTED has the API
+ * reject the login in each turn with the real CLI's error, in the style it
+ * names. FAKE_REPLY replaces the findings reply.
  */
 const FAKES: Record<string, string> = {
 	claude: `
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|FAKE_HOST)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST)/.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
-if (argv[0] === "auth") process.exit(process.env.FAKE_LOGGED_OUT ? 1 : 0);
+const credential = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"].some((k) => process.env[k]);
+const loggedIn = !process.env.FAKE_LOGGED_OUT || credential;
+if (argv[0] === "auth") process.exit(loggedIn ? 0 : 1);
 const at = (flag) => argv[argv.indexOf(flag) + 1];
 const result = (fields) => console.log(JSON.stringify({ type: "result", is_error: false, ...fields }));
+const rejected = process.env.FAKE_REJECTED ?? (loggedIn ? undefined : "status");
+if (rejected) {
+	const session_id = at("--session-id") ?? at("--resume");
+	if (rejected === "status") {
+		result({ session_id, is_error: true, api_error_status: 401, result: "Failed to authenticate. API Error: 401 Invalid bearer token" });
+	} else {
+		result({ session_id, is_error: true, result: "OAuth token revoked · Please run /login" });
+	}
+	process.exit(1);
+}
 const usage = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
 if (argv.includes("--session-id")) {
 	result({
@@ -57,10 +73,23 @@ if (argv.includes("--session-id")) {
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|FAKE_HOST)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST)/.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT ? 1 : 0);
 const event = (value) => console.log(JSON.stringify(value));
+const loggedIn = !process.env.FAKE_LOGGED_OUT || process.env.CODEX_API_KEY;
+const rejected = process.env.FAKE_REJECTED ?? (loggedIn ? undefined : "turn");
+if (rejected === "turn") {
+	const message = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
+	event({ type: "thread.started", thread_id: "thread-1" });
+	event({ type: "error", message: "Reconnecting... 1/5 (" + message + ")" });
+	event({ type: "turn.failed", error: { message } });
+	process.exit(1);
+}
+if (rejected) {
+	console.error("Error: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.");
+	process.exit(1);
+}
 const message = (text) => event({ type: "item.completed", item: { type: "agent_message", text } });
 const zero = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
 if (argv[1] === "review") {
@@ -92,6 +121,18 @@ interface Setup {
 	/** Every logged invocation of a fake CLI. */
 	calls(): { argv: string[]; stdin: string; env: Record<string, string>; cwd: string }[];
 }
+
+/** Credentials and reroutes the running session may hold, cleared so each test sets its own. */
+const HOST_CREDENTIALS = [
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_BASE_URL",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"CLAUDE_CODE_USE_BEDROCK",
+	"CLAUDE_CODE_USE_VERTEX",
+	"CLAUDE_CODE_USE_FOUNDRY",
+	"CODEX_API_KEY",
+];
 
 /**
  * A clone whose origin's main holds instructions and review rules, checked out
@@ -127,8 +168,9 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	const log = join(dir, "calls.log");
 	vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 	vi.stubEnv("FAKE_LOG", log);
-	vi.stubEnv("CLAUDECODE", undefined);
-	vi.stubEnv("CODEX_THREAD_ID", undefined);
+	for (const name of [...HOST_CREDENTIALS, "CLAUDECODE", "CODEX_THREAD_ID", "FAKE_LOGGED_OUT", "FAKE_REJECTED"]) {
+		vi.stubEnv(name, undefined);
+	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
 	if (host === "CODEX_THREAD_ID") vi.stubEnv("CODEX_THREAD_ID", "parent");
 	return {
@@ -191,6 +233,84 @@ fakes("a missing or logged-out reviewer CLI is a usage error", async () => {
 	expect(out.code).toBe(2);
 	expect(out.stderr).toContain("codex is not logged in; run `codex login`");
 	expect(t.calls().map((c) => c.argv)).toEqual([["login", "status"]]);
+});
+
+fakes("a login the API rejects fails as logged out, whatever the status check said", async () => {
+	for (const [host, variant, message] of [
+		["CLAUDECODE", "turn", "codex is not logged in; run `codex login`"],
+		["CLAUDECODE", "stderr", "codex is not logged in; run `codex login`"],
+		["CODEX_THREAD_ID", "status", "claude is not logged in; run `claude auth login`"],
+		["CODEX_THREAD_ID", "text", "claude is not logged in; run `claude auth login`"],
+	] as const) {
+		const s = setup(host);
+		vi.stubEnv("FAKE_REJECTED", variant);
+		const result = await quest("--root", s.repo, "review");
+		expect(result.stderr, variant).toContain(message);
+		expect(result.code, variant).toBe(2);
+		// The status check passed, and the first turn failed.
+		expect(s.calls(), variant).toHaveLength(2);
+	}
+});
+
+fakes("a reviewer with no stored login reviews with the credential its CLI reads from the environment", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("CODEX_API_KEY", "codex-key");
+	vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "session-token");
+	const codex = await quest("--root", s.repo, "review");
+	expect(codex.stderr).toBe("");
+	expect(codex.code).toBe(0);
+	for (const call of s.calls().slice(1)) {
+		expect(call.env.CODEX_API_KEY).toBe("codex-key");
+		// The other harness's credentials and the session's own variables still never reach it.
+		expect(call.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+		expect(call.env.CLAUDECODE).toBeUndefined();
+	}
+
+	const t = setup("CODEX_THREAD_ID");
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-key");
+	vi.stubEnv("CODEX_API_KEY", "codex-key");
+	vi.stubEnv("CLAUDE_CODE_ENTRYPOINT", "sdk-ts");
+	const claude = await quest("--root", t.repo, "review");
+	expect(claude.stderr).toBe("");
+	expect(claude.code).toBe(0);
+	for (const call of t.calls().slice(1)) {
+		expect(call.env.ANTHROPIC_API_KEY).toBe("anthropic-key");
+		expect(call.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+		expect(call.env.CODEX_API_KEY).toBeUndefined();
+		expect(call.env.CODEX_THREAD_ID).toBeUndefined();
+	}
+});
+
+fakes("a stored login wins over an environment credential, so a shell's key never changes the billing", async () => {
+	const s = setup("CODEX_THREAD_ID");
+	vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-key");
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	for (const call of s.calls()) expect(call.env.ANTHROPIC_API_KEY).toBeUndefined();
+});
+
+fakes("an environment credential the API rejects is named in the error", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("CODEX_API_KEY", "codex-key");
+	vi.stubEnv("FAKE_REJECTED", "turn");
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain("codex rejected CODEX_API_KEY; replace it, or run `codex login`");
+});
+
+fakes("a credential meant for another endpoint stays stripped, and the error names what reroutes it", async () => {
+	const s = setup("CODEX_THREAD_ID");
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "gateway-token");
+	vi.stubEnv("ANTHROPIC_BASE_URL", "https://gateway.example");
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain(
+		"claude is not logged in, and quest review strips ANTHROPIC_BASE_URL, which would reroute it; run `claude auth login`",
+	);
+	expect(s.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
 });
 
 fakes("only a clean, attached checkout is reviewed", async () => {

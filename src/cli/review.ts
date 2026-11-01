@@ -170,6 +170,8 @@ interface Reply {
 	structured?: unknown;
 	usage?: Omit<Usage, "turn">;
 	error?: string;
+	/** The API's HTTP status when the turn failed on an API error, if the CLI reports one. */
+	status?: number;
 }
 
 interface Reader {
@@ -182,6 +184,16 @@ interface Reviewer {
 	status: string[];
 	/** How the user logs in. */
 	login: string;
+	/** Credentials the CLI reads from the environment, passed only when it has no stored login. */
+	credentials: string[];
+	/**
+	 * Variables that send the CLI's requests, and their credentials, to another
+	 * endpoint or provider. They stay stripped, and while one is set no
+	 * credential passes either, since it is meant for that endpoint.
+	 */
+	reroutes: string[];
+	/** Matches the CLI's error for a login or credential the API rejected: expired, revoked, or invalid. */
+	unauthorized: RegExp;
 	review(context: Context, session: string): Turn;
 	resume(context: Context, session: string, prompt: string): Turn;
 	reader(): Reader;
@@ -212,6 +224,10 @@ const text = (value: unknown) => (typeof value === "string" ? value : undefined)
 const claude: Reviewer = {
 	status: ["claude", "auth", "status"],
 	login: "claude auth login",
+	credentials: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+	reroutes: ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
+	// Such as "Failed to authenticate. API Error: 401 ...", "Invalid API key · ...", or "Login expired · Please run /login".
+	unauthorized: /API Error: 401|Failed to authenticate|Invalid API key|Please run \/login/,
 	// The command's level sets its own effort, overriding `--effort`, so it is given the same one.
 	review: (context, session) => ({
 		argv: [...claudeFlags(context), "--session-id", session],
@@ -254,6 +270,7 @@ const claude: Reviewer = {
 					structured: result.structured_output,
 					usage: { input, cached, output },
 					error: result.is_error === true ? (text(result.result) ?? "claude reported an error") : undefined,
+					status: typeof result.api_error_status === "number" ? result.api_error_status : undefined,
 				};
 			},
 		};
@@ -297,6 +314,13 @@ const claudeEnv = () => ({ CLAUDE_CODE_PROMPT_CACHE_TTL: "1h" });
 const codex: Reviewer = {
 	status: ["codex", "login", "status"],
 	login: "codex login",
+	// `codex exec` reads CODEX_API_KEY, though `codex login status` does not count it; it ignores OPENAI_API_KEY.
+	credentials: ["CODEX_API_KEY"],
+	// OPENAI_BASE_URL is never stripped, so a passed key goes where the CLI already sends its requests.
+	reroutes: [],
+	// Such as "unexpected status 401 Unauthorized: ..." or "Your access token could not be refreshed
+	// because your refresh token was revoked. Please log out and sign in again."
+	unauthorized: /\b401 Unauthorized\b|sign in again/,
 	review: (context) => ({
 		argv: ["codex", "exec", "review", "--base", context.base, "--json", ...codexFlags(context)],
 		stdin: "",
@@ -405,12 +429,58 @@ function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string,
 	});
 }
 
-/** Run one reviewer turn, failing on any error it reports. */
-async function turn(reviewer: Reviewer, call: Turn, cwd: string, env: NodeJS.ProcessEnv): Promise<Reply> {
-	const reader = reviewer.reader();
-	const { code, stderr } = await run(call.argv, cwd, { ...env, ...call.env }, call.stdin, reader);
+/** The reviewer CLI with the environment it runs in and the error for a login the API rejects. */
+interface Cli {
+	reviewer: Reviewer;
+	env: NodeJS.ProcessEnv;
+	/** Thrown when a turn fails on authentication, as a logged-out status check fails. */
+	unauthorized: string;
+}
+
+const names = (list: string[]) => list.join(" and ");
+
+/**
+ * Prepare the reviewer: the user's environment minus `STRIPPED`, so the CLI
+ * uses its stored login, as any launched agent does. A CLI with no stored
+ * login keeps the credentials it would read from the environment instead,
+ * unless a stripped variable would have sent them elsewhere. A shell's API key
+ * never overrides a stored subscription login, so a review is billed as the
+ * user's own CLI sessions are.
+ */
+async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv): Promise<Cli> {
+	const reviewer = REVIEWERS[harness];
+	const stripped = strippedEnvironment(env);
+	const loggedOut = `${harness} is not logged in; run \`${reviewer.login}\``;
+	if ((await run(reviewer.status, cwd, stripped, "")).code === 0) {
+		return { reviewer, env: stripped, unauthorized: loggedOut };
+	}
+	const reroutes = reviewer.reroutes.filter((name) => env[name]);
+	if (reroutes.length > 0) {
+		throw new ReviewInputError(
+			`${harness} is not logged in, and quest review strips ${names(reroutes)}, which would reroute it; ` +
+				`run \`${reviewer.login}\``,
+		);
+	}
+	const credentials = reviewer.credentials.filter((name) => env[name]);
+	if (credentials.length === 0) throw new ReviewInputError(loggedOut);
+	return {
+		reviewer,
+		env: { ...stripped, ...Object.fromEntries(credentials.map((name) => [name, env[name]])) },
+		unauthorized: `${harness} rejected ${names(credentials)}; replace it, or run \`${reviewer.login}\``,
+	};
+}
+
+/** Run one reviewer turn, failing on any error it reports, and as logged out on an authentication error. */
+async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
+	const reader = cli.reviewer.reader();
+	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader);
 	const reply = reader.reply();
 	if (code !== 0 || reply.error !== undefined) {
+		// A login can expire or be revoked while the status check still passes.
+		const message = reply.error ?? stderr;
+		if (reply.status === 401 || cli.reviewer.unauthorized.test(message)) {
+			throw new ReviewInputError(cli.unauthorized);
+		}
 		const detail = reply.error ?? stderr.trim().split("\n").slice(-5).join("\n");
 		throw new Error(`${call.argv[0]} failed${detail ? `: ${detail}` : ` with exit status ${code}`}`);
 	}
@@ -650,9 +720,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		);
 	}
 
-	const env = strippedEnvironment(deps.env);
-	const status = await run(reviewer.status, root, env, "");
-	if (status.code !== 0) throw new ReviewInputError(`${harness} is not logged in; run \`${reviewer.login}\``);
+	const cli = await prepare(harness, root, deps.env);
 
 	// The reviewer's sandbox has no network, so the base is fetched first.
 	const baseRef = options.base ?? `origin/${defaultBranch(root, "origin")}`;
@@ -686,12 +754,12 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	// A resumed session would keep instructions the base or the change has since replaced.
 	const resume = previous !== undefined && state?.given.instructions === given.instructions;
 	if (!resume) {
-		const first = await turn(reviewer, reviewer.review(context, randomUUID()), root, env);
+		const first = await turn(cli, reviewer.review(context, randomUUID()), root);
 		if (first.session === undefined) throw new Error(`${harness} did not report its session`);
 		session = first.session;
 		if (reported(first.usage)) usage.push({ turn: "review", ...first.usage });
 		const prompt = firstPrompt(head, rules, options.responses);
-		reply = await turn(reviewer, reviewer.resume(context, session, prompt), root, env);
+		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
 	} else {
 		session = state!.session;
 		const prompt = laterPrompt({
@@ -702,7 +770,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			rules,
 			rulesRemoved: state!.given.rules !== null,
 		});
-		reply = await turn(reviewer, reviewer.resume(context, session, prompt), root, env);
+		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
 	const found = findings(reply);
