@@ -4,11 +4,11 @@
 
 When a batch's check fails, `quest land` reruns the failing check modules
 once on the same tip before blaming or ejecting anything. A test that failed
-and then passed, or whose failure the fixer judges nondeterministic (for
-example a timeout under load, or a race), is flaky. The fixer pushes one
-commit onto the batch's base PR that disables the test with a reason and adds
-a follow-up quest to fix or delete it in the repository's m0 `flaky` epic.
-The batch then lands with that commit.
+and then passed on that rerun is flaky. The batch lands, and the fixer opens a
+separate PR that disables the test with a reason and adds a follow-up quest
+to fix or delete it in the repository's m0 `flaky` epic. The gate queues that
+PR like any other, with no human pick needed. A failure the fixer only
+suspects is nondeterministic is not disabled.
 
 ## Plan
 
@@ -42,6 +42,14 @@ was written and landed by hand.
   - The earliest milestone, ungrouped
   - m1
 
+- Superseded again 2026-11-01 (maintainer, from the audit of the merge-queue
+  plan): PRs land as squashes, so a disable commit on the batch's base PR
+  would land inside that unrelated PR's commit, under its title; and
+  disabling on the fixer's judgment alone risks hiding real bugs.
+  - ✅ Only a rerun-proven flaky test, disabled in a separate PR the gate
+    queues
+  - Keep: rerun or the fixer's judgment, with the commit on the base PR
+
 How the gate reruns one module is up to the repository. `quest land` passes
 the failed module names to the check command (for example through
 `QUEST_LAND_RERUN`). A check command that ignores them reruns whole. moq's
@@ -56,9 +64,6 @@ flake.
 
 Flaky verdicts never spend a PR's attempt
 ([Attempt budget](/quest/m0/land-fixer/attempts.md)), and a batch whose only
-failure was flaky lands without ejecting anyone
-([Batch triage](/quest/m0/land-fixer/triage.md)).
-
-## Related
-
-- [Batch triage](/quest/m0/land-fixer/triage.md) - blame runs after the rerun
+failure was flaky lands without ejecting anyone. Since batch triage
+([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)), a failing batch's PRs are parked
+for the fixer rather than ejected; the rerun comes before that.

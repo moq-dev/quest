@@ -37,4 +37,4 @@ CI failures park (`quest/m0/land-fixer/ci-park.md`), which
 
 ## Related
 
-- [Batch triage](/quest/m0/land-fixer/triage.md) - where the fixer uses the signal
+- Batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) - where the fixer uses the signal
