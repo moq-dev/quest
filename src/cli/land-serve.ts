@@ -90,14 +90,20 @@ function save(path: string, value: unknown): void {
 }
 
 /**
- * The merge needs workflow write when this PR's squash changes a workflow, or when the head being
- * merged changes one since the pinned head: GitHub refuses an App's merge of a PR whose commits touch
- * workflows, such as the gate's own merge of a base that changed one.
+ * The merge needs workflow write when this PR's squash changes a workflow, or when any commit the PR
+ * brings changes one: GitHub refuses an App's merge of a PR whose commits touch workflows, such as a
+ * merge of a base that changed one, whether the gate or the author made it.
  */
-export function touchesWorkflows(root: string, parent: string, link: Chain["links"][number], head: string): boolean {
-	const changed = (from: string, to: string) =>
-		git(root, ["diff", "--name-only", from, to, "--", ".github/workflows"]) !== "";
-	return changed(parent, link.commit) || changed(link.entry.head, head);
+export function touchesWorkflows(
+	root: string,
+	parent: string,
+	link: Chain["links"][number],
+	base: string,
+	head: string,
+): boolean {
+	if (git(root, ["diff", "--name-only", parent, link.commit, "--", ".github/workflows"]) !== "") return true;
+	// `-m` also lists a merge commit's changes against each parent, so a merged-in workflow change counts.
+	return git(root, ["log", "-m", "--format=", "--name-only", `${base}..${head}`, "--", ".github/workflows"]) !== "";
 }
 
 /** A fresh bare repository with no config, objects, or alternates inherited from the user's checkout. */
@@ -646,7 +652,10 @@ export async function serveBatch(
 		const merge =
 			"reason" in prepared
 				? new GitHub(deps)
-				: new GitHub({ ...deps, token: await token(touchesWorkflows(root, parent, link, prepared.head)) });
+				: new GitHub({
+						...deps,
+						token: await token(touchesWorkflows(root, parent, link, plan.base.sha, prepared.head)),
+					});
 		const result = "reason" in prepared ? prepared : await mergePinned(merge, path, prepared.head, link.entry.head);
 		if (result === null) {
 			forgetHeads(options.state, link.entry.number);

@@ -182,6 +182,29 @@ class Forge {
 		this.repo.branches.main = this.main();
 	}
 
+	/** The author merges the current base into a PR's branch, which moves its head and pin. */
+	mergeMain(number: number): string {
+		const pull = this.repo.pulls.find((pull) => pull.number === number)!;
+		git(this.work, "checkout", "--quiet", "-B", pull.branch, pull.head!);
+		git(
+			this.work,
+			"-c",
+			"user.name=Author",
+			"-c",
+			"user.email=author@example.test",
+			"merge",
+			"--quiet",
+			"--no-edit",
+			this.main(),
+		);
+		const head = git(this.work, "rev-parse", "HEAD");
+		git(this.work, "push", "--quiet", "--force", "origin", `${head}:refs/heads/${pull.branch}`);
+		git(this.work, "push", "--quiet", "--force", "origin", `${head}:refs/pull/${number}/head`);
+		pull.head = head;
+		pull.autoMerge = { ...pull.autoMerge!, commitBody: pin(head) };
+		return head;
+	}
+
 	main(): string {
 		return git(this.origin, "rev-parse", "refs/heads/main");
 	}
@@ -1824,6 +1847,26 @@ mv '${result}.new' '${result}'
 		});
 		expect(output).toEqual([`landed 1 ${forge.repo.pulls[0].squash}`]);
 		// The squash changes no workflow, but GitHub refuses an App's merge of a PR whose commits do.
+		expect(forge.merges.map(({ authorization }) => tokens.get(authorization!.replace("Bearer ", "")))).toEqual([
+			true,
+		]);
+	});
+
+	test("scopes the merge token to workflows when the author's own base merge brought a workflow change", async () => {
+		const forge = new Forge();
+		forge.pull("Merged main", { "code.txt": "one" });
+		forge.advance({ ".github/workflows/ci.yml": "on: push\n" });
+		// The head is up to date, so the gate merges nothing; the workflow change is in the PR's own commits.
+		forge.mergeMain(1);
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const tokens = new Map<string, boolean>();
+		const output = await serveBatch(forge.clone(), plan, sandbox(), deps, async (workflows) => {
+			const minted = await forge.deps(workflows ? { workflows: "write" } : {});
+			tokens.set(minted.token, workflows);
+			return minted.token;
+		});
+		expect(output).toEqual([`landed 1 ${forge.repo.pulls[0].squash}`]);
 		expect(forge.merges.map(({ authorization }) => tokens.get(authorization!.replace("Bearer ", "")))).toEqual([
 			true,
 		]);
