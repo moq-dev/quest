@@ -49,6 +49,7 @@ import {
 	resolveQueue,
 } from "../src/cli/land";
 import { batchable, parked } from "../src/cli/land-park";
+import { candidates, readPrechecks, recordPrecheck, squashAlone } from "../src/cli/land-precheck";
 import {
 	apiDependencies,
 	checkBase,
@@ -1529,6 +1530,188 @@ mv '${result}.new' '${result}'
 		} finally {
 			watcher!.close();
 		}
+	});
+
+	test("pre-checks the PRs the next batch draws while a batch runs, and ejects a failing one before it batches", async () => {
+		const forge = new Forge();
+		forge.pull("One", { "one.txt": "yes" });
+		forge.pull("Broken", { broken: "yes" });
+		forge.pull("Three", { "three.txt": "yes" });
+		const dir = tempDir();
+		const prechecked = join(dir, "prechecked");
+		// The batch's check outlasts both pre-checks, so neither is cancelled.
+		const options = {
+			...sandbox(
+				`cd "$1"; while [ "$(wc -l < '${prechecked}' 2>/dev/null || echo 0)" -lt 2 ]; do sleep 0.05; done; test ! -e broken`,
+			),
+			precheck: join(dir, "precheck"),
+		};
+		writeFileSync(
+			options.precheck,
+			`#!/bin/sh\ncd "$1"\necho "$(git log -1 --format=%s) $2 $QUEST_LAND_BASE $(git rev-list --count HEAD)" >> '${prechecked}'\ntest ! -e broken\n`,
+			{ mode: 0o755 },
+		);
+		writeFileSync(join(options.state, "batch-policy.json"), JSON.stringify({ order: "oldest", size: 1 }));
+		const deps = await forge.deps();
+		const base = forge.main();
+		const root = forge.clone();
+		const first = await serveBatch(
+			root,
+			await resolveQueue(REPOSITORY, undefined, deps),
+			options,
+			deps,
+			async () => deps.token,
+		);
+		expect(first).toEqual([`landed 1 ${forge.repo.pulls[0].squash}`]);
+		// The next batch is newest-first, so it draws 3 before 2; each was checked alone, one commit above the base.
+		expect(readFileSync(prechecked, "utf8")).toBe(`Three (#3) ${base} ${base} 2\nBroken (#2) ${base} ${base} 2\n`);
+		const records = readPrechecks(options.state);
+		expect(Object.keys(records)).toEqual(["2", "3"]);
+		expect(records[3]).toMatchObject({ head: forge.repo.pulls[2].head, base, code: 0 });
+		expect(records[2]).toMatchObject({ head: forge.repo.pulls[1].head, base, code: 1 });
+		forge.settle();
+
+		const second = await serveBatch(
+			root,
+			await resolveQueue(REPOSITORY, undefined, deps),
+			options,
+			deps,
+			async () => deps.token,
+		);
+		expect(second[0]).toBe("ejected 2 failed_checks");
+		expect(second[1]).toMatch(/^landed 3 /);
+		expect(forge.comment(2)).toContain(
+			`its pre-check failed (exit 1) with it squashed alone onto the base ${base}`,
+		);
+		expect(forge.comment(2)).toContain("<!-- quest land: failed_checks -->");
+		expect(readPrechecks(options.state)[2]?.reported).toBe(true);
+	});
+
+	test("parks a PR whose pre-check failed for the fixer, with the pre-check's log and squash", async () => {
+		const forge = new Forge();
+		forge.pull("One", { "one.txt": "yes" });
+		forge.pull("Broken", { broken: "yes" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const options = { ...sandbox(), fixer: join(tempDir(), "fixer") };
+		const result = join(options.state, "fixer-result");
+		writeFileSync(
+			options.fixer,
+			`#!/bin/sh\nprintf '%s\\n' "$PWD" "$1" "$2" > '${result}.new'\nmv '${result}.new' '${result}'\n`,
+			{ mode: 0o755 },
+		);
+		const trusted = privateRepository(options.state);
+		forge.configure(trusted);
+		await build(trusted, plan);
+		// A pre-check on this base, as a batch's check left it.
+		const [squashed] = squashAlone(trusted, plan, [plan.queue[1]]);
+		const log = join(options.state, "precheck-1-2.log");
+		writeFileSync(log, "error[E0308]: mismatched types\n");
+		recordPrecheck(options.state, plan, 2, {
+			head: plan.queue[1].head,
+			enabledAt: plan.queue[1].enabledAt,
+			base: plan.base.sha,
+			commit: squashed.commit,
+			code: 101,
+			log,
+		});
+		let watcher: ReturnType<typeof watch>;
+		const launched = new Promise<void>((done) => {
+			watcher = watch(options.state, (_event, name) => {
+				if (name === "fixer-result" && existsSync(result)) done();
+			});
+		});
+		try {
+			const lines = await serveBatch(trusted, plan, options, deps, async () => deps.token);
+			expect(lines[0]).toBe("parked 2");
+			expect(lines[1]).toMatch(/^landed 1 /);
+			expect(forge.repo.pulls[1].landing).toBe(true);
+			await launched;
+			const [cwd, fixerLog, number] = readFileSync(result, "utf8").trim().split("\n");
+			expect(fixerLog).toBe(log);
+			expect(number).toBe("2");
+			expect(git(cwd, "rev-parse", "HEAD")).toBe(plan.base.sha);
+			expect(git(cwd, "rev-parse", "batch")).toBe(squashed.commit);
+		} finally {
+			watcher!.close();
+		}
+	});
+
+	test("cancels a pre-check still running when the batch's check ends, recording nothing", async () => {
+		const forge = new Forge();
+		forge.pull("One", { "one.txt": "yes" });
+		forge.pull("Two", { "two.txt": "yes" });
+		const dir = tempDir();
+		const started = join(dir, "started");
+		const options = {
+			...sandbox(`while [ ! -e '${started}' ]; do sleep 0.05; done`),
+			precheck: join(dir, "precheck"),
+		};
+		writeFileSync(options.precheck, `#!/bin/sh\ntouch '${started}'\nwhile :; do sleep 0.05; done\n`, {
+			mode: 0o755,
+		});
+		writeFileSync(join(options.state, "batch-policy.json"), JSON.stringify({ order: "oldest", size: 1 }));
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		expect((await serveBatch(forge.clone(), plan, options, deps, async () => deps.token))[0]).toMatch(/^landed 1 /);
+		expect(readPrechecks(options.state)).toEqual({});
+		const logs = readdirSync(options.state).filter((name) => /^precheck-.*-2\.log$/.test(name));
+		expect(logs).toHaveLength(1);
+		expect(readFileSync(join(options.state, logs[0]), "utf8")).toContain("the check was cancelled");
+	});
+
+	test("pre-checks a PR once per head, and again on a moved base only when it is next in line", () => {
+		const state = tempDir();
+		const entry = (number: number, head = `${number}`.repeat(40)) => ({
+			id: `PR_${number}`,
+			number,
+			url: `https://github.com/upstream/project/pull/${number}`,
+			title: `PR ${number}`,
+			enabledAt: `2026-10-26T00:00:0${number}Z`,
+			head,
+			approved: head,
+			repository: "upstream/project",
+			branch: `topic-${number}`,
+			maintainerCanModify: false,
+		});
+		const plan = (base: string, queue: ReturnType<typeof entry>[]): Plan => ({
+			repository: "upstream/project",
+			base: { ref: "main", sha: base },
+			queue,
+			eject: [],
+		});
+		const old = "a".repeat(40);
+		const moved = "b".repeat(40);
+		const queue = [1, 2, 3, 4, 5, 6, 7].map((number) => entry(number));
+		for (const number of [2, 3])
+			recordPrecheck(state, plan(old, queue), number, {
+				head: queue[number - 1].head,
+				enabledAt: queue[number - 1].enabledAt,
+				base: old,
+				commit: old,
+				code: 0,
+				log: "",
+			});
+		const numbers = (current: Plan, order: "oldest" | "newest" = "oldest", skip = [1]) =>
+			candidates(state, current, order, new Set(skip)).map(({ number }) => number);
+		// On the same base, a pre-checked head is skipped, and at most four run.
+		expect(numbers(plan(old, queue))).toEqual([4, 5, 6, 7]);
+		// On a moved base, only the PR next in line runs again.
+		expect(numbers(plan(moved, queue))).toEqual([2, 4, 5, 6]);
+		expect(numbers(plan(moved, queue), "newest", [7])).toEqual([6, 5, 4, 1]);
+		// A moved head runs again wherever it is.
+		const pushed = queue.map((item) => (item.number === 3 ? entry(3, "c".repeat(40)) : item));
+		expect(numbers(plan(old, pushed))).toEqual([3, 4, 5, 6]);
+		// A PR that leaves the queue is forgotten, so a requeue runs it again.
+		recordPrecheck(state, plan(old, queue.slice(2)), 4, {
+			head: queue[3].head,
+			enabledAt: queue[3].enabledAt,
+			base: old,
+			commit: old,
+			code: 0,
+			log: "",
+		});
+		expect(Object.keys(readPrechecks(state))).toEqual(["3", "4"]);
 	});
 
 	test.each(["base", "dequeued", "requeued"])("refuses a batch whose %s changes during a check", async (change) => {

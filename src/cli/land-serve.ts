@@ -3,6 +3,7 @@ import { authenticatedRead } from "./land-git";
 import { startFixer, startBaseFixer, collectFixers, handbackRepeated } from "./land-fixer";
 import { closeFix, fixing, haltNotice, readHalt, resume, saveHalt } from "./land-halt";
 import { batchable } from "./land-park";
+import { candidates, precheck, squashAlone, takeFailures } from "./land-precheck";
 import { spawn } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
 import {
@@ -42,6 +43,8 @@ export interface ServeOptions {
 	/** Empty for the default, `defaultState`. */
 	state: string;
 	sandbox: string;
+	/** The sandbox's quick command (compile and lint), run on queued PRs while a batch's check runs. */
+	precheck?: string;
 	fixer?: string;
 	appId: string;
 	/** Minutes the sandbox may run before the batch fails. */
@@ -402,7 +405,7 @@ function nextPolicy(state: string, policy: BatchPolicy, checked: number, passed:
 }
 
 /** What a batch may do while its check runs. */
-export interface BatchOptions extends Pick<ServeOptions, "state" | "sandbox" | "fixer" | "timeout"> {
+export interface BatchOptions extends Pick<ServeOptions, "state" | "sandbox" | "precheck" | "fixer" | "timeout"> {
 	/** Collect finished fixer jobs while a check runs, so their PRs join the next batch at once. */
 	collect?: () => Promise<void>;
 }
@@ -410,7 +413,10 @@ export interface BatchOptions extends Pick<ServeOptions, "state" | "sandbox" | "
 /** How often a running check pauses to collect finished fixer jobs. */
 const COLLECT_EVERY = 60_000;
 
-/** Run the sandbox on `tip`, `links` commits above `base`, appending its output to `log`. Returns its exit code. */
+/**
+ * Run the sandbox on `tip`, `links` commits above `base`, appending its output to `log`. Returns its
+ * exit code. An abort kills it, as the deadline does.
+ */
 async function runSandbox(
 	root: string,
 	options: BatchOptions,
@@ -418,6 +424,7 @@ async function runSandbox(
 	links: number,
 	base: string,
 	log: string,
+	signal?: AbortSignal,
 ): Promise<number> {
 	const checkout = sandboxTree(root, options.state, tip, links);
 	writeFileSync(log, "", { mode: 0o600 });
@@ -435,13 +442,20 @@ async function runSandbox(
 				env: { ...commandEnvironment(), QUEST_LAND_BASE: base },
 				stdio: ["ignore", "pipe", "pipe"],
 			});
-			// A hung check would stall the queue: kill its whole process group at the deadline.
-			const timer = setTimeout(() => {
-				appendFileSync(log, `\nquest land: the check ran past ${options.timeout} minutes and was killed\n`);
+			const kill = (why: string) => {
+				appendFileSync(log, `\nquest land: ${why}\n`);
 				try {
 					process.kill(-child.pid!, "SIGKILL");
 				} catch {}
-			}, options.timeout * 60_000);
+			};
+			// A hung check would stall the queue: kill its whole process group at the deadline.
+			const timer = setTimeout(
+				() => kill(`the check ran past ${options.timeout} minutes and was killed`),
+				options.timeout * 60_000,
+			);
+			const abort = () => kill("the check was cancelled");
+			signal?.addEventListener("abort", abort, { once: true });
+			child.once("close", () => signal?.removeEventListener("abort", abort));
 			child.stdout.on("data", (data: Buffer) => appendFileSync(log, data));
 			child.stderr.on("data", (data: Buffer) => appendFileSync(log, data));
 			child.once("error", (error) => {
@@ -546,7 +560,25 @@ export async function serveBatch(
 		await resume(github, options.state, plan.repository, plan.base);
 	}
 	// Parked PRs sit out until their fixer job is collected; the rest keep their places.
-	const batch = batchable(options.state, plan);
+	let batch = batchable(options.state, plan);
+	// A PR whose pre-check failed is parked for the fixer (ejected without one) before it batches.
+	const prechecked = takeFailures(options.state, batch);
+	for (const { entry, record } of prechecked) {
+		output.push(
+			...(await fail(root, options, deps, {
+				// The fixer starts from the base the pre-check ran on, which a landing may since have moved.
+				plan: { ...batch, base: { ...batch.base, sha: record.base } },
+				tip: record.commit,
+				log: record.log,
+				entries: [entry],
+				blame: [entry.number],
+				reason: "failed_checks",
+				detail: `its pre-check failed (exit ${record.code}) with it squashed alone onto the base ${record.base}.\n\n<pre>${excerpt(readFileSync(record.log, "utf8").trimEnd())}</pre>\n`,
+			})),
+		);
+	}
+	const failed = new Set(prechecked.map(({ entry }) => entry.number));
+	batch = { ...batch, queue: batch.queue.filter((entry) => !failed.has(entry.number)) };
 	if (batch.queue.length === 0) return output;
 	const screened = readScreened(options.state);
 	const policy = readPolicy(options.state);
@@ -587,7 +619,41 @@ export async function serveBatch(
 		return output;
 	}
 	const tip = chain.links.at(-1)!;
-	const code = await runSandbox(root, options, tip.commit, chain.links.length, plan.base.sha, log);
+	// While this check runs, pre-check the PRs the next batch draws first, each alone on the base; the
+	// next batch flips the order (see `nextPolicy`). The batch's end cancels the pre-check in flight.
+	const cancel = new AbortController();
+	const skip = new Set([...chain.links, ...chain.rejected].map(({ entry }) => entry.number));
+	const squashed = options.precheck
+		? squashAlone(
+				root,
+				batch,
+				candidates(options.state, batch, policy.order === "oldest" ? "newest" : "oldest", skip),
+			)
+		: [];
+	const prechecking = precheck(
+		options.state,
+		// The whole queue, so recording a pre-check keeps the records of parked PRs.
+		plan,
+		squashed,
+		(commit, precheckLog, signal) =>
+			runSandbox(
+				root,
+				{ ...options, sandbox: options.precheck!, collect: undefined },
+				commit,
+				1,
+				plan.base.sha,
+				precheckLog,
+				signal,
+			),
+		cancel.signal,
+	).catch((error: unknown) => deps.warn(`quest land: a pre-check failed to run: ${String(error)}`));
+	let code: number;
+	try {
+		code = await runSandbox(root, options, tip.commit, chain.links.length, plan.base.sha, log);
+	} finally {
+		cancel.abort();
+		await prechecking;
+	}
 	nextPolicy(options.state, policy, chain.links.length, code === 0);
 	if (code !== 0) {
 		// The fixer reads the failure first and says which PR broke the batch; until then, all of them
@@ -783,6 +849,7 @@ export async function serve(
 	// These are startup configuration failures; transient network/batch failures below are recoverable.
 	createPrivateKey(readFileSync(keyPath()));
 	accessSync(options.sandbox, constants.X_OK);
+	if (options.precheck) accessSync(options.precheck, constants.X_OK);
 	if (options.fixer) accessSync(options.fixer, constants.X_OK);
 	// One daemon per checkout's repository and per state directory, whichever two daemons would share.
 	const unlockRepository = await lockRepository(root);

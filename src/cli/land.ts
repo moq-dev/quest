@@ -587,7 +587,7 @@ const OVERLAP_AHEAD = 4;
  * the base lacks, and a fresh head's conflicts with the PRs landing soonest ahead of it. Results are
  * memoized, since a head is squashed alone once per batch however often it is needed.
  */
-function screener(dir: string, driver: string, plan: Plan) {
+export function screener(dir: string, driver: string, plan: Plan) {
 	// A base without quests is a repository that does not use them.
 	const known =
 		git(dir, ["ls-tree", "--name-only", plan.base.sha, "quest"]) === "" ? null : questCheck(dir, plan.base.sha);

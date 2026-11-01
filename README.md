@@ -621,6 +621,24 @@ landing soonest ahead of it; if any conflict, the daemon comments once with thei
 can resolve the overlap before its turn. It is screened again only once
 requeued.
 
+With `--precheck <command>`, the daemon pre-checks queued PRs while a batch's
+check runs. The pre-check executable takes the same arguments, environment, and
+standalone shallow clone as the sandbox, one commit above the base, and runs the
+repository's quick command, such as a compile and lint without tests (moq: a
+diff-scoped compile and lint against `$2`). The wrapper must run it in the same
+kind of sandbox as the batch check, never on the host, through a launcher of its
+own so it never waits for the batch check or makes the batch check wait, and
+below the batch check's priority, such as a lower CPU weight. Up to four PRs the
+next batch draws first are each squashed alone onto the base and pre-checked one
+at a time; a PR that conflicts with the base or fails `quest check` is left for
+the batch that reaches it. A PR is pre-checked once per head; after the base
+moves, only the PR next in line is pre-checked again. The batch's end kills a
+pre-check still running, which runs again on a later batch. Before the next batch
+is filled, a PR whose pre-check failed is parked alone for the fixer, blamed for
+it, with the pre-check's log as its failure and its squash onto the pre-checked
+base as the fixer's start. Without a fixer it is ejected as `failed_checks` with
+the log. Pre-check logs stay in the state directory.
+
 Queue reads happen about once a minute and between batches. Pins, required
 checks, reviews, conversations, rulesets, and classic protection remain enforced;
 unsupported protection settings prevent landing. Heads moved since approval are

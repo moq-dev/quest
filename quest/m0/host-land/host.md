@@ -111,3 +111,11 @@ What remains:
   `quest-land-check-command`, then bump the pinned quest, so a land check's
   nested `quest gate` waits for memory but not load. Don't use
   `QUEST_GATE_ADMITTED`, which also skips the memory check.
+- Wire up `quest land serve --precheck <command>` for moq once the pinned
+  quest has it (decided 2026-11-01 in the
+  [land fixer](/quest/m0/land-fixer/README.md) epic): a pre-check launcher
+  and nspawn container per repository, beside the check's but with its own
+  socket and network, so a pre-check never waits for the batch check or
+  makes it wait, and a lower CPU weight than the check. Its command runs the
+  repository's quick compile and lint against `$QUEST_LAND_BASE`, without
+  tests. moq has no such recipe yet (`just ci` runs the tests too).
