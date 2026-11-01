@@ -36,6 +36,9 @@ afterEach(() => {
 /** The fake agent CLIs are shebang scripts found on a POSIX PATH, which Windows cannot run. */
 const fakes = test.skipIf(process.platform === "win32");
 
+/** The variables a fake agent CLI logs, so a test can compare the environment it was launched with. */
+const LOGGED = /^(CLAUDE|ANTHROPIC|QUEST|OP_|CODEX)/;
+
 /**
  * Fake agent CLIs and secret manager. Each logs its argv, stdin, and the
  * variables it was given, then behaves as FAKE_MODE says.
@@ -45,7 +48,7 @@ const FAKES: Record<string, string> = {
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|ANTHROPIC|QUEST|OP_|CODEX)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ${LOGGED}.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 const at = (flag) => argv[argv.indexOf(flag) + 1];
 const session = argv.includes("--resume") ? at("--resume") : at("--session-id");
@@ -82,7 +85,7 @@ if (process.env.FAKE_MODE === "quota-reply") {
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|ANTHROPIC|QUEST|OP_|CODEX)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ${LOGGED}.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 const event = (value) => console.log(JSON.stringify(value));
 const resume = argv[1] === "resume";
@@ -142,6 +145,8 @@ function setup(keys = "sk-literal op://vault/item/second"): Setup {
 	mkdirSync(runtime, { mode: 0o700 });
 	const log = join(dir, "agent.log");
 	const opLog = join(dir, "op.log");
+	// Only what the test sets: the caller may itself run in an agent session.
+	for (const name of Object.keys(process.env)) if (LOGGED.test(name)) vi.stubEnv(name, undefined);
 	vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 	vi.stubEnv("XDG_RUNTIME_DIR", runtime);
 	vi.stubEnv("QUEST_API_KEYS", keys);

@@ -27,8 +27,8 @@ function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-/** Identity and no signing, so commits work under any user configuration. */
-const IDENTITY = "[user]\n\tname = Test\n\temail = test@example.com\n[commit]\n\tgpgsign = false\n";
+/** An identity, so commits work without one in the caller's configuration. */
+const IDENTITY = "[user]\n\tname = Test\n\temail = test@example.com\n";
 
 /** A new repository on main. */
 function setup(dir: string): void {

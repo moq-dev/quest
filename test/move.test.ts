@@ -23,19 +23,7 @@ function git(dir: string, ...args: string[]): string {
 function committed(tree: Tree): Tree {
 	git(tree.path, "init", "-q", "-b", "main");
 	git(tree.path, "add", "-A");
-	git(
-		tree.path,
-		"-c",
-		"user.name=Test",
-		"-c",
-		"user.email=test@example.com",
-		"-c",
-		"commit.gpgsign=false",
-		"commit",
-		"-q",
-		"-m",
-		"init",
-	);
+	git(tree.path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "init");
 	return tree;
 }
 

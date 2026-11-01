@@ -16,7 +16,6 @@ function init(root: string): void {
 	git(root, "init", "-q", "-b", "main");
 	git(root, "config", "user.name", "Test");
 	git(root, "config", "user.email", "test@example.com");
-	git(root, "config", "commit.gpgsign", "false");
 }
 
 function commit(root: string): string {
@@ -61,7 +60,6 @@ describe("committed submodule links", { timeout: 20_000 }, () => {
 		const { tree, head, module } = fixture();
 		git(module, "config", "user.name", "Test");
 		git(module, "config", "user.email", "test@example.com");
-		git(module, "config", "commit.gpgsign", "false");
 		rmSync(join(module, "README.md"));
 		writeFileSync(join(module, "later.md"), "# Later\n");
 		commit(module);
@@ -83,7 +81,6 @@ describe("committed submodule links", { timeout: 20_000 }, () => {
 		commit(nested);
 		git(module, "config", "user.name", "Test");
 		git(module, "config", "user.email", "test@example.com");
-		git(module, "config", "commit.gpgsign", "false");
 		git(module, "-c", "protocol.file.allow=always", "submodule", "add", "-q", nested, "nested");
 		commit(module);
 		const head = commit(tree.path);

@@ -1164,7 +1164,7 @@ async function rpc(method, params) {
 	for (const step of steps) {
 		if (step.write) fs.writeFileSync(step.write, step.content);
 		if (step.remove) fs.rmSync(step.remove);
-		if (step.git) require("node:child_process").execFileSync("git", ["-c", "user.name=Fake Agent", "-c", "user.email=fake@example.test", ...step.git], { stdio: "ignore" });
+		if (step.git) require("node:child_process").execFileSync("git", ["-c", "user.name=Fake Agent", "-c", "user.email=fake@example.test", "-c", "commit.gpgsign=false", ...step.git], { stdio: "ignore" });
 		if (step.emit) out(step.emit);
 		if (step.backgroundWait) {
 			void rpc("tools/call", { name: "wait", arguments: {minutes:55} }).catch(() => {});

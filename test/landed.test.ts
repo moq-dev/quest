@@ -32,8 +32,6 @@ function commit(tree: Tree, message: string) {
 		"user.name=Quest",
 		"-c",
 		"user.email=quest@example.com",
-		"-c",
-		"commit.gpgsign=false",
 		"commit",
 		"--quiet",
 		"--allow-empty",
