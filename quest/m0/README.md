@@ -52,7 +52,6 @@ ownership-manifest design:
 - [Live sandbox test](/quest/m0/review-sandbox.md) - the real reviewer CLIs run nothing a reviewed head plants
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Agent test environment](/quest/m0/agent-test-env.md) - `just test` passes inside agent sessions
-- [Stale skill stubs](/quest/m0/init-prune.md) - `quest init` and `quest uninstall` remove stubs of retired skills such as `quest-ready`
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - condition: Bun fixes concurrent `rmSync` on Windows; report it, then drop the workaround
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - condition: Codex keeps a supported way to skip a project's `.codex/` layer; then reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
