@@ -22,3 +22,8 @@ whose only conflict was in quest link lists, which the driver resolves.
 `pull.mergeable === false` or `mergeable_state === "dirty"`. Hand that case
 to `prepareHead` (`src/cli/land-head.ts`), which already merges with the
 driver through `mergeBase` (`src/cli/land.ts`), instead of ejecting.
+
+Since batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)), that
+`merge_conflict` already parks the PR for the fixer (`fail` in
+`src/cli/land-serve.ts`) instead of ejecting it, and the rest of the batch
+stays queued; this quest adds the local merge before parking.

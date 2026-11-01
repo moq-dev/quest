@@ -209,7 +209,8 @@ export async function startFixer(
 				lines.push(`handback ${entry.number}`);
 			continue;
 		}
-		if (!samePick(previous, entry)) save(attemptPath(state, entry.number), { pick: entry.enabledAt, blamed: false });
+		if (!samePick(previous, entry))
+			save(attemptPath(state, entry.number), { pick: entry.enabledAt, blamed: false });
 		entries.push(entry);
 	}
 	if (!entries.length) {

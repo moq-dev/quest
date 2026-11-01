@@ -30,8 +30,8 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | 16 | fixer disappeared before recording an exit status | fixed on the host; none after 2026-10-31 04:00Z |
 | 7 | fixer repository exceeds its size cap | fixed by #332 |
 | 6 | AGENTS.md "pull the latest origin changes" read as an injection | fixed by [#325](https://github.com/moq-dev/quest/pull/325) and [#328](https://github.com/moq-dev/quest/pull/328); none after 2026-10-31 18:46Z |
-| 98 | "already used its mechanical fix attempt" after a collateral requeue or an earlier conflict fix; each needed a manual re-pick | [Attempt budget](/quest/m0/land-fixer/attempts.md), [Batch triage](/quest/m0/land-fixer/triage.md) |
-| ~75 | "requeued unchanged": collateral of a batch another PR broke | [Batch triage](/quest/m0/land-fixer/triage.md) |
+| 98 | "already used its mechanical fix attempt" after a collateral requeue or an earlier conflict fix; each needed a manual re-pick | [Attempt budget](/quest/m0/land-fixer/attempts.md), batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
+| ~75 | "requeued unchanged": collateral of a batch another PR broke | batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | 36 | picked again while fixing; the newer pick is kept, so nothing is lost | not planned |
 | 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | [Protected edits](/quest/m0/land-fixer/protected.md) |
 | 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | [Registry network](/quest/m0/land-fixer/network.md) |
@@ -44,7 +44,7 @@ Decision prompts, selected options marked ✅:
 - Goal: "the fixer resolves every mechanical failure on its own"
   - Yes, as stated (triage and local mergeability stay separate)
   - Narrower: only the attempt budget and offline builds
-  - ✅ Broader: also fold [Batch triage](/quest/m0/land-fixer/triage.md)
+  - ✅ Broader: also fold batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
     and [Local mergeability](/quest/m0/land-fixer/mergeability.md) into
     this epic
 - How attempts count: see [Attempt budget](/quest/m0/land-fixer/attempts.md).
@@ -57,8 +57,10 @@ Decision prompts, selected options marked ✅:
   failures without kicking stuff out of the queue." A conflict or a failing
   check therefore never ejects a PR; the gate parks it (no auto-merge change,
   no ejection comment) while its fixer job runs, and only a handback
-  disables auto-merge. [Batch triage](/quest/m0/land-fixer/triage.md) and
-  [Local mergeability](/quest/m0/land-fixer/mergeability.md) follow this
+  disables auto-merge. Batch triage
+  ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) built this parking:
+  a PR is parked while a fixer job holds it (`src/cli/land-park.ts`), and
+  [Local mergeability](/quest/m0/land-fixer/mergeability.md) follows the same
   rule.
 
 The README's landing section and `CONTRIBUTING.md` list what the fixer
@@ -68,7 +70,6 @@ resolves itself and what it hands back; that docs update finishes the epic.
 
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
 - [Registry network](/quest/m0/land-fixer/network.md) - the fixer fetches dependencies, so it builds and tests what it requeues
-- [Batch triage](/quest/m0/land-fixer/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
 - [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, disables a flaky test in the next batch, and files a follow-up
 - [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Protected edits](/quest/m0/land-fixer/protected.md) - the fixer edits protected paths when it judges the edit mechanical, and the fix lands

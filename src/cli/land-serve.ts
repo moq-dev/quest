@@ -434,6 +434,8 @@ export async function checkBase(
 	deps: GitHubDependencies,
 	read: RemoteRead = readRemote,
 ): Promise<boolean> {
+	// Already halted on this base: another failing batch on it needs no second check or notice.
+	if (readHalt(options.state)?.sha === base.sha) return false;
 	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote({ repository }), base.sha]);
 	const log = join(options.state, `base-${Date.now()}-${base.sha.slice(0, 12)}.log`);
 	if ((await runSandbox(root, options, base.sha, 0, base.sha, log)) === 0) return true;
@@ -454,7 +456,10 @@ export async function checkBase(
 			body: `quest land checked ${base.ref} alone at ${base.sha}, after a failing batch whose fixer blamed none of its pull requests, and the base fails too. No pull request is blamed or ejected for it. The queue is halted: queued pull requests keep their auto-merge and their place, and nothing lands until a check of ${base.ref} passes. The gate checks it again whenever it moves, and closes this issue then.\n\n${output}\n\n<!-- quest land: halted -->`,
 		},
 	});
-	save(join(options.state, HALT), { sha: base.sha, issue: Number(object(await response.json()).number) } satisfies Halt);
+	save(join(options.state, HALT), {
+		sha: base.sha,
+		issue: Number(object(await response.json()).number),
+	} satisfies Halt);
 	return false;
 }
 
@@ -565,7 +570,8 @@ export async function serveBatch(
 		chain.links.some(
 			({ entry }) =>
 				!fresh.queue.some(
-					(now) => now.number === entry.number && now.head === entry.head && now.enabledAt === entry.enabledAt,
+					(now) =>
+						now.number === entry.number && now.head === entry.head && now.enabledAt === entry.enabledAt,
 				),
 		)
 	)
@@ -574,7 +580,16 @@ export async function serveBatch(
 	for (const [index, link] of chain.links.entries()) {
 		const parent = index === 0 ? plan.base.sha : chain.links[index - 1].commit;
 		const path = `/repos/${plan.repository}/pulls/${link.entry.number}`;
-		const prepared = await prepareHead(root, options.state, plan, link.entry, expectedParent, link.tree, token, read);
+		const prepared = await prepareHead(
+			root,
+			options.state,
+			plan,
+			link.entry,
+			expectedParent,
+			link.tree,
+			token,
+			read,
+		);
 		if ("fallback" in prepared) {
 			const completed = await landFallback(
 				root,
@@ -799,7 +814,8 @@ export async function serve(
 			},
 		};
 		await daemonLoop(async () => {
-			const checkCollected = (base: Plan["base"]) => checkBase(trusted, name, base, batch, deps, read);
+			// Without `collect`: this check runs inside a collection, which must not start another.
+			const checkCollected = (base: Plan["base"]) => checkBase(trusted, name, base, options, deps, read);
 			for (const line of await collectFixers(trusted, options.state, deps, mint, undefined, read, checkCollected))
 				warn(line);
 			for (const line of await resumeFailure(trusted, options, deps)) warn(line);

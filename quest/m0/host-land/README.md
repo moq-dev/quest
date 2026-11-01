@@ -90,8 +90,9 @@ can hand off instead.
   its fix, and the other is handed back. `CONTRIBUTING.md` and the README's
   landing section describe the host gate.
 - Amended 2026-10-31 (user): the fixer triages a failing batch before
-  anything is ejected, and only the PR it blames is ejected. See
-  [batch triage](/quest/m0/land-fixer/triage.md).
+  anything is ejected, and only the PR it blames is ejected. Batch triage
+  ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) went further: nothing is ejected for a failure, and the
+  blamed PR is parked for the fixer.
 
 ## Required
 

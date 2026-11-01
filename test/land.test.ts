@@ -1139,7 +1139,13 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		const root = forge.clone();
 		const round = async () => {
 			const deps = await forge.deps();
-			return serveBatch(root, await resolveQueue(REPOSITORY, undefined, deps), options, deps, async () => deps.token);
+			return serveBatch(
+				root,
+				await resolveQueue(REPOSITORY, undefined, deps),
+				options,
+				deps,
+				async () => deps.token,
+			);
 		};
 		expect(await round()).toEqual(["parked 1", "parked 2"]);
 		for (const number of [1, 2]) {
@@ -1160,7 +1166,13 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		const root = forge.clone();
 		const deps = await forge.deps();
 		expect(
-			await serveBatch(root, await resolveQueue(REPOSITORY, undefined, deps), options, deps, async () => deps.token),
+			await serveBatch(
+				root,
+				await resolveQueue(REPOSITORY, undefined, deps),
+				options,
+				deps,
+				async () => deps.token,
+			),
 		).toEqual(["parked 1"]);
 		const base = forge.main();
 		expect(await checkBase(root, "upstream/project", { ref: "main", sha: base }, options, deps)).toBe(false);
@@ -1217,13 +1229,21 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		const plan: Plan = {
 			repository: "upstream/project",
 			base: { ref: "main", sha: "b" },
-			queue: [entry(2, "2026-10-26T00:00:02Z"), entry(3, "2026-10-26T00:00:03Z"), entry(1, "2026-10-26T00:00:09Z")],
+			queue: [
+				entry(2, "2026-10-26T00:00:02Z"),
+				entry(3, "2026-10-26T00:00:03Z"),
+				entry(1, "2026-10-26T00:00:09Z"),
+			],
 			eject: [],
 		};
 		// PR 1's fix was requeued at :09, but its pick is from :01.
 		writeFileSync(
 			join(state, "fix-attempt-1.json"),
-			JSON.stringify({ pick: "2026-10-26T00:00:01Z", requeued: "2026-10-26T00:00:09Z", blamed: "fix-job-x.json" }),
+			JSON.stringify({
+				pick: "2026-10-26T00:00:01Z",
+				requeued: "2026-10-26T00:00:09Z",
+				blamed: "fix-job-x.json",
+			}),
 		);
 		writeFileSync(
 			join(state, "fix-job-y.json"),
@@ -1944,8 +1964,11 @@ ${options.raw ? `exec '${agent}' "$@"` : options.pipe ? `quest land fix --agent 
 	await serveBatch(root, plan, { ...state, fixer: wrapper }, deps, async () => deps.token);
 	const jobs = () => readdirSync(state.state).filter((name) => /^fix-job-.*\.json$/.test(name));
 	// A fixer that blames no PR has the gate check the base alone; it passes unless a test says otherwise.
-	const collect = (dependencies = deps, timeout?: number, base: (base: Plan["base"]) => Promise<boolean> = async () => true) =>
-		collectFixers(root, state.state, dependencies, async () => deps.token, timeout, undefined, base);
+	const collect = (
+		dependencies = deps,
+		timeout?: number,
+		base: (base: Plan["base"]) => Promise<boolean> = async () => true,
+	) => collectFixers(root, state.state, dependencies, async () => deps.token, timeout, undefined, base);
 	return { forge, pull, collateral, deps, plan, state, root, finished, ready, fifo, jobs, collect, wrapper };
 }
 function eventFile(dir: string, matches: (name: string) => boolean): Promise<void> & { cancel: () => void } {
@@ -2027,6 +2050,28 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		);
 		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixture.pull.head!));
 		expect(fixture.pull.labels).toContain("quest:merge");
+	});
+	test("hands back a conflict at once when its pick already spent its attempt on a fix", async () => {
+		const fixture = await fixerFixture(fixedScript(), { conflict: true });
+		await fixture.finished;
+		expect(await fixture.collect(await fixture.forge.deps())).toEqual(["requeued 1"]);
+		// The fixed head conflicts again as the base moves; the gate blames it without asking the fixer.
+		fixture.forge.advance({ "code.txt": "one\nthree\n" });
+		const deps = await fixture.forge.deps();
+		const next = await resolveQueue(REPOSITORY, undefined, deps);
+		expect(
+			await serveBatch(
+				fixture.root,
+				next,
+				{ ...fixture.state, fixer: fixture.wrapper },
+				deps,
+				async () => deps.token,
+			),
+		).toEqual(["handback 1"]);
+		expect(fixture.jobs()).toEqual([]);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("already used its mechanical fix attempt");
+		expect(fixture.forge.comment(1)).toContain("<!-- quest land: merge_conflict -->");
 	});
 	test("accepts a fix whose base gained protected changes before collection", async () => {
 		const fixture = await fixerFixture(fixedScript(), { conflict: true, protectedBase: true });
