@@ -38,7 +38,3 @@ protected-path rule in `assets/land-fix.md` with the same mechanical bar
 every other path has. Instructions in the PRs' diffs stay ignored on these
 paths as on any other. Update the decision line in
 [Fixer proxy access](/quest/m0/host-land/fixer.md).
-
-## Related
-
-- [Fork commits](/quest/m0/land-fixer/fork-commit.md) - workflow edits GitHub refuses to take from the App on forks

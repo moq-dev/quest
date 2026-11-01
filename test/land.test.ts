@@ -25,6 +25,7 @@ import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/de
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import { collectFixers, validateFix, fixerText, handbackRepeated } from "../src/cli/land-fixer";
 import { importFixer } from "../src/cli/land-fixer-repository";
+import { apply, parseResolution, pushCommand, resolutionSection } from "../src/cli/land-apply";
 import fixerPrompt from "../assets/land-fix.md";
 import { fix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
@@ -1783,6 +1784,8 @@ async function fixerFixture(
 		collateral?: boolean;
 		// The base the fixer merges already changed a protected file.
 		protectedBase?: boolean;
+		// The base the fixer merges already changed a workflow.
+		workflowBase?: boolean;
 	} = {},
 ) {
 	const forge = new Forge();
@@ -1794,6 +1797,7 @@ async function fixerFixture(
 	const collateral = options.collateral ? forge.pull("Bystander", { "other.txt": "fine\n" }) : undefined;
 	if (options.conflict) forge.advance({ "code.txt": "one\n2\nthree\n" });
 	if (options.protectedBase) forge.advance({ "flake.nix": "base\n" });
+	if (options.workflowBase) forge.advance({ ".github/workflows/alert.yml": "on: push\n" });
 	const deps = await forge.deps();
 	const plan = await resolveQueue(REPOSITORY, undefined, deps);
 	const state = sandbox();
@@ -2555,5 +2559,106 @@ describe.skipIf(process.platform === "win32")("private repository reads", () => 
 		);
 		expect(minted).toBe(3);
 		await expect(read(root, ["fetch", "file:///local/repository", "main"])).rejects.toThrow("GitHub HTTPS");
+	});
+});
+
+/** GitHub's refusal of an App push that changes a workflow, as a pre-receive hook on every local remote. */
+function refuseWorkflows(forge: Forge): void {
+	const hook = join(forge.origin, "hooks", "pre-receive");
+	writeFileSync(
+		hook,
+		`#!/bin/sh
+while read -r old new ref; do
+	if [ -n "$(git diff --name-only "$old" "$new" -- .github/workflows)" ]; then
+		echo "refusing to allow a GitHub App to create or update workflow without workflows permission" >&2
+		exit 1
+	fi
+done
+`,
+		{ mode: 0o755 },
+	);
+}
+
+describe.skipIf(process.platform === "win32")("quest land apply", () => {
+	const PR = { owner: "upstream", repo: "project", number: 1 };
+	async function refused() {
+		const fixture = await fixerFixture(fixedScript(), { conflict: true, workflowBase: true });
+		await fixture.finished;
+		refuseWorkflows(fixture.forge);
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		const comment = fixture.forge.comment(1)!;
+		expect(comment).toContain("without workflows permission");
+		expect(fixture.pull.head).toBe(fixture.plan.queue[0].head);
+		return { ...fixture, comment };
+	}
+
+	test("rebuilds the fixer's commit from a refused workflow push, for the maintainer to push", async () => {
+		const fixture = await refused();
+		expect(fixture.comment).toContain("`quest land apply 1`");
+		const resolution = parseResolution(fixture.comment)!;
+		expect(resolution).toMatchObject({ head: fixture.plan.queue[0].head, base: fixture.plan.base.sha });
+
+		// A maintainer's checkout whose own merge settings differ from the daemon's.
+		const checkout = fixture.forge.clone();
+		git(checkout, "config", "merge.conflictStyle", "zdiff3");
+		const applied = await apply(checkout, PR, await fixture.forge.deps());
+		expect(git(checkout, "rev-parse", `${applied.commit}^{tree}`)).toBe(resolution.tree);
+		expect(git(checkout, "show", "-s", "--format=%P", applied.commit)).toBe(
+			`${resolution.head} ${resolution.base}`,
+		);
+		expect(git(checkout, "show", `${applied.commit}:code.txt`)).toBe("one\nII and 2\nthree");
+		expect(git(checkout, "show", `${applied.commit}:.github/workflows/alert.yml`)).toBe("on: push");
+		expect(applied).toEqual({
+			commit: applied.commit,
+			remote: "https://github.com/upstream/project.git",
+			branch: "topic-1",
+		});
+		expect(git(checkout, "status", "--porcelain")).toBe("");
+		// The maintainer's push is no App's, so GitHub takes it as a fast-forward of the PR branch.
+		rmSync(join(fixture.forge.origin, "hooks", "pre-receive"));
+		git(checkout, "push", "--quiet", applied.remote, `${applied.commit}:refs/heads/${applied.branch}`);
+		expect(fixture.forge.ref("upstream/project", "refs/heads/topic-1")).toBe(applied.commit);
+	});
+
+	test("refuses a PR whose head moved since the handback", async () => {
+		const fixture = await refused();
+		git(fixture.forge.origin, "update-ref", "refs/heads/topic-1", fixture.plan.base.sha);
+		await expect(apply(fixture.forge.clone(), PR, await fixture.forge.deps())).rejects.toThrow("head moved");
+	});
+
+	test("trusts only an App's resolution", async () => {
+		const fixture = await refused();
+		fixture.pull.comments = fixture.pull.comments!.map((item) => ({ ...item, author: "outsider" }));
+		await expect(apply(fixture.forge.clone(), PR, await fixture.forge.deps())).rejects.toThrow(
+			"carries no quest land fixer resolution",
+		);
+	});
+
+	test("refuses a resolution whose tree the rebuild does not reach", async () => {
+		const fixture = await refused();
+		const resolution = parseResolution(fixture.comment)!;
+		const forged = fixture.comment.replace(`tree=${resolution.tree}`, `tree=${"0".repeat(40)}`);
+		fixture.pull.comments!.at(-1)!.body = forged;
+		await expect(apply(fixture.forge.clone(), PR, await fixture.forge.deps())).rejects.toThrow(
+			"differs from the fixer's",
+		);
+	});
+
+	test("quotes a contributor's branch in the push command", () => {
+		const branch = "topic;echo${IFS}injected'x";
+		const command = pushCommand({ commit: "a".repeat(40), remote: "https://github.com/o/r.git", branch });
+		const echoed = execFileSync("sh", ["-c", `eval "set -- $1"; printf '%s\\n' "$@"`, "sh", command], {
+			encoding: "utf8",
+		});
+		expect(echoed).toBe(`git\npush\nhttps://github.com/o/r.git\n${"a".repeat(40)}:refs/heads/${branch}\n`);
+	});
+
+	test("hands back plainly when the resolution does not fit in a comment", () => {
+		const resolution = { head: "a".repeat(40), base: "b".repeat(40), tree: "c".repeat(40), patch: "x".repeat(100) };
+		const fits = resolutionSection(1, resolution, 1_000);
+		expect(parseResolution(fits)).toEqual(resolution);
+		const plain = resolutionSection(1, resolution, 300);
+		expect(parseResolution(plain)).toBeUndefined();
+		expect(plain).toContain("too large for a comment");
 	});
 });
