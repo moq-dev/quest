@@ -167,7 +167,10 @@ Commit and pass the repository's checks first.
 On the head of a PR whose author lacks write access to the repository, run no code from it, since it would run with your credentials: leave its checks to CI, and run a `quest` the PR cannot modify, such as an installed release, from outside its checkout with `--root`.
 Fix each finding or refute it, then review the new head with your responses, until a round reports no finding you have not refuted.
 A refutation stands only when it cites evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
-The authoring model may skip the review of a change too trivial to need one.
+Skip the local review of a simple change and rely on the online reviewers, such as CodeRabbit and Pullfrog, instead.
+A change is simple when it carries no behavior risk: it touches only quests, docs, or comments; only tests or benchmarks; is a mechanical rename or dependency bump; or is a small fix of a few dozen lines that touches no public API, wire format, security code, or `unsafe`.
+Record the skip and its reason; the online reviewers' findings on the head must still be fixed or refuted before it lands.
+Every other change gets the local review.
 
 The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
 Rewrite it after each round.
@@ -175,7 +178,7 @@ A review counts for the head whose SHA it names.
 
 Once "Ready to Review", CI and any online reviewers run.
 Address their findings already posted on the head when merging; never wait for or request one.
-Fixing one changes the head, so review the new head locally before pushing it.
+Fixing one changes the head, so review the new head locally before pushing it, unless the change is simple as above.
 
 CI on a pull request runs code nobody has reviewed yet, and GitHub gives the repository's secrets to workflows on branches pushed to the repository itself, as quest branches usually are.
 Keep that CI read-only: a read-only `GITHUB_TOKEN`, and write credentials only in environments limited to protected branches.
@@ -187,7 +190,7 @@ Leave a comment on any review feedback you disagree with.
 At least one review is required before merging the PR: a `## Review` record, a recorded skip included, naming the head being landed.
 Changes since the last review skip a new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged,
 or a land fixer's recorded mechanical fix that changes no behavior.
-Any other change needs a local review of the new head.
+Any other change needs a local review of the new head, unless it is simple as above.
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
 

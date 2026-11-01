@@ -20,7 +20,7 @@ Fix each finding you agree with, or refute it with evidence the reviewer can che
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted with evidence.
 A finding the reviewer keeps against such a refutation is a decision for the user; a background agent lists it under `## Decisions needed`.
-If you judge the change too trivial to review, skip the review instead and record why.
+If the change is simple as the guide's Reviews section defines it, skip the review instead and record why; the online reviewers cover it.
 
 Rewrite the PR body's `## Review` section after each round, or once for a skip.
 Push, then flip the PR to "Ready for Review" with `quest ready <pr> <token> --done`, which also drops its `## Decisions needed` section.
