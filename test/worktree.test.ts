@@ -19,23 +19,20 @@ import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from 
 import { GitHub, mergedHead } from "../src/cli/github";
 import { main } from "../src/cli/main";
 import { Worktrees, diskUsage } from "../src/cli/worktree";
-import { run } from "./fixture";
+import { initRepository, run, template } from "./fixture";
 
 const roots: string[] = [];
 function git(root: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
-function repository(path: string): string {
-	mkdirSync(path, { recursive: true });
-	git(path, "init", "-b", "main");
-	git(path, "config", "user.name", "Fixture");
-	git(path, "config", "user.email", "fixture@localhost");
-	writeFileSync(join(path, "file"), "original\n");
-	writeFileSync(join(path, ".gitignore"), "cache/\n.env\n.worktrees/\n");
-	git(path, "add", ".");
-	git(path, "commit", "-m", "initial");
-	return path;
-}
+/** A repository whose main holds one file and ignores scratch, at `path`. */
+const repository: (path: string) => string = template((dir) => {
+	initRepository(dir);
+	writeFileSync(join(dir, "file"), "original\n");
+	writeFileSync(join(dir, ".gitignore"), "cache/\n.env\n.worktrees/\n");
+	git(dir, "add", ".");
+	git(dir, "commit", "-q", "-m", "initial");
+});
 
 /** Scopes that are never live and whose runs exit at once, except where `overrides` says otherwise. */
 function stubScopes(overrides: Partial<Scopes>): Scopes {

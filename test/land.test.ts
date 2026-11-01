@@ -54,7 +54,7 @@ import {
 	serveBatch,
 } from "../src/cli/land-serve";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { tempDir } from "./fixture";
+import { GIT_SETTINGS, configure, initRepository, template, tempDir } from "./fixture";
 
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
@@ -85,6 +85,34 @@ const QUEST = (title: string) => `# [S] ${title}\n\n## Goal\n\n${title}.\n`;
 const EPIC = (entries: string[]) =>
 	`# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
 
+/** The tip of every forge's main, which the template sets. */
+let forgeBase: string | undefined;
+
+/**
+ * Upstream's bare repository with one commit on main, and a work clone whose
+ * origin is its github.com URL, before routing that URL to the copy.
+ */
+const forge = template((dir) => {
+	const origin = initRepository(join(dir, "github", "upstream", "project.git"), { bare: true });
+	const work = initRepository(join(dir, "work"));
+	const files: Record<string, string> = {
+		".gitattributes": "quest/** merge=quest\n",
+		"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
+		"quest/m0/README.md": EPIC(["a"]),
+		"quest/m0/a.md": "# [S] A\n\n## Goal\n\nA.\n",
+		"code.txt": "one\ntwo\nthree\n",
+	};
+	for (const [path, content] of Object.entries(files)) {
+		mkdirSync(join(work, path, ".."), { recursive: true });
+		writeFileSync(join(work, path), content);
+	}
+	git(work, "add", ".");
+	git(work, "commit", "--quiet", "-m", "base");
+	git(work, "push", "--quiet", origin, "HEAD:refs/heads/main");
+	git(work, "remote", "add", "origin", "https://github.com/upstream/project.git");
+	forgeBase = git(work, "rev-parse", "HEAD");
+});
+
 /**
  * github.com as local bare repositories: `upstream/project`, a fork for each
  * contributor, and a clone per CI job that reaches them through
@@ -100,21 +128,8 @@ class Forge {
 	private nextPull = 1;
 
 	constructor() {
-		mkdirSync(this.origin, { recursive: true });
-		git(this.origin, "init", "--quiet", "--bare", "--initial-branch=main");
-		git(this.dir, "init", "--quiet", "--initial-branch=main", this.work);
+		forge(this.dir);
 		this.configure(this.work);
-		git(this.work, "remote", "add", "origin", "https://github.com/upstream/project.git");
-		this.write({
-			".gitattributes": "quest/** merge=quest\n",
-			"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
-			"quest/m0/README.md": EPIC(["a"]),
-			"quest/m0/a.md": "# [S] A\n\n## Goal\n\nA.\n",
-			"code.txt": "one\ntwo\nthree\n",
-		});
-		git(this.work, "add", ".");
-		git(this.work, "commit", "--quiet", "-m", "base");
-		git(this.work, "push", "--quiet", "origin", "HEAD:refs/heads/main");
 		this.world = {
 			app: { id: 1, slug: "gate" },
 			installation: 5,
@@ -130,7 +145,7 @@ class Forge {
 					files: [],
 					issues: [],
 					pulls: [],
-					branches: { main: this.main() },
+					branches: { main: forgeBase! },
 					fork: {},
 					commits: {},
 					trees: {},
@@ -144,19 +159,17 @@ class Forge {
 		return this.world.repos[0];
 	}
 
-	/** Route github.com URLs to the local bare repositories, and give commits an identity. */
+	/** Route github.com URLs to the local bare repositories. */
 	configure(dir: string): void {
-		git(dir, "config", `url.${this.hub}/.insteadOf`, "https://github.com/");
-		git(dir, "config", "user.name", "Gate");
-		git(dir, "config", "user.email", "gate@example.test");
+		configure(dir, { [`url.${this.hub}/.insteadOf`]: "https://github.com/" });
 	}
 
-	/** A fresh clone of upstream, as a CI job checks out. */
+	/** A fresh clone of upstream, as a CI job checks out, routed and with the fixture settings. */
 	clone(): string {
 		const dir = join(this.dir, `clone-${Math.random().toString(36).slice(2)}`);
-		git(this.dir, "clone", "--quiet", this.origin, dir);
-		this.configure(dir);
-		git(dir, "remote", "set-url", "origin", "https://github.com/upstream/project.git");
+		const settings = { [`url.${this.hub}/.insteadOf`]: "https://github.com/", ...GIT_SETTINGS };
+		const options = Object.entries(settings).flatMap(([key, value]) => ["-c", `${key}=${value}`]);
+		git(this.dir, "clone", "--quiet", ...options, "https://github.com/upstream/project.git", dir);
 		return dir;
 	}
 
@@ -220,16 +233,16 @@ class Forge {
 			"Co-Authored-By: Helper <helper@example.test>",
 		);
 		const head = git(this.work, "rev-parse", "HEAD");
+		// GitHub keeps every PR's head in the upstream, forks' included.
+		const keep = `${head}:refs/pull/${number}/head`;
 		if (options.contributor) {
 			const fork = join(this.hub, options.contributor, "project.git");
-			mkdirSync(fork, { recursive: true });
-			spawnSync("git", ["init", "--quiet", "--bare", fork]);
+			if (!existsSync(fork)) initRepository(fork, { bare: true });
 			git(this.work, "push", "--quiet", fork, `${head}:refs/heads/${branch}`);
+			git(this.work, "push", "--quiet", "origin", keep);
 		} else {
-			git(this.work, "push", "--quiet", "origin", `${head}:refs/heads/${branch}`);
+			git(this.work, "push", "--quiet", "origin", `${head}:refs/heads/${branch}`, keep);
 		}
-		// GitHub keeps every PR's head in the upstream, forks' included.
-		git(this.work, "push", "--quiet", "origin", `${head}:refs/pull/${number}/head`);
 		const pull: Pull = {
 			number,
 			title,
@@ -261,29 +274,41 @@ class Forge {
 			this.lag--;
 			return;
 		}
-		for (const pull of this.repo.pulls) {
-			if (pull.closed) continue;
-			const holder = pull.contributor ? `${pull.contributor}/project` : "upstream/project";
-			const tip = spawnSync(
-				"git",
-				["-C", join(this.hub, `${holder}.git`), "rev-parse", `refs/heads/${pull.branch}`],
-				{
-					encoding: "utf8",
-				},
-			);
-			if (tip.status === 0) {
-				pull.head = tip.stdout.trim();
-				if (pull.contributor)
-					git(
-						join(this.hub, `${holder}.git`),
-						"push",
-						"--quiet",
-						this.origin,
-						`${pull.head}:refs/pull/${pull.number}/head`,
-					);
-				else git(this.origin, "update-ref", `refs/pull/${pull.number}/head`, pull.head);
+		const open = this.repo.pulls.filter((pull) => !pull.closed);
+		if (open.length === 0) return;
+		// One read of each repository's refs, and one write of the upstream's PR refs that moved.
+		const refs = new Map<string, Map<string, string>>();
+		const read = (holder: string) => {
+			let found = refs.get(holder);
+			if (found === undefined) {
+				found = new Map();
+				const listing = git(
+					join(this.hub, `${holder}.git`),
+					"for-each-ref",
+					"--format=%(refname) %(objectname)",
+				);
+				for (const line of listing.split("\n").filter(Boolean)) {
+					const [ref, sha] = line.split(" ");
+					found.set(ref, sha);
+				}
+				refs.set(holder, found);
 			}
+			return found;
+		};
+		const pulled = read("upstream/project");
+		const updates: string[] = [];
+		for (const pull of open) {
+			const holder = pull.contributor ? `${pull.contributor}/project` : "upstream/project";
+			const tip = read(holder).get(`refs/heads/${pull.branch}`);
+			if (tip === undefined) continue;
+			pull.head = tip;
+			const ref = `refs/pull/${pull.number}/head`;
+			if (pulled.get(ref) === tip) continue;
+			if (pull.contributor) git(join(this.hub, `${holder}.git`), "push", "--quiet", this.origin, `${tip}:${ref}`);
+			else updates.push(`update ${ref} ${tip}\n`);
 		}
+		if (updates.length > 0)
+			execFileSync("git", ["update-ref", "--stdin"], { cwd: this.origin, input: updates.join("") });
 	}
 
 	/** GitHub's view after a landing: a PR whose head it had synced and that reached main merged. */
@@ -329,7 +354,8 @@ class Forge {
 				const number = /\/pulls\/(\d+)\/merge$/.exec(String(input))?.[1];
 				if (number && init?.method === "PUT") this.beforeMerge?.(Number(number));
 				this.sync();
-				let root: string | undefined;
+				/** main before a squash this request made. */
+				let base: string | undefined;
 				if (number && init?.method === "PUT") {
 					const body = JSON.parse(String(init.body));
 					this.merges.push({
@@ -339,41 +365,41 @@ class Forge {
 					});
 					const pull = this.repo.pulls.find((pull) => pull.number === Number(number))!;
 					if (pull.head === body.sha && pull.merge === "CLEAN") {
-						root = this.clone();
-						git(root, "checkout", "--quiet", "--detach", this.main());
-						const result = spawnSync(
-							"git",
-							["-c", "core.hooksPath=/dev/null", "merge", "--squash", pull.head!],
-							{ cwd: root },
-						);
-						if (result.status !== 0) pull.merge = "DIRTY";
+						// Squash in the upstream itself: the merged tree, committed onto main.
+						const main = this.main();
+						const merged = spawnSync("git", ["merge-tree", "--write-tree", main, pull.head!], {
+							cwd: this.origin,
+							encoding: "utf8",
+						});
+						if (merged.status !== 0) pull.merge = "DIRTY";
 						else {
-							git(
-								root,
-								"commit",
-								"--quiet",
-								"--allow-empty",
+							const tree = merged.stdout.split("\n")[0];
+							const message = `${pull.title} (#${pull.number})`;
+							pull.squash = git(
+								this.origin,
+								"commit-tree",
+								tree,
+								"-p",
+								main,
 								"-m",
-								`${pull.title} (#${pull.number})`,
+								message,
 								"-m",
 								"Native GitHub squash",
 							);
-							pull.squash = git(root, "rev-parse", "HEAD");
+							base = main;
 							this.repo.commits[pull.squash] = {
-								parents: [this.main()],
-								tree:
-									this.mismatch === pull.number
-										? "f".repeat(40)
-										: git(root, "rev-parse", "HEAD^{tree}"),
-								message: `${pull.title} (#${pull.number})`,
+								parents: [main],
+								tree: this.mismatch === pull.number ? "f".repeat(40) : tree,
+								message,
 							};
 						}
 					}
 				}
 				const response = await fetch(input, init);
-				if (root && response.ok && ((await response.clone().json()) as { merged?: boolean }).merged) {
+				if (base && response.ok && ((await response.clone().json()) as { merged?: boolean }).merged) {
 					const pull = this.repo.pulls.find((pull) => pull.number === Number(number))!;
-					git(root, "push", "--quiet", "origin", `${pull.squash}:refs/heads/main`);
+					// A fast-forward, as the push of a squash on main was: it fails if main moved.
+					git(this.origin, "update-ref", "refs/heads/main", pull.squash!, base);
 				}
 				return response;
 			},
@@ -2201,8 +2227,7 @@ ${requeueScript}
 	test("does not import private objects through alternates", async () => {
 		const fixture = await fixerFixture(fixedScript());
 		await fixture.finished;
-		const privateRepo = tempDir();
-		git(privateRepo, "init", "--quiet");
+		const privateRepo = initRepository();
 		fixture.forge.configure(privateRepo);
 		writeFileSync(join(privateRepo, "private"), "private data");
 		git(privateRepo, "add", ".");
