@@ -38,7 +38,8 @@ Each sub-agent reports back only when done or blocked, and never waits on GitHub
 
 Do not watch the queue or wait for merges.
 An open PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`.
-After `merge_conflict` or `failed_checks`, its pick still holds, even from an earlier session: dispatch `/quest-iterate` without asking, then run `/quest-merge` when it reports.
+On a base that lands through `quest land` with its fixer, the fixer resolves conflicts and failures itself and hands a PR back only when a decision is needed, so do not run `/quest-merge` again for a PR that queue dropped: ask the user about it, with the diagnosis and recommendation from the fixer's handback comment.
+Without that fixer, such as on GitHub's merge queue, after `merge_conflict` or `failed_checks`, its pick still holds, even from an earlier session: dispatch `/quest-iterate` without asking, then run `/quest-merge` when it reports.
 After `checks_pending`, or a pick `/quest-merge` left for pending checks, run `/quest-merge` again on a later refresh once they pass.
 Any other reason, such as a person removing it, is the user's call, so ask about the PR again.
 
