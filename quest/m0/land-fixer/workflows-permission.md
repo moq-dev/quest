@@ -29,7 +29,3 @@ happening; whether to keep that quest and
 review.
 
 Delete this quest once the permission is granted and accepted.
-
-## Related
-
-- [Protected edits](/quest/m0/land-fixer/protected.md) - the fixer edits workflows when the change is mechanical
