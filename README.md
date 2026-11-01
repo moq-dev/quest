@@ -937,11 +937,14 @@ service, such as a systemd user unit with `Restart=on-failure`.
 The experimental `quest worktree` commands share one disk budget across this
 user's repositories and release a checkout's disk by deleting its declared
 scratch in place. They only operate on Git worktrees they create; use the
-owning application for Codex, Claude, or other managed checkouts.
+owning application for Codex or other managed checkouts. Claude Code's
+checkouts are Quest's own once `quest init` installs its hooks (see
+[Claude Code checkouts](#claude-code-checkouts)).
 
 Set a shared capacity and an explicit reservation in bytes, covering the
 checkout and its expected build output. Measure representative jobs before
-choosing the budget. Reservations serialize creators and account for concurrent
+choosing the budget. Until a capacity is set, only free disk space limits new
+reservations. Reservations serialize creators and account for concurrent
 expected growth. They do not enforce filesystem quotas against arbitrary
 writers, and Git objects stored in the shared repository are not charged.
 
@@ -953,7 +956,8 @@ quest worktree status
 ```
 
 Creation prints JSON with the ID and the detached, locked checkout path under
-`.worktrees/`, and records the `--scratch` paths. `run` restores a released
+`.worktrees/`, and records the `--scratch` paths. Names are unique per
+repository; where several repositories use one, the other commands take the ID. `run` restores a released
 checkout, runs the command there, and once it exits kills any descendants it
 left behind. When no other run remains in the checkout, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
@@ -1009,6 +1013,32 @@ A failed creation stays charged until `release` drops it. Records live in
 `~/.local/state/quest/worktrees`). The registry lock of a process that exited on
 this host is reclaimed; a live lock, or one held from another host, is never
 stolen. This initial interface refuses unknown or changed checkout ownership.
+
+### Claude Code checkouts
+
+`quest init` adds hook entries to the repository's `.claude/settings.json` that
+run `quest worktree hook` for Claude Code's `WorktreeCreate`, `WorktreeRemove`,
+`SubagentStart`, and `SubagentStop` events, so `quest` must be on the `PATH`
+Claude Code runs hooks with. The hook then creates every worktree Claude makes
+in the repository, for `--worktree`, `EnterWorktree`, isolated subagents, and
+background sessions, and Claude no longer copies `.worktreeinclude` files into
+them.
+
+Each is a `quest worktree` checkout under the main checkout's `.worktrees/`,
+named as Claude names it. Like Claude's default, it starts from the remote's
+default branch as last fetched (`origin/HEAD`), or from the session's commit
+when that is unknown; Claude's `worktree.baseRef` setting no longer applies. With only a name to go on,
+it declares the main checkout's top-level ignored entries as scratch, except
+`.worktrees/`, `.claude/`, and entries holding a nested repository, and
+reserves the main checkout's disk usage without `.git` and those checkouts. A
+subagent's checkout is released when the subagent finishes or stops to wait for
+an answer, and restored when it resumes, with a note telling it to reinstall
+its scratch. Another `SubagentStop` hook that keeps a subagent running defeats
+this: Claude continues the subagent without a `SubagentStart`, so it works on
+without its scratch until it reinstalls it. Claude never removes a subagent's checkout itself, so remove a
+finished one with `quest worktree remove`, which also recovers one whose
+session crashed. When Claude removes a session's checkout, `quest worktree
+remove` decides: a checkout holding unpreserved work is kept.
 
 ## Work with your agents
 
