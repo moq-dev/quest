@@ -505,23 +505,42 @@ The sandbox runs the repository's checks
 is passed to it. The daemon refuses to start without `--sandbox`. The optional
 fixer runs as tracked background work, receiving the full log path followed by
 PR numbers, with the same restricted environment (`PATH` and `LANG` only).
-Its cwd is the standalone repository, with `batch`, `base`, and `pr-<n>` branches.
-The wrapper starts an ephemeral container and runs `quest land fix <log> <prs...>`
+Its cwd is the standalone repository, checked out at `base` so the agent loads no
+PR's instructions or tooling, with `batch` and `pr-<n>` branches beside it. The
+prompt names each PR's branch and pinned head. For a base that fails its check
+alone it receives only the log path, and the repository has only `base`.
+The wrapper starts an ephemeral container and runs `quest land fix <log> [prs...]`
 there, exposing that repository read/write and the log read-only at the given paths.
 It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses
 endpoint, including `/v1`) and `OPENAI_API_KEY` (the gate's proxy client key).
-The daemon never supplies these or any Git/GitHub credential; the wrapper must
-restrict network access to the model proxy. Codex login stays on CLIProxyAPI.
+The daemon never supplies these or any Git/GitHub credential, and the wrapper
+must keep every other credential out of the container. Its network must reach the
+model proxy and, so the fixer can build and test its fix, the package registries
+and `github.com`/`codeload.github.com` that the repository's dependencies come from.
+The prompt allows only those dependency fetches: no GitHub API, no push, no other
+host. Codex login stays on CLIProxyAPI.
 The wrapper waits for the payload, returns its exit status, and tears down its
 container on exit or SIGTERM. On timeout the daemon sends SIGTERM, allows at
 least 10 seconds for container cleanup, then sends SIGKILL on a later collection. The payload defaults
 to `codex exec`; `--agent <executable>` and repeatable `--agent-arg <argument>`
 replace it for another CLI. It writes `<cwd>/quest-land-result.json`: an array of
 `{number, action:"requeue", reason}`, `{number, action:"fixed", head, reason}`, or
-`{number, action:"handback", diagnosis, recommendation}`, with no extra fields.
+`{number, action:"handback", diagnosis, recommendation}`, with no extra fields
+beyond an optional `comment`, an optional `blame: true` on each PR that caused the failure (a blamed PR is
+fixed or handed back), and on a handback an optional `log: [first, last]` citing the
+failure log's lines, which its comment quotes. For the base alone, it writes one
+object instead: `{action:"fixed", head, reason}` with the fix committed on `base`,
+or `{action:"handback", diagnosis, recommendation}`.
 The payload adds `agent` and `model` metadata to each result (`--model <id>`
 selects the default Codex model; unknown models fall back to `Codex`).
 Reasons and diagnoses are single lines. Fixed heads must be committed on `pr-<n>`.
+A `comment` is Markdown of at most 4000 characters that the fixer wants on its PR.
+The fixer holds no GitHub credential, since PR code it builds can read the
+container's environment, so the daemon posts the comment as the bot when it
+collects the job, before any outcome comment of its own. It quotes the text under the
+recorded agent, strips HTML comments so the text can never carry the daemon's
+hidden markers, defuses @-mentions, and redacts GitHub tokens, as it does for
+every fixer text and log it posts.
 
 Jobs and attempts persist across daemon restarts. A running fixer outlives a
 restart only where the host leaves its process group alive (under systemd,
@@ -537,13 +556,22 @@ repository borrows from the daemon's own. It ignores fixer configuration and nev
 follows the fixer's Git alternates. Pack indexes are rebuilt with
 `git index-pack` rather than trusted; the fetch into the daemon's repository
 checks every object and link, since the import enables `fetch.fsckObjects=true`. It records `mechanical fix by <recorded agent/model>: <reason>` and the new head in
-`## Review`, enables head-pinned auto-merge, and adds `quest:merge`. Healthy PRs
-requeue unchanged. Forks refusing maintainer edits, refused pushes, invalid results,
+`## Review`, and enables head-pinned auto-merge again on the fixed head, which keeps
+the place of the pick it descends from. Healthy PRs go back to batches unchanged,
+without a comment. Forks refusing maintainer edits, refused pushes, invalid results,
 crashes, or the 60-minute fixer deadline hand back with a marked comment naming the exit
-status or signal, with the tail of the job's retained log. A flaky
-requeue suggests a follow-up. Each maintainer pick gets one attempt; the daemon
-records the fixer's new auto-merge `enabledAt` so its second ejection hands back.
-A new maintainer pick resets the attempt. Host provisioning and isolation
+status or signal, with the tail of the job's retained log. A validated fix whose push
+GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
+the `workflows` permission to push, is handed back with its resolution: the PR head,
+the base, the resolved tree, and the fixer's edits as a patch against the merge's
+conflicted result, sized to GitHub's 65,536-character comment limit. A maintainer
+runs `quest land apply <pr>`, which refuses a moved head, rebuilds and checks that
+tree, and prints an unpushed commit and its push command. A resolution too large for
+the comment hands back plainly. A handback disables
+auto-merge, removes `quest:merge`, and carries the reason marker `quest status`
+reads. Each maintainer pick gets one attempt, spent only when a fixer job blames
+the PR: a PR that only shared a broken batch keeps it. A blamed PR whose pick already
+spent its attempt hands back. A new maintainer pick resets the attempt. Host provisioning and isolation
 belong to the host; these commands are executable paths, not shell expressions.
 Wrappers must expose only the supplied tree and log, never the state directory
 or its private bare repository.
@@ -553,11 +581,30 @@ up to floor(log2 n) further PRs that merge cleanly in that order, resolving
 quest links with `quest resolve`. A failed batch halves the next batch's size,
 down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
-additions stay queued. A base conflict ejects only the base. The sandbox checks
-the tip once: success lands one squash commit per PR, while failure ejects every
-PR in that batch, without bisection. Ejection disables auto-merge, removes
-`quest:merge`, and comments with the reason and the last 100 output lines.
-`quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
+additions stay queued. A PR whose required checks are still running stays queued
+and sits out batches until they pass. If any are still pending two hours after
+its pick (twice the default `--timeout`), the daemon comments once on that pick,
+naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
+bisection: success lands one squash commit per PR. A failure, or a base that
+conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
+auto-merge, `quest:merge`, and place, get no comment, and sit out batches while its
+job runs, so the rest of the queue keeps landing. The fixer reads the log and blames
+the PRs that caused it; the others go back to batches unchanged. When it blames
+none, the daemon checks the base alone. A green base leaves every PR to the fixer's
+verdict, as if blamed. A red base releases them all and halts the queue: nothing
+lands until the base moves and its check passes. The fixer then runs on the base
+alone. The daemon validates its fix as it would a PR's, protected paths
+included, pushes it to a `quest-land/fix-<sha>` branch, and opens it as a pull
+request for a maintainer to merge as an administrator. Only when the fixer cannot
+fix the base, or there is no fixer, does an issue say the queue is halted. If the
+base moves and still fails, the daemon closes that fix and runs the fixer on the
+new base. Once a check of a moved base passes, the queue resumes, and the daemon
+closes the issue and any fix it no longer needs. A job collected while the queue is halted releases its PRs without checking its own, possibly older, base. The daemon collects a finished fixer job even while a check runs.
+Without a fixer, a failure ejects the batch instead: ejection disables auto-merge,
+removes `quest:merge`, and comments with the reason and the failing log, bounded by
+size. When GitHub refuses one PR's squash merge, only that PR stops: a conflict is
+parked for the fixer, a moved head or refusal is ejected, and the rest of the batch
+stays queued. `quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
 `$STATE_DIRECTORY` or the XDG state home, never inside the checkout. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
@@ -571,9 +618,9 @@ A quest the base moved is a rename, not a deletion, and a link in prose stays.
 As a batch is filled, each PR it reaches is squashed alone onto the current
 base, and `quest check` runs on the result; PRs the batch does not reach wait
 for a later round, so a long queue costs only each batch's candidates. A PR with findings the base lacks, such as
-a mistyped link, is ejected alone as
-`failed_checks` with those findings, so it never fails a batch; a configured
-fixer receives it as it would a failed batch, starting from that squash. This check runs
+a mistyped link, is parked alone for the fixer, blamed
+for those findings, so it never fails a batch; the fixer starts from that squash.
+Without a fixer it is ejected as `failed_checks` with those findings. This check runs
 in the daemon, never the sandbox: it parses quest files read from git objects
 and executes nothing from the tree. A base without a `quest/` directory skips
 it. A newly queued PR the batch reaches is also squashed onto the four PRs
@@ -601,8 +648,8 @@ failure ejects `head_moved`. A locally prepared or API squash tree mismatch logs
 CRITICAL and ejects the remaining batch as `tree_mismatch`.
 
 After an API refusal, the daemon re-reads mergeability and briefly retries
-pending mergeability or a base refresh. Confirmed conflicts and moved heads eject
-the remainder; a persistent policy refusal ejects as `merge_refused` without the
+pending mergeability or a base refresh. A confirmed conflict parks only that PR for
+the fixer and a moved head ejects only that PR; the rest stays queued. A persistent policy refusal ejects as `merge_refused` without the
 fixer. Already-merged PRs are skipped. An unexpected API squash parent means the
 base moved: the remainder is rebuilt without ejection.
 
@@ -707,16 +754,13 @@ branch before it is pushed for review: Codex when run from Claude Code, and
 Claude Code when run from Codex. `--harness` names the reviewer instead; an
 unknown harness, or a missing or logged-out CLI, is an error rather than a
 same-model review. The reviewer uses its CLI's own login, with a
-pinned model and effort: a default tier for routine work and, with `--deep`, a
-stronger one for a high-stakes change such as security, a wire format or public
-API, or a risk of data loss. `quest review --help` lists them; `--model` and
-`--effort` override either.
+pinned model and effort that `quest review --help` lists; `--model` and
+`--effort` override them.
 
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
-quest review --deep                           # the stronger model, for a high-stakes change
 ```
 
 The first round runs the reviewer's own review, `codex exec review --base` or
