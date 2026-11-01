@@ -843,7 +843,16 @@ and the agent's final reply. It never prints a key. It exits 0 when the agent
 finished, 3 when the provider refused the key for lack of credit, 2 for invalid
 arguments, 128 plus the signal number when interrupted, and 1 otherwise. `stop`
 signals the agent and waits until its `start` or `resume` has reported.
-`quest agent` does not run on native Windows yet; use WSL.
+
+The agent CLI and `op` run from their absolute paths on `PATH`, skipping
+relative entries, so a worktree can never supply its own `claude` and receive
+a key. They also run with only `PATH`'s absolute entries, so neither finds a
+program it starts by name, such as `node`, in the worktree. On native Windows
+the lookup tries `PATHEXT`'s program and batch extensions, a batch shim such as
+npm's `claude.cmd` runs through System32's `cmd.exe` with its arguments
+escaped, `NoDefaultCurrentDirectoryInExePath` stops Windows' implicit search of
+the working directory, and `stop` ends the agent's whole process tree at once,
+since Windows has no `SIGTERM`.
 
 ## Run kix jobs on your machines
 
