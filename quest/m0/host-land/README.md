@@ -81,9 +81,10 @@ can hand off instead.
 - No GitHub Actions in landing (user, 2026-10-30): the daemon replaces the
   Land workflow and the host's `quest-land` Actions runner, and ejection
   comments carry the failing log's tail.
-- This epic ranks first in m0. It replaces the hook-started kix fixer that
-  [moq-dev/quest#276](https://github.com/moq-dev/quest/pull/276) proposes
-  (`kix/eject-fix`).
+- This epic ranks first in m0. It replaces the hook-started kix fixer
+  (`kix/eject-fix`) that
+  [moq-dev/quest#276](https://github.com/moq-dev/quest/pull/276) proposed;
+  #276 was closed as superseded on 2026-11-01.
 - The epic finishes with an end-to-end run on moq-dev/quest: a batch with one
   PR that fails a check, one that conflicts with the base, and one healthy
   PR. The healthy PR lands after the requeue, the mechanical one lands after
@@ -98,4 +99,5 @@ can hand off instead.
 
 - [Gate host](/quest/m0/host-land/host.md) - kixelated/nixos runs the daemon as its own user, checks in nspawn containers, and retires the Actions runner
 - [Fixer proxy access](/quest/m0/host-land/fixer.md) - connect the nixos fixer container to CLIProxyAPI with the gate client key and maintainer login
+- [Fixer TLS](/quest/m0/host-land/fixer-tls.md) - the fixer's container trusts public certificates, so workerd and the Worker tests run there
 - [Daemon restart keeps its check](/quest/m0/host-land/reattach.md) - a deploy no longer reruns the batch it interrupted

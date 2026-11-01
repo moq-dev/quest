@@ -20,3 +20,4 @@ maintainers, so they need none of this first.
 - [Read-only CI](/quest/m1/kix/ci-read-only.md) - enrolled repositories keep pull-request CI read-only, checked at enrollment, with every trust boundary written down
 - [Contributor sandboxing](/quest/m1/kix/sandbox/README.md) - contributors' PR heads build in a VM, on stock Ubuntu and verified on macOS
 - [Onboarding guide](/quest/m1/kix/guide.md) - a complete maintainer path, from runner setup through a reviewed PR
+- [Missing review flag](/quest/m1/kix/review-flag.md) - the inbox shows a PR's missing review before the merge click

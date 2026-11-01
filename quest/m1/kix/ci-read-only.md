@@ -45,6 +45,12 @@ moq-dev/quest#246's Codex Security P1):
   moq-dev/quest's `land` environment was limited to `main` on 2026-10-28,
   and moq-dev/moq tracks its fix in
   [read-only secrets](https://github.com/moq-dev/moq/blob/main/quest/m0/ci/read-only-secrets.md).
+- Noted 2026-11-01 (user, /quest-plan, from
+  [moq-dev/quest#246](https://github.com/moq-dev/quest/pull/246)):
+  moq-dev/moq's `.github/workflows/check.yml` passes the
+  `MBX_R2_ACCESS_KEY_ID` and `MBX_R2_SECRET_ACCESS_KEY` secrets to its
+  `pull_request` checks. They must move to an environment limited to
+  protected branches before moq enrolls.
 
 ## Related
 
