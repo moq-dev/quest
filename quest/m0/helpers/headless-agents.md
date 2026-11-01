@@ -42,7 +42,3 @@ every user would have to add it.
   native Windows jobs.
 - The command does no load or CPU admission, and the skill no longer caps
   agents: the guide routes their expensive commands through `quest gate`.
-
-## Related
-
-- [Agent lifecycle integration](/quest/m0/worktree-agents.md) - reclaims the checkouts of finished and suspended Claude agents

@@ -71,13 +71,5 @@ commands from Sep-Oct. Session counts in each child come from that window.
 ## Required
 
 - [quest merge --land gaps](/quest/m0/helpers/merge-land.md) - squash on squash-only repositories, PR URLs outside a checkout, labels released after direct merges, and a warning when auto-merge outlives its head
-- [Visible merge-driver fallback](/quest/m0/helpers/merge-driver.md) - a merge without `quest` on PATH says so, and this repository's dev shell provides one
-- [Review rules](/quest/m0/helpers/review-rules.md) - a head whose diff matches the reviewed diff keeps its review
-- [Plan delegated follow-ups](/quest/m0/helpers/follow-up-plan.md) - a caller plans a background merge's follow-ups without asking
-- [Drop review-rounds](/quest/m0/helpers/review-rounds.md) - `quest status` stops counting GitHub reviews now that `quest review` numbers rounds
 - [Headless agents](/quest/m0/helpers/headless-agents.md) - `/quest-spawn api` launches, resumes, and stops billed agents through one command auto mode allows
 - [moq-dev/quest lands through quest land](/quest/m0/helpers/land-adopt.md) - this repository's `main` changes only through its own gate
-
-## Related
-
-- [Agent lifecycle integration](/quest/m0/worktree-agents.md) - reclaims finished and suspended agent checkouts through their harness
