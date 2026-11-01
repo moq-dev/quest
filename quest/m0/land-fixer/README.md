@@ -83,7 +83,13 @@ Decision prompts, selected options marked ✅:
     disable the flaky test in the base PR then."
   - The flaky commit: ✅ in this batch (on its base PR, per the answer above)
     · in the next batch
-  - GitHub comments: the daemon posts them · ✅ a comment-only token · both
+  - GitHub comments: ✅ the daemon posts them from the fixer's result · a
+    comment-only token in the container · both. The user first picked the
+    token, then reversed it on 2026-11-01 after an independent audit: PR code
+    the fixer builds can read the container's environment, so a token there
+    would let PR code post as moq-bot[bot]. `quest land apply`, the daemon's
+    own comment deduplication, and `quest status`'s ejection reason all trust
+    moq-bot comments.
   - Workflow pushes: ✅ grant moq-bot `workflows` · the fixer avoids
     workflows
 - The user, starting the work: "The fixer is meant to handle conflicts and
@@ -100,7 +106,6 @@ resolves itself and what it hands back; that docs update finishes the epic.
 ## Required
 
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
-- [Fixer comments](/quest/m0/land-fixer/comments.md) - a per-job, comment-only GitHub token lets the fixer explain its work on the PRs
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
 - [Batch triage](/quest/m0/land-fixer/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
 - [CI failures park](/quest/m0/land-fixer/ci-park.md) - a PR whose own required CI fails is parked for the fixer with the failing log, not ejected
