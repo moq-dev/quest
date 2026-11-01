@@ -80,6 +80,5 @@ ownership-manifest design:
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - condition: Codex keeps a supported way to skip a project's `.codex/` layer; then reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
 - [Gate admission on CI](/quest/m0/gate-ci-admission.md) - gated commands admit on loaded hosted runners like arm64 macOS
-- [Agent lifecycle integration](/quest/m0/worktree-agents.md) - reclaim completed and suspended Claude checkouts through its hooks
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
 - [Review harness check](/quest/m0/review-harness.md) - recurring each milestone: newest pinned review models, and the live sandbox test passes
