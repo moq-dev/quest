@@ -289,7 +289,8 @@ quest command to register the current one.
 
 `quest wait` blocks until a GitHub PR has a review, comment, review-thread
 reply, reaction to the PR or one of its reviews, push, merge, close, removal
-from the merge queue, disabled auto-merge, or required CI result:
+from the merge queue, disabled auto-merge or auto-merge left on a moved head, or
+required CI result:
 
 ```sh
 quest wait 101
@@ -297,7 +298,8 @@ quest wait https://github.com/moq-dev/quest/pull/101 --since 2026-10-07T12:00:00
 quest wait 101 --since abcdef0123456789abcdef0123456789abcdef01
 ```
 
-A number uses the repository's `origin`; a URL works from any directory.
+A number uses the repository's `origin`, so it needs a checkout or `--root`
+naming one; a URL works from any directory.
 Authentication comes from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`.
 Without `--since`, the point is the current head's push time, so an existing
 review on that head is included. GitHub lists a push seconds to minutes after
@@ -345,6 +347,12 @@ If the base branch requires no checks, every check is required. A result counts 
 was reached at or after the starting point, so a wait started after CI finished
 still reports it; a push starts over for the new head, and the cursor records
 what was reported, so resuming never replays it.
+
+GitHub keeps auto-merge across a push by anyone with write access, so it can
+land a head nobody approved. While auto-merge stays enabled on a head other
+than the current one, `auto-merge:moved` prints once per head, with the account
+that enabled it as the actor and `<pr-url>/commits/<sha>` naming the head it was
+enabled on, read as `quest status` reads it.
 
 Review-thread replies and reactions never reach the PR timeline, so they are
 read separately. A reply prints as `replied`; a thread's first comment is part
@@ -404,7 +412,7 @@ comes last, and a missing value prints as `-`:
 | --- | --- |
 | `url`, `state`, `draft`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the head SHA. |
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
-| `auto-merge` | Method, who enabled it, and when. |
+| `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when. |
 | `checks` | The head's rollup state and `passed=`, `failing=`, `pending=` counts. |
@@ -426,6 +434,15 @@ same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
 failures exit 1.
+
+GitHub keeps auto-merge enabled across a writer's push without saying which head
+it was enabled on, so the `auto-merge` line reads it from the auto-merge commit
+body's `Quest-Land-Head` pin when [`quest land`](#land-a-batch-with-quest-land)
+queued the PR. Otherwise it is the last push to the head branch before
+auto-merge was enabled, from the head repository's activity; it prints `-`
+until GitHub lists the current head's push, which takes seconds to minutes, and
+when a push shares the second auto-merge was enabled. A head there that differs
+from `head` means a push followed auto-merge: disable it, or land the new head.
 
 ## Own a pull request
 
@@ -455,9 +472,11 @@ at once, the first label added keeps the PR and the other backs off.
 before swapping labels, so the token you passed stays valid. If a step fails
 after a swap, the error names the new token.
 It enables auto-merge bound to that SHA, which enters GitHub's merge queue
-when the base has one, or merges at once when nothing is left to wait for. It
-makes a merge commit; `--squash` or `--rebase` picks another method, and a
-merge queue applies its own. On a base that requires the `quest land` check, it
+when the base has one, or merges at once when nothing is left to wait for.
+`--squash` or `--rebase` picks the method, and it refuses one the repository
+disallows; otherwise it uses the only method the repository allows, or else a
+merge commit, and refuses when merge commits are off and more than one method
+remains. A merge queue applies its own. On a base that requires the `quest land` check, it
 queues the PR for [`quest land`](#land-a-batch-with-quest-land) instead.
 On an ungated base with auto-merge disabled, it refuses before changing labels
 and keeps the caller’s hold token valid. Follow the repository’s own landing
@@ -469,7 +488,8 @@ head that is behind or diverged: merge the base, rerun the repository's checks,
 and land the new head. This is a preflight check; GitHub can still move the base
 between that comparison and its head-pinned merge mutation. `quest:merge` stays
 on while the PR is queued or auto-merging; once the PR leaves the queue unmerged, the next command removes
-it. The commands accept the same PR argument and authentication as
+it, and a direct merge removes it once GitHub reports the PR merged. GitHub
+keeps auto-merge across a writer's push, so disable it before pushing to the PR. The commands accept the same PR argument and authentication as
 `quest wait`, and exit 0 when done, 3 when refused, 2 for invalid arguments,
 and 1 for other failures.
 

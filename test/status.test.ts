@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import type { GitHubDependencies } from "../src/cli/github";
 import { main } from "../src/cli/main";
@@ -111,6 +111,8 @@ function setup(
 		now?: number;
 		holdFields?: Node;
 		eventPages?: { rows: Node[]; next?: string }[];
+		/** Pages of the head repository's activity, newest first. */
+		activity?: { rows: Node[]; next?: string }[];
 	} = {},
 ) {
 	const queries: Record<string, unknown>[] = [];
@@ -118,6 +120,8 @@ function setup(
 	const eventRequests: string[] = [];
 	let last: ReturnType<typeof pull> | undefined;
 	const eventPages = [...(options.eventPages ?? [])];
+	const activityPages = [...(options.activity ?? [])];
+	const activityRequests: string[] = [];
 	const deps: GitHubDependencies = {
 		token: "test-token",
 		now: () => options.now ?? 0,
@@ -125,6 +129,12 @@ function setup(
 		warn: () => {},
 		fetch: async (url, init) => {
 			const path = new URL(String(url));
+			if (path.pathname === "/repos/fork/project/activity") {
+				activityRequests.push(`${path.pathname}${path.search}`);
+				const page = activityPages.shift();
+				if (!page) return Response.json({ message: "Not Found" }, { status: 404 });
+				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
+			}
 			if (path.pathname !== "/graphql") {
 				expect(path.pathname).toBe("/repos/example/project/issues/1/events");
 				eventRequests.push(String(url));
@@ -157,7 +167,7 @@ function setup(
 			return Response.json(body);
 		},
 	};
-	return { deps, queries, holdQueries, eventRequests };
+	return { deps, queries, holdQueries, eventRequests, activityRequests };
 }
 
 test("reports checks by requiredness, each reviewer's latest review against the head, and open threads", async () => {
@@ -246,13 +256,81 @@ test("a queued PR with auto-merge and no checks reports both, and JSON is determ
 		"mergeable mergeable",
 		"merge-state blocked",
 		"review-decision -",
-		"auto-merge squash kixelated 2026-10-07T12:00:00Z",
+		"auto-merge squash kixelated 2026-10-07T12:00:00Z -",
 		"merge-queue awaiting_checks 2 2026-10-07T12:01:00Z",
 		"landing-stopped -",
 		"checks - passed=0 failing=0 pending=0",
 	]);
 	expect(JSON.stringify(await pullRequestStatus(pr, setup([body]).deps))).toBe(JSON.stringify(status));
 	expect(status.mergeQueue).toEqual({ state: "awaiting_checks", position: 2, enqueuedAt: "2026-10-07T12:01:00Z" });
+});
+
+describe("the head auto-merge was enabled on", () => {
+	const ENABLED = "2026-10-07T12:00:00Z";
+	const push = (after: string, timestamp: string, activity_type = "push") => ({ after, timestamp, activity_type });
+	const enabled = async (
+		request: Node,
+		activity: { rows: Node[]; next?: string }[] = [],
+		head = B,
+	): Promise<{ line: string | undefined; requests: string[] }> => {
+		const body = pull({
+			head,
+			checks: null,
+			reviews: page([]),
+			threads: page([]),
+			headRefName: "feature/x",
+			headRepository: { nameWithOwner: "fork/project" },
+			autoMergeRequest: {
+				enabledAt: ENABLED,
+				mergeMethod: "MERGE",
+				enabledBy: { login: "kixelated" },
+				...request,
+			},
+		});
+		const fixture = setup([body], { activity });
+		const status = await pullRequestStatus(pr, fixture.deps);
+		return {
+			line: statusLines(status).find((line) => line.startsWith("auto-merge ")),
+			requests: fixture.activityRequests,
+		};
+	};
+
+	test("is the head a quest land pin names, without reading activity", async () => {
+		const result = await enabled({ commitBody: `Quest-Land-Head: ${A}` });
+		expect(result.line).toBe(`auto-merge merge kixelated ${ENABLED} ${A}`);
+		expect(result.requests).toEqual([]);
+	});
+
+	test("is otherwise the last push before it was enabled, paging the head branch's activity", async () => {
+		const result = await enabled({ commitBody: null }, [
+			{
+				rows: [push(B, "2026-10-07T12:05:00Z")],
+				next: "https://api.github.com/repos/fork/project/activity?page=2",
+			},
+			{ rows: [push(A, "2026-10-07T11:59:00Z", "force_push"), push("c".repeat(40), "2026-10-07T11:00:00Z")] },
+		]);
+		expect(result.line).toBe(`auto-merge merge kixelated ${ENABLED} ${A}`);
+		expect(result.requests).toEqual([
+			"/repos/fork/project/activity?ref=feature%2Fx&per_page=100",
+			"/repos/fork/project/activity?page=2",
+		]);
+	});
+
+	test("matches the head when no push followed", async () => {
+		const result = await enabled({ commitBody: "" }, [{ rows: [push(B, "2026-10-07T11:59:59Z")] }]);
+		expect(result.line).toBe(`auto-merge merge kixelated ${ENABLED} ${B}`);
+	});
+
+	test("is unknown until GitHub lists the current head's push, or when a push shares the second", async () => {
+		expect((await enabled({}, [{ rows: [push(A, "2026-10-07T11:59:00Z")] }])).line).toBe(
+			`auto-merge merge kixelated ${ENABLED} -`,
+		);
+		expect((await enabled({}, [{ rows: [push(B, ENABLED), push(A, "2026-10-07T11:59:00Z")] }])).line).toBe(
+			`auto-merge merge kixelated ${ENABLED} -`,
+		);
+		// A head repository the token cannot read.
+		expect((await enabled({}, [])).line).toBe(`auto-merge merge kixelated ${ENABLED} -`);
+	});
 });
 
 test("reports why the latest landing stopped, from a merge queue or auto-merge", async () => {

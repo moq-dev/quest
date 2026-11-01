@@ -24,6 +24,7 @@ Address the automated review findings already posted, without waiting on optiona
 One round only; never request a review, including by toggling a ready PR to draft and back.
 
 Before pushing to a PR that is ready for review, review the new head locally as the guide's Reviews section describes.
+If `quest status <pr>` shows auto-merge enabled, disable it with `gh pr merge <pr> --disable-auto` before any push: GitHub keeps it across a writer's push and would land the new head unreviewed.
 Push your changes to the PR and update its summary.
 Summarize the changes made.
 

@@ -28,6 +28,10 @@ class FakePull {
 	mergeState = "BLOCKED";
 	queue = false;
 	allowAutoMerge: boolean | null = true;
+	/** The repository's merge method settings, hidden from the token when null. */
+	methods: Record<string, boolean> | null = null;
+	/** GitHub accepts a merge but still reports the PR open. */
+	mergeLeavesOpen = false;
 	baseRef = "main";
 	/** Runs after each pull request read, to change it between reads. */
 	afterRead?: () => void;
@@ -76,7 +80,10 @@ class FakePull {
 		const body = init.body ? (JSON.parse(String(init.body)) as ObjectValue) : {};
 		const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status });
 		if (url.pathname === "/repos/example/project")
-			return json(200, this.allowAutoMerge === null ? {} : { allow_auto_merge: this.allowAutoMerge });
+			return json(200, {
+				...(this.allowAutoMerge === null ? {} : { allow_auto_merge: this.allowAutoMerge }),
+				...this.methods,
+			});
 		if (url.pathname === "/graphql")
 			return json(200, this.graphql(String(body.query), body.variables as ObjectValue));
 		if (url.pathname === "/repos/example/project/issues/7/labels" && method === "POST") {
@@ -126,7 +133,7 @@ class FakePull {
 			const body = variables.body ? ` ${String(variables.body)}` : "";
 			this.writes.push(method ? `${name} ${variables.sha} ${method}${body}` : name);
 			if (name === "markPullRequestReadyForReview") this.draft = false;
-			if (name === "mergePullRequest") this.state = "MERGED";
+			if (name === "mergePullRequest" && !this.mergeLeavesOpen) this.state = "MERGED";
 			if (name === "enablePullRequestAutoMerge") {
 				const reason = this.beforeAutoMerge?.();
 				if (reason) return { errors: [{ message: reason }] };
@@ -345,7 +352,7 @@ describe("merge --land", () => {
 					stderr: () => undefined,
 				}),
 			).toBe(0);
-			expect(pull.writes.at(-1)).toBe(`mergePullRequest ${HEAD} MERGE`);
+			expect(pull.writes.slice(-2)).toEqual([`mergePullRequest ${HEAD} MERGE`, "remove quest:merge"]);
 		} finally {
 			vi.unstubAllEnvs();
 			vi.unstubAllGlobals();
@@ -385,14 +392,100 @@ describe("merge --land", () => {
 		expect(pull.labels).toEqual(["quest:merge"]);
 	});
 
-	test("merges at once when nothing is left to wait for, with --squash or --rebase", async () => {
+	test("merges at once when nothing is left to wait for, with --squash or --rebase, releasing the hold", async () => {
 		for (const method of ["squash", "rebase"] as const) {
 			const pull = new FakePull();
 			pull.mergeState = "CLEAN";
 			const { token } = await take(PR, "merge", undefined, pull.deps());
 			await land(PR, token, HEAD, method, pull.deps());
-			expect(pull.writes.at(-1)).toBe(`mergePullRequest ${HEAD} ${method.toUpperCase()}`);
+			expect(pull.writes.slice(-2)).toEqual([
+				`mergePullRequest ${HEAD} ${method.toUpperCase()}`,
+				"remove quest:merge",
+			]);
+			expect(pull.labels).toEqual([]);
 		}
+	});
+
+	test("keeps the hold when GitHub does not report a direct merge merged", async () => {
+		const pull = new FakePull();
+		pull.mergeState = "CLEAN";
+		pull.mergeLeavesOpen = true;
+		const warnings: string[] = [];
+		const { token } = await take(PR, "merge", undefined, pull.deps());
+		await land(PR, token, HEAD, "merge", pull.deps(warnings));
+		expect(pull.writes.at(-1)).toBe(`mergePullRequest ${HEAD} MERGE`);
+		expect(pull.labels).toEqual(["quest:merge"]);
+		expect(warnings).toEqual([`${URL_} is open after merging, so quest:merge stays on`]);
+	});
+
+	describe("picks the repository's merge method", () => {
+		const allowing = (...methods: string[]) => {
+			const pull = new FakePull();
+			pull.methods = {
+				allow_merge_commit: methods.includes("merge"),
+				allow_squash_merge: methods.includes("squash"),
+				allow_rebase_merge: methods.includes("rebase"),
+			};
+			return pull;
+		};
+
+		test("uses the only method allowed without a flag", async () => {
+			for (const method of ["squash", "rebase"]) {
+				const pull = allowing(method);
+				const { token } = await take(PR, "merge", undefined, pull.deps());
+				await land(PR, token, HEAD, undefined, pull.deps());
+				expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} ${method.toUpperCase()}`);
+			}
+		});
+
+		test("keeps a merge commit by default while one is allowed", async () => {
+			const pull = allowing("merge", "squash");
+			const { token } = await take(PR, "merge", undefined, pull.deps());
+			await land(PR, token, HEAD, undefined, pull.deps());
+			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+		});
+
+		test("also applies with --direct", async () => {
+			const pull = allowing("squash");
+			pull.allowAutoMerge = false;
+			pull.mergeState = "CLEAN";
+			const { token } = await take(PR, "merge", undefined, pull.deps());
+			await land(PR, token, HEAD, undefined, pull.deps(), true);
+			expect(pull.writes.slice(-2)).toEqual([`mergePullRequest ${HEAD} SQUASH`, "remove quest:merge"]);
+		});
+
+		test("refuses, before changing labels, a named method the repository disallows or a choice it leaves open", async () => {
+			const cases: [string[], "merge" | "squash" | "rebase" | undefined, string][] = [
+				[["squash"], "merge", "does not allow merge merges; it allows squash"],
+				[["merge", "squash"], "rebase", "does not allow rebase merges; it allows merge, squash"],
+				[["squash", "rebase"], undefined, "pass --squash or --rebase"],
+				[[], undefined, "allows no merge method"],
+			];
+			for (const [methods, named, refusal] of cases) {
+				const pull = allowing(...methods);
+				const { token } = await take(PR, "iterate", undefined, pull.deps());
+				const writes = [...pull.writes];
+				expect(await refused(land(PR, token, HEAD, named, pull.deps()))).toContain(refusal);
+				expect(pull.writes).toEqual(writes);
+				expect(pull.labels).toEqual(["quest:iterate"]);
+			}
+		});
+
+		test("leaves a gated base or a merge queue to its own method", async () => {
+			const gated = allowing("merge");
+			gated.required = ["quest land"];
+			const { token } = await take(PR, "merge", undefined, gated.deps());
+			await land(PR, token, HEAD, undefined, gated.deps());
+			expect(gated.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`);
+
+			const queued = allowing("squash");
+			queued.queue = true;
+			const warnings: string[] = [];
+			const queuedHold = await take(PR, "merge", undefined, queued.deps());
+			await land(PR, queuedHold.token, HEAD, undefined, queued.deps(warnings));
+			expect(queued.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+			expect(warnings).toEqual([]);
+		});
 	});
 
 	test("enters the merge queue through auto-merge even when clean", async () => {
@@ -453,11 +546,13 @@ describe("merge --land", () => {
 			const { token } = await take(PR, "merge", undefined, pull.deps());
 			const before = pull.reads;
 			await land(PR, token, HEAD, "squash", pull.deps());
-			expect(pull.writes.slice(-2)).toEqual([
+			expect(pull.writes.slice(-3)).toEqual([
 				`enablePullRequestAutoMerge ${HEAD} SQUASH`,
 				`mergePullRequest ${HEAD} SQUASH`,
+				"remove quest:merge",
 			]);
-			expect(pull.reads - before).toBe(2); // The usual hold read, then one reread after refusal.
+			// The usual hold read, one reread after refusal, and one to confirm the merge.
+			expect(pull.reads - before).toBe(3);
 			expect(pull.state).toBe("MERGED");
 		},
 	);

@@ -163,18 +163,49 @@ export async function finish(pr: PullRequest, token: string, deps: GitHubDepende
 	});
 }
 
+/** The repository setting that allows each merge method. */
+const ALLOWS: Record<Method, string> = {
+	merge: "allow_merge_commit",
+	squash: "allow_squash_merge",
+	rebase: "allow_rebase_merge",
+};
+
+/**
+ * The method an ungated landing uses: the one `named`, which the repository must allow, else the
+ * only one it allows, else a merge commit. Settings hidden from the token leave GitHub to refuse.
+ */
+function mergeMethod(repository: ObjectValue, named: Method | undefined, url: string): Method {
+	const methods = Object.keys(ALLOWS) as Method[];
+	if (methods.some((method) => typeof repository[ALLOWS[method]] !== "boolean")) return named ?? "merge";
+	const allowed = methods.filter((method) => repository[ALLOWS[method]] === true);
+	if (named !== undefined) {
+		if (allowed.includes(named)) return named;
+		throw new Refusal(
+			`${url} repository does not allow ${named} merges; it allows ${allowed.join(", ") || "none"}`,
+		);
+	}
+	if (allowed.length === 1) return allowed[0];
+	if (allowed.includes("merge")) return "merge";
+	if (allowed.length === 0) throw new Refusal(`${url} repository allows no merge method`);
+	throw new Refusal(
+		`${url} repository does not allow merge commits; pass --${allowed.join(" or --")}, as its landing instructions in CONTRIBUTING.md or AGENTS.md name`,
+	);
+}
+
 /**
  * Take `pr` for merge, then land `sha`, which must still be its head: enable
  * auto-merge bound to it, which enters the merge queue when the base has one,
  * or merge at once when GitHub would refuse auto-merge because nothing is left to wait for.
+ * A direct merge releases the hold once GitHub reports the PR merged.
  * A base that requires the `quest land` check queues it for `quest land` instead:
  * squash auto-merge whose commit body pins `sha`.
+ * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one.
  */
 export async function land(
 	pr: PullRequest,
 	token: string,
 	sha: string,
-	method: Method,
+	named: Method | undefined,
 	deps: GitHubDependencies,
 	direct = false,
 ): Promise<Hold> {
@@ -187,15 +218,19 @@ export async function land(
 	// Pre-check before any label changes, preserving the caller's token on refusal.
 	let gated = false;
 	let checkedBase = "";
+	// A merge queue applies its own method, so only an ungated, unqueued landing picks one.
+	let method: Method = named ?? "merge";
 	const { hold, snapshot } = await acquire(labels, "merge", token, async (snapshot) => {
 		current(snapshot);
 		checkedBase = snapshot.base;
 		gated = (await requirements(labels.github, pr, snapshot.base)).checks.some(
 			(check) => check.name === LAND_CHECK,
 		);
+		if (gated || snapshot.queue) return;
+		const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
+		method = mergeMethod(repository, named, snapshot.url);
 		// A merge queue is the repository's own gate, so it decides; otherwise auto-merge must be on.
-		if (!gated && !direct && !snapshot.queue) {
-			const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
+		if (!direct) {
 			// GitHub shows the merge settings only to writers; fail closed, with a next step.
 			if (typeof repository.allow_auto_merge !== "boolean")
 				throw new Refusal(
@@ -214,7 +249,8 @@ export async function land(
 		}
 		current(snapshot);
 		if (gated) {
-			if (method !== "squash") deps.warn(`${snapshot.url} lands through quest land, which squashes`);
+			if (named !== undefined && named !== "squash")
+				deps.warn(`${snapshot.url} lands through quest land, which squashes`);
 			await enqueue(labels.github, snapshot.id, snapshot.head);
 			return;
 		}
@@ -232,7 +268,7 @@ export async function land(
 				`${snapshot.url} head ${snapshot.head} does not contain ${snapshot.base} at ${base}; merge the base and rerun the repository's checks before landing`,
 			);
 		}
-		if (snapshot.queue && method !== "merge") {
+		if (snapshot.queue && named !== undefined && named !== "merge") {
 			deps.warn(`${snapshot.url} lands through a merge queue, which applies its own merge method`);
 		}
 		const submit = (mutation: "mergePullRequest" | "enablePullRequestAutoMerge") =>
@@ -242,8 +278,18 @@ export async function land(
 			}`,
 				{ id: snapshot.id, sha: snapshot.head, method: method.toUpperCase() },
 			);
-		if (immediateMerge(snapshot.mergeState, snapshot.queue)) {
+		/** Merge at once, then release the hold: only a queued or auto-merging PR keeps it. */
+		const merge = async () => {
 			await submit("mergePullRequest");
+			const merged = await labels.read();
+			if (merged.state !== "MERGED") {
+				deps.warn(`${merged.url} is ${merged.state.toLowerCase()} after merging, so ${hold.label} stays on`);
+				return;
+			}
+			if (heldToken(merged, hold.label) === hold.token) await labels.remove(hold.label);
+		};
+		if (immediateMerge(snapshot.mergeState, snapshot.queue)) {
+			await merge();
 			return;
 		}
 		try {
@@ -261,7 +307,7 @@ export async function land(
 				(await requirements(labels.github, pr, fresh.base)).checks.some((check) => check.name === LAND_CHECK)
 			)
 				throw error;
-			await submit("mergePullRequest");
+			await merge();
 		}
 	});
 }

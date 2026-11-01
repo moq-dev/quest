@@ -59,7 +59,7 @@ export async function enqueue(github: GitHub, id: string, head: string): Promise
 }
 
 /** The head an auto-merge commit body pins, if any. */
-function pinned(body: string): string | null {
+export function pinned(body: string): string | null {
 	return new RegExp(`^${PIN}: ([0-9a-f]{40})$`, "m").exec(body)?.[1] ?? null;
 }
 
