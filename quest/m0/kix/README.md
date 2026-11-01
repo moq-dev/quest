@@ -43,12 +43,12 @@ operator-paid-hosting decisions:
   the whole default UI. Raw agent output is collapsed behind a per-job
   disclosure that only current maintainers can expand.
 - **Phone first.** m0 ships an installable PWA with Web Push for decision
-  items. A [native mobile app](/quest/m2/mobile-app.md) follows in m1.
+  items. A [native mobile app](/quest/m2/mobile-app.md) follows in m2.
 - **Your own runners first.** `quest runner` turns any Linux or macOS machine
   into a runner. It claims jobs over HTTPS and drives the official CLIs with
   that machine's own logins, so kix never holds provider tokens. There are no
   Windows runners. Free, capped [cloud runners](/quest/m2/cloud/README.md)
-  and API-key or donor funding follow in m1, with paid compute later.
+  and API-key or donor funding follow in m2, with paid compute later.
 - **Abstract the CLIs.** A runner adapter interface hides each CLI: start or
   resume, structured questions, checkpoint summaries, and results. Claude
   Code covers Claude subscriptions; opencode covers OpenCode Go, ChatGPT
@@ -63,7 +63,7 @@ operator-paid-hosting decisions:
   shell, with no other way to install dependencies, for cache efficiency and
   reproducibility. The runner pins the agent CLIs through Nix as well.
   Runners keep a persistent local store and honor the flake's substituters;
-  a [shared cache](/quest/m2/automation/cache.md) follows in m1.
+  a [shared cache](/quest/m2/automation/cache.md) follows in m2.
 - **Sandboxed jobs.** Every job's commands run in an OS sandbox. PR heads
   with non-maintainer commits route to Linux runners, which build the PR's
   devShell in a VM first; macOS runners take trusted revisions only. Cloud

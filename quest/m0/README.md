@@ -36,9 +36,6 @@ Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
   and opencode sandboxing stay, since moq-dev's own jobs need them.
 - moq-dev/moq comes first, then private repositories so moq.pro can enroll.
 
-Decided while planning the first release (2026-09-26), replacing the earlier
-copied-files and ownership-manifest design:
-
 Decided while planning m0 (2026-09-26), replacing the earlier copied-files and
 ownership-manifest design:
 

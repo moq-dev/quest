@@ -18,11 +18,12 @@ service before it works for moq-dev's own repositories.
   - Anyone, with the host simply not advertised
 
 - A Worker variable such as `ENROLL_OWNERS` in `cloudflare/wrangler.jsonc`
-  holds a comma-separated list of GitHub owner logins. Enrollment checks it
+  holds a comma-separated list of GitHub owner IDs, with each owner's login
+  in a comment beside it. Enrollment checks the repository owner's ID
   beside its existing checks; webhooks from other owners' installations are
   acknowledged and dropped. The local dev seed's owners are listed in dev.
-- Compare GitHub's owner ID, not just the login, so a renamed or recreated
-  account can't take over the name; resolve logins to IDs when the list is
-  read.
+- Store IDs, not logins resolved at read time: GitHub frees a deleted or
+  renamed account's login for anyone to claim, so a name lookup could
+  admit a different account.
 - [Open kix.quest](/quest/m1/open.md) removes the allowlist for the launch.
 - Test enrollment and a webhook for a listed and an unlisted owner.
