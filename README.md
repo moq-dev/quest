@@ -506,7 +506,9 @@ is passed to it. The daemon refuses to start without `--sandbox`. The optional
 fixer runs as tracked background work, receiving the full log path followed by
 PR numbers, with the same restricted environment (`PATH` and `LANG` only).
 Its cwd is the standalone repository, with `batch`, `base`, and `pr-<n>` branches.
-The wrapper starts an ephemeral container and runs `quest land fix <log> <prs...>`
+For a base that fails its check alone it receives only the log path, and the
+repository has only `base`.
+The wrapper starts an ephemeral container and runs `quest land fix <log> [prs...]`
 there, exposing that repository read/write and the log read-only at the given paths.
 It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses
 endpoint, including `/v1`) and `OPENAI_API_KEY` (the gate's proxy client key).
@@ -525,7 +527,9 @@ replace it for another CLI. It writes `<cwd>/quest-land-result.json`: an array o
 `{number, action:"handback", diagnosis, recommendation}`, with no extra fields
 beyond an optional `blame: true` on each PR that caused the failure (a blamed PR is
 fixed or handed back), and on a handback an optional `log: [first, last]` citing the
-failure log's lines, which its comment quotes.
+failure log's lines, which its comment quotes. For the base alone, it writes one
+object instead: `{action:"fixed", head, reason}` with the fix committed on `base`,
+or `{action:"handback", diagnosis, recommendation}`.
 The payload adds `agent` and `model` metadata to each result (`--model <id>`
 selects the default Codex model; unknown models fall back to `Codex`).
 Reasons and diagnoses are single lines. Fixed heads must be committed on `pr-<n>`.
@@ -563,16 +567,24 @@ quest links with `quest resolve`. A failed batch halves the next batch's size,
 down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
 additions stay queued. A PR whose required checks are still running stays queued
-and sits out batches until they pass. The sandbox checks the tip once, without
+and sits out batches until they pass. If any are still pending two hours after
+its pick (twice the default `--timeout`), the daemon comments once on that pick,
+naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
 bisection: success lands one squash commit per PR. A failure, or a base that
 conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
 auto-merge, `quest:merge`, and place, get no comment, and sit out batches while its
 job runs, so the rest of the queue keeps landing. The fixer reads the log and blames
 the PRs that caused it; the others go back to batches unchanged. When it blames
 none, the daemon checks the base alone. A green base leaves every PR to the fixer's
-verdict, as if blamed. A red base releases them all and halts the queue with one
-issue saying so; nothing lands until the base moves and its check passes, which
-closes the issue. The daemon collects a finished fixer job even while a check runs.
+verdict, as if blamed. A red base releases them all and halts the queue: nothing
+lands until the base moves and its check passes. The fixer then runs on the base
+alone. The daemon validates its fix as it would a PR's, protected paths
+included, pushes it to a `quest-land/fix-<sha>` branch, and opens it as a pull
+request for a maintainer to merge as an administrator. Only when the fixer cannot
+fix the base, or there is no fixer, does an issue say the queue is halted. If the
+base moves and still fails, the daemon closes that fix and runs the fixer on the
+new base. Once a check of a moved base passes, the queue resumes, and the daemon
+closes the issue and any fix it no longer needs. The daemon collects a finished fixer job even while a check runs.
 Without a fixer, a failure ejects the batch instead: ejection disables auto-merge,
 removes `quest:merge`, and comments with the reason and the failing log, bounded by
 size. When GitHub refuses one PR's squash merge, only that PR stops: a conflict is

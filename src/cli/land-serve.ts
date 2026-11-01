@@ -1,6 +1,7 @@
 // Host orchestration: PR code runs only through the configured sandbox.
 import { authenticatedRead } from "./land-git";
-import { startFixer, collectFixers, handbackRepeated } from "./land-fixer";
+import { startFixer, startBaseFixer, collectFixers, handbackRepeated } from "./land-fixer";
+import { closeFix, fixing, haltNotice, readHalt, resume, saveHalt } from "./land-halt";
 import { batchable } from "./land-park";
 import { spawn } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
@@ -288,6 +289,43 @@ async function reportOverlaps(github: GitHub, plan: Plan, state: string, overlap
 	return output;
 }
 
+/**
+ * How long after its pick a PR may wait on pending required checks before its author is told which.
+ * Twice the default check deadline (`--timeout`), so a slow but running CI rarely trips it.
+ */
+export const STALLED_AFTER = 2 * 60 * 60_000;
+
+/**
+ * Comment once per pick on each PR still waiting on required checks `STALLED_AFTER` its pick, naming
+ * them: a check that never reports, such as one whose workflow skips the PR, would otherwise hold it
+ * in the queue without a word.
+ */
+async function reportStalled(github: GitHub, plan: Plan, state: string, now: number): Promise<string[]> {
+	const path = join(state, "stalled.json");
+	const told = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Record<number, string>) : {};
+	// Only picks still queued are remembered; a new pick is told again.
+	const kept: Record<number, string> = Object.fromEntries(
+		[...plan.queue, ...(plan.waiting ?? [])].flatMap((entry) =>
+			told[entry.number] === entry.enabledAt ? [[entry.number, entry.enabledAt]] : [],
+		),
+	);
+	const output: string[] = [];
+	for (const waiting of plan.waiting ?? []) {
+		if (kept[waiting.number] === waiting.enabledAt || now - Date.parse(waiting.enabledAt) < STALLED_AFTER) continue;
+		const list = waiting.pending.map((name) => `- <code>${excerpt(name)}</code>`).join("\n");
+		await github.request(`/repos/${plan.repository}/issues/${waiting.number}/comments`, {
+			body: {
+				body: `quest land: this pull request is queued, but ${waiting.pending.length === 1 ? "a required check is" : "required checks are"} still pending on its head ${STALLED_AFTER / 3_600_000} hours after it was picked:\n\n${list}\n\nIt keeps its place and joins a batch once they pass. A check that never reports, such as one whose workflow does not run on this pull request, holds it here: run that check, or ask a maintainer to change the checks ${plan.base.ref} requires.`,
+			},
+		});
+		kept[waiting.number] = waiting.enabledAt;
+		save(path, kept);
+		output.push(`stalled ${waiting.number} ${waiting.pending.join(",")}`);
+	}
+	save(path, kept);
+	return output;
+}
+
 type MergeResult =
 	{ sha: string } | { reason: "head_moved" | "merge_conflict" | "merge_refused"; detail: string } | null;
 
@@ -410,21 +448,10 @@ async function runSandbox(
 	}
 }
 
-/** A red base the queue is halted on, and the issue that says so. */
-interface Halt {
-	sha: string;
-	issue?: number;
-}
-const HALT = "halt.json";
-
-function readHalt(state: string): Halt | undefined {
-	const path = join(state, HALT);
-	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Halt) : undefined;
-}
-
 /**
  * Check the base alone, as when the fixer cannot tell which PR broke a batch. A red base halts the
- * queue with one issue saying so; no PR is blamed for it. Returns whether the base passed.
+ * queue, and no PR is blamed for it. The fixer then works on the base alone, and its fix is proposed
+ * as a PR; without a fixer, an issue says the queue is halted. Returns whether the base passed.
  */
 export async function checkBase(
 	root: string,
@@ -434,47 +461,35 @@ export async function checkBase(
 	deps: GitHubDependencies,
 	read: RemoteRead = readRemote,
 ): Promise<boolean> {
-	// Already halted on this base: another failing batch on it needs no second check or notice.
+	// Already halted on this base: another failing batch on it needs no second check or fix.
 	if (readHalt(options.state)?.sha === base.sha) return false;
 	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote({ repository }), base.sha]);
 	const log = join(options.state, `base-${Date.now()}-${base.sha.slice(0, 12)}.log`);
 	if ((await runSandbox(root, options, base.sha, 0, base.sha, log)) === 0) return true;
 	const github = new GitHub(deps);
 	const halt = readHalt(options.state);
-	const output = `<pre>${excerpt(readFileSync(log, "utf8").trimEnd())}</pre>`;
-	if (halt?.issue !== undefined) {
-		if (halt.sha !== base.sha)
-			await github.request(`/repos/${repository}/issues/${halt.issue}/comments`, {
-				body: { body: `${base.ref} moved to ${base.sha}, which also fails its check alone.\n\n${output}` },
-			});
-		save(join(options.state, HALT), { ...halt, sha: base.sha } satisfies Halt);
+	// A fix proposed for an earlier red base is superseded: the fixer proposes one for this base.
+	if (halt?.fix)
+		await closeFix(
+			github,
+			repository,
+			halt.fix,
+			`${base.ref} moved to ${base.sha}, which still fails its check alone, so quest land closes this fix and tries again on the new base.`,
+		);
+	saveHalt(options.state, { sha: base.sha, ...(halt?.issue === undefined ? {} : { issue: halt.issue }) });
+	if (options.fixer) {
+		await startBaseFixer(root, options.state, repository, base, log, options.fixer, deps);
 		return false;
 	}
-	const response = await github.request(`/repos/${repository}/issues`, {
-		body: {
-			title: `quest land: ${base.ref} fails its own check, so the queue is halted`,
-			body: `quest land checked ${base.ref} alone at ${base.sha}, after a failing batch whose fixer blamed none of its pull requests, and the base fails too. No pull request is blamed or ejected for it. The queue is halted: queued pull requests keep their auto-merge and their place, and nothing lands until a check of ${base.ref} passes. The gate checks it again whenever it moves, and closes this issue then.\n\n${output}\n\n<!-- quest land: halted -->`,
-		},
-	});
-	save(join(options.state, HALT), {
-		sha: base.sha,
-		issue: Number(object(await response.json()).number),
-	} satisfies Halt);
+	await haltNotice(
+		github,
+		options.state,
+		repository,
+		base,
+		"No land fixer is configured to propose a fix.",
+		`<pre>${excerpt(readFileSync(log, "utf8").trimEnd())}</pre>`,
+	);
 	return false;
-}
-
-/** A passing check of a moved base resumes a halted queue and closes its issue. */
-async function resume(github: GitHub, state: string, repository: string, base: Plan["base"]): Promise<void> {
-	const halt = readHalt(state);
-	if (!halt) return;
-	if (halt.issue !== undefined) {
-		const issue = `/repos/${repository}/issues/${halt.issue}`;
-		await github.request(`${issue}/comments`, {
-			body: { body: `${base.ref} passes its check at ${base.sha}, so the queue resumed.` },
-		});
-		await github.request(issue, { method: "PATCH", body: { state: "closed" } });
-	}
-	rmSync(join(state, HALT));
 }
 
 export async function serveBatch(
@@ -496,13 +511,26 @@ export async function serveBatch(
 		await report(item);
 		await handbackRepeated(options.state, plan, item, deps);
 	}
+	output.push(...(await reportStalled(github, plan, options.state, deps.now())));
 	// Parked PRs sit out until their fixer job is collected; the rest keep their places.
 	const batch = batchable(options.state, plan);
 	if (batch.queue.length === 0) return output;
 	// A halted queue waits for its base to move, then resumes once the new base passes alone.
 	const halt = readHalt(options.state);
 	if (halt) {
-		if (halt.sha === plan.base.sha) return output;
+		if (halt.sha === plan.base.sha) {
+			// A crash between the halt and its fixer's launch leaves nothing to end the attempt.
+			if (!halt.fix && !halt.noticed && !fixing(options.state, halt.sha))
+				await haltNotice(
+					github,
+					options.state,
+					plan.repository,
+					plan.base,
+					"The land fixer's job on it was lost.",
+					"",
+				);
+			return output;
+		}
 		if (!(await checkBase(root, plan.repository, plan.base, options, deps, read))) return output;
 		await resume(github, options.state, plan.repository, plan.base);
 	}

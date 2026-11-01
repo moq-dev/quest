@@ -5,6 +5,7 @@ import {
 	constants,
 	existsSync,
 	fstatSync,
+	mkdtempSync,
 	openSync,
 	readSync,
 	readdirSync,
@@ -31,10 +32,11 @@ import {
 	type Plan,
 	type Reason,
 } from "./land";
-import { readFixResult, parseFixResult, type FixResult } from "./land-fix";
+import { readFixResult, parseBaseFix, parseFixResult, type BaseFix, type FixResult } from "./land-fix";
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
-import { push } from "./land-head";
+import { push, remoteHead } from "./land-head";
+import { BASE_JOB, type Halt, haltNotice, readHalt, saveHalt } from "./land-halt";
 import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
 
@@ -66,8 +68,21 @@ function fixerLog(path: string): string {
 	}
 }
 
-interface Job {
+/** A fixer process the daemon tracks across restarts, and how it ended. */
+interface Process {
 	checkout: string;
+	started: number;
+	terminating?: number;
+	pid?: number;
+	identity?: string;
+	/** The launching daemon's process identity, to tell a restart from a crash. */
+	daemon?: string;
+	/** Packs fetched from the daemon's repository at launch; their objects are already there. */
+	packs?: string[];
+	error?: string;
+}
+
+interface Job extends Process {
 	plan: Plan;
 	/** The PRs this job parks until each one's result is collected; see `parked`. */
 	numbers: number[];
@@ -81,16 +96,7 @@ interface Job {
 	blame?: number[];
 	/** When the fixer blamed none: whether the base alone passed its check. */
 	base?: boolean;
-	started: number;
-	terminating?: number;
-	pid?: number;
-	identity?: string;
-	/** The launching daemon's process identity, to tell a restart from a crash. */
-	daemon?: string;
-	/** Packs fetched from the daemon's repository at launch; their objects are already there. */
-	packs?: string[];
 	results?: FixResult[];
-	error?: string;
 	handbacks?: Record<number, string>;
 	/** PRs a handback is taking out of the queue, recorded before their auto-merge is disabled. */
 	left?: number[];
@@ -217,23 +223,16 @@ export async function startFixer(
 		rmSync(checkout, { recursive: true, force: true });
 		return lines;
 	}
-	git(checkout, ["init", "--quiet"]);
-	// No background gc or maintenance may rewrite objects while the daemon imports the fixer's result.
-	git(checkout, ["config", "gc.auto", "0"]);
-	git(checkout, ["config", "maintenance.auto", "false"]);
-	git(checkout, [
-		"fetch",
-		"--quiet",
-		"--no-tags",
-		"--no-write-fetch-head",
+	const packs = prepare(
 		root,
-		`${failure.tip}:refs/heads/batch`,
-		`${failure.plan.base.sha}:refs/heads/base`,
-		...entries.map((entry) => `${entry.head}:refs/heads/pr-${entry.number}`),
-	]);
-	git(checkout, ["config", "user.name", "quest fixer"]);
-	git(checkout, ["config", "user.email", "quest-fixer@localhost"]);
-	git(checkout, ["checkout", "--quiet", "--detach", failure.tip]);
+		checkout,
+		[
+			`${failure.tip}:refs/heads/batch`,
+			`${failure.plan.base.sha}:refs/heads/base`,
+			...entries.map((entry) => `${entry.head}:refs/heads/pr-${entry.number}`),
+		],
+		failure.tip,
+	);
 	const path = join(state, `fix-job-${checkout.split("/").at(-1)}.json`);
 	const job: Job = {
 		checkout,
@@ -245,12 +244,181 @@ export async function startFixer(
 		...(failure.blame ? { blame: failure.blame } : {}),
 		started: deps.now(),
 		daemon: identity(process.pid),
-		packs: readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack")),
+		packs,
 		published: [],
 	};
+	await launch(path, job, fixer, failure.log, job.numbers);
+	for (const number of job.numbers) lines.push(`parked ${number}`);
+	return lines;
+}
+
+/**
+ * A standalone repository in `checkout` holding `refs` fetched from the daemon's, detached at
+ * `start`. Returns the packs the fetch wrote, whose objects the daemon already has.
+ */
+function prepare(root: string, checkout: string, refs: string[], start: string): string[] {
+	git(checkout, ["init", "--quiet"]);
+	// No background gc or maintenance may rewrite objects while the daemon imports the fixer's result.
+	git(checkout, ["config", "gc.auto", "0"]);
+	git(checkout, ["config", "maintenance.auto", "false"]);
+	git(checkout, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", root, ...refs]);
+	git(checkout, ["config", "user.name", "quest fixer"]);
+	git(checkout, ["config", "user.email", "quest-fixer@localhost"]);
+	git(checkout, ["checkout", "--quiet", "--detach", start]);
+	return readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack"));
+}
+
+/** A fixer job on the base alone, which fails its check with no PR applied. */
+interface BaseJob extends Process {
+	repository: string;
+	base: Plan["base"];
+	/** The base's failing check log, which the fixer reads and a halt notice quotes. */
+	log: string;
+	result?: BaseFix;
+}
+
+/**
+ * Start the fixer on a base that fails its check alone, with only its `base` branch. Its fix is
+ * proposed as a PR for a maintainer to merge; without one, the queue's halt gets an issue.
+ */
+export async function startBaseFixer(
+	root: string,
+	state: string,
+	repository: string,
+	base: Plan["base"],
+	log: string,
+	fixer: string,
+	deps: Pick<GitHubDependencies, "now">,
+): Promise<void> {
+	const checkout = mkdtempSync(join(state, "fix-"));
+	try {
+		const packs = prepare(root, checkout, [`${base.sha}:refs/heads/base`], base.sha);
+		const job: BaseJob = {
+			checkout,
+			repository,
+			base,
+			log,
+			started: deps.now(),
+			daemon: identity(process.pid),
+			packs,
+		};
+		await launch(join(state, `fix-base-${basename(checkout)}.json`), job, fixer, log, []);
+	} catch (error) {
+		rmSync(checkout, { recursive: true, force: true });
+		throw error;
+	}
+}
+
+/**
+ * Publish a finished base job's outcome while the queue is still halted on its base: its fix as a
+ * PR, or else the halt's issue. A job whose base the queue moved past is discarded.
+ */
+async function collectBaseJob(
+	root: string,
+	state: string,
+	path: string,
+	job: BaseJob,
+	deps: GitHubDependencies,
+	token: (workflows: boolean) => Promise<string>,
+	timeout: number,
+	read: RemoteRead,
+): Promise<string[]> {
+	if (
+		!job.result &&
+		!job.error &&
+		!settle(path, job, deps, timeout, () => (job.result = parseBaseFix(readFixResult(job.checkout))))
+	)
+		return [];
+	const output: string[] = [];
+	const halt = readHalt(state);
+	if (halt?.sha === job.base.sha && !halt.fix && !halt.noticed) {
+		const github = new GitHub(deps);
+		const result = job.result;
+		let error = job.error?.replace(/; run \/quest-iterate.*$/, "");
+		if (!error && result?.action === "fixed") {
+			try {
+				const fix = await proposeFix(root, state, job, result, deps, token, read);
+				saveHalt(state, { ...halt, fix });
+				if (halt.issue !== undefined)
+					await github.request(`/repos/${job.repository}/issues/${halt.issue}/comments`, {
+						body: {
+							body: `${job.base.ref} fails its check alone at ${job.base.sha} too. The land fixer proposes a mechanical fix in #${fix.number}.`,
+						},
+					});
+				output.push(`proposed ${fix.number}`);
+			} catch (failure) {
+				if (!(failure instanceof FixerRefusal)) throw failure;
+				error = failure.message;
+			}
+		}
+		const cause = error
+			? `The land fixer could not propose a fix: ${error}.`
+			: result?.action === "handback"
+				? `The land fixer could not fix it mechanically: ${fixerText(result.diagnosis)}. Recommendation: ${fixerText(result.recommendation)}.`
+				: undefined;
+		if (cause) {
+			const log = existsSync(job.log) ? readFileSync(job.log, "utf8").trimEnd() : "";
+			await haltNotice(github, state, job.repository, job.base, cause, log && `<pre>${excerpt(log)}</pre>`);
+			output.push(`halted ${job.base.sha}`);
+		}
+	}
+	rmSync(job.checkout, { recursive: true, force: true });
+	rmSync(`${path}.exit`, { force: true });
+	rmSync(path);
+	return output;
+}
+
+/** Push a base fix to its own branch, as validated as a PR's, and open it as a PR, once. */
+async function proposeFix(
+	root: string,
+	state: string,
+	job: BaseJob,
+	result: BaseFix & { action: "fixed" },
+	deps: GitHubDependencies,
+	token: (workflows: boolean) => Promise<string>,
+	read: RemoteRead,
+): Promise<NonNullable<Halt["fix"]>> {
+	const { base, repository } = job;
+	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote({ repository }), base.sha]);
+	try {
+		importFixer(root, state, job.checkout, "base", result.head, job.packs);
+		// The fix may not edit protected paths: they must stay as the base has them.
+		validateFix(root, { head: base.sha }, result.head, base.sha);
+	} catch (error) {
+		throw new FixerRefusal(String(error));
+	}
+	const branch = `quest-land/fix-${base.sha.slice(0, 12)}`;
+	const remote = `https://github.com/${repository}.git`;
+	const ref = `refs/heads/${branch}`;
+	// A retry after a restart finds its own push already there.
+	if ((await remoteHead(root, remote, ref, read)) !== result.head) {
+		const pushed = await push(root, remote, base.sha, result.head, ref, token, "");
+		if (pushed.status !== 0) throw new FixerRefusal(`fix push refused: ${pushed.stderr.trim()}`);
+	}
+	const github = new GitHub(deps);
+	const head = `${repository.split("/")[0]}:${branch}`;
+	const [open] = await github.all(`/repos/${repository}/pulls?head=${encodeURIComponent(head)}&state=open`);
+	if (open) return { number: Number(open.number), branch };
+	const attribution = author(result);
+	const log = existsSync(job.log) ? readFileSync(job.log, "utf8").trimEnd() : "";
+	const response = await github.request(`/repos/${repository}/pulls`, {
+		body: {
+			title: `quest land: fix ${base.ref}, which fails its own check`,
+			head,
+			base: base.ref,
+			body: `${base.ref} fails its own check at ${base.sha}, so quest land halted its queue. Its land fixer proposes this mechanical fix: ${fixerText(result.reason)}\n\nMerge it as an administrator: the queue resumes once a check of the new ${base.ref} passes. If ${base.ref} passes without it first, quest land closes this pull request.${log ? `\n\n<pre>${excerpt(log)}</pre>` : ""}${review("", result.head, result.reason, attribution)}\n\n(written by ${attribution})`,
+		},
+	});
+	return { number: Number(object(await response.json()).number), branch };
+}
+
+/**
+ * Save `job`, then start the fixer wrapper on it under a supervisor that survives a daemon restart
+ * and atomically records the wrapper's exit status. Its state path is never passed to the wrapper
+ * or mounted in its container.
+ */
+async function launch(path: string, job: Process, fixer: string, log: string, numbers: number[]): Promise<void> {
 	save(path, job);
-	// The supervisor survives a daemon restart and atomically records the wrapper's exit status.
-	// Its state path is never passed to the wrapper or mounted in its container.
 	const output = openSync(
 		`${path}.log`,
 		constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW,
@@ -266,10 +434,10 @@ export async function startFixer(
 				"quest-fixer",
 				`${path}.exit`,
 				fixer,
-				failure.log,
-				...job.numbers.map(String),
+				log,
+				...numbers.map(String),
 			],
-			{ cwd: checkout, detached: true, env: commandEnvironment(), stdio: ["ignore", output, output] },
+			{ cwd: job.checkout, detached: true, env: commandEnvironment(), stdio: ["ignore", output, output] },
 		);
 	} finally {
 		closeSync(output);
@@ -286,12 +454,51 @@ export async function startFixer(
 	}
 	save(path, job);
 	child.unref();
-	for (const number of job.numbers) lines.push(`parked ${number}`);
-	return lines;
+}
+
+/** Whether the fixer process ended, recording its error or, on a clean exit, reading its result with `read`. */
+function settle(path: string, job: Process, deps: GitHubDependencies, timeout: number, read: () => void): boolean {
+	// A restart stops the daemon's whole unit, fixers included, unless the host keeps them running.
+	const daemon = identity(process.pid);
+	const restarted = job.daemon && daemon && job.daemon !== daemon ? "; the daemon restarted while it ran" : "";
+	if (existsSync(`${path}.exit`)) {
+		const code = readFileSync(`${path}.exit`, "utf8");
+		if (job.terminating !== undefined) job.error = "fixer timed out; run /quest-iterate";
+		else if (code !== "0") job.error = `fixer ${exited(code)}${restarted}; run /quest-iterate`;
+		else
+			try {
+				read();
+			} catch (error) {
+				job.error = `invalid fixer result: ${String(error)}; run /quest-iterate`;
+			}
+	} else if (deps.now() - job.started > timeout * 60_000) {
+		if (job.terminating === undefined) {
+			job.terminating = deps.now();
+			if (job.pid && job.identity && identity(job.pid) === job.identity) {
+				try {
+					process.kill(-job.pid, "SIGTERM");
+				} catch {}
+			}
+			save(path, job);
+			return false;
+		}
+		if (deps.now() - job.terminating < 10_000) return false;
+		if (job.pid && job.identity && identity(job.pid) === job.identity) {
+			try {
+				process.kill(-job.pid, "SIGKILL");
+			} catch {}
+		}
+		job.error = "fixer timed out; run /quest-iterate to diagnose and retry";
+	}
+	// Without a launch identity (an unreadable /proc), only its exit status or the timeout can end the job.
+	else if (!job.identity || (job.pid && identity(job.pid) === job.identity)) return false;
+	else job.error = `fixer stopped without recording an exit status${restarted}; run /quest-iterate`;
+	save(path, job);
+	return true;
 }
 
 /** New commits descend from the pin. Protected content/modes at the head must match the pin or its merge with `base`, the base the fixer was given. */
-export function validateFix(root: string, entry: Entry, head: string, base: string): void {
+export function validateFix(root: string, entry: Pick<Entry, "head">, head: string, base: string): void {
 	if (!contains(root, entry.head, head) || head === entry.head)
 		throw new Error("fixed head must descend from the pinned PR head");
 	for (const commit of git(root, ["rev-list", head, `^${entry.head}`, `^${base}`])
@@ -369,6 +576,16 @@ export async function collectFixers(
 	checkBase?: (base: Plan["base"]) => Promise<boolean>,
 ): Promise<string[]> {
 	const output: string[] = [];
+	for (const name of readdirSync(state).filter((name) => BASE_JOB.test(name))) {
+		const path = join(state, name);
+		try {
+			const job = JSON.parse(readFileSync(path, "utf8")) as BaseJob;
+			output.push(...(await collectBaseJob(root, state, path, job, deps, token, timeout, read)));
+		} catch (error) {
+			// The queue stays halted on its base meanwhile; nothing else waits on this job.
+			deps.warn(`quest land fixer: base fix pending for ${name}: ${String(error)}`);
+		}
+	}
 	for (const name of readdirSync(state).filter((name) => /^fix-job-.*\.json$/.test(name))) {
 		const path = join(state, name);
 		let job: Job;
@@ -419,44 +636,18 @@ async function collectJob(
 ): Promise<string[]> {
 	const github = new GitHub(deps);
 	const output: string[] = [];
-	if (!job.results && !job.error) {
-		// A restart stops the daemon's whole unit, fixers included, unless the host keeps them running.
-		const daemon = identity(process.pid);
-		const restarted = job.daemon && daemon && job.daemon !== daemon ? "; the daemon restarted while it ran" : "";
-		if (existsSync(`${path}.exit`)) {
-			const code = readFileSync(`${path}.exit`, "utf8");
-			if (job.terminating !== undefined) job.error = "fixer timed out; run /quest-iterate";
-			else if (code !== "0") job.error = `fixer ${exited(code)}${restarted}; run /quest-iterate`;
-			else
-				try {
-					job.results = parseFixResult(readFixResult(job.checkout), job.numbers);
-				} catch (error) {
-					job.error = `invalid fixer result: ${String(error)}; run /quest-iterate`;
-				}
-		} else if (deps.now() - job.started > timeout * 60_000) {
-			if (job.terminating === undefined) {
-				job.terminating = deps.now();
-				if (job.pid && job.identity && identity(job.pid) === job.identity) {
-					try {
-						process.kill(-job.pid, "SIGTERM");
-					} catch {}
-				}
-				save(path, job);
-				return output;
-			}
-			if (deps.now() - job.terminating < 10_000) return output;
-			if (job.pid && job.identity && identity(job.pid) === job.identity) {
-				try {
-					process.kill(-job.pid, "SIGKILL");
-				} catch {}
-			}
-			job.error = "fixer timed out; run /quest-iterate to diagnose and retry";
-		}
-		// Without a launch identity (an unreadable /proc), only its exit status or the timeout can end the job.
-		else if (!job.identity || (job.pid && identity(job.pid) === job.identity)) return output;
-		else job.error = `fixer stopped without recording an exit status${restarted}; run /quest-iterate`;
-		save(path, job);
-	}
+	if (
+		!job.results &&
+		!job.error &&
+		!settle(
+			path,
+			job,
+			deps,
+			timeout,
+			() => (job.results = parseFixResult(readFixResult(job.checkout), job.numbers)),
+		)
+	)
+		return output;
 	const named = job.results?.some((result) => result.blame === true) ?? false;
 	// The fixer could not say which PR broke the batch: check the base alone before anything else
 	// happens to them. A PR's content cannot skip this, since only the gate runs it.
@@ -532,7 +723,7 @@ async function collectJob(
 					if (entry.repository !== job.plan.repository && !entry.maintainerCanModify)
 						throw new FixerRefusal("fork does not allow maintainer edits");
 					try {
-						importFixer(root, state, job.checkout, number, head, job.packs);
+						importFixer(root, state, job.checkout, `pr-${number}`, head, job.packs);
 					} catch (error) {
 						throw new FixerRefusal(String(error));
 					}

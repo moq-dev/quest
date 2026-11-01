@@ -26,7 +26,7 @@ import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import { collectFixers, validateFix, fixerText, handbackRepeated } from "../src/cli/land-fixer";
 import { importFixer } from "../src/cli/land-fixer-repository";
 import fixerPrompt from "../assets/land-fix.md";
-import { fix, parseFixResult } from "../src/cli/land-fix";
+import { fix, parseBaseFix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
 import type { GitHubDependencies } from "../src/cli/github";
 import {
@@ -54,6 +54,7 @@ import {
 	readPolicy,
 	resumeFailure,
 	serveBatch,
+	STALLED_AFTER,
 } from "../src/cli/land-serve";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { tempDir } from "./fixture";
@@ -331,6 +332,14 @@ class Forge {
 				const number = /\/pulls\/(\d+)\/merge$/.exec(String(input))?.[1];
 				if (number && init?.method === "PUT") this.beforeMerge?.(Number(number));
 				this.sync();
+				// GitHub knows a branch the daemon pushed before it opens a PR from it.
+				if (String(input).endsWith("/pulls") && init?.method === "POST") {
+					const branch = String(JSON.parse(String(init.body)).head).split(":")[1];
+					const tip = spawnSync("git", ["-C", this.origin, "rev-parse", `refs/heads/${branch}`], {
+						encoding: "utf8",
+					});
+					if (tip.status === 0) this.repo.branches[branch] = tip.stdout.trim();
+				}
 				let root: string | undefined;
 				if (number && init?.method === "PUT") {
 					const body = JSON.parse(String(init.body));
@@ -795,7 +804,14 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			[1, "not_pinned"],
 		]);
 		// Its required checks are still running: it stays queued, keeping its auto-merge, and sits out batches.
-		expect(plan.waiting).toEqual([5]);
+		expect(plan.waiting).toEqual([
+			{
+				number: 5,
+				url: "https://github.com/upstream/project/pull/5",
+				enabledAt: "2026-10-26T00:00:05Z",
+				pending: ["test"],
+			},
+		]);
 	});
 
 	test("refuses a base that does not require the quest land check", async () => {
@@ -832,7 +848,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		const plan = await resolveQueue(REPOSITORY, "main", await forge.deps());
 		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[2, "failed_checks"]]);
-		expect(plan.waiting).toEqual([3]);
+		expect(plan.waiting?.map(({ number }) => number)).toEqual([3]);
 	});
 
 	test("counts a required check only from the app its rule names", async () => {
@@ -858,7 +874,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		const plan = await resolveQueue(REPOSITORY, "main", await forge.deps());
 		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
 		expect(plan.eject).toEqual([]);
-		expect(plan.waiting).toEqual([2, 3]);
+		expect(plan.waiting?.map(({ number }) => number)).toEqual([2, 3]);
 	});
 
 	test("refuses ruleset rules it does not uphold before reading the queue", async () => {
@@ -934,7 +950,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			[3, "unresolved_conversations"],
 			[4, "review_required"],
 		]);
-		expect(plan.waiting).toEqual([2]);
+		expect(plan.waiting?.map(({ number }) => number)).toEqual([2]);
 	});
 
 	test("refuses classic protection settings it does not uphold, or cannot read", async () => {
@@ -1158,33 +1174,22 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect((await round())[0]).toMatch(/^landed 3 /);
 	});
 
-	test("checks the base alone when the fixer blames no PR, halting the queue while it is red", async () => {
+	test("halts the queue on a red base with an issue when there is no fixer, until a moved base passes", async () => {
 		const forge = new Forge();
 		forge.pull("Innocent", { "ok.txt": "yes" });
-		const options = { ...sandbox("exit 1"), fixer: join(tempDir(), "fixer") };
-		writeFileSync(options.fixer, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		const options = sandbox("exit 1");
 		const root = forge.clone();
 		const deps = await forge.deps();
-		expect(
-			await serveBatch(
-				root,
-				await resolveQueue(REPOSITORY, undefined, deps),
-				options,
-				deps,
-				async () => deps.token,
-			),
-		).toEqual(["parked 1"]);
 		const base = forge.main();
 		expect(await checkBase(root, "upstream/project", { ref: "main", sha: base }, options, deps)).toBe(false);
 		const [issue] = forge.repo.issues;
 		expect(issue.title).toContain("main fails its own check");
 		expect(issue.body).toContain(base);
+		expect(issue.body).toContain("No land fixer is configured");
 		// One notice: a second red check of the same base adds nothing.
 		expect(await checkBase(root, "upstream/project", { ref: "main", sha: base }, options, deps)).toBe(false);
 		expect(forge.repo.issues).toHaveLength(1);
 		expect(issue.comments ?? []).toEqual([]);
-		for (const name of readdirSync(options.state).filter((name) => /^fix-job-/.test(name)))
-			rmSync(join(options.state, name), { force: true });
 		// While the base stays red, nothing is batched and nothing leaves the queue.
 		const halted = await resolveQueue(REPOSITORY, undefined, deps);
 		expect(await serveBatch(root, halted, options, deps, async () => deps.token)).toEqual([]);
@@ -1197,6 +1202,55 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(issue.closed).toBe(true);
 		expect(issue.comments?.at(-1)?.body).toContain("the queue resumed");
 		expect(existsSync(join(options.state, "halt.json"))).toBe(false);
+	});
+
+	test("opens the halt issue when the base fixer's launch was lost", async () => {
+		const forge = new Forge();
+		forge.pull("Innocent", { "ok.txt": "yes" });
+		const options = sandbox("exit 1");
+		const root = forge.clone();
+		const deps = await forge.deps();
+		// Halted on this base, with no fix proposed, no notice, and no base job running.
+		writeFileSync(join(options.state, "halt.json"), JSON.stringify({ sha: forge.main() }));
+		const halted = await resolveQueue(REPOSITORY, undefined, deps);
+		expect(await serveBatch(root, halted, options, deps, async () => deps.token)).toEqual([]);
+		expect(forge.repo.issues[0].body).toContain("The land fixer's job on it was lost.");
+		expect(await serveBatch(root, halted, options, deps, async () => deps.token)).toEqual([]);
+		expect(forge.repo.issues).toHaveLength(1);
+		expect(forge.repo.pulls[0].landing).toBe(true);
+	});
+
+	test("comments once per pick on a PR whose required check is still pending two hours after its pick", async () => {
+		const forge = new Forge();
+		const silent = forge.pull("Silent", { "1.txt": "1\n" }, { pull: { runs: [] } });
+		const options = sandbox();
+		const root = forge.clone();
+		const round = async (now: number) => {
+			const deps = { ...(await forge.deps()), now: () => now };
+			return serveBatch(
+				root,
+				await resolveQueue(REPOSITORY, undefined, deps),
+				options,
+				deps,
+				async () => deps.token,
+			);
+		};
+		const picked = Date.parse(silent.autoMerge!.enabledAt);
+		expect(await round(picked + STALLED_AFTER - 1)).toEqual([]);
+		expect(forge.comment(1)).toBeUndefined();
+		expect(await round(picked + STALLED_AFTER)).toEqual(["stalled 1 test"]);
+		expect(forge.comment(1)).toContain("<code>test</code>");
+		expect(forge.comment(1)).toContain("2 hours after it was picked");
+		// It stays queued, and is told only once for this pick.
+		expect(await round(picked + 2 * STALLED_AFTER)).toEqual([]);
+		expect(silent.comments).toHaveLength(1);
+		expect(silent.landing).toBe(true);
+		// A new pick waits anew, and is told again once that wait is over.
+		const repicked = picked + 3 * STALLED_AFTER;
+		silent.autoMerge = { ...silent.autoMerge!, enabledAt: new Date(repicked).toISOString() };
+		expect(await round(repicked + STALLED_AFTER - 1)).toEqual([]);
+		expect(await round(repicked + STALLED_AFTER)).toEqual(["stalled 1 test"]);
+		expect(silent.comments).toHaveLength(2);
 	});
 
 	test("collects finished fixer jobs while a check runs", async () => {
@@ -1989,6 +2043,43 @@ function eventFile(dir: string, matches: (name: string) => boolean): Promise<voi
 	return Object.assign(promise, { cancel: () => watcher.close() });
 }
 
+/** A red base with one innocent queued PR, and a fixer that runs the real payload on the base alone. */
+async function baseFixture(script: string) {
+	const forge = new Forge();
+	forge.pull("Innocent", { "ok.txt": "yes" });
+	const tools = tempDir();
+	const agent = join(tools, "agent");
+	writeFileSync(agent, `#!/bin/sh\nset -eu\ncat > /dev/null\n${script}\n`, { mode: 0o755 });
+	const fixer = join(tools, "wrapper");
+	// Only the log: no PR numbers, for the base alone.
+	writeFileSync(
+		fixer,
+		`#!/bin/sh\nset -eu\n[ "$#" = 1 ]\nexec quest land fix --agent '${agent}' --agent-arg=- "$@"\n`,
+		{ mode: 0o755 },
+	);
+	const options = { ...sandbox("exit 1"), fixer };
+	const root = forge.clone();
+	const deps = await forge.deps();
+	const base = { ref: "main", sha: forge.main() };
+	const run = async (check: () => Promise<unknown>) => {
+		const finished = eventFile(options.state, (name) => name.endsWith(".exit"));
+		await check();
+		await finished;
+	};
+	await run(async () => expect(await checkBase(root, "upstream/project", base, options, deps)).toBe(false));
+	// No issue while the fixer works on the base.
+	expect(forge.repo.issues).toEqual([]);
+	const collect = () => collectFixers(root, options.state, deps, async () => deps.token);
+	const serve = async () =>
+		serveBatch(root, await resolveQueue(REPOSITORY, undefined, deps), options, deps, async () => deps.token);
+	return { forge, options, root, deps, base, run, collect, serve };
+}
+const baseFixScript = `git checkout -q base
+printf 'fixed\\n' > fixed.txt
+git add fixed.txt
+git commit -qm 'mechanical base fix'
+printf '{"action":"fixed","head":"%s","reason":"restore the missing file"}' "$(git rev-parse HEAD)" > quest-land-result.json`;
+
 const requeueScript = `printf '[{"number":1,"action":"requeue","reason":"flaky check; unchanged"}]' > quest-land-result.json`;
 const fixedScript = (path = "code.txt") => `git checkout -q pr-1
 git merge --no-ff --no-commit base || test -n "$(git ls-files -u)"
@@ -2039,6 +2130,83 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		fixture.pull.autoMerge = { enabledAt: "2099-01-01T00:00:00Z", commitBody: pin(fixture.pull.head!) };
 		await fail();
 		expect(await fixture.collect()).toEqual(["requeued 1"]);
+	});
+	test("proposes the fixer's fix of a red base as a PR, and resumes once the maintainer merges it", async () => {
+		const fixture = await baseFixture(baseFixScript);
+		const { forge } = fixture;
+		expect(await fixture.collect()).toEqual(["proposed 2"]);
+		expect(forge.repo.issues).toEqual([]);
+		const branch = `quest-land/fix-${fixture.base.sha.slice(0, 12)}`;
+		const fix = forge.repo.pulls[1];
+		expect(fix.branch).toBe(branch);
+		const head = forge.ref("upstream/project", `refs/heads/${branch}`);
+		expect(git(forge.origin, "rev-parse", `${head}^`)).toBe(fixture.base.sha);
+		expect(fix.body).toContain(`mechanical fix by agent / Codex: \`restore the missing file\` (head ${head})`);
+		expect(fix.body).toContain("Merge it as an administrator");
+		// Collected once, and the queue stays halted on this base.
+		expect(await fixture.collect()).toEqual([]);
+		expect(await fixture.serve()).toEqual([]);
+		expect(forge.repo.pulls).toHaveLength(2);
+		expect(forge.repo.pulls[0].landing).toBe(true);
+		// The maintainer admin-merges the fix: the new base passes, so the queue resumes.
+		git(forge.origin, "update-ref", "refs/heads/main", head);
+		forge.repo.branches.main = head;
+		fix.closed = fix.merged = true;
+		writeFileSync(fixture.options.sandbox, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		expect((await fixture.serve())[0]).toMatch(/^landed 1 /);
+		expect(forge.repo.branches[branch]).toBeUndefined();
+		expect(fix.comments ?? []).toEqual([]);
+		expect(existsSync(join(fixture.options.state, "halt.json"))).toBe(false);
+	});
+	test("closes a proposed base fix once the base moves on, and discards a fix for a base passed by", async () => {
+		const fixture = await baseFixture(baseFixScript);
+		const { forge } = fixture;
+		expect(await fixture.collect()).toEqual(["proposed 2"]);
+		const first = forge.repo.pulls[1];
+		// The base moves on and still fails: that fix is superseded, and the fixer tries the new base.
+		forge.advance({ "other.txt": "yes" });
+		await fixture.run(async () => expect(await fixture.serve()).toEqual([]));
+		expect(first.closed).toBe(true);
+		expect(first.comments?.at(-1)?.body).toContain("tries again on the new base");
+		expect(forge.repo.branches[first.branch!]).toBeUndefined();
+		// The base moves again and passes before that job is collected: the queue resumes, and its fix is dropped.
+		forge.advance({ "fixed.txt": "yes" });
+		writeFileSync(fixture.options.sandbox, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		expect((await fixture.serve())[0]).toMatch(/^landed 1 /);
+		expect(await fixture.collect()).toEqual([]);
+		expect(forge.repo.pulls).toHaveLength(2);
+		expect(forge.repo.issues).toEqual([]);
+		// Only the jobs' logs are kept.
+		expect(
+			readdirSync(fixture.options.state).filter((name) => name.startsWith("fix-") && !name.endsWith(".log")),
+		).toEqual([]);
+	});
+	test("opens the halt issue when the fixer cannot fix a red base", async () => {
+		const fixture = await baseFixture(
+			`printf '{"action":"handback","diagnosis":"a test asserts behavior the base changed","recommendation":"decide the intended behavior"}' > quest-land-result.json`,
+		);
+		expect(await fixture.collect()).toEqual([`halted ${fixture.base.sha}`]);
+		const [issue] = fixture.forge.repo.issues;
+		expect(issue.title).toContain("main fails its own check");
+		expect(issue.body).toContain("could not fix it mechanically: `a test asserts behavior the base changed`");
+		expect(issue.body).toContain("<!-- quest land: halted -->");
+		expect(fixture.forge.repo.pulls).toHaveLength(1);
+		// Halted, with one notice.
+		expect(await fixture.serve()).toEqual([]);
+		expect(await fixture.collect()).toEqual([]);
+		expect(fixture.forge.repo.issues).toHaveLength(1);
+	});
+	test("refuses a base fix that edits a protected path, and opens the halt issue", async () => {
+		const fixture = await baseFixture(`git checkout -q base
+printf 'edited\\n' > flake.nix
+git add flake.nix
+git commit -qm 'edit a protected path'
+printf '{"action":"fixed","head":"%s","reason":"edit the flake"}' "$(git rev-parse HEAD)" > quest-land-result.json`);
+		expect(await fixture.collect()).toEqual([`halted ${fixture.base.sha}`]);
+		expect(fixture.forge.repo.issues[0].body).toContain("off-limits fixer edit");
+		expect(fixture.forge.repo.pulls).toHaveLength(1);
+		const branch = `refs/heads/quest-land/fix-${fixture.base.sha.slice(0, 12)}`;
+		expect(spawnSync("git", ["-C", fixture.forge.origin, "rev-parse", "--verify", branch]).status).not.toBe(0);
 	});
 	test("collects a fixed conflict after a restart, pushes and pins the new Review head", async () => {
 		const fixture = await fixerFixture(fixedScript(), { conflict: true, blocked: true });
@@ -2245,7 +2413,7 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		writeFileSync(join(checkout, ".git", "objects", "pack", `${large}.pack`), "");
 		truncateSync(join(checkout, ".git", "objects", "pack", `${large}.pack`), 101 * 1024 * 1024);
 		writeFileSync(join(checkout, ".git", "objects", "pack", `${large}.idx`), "");
-		expect(() => importFixer(root, tempDir(), checkout, 1, fixed, packs)).toThrow("exceeds 100 MiB");
+		expect(() => importFixer(root, tempDir(), checkout, "pr-1", fixed, packs)).toThrow("exceeds 100 MiB");
 		// A submodule the host initialized for the dev shell keeps its own history under .git/modules.
 		const submodule = join(checkout, ".git", "modules", "moq", "objects", "pack");
 		mkdirSync(submodule, { recursive: true });
@@ -2253,7 +2421,7 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		truncateSync(join(submodule, `${large}.pack`), 101 * 1024 * 1024);
 		// A transient lock is skipped, never read: git maintenance may remove it mid-walk (moq-dev/moq#6987).
 		symlinkSync(join(checkout, "missing"), join(checkout, ".git", "objects", "maintenance.lock"));
-		importFixer(root, tempDir(), checkout, 1, fixed, [...packs, `${large}.pack`]);
+		importFixer(root, tempDir(), checkout, "pr-1", fixed, [...packs, `${large}.pack`]);
 		expect(git(root, "show", `${fixed}:kept.txt`)).toBe("unchanged");
 		expect(git(root, "rev-parse", `${fixed}^`)).toBe(pinned);
 	});
@@ -2578,6 +2746,28 @@ ${requeueScript}
 				[1, 2],
 			),
 		).toHaveLength(2);
+	});
+	test("strictly accepts one fixed or handback object for the base alone", () => {
+		const head = "a".repeat(40);
+		for (const value of [
+			[{ action: "fixed", head, reason: "fine" }],
+			{ number: 1, action: "fixed", head, reason: "fine" },
+			{ action: "requeue", reason: "fine" },
+			{ action: "fixed", head, reason: "fine", blame: true },
+			{ action: "handback", diagnosis: "d", recommendation: "r", log: [1, 2] },
+			{ action: "fixed", head: "short", reason: "fine" },
+			{ action: "fixed", head, reason: "a\nb" },
+		])
+			expect(() => parseBaseFix(JSON.stringify(value))).toThrow();
+		expect(parseBaseFix(JSON.stringify({ action: "fixed", head, reason: "fine", agent: "codex" }))).toEqual({
+			action: "fixed",
+			head,
+			reason: "fine",
+			agent: "codex",
+		});
+		expect(parseBaseFix(JSON.stringify({ action: "handback", diagnosis: "d", recommendation: "r" })).action).toBe(
+			"handback",
+		);
 	});
 	test("compares protected paths at the new head against the pin and current base", async () => {
 		const forge = new Forge();

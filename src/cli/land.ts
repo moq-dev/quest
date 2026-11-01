@@ -114,7 +114,17 @@ export interface Plan {
 	queue: Entry[];
 	eject: Ejection[];
 	/** Queued PRs whose required checks have not finished: they stay queued and sit out batches until they pass. */
-	waiting?: number[];
+	waiting?: Waiting[];
+}
+
+/** A queued PR waiting on required checks that are still running or have not reported. */
+export interface Waiting {
+	number: number;
+	url: string;
+	/** Its pick, from which the wait for its checks is measured. */
+	enabledAt: string;
+	/** The required checks still pending on its head. */
+	pending: string[];
 }
 
 /** A page of a commit's check runs and commit statuses, with the app behind each run. */
@@ -379,7 +389,12 @@ export async function resolveQueue(
 				eject("failed_checks", `required checks failed on its head: ${unmet.failing.join(", ")}`);
 			} else if (unmet.pending.length > 0) {
 				// Still running: it keeps its auto-merge and its place, and joins a batch once they pass.
-				plan.waiting!.push(entry.number);
+				plan.waiting!.push({
+					number: entry.number,
+					url: entry.url,
+					enabledAt: entry.enabledAt,
+					pending: unmet.pending,
+				});
 			} else {
 				plan.queue.push(entry);
 			}
