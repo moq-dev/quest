@@ -39,7 +39,7 @@ import {
 } from "../runner/cli";
 import type { AdapterName } from "../runner/adapter";
 import { held, reach, target, upstream, upstreamHead } from "./claims";
-import { gate } from "./gate";
+import { gate, QUICK_MS } from "./gate";
 import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, remoteRepository, remoteUrl } from "./github";
 import { type Hold, type State, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
@@ -111,16 +111,20 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"budget less memory: commands start at once while those still fit, and 5 seconds apart while " +
 				"only the raw measures do. Nested calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +
+				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
+				"cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the environment, as the land " +
+				"daemon's sandbox should set for its check, the command waits for memory but never for load.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
 				"a systemd user scope. macOS, and Linux without one, own the command's process group in a new session " +
 				"without a controlling terminal, so a descendant that leaves the group or session escapes. Windows " +
 				"owns only the command. Exits with the command's status, or 128 plus the signal's number once cancelled.",
 		)
+		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
 		.argument("<command>", "Executable to run")
 		.argument("[args...]", "Arguments forwarded verbatim")
-		.action((command: string, args: string[]) => {
-			pending = gate([command, ...args]).catch((error: unknown) => {
+		.action((command: string, args: string[], options: { quick?: boolean }) => {
+			pending = gate([command, ...args], { quick: options.quick }).catch((error: unknown) => {
 				warn(error instanceof Error ? error.message : String(error));
 				return 1;
 			});
@@ -1086,18 +1090,19 @@ function positiveSeconds(value: string): number {
 
 /**
  * Stop option parsing before a gated executable, keeping its own flags intact.
- * Quest's global options still apply on either side of `gate`.
+ * Quest's global options still apply on either side of `gate`, and its own `--quick` after it.
  */
 export function gateBoundary(argv: string[]): string[] {
-	const skipRoot = (index: number) => {
-		while (argv[index] === "--root" || argv[index]?.startsWith("--root=")) {
-			index += argv[index] === "--root" ? 2 : 1;
+	const skip = (index: number, own: string[] = []) => {
+		for (;;) {
+			if (argv[index] === "--root") index += 2;
+			else if (argv[index]?.startsWith("--root=") || own.includes(argv[index])) index += 1;
+			else return index;
 		}
-		return index;
 	};
-	const index = skipRoot(0);
+	const index = skip(0);
 	if (argv[index] !== "gate") return argv;
-	const command = skipRoot(index + 1);
+	const command = skip(index + 1, ["--quick"]);
 	if (!argv[command] || ["--", "-h", "--help", "-V", "--version"].includes(argv[command])) return argv;
 	return [...argv.slice(0, command), "--", ...argv.slice(command)];
 }

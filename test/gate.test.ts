@@ -29,6 +29,7 @@ import {
 	linuxMemory,
 	type Owner,
 	owner,
+	QUICK_MS,
 	RECENT_MS,
 	SETTLE_MS,
 	scope,
@@ -116,6 +117,49 @@ test("load and memory pressure wait whatever the ledger holds", async () => {
 	await admit({ load: 4, memory: GiB }, host, signal, (reason) => events.push(reason));
 	expect(events).toEqual(["load", `sleep ${SETTLE_MS}`, "memory", `sleep ${SETTLE_MS}`]);
 	expect(host.ledger().admissions).toEqual([{ id: expect.any(String), at: 2 * SETTLE_MS }]);
+});
+
+test("a priority caller waits for memory, never for load, and still counts against the others", async () => {
+	const directory = tempDir();
+	const state = { now: 0, load: 99, memory: 0 };
+	const limits = { load: 4, memory: GiB };
+	const events: string[] = [];
+	const host = testHost(directory, state, events);
+	const sleep = host.sleep;
+	host.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		state.memory = 8 * GiB;
+	};
+	await admit(limits, host, signal, (reason) => events.push(reason), { priority: true });
+	expect(events).toEqual(["memory", `sleep ${SETTLE_MS}`]);
+	// Its admission takes headroom from an ordinary caller once the load falls.
+	state.load = 3;
+	const ordinary: string[] = [];
+	await admit(limits, testHost(directory, state, ordinary), signal);
+	expect(ordinary).toEqual([`sleep ${SETTLE_MS}`]);
+});
+
+test("a quick caller starts after at most QUICK_MS, and its admission is recorded", async () => {
+	const directory = tempDir();
+	const state = { now: 0, load: 99, memory: 0 };
+	const events: string[] = [];
+	const host = testHost(directory, state, events);
+	await admit({ load: 4, memory: GiB }, host, signal, undefined, { quick: true });
+	const sleeps = Array.from({ length: QUICK_MS / SETTLE_MS }, () => `sleep ${SETTLE_MS}`);
+	expect(events).toEqual(sleeps);
+	expect(host.ledger().admissions).toEqual([{ id: expect.any(String), at: QUICK_MS }]);
+	// A sleep that overran shortens the last one, which ends at the deadline.
+	const late = { now: 0, load: 99, memory: 0 };
+	const overran: string[] = [];
+	const slow = testHost(tempDir(), late, overran);
+	const sleep = slow.sleep;
+	slow.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		if (overran.length === 1) late.now += 3000;
+	};
+	await admit({ load: 4, memory: GiB }, slow, signal, undefined, { quick: true });
+	expect(overran.at(-1)).toBe(`sleep ${SETTLE_MS - 3000}`);
+	expect(slow.ledger().admissions).toEqual([{ id: expect.any(String), at: QUICK_MS }]);
 });
 
 test("a burst that all read the ledger before any records admits only what the rule allows", async () => {
@@ -617,6 +661,23 @@ test("the gated command keeps its own flags, even ones Quest also parses", () =>
 	expect(gateBoundary(["gate", "--root", "r", "ls"])).toEqual(["gate", "--root", "r", "--", "ls"]);
 	expect(gateBoundary(["gate", "--root=r", "ls"])).toEqual(["gate", "--root=r", "--", "ls"]);
 	expect(gateBoundary(["gate", "--version"])).toEqual(["gate", "--version"]);
+	// Gate's own option stays Quest's; the same flag after the executable is the command's.
+	expect(gateBoundary(["gate", "--quick", "ls", "--quick"])).toEqual(["gate", "--quick", "--", "ls", "--quick"]);
+	expect(gateBoundary(["gate", "--root", "r", "--quick", "ls"])).toEqual([
+		"gate",
+		"--root",
+		"r",
+		"--quick",
+		"--",
+		"ls",
+	]);
+	expect(gateBoundary(["--quick", "gate", "ls"])).toEqual(["--quick", "gate", "ls"]);
+});
+
+test("gate parses --quick before its command", async () => {
+	vi.stubEnv("QUEST_GATE_ADMITTED", "1");
+	const out = { stdout: () => {}, stderr: () => {} };
+	expect(await main(["gate", "--quick", process.execPath, "-e", "process.exit(4)"], out)).toBe(4);
 });
 
 test("global options after gate keep working", async () => {

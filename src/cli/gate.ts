@@ -61,6 +61,26 @@ export const SETTLE_MS = 5000;
  */
 export const RECENT_MS = 60_000;
 
+/**
+ * The longest a quick command waits for room: the time the load average takes
+ * to reflect new work, so it waits out at most one burst's lag.
+ */
+export const QUICK_MS = RECENT_MS;
+
+/**
+ * How a caller is admitted ahead of the rest.
+ *
+ * - `priority`: wait only for memory, never for load. Its admissions still count
+ *   against every other caller's headroom, so it goes first while the host is
+ *   loaded. For work whose own runner bounds it, such as the land daemon's check.
+ * - `quick`: wait at most QUICK_MS, then start. For a command too cheap to be
+ *   worth holding back, such as a formatter or a linter.
+ */
+export interface Precedence {
+	priority?: boolean;
+	quick?: boolean;
+}
+
 /** The memory one gated build or test stack is assumed to need. */
 export const COMMAND_MEMORY = 4 * 2 ** 30;
 
@@ -323,10 +343,18 @@ export function fileHost(directory: string, now = Date.now): Host {
  *
  * Each caller decides against the newest ledger and publishes its admission
  * atomically, so concurrent callers never exceed the rule and one always wins
- * while it has room. No fairness promise or admission timeout.
+ * while it has room. No fairness promise, and no admission timeout except a
+ * quick caller's (see `Precedence`).
  */
-export async function admit(limits: Limits, host: Host, signal: AbortSignal, waiting?: (reason: Waiting) => void) {
+export async function admit(
+	limits: Limits,
+	host: Host,
+	signal: AbortSignal,
+	waiting?: (reason: Waiting) => void,
+	precedence: Precedence = {},
+) {
 	const id = randomUUID();
+	const deadline = precedence.quick ? host.now() + QUICK_MS : Infinity;
 	for (;;) {
 		signal.throwIfAborted();
 		const ledger = host.ledger();
@@ -342,7 +370,12 @@ export async function admit(limits: Limits, host: Host, signal: AbortSignal, wai
 			);
 			continue;
 		}
-		const load = host.load();
+		if (now >= deadline) {
+			// Recorded like any admission, so it still counts against the others' headroom.
+			if (host.publish(ledger, [...recent, { id, at: now }])) return;
+			continue;
+		}
+		const load = precedence.priority ? 0 : host.load();
 		const memory = host.memory();
 		let wait = SETTLE_MS;
 		if (load > limits.load) waiting?.("load");
@@ -360,12 +393,18 @@ export async function admit(limits: Limits, host: Host, signal: AbortSignal, wai
 				continue;
 			}
 		}
-		await host.sleep(wait, signal);
+		await host.sleep(Math.min(wait, deadline - now), signal);
 	}
 }
 
 /** Marks an admitted command, so nested gated calls inside it run at once. */
 const ADMITTED = "QUEST_GATE_ADMITTED";
+
+/**
+ * Set to 1 by whatever runs the land daemon's check, such as its sandbox, so
+ * every gate inside the check is admitted with priority (see `Precedence`).
+ */
+export const PRIORITY = "QUEST_GATE_PRIORITY";
 
 /**
  * Runs an admitted command with inherited streams and resolves with its exact exit status.
@@ -471,7 +510,7 @@ const notices: Record<Waiting, string> = {
 };
 
 /** Run from the CLI. */
-export async function gate(command: string[]): Promise<number> {
+export async function gate(command: string[], options: { quick?: boolean } = {}): Promise<number> {
 	const cancel = interrupts();
 	try {
 		const run = owner();
@@ -479,11 +518,13 @@ export async function gate(command: string[]): Promise<number> {
 		if (process.env[ADMITTED] !== "1") {
 			const shown = new Set<Waiting>();
 			try {
-				await admit(hostLimits(), fileHost(claimDirectory()), cancel.signal, (reason) => {
+				const notice = (reason: Waiting) => {
 					if (shown.has(reason)) return;
 					shown.add(reason);
 					process.stderr.write(`${notices[reason]}\n`);
-				});
+				};
+				const precedence = { priority: process.env[PRIORITY] === "1", quick: options.quick };
+				await admit(hostLimits(), fileHost(claimDirectory()), cancel.signal, notice, precedence);
 			} catch (error) {
 				if (cancel.signal.aborted) return cancelled(cancel.signal);
 				throw error;

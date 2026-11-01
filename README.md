@@ -658,6 +658,17 @@ an account missing from it, as in arbitrary-UID containers, uses
 `/tmp/quest-<uid>/admissions/<hostname>`, and refuses that directory unless only
 its UID can write it.
 
+Two kinds of command go ahead of the rest. `quest gate --quick <command>` waits
+at most a minute, then starts the command whatever the host's load and memory;
+pass it only for cheap commands, such as a formatter or `quest check`, that cost
+less to run than to hold back. The land daemon's check goes first: with
+`QUEST_GATE_PRIORITY=1` in its environment, every gate inside the check waits
+for memory but never for load. Both record their admissions, so the other
+callers count them against the host's headroom. The land daemon's sandbox
+should set the variable in the check's environment: a container's gates keep a
+ledger of their own, yet wait on the host's load. `quest agent` drops the
+variable, as it drops an admission.
+
 The gate holds no slot or lock while the command runs, but it owns the
 command's descendants. Once the command exits, or the gate is cancelled and the
 command exits, any descendant still running is killed, so a cancelled build or
@@ -690,8 +701,8 @@ Arguments, working directory, environment, terminal streams, and the exit
 status pass through, and waiting happens before the command starts. A
 terminal's Ctrl-C reaches the command's process group once; SIGTERM and SIGHUP
 sent to Quest are forwarded to the command, and a cancelled gate exits with
-128 plus the signal's number. There is no fairness guarantee or timeout: a
-command waits as long as the host stays busy.
+128 plus the signal's number. There is no fairness guarantee, and no timeout
+except `--quick`'s: any other command waits as long as the host stays busy.
 
 ## Review locally
 
@@ -777,7 +788,7 @@ store under `$XDG_RUNTIME_DIR` (or the temporary directory), shared by the
 repository's worktrees until `quest agent stop --all` deletes it. The agent
 runs in the worktree with the user's environment minus the coordinating
 session's harness variables (keeping `CLAUDE_CONFIG_DIR` and `CODEX_HOME`),
-other keys, secret-manager tokens, and any `quest gate` admission, plus its one
+other keys, secret-manager tokens, and any `quest gate` admission or priority, plus its one
 key. `--permission-mode` is Claude Code's permission mode, or Codex's sandbox
 mode; the agent cannot prompt.
 

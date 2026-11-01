@@ -206,8 +206,9 @@ export class AgentInputError extends Error {}
  * state and credentials, other keys, and secret-manager tokens. Without them
  * the agent neither reuses the session's account nor acts as its sub-session.
  * A launch from inside a `quest gate` command does not admit the agent's own
- * expensive commands, so the gate's mark is dropped too, as is the base a land
- * check runs against. Each CLI keeps the user's configuration directory.
+ * expensive commands or give them a land check's priority, so the gate's marks
+ * are dropped too, as is the base a land check runs against. Each CLI keeps the
+ * user's configuration directory.
  */
 const STRIPPED = [
 	/^CLAUDE(?!_CONFIG_DIR$)/,
@@ -216,7 +217,7 @@ const STRIPPED = [
 	/^OPENAI_API_KEY$/,
 	/^OP_/,
 	/^QUEST_API_KEYS$/,
-	/^QUEST_GATE_ADMITTED$/,
+	/^QUEST_GATE_(ADMITTED|PRIORITY)$/,
 	/^QUEST_LAND_BASE$/,
 ];
 
