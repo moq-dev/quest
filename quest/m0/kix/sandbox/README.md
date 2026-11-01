@@ -1,18 +1,21 @@
-# Run untrusted PR heads on sandboxed runners
+# Sandbox maintainers' jobs
 
 ## Goal
 
-Jobs on PR heads containing non-maintainer commits route to Linux runners,
-which build the PR's devShell in a per-job VM before its commands run in the
-OS sandbox every Claude Code job already uses. opencode jobs' commands run in
-that sandbox too. kix classifies PR heads whose commits all
-carry a current maintainer's valid signature as trusted, so those run on any runner. The
-sandbox is verified on macOS, and the owner's approval of another
-maintainer's answer is lifted once it is.
+Every job's commands run in the OS sandbox, opencode's included, and a
+maintainer can approve one exact PR head, such as one kix pushed, so its
+iterate and merge jobs run on any runner. Runners keep refusing PR heads with
+non-maintainer commits until
+[contributor sandboxing](/quest/m1/kix/sandbox/README.md) in m1.
 
 ## Plan
 
-Decided 2026-10-15, from Codex's review of kixelated/quest#121:
+Decided 2026-10-30 (user, /quest-plan): the untrusted-head VM, stock-Ubuntu
+AppArmor, and macOS verification moved to
+[m1](/quest/m1/kix/sandbox/README.md), since moq-dev's maintainers run their
+own jobs. The decisions below still cover both epics.
+
+Decided 2026-10-15, from Codex's review of moq-dev/quest#121:
 
 - A Nix devShell is not an isolation boundary, and maintainers' machines
   must not run contributor-controlled code unconfined. Sandbox all jobs, not
@@ -27,7 +30,7 @@ Decided 2026-10-15, from Codex's review of kixelated/quest#121:
   untrusted-head job waits with "needs a Linux runner" while none is online.
   Cloud runners are Linux-only.
 - Decided 2026-10-22 on
-  [kixelated/quest#188](https://github.com/kixelated/quest/pull/188), from
+  [moq-dev/quest#188](https://github.com/moq-dev/quest/pull/188), from
   Codex's security review: a job resumes with an answer from a maintainer
   other than the runner's owner (the job's requester) only after the owner
   approves it in the inbox, since the agent would act on that text with the
@@ -35,7 +38,7 @@ Decided 2026-10-15, from Codex's review of kixelated/quest#121:
   without `approvedAt`. The sandbox lifts this gate once it is verified on
   macOS.
 
-Shipped in [kixelated/quest#212](https://github.com/kixelated/quest/pull/212)
+Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 (`src/runner/sandbox.ts`), and verified live on Linux with Claude Code
 2.1.291 and 2.1.305:
 
@@ -52,7 +55,7 @@ Shipped in [kixelated/quest#212](https://github.com/kixelated/quest/pull/212)
   the filesystem, while a trusted Nix user could reach the daemon's
   root-level options. `nix build` and `nix flake check` run in CI instead.
 - Decided 2026-10-24 on
-  [kixelated/quest#212](https://github.com/kixelated/quest/pull/212): a
+  [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212): a
   trusted revision's commands reach a fixed list of package registries
   (npm, crates.io's index and downloads, PyPI), since most repositories
   cannot run their checks without installing dependencies. An untrusted
@@ -74,6 +77,3 @@ Shipped in [kixelated/quest#212](https://github.com/kixelated/quest/pull/212)
 
 - [Head approval](/quest/m0/kix/sandbox/head-approval.md) - a maintainer approves an exact head, such as one kix pushed, for host runners
 - [opencode sandboxing](/quest/m0/kix/sandbox/opencode.md) - opencode jobs' commands run in the same sandbox as Claude Code's
-- [macOS sandbox](/quest/m0/kix/sandbox/macos.md) - the boundary verified under Seatbelt, then the answer-approval gate removed
-- [Ubuntu AppArmor](/quest/m0/kix/sandbox/apparmor.md) - the sandbox starts on stock Ubuntu, or the runner refuses at startup
-- [Untrusted devShells](/quest/m0/kix/sandbox/vm.md) - untrusted PR heads build their devShell in a per-job VM

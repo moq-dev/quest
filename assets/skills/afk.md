@@ -13,7 +13,7 @@ Make no decisions, not even by acting on your own recommendation; skip each one 
 
 - Start every ready quest that `/quest-spawn` starts without asking; leave each quest it would ask about unstarted.
 - Carry on each action the user already picked, such as a `/quest-merge` pick, until it lands or needs the user again.
-- Pick no skip, `/quest-ready`, `/quest-iterate`, `/quest-merge`, or `/quest-delete` for a PR the user has not, so nothing merges or is deleted on your judgment. A started agent still runs `/quest-ready` itself when its quest finishes with no decisions, as `/quest-start` describes.
+- Pick no skip, `/quest-review`, `/quest-iterate`, `/quest-merge`, or `/quest-delete` for a PR the user has not, so nothing merges or is deleted on your judgment. A started agent still runs `/quest-review` itself when its quest finishes with no decisions, as `/quest-start` describes.
 - Answer no decision an agent reports. Its PR stays a draft whose `## Decisions needed` section lists the decision with a recommendation.
 - Hold `/quest-plan` sessions, stale claims, and suggested follow-ups for the user.
 

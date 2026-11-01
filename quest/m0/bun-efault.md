@@ -12,7 +12,7 @@ this quest is deleted.
 
 Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-complete run). Posting the report to oven-sh/bun is approved.
 
-- [kixelated/quest#233](https://github.com/kixelated/quest/pull/233) found the
+- [moq-dev/quest#233](https://github.com/moq-dev/quest/pull/233) found the
   race and worked around it. Its diagnostic runs have the minimal repro: two
   processes `rmSync` the same file on `windows-11-arm` and `windows-2022`.
 - Search existing Bun issues first, and comment on a match instead of opening

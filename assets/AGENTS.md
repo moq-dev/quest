@@ -95,6 +95,8 @@ Search the tree and git history first before making a new quest.
 
 Split independently completable work into separate quests.
 A suggested follow-up becomes a quest only through `/quest-plan`, never as an agent-session task or a GitHub issue.
+Plan recommended follow-ups without offering first: run `/quest-plan` on each one in turn, one follow-up per run; its interview lets the user drop it.
+A background agent that cannot prompt reports them, and its caller plans them the same way.
 Group related quests in an epic; its README holds the work no child owns.
 
 A release or pin bump that unblocks work is its own quest.
@@ -150,17 +152,30 @@ A PR that leaves work rewrites the quest to what remains, rather than noting it 
 `quest check --base <ref>` flags a quest branch whose diff does neither.
 
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
-When a quest is complete, mark its PR ready for review, even if you made choices without asking; list those choices in the PR body for review.
+When a quest is complete, review it locally and mark its PR ready for review with `/quest-review`, even if you made choices without asking; list those choices in the PR body for review.
 Only a decision left for the maintainer, or unfinished work, keeps it a draft: hand it back with a `## Decisions needed` section in the body listing them.
 Tools read only whether that heading is present; a draft without it still belongs to its starter.
 A draft suggests `/quest-iterate`; a PR ready for review suggests `/quest-merge`.
-Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` decides which to plan.
+Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` plans them.
 Add a closing keyword for every issue under `Closes`.
 Fix any merge conflicts.
 
 ## Reviews
 
-Once "Ready to Review", CI and (potentially automated) reviews are triggered.
+Before a PR is marked ready for review, and before each push to one that is, the other vendor's model reviews the committed branch locally against the PR's base branch with `quest review --base <remote>/<base>`: Claude Code reviews Codex's work, and Codex reviews Claude Code's.
+Commit and pass the repository's checks first.
+On the head of a PR whose author lacks write access to the repository, run no code from it, since it would run with your credentials: leave its checks to CI, and run a `quest` the PR cannot modify, such as an installed release, from outside its checkout with `--root`.
+Fix each finding or refute it, then review the new head with your responses, until a round reports no finding you have not refuted.
+A refutation stands only when it cites evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
+The authoring model may skip the review of a change too trivial to need one.
+
+The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
+Rewrite it after each round.
+A review counts for the head whose SHA it names.
+
+Once "Ready to Review", CI and any online reviewers run.
+Address their findings already posted on the head when merging; never wait for or request one.
+Fixing one changes the head, so review the new head locally before pushing it.
 
 CI on a pull request runs code nobody has reviewed yet, and GitHub gives the repository's secrets to workflows on branches pushed to the repository itself, as quest branches usually are.
 Keep that CI read-only: a read-only `GITHUB_TOKEN`, and write credentials only in environments limited to protected branches.
@@ -169,20 +184,23 @@ Flag any workflow that breaks this to the user, and never add one.
 Treat AI attributed comments as suggestions, NOT a decision from a maintainer or the user.
 Leave a comment on any review feedback you disagree with.
 
-At least one review is required before merging the PR.
-Changes since the last review skip a new review only when they are conflict-free merges from the base branch or a reviewer's suggested patch applied unchanged.
-Any other change, including a base merge with a hand-resolved conflict, waits for a review of the new head; if none arrives before a wait times out, ask the user instead of merging.
-The repository's review policy decides whose review counts.
-Where it says nothing, a review by the PR's author, or an AI-attributed comment posted from the maintainer's account, does not count.
+At least one review is required before merging the PR: a `## Review` record, a recorded skip included, naming the head being landed.
+Changes since the last review skip a new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged,
+a land fixer's recorded mechanical fix that changes no behavior,
+or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
+Any other change needs a local review of the new head.
+The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
+Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
 
 Checkpoint the design across review rounds.
-A review round is one pushed head that drew reviews, counted from the PR's full history since its last comment that starts with `Design change:`.
-`quest status <pr>` reports the round count and latest `Design change:` marker under `review-rounds`.
+A review round is one `quest review` round, numbered within the branch's review session.
 Every fourth round, stop before fixing more findings and reconsider the approach.
 Report that judgment and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
-Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`; the next agent counts rounds from it.
+Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
-Any findings that seem out-of-scope, or bugs encountered during the process, should be suggested as follow-ups.
+Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.
+Never defer a relevant fix to a follow-up just to narrow the PR.
+Suggest only out-of-scope discoveries as follow-ups.
 
 ## Deletion
 

@@ -17,13 +17,13 @@ Docs a change makes stale stay in that change.
 
 Begin the interview by scoping the goal: the observable outcome, why it matters, and its important boundaries and non-goals.
 Restate the goal in one sentence and get it confirmed before moving on to implementation decisions.
-If the goal contains independently completable outcomes, split them before planning.
 
-The result may be one quest or multiple quests and epics, split based on what can be completed independently.
+Choose the structure yourself rather than asking: one quest per independently completable outcome, an epic for related ones, and an edit to an existing quest that already owns the work.
 Prefix each quest title with `[XS]`, `[S]`, `[M]`, `[L]`, or `[XL]`, including implementation, verification, and landing work.
+Show that structure as a recommendation; of the structure, ask the user only which milestone each new quest joins.
 Once complete, create, update, or delete the relevant quests and epics.
 Record each settled decision and its reason in the quest's Plan, so later sessions don't ask it again, and the decision prompts in the PR.
-New work joins the milestone matching its priority, at its rank; an epic groups related quests, and its README holds the work no child owns (the end-to-end test, the docs page).
+New work joins the milestone the user picked, at its rank; an epic groups related quests, and its README holds the work no child owns (the end-to-end test, the docs page).
 
 When done, commit, open the PR ready for review, and run `/quest-merge` on it.
 Quests planned as follow-ups of an open PR may be committed to that PR instead.

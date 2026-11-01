@@ -2,7 +2,7 @@
 
 ## Goal
 
-A maintainer starts ready work through kix.quest, follows it through agent
+A maintainer starts ready work through kix, follows it through agent
 summaries, answers its questions, and receives a normal contribution PR. New
 PR notifications present useful next actions, including explicitly
 requested iteration, in the same decision UI.
@@ -10,7 +10,7 @@ requested iteration, in the same decision UI.
 ## Plan
 
 Decided 2026-10-20 (user) from the transcript audit recorded in
-[quest start](https://github.com/kixelated/quest/blob/d265755/quest/m0/helpers/start.md). Locally the user runs
+[quest start](https://github.com/moq-dev/quest/blob/d265755/quest/m0/helpers/start.md). Locally the user runs
 `/quest-spawn next 16` or `next 32` twice a day per repository, only ever
 asks for more parallelism, and accepts the recommended option 73% of the
 time:
@@ -68,4 +68,4 @@ Earlier guidance:
 
 ## Required
 
-- [Job sandbox](/quest/m0/kix/sandbox/README.md) - safe iteration on PRs with contributors' commits
+- [Job sandbox](/quest/m0/kix/sandbox/README.md) - iterate and merge jobs on approved kix-pushed heads, with opencode sandboxed

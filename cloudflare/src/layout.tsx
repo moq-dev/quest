@@ -4,7 +4,7 @@ import { raw } from "hono/html";
 // The site shell: every HTML page the Worker serves renders inside Layout.
 // Colours, type, and glyphs follow design/theme.md; tokens live in /theme/theme.css.
 
-export const repo = "https://github.com/kixelated/quest";
+export const repo = "https://github.com/moq-dev/quest";
 
 const fonts =
 	"https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;600&display=swap";

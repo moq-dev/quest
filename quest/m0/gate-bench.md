@@ -10,11 +10,11 @@ confirms headroom admission; anything else becomes a follow-up.
 ## Plan
 
 Decided 2026-10-22 (user) as a follow-up of
-[kixelated/quest#189](https://github.com/kixelated/quest/pull/189), whose
+[moq-dev/quest#189](https://github.com/moq-dev/quest/pull/189), whose
 benchmarks ran while other agents kept the host's load at 19-42 on 24 CPUs,
 so they measured the busy-host path, not the idle burst the quest was for.
 The earlier baseline, from
-[kixelated/quest#177](https://github.com/kixelated/quest/pull/177), was 104 s
+[moq-dev/quest#177](https://github.com/moq-dev/quest/pull/177), was 104 s
 gated against 19 s ungated for a burst of 8.
 
 - Run on a host with no other agents or builds; record the 1-minute load

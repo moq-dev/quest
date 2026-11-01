@@ -25,7 +25,7 @@ cat >"$work/bin/mise" <<'MOCK'
 set -euo pipefail
 case "$1" in
   use)
-    [[ $2 == --pin && $3 == github:kixelated/quest@v0.1.0 ]]
+    [[ $2 == --pin && $3 == github:moq-dev/quest@v0.1.0 ]]
     [[ ! -e $MISE_DATA_DIR && ! -e $MISE_CACHE_DIR && ! -e $MISE_CONFIG_DIR ]]
     [[ $PWD == "$RUNNER_TEMP"/quest-install.*/project ]]
     printf '%s\n' "mise $3" >> "$INSTALL_TEST_LOG"
@@ -52,7 +52,7 @@ cat >"$work/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ $1 == --proto && $2 == =https && $3 == --tlsv1.2 && $4 == -fLsS ]]
-[[ $5 == https://github.com/kixelated/quest/releases/download/v0.1.0/quest-installer.sh && $6 == -o ]]
+[[ $5 == https://github.com/moq-dev/quest/releases/download/v0.1.0/quest-installer.sh && $6 == -o ]]
 printf '%s\n' "shell $5" >> "$INSTALL_TEST_LOG"
 if [[ ${INSTALL_TEST_DOWNLOAD_FAIL:-0} == 1 ]]; then exit 22; fi
 cat > "$7" <<'INSTALLER'

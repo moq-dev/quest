@@ -13,12 +13,12 @@ core/lifecycle CI use [Windows Server 2022 x64 and Windows 11 ARM64 runners](htt
 
 This change adds Windows artifacts to the next release containing it. Existing
 releases such as v0.1.0 do not contain them. Choose an actual published tag
-with the matching ZIP before installing. See the [release list](https://github.com/kixelated/quest/releases).
+with the matching ZIP before installing. See the [release list](https://github.com/moq-dev/quest/releases).
 
 ## Install
 
 If your repository already uses mise, pin a release with
-`mise use github:kixelated/quest@<tag>` and confirm `quest --version`.
+`mise use github:moq-dev/quest@<tag>` and confirm `quest --version`.
 [The GitHub backend](https://mise.jdx.dev/dev-tools/backends/github.html)
 selects the matching release asset. Its Windows install is checked separately
 from the manual archive path after publishing.
@@ -36,7 +36,7 @@ $target = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchite
     default { throw 'Quest has no Windows build for this architecture' }
 }
 $archive = "quest-$target.zip"
-$base = "https://github.com/kixelated/quest/releases/download/$tag"
+$base = "https://github.com/moq-dev/quest/releases/download/$tag"
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ('quest download ' + [guid]::NewGuid())
 $install = Join-Path $env:LOCALAPPDATA 'Programs/Quest/bin'
 New-Item -ItemType Directory -Path $work | Out-Null
@@ -85,6 +85,10 @@ Quest does not bundle or start an agent. Install the native tools separately:
 - [Codex on Windows](https://developers.openai.com/codex/windows) supports
   native PowerShell and Windows sandboxing. Follow its current device and
   enterprise-policy requirements.
+
+`quest agent` launches Claude Code natively for `/quest-spawn api`, including
+npm's `claude.cmd` shim, and `quest agent stop` ends the agent's whole process
+tree at once. Its Codex agents need Linux worktree supervision.
 
 The skills remain the same workflows. Claims and PR work need Git for Windows
 and the appropriate GitHub credentials, and repository builds need that project's
