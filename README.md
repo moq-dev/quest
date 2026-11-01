@@ -504,18 +504,25 @@ The sandbox runs the repository's checks
 (`just check` and `just test` here). No credential or inherited home configuration
 is passed to it. The daemon refuses to start without `--sandbox`. The optional
 fixer runs as tracked background work, receiving the full log path followed by
-PR numbers, with the same restricted environment (`PATH` and `LANG` only).
+PR numbers, with the same restricted environment plus `GH_TOKEN` and `GH_REPO`.
+`GH_TOKEN` is an installation token the daemon mints for each job with only
+`issues: write` on this repository, so the fixer can comment on the batch's PRs.
+It cannot push, merge, or reach another repository, though it can also edit or
+close issues and change labels there, and GitHub expires it within the hour,
+matching the fixer's 60-minute deadline. The daemon's own comments redact GitHub
+tokens from the fixer's text and log.
 Its cwd is the standalone repository, with `batch`, `base`, and `pr-<n>` branches.
 The wrapper starts an ephemeral container and runs `quest land fix <log> <prs...>`
 there, exposing that repository read/write and the log read-only at the given paths.
 It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses
-endpoint, including `/v1`) and `OPENAI_API_KEY` (the gate's proxy client key).
-The daemon never supplies these or any Git/GitHub credential, and the wrapper
-must keep every other credential out of the container. Its network must reach the
+endpoint, including `/v1`) and `OPENAI_API_KEY` (the gate's proxy client key),
+and passes on `GH_TOKEN` and `GH_REPO`. The daemon never supplies the model
+credentials or any other Git/GitHub credential, and the wrapper must keep every
+other credential out of the container. Its network must reach the
 model proxy and, so the fixer can build and test its fix, the package registries
 and `github.com`/`codeload.github.com` that the repository's dependencies come from.
-The prompt allows only those dependency fetches: no GitHub API, no push, no other
-host. Codex login stays on CLIProxyAPI.
+The prompt allows only those dependency fetches and comments on the batch's PRs:
+no push, no other host. Codex login stays on CLIProxyAPI.
 The wrapper waits for the payload, returns its exit status, and tears down its
 container on exit or SIGTERM. On timeout the daemon sends SIGTERM, allows at
 least 10 seconds for container cleanup, then sends SIGKILL on a later collection. The payload defaults
@@ -622,7 +629,7 @@ in argv or repository configuration. Local `file://` fetches into sandbox and
 fixer repositories remain credential-free. Write installation tokens are scoped
 to this repository, with contents and pull requests write.
 Tokens are minted for each push or API merge and passed only to trusted git
-and GitHub clients, never the sandbox or fixer. A PR-branch push also requests
+and GitHub clients, never the sandbox or fixer, whose only token is its comment token. A PR-branch push also requests
 workflow write when the head-to-merge range carries workflow changes from the base. Workflow write is requested only when that PR's squash changes
 `.github/workflows`. Queue API tokens, which disable auto-merge on ejection and
 so need contents write, stay in the daemon, refresh before expiry, and are

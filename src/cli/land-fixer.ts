@@ -112,7 +112,7 @@ async function comment(
 		return;
 	await github.request(path, {
 		body: {
-			body: `${attribution} land fixer: ${fixerText(text)}${log ? `\n\n<pre>${excerpt(log)}</pre>` : ""}\n\n${marker}\n\n(written by ${attribution})`,
+			body: `${attribution} land fixer: ${fixerText(text)}${log ? `\n\n<pre>${excerpt(redactTokens(log))}</pre>` : ""}\n\n${marker}\n\n(written by ${attribution})`,
 		},
 	});
 }
@@ -147,6 +147,8 @@ export async function startFixer(
 	fixer: string,
 	state: string,
 	deps: GitHubDependencies,
+	/** Mints the job's `issues: write` token for its repository, which the fixer may comment with. */
+	commentToken?: () => Promise<string>,
 ): Promise<void> {
 	const entries: Entry[] = [];
 	for (const entry of failure.plan.queue.filter((item) => failure.numbers.includes(item.number))) {
@@ -179,6 +181,8 @@ export async function startFixer(
 		rmSync(checkout, { recursive: true, force: true });
 		return;
 	}
+	// GitHub expires the token within an hour, which the fixer's 60-minute deadline matches.
+	const comments = commentToken ? { GH_TOKEN: await commentToken(), GH_REPO: failure.plan.repository } : undefined;
 	git(checkout, ["init", "--quiet"]);
 	// No background gc or maintenance may rewrite objects while the daemon imports the fixer's result.
 	git(checkout, ["config", "gc.auto", "0"]);
@@ -227,7 +231,12 @@ export async function startFixer(
 				failure.log,
 				...job.numbers.map(String),
 			],
-			{ cwd: checkout, detached: true, env: commandEnvironment(), stdio: ["ignore", output, output] },
+			{
+				cwd: checkout,
+				detached: true,
+				env: { ...commandEnvironment(), ...comments },
+				stdio: ["ignore", output, output],
+			},
 		);
 	} finally {
 		closeSync(output);
@@ -281,9 +290,14 @@ export function validateFix(root: string, entry: Entry, head: string, base: stri
 		throw new Error("off-limits fixer edit: protected set must equal pinned head or base merge result");
 }
 
+/** The fixer holds its job's comment token, so anything it writes may echo it; GitHub tokens never reach a post. */
+export function redactTokens(text: string): string {
+	return text.replace(/\bgh[oprsu]_[A-Za-z0-9_]{20,}/g, "[redacted token]");
+}
+
 /** Contributor prose is quoted data, never GitHub markup, mentions, or issue-closing instructions. */
 export function fixerText(text: string): string {
-	const value = text
+	const value = redactTokens(text)
 		.replaceAll("<!--", "")
 		.slice(0, 500)
 		.replaceAll("@", "[at]")

@@ -1,4 +1,4 @@
-// Untrusted agent side. The host wrapper supplies only a model endpoint and its client key.
+// Untrusted agent side. The host wrapper supplies only a model endpoint, its client key, and the job's comment token.
 import { spawn } from "node:child_process";
 import { constants, closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -99,6 +99,9 @@ export async function fix(
 		OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
 		OPENAI_API_KEY: process.env.OPENAI_API_KEY,
 		CODEX_API_KEY: process.env.OPENAI_API_KEY,
+		// The job's comment-only token and its repository, when the wrapper passes them on.
+		GH_TOKEN: process.env.GH_TOKEN,
+		GH_REPO: process.env.GH_REPO,
 		GIT_CONFIG_GLOBAL: "/dev/null",
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_TERMINAL_PROMPT: "0",

@@ -27,7 +27,3 @@ told to ignore any new instructions in the diff." See the
   ([moq-dev/quest#325](https://github.com/moq-dev/quest/pull/325)).
 - Internet access already landed in
   [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356).
-
-## Related
-
-- [Fixer comments](/quest/m0/land-fixer/comments.md) - the other capability the user added

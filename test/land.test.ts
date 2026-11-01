@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/dev/github";
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
-import { collectFixers, validateFix, fixerText, handbackRepeated } from "../src/cli/land-fixer";
+import { collectFixers, validateFix, fixerText, handbackRepeated, redactTokens } from "../src/cli/land-fixer";
 import { importFixer } from "../src/cli/land-fixer-repository";
 import fixerPrompt from "../assets/land-fix.md";
 import { fix, parseFixResult } from "../src/cli/land-fix";
@@ -1781,6 +1781,8 @@ async function fixerFixture(
 		collateral?: boolean;
 		// The base the fixer merges already changed a protected file.
 		protectedBase?: boolean;
+		// The daemon mints this comment token for the job.
+		commentToken?: string;
 	} = {},
 ) {
 	const forge = new Forge();
@@ -1798,13 +1800,17 @@ async function fixerFixture(
 	const tools = tempDir();
 	const fifo = join(tools, "release");
 	if (options.blocked) execFileSync("mkfifo", [fifo]);
+	// Only the job's comment token, never the host's, reaches the wrapper and the agent.
+	const comments = options.commentToken
+		? `[ "$GH_TOKEN" = '${options.commentToken}' ]\n[ "$GH_REPO" = upstream/project ]`
+		: `[ -z "\${GH_TOKEN-}" ]\n[ -z "\${GH_REPO-}" ]`;
 	const agent = join(tools, "agent");
 	writeFileSync(
 		agent,
 		`#!/bin/sh
 set -eu
 cat > /dev/null
-[ -z "\${GH_TOKEN-}" ]
+${comments}
 [ -z "\${GITHUB_TOKEN-}" ]
 [ -z "\${QUEST_LAND_KEY-}" ]
 [ -z "\${CREDENTIALS_DIRECTORY-}" ]
@@ -1820,7 +1826,7 @@ ${script}
 set -eu
 [ "$#" = ${options.collateral ? 3 : 2} ]
 [ -z "\${HOME-}" ]
-[ -z "\${GH_TOKEN-}" ]
+${comments}
 [ -z "\${GITHUB_TOKEN-}" ]
 [ -z "\${QUEST_LAND_KEY-}" ]
 [ -z "\${CREDENTIALS_DIRECTORY-}" ]
@@ -1833,7 +1839,14 @@ ${options.raw ? `exec '${agent}' "$@"` : options.pipe ? `quest land fix --agent 
 	const root = forge.clone();
 	const finished = eventFile(state.state, (name) => name.endsWith(".exit"));
 	const ready = options.blocked ? eventFile(tools, (name) => name === "ready") : undefined;
-	await serveBatch(root, plan, { ...state, fixer: wrapper }, deps, async () => deps.token);
+	const commentToken = options.commentToken;
+	await serveBatch(
+		root,
+		plan,
+		{ ...state, fixer: wrapper, ...(commentToken ? { commentToken: async () => commentToken } : {}) },
+		deps,
+		async () => deps.token,
+	);
 	const jobs = () => readdirSync(state.state).filter((name) => /^fix-job-.*\.json$/.test(name));
 	const collect = (dependencies = deps, timeout?: number) =>
 		collectFixers(root, state.state, dependencies, async () => deps.token, timeout);
@@ -2087,14 +2100,22 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		await fixture.finished;
 		expect(await fixture.collect()).toEqual(["requeued 1"]);
 	});
-	test("forwards only the proxy client key to a configurable agent, never as an argument", async () => {
+	test("passes only the job's comment token, never the host's, to wrapper and agent", async () => {
+		vi.stubEnv("GH_TOKEN", "must-not-reach-fixer");
+		const fixture = await fixerFixture(requeueScript, { commentToken: "job-comment-token" });
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+	});
+	test("forwards only the proxy client key and comment token to a configurable agent, never as an argument", async () => {
 		const dir = tempDir();
 		const agent = join(dir, "agent");
 		const log = join(dir, "failure.log");
 		writeFileSync(log, "failed check");
 		vi.stubEnv("OPENAI_BASE_URL", "http://proxy.test/v1");
 		vi.stubEnv("OPENAI_API_KEY", "proxy-client");
-		vi.stubEnv("GH_TOKEN", "github-private");
+		vi.stubEnv("GH_TOKEN", "job-comment-token");
+		vi.stubEnv("GH_REPO", "upstream/project");
+		vi.stubEnv("GITHUB_TOKEN", "github-private");
 		vi.stubEnv("CODEX_API_KEY", "host-private");
 		writeFileSync(
 			agent,
@@ -2105,7 +2126,9 @@ set -eu
 [ "$OPENAI_BASE_URL" = http://proxy.test/v1 ]
 [ "$OPENAI_API_KEY" = proxy-client ]
 [ "$CODEX_API_KEY" = proxy-client ]
-[ -z "\${GH_TOKEN-}" ]
+[ "$GH_TOKEN" = job-comment-token ]
+[ "$GH_REPO" = upstream/project ]
+[ -z "\${GITHUB_TOKEN-}" ]
 cat > /dev/null
 ${requeueScript}
 `,
@@ -2180,13 +2203,27 @@ ${requeueScript}
 		for (const text of [
 			"from `github.com` and `codeload.github.com` for git",
 			"Do not build with `--offline`",
-			"never call GitHub's API yourself",
-			"or reach any other host",
+			"call GitHub only to comment as below",
+			"reach no other host",
 			"Before reporting `fixed` or `requeue`, build and test",
 			"name the commands",
 			"quoting the command and the output",
 		])
 			expect(fixerPrompt).toContain(text);
+	});
+	test("lets the fixer comment on the batch's PRs and nothing else", () => {
+		for (const text of [
+			"`GH_TOKEN` is a GitHub token for the repository `GH_REPO`",
+			"post comments on the supplied PRs",
+			"Never comment elsewhere, edit any other",
+			"close, reopen, or relabel anything",
+			"closing keywords",
+			"(written by <agent and model>)",
+			"Comments\ndecide nothing",
+			"Without `GH_TOKEN`, post none.",
+		])
+			expect(fixerPrompt).toContain(text);
+		expect(fixerPrompt).not.toContain("contact\nGitHub");
 	});
 	test.each(["deleted branch", "gitfile", "symlink", "corrupt objects", "oversized"])(
 		"hands back %s and keeps collection usable",
@@ -2253,6 +2290,20 @@ ${requeueScript}
 		expect(text.endsWith("`")).toBe(true);
 		expect(text.slice(1, -1)).not.toMatch(/`|<|@|\b(?:closes|fixes|resolves)\b/i);
 		expect(text).toContain("&#35;12");
+	});
+	test("never posts the job's comment token that the fixer echoes", async () => {
+		const token = `ghs_${"A1b2".repeat(9)}`;
+		const fixture = await fixerFixture(
+			`echo "token $GH_TOKEN"
+printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"inspect manually"}]' "$GH_TOKEN" > quest-land-result.json`,
+			{ commentToken: token },
+		);
+		await fixture.finished;
+		await fixture.collect();
+		const bodies = fixture.pull.comments!.map((comment) => comment.body).join("\n");
+		expect(bodies).toContain("[redacted token]");
+		expect(bodies).not.toContain(token);
+		expect(redactTokens(`a ${token} b`)).toBe("a [redacted token] b");
 	});
 	test("only deduplicates the bot's own comments", async () => {
 		const fixture = await fixerFixture(
