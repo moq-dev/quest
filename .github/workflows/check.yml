@@ -88,6 +88,10 @@ jobs:
       - name: Verify the installed CLI lifecycle
         shell: bash
         run: nix develop --command bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest-lifecycle-install/bin/quest"
+      # A fresh macOS runner's Spotlight index holds its load above its CPUs.
+      - name: Check that the gate admits and owns its command's descendants
+        shell: bash
+        run: bash scripts/gate-check.sh "$RUNNER_TEMP/quest-lifecycle-install/bin/quest"
 
   windows:
     name: native Windows (${{ matrix.runner }})

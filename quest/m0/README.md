@@ -83,7 +83,6 @@ ownership-manifest design:
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - condition: Bun fixes concurrent `rmSync` on Windows; report it, then drop the workaround
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - condition: Codex keeps a supported way to skip a project's `.codex/` layer; then reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
-- [Gate admission on CI](/quest/m0/gate-ci-admission.md) - gated commands admit on loaded hosted runners like arm64 macOS
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
 - [Review the branch's own change](/quest/m0/review-merge-base.md) - `quest review` diffs against the merge base and accepts a detached `HEAD`
 - [Skill stub cleanup](/quest/m0/skill-stubs.md) - stray skill copies deleted, and `quest init` refreshes unedited outdated stubs
