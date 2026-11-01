@@ -3,7 +3,9 @@
 ## Goal
 
 When `validateFix` rejects a fixer result because it edits a protected path
-(`.github/`, `flake.nix`, `nix/`, justfiles, gitlinks) beyond what the base
+(`.github/`, `nix/`, `flake.nix`, `flake.lock`, `shell.nix`, `default.nix`,
+`.envrc`, `.gitmodules`, and gitlinks, as `validateFix` in
+`src/cli/land-fixer.ts` lists them) beyond what the base
 merge carries, the handback carries that result as a ready commit, the same
 form as a fork push GitHub refuses
 ([moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358)).

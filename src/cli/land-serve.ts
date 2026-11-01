@@ -89,9 +89,21 @@ function save(path: string, value: unknown): void {
 	renameSync(`${path}.new`, path);
 }
 
-/** Only this PR's squash changes need workflow write; no PR branch is moved. */
-export function touchesWorkflows(root: string, parent: string, link: Chain["links"][number]): boolean {
-	return git(root, ["diff", "--name-only", parent, link.commit, "--", ".github/workflows"]) !== "";
+/**
+ * The merge needs workflow write when this PR's squash changes a workflow, or when any commit the PR
+ * brings changes one: GitHub refuses an App's merge of a PR whose commits touch workflows, such as a
+ * merge of a base that changed one, whether the gate or the author made it.
+ */
+export function touchesWorkflows(
+	root: string,
+	parent: string,
+	link: Chain["links"][number],
+	base: string,
+	head: string,
+): boolean {
+	if (git(root, ["diff", "--name-only", parent, link.commit, "--", ".github/workflows"]) !== "") return true;
+	// `-m` also lists a merge commit's changes against each parent, so a merged-in workflow change counts.
+	return git(root, ["log", "-m", "--format=", "--name-only", `${base}..${head}`, "--", ".github/workflows"]) !== "";
 }
 
 /** A fresh bare repository with no config, objects, or alternates inherited from the user's checkout. */
@@ -338,8 +350,10 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 		const response = await github.request(`${path}/merge`, {
 			method: "PUT",
 			body: { merge_method: "squash", sha: head },
-			allow: [405, 409],
+			allow: [403, 405, 409],
 		});
+		// The client waits out a rate limit; any other 403 is GitHub refusing this PR, which stops this PR
+		// alone rather than failing the whole batch on every retry.
 		const result = object(await response.json());
 		if (response.ok && result.merged === true) return { sha: string(result.sha) };
 		const pull = object(await (await github.request(path)).json());
@@ -347,16 +361,15 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 		if (pull.merged === true) return null;
 		const detail = `GitHub refused ${path}: ${String(result.message)}`;
 		if (pull.state !== "open") return { reason: "merge_refused", detail };
-		if (
-			previous !== head &&
-			response.status === 409 &&
-			(object(pull.head).sha === previous || object(pull.head).sha === head)
-		) {
+		// Right after the gate's own push, GitHub can still report the pin as the head and refuse the merge
+		// for it: a 409, or a 405 when the pin conflicts with the base that push merged. Neither is a writer.
+		const current = object(pull.head).sha;
+		if (previous !== head && (current === previous || (response.status === 409 && current === head))) {
 			if (attempt >= 3) throw new Error(`${detail}; prepared head has not propagated`);
 			await github.pause(500 * 2 ** attempt);
 			continue;
 		}
-		if (object(pull.head).sha !== head) return { reason: "head_moved", detail };
+		if (current !== head) return { reason: "head_moved", detail };
 		if (pull.mergeable === false || pull.mergeable_state === "dirty") return { reason: "merge_conflict", detail };
 		if (pull.mergeable === null || /base branch was modified/i.test(String(result.message))) {
 			if (attempt >= 3) throw new Error(`${detail}; mergeability did not settle`);
@@ -639,7 +652,10 @@ export async function serveBatch(
 		const merge =
 			"reason" in prepared
 				? new GitHub(deps)
-				: new GitHub({ ...deps, token: await token(touchesWorkflows(root, parent, link)) });
+				: new GitHub({
+						...deps,
+						token: await token(touchesWorkflows(root, parent, link, plan.base.sha, prepared.head)),
+					});
 		const result = "reason" in prepared ? prepared : await mergePinned(merge, path, prepared.head, link.entry.head);
 		if (result === null) {
 			forgetHeads(options.state, link.entry.number);
@@ -647,8 +663,8 @@ export async function serveBatch(
 		}
 		if ("reason" in result) {
 			// Only this PR failed to land. The rest of the batch passed its check and stays queued,
-			// to be rebuilt on the new base, except after a tree mismatch, which stops them all.
-			const detail = `${result.detail}; the rest of the batch was not merged`;
+			// to be rebuilt on the new base.
+			const detail = `${result.detail}; the rest of the batch stays queued`;
 			appendFileSync(log, `${detail}\n`);
 			if (result.reason === "merge_conflict") {
 				output.push(
@@ -664,22 +680,11 @@ export async function serveBatch(
 				);
 				return output;
 			}
-			const remaining = result.reason === "tree_mismatch" ? chain.links.slice(index) : [link];
-			if (result.reason === "tree_mismatch") deps.warn(`CRITICAL: ${detail}`);
+			// A prepared tree that differs from the tested one is the gate's own fault, for a maintainer to judge.
+			const reported = result.reason === "tree_mismatch" ? `CRITICAL: ${detail}` : detail;
+			if (reported !== detail) deps.warn(reported);
 			return output.concat(
-				await stop(
-					root,
-					options,
-					deps,
-					batch,
-					remaining.map(({ entry }) =>
-						ejection(
-							entry,
-							result.reason,
-							excerpt(result.reason === "tree_mismatch" ? `CRITICAL: ${detail}` : detail),
-						),
-					),
-				),
+				await stop(root, options, deps, batch, [ejection(link.entry, result.reason, excerpt(reported))]),
 			);
 		}
 		const sha = result.sha;
@@ -697,20 +702,11 @@ export async function serveBatch(
 		expectedParent = sha;
 		const tree = string(object(commit.tree).sha);
 		if (tree === link.tree) continue;
-		const detail = `CRITICAL: GitHub squash #${link.entry.number} at ${sha} has tree ${tree}, but the tested chain has ${link.tree}. Already merged PRs stay merged; the remaining batch was stopped`;
+		// The squash is already merged, so there is nothing to eject. The rest of the batch stays queued and
+		// is rebuilt and checked on the base as it now is, like after a moved base.
+		const detail = `CRITICAL: GitHub squash #${link.entry.number} at ${sha} has tree ${tree}, but the tested chain has ${link.tree}. It stays merged; the rest of the batch stays queued, to be rebuilt on the new base`;
 		deps.warn(detail);
 		appendFileSync(log, `${detail}\n`);
-		const remaining = chain.links.slice(index + 1);
-		if (remaining.length)
-			output.push(
-				...(await stop(
-					root,
-					options,
-					deps,
-					batch,
-					remaining.map(({ entry }) => ejection(entry, "tree_mismatch", excerpt(detail))),
-				)),
-			);
 		return output;
 	}
 	return output;

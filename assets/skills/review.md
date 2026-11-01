@@ -29,6 +29,7 @@ Do not wait for online reviewers.
 
 Summarize the review and CI from `quest status <pr>`, then interactively prompt the user with your recommendation:
 - `/quest-merge`: If the PR is landable as `/quest-merge` defines it, which needs its required status checks passed and every automated review finding on GitHub fixed or refuted.
+- `/quest-iterate` + `/quest-merge`: If it would be landable once fixed, with no decision left for the user, such as failing checks or unaddressed automated review findings.
 - `/quest-iterate`: If it raised significant issues or decisions.
 - skip: If the PR should not be merged yet.
 - `/quest-delete`: If the quest should be deleted.
