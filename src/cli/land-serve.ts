@@ -346,16 +346,9 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 			body: { merge_method: "squash", sha: head },
 			allow: [403, 405, 409],
 		});
+		// The client waits out a rate limit; any other 403 is GitHub refusing this PR, which stops this PR
+		// alone rather than failing the whole batch on every retry.
 		const result = object(await response.json());
-		// A rate limit is transient, but any other 403 is GitHub refusing this PR: it stops this PR alone,
-		// rather than failing the whole batch on every retry.
-		if (
-			response.status === 403 &&
-			(response.headers.has("retry-after") ||
-				response.headers.get("x-ratelimit-remaining") === "0" ||
-				/rate limit/i.test(String(result.message)))
-		)
-			throw new Error(`GitHub rate limited ${path}: ${String(result.message)}`);
 		if (response.ok && result.merged === true) return { sha: string(result.sha) };
 		const pull = object(await (await github.request(path)).json());
 		// A lost response or a manual merge is reconciled by rebuilding the remaining queue.
