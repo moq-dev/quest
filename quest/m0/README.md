@@ -75,7 +75,6 @@ ownership-manifest design:
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Review handles expired and environment logins](/quest/m0/review-login.md) - `quest review` says to log in again instead of failing with a 401, and reviews with credentials from the environment
-- [Live sandbox test](/quest/m0/review-sandbox.md) - the real reviewer CLIs run nothing a reviewed head plants
 - [Agent test environment](/quest/m0/agent-test-env.md) - `just test` passes inside agent sessions
 - [Stale skill stubs](/quest/m0/init-prune.md) - `quest init` and `quest uninstall` remove stubs of retired skills such as `quest-ready`
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - condition: Bun fixes concurrent `rmSync` on Windows; report it, then drop the workaround
