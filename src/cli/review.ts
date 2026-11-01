@@ -12,6 +12,7 @@ import { join, posix } from "node:path";
 
 import { type HarnessName, LINE_LIMIT, boundedLines, strippedEnvironment } from "./agent";
 import { gitOutput } from "./claims";
+import { programEnvironment, requireProgram } from "./program";
 import { save } from "./worktree";
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
@@ -363,10 +364,25 @@ const reported = (usage: Omit<Usage, "turn"> | undefined): usage is Omit<Usage, 
 /** The longest stderr tail kept for an error message. */
 const TAIL = 16 * 1024;
 
-/** Run one turn in `cwd`, forwarding termination signals so the reviewer never outlives the command. */
+/**
+ * Run one turn in `cwd`, forwarding termination signals so the reviewer never
+ * outlives the command. The CLI is found on PATH's absolute directories, never
+ * in the checkout under review, and the CLI's own commands keep only those too.
+ */
 function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string, reader?: Reader) {
 	return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
-		const child = spawn(argv[0], argv.slice(1), { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+		let program: string;
+		try {
+			program = requireProgram(argv[0], env);
+		} catch (error) {
+			reject(new ReviewInputError((error as Error).message));
+			return;
+		}
+		const child = spawn(program, argv.slice(1), {
+			cwd,
+			env: programEnvironment(env),
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 		const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 		const handlers = signals.map((name) => [name, () => child.kill(name)] as const);
 		for (const [name, handler] of handlers) process.on(name, handler);
@@ -604,7 +620,7 @@ function load(path: string): State | undefined {
 
 /** Review the checkout's committed branch: one round, resuming the branch's session unless `fresh`. */
 export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Round> {
-	// Native Windows searches the checkout before PATH, so a checkout could supply its own reviewer CLI.
+	// Native Windows installs the reviewer CLIs as batch shims, which `run` cannot start without a shell.
 	if (process.platform === "win32")
 		throw new ReviewInputError("quest review does not support native Windows yet; use WSL");
 	const root = gitOutput(options.root, ["rev-parse", "--show-toplevel"]);

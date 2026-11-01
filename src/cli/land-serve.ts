@@ -782,6 +782,9 @@ export async function serve(
 	mkdirSync(options.state, { recursive: true, mode: 0o700 });
 	// These are startup configuration failures; transient network/batch failures below are recoverable.
 	createPrivateKey(readFileSync(keyPath()));
+	// Both run in a PR's checkout, where a relative path would otherwise name the PR's own file.
+	options.sandbox = resolve(options.sandbox);
+	if (options.fixer) options.fixer = resolve(options.fixer);
 	accessSync(options.sandbox, constants.X_OK);
 	if (options.fixer) accessSync(options.fixer, constants.X_OK);
 	// One daemon per checkout's repository and per state directory, whichever two daemons would share.

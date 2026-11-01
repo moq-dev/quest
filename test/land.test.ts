@@ -2123,6 +2123,12 @@ mv '${result}.new' '${result}'
 		expect(Object.keys(commandEnvironment()).sort()).toEqual(["LANG", "PATH"]);
 	});
 
+	test("never finds a program in the checkout through a relative PATH entry", () => {
+		// git and the wrappers run with a PR's checkout as their working directory.
+		vi.stubEnv("PATH", ".:/usr/bin::relative:/bin:");
+		expect(commandEnvironment().PATH).toBe("/usr/bin:/bin");
+	});
+
 	test.each([false, true])("scopes App tokens to the repository, workflows=%s", async (workflows) => {
 		const key = join(tempDir(), "key.pem");
 		writeFileSync(
@@ -2726,6 +2732,39 @@ ${requeueScript}
 		);
 		await fix(dir, log, [1], agent, ["-"]);
 		expect(readFileSync(join(dir, "prompt.txt"), "utf8")).toContain(`PRs:\n- #1: branch pr-1 at ${head}\n`);
+	});
+	test("finds the agent on PATH, never in the checkout it fixes", async () => {
+		const dir = fixRepository();
+		const bin = join(tempDir(), "bin");
+		mkdirSync(bin);
+		const log = join(dir, "failure.log");
+		writeFileSync(log, "failed check");
+		const planted = join(bin, "..", "planted.log");
+		vi.stubEnv("OPENAI_BASE_URL", "http://proxy.test/v1");
+		vi.stubEnv("OPENAI_API_KEY", "proxy-client");
+		// The checkout holds the PRs' code, which supplies its own agent, and PATH names it relatively.
+		writeFileSync(join(dir, "quest-test-agent"), `#!/bin/sh\necho "$OPENAI_API_KEY" > '${planted}'\n`, {
+			mode: 0o755,
+		});
+		vi.stubEnv("PATH", `.::relative:${process.env.PATH}:`);
+		await expect(fix(dir, log, [1], "quest-test-agent", ["-"])).rejects.toThrow(
+			"quest-test-agent is not installed",
+		);
+		expect(existsSync(planted)).toBe(false);
+
+		// The agent found on PATH runs, and its own commands cannot reach the checkout either.
+		writeFileSync(
+			join(bin, "quest-test-agent"),
+			`#!/bin/sh\nset -eu\nprintf '%s' "$PATH" > path.txt\ncat >/dev/null\n${requeueScript}\n`,
+			{ mode: 0o755 },
+		);
+		vi.stubEnv("PATH", `.:${bin}::${process.env.PATH}`);
+		await fix(dir, log, [1], "quest-test-agent", ["-"]);
+		expect(existsSync(planted)).toBe(false);
+		const path = readFileSync(join(dir, "path.txt"), "utf8").split(":");
+		expect(path[0]).toBe(bin);
+		expect(path.every((entry) => entry.startsWith("/"))).toBe(true);
+		expect(JSON.parse(readFileSync(join(dir, "quest-land-result.json"), "utf8"))[0].agent).toBe("quest-test-agent");
 	});
 	test("runs default Codex with an explicit reasoning effort", async () => {
 		const dir = fixRepository();
