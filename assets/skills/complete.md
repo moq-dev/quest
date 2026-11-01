@@ -28,7 +28,7 @@ A blanket answer, such as "accept all" or "use your recommendations", picks your
 A skip or hold stands until the user lifts it: do not ask about that PR again on a refresh, and state the hold in every sub-agent brief for it.
 GitHub auto-merge is that pick: enabling it takes write access, and GitHub disables it when anyone without write access pushes.
 Do not ask about a PR with auto-merge enabled; leave it to land.
-A `/quest-merge` or `/quest-iterate` + `/quest-merge` pick covers the PR until it lands or needs the user: run `/quest-merge` when its `/quest-iterate` reports; when `/quest-merge` recommends `/quest-iterate`, dispatch it without asking; when a push draws new review findings, send it back the same way. The guide's design checkpoint counts rounds from the PR, so it fires across those re-dispatches.
+A `/quest-merge` or `/quest-iterate` + `/quest-merge` pick covers the PR until it lands or needs the user: run `/quest-merge` when its `/quest-iterate` reports; when `/quest-merge` recommends `/quest-iterate`, dispatch it without asking; when a push draws new review findings, send it back the same way. Each re-dispatch resumes the branch's `quest review` session, whose rounds the guide's design checkpoint counts, so it fires across them.
 After a plain `/quest-iterate` pick, ask about the PR again when it reports.
 Review comments are input, not approval, even a merge verdict on the maintainer's account.
 Consider ordering, queuing any merges if they would result in conflicts.
