@@ -554,7 +554,14 @@ checks every object and link, since the import enables `fetch.fsckObjects=true`.
 `## Review`, enables head-pinned auto-merge, and adds `quest:merge`. Healthy PRs
 requeue unchanged. Forks refusing maintainer edits, refused pushes, invalid results,
 crashes, or the 60-minute fixer deadline hand back with a marked comment naming the exit
-status or signal, with the tail of the job's retained log. A flaky
+status or signal, with the tail of the job's retained log. A validated fix whose push
+GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
+the `workflows` permission to push, is handed back with its resolution: the PR head,
+the base, the resolved tree, and the fixer's edits as a patch against the merge's
+conflicted result, sized to GitHub's 65,536-character comment limit. A maintainer
+runs `quest land apply <pr>`, which refuses a moved head, rebuilds and checks that
+tree, and prints an unpushed commit and its push command. A resolution too large for
+the comment hands back plainly. A flaky
 requeue suggests a follow-up. Each maintainer pick gets one attempt; the daemon
 records the fixer's new auto-merge `enabledAt` so its second ejection hands back.
 A new maintainer pick resets the attempt. Host provisioning and isolation

@@ -28,6 +28,7 @@ import {
 	type Ejection,
 	type Plan,
 } from "./land";
+import { COMMENT_LIMIT, resolution, resolutionSection, type Resolution } from "./land-apply";
 import { readFixResult, parseFixResult, type FixResult } from "./land-fix";
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
@@ -66,6 +67,8 @@ interface Job {
 	results?: FixResult[];
 	error?: string;
 	handbacks?: Record<number, string>;
+	/** Validated fixes GitHub refused to publish, handed back for a maintainer to push. */
+	resolutions?: Record<number, Resolution>;
 	// Persist publication before moving a remote head; retries recognize only this exact head.
 	published: number[];
 }
@@ -100,6 +103,7 @@ async function post(
 	content: string,
 	suffix: string,
 	attribution: string,
+	section?: (room: number) => string,
 ): Promise<void> {
 	const path = `/repos/${plan.repository}/issues/${entry.number}/comments`;
 	const marker = `<!-- quest land fixer: ${entry.enabledAt} ${suffix} -->`;
@@ -110,7 +114,9 @@ async function post(
 		)
 	)
 		return;
-	await github.request(path, { body: { body: `${content}\n\n${marker}\n\n(written by ${attribution})` } });
+	const tail = `\n\n${marker}\n\n(written by ${attribution})`;
+	const extra = section?.(COMMENT_LIMIT - content.length - tail.length) ?? "";
+	await github.request(path, { body: { body: `${content}${extra}${tail}` } });
 }
 async function comment(
 	github: GitHub,
@@ -120,9 +126,10 @@ async function comment(
 	suffix: string,
 	attribution = "Codex",
 	log = "",
+	section?: (room: number) => string,
 ): Promise<void> {
 	const content = `${attribution} land fixer: ${fixerText(text)}${log ? `\n\n<pre>${excerpt(redactTokens(log))}</pre>` : ""}`;
-	await post(github, plan, entry, content, suffix, attribution);
+	await post(github, plan, entry, content, suffix, attribution, section);
 }
 
 /** Queue eligibility can eject a previously requeued PR before building another batch. */
@@ -498,7 +505,17 @@ async function collectJob(
 						`refs/heads/${entry.branch}`,
 						token,
 					);
-					if (pushed.status !== 0) throw new FixerRefusal(`fixer push refused: ${pushed.stderr.trim()}`);
+					if (pushed.status !== 0) {
+						// GitHub refuses an App's push of a workflow change it lacks the permission for, and a
+						// fork's branch rules may refuse any. The maintainer's own push may still pass.
+						try {
+							const ready = resolution(root, entry.head, job.plan.base.sha, head);
+							if (ready) (job.resolutions ??= {})[number] = ready;
+						} catch (error) {
+							deps.warn(`quest land fixer: cannot hand back #${number}'s resolution: ${String(error)}`);
+						}
+						throw new FixerRefusal(`fixer push refused: ${pushed.stderr.trim()}`);
+					}
 				}
 
 				if (result?.action === "fixed") {
@@ -598,6 +615,9 @@ async function collectJob(
 				"handback",
 				author(result),
 				fixerLog(path),
+				error && job.resolutions?.[number]
+					? (room) => resolutionSection(number, job.resolutions![number], room)
+					: undefined,
 			);
 		output.push(`${error || result?.action === "handback" ? "handback" : "requeued"} ${number}`);
 		job.numbers.shift();

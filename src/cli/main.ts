@@ -43,6 +43,7 @@ import { gate } from "./gate";
 import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, remoteRepository, remoteUrl } from "./github";
 import { type Hold, type State, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
+import { apply, pushCommand } from "./land-apply";
 import { fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { landed } from "./landed";
@@ -532,9 +533,26 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			);
 		});
 	landCommand
+		.command("apply")
+		.description(
+			"Rebuild the commit a quest land fixer handed back because GitHub refused its push, such as a merge of a " +
+				"base that changed .github/workflows, which the App lacks the permission to push. Reads the latest " +
+				"resolution an App posted on the PR and refuses (exit 3) when the PR's head is no longer the one it " +
+				"resolved. Fetches that head and base, recomputes the merge's conflicted result as the daemon did, " +
+				"applies the fixer's patch, and checks the resolved tree before committing with your identity. Prints the commit and the push command; " +
+				"nothing is pushed and the working tree is untouched.",
+		)
+		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
+		.action((value: string) => {
+			settle(apply(root(), pullRequest(value, root()), gitHubDependencies(warn)), (applied) => {
+				print(applied.commit);
+				print(`review it, then push: ${pushCommand(applied)}`);
+			});
+		});
+	landCommand
 		.command("serve")
 		.description(
-			"Run one daemon per repository. As a batch is filled, eject alone each PR it reaches whose squash onto the base fails quest check with findings the base lacks, and comment once on each newly queued PR that conflicts with the four PRs landing soonest ahead of it. Check a base PR plus up to floor(log2 n) cleanly merging PRs once through the sandbox, alternating the oldest and the newest queued PR as the base. Failed batches are ejected together, never bisected, and halve the next batch's size down to one PR; each landed batch grows it back by one. Requires quest on PATH and flock. Sandbox and fixer wrappers MUST run code as a different user from the App key owner (for example in nspawn containers); environment filtering alone cannot isolate /proc or host files. The sandbox receives <checkout> <base-sha>, with the base also in QUEST_LAND_BASE and present in the standalone shallow clone; the optional tracked background fixer receives the log path followed by PR numbers. Neither receives credentials. State retains logs, fixer jobs, and one mechanical attempt per maintainer pick across restarts. Fixer results are validated, lease-pushed, recorded in Review, and pinned for requeue, and the comment a result carries for its PR is posted there; invalid results, crashes, and timeouts are handed back. After revalidating the queue, merge the base into each behind-base PR head with quest resolve, verify the tested tree, and lease-push that head before the pinned GitHub squash API merge. A permissions-refused branch push falls back to a leased fast-forward of the tested squash to the base, closing the PR with a linked-commit comment and removing quest:merge. A recorded daemon merge atop the original pin is recognized after restart; other moved heads require maintainer requeueing. Pending mergeability is retried briefly; confirmed conflicts or moved heads eject the remaining batch. A refusal that would repeat, such as squash being disabled, ejects as merge_refused without the fixer. An unexpected squash parent rebuilds the queue without ejecting; a tree mismatch logs CRITICAL and ejects the rest as tree_mismatch. Merged PRs drop out of the queue after restart.",
+			"Run one daemon per repository. As a batch is filled, eject alone each PR it reaches whose squash onto the base fails quest check with findings the base lacks, and comment once on each newly queued PR that conflicts with the four PRs landing soonest ahead of it. Check a base PR plus up to floor(log2 n) cleanly merging PRs once through the sandbox, alternating the oldest and the newest queued PR as the base. Failed batches are ejected together, never bisected, and halve the next batch's size down to one PR; each landed batch grows it back by one. Requires quest on PATH and flock. Sandbox and fixer wrappers MUST run code as a different user from the App key owner (for example in nspawn containers); environment filtering alone cannot isolate /proc or host files. The sandbox receives <checkout> <base-sha>, with the base also in QUEST_LAND_BASE and present in the standalone shallow clone; the optional tracked background fixer receives the log path followed by PR numbers. Neither receives credentials. State retains logs, fixer jobs, and one mechanical attempt per maintainer pick across restarts. Fixer results are validated, lease-pushed, recorded in Review, and pinned for requeue, and the comment a result carries for its PR is posted there; invalid results, crashes, and timeouts are handed back. A validated fix whose push GitHub refuses is handed back with its resolution for `quest land apply`. After revalidating the queue, merge the base into each behind-base PR head with quest resolve, verify the tested tree, and lease-push that head before the pinned GitHub squash API merge. A permissions-refused branch push falls back to a leased fast-forward of the tested squash to the base, closing the PR with a linked-commit comment and removing quest:merge. A recorded daemon merge atop the original pin is recognized after restart; other moved heads require maintainer requeueing. Pending mergeability is retried briefly; confirmed conflicts or moved heads eject the remaining batch. A refusal that would repeat, such as squash being disabled, ejects as merge_refused without the fixer. An unexpected squash parent rebuilds the queue without ejecting; a tree mismatch logs CRITICAL and ejects the rest as tree_mismatch. Merged PRs drop out of the queue after restart.",
 		)
 		.option("--base <branch>", "Base branch (default: repository default)")
 		.option("--state <path>", "Private daemon state directory (default: $STATE_DIRECTORY or the XDG state home)")
