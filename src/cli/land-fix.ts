@@ -21,10 +21,15 @@ export function readFixResult(root: string): string {
 		closeSync(fd);
 	}
 }
-export type FixResult = { agent?: string; model?: string } & (
+/**
+ * The fixer's verdict on one PR. `blame` names a PR whose own change caused the failure; a blamed PR
+ * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
+ * to last, that show the failure, which its comment quotes.
+ */
+export type FixResult = { agent?: string; model?: string; blame?: boolean } & (
 	| { number: number; action: "requeue"; reason: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
-	| { number: number; action: "handback"; diagnosis: string; recommendation: string }
+	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
 );
 
 /** Reject extra fields, duplicate/missing PRs, multiline reasons, and oversized output. */
@@ -54,6 +59,23 @@ export function parseFixResult(text: string, numbers: number[]): FixResult[] {
 		const metadata = ["agent", "model"].filter((key) => key in item);
 		if (metadata.some((key) => typeof item[key] !== "string" || !/^[a-zA-Z0-9 ._/-]{1,100}$/.test(item[key])))
 			throw new Error("invalid fixer identity");
+		if ("blame" in item) {
+			if (typeof item.blame !== "boolean") throw new Error("invalid fixer blame");
+			if (item.blame && item.action === "requeue") throw new Error("a blamed PR must be fixed or handed back");
+			metadata.push("blame");
+		}
+		if ("log" in item) {
+			const log = item.log;
+			if (
+				item.action !== "handback" ||
+				!Array.isArray(log) ||
+				log.length !== 2 ||
+				!log.every((line) => Number.isSafeInteger(line) && line >= 1) ||
+				log[0] > log[1]
+			)
+				throw new Error("invalid fixer log lines");
+			metadata.push("log");
+		}
 		if (
 			fields.length === 0 ||
 			Object.keys(item).length !== fields.length + metadata.length ||

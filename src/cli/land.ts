@@ -67,7 +67,6 @@ function pinned(body: string): string | null {
 export type Reason =
 	| "merge_conflict"
 	| "failed_checks"
-	| "checks_pending"
 	| "review_required"
 	| "changes_requested"
 	| "unresolved_conversations"
@@ -114,6 +113,8 @@ export interface Plan {
 	/** Queued PRs in enqueue order. */
 	queue: Entry[];
 	eject: Ejection[];
+	/** Queued PRs whose required checks have not finished: they stay queued and sit out batches until they pass. */
+	waiting?: number[];
 }
 
 /** A page of a commit's check runs and commit statuses, with the app behind each run. */
@@ -253,7 +254,8 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 /**
  * Read the queue: open PRs to `base` with auto-merge enabled, in the order it
  * was enabled. A PR is queued while its auto-merge commit body pins its current
- * head; the rest of the auto-merging PRs are ejected with a reason.
+ * head; one whose required checks are still running waits, and the rest of the
+ * auto-merging PRs are ejected with a reason.
  */
 export async function resolveQueue(
 	repository: Repository,
@@ -332,7 +334,7 @@ export async function resolveQueue(
 		after = info.hasNextPage === true ? string(info.endCursor) : null;
 	} while (after !== null);
 
-	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [] };
+	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [], waiting: [] };
 	const landing = nodes.filter((node) => node.autoMergeRequest !== null && node.isDraft !== true);
 	const order = (node: ObjectValue) => string(object(node.autoMergeRequest).enabledAt);
 	landing.sort((a, b) => order(a).localeCompare(order(b)) || Number(a.number) - Number(b.number));
@@ -376,10 +378,8 @@ export async function resolveQueue(
 			if (unmet.failing.length > 0) {
 				eject("failed_checks", `required checks failed on its head: ${unmet.failing.join(", ")}`);
 			} else if (unmet.pending.length > 0) {
-				eject(
-					"checks_pending",
-					`required checks had not passed on its head when the gate ran: ${unmet.pending.join(", ")}; land it again once they pass`,
-				);
+				// Still running: it keeps its auto-merge and its place, and joins a batch once they pass.
+				plan.waiting!.push(entry.number);
 			} else {
 				plan.queue.push(entry);
 			}
@@ -716,7 +716,7 @@ export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Pro
 }
 
 /** The repository from which approved heads and the base are fetched. */
-export function baseRemote(plan: Plan): string {
+export function baseRemote(plan: Pick<Plan, "repository">): string {
 	return `https://github.com/${plan.repository}.git`;
 }
 

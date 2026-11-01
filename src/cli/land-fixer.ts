@@ -14,27 +14,42 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { MERGE_LABEL } from "../core";
 import { GitHub, type GitHubDependencies, object, string } from "./github";
 import {
 	baseRemote,
 	commandEnvironment,
 	contains,
+	eject,
+	ejection,
 	git,
 	tryGit,
 	enqueue,
 	type Entry,
 	type Ejection,
 	type Plan,
+	type Reason,
 } from "./land";
 import { readFixResult, parseFixResult, type FixResult } from "./land-fix";
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
 import { push } from "./land-head";
+import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
 
 class FixerRefusal extends Error {}
+class BaseCheckError extends Error {}
+
+/** The failure log's lines the fixer cited, first to last; the comment bounds them. */
+function cited(log: string, [first, last]: [number, number]): string {
+	if (!existsSync(log)) return "";
+	return readFileSync(log, "utf8")
+		.split("\n")
+		.slice(first - 1, last)
+		.join("\n")
+		.trimEnd();
+}
 
 /** Read a bounded tail, retaining the complete per-job log for host diagnosis. */
 function fixerLog(path: string): string {
@@ -54,7 +69,18 @@ function fixerLog(path: string): string {
 interface Job {
 	checkout: string;
 	plan: Plan;
+	/** The PRs this job parks until each one's result is collected; see `parked`. */
 	numbers: number[];
+	/** Set on every job since parking: its PRs never left the queue. An older job's PRs were ejected first. */
+	parked?: boolean;
+	/** Why its PRs failed, for the marker `quest status` reads when a handback takes one out of the queue. */
+	reason?: Reason;
+	/** The failure log the fixer read, which a handback's comment quotes. */
+	log?: string;
+	/** The PRs the gate itself blamed, as for a conflict; absent when the fixer must say which PR broke the batch. */
+	blame?: number[];
+	/** When the fixer blamed none: whether the base alone passed its check. */
+	base?: boolean;
 	started: number;
 	terminating?: number;
 	pid?: number;
@@ -66,24 +92,40 @@ interface Job {
 	results?: FixResult[];
 	error?: string;
 	handbacks?: Record<number, string>;
+	/** PRs a handback is taking out of the queue, recorded before their auto-merge is disabled. */
+	left?: number[];
 	// Persist publication before moving a remote head; retries recognize only this exact head.
 	published: number[];
 }
-interface Attempt {
+/** A maintainer pick's fixer attempt; a fixed head's requeue keeps it as `requeued`. */
+export interface Attempt {
 	agent?: string;
 	model?: string;
 	pick: string;
 	requeued?: string;
 	head?: string;
+	/**
+	 * The job that blamed this pick, which spends its attempt, or false while it was only collateral of
+	 * other PRs' failures. A record from before blame was tracked has none, and counts as spent.
+	 */
+	blamed?: string | false;
 }
 function save(path: string, data: unknown): void {
 	writeFileSync(`${path}.new`, JSON.stringify(data), { mode: 0o600 });
 	renameSync(`${path}.new`, path);
 }
 const attemptPath = (state: string, number: number) => join(state, `fix-attempt-${number}.json`);
-function attempt(state: string, number: number): Attempt | undefined {
+export function attempt(state: string, number: number): Attempt | undefined {
 	const path = attemptPath(state, number);
 	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Attempt) : undefined;
+}
+/** Whether `record` belongs to the pick `entry` is queued under: the pick itself, or the fixer's requeue of it. */
+function samePick(record: Attempt | undefined, entry: Pick<Entry, "enabledAt">): record is Attempt {
+	return record !== undefined && (record.pick === entry.enabledAt || record.requeued === entry.enabledAt);
+}
+/** Whether the pick already spent its attempt on a job other than `job`: only being blamed spends it. */
+function spent(record: Attempt | undefined, entry: Pick<Entry, "enabledAt">, job?: string): boolean {
+	return samePick(record, entry) && record.blamed !== false && record.blamed !== job;
 }
 function identity(pid: number): string | undefined {
 	try {
@@ -100,6 +142,7 @@ async function comment(
 	suffix: string,
 	attribution = "Codex",
 	log = "",
+	reason?: Reason,
 ): Promise<void> {
 	const path = `/repos/${plan.repository}/issues/${entry.number}/comments`;
 	const marker = `<!-- quest land fixer: ${entry.enabledAt} ${suffix} -->`;
@@ -112,7 +155,7 @@ async function comment(
 		return;
 	await github.request(path, {
 		body: {
-			body: `${attribution} land fixer: ${fixerText(text)}${log ? `\n\n<pre>${excerpt(log)}</pre>` : ""}\n\n${marker}\n\n(written by ${attribution})`,
+			body: `${attribution} land fixer: ${fixerText(text)}${log ? `\n\n<pre>${excerpt(log)}</pre>` : ""}\n\n${marker}${reason ? `\n<!-- quest land: ${reason} -->` : ""}\n\n(written by ${attribution})`,
 		},
 	});
 }
@@ -128,18 +171,22 @@ export async function handbackRepeated(
 	deps: GitHubDependencies,
 ): Promise<boolean> {
 	const previous = attempt(state, entry.number);
-	if (!previous || (previous.pick !== entry.enabledAt && previous.requeued !== entry.enabledAt)) return false;
+	if (!spent(previous, entry)) return false;
 	await comment(
 		new GitHub(deps),
 		plan,
 		entry,
 		"This maintainer pick already used its mechanical fix attempt. Run /quest-iterate to diagnose the repeated failure, then pick it again.",
 		"handback",
-		author(previous),
+		author(previous!),
 	);
 	return true;
 }
 
+/**
+ * Park the failure's PRs and start one fixer job on them. A PR the gate already blames, as for a
+ * conflict, whose pick spent its attempt is handed back instead. Returns what it did.
+ */
 export async function startFixer(
 	root: string,
 	checkout: string,
@@ -147,37 +194,27 @@ export async function startFixer(
 	fixer: string,
 	state: string,
 	deps: GitHubDependencies,
-): Promise<void> {
+): Promise<string[]> {
+	const lines: string[] = [];
 	const entries: Entry[] = [];
+	const held = parked(state);
 	for (const entry of failure.plan.queue.filter((item) => failure.numbers.includes(item.number))) {
-		// failure.json may replay after launching or collecting this same job. It is not a second pick.
+		// failure.json may replay after launching this same job. It is not a second pick.
+		if (isParked(held, entry)) continue;
 		const previous = attempt(state, entry.number);
-		if (
-			previous?.pick === entry.enabledAt &&
-			(previous.requeued ||
-				readdirSync(state).some((name) => {
-					if (!/^fix-job-.*\.json$/.test(name)) return false;
-					const job = JSON.parse(readFileSync(join(state, name), "utf8")) as Job;
-					return (
-						job.numbers.includes(entry.number) &&
-						job.plan.queue.some(
-							(item) => item.number === entry.number && item.enabledAt === entry.enabledAt,
-						)
-					);
-				}))
-		)
+		if (failure.blame?.includes(entry.number) && spent(previous, entry)) {
+			const detail =
+				"this maintainer pick already used its mechanical fix attempt. Run /quest-iterate to diagnose the repeated failure, then pick it again";
+			if (await eject(new GitHub(deps), failure.plan, ejection(entry, failure.reason ?? "failed_checks", detail)))
+				lines.push(`handback ${entry.number}`);
 			continue;
-
-		if (await handbackRepeated(state, failure.plan, entry, deps)) {
-			continue;
-		} else {
-			save(attemptPath(state, entry.number), { pick: entry.enabledAt });
-			entries.push(entry);
 		}
+		if (!samePick(previous, entry)) save(attemptPath(state, entry.number), { pick: entry.enabledAt, blamed: false });
+		entries.push(entry);
 	}
 	if (!entries.length) {
 		rmSync(checkout, { recursive: true, force: true });
-		return;
+		return lines;
 	}
 	git(checkout, ["init", "--quiet"]);
 	git(checkout, [
@@ -198,6 +235,10 @@ export async function startFixer(
 		checkout,
 		plan: failure.plan,
 		numbers: entries.map((entry) => entry.number),
+		parked: true,
+		reason: failure.reason,
+		log: failure.log,
+		...(failure.blame ? { blame: failure.blame } : {}),
 		started: deps.now(),
 		daemon: identity(process.pid),
 		packs: readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack")),
@@ -241,6 +282,8 @@ export async function startFixer(
 	}
 	save(path, job);
 	child.unref();
+	for (const number of job.numbers) lines.push(`parked ${number}`);
+	return lines;
 }
 
 /** New commits descend from the pin. Protected content/modes at the head must match the pin or its merge with `base`, the base the fixer was given. */
@@ -319,6 +362,7 @@ export async function collectFixers(
 	token: (workflows: boolean) => Promise<string>,
 	timeout = 60,
 	read: RemoteRead = readRemote,
+	checkBase?: (base: Plan["base"]) => Promise<boolean>,
 ): Promise<string[]> {
 	const output: string[] = [];
 	for (const name of readdirSync(state).filter((name) => /^fix-job-.*\.json$/.test(name))) {
@@ -332,8 +376,13 @@ export async function collectFixers(
 		}
 
 		try {
-			output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read)));
+			output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read, checkBase)));
 		} catch (error) {
+			// The gate's own base check failing to run is not the fixer's failure: retry it later.
+			if (error instanceof BaseCheckError) {
+				deps.warn(`quest land fixer: base check pending for ${name}: ${String(error.cause)}`);
+				continue;
+			}
 			// Keep the first reason: a GitHub error while handing back a crash must not replace the crash.
 			job.error ??= `fixer collection failed: ${String(error)}; run /quest-iterate`;
 			try {
@@ -362,6 +411,7 @@ async function collectJob(
 	token: (workflows: boolean) => Promise<string>,
 	timeout: number,
 	read: RemoteRead,
+	checkBase?: (base: Plan["base"]) => Promise<boolean>,
 ): Promise<string[]> {
 	const github = new GitHub(deps);
 	const output: string[] = [];
@@ -403,10 +453,33 @@ async function collectJob(
 		else job.error = `fixer stopped without recording an exit status${restarted}; run /quest-iterate`;
 		save(path, job);
 	}
+	const named = job.results?.some((result) => result.blame === true) ?? false;
+	// The fixer could not say which PR broke the batch: check the base alone before anything else
+	// happens to them. A PR's content cannot skip this, since only the gate runs it.
+	if (job.parked && job.results && !job.error && !job.blame && !named && job.base === undefined) {
+		if (!checkBase) return output;
+		try {
+			job.base = await checkBase(job.plan.base);
+		} catch (error) {
+			throw new BaseCheckError("base check failed to run", { cause: error });
+		}
+		save(path, job);
+	}
+	// A red base halted the queue: the batch's PRs did nothing wrong, so all of them go back unchanged.
+	if (job.base === false) {
+		for (const number of job.numbers) output.push(`released ${number}`);
+		job.numbers = [];
+	}
+	const name = basename(path);
 	while (job.numbers.length) {
 		const number = job.numbers[0];
 		const entry = job.plan.queue.find((entry) => entry.number === number)!;
 		const result = job.results?.find((item) => item.number === number);
+		// The gate's blame, else the fixer's; when the fixer named none and the base passed, every PR.
+		// An older job's PRs were ejected and keep its rules.
+		const blamed =
+			job.parked === true &&
+			(job.blame ? job.blame.includes(number) : named ? result?.blame === true : job.base === true);
 		let error = job.handbacks?.[number] ?? job.error;
 		const pullPath = `/repos/${job.plan.repository}/pulls/${number}`;
 		const pull = object(await (await github.request(pullPath)).json());
@@ -416,24 +489,40 @@ async function collectJob(
 			{ id: entry.id },
 		);
 		const auto = object(queued.node).autoMergeRequest;
-		const previous = attempt(state, number)!;
+		let previous = attempt(state, number)!;
 		const head = result?.action === "fixed" ? result.head : entry.head;
 		const actor = { agent: result?.agent, model: result?.model };
-		if (previous.pick !== entry.enabledAt)
+		const queuedAs = auto == null ? null : string(object(auto).enabledAt);
+		// This collection already enabled auto-merge again on the fixed head, before a restart.
+		const requeued =
+			queuedAs !== null &&
+			queuedAs !== entry.enabledAt &&
+			job.published.includes(number) &&
+			current === head &&
+			previous.head === head &&
+			(!previous.requeued || previous.requeued === queuedAs);
+		if (!samePick(previous, entry))
 			error = "fixer was superseded by a newer maintainer pick; keeping its work untouched";
 		// Never displace a newer maintainer pick, closed PR, or writer's commit.
 		if (pull.state !== "open" || (current !== entry.head && !(job.published.includes(number) && current === head)))
 			error = "PR closed or head moved while fixing; inspect and pick it again";
-		if (auto != null) {
-			if (
-				job.published.includes(number) &&
-				current === head &&
-				previous.head === head &&
-				(!previous.requeued || previous.requeued === object(auto).enabledAt)
-			) {
-				save(attemptPath(state, number), { ...previous, requeued: string(object(auto).enabledAt) });
-			} else error = "PR was picked again while fixing; keeping the newer pick";
+		const left = job.left?.includes(number) ?? false;
+		// A parked PR keeps its auto-merge; one an older job's ejection left without it is requeued below.
+		if (job.parked && queuedAs === null && !left)
+			error ??= "PR left the queue while fixing; its result was not applied";
+		else if (queuedAs !== null && queuedAs !== entry.enabledAt && !requeued)
+			error = "PR was picked again while fixing; keeping the newer pick";
+		// Only a blamed PR spends the pick's attempt; collateral of another PR's failure never does.
+		if (blamed && spent(previous, entry, name))
+			error ??=
+				"This maintainer pick already used its mechanical fix attempt. Run /quest-iterate to diagnose the repeated failure, then pick it again";
+		if (requeued) {
+			save(attemptPath(state, number), { ...previous, requeued: queuedAs });
 		} else if (!error && result?.action !== "handback") {
+			if (blamed && previous.blamed !== name) {
+				previous = { ...previous, blamed: name };
+				save(attemptPath(state, number), previous);
+			}
 			try {
 				if (result?.action === "fixed") {
 					if (entry.repository !== job.plan.repository && !entry.maintainerCanModify)
@@ -489,60 +578,58 @@ async function collectJob(
 					});
 				}
 
-				// Save intent before enabling, so a lost response can be reconciled after restart.
-				save(attemptPath(state, number), { ...previous, ...actor, head });
-				await enqueue(github, entry.id, head);
-				const enabled = await github.graphql(
-					"query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }",
-					{ id: entry.id },
-				);
-				const enabledAt = string(object(object(enabled.node).autoMergeRequest).enabledAt);
-				save(attemptPath(state, number), { ...previous, ...actor, head, requeued: enabledAt });
+				// A parked PR requeued unchanged is still queued as it was; anything else is pinned anew.
+				if (queuedAs !== entry.enabledAt || head !== entry.head) {
+					// Save intent before enabling, so a lost response can be reconciled after restart.
+					save(attemptPath(state, number), { ...previous, ...actor, head });
+					await enqueue(github, entry.id, head);
+					const enabled = await github.graphql(
+						"query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }",
+						{ id: entry.id },
+					);
+					const enabledAt = string(object(object(enabled.node).autoMergeRequest).enabledAt);
+					save(attemptPath(state, number), { ...previous, ...actor, head, requeued: enabledAt });
+				}
 			} catch (failure) {
 				if (!(failure instanceof FixerRefusal)) throw failure;
 				error = `${String(failure)}; run /quest-iterate before picking it again`;
 			}
 		}
 		if (!error && result?.action !== "handback") {
+			// A PR that stayed queued needs no comment: its own fix, if any, is recorded in `## Review`.
 			await github.request(`/repos/${job.plan.repository}/issues/${number}/labels`, {
 				body: { labels: [MERGE_LABEL] },
 			});
-			if (result?.action === "requeue")
-				await comment(
-					github,
-					job.plan,
-					entry,
-					// The reason says why: another PR in the batch, or a flaky check worth a follow-up.
-					`Requeued unchanged: ${result.reason.slice(0, 200)}`,
-					"requeue",
-					author(result),
-				);
 		}
 
-		if (
-			error &&
-			auto != null &&
-			job.published.includes(number) &&
-			previous.head === head &&
-			(!previous.requeued || previous.requeued === object(auto).enabledAt)
-		) {
-			await github.graphql(
-				"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
-				{ id: entry.id },
-			);
+		const handback = error !== undefined || result?.action === "handback";
+		if (handback && blamed && !error && previous.blamed !== name)
+			save(attemptPath(state, number), { ...previous, blamed: name });
+		if (error) {
+			// Before leaving the queue, so a restart keeps this reason rather than finding it left.
+			job.handbacks ??= {};
+			job.handbacks[number] = error;
+			save(path, job);
+		}
+		// A handback takes the PR out of the queue, as parked or as this collection requeued it, never a newer pick.
+		const leaves = handback && (left || (queuedAs !== null && (queuedAs === entry.enabledAt || requeued)));
+		if (leaves) {
+			if (!left) {
+				job.left = [...(job.left ?? []), number];
+				save(path, job);
+			}
+			if (queuedAs !== null)
+				await github.graphql(
+					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+					{ id: entry.id },
+				);
 			await github.request(
 				`/repos/${job.plan.repository}/issues/${number}/labels/${encodeURIComponent(MERGE_LABEL)}`,
 				{ method: "DELETE", allow: [404] },
 			);
 		}
 
-		if (error) {
-			job.handbacks ??= {};
-			job.handbacks[number] = error;
-			save(path, job);
-		}
-
-		if (error || result?.action === "handback")
+		if (handback)
 			await comment(
 				github,
 				job.plan,
@@ -554,7 +641,11 @@ async function collectJob(
 						: "missing result; run /quest-iterate",
 				"handback",
 				author(result),
-				fixerLog(path),
+				!error && result?.action === "handback" && result.log && job.log
+					? cited(job.log, result.log)
+					: fixerLog(path),
+				// The marker `quest status` reads, now that no ejection comment precedes this one.
+				job.parked && leaves ? (job.reason ?? "failed_checks") : undefined,
 			);
 		output.push(`${error || result?.action === "handback" ? "handback" : "requeued"} ${number}`);
 		job.numbers.shift();

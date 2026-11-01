@@ -1,6 +1,7 @@
 // Host orchestration: PR code runs only through the configured sandbox.
 import { authenticatedRead } from "./land-git";
 import { startFixer, collectFixers, handbackRepeated } from "./land-fixer";
+import { batchable } from "./land-park";
 import { spawn } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
 import {
@@ -22,6 +23,7 @@ import { GitHub, type GitHubDependencies, type Repository, object, string } from
 import { forgetHeads, prepareHead, resolvePreparedQueue, landFallback, finishFallback } from "./land-head";
 import {
 	type BatchPolicy,
+	baseRemote,
 	build,
 	commandEnvironment,
 	eject,
@@ -31,6 +33,7 @@ import {
 	type Overlap,
 	type RemoteRead,
 	type Plan,
+	type Reason,
 } from "./land";
 
 export interface ServeOptions {
@@ -169,12 +172,23 @@ export function apiDependencies(
 	};
 }
 
+/**
+ * A failure the gate hands on: PRs it ejects, and PRs it parks for the fixer. A parked PR stays
+ * queued with its auto-merge and sits out batches while its fixer job runs (see `parked`).
+ */
 export interface Failure {
 	plan: Plan;
 	ejections: Plan["eject"];
+	/** The PRs the fixer works on, parked until each one's result is collected. */
 	numbers: number[];
 	log: string;
 	tip: string;
+	/** Why the parked PRs failed, which a handback records for `quest status`. */
+	reason?: Reason;
+	/** The PRs the gate itself blames, as for a conflict; absent when the fixer must say which PR broke a batch. */
+	blame?: number[];
+	/** The fixer job started, so a replay after a restart never starts a second one. */
+	launched?: boolean;
 }
 
 /** Finish a failed batch even when the daemon died halfway through its ejections. */
@@ -195,10 +209,13 @@ export async function resumeFailure(
 		failure.ejections.shift();
 		save(path, failure);
 	}
-	if (options.fixer && failure.numbers.length > 0) {
+	if (options.fixer && failure.numbers.length > 0 && !failure.launched) {
+		// A launch lost to a crash leaves its PRs unparked, so they only rejoin batches.
+		failure.launched = true;
+		save(path, failure);
 		const checkout = mkdtempSync(join(options.state, "fix-"));
 		try {
-			await startFixer(root, checkout, failure, options.fixer, options.state, deps);
+			output.push(...(await startFixer(root, checkout, failure, options.fixer, options.state, deps)));
 		} catch (error) {
 			rmSync(checkout, { recursive: true, force: true });
 			throw error;
@@ -208,10 +225,27 @@ export async function resumeFailure(
 	return output;
 }
 
+/** Record a failure and act on it: park its PRs for the fixer, or eject them when there is none. */
+async function fail(
+	root: string,
+	options: Pick<ServeOptions, "state" | "fixer">,
+	deps: GitHubDependencies,
+	failure: Omit<Failure, "ejections" | "numbers"> & { entries: Plan["queue"]; detail: string },
+): Promise<string[]> {
+	const { entries, detail, ...rest } = failure;
+	const reason = failure.reason ?? "failed_checks";
+	save(join(options.state, "failure.json"), {
+		...rest,
+		numbers: entries.map((entry) => entry.number),
+		ejections: options.fixer ? [] : entries.map((entry) => ejection(entry, reason, detail)),
+	} satisfies Failure);
+	return resumeFailure(root, options, deps);
+}
+
 /** GitHub refuses comments over 65,536 characters. Escaping grows a character at most 5x (`&amp;`). */
 const EXCERPT = 12_000;
 
-/** The end of a log, escaped for `<pre>` and bounded so the ejection comment always posts. */
+/** The end of a log, escaped for `<pre>` and bounded so the comment always posts. */
 export function excerpt(tail: string): string {
 	const cut = tail.length > EXCERPT ? `…${tail.slice(-EXCERPT)}` : tail;
 	return cut.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
@@ -316,10 +350,132 @@ function nextPolicy(state: string, policy: BatchPolicy, checked: number, passed:
 	save(join(state, POLICY), { order: policy.order === "oldest" ? "newest" : "oldest", size });
 }
 
+/** What a batch may do while its check runs. */
+export interface BatchOptions extends Pick<ServeOptions, "state" | "sandbox" | "fixer" | "timeout"> {
+	/** Collect finished fixer jobs while a check runs, so their PRs join the next batch at once. */
+	collect?: () => Promise<void>;
+}
+
+/** How often a running check pauses to collect finished fixer jobs. */
+const COLLECT_EVERY = 60_000;
+
+/** Run the sandbox on `tip`, `links` commits above `base`, appending its output to `log`. Returns its exit code. */
+async function runSandbox(
+	root: string,
+	options: BatchOptions,
+	tip: string,
+	links: number,
+	base: string,
+	log: string,
+): Promise<number> {
+	const checkout = sandboxTree(root, options.state, tip, links);
+	writeFileSync(log, "", { mode: 0o600 });
+	let collecting: Promise<void> | undefined;
+	const collector = options.collect
+		? setInterval(() => {
+				collecting ??= options.collect!().finally(() => (collecting = undefined));
+			}, COLLECT_EVERY)
+		: undefined;
+	try {
+		return await new Promise<number>((done, reject) => {
+			const child = spawn(options.sandbox, [checkout, base], {
+				cwd: checkout,
+				detached: true,
+				env: { ...commandEnvironment(), QUEST_LAND_BASE: base },
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			// A hung check would stall the queue: kill its whole process group at the deadline.
+			const timer = setTimeout(() => {
+				appendFileSync(log, `\nquest land: the check ran past ${options.timeout} minutes and was killed\n`);
+				try {
+					process.kill(-child.pid!, "SIGKILL");
+				} catch {}
+			}, options.timeout * 60_000);
+			child.stdout.on("data", (data: Buffer) => appendFileSync(log, data));
+			child.stderr.on("data", (data: Buffer) => appendFileSync(log, data));
+			child.once("error", (error) => {
+				clearTimeout(timer);
+				reject(error);
+			});
+			child.once("close", (status) => {
+				clearTimeout(timer);
+				done(status ?? 1);
+			});
+		});
+	} finally {
+		clearInterval(collector);
+		// The batch goes on only after a collection in flight finishes, never beside it.
+		await collecting;
+		rmSync(checkout, { recursive: true });
+	}
+}
+
+/** A red base the queue is halted on, and the issue that says so. */
+interface Halt {
+	sha: string;
+	issue?: number;
+}
+const HALT = "halt.json";
+
+function readHalt(state: string): Halt | undefined {
+	const path = join(state, HALT);
+	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Halt) : undefined;
+}
+
+/**
+ * Check the base alone, as when the fixer cannot tell which PR broke a batch. A red base halts the
+ * queue with one issue saying so; no PR is blamed for it. Returns whether the base passed.
+ */
+export async function checkBase(
+	root: string,
+	repository: string,
+	base: Plan["base"],
+	options: BatchOptions,
+	deps: GitHubDependencies,
+	read: RemoteRead = readRemote,
+): Promise<boolean> {
+	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote({ repository }), base.sha]);
+	const log = join(options.state, `base-${Date.now()}-${base.sha.slice(0, 12)}.log`);
+	if ((await runSandbox(root, options, base.sha, 0, base.sha, log)) === 0) return true;
+	const github = new GitHub(deps);
+	const halt = readHalt(options.state);
+	const output = `<pre>${excerpt(readFileSync(log, "utf8").trimEnd())}</pre>`;
+	if (halt?.issue !== undefined) {
+		if (halt.sha !== base.sha)
+			await github.request(`/repos/${repository}/issues/${halt.issue}/comments`, {
+				body: { body: `${base.ref} moved to ${base.sha}, which also fails its check alone.\n\n${output}` },
+			});
+		save(join(options.state, HALT), { ...halt, sha: base.sha } satisfies Halt);
+		return false;
+	}
+	const response = await github.request(`/repos/${repository}/issues`, {
+		body: {
+			title: `quest land: ${base.ref} fails its own check, so the queue is halted`,
+			body: `quest land checked ${base.ref} alone at ${base.sha}, after a failing batch whose fixer blamed none of its pull requests, and the base fails too. No pull request is blamed or ejected for it. The queue is halted: queued pull requests keep their auto-merge and their place, and nothing lands until a check of ${base.ref} passes. The gate checks it again whenever it moves, and closes this issue then.\n\n${output}\n\n<!-- quest land: halted -->`,
+		},
+	});
+	save(join(options.state, HALT), { sha: base.sha, issue: Number(object(await response.json()).number) } satisfies Halt);
+	return false;
+}
+
+/** A passing check of a moved base resumes a halted queue and closes its issue. */
+async function resume(github: GitHub, state: string, repository: string, base: Plan["base"]): Promise<void> {
+	const halt = readHalt(state);
+	if (!halt) return;
+	if (halt.issue !== undefined) {
+		const issue = `/repos/${repository}/issues/${halt.issue}`;
+		await github.request(`${issue}/comments`, {
+			body: { body: `${base.ref} passes its check at ${base.sha}, so the queue resumed.` },
+		});
+		await github.request(issue, { method: "PATCH", body: { state: "closed" } });
+	}
+	rmSync(join(state, HALT));
+}
+
 export async function serveBatch(
 	root: string,
 	plan: Plan,
-	options: Pick<ServeOptions, "state" | "sandbox" | "fixer" | "timeout">,
+	options: BatchOptions,
 	deps: GitHubDependencies,
 	token: (workflows: boolean) => Promise<string>,
 	read: RemoteRead = readRemote,
@@ -335,199 +491,200 @@ export async function serveBatch(
 		await report(item);
 		await handbackRepeated(options.state, plan, item, deps);
 	}
-	if (plan.queue.length === 0) return output;
+	// Parked PRs sit out until their fixer job is collected; the rest keep their places.
+	const batch = batchable(options.state, plan);
+	if (batch.queue.length === 0) return output;
+	// A halted queue waits for its base to move, then resumes once the new base passes alone.
+	const halt = readHalt(options.state);
+	if (halt) {
+		if (halt.sha === plan.base.sha) return output;
+		if (!(await checkBase(root, plan.repository, plan.base, options, deps, read))) return output;
+		await resume(github, options.state, plan.repository, plan.base);
+	}
 	const screened = readScreened(options.state);
 	const policy = readPolicy(options.state);
-	const chain = await build(root, plan, read, (entry) => screened[entry.number] !== entry.enabledAt, policy);
-	// Each rejection is its own failure, so a fixer can repair it as it would a failed batch.
+	const chain = await build(root, batch, read, (entry) => screened[entry.number] !== entry.enabledAt, policy);
+	// Each rejection is its own failure, blamed on its PR, so a fixer can repair it as it would a failed batch.
 	for (const { entry, commit, findings } of chain.rejected) {
 		const log = join(options.state, `check-${Date.now()}-${entry.number}.log`);
 		writeFileSync(log, `${findings.join("\n")}\n`, { mode: 0o600 });
-		const detail = `\`quest check\` fails with it squashed alone onto the base ${plan.base.sha}.\n\n<pre>${excerpt(findings.join("\n"))}</pre>\n`;
-		save(join(options.state, "failure.json"), {
-			plan,
-			tip: commit,
-			log,
-			numbers: [entry.number],
-			ejections: [ejection(entry, "failed_checks", detail)],
-		} satisfies Failure);
-		output.push(...(await resumeFailure(root, options, deps)));
+		output.push(
+			...(await fail(root, options, deps, {
+				plan: batch,
+				tip: commit,
+				log,
+				entries: [entry],
+				blame: [entry.number],
+				reason: "failed_checks",
+				detail: `\`quest check\` fails with it squashed alone onto the base ${plan.base.sha}.\n\n<pre>${excerpt(findings.join("\n"))}</pre>\n`,
+			})),
+		);
 	}
 	output.push(...(await reportOverlaps(github, plan, options.state, chain.overlaps)));
 	const conflict = chain.conflict;
 	if (!conflict && chain.links.length === 0) return output;
-	const log = join(options.state, `batch-${Date.now()}-${plan.queue[0].number}.log`);
-	let failure: Failure | undefined;
+	const log = join(options.state, `batch-${Date.now()}-${batch.queue[0].number}.log`);
 	if (conflict) {
 		writeFileSync(log, `Conflicts with the base: ${conflict.files.join(", ")}\n`);
-		failure = {
-			plan,
-			tip: conflict.entry.head,
-			numbers: [conflict.entry.number],
-			log,
-			ejections: [ejection(conflict.entry, "merge_conflict", excerpt(readFileSync(log, "utf8")))],
-		};
-	} else {
-		const tip = chain.links.at(-1)!;
-		const checkout = sandboxTree(root, options.state, tip.commit, chain.links.length);
-		writeFileSync(log, "", { mode: 0o600 });
-		let code: number;
-		try {
-			code = await new Promise<number>((done, reject) => {
-				const child = spawn(options.sandbox, [checkout, plan.base.sha], {
-					cwd: checkout,
-					detached: true,
-					env: { ...commandEnvironment(), QUEST_LAND_BASE: plan.base.sha },
-					stdio: ["ignore", "pipe", "pipe"],
-				});
-				// A hung check would stall the queue: kill its whole process group at the deadline.
-				const timer = setTimeout(() => {
-					appendFileSync(log, `\nquest land: the check ran past ${options.timeout} minutes and was killed\n`);
-					try {
-						process.kill(-child.pid!, "SIGKILL");
-					} catch {}
-				}, options.timeout * 60_000);
-				child.stdout.on("data", (data: Buffer) => appendFileSync(log, data));
-				child.stderr.on("data", (data: Buffer) => appendFileSync(log, data));
-				child.once("error", (error) => {
-					clearTimeout(timer);
-					reject(error);
-				});
-				child.once("close", (status) => {
-					clearTimeout(timer);
-					done(status ?? 1);
-				});
-			});
-		} finally {
-			rmSync(checkout, { recursive: true });
-		}
-		nextPolicy(options.state, policy, chain.links.length, code === 0);
-		if (code !== 0) {
-			const tail = readFileSync(log, "utf8").trimEnd().split("\n").slice(-100).join("\n");
-			failure = {
-				plan,
+		output.push(
+			...(await fail(root, options, deps, {
+				plan: batch,
+				tip: conflict.entry.head,
+				log,
+				entries: [conflict.entry],
+				blame: [conflict.entry.number],
+				reason: "merge_conflict",
+				detail: excerpt(readFileSync(log, "utf8")),
+			})),
+		);
+		return output;
+	}
+	const tip = chain.links.at(-1)!;
+	const code = await runSandbox(root, options, tip.commit, chain.links.length, plan.base.sha, log);
+	nextPolicy(options.state, policy, chain.links.length, code === 0);
+	if (code !== 0) {
+		// The fixer reads the failure first and says which PR broke the batch; until then, all of them
+		// sit out. Without a fixer, the whole batch is ejected.
+		output.push(
+			...(await fail(root, options, deps, {
+				plan: batch,
 				tip: tip.commit,
 				log,
-				numbers: chain.links.map(({ entry }) => entry.number),
-				ejections: chain.links.map(({ entry }) =>
-					ejection(
-						entry,
-						"failed_checks",
-						`the batch check failed (exit ${code}).\n\n<pre>${excerpt(tail)}</pre>\n`,
-					),
+				entries: chain.links.map(({ entry }) => entry),
+				reason: "failed_checks",
+				detail: `the batch check failed (exit ${code}).\n\n<pre>${excerpt(readFileSync(log, "utf8").trimEnd())}</pre>\n`,
+			})),
+		);
+		return output;
+	}
+	const [owner, repo] = plan.repository.split("/");
+	const fresh = await resolvePreparedQueue(root, options.state, { owner, repo }, plan.base.ref, deps);
+	for (const item of fresh.eject) await report(item);
+	if (
+		fresh.base.sha !== plan.base.sha ||
+		chain.links.some(
+			({ entry }) =>
+				!fresh.queue.some(
+					(now) => now.number === entry.number && now.head === entry.head && now.enabledAt === entry.enabledAt,
 				),
-			};
-		} else {
-			const [owner, repo] = plan.repository.split("/");
-			const fresh = await resolvePreparedQueue(root, options.state, { owner, repo }, plan.base.ref, deps);
-			for (const item of fresh.eject) await report(item);
-			if (
-				fresh.base.sha !== plan.base.sha ||
-				chain.links.some(
-					({ entry }) =>
-						!fresh.queue.some(
-							(now) =>
-								now.number === entry.number &&
-								now.head === entry.head &&
-								now.enabledAt === entry.enabledAt,
-						),
-				)
-			)
-				return output;
-			let expectedParent = plan.base.sha;
-			for (const [index, link] of chain.links.entries()) {
-				const parent = index === 0 ? plan.base.sha : chain.links[index - 1].commit;
-				const path = `/repos/${plan.repository}/pulls/${link.entry.number}`;
-				const prepared = await prepareHead(
-					root,
-					options.state,
-					plan,
-					link.entry,
-					expectedParent,
-					link.tree,
-					token,
-					read,
-				);
-				if ("fallback" in prepared) {
-					const completed = await landFallback(
-						root,
-						options.state,
-						plan,
-						link.entry,
-						link.commit,
-						expectedParent,
-						deps,
-						token,
-						read,
-					);
-					if (completed) output.push(completed);
-					if (!completed?.startsWith("landed ")) return output;
-					expectedParent = completed.split(" ")[2];
-					continue;
-				}
-				const merge =
-					"reason" in prepared
-						? new GitHub(deps)
-						: new GitHub({ ...deps, token: await token(touchesWorkflows(root, parent, link)) });
-				const result =
-					"reason" in prepared ? prepared : await mergePinned(merge, path, prepared.head, link.entry.head);
-				if (result === null) {
-					forgetHeads(options.state, link.entry.number);
-					return output;
-				}
-				let reason: "head_moved" | "merge_conflict" | "merge_refused" | "tree_mismatch";
-				let detail: string;
-				let remaining = chain.links.slice(index);
-				if ("reason" in result) {
-					reason = result.reason;
-					detail = `${result.detail}; the rest of the batch was not merged`;
-					if (reason === "tree_mismatch") {
-						detail = `CRITICAL: ${detail}`;
-						deps.warn(detail);
-					}
-				} else {
-					const sha = result.sha;
-					forgetHeads(options.state, link.entry.number);
-					output.push(`landed ${link.entry.number} ${sha}`);
-					const commit = object(
-						await (await merge.request(`/repos/${plan.repository}/git/commits/${sha}`)).json(),
-					);
-					const parents = commit.parents;
-					const actualParent =
-						Array.isArray(parents) && parents.length ? string(object(parents[0]).sha) : null;
-					if (actualParent !== expectedParent) {
-						const message = `quest land: base moved before squash #${link.entry.number}: expected parent ${expectedParent}, got ${actualParent}; rebuilding the remaining queue`;
-						appendFileSync(log, `${message}\n`);
-						deps.warn(message);
-						return output;
-					}
-					expectedParent = sha;
-					const tree = string(object(commit.tree).sha);
-					if (tree === link.tree) continue;
-					reason = "tree_mismatch";
-					detail = `CRITICAL: GitHub squash #${link.entry.number} at ${sha} has tree ${tree}, but the tested chain has ${link.tree}. Already merged PRs stay merged; the remaining batch was stopped`;
-					remaining = chain.links.slice(index + 1);
-					deps.warn(detail);
-				}
-				appendFileSync(log, `${detail}\n`);
-				if (remaining.length)
-					failure = {
-						plan,
+		)
+	)
+		return output;
+	let expectedParent = plan.base.sha;
+	for (const [index, link] of chain.links.entries()) {
+		const parent = index === 0 ? plan.base.sha : chain.links[index - 1].commit;
+		const path = `/repos/${plan.repository}/pulls/${link.entry.number}`;
+		const prepared = await prepareHead(root, options.state, plan, link.entry, expectedParent, link.tree, token, read);
+		if ("fallback" in prepared) {
+			const completed = await landFallback(
+				root,
+				options.state,
+				plan,
+				link.entry,
+				link.commit,
+				expectedParent,
+				deps,
+				token,
+				read,
+			);
+			if (completed) output.push(completed);
+			if (!completed?.startsWith("landed ")) return output;
+			expectedParent = completed.split(" ")[2];
+			continue;
+		}
+		const merge =
+			"reason" in prepared
+				? new GitHub(deps)
+				: new GitHub({ ...deps, token: await token(touchesWorkflows(root, parent, link)) });
+		const result = "reason" in prepared ? prepared : await mergePinned(merge, path, prepared.head, link.entry.head);
+		if (result === null) {
+			forgetHeads(options.state, link.entry.number);
+			return output;
+		}
+		if ("reason" in result) {
+			// Only this PR failed to land. The rest of the batch passed its check and stays queued,
+			// to be rebuilt on the new base, except after a tree mismatch, which stops them all.
+			const detail = `${result.detail}; the rest of the batch was not merged`;
+			appendFileSync(log, `${detail}\n`);
+			if (result.reason === "merge_conflict") {
+				output.push(
+					...(await fail(root, options, deps, {
+						plan: batch,
 						tip: tip.commit,
 						log,
-						// A refusal is the repository's settings or rules, which the fixer cannot change.
-						numbers: reason === "merge_refused" ? [] : remaining.map(({ entry }) => entry.number),
-						ejections: remaining.map(({ entry }) => ejection(entry, reason, excerpt(detail))),
-					};
-				break;
+						entries: [link.entry],
+						blame: [link.entry.number],
+						reason: "merge_conflict",
+						detail: excerpt(detail),
+					})),
+				);
+				return output;
 			}
+			const remaining = result.reason === "tree_mismatch" ? chain.links.slice(index) : [link];
+			if (result.reason === "tree_mismatch") deps.warn(`CRITICAL: ${detail}`);
+			return output.concat(
+				await stop(
+					root,
+					options,
+					deps,
+					batch,
+					remaining.map(({ entry }) =>
+						ejection(
+							entry,
+							result.reason,
+							excerpt(result.reason === "tree_mismatch" ? `CRITICAL: ${detail}` : detail),
+						),
+					),
+				),
+			);
 		}
-	}
-	if (failure) {
-		save(join(options.state, "failure.json"), failure);
-		output.push(...(await resumeFailure(root, options, deps)));
+		const sha = result.sha;
+		forgetHeads(options.state, link.entry.number);
+		output.push(`landed ${link.entry.number} ${sha}`);
+		const commit = object(await (await merge.request(`/repos/${plan.repository}/git/commits/${sha}`)).json());
+		const parents = commit.parents;
+		const actualParent = Array.isArray(parents) && parents.length ? string(object(parents[0]).sha) : null;
+		if (actualParent !== expectedParent) {
+			const message = `quest land: base moved before squash #${link.entry.number}: expected parent ${expectedParent}, got ${actualParent}; rebuilding the remaining queue`;
+			appendFileSync(log, `${message}\n`);
+			deps.warn(message);
+			return output;
+		}
+		expectedParent = sha;
+		const tree = string(object(commit.tree).sha);
+		if (tree === link.tree) continue;
+		const detail = `CRITICAL: GitHub squash #${link.entry.number} at ${sha} has tree ${tree}, but the tested chain has ${link.tree}. Already merged PRs stay merged; the remaining batch was stopped`;
+		deps.warn(detail);
+		appendFileSync(log, `${detail}\n`);
+		const remaining = chain.links.slice(index + 1);
+		if (remaining.length)
+			output.push(
+				...(await stop(
+					root,
+					options,
+					deps,
+					batch,
+					remaining.map(({ entry }) => ejection(entry, "tree_mismatch", excerpt(detail))),
+				)),
+			);
+		return output;
 	}
 	return output;
+}
+
+/**
+ * Eject PRs that cannot land as tested, such as a moved head, a merge GitHub refuses, or a tree
+ * mismatch. The fixer cannot repair these: a writer moved the head, or the repository's settings refuse.
+ */
+async function stop(
+	root: string,
+	options: Pick<ServeOptions, "state" | "fixer">,
+	deps: GitHubDependencies,
+	plan: Plan,
+	ejections: Plan["eject"],
+): Promise<string[]> {
+	save(join(options.state, "failure.json"), { plan, ejections, numbers: [], log: "", tip: "" } satisfies Failure);
+	return resumeFailure(root, options, deps);
 }
 
 /** An OS lock disappears even after SIGKILL. Its holder exits when our pipe closes. */
@@ -628,13 +785,28 @@ export async function serve(
 			{ fetch, now: Date.now, sleep, warn },
 		);
 
+		const name = `${repository.owner}/${repository.repo}`;
+		const batch: BatchOptions = {
+			...options,
+			// Between collections a check may run for most of an hour; a finished fixer's PRs need not wait for it.
+			collect: async () => {
+				try {
+					for (const line of await collectFixers(trusted, options.state, deps, mint, undefined, read))
+						warn(line);
+				} catch (error) {
+					warn(`quest land fixer: collection during a check failed: ${String(error)}`);
+				}
+			},
+		};
 		await daemonLoop(async () => {
-			for (const line of await collectFixers(trusted, options.state, deps, mint, undefined, read)) warn(line);
+			const checkCollected = (base: Plan["base"]) => checkBase(trusted, name, base, batch, deps, read);
+			for (const line of await collectFixers(trusted, options.state, deps, mint, undefined, read, checkCollected))
+				warn(line);
 			for (const line of await resumeFailure(trusted, options, deps)) warn(line);
 			const completed = await finishFallback(trusted, options.state, deps, mint, read);
 			if (completed) warn(completed);
 			const plan = await resolvePreparedQueue(trusted, options.state, repository, options.base, deps);
-			const lines = await serveBatch(trusted, plan, options, deps, mint, read);
+			const lines = await serveBatch(trusted, plan, batch, deps, mint, read);
 			for (const line of lines) warn(line);
 			return lines.length > 0;
 		}, deps);

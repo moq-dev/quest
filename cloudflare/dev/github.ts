@@ -843,6 +843,17 @@ export function fakeGitHub(world: World) {
 			// Newest first, as GitHub lists them.
 			return json(found.reverse().map((pull) => restPull(repo, pull)));
 		}
+		if (tail === "/issues" && method === "POST") {
+			if (!writes("issues")) return forbidden();
+			const issue: Issue = {
+				number: Math.max(0, ...repo.issues.map((i) => i.number), ...repo.pulls.map((p) => p.number)) + 1,
+				title: String(body.title),
+				author: `${world.app.slug}[bot]`,
+				body: typeof body.body === "string" ? body.body : undefined,
+			};
+			repo.issues.push(issue);
+			return json({ number: issue.number, title: issue.title, state: "open" }, 201);
+		}
 		if (tail === "/pulls" && method === "POST") {
 			if (!writes("pull_requests")) return forbidden();
 			const [owner, branch] = String(body.head).split(":");
@@ -873,8 +884,13 @@ export function fakeGitHub(world: World) {
 			const list: Issue[] = item[1] === "pulls" ? repo.pulls : repo.issues;
 			const found = list.find((i) => String(i.number) === item[2]);
 			if (!found) return notFound();
-			if (item[1] === "issues")
+			if (item[1] === "issues") {
+				if (method === "PATCH") {
+					if (!writes("issues")) return forbidden();
+					if (body.state === "closed") found.closed = true;
+				}
 				return json({ number: found.number, title: found.title, state: found.closed ? "closed" : "open" });
+			}
 			const pull = found as Pull;
 			if (method === "PATCH") {
 				if (!writes("pull_requests")) return forbidden();
