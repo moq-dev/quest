@@ -54,7 +54,7 @@ export function pullRequest(value: string, root: string): PullRequest {
  */
 export interface Remote {
 	name: string;
-	/** `remote.<name>.url`, and `.pushurl` or `null` when unset, as configured. */
+	/** `remote.<name>.url`, and `.pushurl` or `null` when unset, as configured: the last value of each, as `git config --get` prints. */
 	configured: { fetch: string; push: string | null };
 	/** The URLs fetches and pushes use, as `git remote get-url [--push]` prints them. */
 	used(): { fetch: string; push: string };
@@ -67,10 +67,11 @@ export interface Remote {
  */
 export function readRemote(root: string, name: string): Remote | null {
 	const key = `remote.${name}.`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	let fetch: string | null = null;
-	let push: string | null = null;
+	// Every value in order: the last is what `git config --get` prints, the first what git uses.
+	const fetch: string[] = [];
+	const push: string[] = [];
 	let rewrites = false;
-	// `-z` prints `key\nvalue\0` for each value; the last value wins, as `git config --get` does.
+	// `-z` prints `key\nvalue\0` for each value.
 	const listing = git(root, [
 		"config",
 		"-z",
@@ -82,12 +83,12 @@ export function readRemote(root: string, name: string): Remote | null {
 		if (at < 0) continue;
 		const [variable, value] = [entry.slice(0, at), entry.slice(at + 1)];
 		if (variable.startsWith("url.")) rewrites = true;
-		else if (variable.endsWith(".pushurl")) push = value;
-		else fetch = value;
+		else if (variable.endsWith(".pushurl")) push.push(value);
+		else fetch.push(value);
 	}
-	if (fetch === null) return null;
-	const configured = { fetch, push };
-	let used = rewrites ? null : { fetch, push: push ?? fetch };
+	if (fetch.length === 0) return null;
+	const configured = { fetch: fetch.at(-1)!, push: push.at(-1) ?? null };
+	let used = rewrites ? null : { fetch: fetch[0], push: push[0] ?? fetch[0] };
 	return {
 		name,
 		configured,
@@ -98,9 +99,10 @@ export function readRemote(root: string, name: string): Remote | null {
 /** The URLs `git remote get-url [--push]` prints for `name`, from one `git remote -v`. */
 function rewritten(root: string, name: string): { fetch: string; push: string } {
 	const urls: { fetch?: string; push?: string } = {};
-	// `<name>\t<url> (fetch|push)` for each URL of every remote; get-url prints the first of each.
+	// `<name>\t<url> (fetch|push)` for each URL of every remote, a partial clone's fetch followed by
+	// ` [<filter>]`; get-url prints the first of each.
 	for (const line of git(root, ["remote", "-v"]).split("\n")) {
-		const match = /^([^\t]+)\t(.*) \((fetch|push)\)$/.exec(line);
+		const match = /^([^\t]+)\t(.*) \((fetch|push)\)(?: \[[^\]]*\])?$/.exec(line);
 		if (match !== null && match[1] === name) urls[match[3] as "fetch" | "push"] ??= match[2];
 	}
 	if (urls.fetch === undefined) throw new Error(`no ${name} remote`);

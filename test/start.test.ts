@@ -834,6 +834,21 @@ test("readRemote reads configured URLs, and rewritten ones as git uses them", ()
 	});
 });
 
+test("readRemote uses the first of several URLs, as git does, with or without rewrites", () => {
+	const dir = initRepository();
+	git(dir, "remote", "add", "origin", "https://github.com/example/first.git");
+	git(dir, "config", "--add", "remote.origin.url", "https://github.com/example/second.git");
+	git(dir, "config", "--add", "remote.origin.pushurl", "https://github.com/me/first.git");
+	git(dir, "config", "--add", "remote.origin.pushurl", "https://github.com/me/second.git");
+	const first = { fetch: "https://github.com/example/first.git", push: "https://github.com/me/first.git" };
+	expect(readRemote(dir, "origin")!.used()).toEqual(first);
+	// A partial clone's filter follows its fetch URL in `git remote -v`.
+	git(dir, "config", "remote.origin.promisor", "true");
+	git(dir, "config", "remote.origin.partialclonefilter", "blob:none");
+	git(dir, "config", "url.https://github.com/.insteadOf", "https://example.invalid/");
+	expect(readRemote(dir, "origin")!.used()).toEqual(first);
+});
+
 test("ago rounds to minutes, hours, then days", () => {
 	const now = Date.parse("2026-10-21T12:00:00Z");
 	expect(ago(now, now - 10_000)).toBe("just now");
