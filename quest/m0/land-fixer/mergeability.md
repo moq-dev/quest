@@ -27,3 +27,8 @@ Since batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/35
 `merge_conflict` already parks the PR for the fixer (`fail` in
 `src/cli/land-serve.ts`) instead of ejecting it, and the rest of the batch
 stays queued; this quest adds the local merge before parking.
+
+GitHub also flags the gate's own freshly pushed base merge as conflicting, from
+the pin's stale mergeability ([moq-dev/quest#342](https://github.com/moq-dev/quest/pull/342)).
+`mergePinned` now retries that case, since the merge holds the tested base. What
+remains is a head the gate did not merge in that round, which GitHub flags anyway.
