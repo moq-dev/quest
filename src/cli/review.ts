@@ -175,11 +175,11 @@ interface Reviewer {
 	/** Credentials the CLI reads from the environment, passed only when it has no stored login. */
 	credentials: string[];
 	/**
-	 * Variables that send the CLI's requests, and their credentials, to another
-	 * endpoint or provider. They stay stripped, and while one is set no
-	 * credential passes either, since it is meant for that endpoint.
+	 * The variables in `env` that send the CLI's requests, and their credentials,
+	 * to another endpoint or provider. They stay stripped, and while one is set
+	 * no credential passes either, since it is meant for that endpoint.
 	 */
-	reroutes: string[];
+	reroutes(env: NodeJS.ProcessEnv): string[];
 	/** Matches the CLI's error for a login or credential the API rejected: expired, revoked, or invalid. */
 	unauthorized: RegExp;
 	review(context: Context, session: string): Turn;
@@ -213,7 +213,13 @@ const claude: Reviewer = {
 	status: ["claude", "auth", "status"],
 	login: "claude auth login",
 	credentials: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
-	reroutes: ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
+	// Claude Code turns a provider on only for `1`, `true`, `yes`, or `on`, so `0` or `false` reroutes nothing.
+	reroutes: (env) => [
+		...(env.ANTHROPIC_BASE_URL ? ["ANTHROPIC_BASE_URL"] : []),
+		...["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"].filter((name) =>
+			/^\s*(1|true|yes|on)\s*$/i.test(env[name] ?? ""),
+		),
+	],
 	// Such as "Failed to authenticate. API Error: 401 ...", "Invalid API key · ...", or "Login expired · Please run /login".
 	unauthorized: /API Error: 401|Failed to authenticate|Invalid API key|Please run \/login/,
 	// The command's level sets its own effort, overriding `--effort`, so it is given the same one.
@@ -305,7 +311,7 @@ const codex: Reviewer = {
 	// `codex exec` reads CODEX_API_KEY, though `codex login status` does not count it; it ignores OPENAI_API_KEY.
 	credentials: ["CODEX_API_KEY"],
 	// OPENAI_BASE_URL is never stripped, so a passed key goes where the CLI already sends its requests.
-	reroutes: [],
+	reroutes: () => [],
 	// Such as "unexpected status 401 Unauthorized: ..." or "Your access token could not be refreshed
 	// because your refresh token was revoked. Please log out and sign in again."
 	unauthorized: /\b401 Unauthorized\b|sign in again/,
@@ -442,7 +448,7 @@ async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv
 	if ((await run(reviewer.status, cwd, stripped, "")).code === 0) {
 		return { reviewer, env: stripped, unauthorized: loggedOut };
 	}
-	const reroutes = reviewer.reroutes.filter((name) => env[name]);
+	const reroutes = reviewer.reroutes(env);
 	if (reroutes.length > 0) {
 		throw new ReviewInputError(
 			`${harness} is not logged in, and quest review strips ${names(reroutes)}, which would reroute it; ` +

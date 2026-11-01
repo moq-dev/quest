@@ -316,6 +316,33 @@ fakes("a credential meant for another endpoint stays stripped, and the error nam
 	expect(s.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
 });
 
+fakes.each(["0", "false", ""])("a provider switch set to %j reroutes nothing", async (value) => {
+	const s = setup("CODEX_THREAD_ID");
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-key");
+	vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", value);
+	vi.stubEnv("CLAUDE_CODE_USE_VERTEX", value);
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code, result.stderr).toBe(0);
+	const turns = s.calls().filter((c) => c.argv[0] !== "auth");
+	expect(turns.length).toBeGreaterThan(0);
+	for (const call of turns) {
+		expect(call.env.ANTHROPIC_API_KEY).toBe("anthropic-key");
+		expect(call.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+	}
+});
+
+fakes("an enabled provider switch withholds the credential, and the error names it", async () => {
+	const s = setup("CODEX_THREAD_ID");
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-key");
+	vi.stubEnv("CLAUDE_CODE_USE_VERTEX", "True");
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain("quest review strips CLAUDE_CODE_USE_VERTEX, which would reroute it");
+	expect(s.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
+});
+
 fakes("only a clean, attached checkout is reviewed", async () => {
 	const s = setup();
 	write(s.repo, "src/lib.ts", "export const x = 3;\n");
