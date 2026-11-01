@@ -38,9 +38,9 @@ import {
 	runRunner,
 } from "../runner/cli";
 import type { AdapterName } from "../runner/adapter";
-import { held, reach, target, upstream, upstreamHead } from "./claims";
+import { held, reach, target, upstream, upstreamRefs } from "./claims";
 import { gate } from "./gate";
-import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, remoteRepository, remoteUrl } from "./github";
+import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, readRemote, remoteRepository } from "./github";
 import { type Hold, type State, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
 import { fix, FixerAgentError } from "./land-fix";
@@ -269,11 +269,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				settle(
 					(async () => {
 						const up = await reach(root(), options.remote, deps);
-						const tree = up === null ? checkout(root()) : snapshot(root(), upstreamHead(root(), up.git));
+						const refs = up === null ? null : upstreamRefs(root(), up.git);
+						const tree = refs === null ? checkout(root()) : snapshot(root(), refs.base);
 						if (!valid(tree)) return null;
 						const ranked = unblocked(tree.docs);
 						const branches = ranked.map((quest) => questBranch(quest.path));
-						return { ranked, holdings: up === null ? [] : (await held(root(), up, branches)).claims };
+						const holdings = up === null ? [] : (await held(root(), up, branches, refs?.branches)).claims;
+						return { ranked, holdings };
 					})(),
 					(result) => {
 						if (result === null) return 1;
@@ -546,7 +548,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.requiredOption("--app-id <id>", "GitHub App id")
 		.option("--timeout <minutes>", "Fail a check that runs longer than this", positiveInteger("timeout"), 60)
 		.action((options: ServeOptions) => {
-			const { repository } = remoteRepository(root(), "origin");
+			const origin = readRemote(root(), "origin");
+			const repository = origin && remoteRepository(origin).repository;
 			if (!repository) throw new Error("origin must name a github.com repository");
 			pending = serve(root(), repository, options, warn).then(
 				() => 0,
@@ -656,12 +659,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	};
 	// Only a commit no local ref reaches asks the forge, so other removals need no token.
 	const merged = async (repository: string, commit: string) => {
-		try {
-			remoteUrl(repository, "origin");
-		} catch {
-			return false; // No forge to ask.
-		}
-		const up = await upstream(repository, "origin", { github: () => gitHubDependencies(warn), warn });
+		const origin = readRemote(repository, "origin");
+		if (origin === null) return false; // No forge to ask.
+		const up = await upstream(repository, origin, { github: () => gitHubDependencies(warn), warn });
 		return up.github !== null && mergedHead(up.github.client, up.github.repository, commit);
 	};
 	worktree
