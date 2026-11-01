@@ -1250,10 +1250,15 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 			JSON.stringify({ numbers: [3], plan: { ...plan, queue: [entry(3, "2026-10-26T00:00:03Z")] } }),
 		);
 		expect(batchable(state, plan).queue.map(({ number }) => number)).toEqual([1, 2]);
-		// A new maintainer pick of a parked PR is not parked.
-		expect(
-			batchable(state, { ...plan, queue: [entry(3, "2026-10-27T00:00:00Z")] }).queue.map(({ number }) => number),
-		).toEqual([3]);
+		// A new maintainer pick of a parked PR is not parked, until a job of its own parks it too.
+		const repicked = entry(3, "2026-10-27T00:00:00Z");
+		expect(batchable(state, { ...plan, queue: [repicked] }).queue.map(({ number }) => number)).toEqual([3]);
+		writeFileSync(
+			join(state, "fix-job-z.json"),
+			JSON.stringify({ numbers: [3], plan: { ...plan, queue: [repicked] } }),
+		);
+		expect(batchable(state, { ...plan, queue: [repicked] }).queue).toEqual([]);
+		expect(parked(state).get(3)).toEqual(new Set(["2026-10-26T00:00:03Z", "2026-10-27T00:00:00Z"]));
 	});
 
 	test("revalidates a moved head after checking and never merges the batch", async () => {
