@@ -5,7 +5,8 @@
 When `validateFix` rejects a fixer result because it edits a protected path
 (`.github/`, `flake.nix`, `nix/`, justfiles, gitlinks) beyond what the base
 merge carries, the handback carries that result as a ready commit, the same
-form as [Fork commits](/quest/m0/land-fixer/fork-commit.md)' refused pushes.
+form as a fork push GitHub refuses
+([moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358)).
 The maintainer reviews it and applies it with `quest land apply <pr>`, then
 pushes and re-picks. Protected edits never land automatically.
 
@@ -25,7 +26,3 @@ Reuse [moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358)'s
 handback format and `quest land apply`. Record the PR head, base, expected
 tree hash, and the patch against the merge's conflicted result. Size it to
 GitHub's comment limit, and hand back plainly when it does not fit.
-
-## Required
-
-- [Fork commits](/quest/m0/land-fixer/fork-commit.md) - provides the ready-commit format and `quest land apply`

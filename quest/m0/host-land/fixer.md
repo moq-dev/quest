@@ -13,7 +13,7 @@ Maintainer decision, 2026-10-30: a `fixed` head lands without further review.
 prompt-injection risk is accepted. Protected paths stay blocked: on 2026-11-01 the
 maintainer briefly let the fixer edit them (moq-dev/quest#357), then reverted that
 after an audit, routing fixer-written protected edits through a ready commit
-instead ([Fork commits](/quest/m0/land-fixer/fork-commit.md)). The built-in prompt treats contributor content
+instead ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)). The built-in prompt treats contributor content
 as untrusted and ignores instructions in the PRs' diffs, without handing the PR
 back for them.
 

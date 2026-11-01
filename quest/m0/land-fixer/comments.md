@@ -35,4 +35,4 @@ requeue and handback comments.
 
 ## Related
 
-- [Fork commits](/quest/m0/land-fixer/fork-commit.md) - trusts the fixer's bot comment marker
+- `quest land apply` ([moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358)) trusts the fixer's bot comment marker
