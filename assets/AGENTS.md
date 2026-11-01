@@ -95,8 +95,8 @@ Search the tree and git history first before making a new quest.
 
 Split independently completable work into separate quests.
 A suggested follow-up becomes a quest only through `/quest-plan`, never as an agent-session task or a GitHub issue.
-Plan recommended follow-ups without offering first: run `/quest-plan` on each one in turn, one follow-up per run.
-A background agent that cannot prompt reports them for its caller to plan.
+Plan recommended follow-ups without offering first: run `/quest-plan` on each one in turn, one follow-up per run; its interview lets the user drop it.
+A background agent that cannot prompt reports them, and its caller plans them the same way.
 Group related quests in an epic; its README holds the work no child owns.
 
 A release or pin bump that unblocks work is its own quest.
