@@ -7,14 +7,18 @@
 // MCP server, and opencode's question tool is denied so every question goes
 // through kix's `ask` instead.
 //
-// opencode has no sandbox of its own, and the runner does not yet wrap it in
-// one: its commands run on the host, in the devShell the runner built from the
-// job's revision and with the attempt's private HOME, but not confined to the
-// checkout.
+// As with Claude Code, the sandbox confines the agent's commands, not the CLI:
+// `opencode serve`, which holds the account's credentials, the server password,
+// and the tools' token, runs outside it, and its own file tools follow
+// permission rules and a plugin instead. opencode runs every command through
+// its configured shell, which here is a script that clears the server's
+// environment and runs the command under sandbox-runtime (`srt`) with the
+// policy Claude Code's sandbox gets, the devShell sourced inside. Nothing the
+// checkout holds runs in the server: no project config, plugins, tools, or MCP
+// servers, and no language servers or formatters.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -37,6 +41,7 @@ import {
 	signalGroup,
 	STOP_GRACE_MS,
 } from "./adapter";
+import { keptEnvironment, quote, runtimeSettings, type Sandbox } from "./sandbox";
 
 /** The XDG base directories opencode keeps its config, credentials, sessions, and caches in, with their defaults. */
 const XDG = {
@@ -89,27 +94,146 @@ function modelConfig(home: string): string {
 }
 
 /**
- * The XDG directories the agent's commands get back: the user's, so tools
- * such as nix and git read their usual config rather than the account's.
+ * An opencode plugin that keeps the file tools inside the checkout and the
+ * attempt's private directory, and lets the read-only ones also read
+ * opencode's own saved tool output. opencode's `external_directory` check is
+ * lexical, so a symlink committed to the checkout would otherwise lead them to
+ * any file this user can read: the server, unlike the commands, runs
+ * unconfined. Each path is resolved as the tool resolves it, then through
+ * every symlink, and a path that does not exist yet through its nearest
+ * existing directory. A dangling symlink is refused, since a write would
+ * follow it. `apply_patch` names its files in the patch's headers.
  */
-function userDirectories(env: NodeJS.ProcessEnv): Record<string, string> {
-	const home = env.HOME || homedir();
-	return Object.fromEntries(Object.entries(XDG).map(([name, fallback]) => [name, env[name] || join(home, fallback)]));
+export const PLUGIN = `import { lstatSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+
+// Each file tool, and whether it only reads.
+const TOOLS = { read: true, glob: true, grep: true, lsp: true, write: false, edit: false, apply_patch: false };
+const HEADER = /^\\s*\\*\\*\\* (?:Add File|Update File|Delete File|Move to):(.*)$/;
+
+function real(path) {
+	try {
+		return realpathSync(path);
+	} catch (error) {
+		if (error?.code !== "ENOENT") throw error;
+		let exists = true;
+		try {
+			lstatSync(path);
+		} catch {
+			exists = false;
+		}
+		const parent = dirname(path);
+		if (exists || parent === path) throw new Error(\`\${path} is a symlink to nothing\`);
+		return join(real(parent), basename(path));
+	}
+}
+
+function inside(path, roots) {
+	return roots.some((root) => {
+		const rel = relative(root, path);
+		return rel === "" || (rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel));
+	});
+}
+
+export default {
+	id: "quest-runner",
+	server: async (_input, options) => {
+		const writes = options.writes.map(real);
+		const reads = [...writes, ...options.reads.map(real)];
+		return {
+			"tool.execute.before": async ({ tool }, { args }) => {
+				if (!(tool in TOOLS)) return;
+				const paths =
+					tool === "apply_patch"
+						? String(args?.patchText ?? "")
+								.split(/\\r\\n|\\r|\\n/)
+								.flatMap((line) => HEADER.exec(line)?.[1]?.trim() || [])
+						: [args?.filePath, args?.path].filter((path) => typeof path === "string" && path);
+				for (const path of paths) {
+					if (!inside(real(resolve(options.cwd, path)), TOOLS[tool] ? reads : writes))
+						throw new Error(\`\${path} is outside the checkout, where the runner keeps the file tools\`);
+				}
+			},
+		};
+	},
+};
+`;
+
+/**
+ * The shell opencode runs every command through, as `<shell> -c <command>`:
+ * the bash tool, the `!` shell, and commands in templates. It starts the
+ * command from the runner's kept variables rather than the server's
+ * environment, which holds the server password, the tools' token in
+ * `OPENCODE_CONFIG_CONTENT`, and any provider key opencode exported, then
+ * sources the private HOME and the devShell inside the sandbox before the
+ * command, as Claude Code does with `CLAUDE_ENV_FILE`.
+ */
+export function shellScript(srt: string, settings: string, sandbox: Sandbox, env: NodeJS.ProcessEnv): string {
+	const kept = Object.entries({ ...keptEnvironment(env), TMPDIR: sandbox.tmp }).map(([name, value]) =>
+		quote(`${name}=${value}`),
+	);
+	const inner = `. ${quote(sandbox.env)} && quest_command=$QUEST_COMMAND && unset QUEST_COMMAND && eval "$quest_command"`;
+	return `#!/bin/sh
+if [ "$#" -ne 2 ] || [ "$1" != -c ]; then
+	echo "usage: $0 -c <command>" >&2
+	exit 2
+fi
+exec /usr/bin/env -i ${kept.join(" ")} "QUEST_COMMAND=$2" ${quote(srt)} --settings ${quote(settings)} -c ${quote(inner)}
+`;
+}
+
+/** The directory opencode saves truncated tool output in, which its read tool may read. */
+function toolOutput(home: string): string {
+	return join(accountDirectories(home).XDG_DATA_HOME, "opencode", "tool-output");
 }
 
 /**
- * An opencode plugin that gives the agent's commands the user's XDG
- * directories back, since opencode passes its own environment to them.
+ * opencode's config for a job. Every tool is allowed, as Claude Code's
+ * permission mode allows its own, except questions, which go through kix,
+ * WebFetch, which would run in the unconfined server, and the file tools'
+ * paths outside the checkout and the attempt's directory. The last matching
+ * rule wins.
  */
-const PLUGIN = `export default {
-	id: "quest-runner",
-	server: async (_input, options) => ({
-		"shell.env": async (_context, output) => {
-			Object.assign(output.env, options.env);
+export function jobConfig(options: {
+	launch: Launch;
+	model: string | undefined;
+	shell: string;
+	plugin: string;
+}): Record<string, unknown> {
+	const { launch } = options;
+	return {
+		// The account's pick outranks any config opencode loads before this one.
+		...(options.model && { model: options.model }),
+		autoupdate: false,
+		share: "disabled",
+		// Only what the account signed in to, not keys the user's environment happens to hold.
+		enabled_providers: credentials(launch.home).map((c) => c.provider),
+		shell: options.shell,
+		permission: {
+			"*": "allow",
+			question: "deny",
+			webfetch: "deny",
+			external_directory: { "*": "deny", [join(launch.sandbox.tmp, "*")]: "allow" },
 		},
-	}),
-};
-`;
+		// Both would run the repository's own tools in the server.
+		lsp: false,
+		formatter: false,
+		mcp: {
+			kix: {
+				type: "remote",
+				url: launch.tools.url,
+				headers: { Authorization: `Bearer ${launch.tools.token}` },
+				oauth: false,
+			},
+		},
+		plugin: [
+			[
+				pathToFileURL(options.plugin).href,
+				{ cwd: launch.cwd, writes: [launch.cwd, launch.sandbox.tmp], reads: [toolOutput(launch.home)] },
+			],
+		],
+	};
+}
 
 export interface Credential {
 	/** opencode's provider ID, such as openai or opencode-go. */
@@ -215,9 +339,10 @@ export function turnExit(
 export class Opencode implements Adapter {
 	readonly name = "opencode";
 
-	/** `binary` is an absolute path, resolved before entering a devShell that could shadow it. */
+	/** `binary` and `srt`, sandbox-runtime's CLI, are absolute paths, so a devShell cannot substitute its own. */
 	constructor(
 		readonly binary: string,
+		readonly srt: string,
 		readonly env: NodeJS.ProcessEnv = process.env,
 	) {}
 
@@ -248,55 +373,37 @@ export class Opencode implements Adapter {
 
 	launch(launch: Launch): Running {
 		const password = randomBytes(32).toString("base64url");
-		// Kept in the account's private home: a session ID per kix session, and the per-launch plugin.
+		// Kept in the account's private home, which commands cannot read or write:
+		// a session ID per kix session, and this launch's plugin, shell, sandbox
+		// settings, and opencode's own temporary files.
 		const sessions = join(launch.home, "kix-sessions");
-		const plugin = join(launch.home, `kix-${launch.session}.js`);
+		const dir = join(launch.home, `kix-${launch.session}`);
+		rmSync(dir, { recursive: true, force: true });
+		mkdirSync(join(dir, "tmp"), { recursive: true, mode: 0o700 });
+		const plugin = join(dir, "plugin.js");
 		writeFileSync(plugin, PLUGIN, { mode: 0o600 });
-		const model = accountModel(launch.home);
-		const config = {
-			// The account's pick outranks a project's own opencode.json, which loads after the account's config.
-			...(model && { model }),
-			autoupdate: false,
-			share: "disabled",
-			// Only what the account signed in to, not keys the user's environment happens to hold.
-			enabled_providers: credentials(launch.home).map((c) => c.provider),
-			permission: { "*": "allow", question: "deny" },
-			mcp: {
-				kix: {
-					type: "remote",
-					url: launch.tools.url,
-					headers: { Authorization: `Bearer ${launch.tools.token}` },
-					oauth: false,
-				},
-			},
-			plugin: [[pathToFileURL(plugin).href, { env: userDirectories(launch.env) }]],
-		};
-		// The account's XDG directories apply to opencode alone: the devShell's nix reads the user's.
-		const xdg = Object.entries(accountDirectories(launch.home)).map(([name, dir]) => `${name}=${dir}`);
-		// The sandbox's script sets the private HOME and enters the devShell, in bash's syntax, before opencode starts.
-		const argv = [
-			"bash",
-			"-c",
-			'. "$0" && exec "$@"',
-			launch.sandbox.env,
-			"/usr/bin/env",
-			...xdg,
-			this.binary,
-			"serve",
-			"--hostname=127.0.0.1",
-			"--port=0",
-		];
+		const settings = join(dir, "srt.json");
+		writeFileSync(settings, JSON.stringify(runtimeSettings(launch.sandbox)), { mode: 0o600 });
+		// opencode names the shell in the bash tool's description.
+		const shell = join(dir, "sandboxed-bash");
+		writeFileSync(shell, shellScript(this.srt, settings, launch.sandbox, launch.env), { mode: 0o700 });
+		const config = jobConfig({ launch, model: accountModel(launch.home), shell, plugin });
+		// The server runs outside the devShell, whose shellHook the job's revision controls, and with a
+		// HOME commands cannot write, since opencode loads plugins and instructions from it.
 		// The password and the tools' bearer token stay out of the command line, which other users can read.
-		const child = spawn(argv[0]!, argv.slice(1), {
+		const child = spawn(this.binary, ["serve", "--hostname=127.0.0.1", "--port=0"], {
 			cwd: launch.cwd,
 			env: {
 				...environment(launch.env),
-				TMPDIR: launch.sandbox.tmp,
+				...accountDirectories(launch.home),
+				HOME: launch.home,
+				TMPDIR: join(dir, "tmp"),
+				OPENCODE_DISABLE_PROJECT_CONFIG: "1",
 				OPENCODE_SERVER_PASSWORD: password,
 				OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
 			},
 			stdio: ["ignore", "pipe", "pipe"],
-			// Its own process group, so stopping it also stops the devShell and every tool it started.
+			// Its own process group, so stopping it also stops every tool it started.
 			detached: true,
 		});
 
@@ -317,7 +424,7 @@ export class Opencode implements Adapter {
 		});
 		const closed = new Promise<void>((resolve) => {
 			child.once("error", (error) => {
-				stderr += `could not start ${argv[0]}: ${error.message}\n`;
+				stderr += `could not start ${this.binary}: ${error.message}\n`;
 				resolve();
 			});
 			child.once("close", () => resolve());
@@ -377,7 +484,7 @@ export class Opencode implements Adapter {
 							abort().catch(ignore);
 						}
 					} else if (event.type === "permission.asked") {
-						// Every tool is allowed, as Claude Code's bypassPermissions; a project's own rules may still ask.
+						// Every rule allows or denies, so nothing should ask; a stray ask must not hang the turn.
 						client.permission.reply({ requestID: event.properties.id, reply: "once" }).catch(ignore);
 					} else if (event.type === "question.asked") {
 						client.question.reject({ requestID: event.properties.id }).catch(ignore);
@@ -407,7 +514,7 @@ export class Opencode implements Adapter {
 				await watched;
 				clearTimeout(killer);
 				lines.end();
-				rmSync(plugin, { force: true });
+				rmSync(dir, { recursive: true, force: true });
 				return exit;
 			});
 		return {
