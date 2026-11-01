@@ -3410,9 +3410,33 @@ describe.skipIf(process.platform === "win32")("flaky checks", () => {
 			`quest-land-failed: ${"x".repeat(201)}`,
 			"  quest-land-failed: indented",
 		].join("\n");
-		expect(failedModules(output)).toEqual(["test rs", "check js"]);
-		const many = Array.from({ length: 60 }, (_, i) => `quest-land-failed: m${i}`).join("\n");
-		expect(failedModules(many)).toHaveLength(50);
+		// A name past the bounds reruns the whole check, so no failed module is left out of the rerun.
+		expect(failedModules(output)).toEqual([]);
+		expect(failedModules(output.split("\n").slice(0, 4).join("\n"))).toEqual(["test rs", "check js"]);
+		const many = (count: number) => Array.from({ length: count }, (_, i) => `quest-land-failed: m${i}`).join("\n");
+		expect(failedModules(many(50))).toHaveLength(50);
+		expect(failedModules(many(51))).toEqual([]);
+	});
+
+	test("keeps no flake for the fixer when its batch stops short of landing", async () => {
+		const forge = new Forge();
+		forge.pull("One", { "one.txt": "yes" });
+		const dir = tempDir();
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const old = forge.main();
+		const fixer = join(dir, "fixer");
+		writeFileSync(fixer, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+		// The PR's head moves while its batch is checked, so the test that flaked may never reach the base.
+		const options = {
+			...sandbox(
+				`git -C '${forge.origin}' update-ref refs/heads/topic-1 ${old}\n${flakyCheck(dir, ["test rs"])}`,
+			),
+			fixer,
+		};
+		const output = await serveBatch(forge.clone(), plan, options, deps, async () => deps.token);
+		expect(output).toEqual([expect.stringMatching(/^flaky [0-9a-f]{40} test rs$/), "ejected 1 head_moved"]);
+		expect(readdirSync(options.state).filter((name) => name.startsWith("flaky"))).toEqual([]);
 	});
 
 	test("reruns only the failed modules on the same tip, and lands a batch whose rerun passes", async () => {

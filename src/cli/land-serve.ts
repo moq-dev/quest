@@ -417,14 +417,15 @@ const FAILED_MODULE = /^quest-land-failed: (.+)$/gm;
 export const RERUN_MARKER = "quest land: rerunning";
 
 /**
- * The modules the check named as failed, in order and once each. A name is check output, so it is
- * bounded: printable, at most 200 characters, and at most 50 of them.
+ * The modules the check named as failed, in order and once each, or none, which reruns the whole check.
+ * A name is check output, so it is bounded: printable, at most 200 characters, and at most 50 of them.
+ * A name past those bounds reruns the whole check too, since a rerun that left out a failed module
+ * could pass a broken batch.
  */
 export function failedModules(output: string): string[] {
-	const names = [...output.matchAll(FAILED_MODULE)]
-		.map((match) => match[1].trim())
-		.filter((name) => name && name.length <= 200 && !/[\u0000-\u001f\u007f]/.test(name));
-	return [...new Set(names)].slice(0, 50);
+	const names = [...new Set([...output.matchAll(FAILED_MODULE)].map((match) => match[1].trim()))];
+	const usable = (name: string) => name && name.length <= 200 && !/[\u0000-\u001f\u007f]/.test(name);
+	return names.length <= 50 && names.every(usable) ? names : [];
 }
 
 /** A check's outcome: whether it passed, and when only its rerun passed, the modules that flaked. */
@@ -528,18 +529,21 @@ function readFlaky(state: string): string[] {
 	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as string[]) : [];
 }
 
-/**
- * A check of `tip` that passed only on its rerun. With a fixer, its log is kept as `flaky-*.log`, a name
- * that tells the fixer to disable the flaky test, until the next round starts that job on the base as it
- * then is, which includes the batch that just landed. Returns the line that reports it.
- */
-function flaked(options: Pick<ServeOptions, "state" | "fixer">, log: string, tip: string, modules: string[]): string {
-	if (options.fixer) {
-		const kept = join(options.state, `flaky-${Date.now()}-${tip.slice(0, 12)}.log`);
-		copyFileSync(log, kept);
-		save(join(options.state, FLAKY), [...readFlaky(options.state), kept]);
-	}
+/** The line that reports a check of `tip` that passed only on its rerun. */
+function flaked(tip: string, modules: string[]): string {
 	return `flaky ${tip} ${modules.length ? modules.join(", ") : "check"}`;
+}
+
+/**
+ * Keep the log of a check of `tip` that passed only on its rerun, once the code it checked is on the
+ * base, so the fixer finds the flaky test there. With a fixer, it is kept as `flaky-*.log`, a name that
+ * tells the fixer to disable the flaky test, until the next round starts that job on the base.
+ */
+function keepFlaky(options: Pick<ServeOptions, "state" | "fixer">, log: string, tip: string): void {
+	if (!options.fixer) return;
+	const kept = join(options.state, `flaky-${Date.now()}-${tip.slice(0, 12)}.log`);
+	copyFileSync(log, kept);
+	save(join(options.state, FLAKY), [...readFlaky(options.state), kept]);
 }
 
 /** Start a fixer job on each recorded flake, which proposes a PR that disables the flaky test and queues it. */
@@ -580,7 +584,10 @@ export async function checkBase(
 	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote({ repository }), base.sha]);
 	const log = join(options.state, `base-${Date.now()}-${base.sha.slice(0, 12)}.log`);
 	const checked = await check(root, options, base.sha, 0, base.sha, log);
-	if (checked.flaky) deps.warn(flaked(options, log, base.sha, checked.flaky));
+	if (checked.flaky) {
+		deps.warn(flaked(base.sha, checked.flaky));
+		keepFlaky(options, log, base.sha);
+	}
 	if (checked.code === 0) return true;
 	const github = new GitHub(deps);
 	const halt = readHalt(options.state);
@@ -694,7 +701,7 @@ export async function serveBatch(
 	const { code, flaky } = await check(root, options, tip.commit, chain.links.length, plan.base.sha, log);
 	// A flaky failure is no PR's fault: the batch passed, and lands.
 	nextPolicy(options.state, policy, chain.links.length, code === 0);
-	if (flaky) output.push(flaked(options, log, tip.commit, flaky));
+	if (flaky) output.push(flaked(tip.commit, flaky));
 	if (code !== 0) {
 		// The fixer reads the failure first and says which PR broke the batch; until then, all of them
 		// sit out. Without a fixer, the whole batch is ejected.
@@ -815,6 +822,9 @@ export async function serveBatch(
 		appendFileSync(log, `${detail}\n`);
 		return output;
 	}
+	// Every PR landed as tested, so a test that flaked in the batch is on the base now. A batch that
+	// stopped short leaves its PRs to a later batch, whose check observes a flake again.
+	if (flaky) keepFlaky(options, log, tip.commit);
 	return output;
 }
 
