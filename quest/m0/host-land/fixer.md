@@ -21,8 +21,10 @@ as untrusted and hands back attempts to redirect its task.
 
 The quest CLI implements `quest land fix`, durable collection, validation,
 lease-pushes, Review records, and one attempt per maintainer pick. Host work
-remains in kixelated/nixos: allow the ephemeral fixer container network access
-only to CLIProxyAPI, provide `OPENAI_BASE_URL` and the gate's `OPENAI_API_KEY`,
+remains in kixelated/nixos: the ephemeral fixer container (`qland-fix`) reaches
+CLIProxyAPI and, like the check containers, the public internet without private
+ranges (`modules/ci-egress.nix`), so its builds fetch dependencies;
+`assets/land-fix.md` limits the fixer to those fetches. Provide `OPENAI_BASE_URL` and the gate's `OPENAI_API_KEY`,
 and log the maintainer's Codex account into CLIProxyAPI. The wrapper runs with
 the supplied repository as cwd, receives `<log> <PR numbers...>`, exposes the
 log read-only, waits for `quest land fix`, preserves its exit status, and returns

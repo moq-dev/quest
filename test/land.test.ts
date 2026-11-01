@@ -2176,6 +2176,18 @@ ${requeueScript}
 		])
 			expect(fixerPrompt).toContain(text);
 	});
+	test("lets the fixer fetch dependencies and requires it to verify what it reports", () => {
+		for (const text of [
+			"from `github.com` and `codeload.github.com` for git",
+			"Do not build with `--offline`",
+			"never call GitHub's API yourself",
+			"or reach any other host",
+			"Before reporting `fixed` or `requeue`, build and test",
+			"name the commands",
+			"quoting the command and the output",
+		])
+			expect(fixerPrompt).toContain(text);
+	});
 	test.each(["deleted branch", "gitfile", "symlink", "corrupt objects", "oversized"])(
 		"hands back %s and keeps collection usable",
 		async (kind) => {

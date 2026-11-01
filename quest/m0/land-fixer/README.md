@@ -34,7 +34,7 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | ~75 | "requeued unchanged": collateral of a batch another PR broke | [Batch triage](/quest/m0/land-fixer/triage.md) |
 | 36 | picked again while fixing; the newer pick is kept, so nothing is lost | not planned |
 | 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | [Protected edits](/quest/m0/land-fixer/protected.md) |
-| 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | [Registry network](/quest/m0/land-fixer/network.md) |
+| 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | fixed by [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356): the prompt allows dependency fetches and requires a build and test |
 | 2 | GitHub refused the push to a fork because the merge touches workflows: moq-dev/moq#7439, #7467 | [Fork commits](/quest/m0/land-fixer/fork-commit.md) |
 | several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | [Flaky tests](/quest/m0/land-fixer/flaky.md) |
 | ~15 | design conflicts, correctly handed back | none |
@@ -48,7 +48,14 @@ Decision prompts, selected options marked ✅:
     and [Local mergeability](/quest/m0/land-fixer/mergeability.md) into
     this epic
 - How attempts count: see [Attempt budget](/quest/m0/land-fixer/attempts.md).
-- How the fixer gets dependencies: see [Registry network](/quest/m0/land-fixer/network.md).
+- How the fixer gets dependencies:
+  - Host prefetches the job's lockfile dependencies and mounts them read-only
+  - ✅ Allow registry network. The host already gave the fixer container
+    public egress; `assets/land-fix.md`'s "never contact GitHub" made it
+    build `--offline`. [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356)
+    allows fetches from package registries and `github.com`/`codeload.github.com`
+    and makes the fixer build and test what it reports.
+  - Leave it
 - Protected paths: see [Protected edits](/quest/m0/land-fixer/protected.md).
 - Fork pushes GitHub refuses: see [Fork commits](/quest/m0/land-fixer/fork-commit.md).
 - Flaky tests: see [Flaky tests](/quest/m0/land-fixer/flaky.md).
@@ -67,7 +74,6 @@ resolves itself and what it hands back; that docs update finishes the epic.
 ## Required
 
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
-- [Registry network](/quest/m0/land-fixer/network.md) - the fixer fetches dependencies, so it builds and tests what it requeues
 - [Batch triage](/quest/m0/land-fixer/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
 - [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, disables a flaky test in the next batch, and files a follow-up
 - [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
