@@ -631,7 +631,7 @@ own so it never waits for the batch check or makes the batch check wait, and
 below the batch check's priority, such as a lower CPU weight. Up to four PRs the
 next batch draws first are each squashed alone onto the base and pre-checked one
 at a time; a PR that conflicts with the base or fails `quest check` is left for
-the batch that reaches it. A PR is pre-checked once per head; after the base
+the batch that reaches it. A PR is pre-checked once per head and pick; after the base
 moves, only the PR next in line is pre-checked again. The batch's end kills a
 pre-check still running, which runs again on a later batch. Before the next batch
 is filled, a PR whose pre-check failed is parked alone for the fixer, blamed for

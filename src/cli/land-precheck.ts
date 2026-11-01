@@ -69,7 +69,7 @@ export function takeFailures(state: string, plan: Plan): { entry: Entry; record:
 
 /**
  * The PRs to pre-check, in `order`, leaving out those already batched or screened out this round.
- * A PR is pre-checked once per head; a moved base pre-checks it again only when it is next in line,
+ * A PR is pre-checked once per head and pick; a moved base pre-checks it again only when it is next in line,
  * so each landing does not pre-check the whole queue again.
  */
 export function candidates(state: string, plan: Plan, order: "oldest" | "newest", skip: Set<number>): Entry[] {
@@ -80,7 +80,8 @@ export function candidates(state: string, plan: Plan, order: "oldest" | "newest"
 	return ordered
 		.filter((entry, index) => {
 			const record = records[entry.number];
-			if (!record || record.head !== entry.head) return true;
+			// A new pick is pre-checked again, as the failure of an earlier pick is never acted on.
+			if (!record || record.head !== entry.head || record.enabledAt !== entry.enabledAt) return true;
 			return index === 0 && record.base !== plan.base.sha;
 		})
 		.slice(0, PRECHECK_AHEAD);

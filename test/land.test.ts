@@ -1702,6 +1702,9 @@ mv '${result}.new' '${result}'
 		// A moved head runs again wherever it is.
 		const pushed = queue.map((item) => (item.number === 3 ? entry(3, "c".repeat(40)) : item));
 		expect(numbers(plan(old, pushed))).toEqual([3, 4, 5, 6]);
+		// So does a new pick of the same head, such as a requeue after leaving the queue.
+		const picked = queue.map((item) => (item.number === 2 ? { ...item, enabledAt: "2026-10-27T00:00:00Z" } : item));
+		expect(numbers(plan(old, picked))).toEqual([2, 4, 5, 6]);
 		// A PR that leaves the queue is forgotten, so a requeue runs it again.
 		recordPrecheck(state, plan(old, queue.slice(2)), 4, {
 			head: queue[3].head,
