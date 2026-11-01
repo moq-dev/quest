@@ -35,6 +35,14 @@ Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
   verification), and ✅ the enrollment-time read-only CI check. Head approval
   and opencode sandboxing stay, since moq-dev's own jobs need them.
 - moq-dev/moq comes first, then private repositories so moq.pro can enroll.
+- Where does Kix rank in m0? Decided 2026-11-01 (user, /quest-complete):
+  - ✅ Land work first (the host gate, the land fixer and the land quests),
+    then Kix, then the rest of m0
+  - Kix first
+  - Kix below the review quests
+
+  The land work is what moq-dev's repositories use every day, and the
+  maintainer ranked it first in the 2026-10-30 and 2026-11-01 sessions.
 
 Decided while planning m0 (2026-09-26), replacing the earlier copied-files and
 ownership-manifest design:
