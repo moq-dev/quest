@@ -103,6 +103,7 @@ resolves itself and what it hands back; that docs update finishes the epic.
 - [Fixer comments](/quest/m0/land-fixer/comments.md) - a per-job, comment-only GitHub token lets the fixer explain its work on the PRs
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
 - [Batch triage](/quest/m0/land-fixer/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
+- [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
 - [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, disables a flaky test on the batch's base PR, and files a follow-up
 - [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Protected edits](/quest/m0/land-fixer/protected.md) - the fixer edits protected paths when it judges the edit mechanical, and the fix lands
