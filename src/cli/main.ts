@@ -978,7 +978,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or zdiff3. Exits 1 when a conflict remains.\n\n" +
 				"quest init registers it for quest/** as the merge.quest driver. Any other command registers the driver " +
 				"in the clone's config when .gitattributes names merge=quest and no config sets it. Without quest on " +
-				"the merge's PATH, the driver falls back to git merge-file. GitHub's merges ignore merge drivers.",
+				"the merge's PATH, the driver falls back to git merge-file, and when conflicts remain it prints to stderr " +
+				"that the file's link lists were not auto-resolved. GitHub's merges ignore merge drivers.",
 		)
 		.argument("<ours>", "Our version, overwritten with the result (git's %A)")
 		.argument("<base>", "The common ancestor (git's %O)")

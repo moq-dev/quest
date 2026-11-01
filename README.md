@@ -271,8 +271,10 @@ opening link. Prose, headings, an entry both sides rewrote, or one side
 removed while the other edited, keep the usual conflict markers. Any `quest`
 command registers the driver in a fresh clone or worktree whose
 `.gitattributes` names it. Without `quest` on the merge's PATH, the driver
-falls back to `git merge-file`, and GitHub's merges ignore drivers, so a PR
-shows as conflicting until a local merge from its base is pushed.
+falls back to `git merge-file` and, when conflicts remain, prints to stderr
+that the file's link lists were not auto-resolved. GitHub's merges ignore
+drivers, so a PR shows as conflicting until a local merge from its base is
+pushed.
 
 The registered driver passes Git's conflict marker length and revision labels
 to `quest resolve`, including the ancestor label for `diff3` conflicts. A direct
