@@ -150,6 +150,9 @@ export async function startFixer(
 	/** Mints the job's `issues: write` token for its repository, which the fixer may comment with. */
 	commentToken?: () => Promise<string>,
 ): Promise<void> {
+	// Before any attempt is recorded, so a failed mint retries the launch instead of spending the attempts.
+	// GitHub expires the token within an hour, which the fixer's 60-minute deadline matches.
+	const comments = commentToken ? { GH_TOKEN: await commentToken(), GH_REPO: failure.plan.repository } : undefined;
 	const entries: Entry[] = [];
 	for (const entry of failure.plan.queue.filter((item) => failure.numbers.includes(item.number))) {
 		// failure.json may replay after launching or collecting this same job. It is not a second pick.
@@ -181,8 +184,6 @@ export async function startFixer(
 		rmSync(checkout, { recursive: true, force: true });
 		return;
 	}
-	// GitHub expires the token within an hour, which the fixer's 60-minute deadline matches.
-	const comments = commentToken ? { GH_TOKEN: await commentToken(), GH_REPO: failure.plan.repository } : undefined;
 	git(checkout, ["init", "--quiet"]);
 	// No background gc or maintenance may rewrite objects while the daemon imports the fixer's result.
 	git(checkout, ["config", "gc.auto", "0"]);

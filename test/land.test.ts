@@ -1783,6 +1783,8 @@ async function fixerFixture(
 		protectedBase?: boolean;
 		// The daemon mints this comment token for the job.
 		commentToken?: string;
+		// GitHub refuses the first mint, so the daemon retries the launch.
+		mintFails?: boolean;
 	} = {},
 ) {
 	const forge = new Forge();
@@ -1840,13 +1842,19 @@ ${options.raw ? `exec '${agent}' "$@"` : options.pipe ? `quest land fix --agent 
 	const finished = eventFile(state.state, (name) => name.endsWith(".exit"));
 	const ready = options.blocked ? eventFile(tools, (name) => name === "ready") : undefined;
 	const commentToken = options.commentToken;
-	await serveBatch(
-		root,
-		plan,
-		{ ...state, fixer: wrapper, ...(commentToken ? { commentToken: async () => commentToken } : {}) },
-		deps,
-		async () => deps.token,
-	);
+	let refuse = options.mintFails;
+	const mint = async () => {
+		if (refuse) {
+			refuse = false;
+			throw new Error("GitHub App request failed: HTTP 502");
+		}
+		return commentToken!;
+	};
+	const fixerOptions = { ...state, fixer: wrapper, ...(commentToken ? { commentToken: mint } : {}) };
+	if (options.mintFails) {
+		await expect(serveBatch(root, plan, fixerOptions, deps, async () => deps.token)).rejects.toThrow("HTTP 502");
+		await resumeFailure(root, fixerOptions, deps);
+	} else await serveBatch(root, plan, fixerOptions, deps, async () => deps.token);
 	const jobs = () => readdirSync(state.state).filter((name) => /^fix-job-.*\.json$/.test(name));
 	const collect = (dependencies = deps, timeout?: number) =>
 		collectFixers(root, state.state, dependencies, async () => deps.token, timeout);
@@ -2290,6 +2298,12 @@ ${requeueScript}
 		expect(text.endsWith("`")).toBe(true);
 		expect(text.slice(1, -1)).not.toMatch(/`|<|@|\b(?:closes|fixes|resolves)\b/i);
 		expect(text).toContain("&#35;12");
+	});
+	test("retries a launch whose comment token failed to mint without spending its attempt", async () => {
+		const fixture = await fixerFixture(requeueScript, { commentToken: "job-comment-token", mintFails: true });
+		expect(fixture.jobs()).toHaveLength(1);
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
 	});
 	test("never posts the job's comment token that the fixer echoes", async () => {
 		const token = `ghs_${"A1b2".repeat(9)}`;
