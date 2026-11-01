@@ -16,7 +16,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { launchEnvironment, boundedLines, redactedLines, spawnDirectory } from "../src/cli/agent";
-import { batchArgument, programCommand, programEnvironment, which } from "../src/cli/program";
+import { batchArgument, programCommand, programEnvironment, signalProcess, which } from "../src/cli/program";
 import { type Output, main } from "../src/cli/main";
 import { tempDir } from "./fixture";
 import { systemdScopes } from "../src/cli/supervise";
@@ -298,8 +298,11 @@ test("start runs claude with every launch setting, one resolved key, and no key 
 		session,
 	]);
 	expect(call.stdin).toBe("/quest-start quest/m0/a.md");
-	expect(call.cwd).toBe(
-		execFileSync("git", ["-C", s.worktree, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim(),
+	// Windows may spell the same directory with a short (8.3) name or either slash.
+	expect(realpathSync.native(call.cwd as string)).toBe(
+		realpathSync.native(
+			execFileSync("git", ["-C", s.worktree, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim(),
+		),
 	);
 	// Only its own key: no session credentials, harness markers, other keys, or secret-manager token.
 	expect(call.env).toEqual({
@@ -666,6 +669,11 @@ test("a Windows batch file runs through System32's cmd.exe with each argument es
 		NoDefaultCurrentDirectoryInExePath: "1",
 	});
 	expect(programEnvironment({ PATH: ".:/bin::relative", HOME: "h" }, "linux")).toEqual({ PATH: "/bin", HOME: "h" });
+});
+
+test("signalling a process that already exited is not an error", () => {
+	// Past Linux's and macOS's pid limits, and not a multiple of 4 as Windows pids are.
+	expect(() => signalProcess(0x3ffffffe, "SIGTERM")).not.toThrow();
 });
 
 test("missing keys, positions past the list, and unknown references are usage errors", async () => {

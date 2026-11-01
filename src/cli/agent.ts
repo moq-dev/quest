@@ -31,7 +31,7 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
+import { alive, programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
 import { Worktrees, save } from "./worktree";
 
@@ -292,15 +292,6 @@ function load<T>(path: string): T | undefined {
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
-	}
-}
-
-function alive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
 }
 
@@ -595,7 +586,13 @@ export async function runAgent(
 	// On Windows the agent may run under a batch shim, so its whole tree is ended.
 	const terminate = (signal: NodeJS.Signals) => {
 		if (process.platform !== "win32") child?.kill(signal);
-		else if (child?.pid !== undefined) signalProcess(child.pid, signal, deps.env);
+		else if (child?.pid !== undefined) {
+			try {
+				signalProcess(child.pid, signal, deps.env);
+			} catch (error) {
+				deps.stderr(`quest: ${(error as Error).message}\n`);
+			}
+		}
 	};
 	// An agent whose record cannot be saved, for example because `stop --all`
 	// deleted the state, could not be stopped, so it is killed.

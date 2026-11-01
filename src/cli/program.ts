@@ -141,15 +141,29 @@ export function programEnvironment(
 	return platform === "win32" ? { ...result, NoDefaultCurrentDirectoryInExePath: "1" } : result;
 }
 
+/** Whether process `pid` exists, including one this user may not signal. */
+export function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
 /**
  * Signal `pid`, ignoring a process that has already exited. Windows has no
  * signals: there the process and its descendants, such as the agent a batch
- * shim started, are terminated at once.
+ * shim started, are terminated at once. A failure to end a process that is
+ * still running throws on both.
  */
 export function signalProcess(pid: number, signal: NodeJS.Signals, env: NodeJS.ProcessEnv = process.env): void {
 	if (process.platform === "win32") {
-		spawnSync(system32(env, "taskkill.exe"), ["/pid", String(pid), "/t", "/f"], { stdio: "ignore" });
-		return;
+		const result = spawnSync(system32(env, "taskkill.exe"), ["/pid", String(pid), "/t", "/f"], { stdio: "ignore" });
+		if (result.status === 0 || !alive(pid)) return;
+		throw new Error(
+			`taskkill could not end process ${pid}: ${result.error?.message ?? `exit code ${result.status ?? result.signal}`}`,
+		);
 	}
 	try {
 		process.kill(pid, signal);
