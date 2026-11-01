@@ -1154,6 +1154,25 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(linking.labels).toEqual([]);
 	});
 
+	test("ejects a PR that fails quest check only atop the batch's earlier links, and checks the batch without it", async () => {
+		const forge = new Forge();
+		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		// Each passes alone: one finishes b, the other links to it.
+		forge.pull("Finish b", { "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
+		forge.pull("Link b", { "quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n` });
+		forge.pull("Clean", { "clean.txt": "ok" });
+		const { checked, landing } = await forge.round();
+		expect(checked).toEqual([[1, 3]]);
+		expect(landing).toEqual([
+			"ejected 2 failed_checks",
+			`landed 1 ${forge.repo.pulls[0].squash}`,
+			`landed 3 ${forge.repo.pulls[2].squash}`,
+		]);
+		expect(forge.comment(2)).toContain("`quest check` fails with it squashed onto the base");
+		expect(forge.comment(2)).toContain("after #1, though it passes alone");
+		expect(forge.comment(2)).toMatch(/quest\/m0\/a\.md:\d+: .*\/quest\/m0\/b\.md/);
+	});
+
 	test("screens only the PRs a batch reaches, leaving the rest of a long queue for later", async () => {
 		const forge = new Forge();
 		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });

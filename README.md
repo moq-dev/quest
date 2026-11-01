@@ -613,7 +613,13 @@ base, and `quest check` runs on the result; PRs the batch does not reach wait
 for a later round, so a long queue costs only each batch's candidates. A PR with findings the base lacks, such as
 a link to a quest the base has since finished, is parked alone for the fixer, blamed
 for those findings, so it never fails a batch; the fixer starts from that squash.
-Without a fixer it is ejected as `failed_checks` with those findings. This check runs
+Without a fixer it is ejected as `failed_checks` with those findings. Two PRs can
+each pass alone yet fail together, such as one finishing a quest the other links
+to, so once the batch is full `quest check` also runs on its chain. The first link
+whose squash atop the earlier links has findings the base lacks is parked or
+ejected the same way, blamed for them, with the fixer starting from that link's
+commit, and the batch is filled again without it, before any sandbox time is
+spent. This check runs
 in the daemon, never the sandbox: it parses quest files read from git objects
 and executes nothing from the tree. A base without a `quest/` directory skips
 it. A newly queued PR the batch reaches is also squashed onto the four PRs

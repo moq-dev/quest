@@ -123,8 +123,9 @@ Decision prompts, selected options marked ✅:
   - Flaky tests: ✅ disable only a rerun-proven flaky test, in a separate PR
     · keep the fixer's judgment and the base PR
   - New work, all picked: ship [Attempt budget](/quest/m0/land-fixer/attempts.md)
-    right after triage; [the batch check](/quest/m0/land-fixer/batch-check.md);
-    [pre-checks](/quest/m0/land-fixer/precheck.md); and
+    right after triage; the batch check (`quest check` on the batch's chain);
+    pre-checks (`quest land serve --precheck`; the host wires it up in the
+    [gate host](/quest/m0/host-land/host.md)); and
     [tuning](/quest/m0/land-fixer/tuning.md)
 - Amended 2026-11-01 (maintainer, /quest-plan in moq-dev/moq): a fixer merge
   on [moq-dev/moq#7318](https://github.com/moq-dev/moq/pull/7318) rebuilt
@@ -140,7 +141,6 @@ work, done once the Required quests below have merged.
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
 - [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
-- [Batch quest check](/quest/m0/land-fixer/batch-check.md) - the daemon runs `quest check` on the batch's chain before spending a sandbox check
 - [Pre-check queued PRs](/quest/m0/land-fixer/precheck.md) - compile and lint the next PRs against the base while a batch runs, parking broken ones before they batch
 - [Throughput tuning](/quest/m0/land-fixer/tuning.md) - batch size from the failure rate, no wasted base-conflict rounds, rerere, a fixer cap, and an explicit reasoning effort
 - [CI failures park](/quest/m0/land-fixer/ci-park.md) - a PR whose own required CI fails is parked for the fixer with the failing log, not ejected

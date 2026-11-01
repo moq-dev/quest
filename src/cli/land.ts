@@ -476,12 +476,17 @@ interface Conflict {
 	files: string[];
 }
 
-/** A queued PR that fails `quest check` squashed alone onto the base, with the findings the base lacks. */
+/**
+ * A queued PR that fails `quest check` squashed alone onto the base, or atop the batch's earlier
+ * links, with the findings the base lacks.
+ */
 export interface Rejection {
 	entry: Entry;
-	/** The squash onto the base that fails, which a fixer starts from. */
+	/** The squash onto the base, or onto the earlier links, that fails, which a fixer starts from. */
 	commit: string;
 	findings: string[];
+	/** The batch's earlier links it fails atop, though it passes alone; absent when it fails alone. */
+	after?: Entry[];
 }
 
 /** A newly screened PR, and the PRs ahead of it that it conflicts with, each squashed alone onto the base. */
@@ -516,7 +521,9 @@ export interface BatchPolicy {
  * is first squashed alone onto the base: one that fails `quest check` there with findings the
  * base lacks is rejected, and a fresh one is also squashed onto the PRs landing soonest ahead of
  * it, to report which ones it conflicts with. Stop at the policy's batch limit, skipping
- * conflicting additions; a conflicting base stops the batch.
+ * conflicting additions; a conflicting base stops the batch. Two PRs can each pass `quest check`
+ * alone yet fail it together, so the batch's chain is checked too: the first link with findings
+ * the base lacks is rejected, and the batch is filled again without it.
  */
 export async function build(
 	root: string,
@@ -538,32 +545,63 @@ export async function build(
 		const ordered = policy.order === "newest" ? [...plan.queue].reverse() : plan.queue;
 		const limit = Math.max(1, Math.min(policy.size, 1 + Math.floor(Math.log2(plan.queue.length))));
 		const screening = screener(dir, driver, plan);
-		// Screen each head only as the batch reaches it, so a long queue costs this batch's
-		// candidates, not every queued PR on every round.
-		for (const entry of ordered) {
-			if (chain.links.length >= limit) break;
-			const alone = screening.alone(entry);
-			if (alone === null) {
-				if (chain.links.length > 0) continue;
-				git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
-				chain.conflict = { entry, files: squash(dir, driver, entry)! };
-				break;
-			}
-			if (alone.findings.length > 0) {
-				chain.rejected.push({ entry, commit: alone.commit, findings: alone.findings.map(formatFinding) });
-				continue;
-			}
-			if (fresh(entry)) chain.overlaps.push({ entry, ahead: screening.overlaps(entry) });
-			git(dir, ["reset", "--quiet", "--hard", chain.links.at(-1)?.commit ?? plan.base.sha]);
-			if (squash(dir, driver, entry) !== null) continue;
-			chain.links.push({
-				entry,
-				commit: git(dir, ["rev-parse", "HEAD"]),
-				tree: git(dir, ["rev-parse", "HEAD^{tree}"]),
+		for (;;) {
+			fill(chain, ordered, limit, dir, driver, plan, screening, fresh);
+			const blamed = chain.conflict ? null : screening.chain(chain.links);
+			if (blamed === null) return chain;
+			// Fill again without the link that introduced the findings; screening is memoized.
+			const index = chain.links.indexOf(blamed.link);
+			chain.rejected.push({
+				entry: blamed.link.entry,
+				commit: blamed.link.commit,
+				findings: blamed.findings.map(formatFinding),
+				after: chain.links.slice(0, index).map((link) => link.entry),
 			});
+			chain.links = [];
+			chain.overlaps = [];
 		}
-		return chain;
 	});
+}
+
+/**
+ * Fill `chain` from `ordered` up to `limit` links, skipping PRs it already rejected. Screen each
+ * head only as the batch reaches it, so a long queue costs this batch's candidates, not every
+ * queued PR on every round.
+ */
+function fill(
+	chain: Chain,
+	ordered: Entry[],
+	limit: number,
+	dir: string,
+	driver: string,
+	plan: Plan,
+	screening: ReturnType<typeof screener>,
+	fresh: (entry: Entry) => boolean,
+): void {
+	const rejected = new Set(chain.rejected.map((rejection) => rejection.entry));
+	for (const entry of ordered) {
+		if (chain.links.length >= limit) break;
+		if (rejected.has(entry)) continue;
+		const alone = screening.alone(entry);
+		if (alone === null) {
+			if (chain.links.length > 0) continue;
+			git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+			chain.conflict = { entry, files: squash(dir, driver, entry)! };
+			break;
+		}
+		if (alone.findings.length > 0) {
+			chain.rejected.push({ entry, commit: alone.commit, findings: alone.findings.map(formatFinding) });
+			continue;
+		}
+		if (fresh(entry)) chain.overlaps.push({ entry, ahead: screening.overlaps(entry) });
+		git(dir, ["reset", "--quiet", "--hard", chain.links.at(-1)?.commit ?? plan.base.sha]);
+		if (squash(dir, driver, entry) !== null) continue;
+		chain.links.push({
+			entry,
+			commit: git(dir, ["rev-parse", "HEAD"]),
+			tree: git(dir, ["rev-parse", "HEAD^{tree}"]),
+		});
+	}
 }
 
 /** Squash `entry` onto `HEAD` and commit it, or return the conflicting files and leave `HEAD` as it was. */
@@ -591,6 +629,11 @@ function screener(dir: string, driver: string, plan: Plan) {
 	// A base without quests is a repository that does not use them.
 	const known =
 		git(dir, ["ls-tree", "--name-only", plan.base.sha, "quest"]) === "" ? null : questCheck(dir, plan.base.sha);
+	// A finding the base already has is not a PR's, even on a line the PR moved.
+	const added = (commit: string) =>
+		questCheck(dir, commit).filter(
+			(finding) => !known!.some((old) => old.path === finding.path && old.message === finding.message),
+		);
 	const cache = new Map<Entry, { commit: string; findings: Finding[] } | null>();
 	const alone = (entry: Entry) => {
 		if (cache.has(entry)) return cache.get(entry)!;
@@ -598,15 +641,7 @@ function screener(dir: string, driver: string, plan: Plan) {
 		let result: { commit: string; findings: Finding[] } | null = null;
 		if (squash(dir, driver, entry) === null) {
 			const commit = git(dir, ["rev-parse", "HEAD"]);
-			// A finding the base already has is not this PR's, even on a line the PR moved.
-			const findings =
-				known === null
-					? []
-					: questCheck(dir, commit).filter(
-							(finding) =>
-								!known.some((old) => old.path === finding.path && old.message === finding.message),
-						);
-			result = { commit, findings };
+			result = { commit, findings: known === null ? [] : added(commit) };
 		}
 		cache.set(entry, result);
 		return result;
@@ -624,7 +659,19 @@ function screener(dir: string, driver: string, plan: Plan) {
 				return files === null ? [] : [{ entry: earlier, files }];
 			});
 	};
-	return { alone, overlaps };
+	/**
+	 * The first of a batch's links whose commit has `quest check` findings the base lacks, with
+	 * them, or null when its tip has none. A lone link was already screened alone.
+	 */
+	const chain = (links: Link[]): { link: Link; findings: Finding[] } | null => {
+		if (known === null || links.length < 2 || added(links.at(-1)!.commit).length === 0) return null;
+		for (const link of links.slice(1)) {
+			const findings = added(link.commit);
+			if (findings.length > 0) return { link, findings };
+		}
+		return null;
+	};
+	return { alone, overlaps, chain };
 }
 
 /**

@@ -552,7 +552,7 @@ export async function serveBatch(
 	const policy = readPolicy(options.state);
 	const chain = await build(root, batch, read, (entry) => screened[entry.number] !== entry.enabledAt, policy);
 	// Each rejection is its own failure, blamed on its PR, so a fixer can repair it as it would a failed batch.
-	for (const { entry, commit, findings } of chain.rejected) {
+	for (const { entry, commit, findings, after } of chain.rejected) {
 		const log = join(options.state, `check-${Date.now()}-${entry.number}.log`);
 		writeFileSync(log, `${findings.join("\n")}\n`, { mode: 0o600 });
 		output.push(
@@ -563,7 +563,7 @@ export async function serveBatch(
 				entries: [entry],
 				blame: [entry.number],
 				reason: "failed_checks",
-				detail: `\`quest check\` fails with it squashed alone onto the base ${plan.base.sha}.\n\n<pre>${excerpt(findings.join("\n"))}</pre>\n`,
+				detail: `\`quest check\` fails with it squashed ${after ? `onto the base ${plan.base.sha} after ${after.map((ahead) => `#${ahead.number}`).join(", ")}, though it passes alone` : `alone onto the base ${plan.base.sha}`}.\n\n<pre>${excerpt(findings.join("\n"))}</pre>\n`,
 			})),
 		);
 	}
