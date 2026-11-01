@@ -615,7 +615,8 @@ test.runIf(windows)("a batch shim's own program search never reaches the worktre
 	writeFileSync(join(shim, "interpreter.cmd"), `@"${process.execPath}" %*\r\n`);
 	const planted = join(s.runtime, "planted.log");
 	writeFileSync(join(s.worktree, "interpreter.cmd"), `@echo ran> "${planted}"\r\n`);
-	vi.stubEnv("PATH", `${shim}${delimiter}${process.env.PATH}`);
+	// PATH names the worktree relatively, too.
+	vi.stubEnv("PATH", `.${delimiter}${shim}${delimiter}${process.env.PATH}`);
 	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
 	expect(result.code).toBe(0);
 	expect(existsSync(planted)).toBe(false);
@@ -658,11 +659,13 @@ test("a Windows batch file runs through System32's cmd.exe with each argument es
 	expect(batchArgument('a\\"b\\')).toBe('^^^"a\\\\\\^^^"b\\\\^^^"');
 	expect(() => batchArgument("%PATH%")).toThrow("cannot pass");
 	expect(() => batchArgument("a\nb")).toThrow("cannot pass");
-	expect(programEnvironment({ PATH: "C:\\bin" }, "win32")).toEqual({
-		PATH: "C:\\bin",
+	// A launched program keeps only PATH's absolute directories and, on Windows, skips its working directory.
+	expect(programEnvironment({ Path: '.;C:\\bin;relative;;"C:\\x y"', HOME: "h" }, "win32")).toEqual({
+		Path: 'C:\\bin;"C:\\x y"',
+		HOME: "h",
 		NoDefaultCurrentDirectoryInExePath: "1",
 	});
-	expect(programEnvironment({ PATH: "/bin" }, "linux")).toEqual({ PATH: "/bin" });
+	expect(programEnvironment({ PATH: ".:/bin::relative", HOME: "h" }, "linux")).toEqual({ PATH: "/bin", HOME: "h" });
 });
 
 test("missing keys, positions past the list, and unknown references are usage errors", async () => {

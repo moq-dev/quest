@@ -18,6 +18,16 @@ function variable(env: NodeJS.ProcessEnv, name: string, platform: NodeJS.Platfor
 	return Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
 }
 
+/** A PATH entry's directory: Windows accepts an entry in quotes, such as one holding spaces. */
+const directory = (entry: string, platform: NodeJS.Platform) =>
+	platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry;
+
+/** PATH's entries naming absolute directories, as written. */
+function absoluteEntries(value: string, platform: NodeJS.Platform): string[] {
+	const path = platform === "win32" ? win32 : posix;
+	return value.split(path.delimiter).filter((entry) => path.isAbsolute(directory(entry, platform)));
+}
+
 /** Extensions Windows can start: programs, and batch files such as npm's `.cmd` shims. */
 const LAUNCHABLE = /^\.(com|exe|bat|cmd)$/i;
 const BATCH = /\.(bat|cmd)$/i;
@@ -47,12 +57,9 @@ export function which(name: string, env: NodeJS.ProcessEnv): string | undefined 
 					.split(";")
 					.filter((ext) => LAUNCHABLE.test(ext))
 			: [""];
-	for (const entry of (variable(env, "PATH", platform) ?? "").split(path.delimiter)) {
-		// Windows accepts a quoted PATH entry, such as one holding a semicolon.
-		const dir = platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry;
-		if (!path.isAbsolute(dir)) continue;
+	for (const entry of absoluteEntries(variable(env, "PATH", platform) ?? "", platform)) {
 		for (const ext of extensions) {
-			const candidate = path.join(dir, name + ext);
+			const candidate = path.join(directory(entry, platform), name + ext);
 			if (launchable(candidate, platform)) return realpathSync(candidate);
 		}
 	}
@@ -112,9 +119,10 @@ export function programCommand(
 }
 
 /**
- * The environment to run a program with. On Windows it sets
- * NoDefaultCurrentDirectoryInExePath, so neither cmd.exe nor the program
- * searches its working directory for the programs it starts by name: npm's
+ * The environment to run a program with: PATH keeps only its absolute
+ * directories, and on Windows NoDefaultCurrentDirectoryInExePath stops the
+ * implicit search of the working directory. Neither cmd.exe nor the program
+ * then finds a program it starts by name in its working directory: npm's
  * shim runs `node` that way when no node.exe sits beside it, and a worktree
  * could otherwise supply its own.
  */
@@ -122,7 +130,15 @@ export function programEnvironment(
 	env: NodeJS.ProcessEnv,
 	platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-	return platform === "win32" ? { ...env, NoDefaultCurrentDirectoryInExePath: "1" } : env;
+	const path = platform === "win32" ? win32 : posix;
+	const result = Object.fromEntries(
+		Object.entries(env).map(([name, value]) =>
+			value !== undefined && (platform === "win32" ? name.toUpperCase() : name) === "PATH"
+				? [name, absoluteEntries(value, platform).join(path.delimiter)]
+				: [name, value],
+		),
+	);
+	return platform === "win32" ? { ...result, NoDefaultCurrentDirectoryInExePath: "1" } : result;
 }
 
 /**

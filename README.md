@@ -790,12 +790,13 @@ signals the agent and waits until its `start` or `resume` has reported.
 
 The agent CLI and `op` run from their absolute paths on `PATH`, skipping
 relative entries, so a worktree can never supply its own `claude` and receive
-a key. On native Windows the lookup tries `PATHEXT`'s program and batch
-extensions, a batch shim such as npm's `claude.cmd` runs through System32's
-`cmd.exe` with its arguments escaped, `NoDefaultCurrentDirectoryInExePath`
-keeps the shim and the agent from finding programs such as `node` in the
-worktree, and `stop` ends the agent's whole process
-tree at once, since Windows has no `SIGTERM`.
+a key. They also run with only `PATH`'s absolute entries, so neither finds a
+program it starts by name, such as `node`, in the worktree. On native Windows
+the lookup tries `PATHEXT`'s program and batch extensions, a batch shim such as
+npm's `claude.cmd` runs through System32's `cmd.exe` with its arguments
+escaped, `NoDefaultCurrentDirectoryInExePath` stops Windows' implicit search of
+the working directory, and `stop` ends the agent's whole process tree at once,
+since Windows has no `SIGTERM`.
 
 ## Run kix jobs on your machines
 
