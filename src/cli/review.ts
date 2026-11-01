@@ -476,9 +476,9 @@ async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader);
 	const reply = reader.reply();
 	if (code !== 0 || reply.error !== undefined) {
-		// A login can expire or be revoked while the status check still passes.
-		const message = reply.error ?? stderr;
-		if (reply.status === 401 || cli.reviewer.unauthorized.test(message)) {
+		// A login can expire or be revoked while the status check still passes. A CLI may report it
+		// only on stderr, behind a reader's fallback error such as "claude printed no result".
+		if (reply.status === 401 || cli.reviewer.unauthorized.test(`${reply.error ?? ""}\n${stderr}`)) {
 			throw new ReviewInputError(cli.unauthorized);
 		}
 		const detail = reply.error ?? stderr.trim().split("\n").slice(-5).join("\n");

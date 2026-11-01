@@ -42,6 +42,8 @@ if (rejected) {
 	const session_id = at("--session-id") ?? at("--resume");
 	if (rejected === "status") {
 		result({ session_id, is_error: true, api_error_status: 401, result: "Failed to authenticate. API Error: 401 Invalid bearer token" });
+	} else if (rejected === "stderr") {
+		console.error("Login expired · Please run /login");
 	} else {
 		result({ session_id, is_error: true, result: "OAuth token revoked · Please run /login" });
 	}
@@ -241,6 +243,7 @@ fakes("a login the API rejects fails as logged out, whatever the status check sa
 		["CLAUDECODE", "stderr", "codex is not logged in; run `codex login`"],
 		["CODEX_THREAD_ID", "status", "claude is not logged in; run `claude auth login`"],
 		["CODEX_THREAD_ID", "text", "claude is not logged in; run `claude auth login`"],
+		["CODEX_THREAD_ID", "stderr", "claude is not logged in; run `claude auth login`"],
 	] as const) {
 		const s = setup(host);
 		vi.stubEnv("FAKE_REJECTED", variant);
