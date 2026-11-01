@@ -119,10 +119,10 @@ const CONTROL: Record<HarnessName, string[]> = {
 };
 
 /**
- * A config home that holds a copy of the user's login and trusts the clone,
- * and for Codex the planted hooks too, which it otherwise skips until a user
- * trusts them. Each run gets a new one, so one run's writes cannot hide
- * another's.
+ * A config home that holds a copy of the user's login and, with `trust`, trusts
+ * the clone, and for Codex the planted hooks too, which it otherwise skips
+ * until a user trusts them. Each run gets a new one, so one run's writes cannot
+ * hide another's.
  */
 interface Home {
 	harness: HarnessName;
@@ -134,21 +134,23 @@ interface Home {
 	release(): void;
 }
 
-async function home(harness: HarnessName): Promise<Home> {
+async function home(harness: HarnessName, trust = true): Promise<Home> {
 	const { clone } = fixture;
 	const path = newHome();
 	if (harness === "codex") {
 		const source = process.env.CODEX_HOME || join(homedir(), ".codex");
 		const config = join(path, "config.toml");
-		writeFileSync(config, `[projects.${JSON.stringify(clone)}]\ntrust_level = "trusted"\n`);
-		const listed = await codexHooks(path, clone);
-		const hooks = listed.hooks.filter((hook) => hook.source === "project");
-		if (hooks.length === 0) throw new Error(`codex lists none of the planted hooks: ${listed.response}`);
-		const state = hooks.map(
-			(hook) =>
-				`\n[hooks.state.${JSON.stringify(hook.key)}]\ntrusted_hash = ${JSON.stringify(hook.currentHash)}\n`,
-		);
-		appendFileSync(config, state.join(""));
+		writeFileSync(config, trust ? `[projects.${JSON.stringify(clone)}]\ntrust_level = "trusted"\n` : "");
+		if (trust) {
+			const listed = await codexHooks(path, clone);
+			const hooks = listed.hooks.filter((hook) => hook.source === "project");
+			if (hooks.length === 0) throw new Error(`codex lists none of the planted hooks: ${listed.response}`);
+			const state = hooks.map(
+				(hook) =>
+					`\n[hooks.state.${JSON.stringify(hook.key)}]\ntrusted_hash = ${JSON.stringify(hook.currentHash)}\n`,
+			);
+			appendFileSync(config, state.join(""));
+		}
 		return {
 			harness,
 			env: { CODEX_HOME: path },
@@ -161,7 +163,7 @@ async function home(harness: HarnessName): Promise<Home> {
 	}
 	const source = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 	const config = join(path, ".claude.json");
-	writeFileSync(config, JSON.stringify({ projects: { [clone]: { hasTrustDialogAccepted: true } } }));
+	writeFileSync(config, JSON.stringify({ projects: trust ? { [clone]: { hasTrustDialogAccepted: true } } : {} }));
 	return {
 		harness,
 		env: { CLAUDE_CONFIG_DIR: path },
@@ -293,23 +295,55 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 	});
 
 	test("quest review runs none of it and trusts nothing new", async () => {
-		clearMarkers();
 		const dir = await home(harness);
 		const trusted = dir.trusted();
-		let outcome: unknown;
-		try {
-			outcome = await review(
-				{ root: fixture.clone, base: "origin/main", harness, effort: EFFORT, fresh: true },
-				{ env: environment(dir) },
-			).catch((error: unknown) => error);
-		} finally {
-			dir.release();
-		}
-		expect(recorded(), "planted configuration ran during the review").toEqual([]);
-		expect(dir.trusted(), "the review trusted a new directory").toEqual(trusted);
-		if (outcome instanceof Error) throw outcome;
+		await reviewIn(dir, () => {
+			expect(recorded(), "planted configuration ran during the review").toEqual([]);
+			expect(dir.trusted(), "the review trusted a new directory").toEqual(trusted);
+		});
+	});
+
+	// A home that already trusts the clone would not show the review trusting it.
+	test("quest review of an untrusted checkout trusts nothing", async () => {
+		const dir = await home(harness, false);
+		await reviewIn(dir, () => {
+			expect(recorded(), "planted configuration ran during the review").toEqual([]);
+			expect(dir.trusted(), "the review trusted a directory").toEqual([]);
+		});
 	});
 });
+
+/** How long a review may run before its reviewer CLI is terminated, within the test timeout. */
+const REVIEW_BOUND = 20 * 60_000;
+
+/**
+ * Review the clone with `dir`, then run `verify` before rethrowing the
+ * review's error, so a failed review still checks what ran. A review that runs
+ * past `REVIEW_BOUND` has the reviewer CLI it spawned terminated and awaited,
+ * so a hung CLI never outlives its test or its config home.
+ */
+async function reviewIn(dir: Home, verify: () => void) {
+	clearMarkers();
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		spawnSync("pkill", ["-TERM", "-P", String(process.pid)]);
+	}, REVIEW_BOUND);
+	let outcome: unknown;
+	try {
+		outcome = await review(
+			{ root: fixture.clone, base: "origin/main", harness: dir.harness, effort: EFFORT, fresh: true },
+			{ env: environment(dir) },
+		).catch((error: unknown) => error);
+	} finally {
+		clearTimeout(timer);
+		dir.release();
+	}
+	verify();
+	if (timedOut)
+		throw new Error(`the review ran past ${REVIEW_BOUND / 60_000} minutes, so its reviewer was terminated`);
+	if (outcome instanceof Error) throw outcome;
+}
 
 function git(cwd: string, ...args: string[]) {
 	const run = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@localhost", ...args], {
