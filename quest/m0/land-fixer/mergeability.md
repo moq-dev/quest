@@ -1,12 +1,14 @@
-# [XS] quest land merges locally instead of trusting GitHub's mergeability
+# [S] quest land merges locally instead of trusting GitHub's mergeability
 
 ## Goal
 
 `quest land` never ejects a PR as `merge_conflict` because of GitHub's
 mergeability alone. When the squash API refuses a PR that GitHub marks as
 conflicting, the gate merges the base into it locally with the quest merge
-driver, pushes that merge, and lands the PR. It ejects only when the local
-merge also conflicts.
+driver, pushes that merge, and lands the PR. When the local merge also
+conflicts, the PR stays queued and parked while the fixer resolves it; it
+leaves the queue only on a handback (2026-11-01, see the
+[epic](/quest/m0/land-fixer/README.md)).
 
 ## Plan
 

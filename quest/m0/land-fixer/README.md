@@ -4,8 +4,11 @@
 
 When a land batch fails or a queued PR conflicts, the gate and its fixer
 resolve every mechanical cause themselves and land the result, so a
-maintainer sees only behavior and design decisions. The fixer blames the
-failing PR before anything is ejected. The gate merges locally instead of
+maintainer sees only behavior and design decisions. Nothing leaves the queue
+for a conflict or a failure: a PR the fixer is working on keeps its
+auto-merge and its place, sits out batches until the fix is in, and leaves
+the queue only when the fixer hands it back. The fixer blames the failing PR
+before anything else happens. The gate merges locally instead of
 trusting GitHub's mergeability, reruns a failed module before blaming, and
 disables a flaky test with a follow-up quest. The fixer builds and tests
 with access to package registries, edits protected paths when the edit is
@@ -50,6 +53,13 @@ Decision prompts, selected options marked ✅:
 - Fork pushes GitHub refuses: see [Fork commits](/quest/m0/land-fixer/fork-commit.md).
 - Flaky tests: see [Flaky tests](/quest/m0/land-fixer/flaky.md).
 - Milestone for the new quests: ✅ m0 · m1
+- The user, starting the work: "The fixer is meant to handle conflicts and
+  failures without kicking stuff out of the queue." A conflict or a failing
+  check therefore never ejects a PR; the gate parks it (no auto-merge change,
+  no ejection comment) while its fixer job runs, and only a handback
+  disables auto-merge. [Batch triage](/quest/m0/land-fixer/triage.md) and
+  [Local mergeability](/quest/m0/land-fixer/mergeability.md) follow this
+  rule.
 
 The README's landing section and `CONTRIBUTING.md` list what the fixer
 resolves itself and what it hands back; that docs update finishes the epic.

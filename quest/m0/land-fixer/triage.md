@@ -1,12 +1,15 @@
-# [M] The fixer triages a failing batch before anything is ejected
+# [M] The fixer triages a failing batch instead of ejecting it
 
 ## Goal
 
 When a batch's check fails, the fixer reads the failure first and names the
-PR that caused it. `quest land` ejects only that PR and keeps the rest
-queued. When the fixer cannot tell, it checks the base tip alone. If the
-base is red, the queue halts and says so, ejecting nothing. If the base is
-green, every PR in the batch is ejected, as today. Bisection stays gone, as
+PR that caused it. `quest land` parks only that PR while the fixer repairs
+it, keeping its auto-merge, and keeps the rest queued; the PR leaves the
+queue only if the fixer hands it back. When the fixer cannot tell, it checks
+the base tip alone. If the base is red, the queue halts and says so,
+parking nothing. If the base is green, every PR in the batch is parked for
+the fixer, still without leaving the queue (2026-11-01, see the
+[epic](/quest/m0/land-fixer/README.md)). Bisection stays gone, as
 the [epic](/quest/m0/host-land/README.md) decided.
 
 ## Plan
