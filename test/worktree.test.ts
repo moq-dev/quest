@@ -718,6 +718,34 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 			"lacks name",
 		);
 	});
+	it("waits out another holder of the registry lock instead of failing", async () => {
+		const { repo, home, worktrees } = fixture();
+		const lock = join(home, "lock");
+		mkdirSync(lock);
+		writeFileSync(join(lock, "live.json"), JSON.stringify(currentOwner()));
+		let settled = false;
+		const created = claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-wait" },
+			worktrees,
+			noForge,
+		);
+		void created.finally(() => (settled = true));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(settled).toBe(false);
+		rmSync(lock, { recursive: true });
+		expect((await created)!.trim()).toBe(join(realpathSync(repo), ".worktrees", "agent-wait"));
+	});
+	it("keeps names unique per repository, and asks for the ID where several share one", async () => {
+		const { root, repo, worktrees } = fixture();
+		const other = repository(join(root, "other"));
+		const first = worktrees.create(repo, "feature", 1_000_000);
+		const second = worktrees.create(other, "feature", 1_000_000);
+		expect(() => worktrees.create(repo, "feature", 1_000_000)).toThrow("already exists in this repository");
+		expect(() => worktrees.release("feature")).toThrow("give the ID instead");
+		expect(worktrees.release(second.id).phase).toBe("released");
+		await worktrees.remove(first.id);
+		expect(worktrees.release("feature").id).toBe(second.id);
+	});
 	it("reads the event on stdin and exits 1, never 2, on failure", () => {
 		const { repo, home } = fixture();
 		const cli = (input: string) =>

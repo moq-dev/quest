@@ -49,7 +49,7 @@ interface Registry {
 }
 
 /** Another live process holds the registry lock. */
-class Busy extends Error {}
+export class Busy extends Error {}
 
 function git(root: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", root, ...args], {
@@ -364,10 +364,17 @@ export class Worktrees {
 			await sleep(100);
 		}
 	}
+	/** Names are unique per repository, so a name that several repositories use needs the ID. */
 	private find(registry: Registry, id: string): WorktreeRecord {
-		const record = registry.records.find((item) => item.id === id || item.name === id);
-		if (!record) throw new Error(`unknown worktree: ${id}`);
-		return record;
+		const byId = registry.records.find((item) => item.id === id);
+		if (byId) return byId;
+		const named = registry.records.filter((item) => item.name === id);
+		if (named.length > 1)
+			throw new Error(
+				`worktree name is used in several repositories; give the ID instead: ${named.map((item) => `${item.id} (${item.repository})`).join(", ")}`,
+			);
+		if (!named[0]) throw new Error(`unknown worktree: ${id}`);
+		return named[0];
 	}
 	/** Unknown counts as running, so scratch is never deleted under a process that may use it. */
 	private running(run: Run): boolean {
@@ -464,10 +471,12 @@ export class Worktrees {
 				throw new Error("name must contain only letters, digits, dots, underscores, or hyphens");
 			if (!Number.isSafeInteger(reserve) || reserve <= 0)
 				throw new Error("reserve must be a positive safe integer in bytes, including expected build growth");
-			if (registry.records.some((item) => item.name === name))
-				throw new Error(`worktree name already exists; use restore or another name: ${name}`);
 			const declared = scratch.map(childPath);
 			const repository = canonical(git(root, "rev-parse", "--show-toplevel").trim());
+			if (registry.records.some((item) => item.name === name && item.repository === repository))
+				throw new Error(
+					`worktree name already exists in this repository; use restore or another name: ${name}`,
+				);
 			const path = join(repository, ".worktrees", name);
 			mkdirSync(dirname(path), { recursive: true });
 			if (existsSync(path)) throw new Error(`refusing to adopt an existing checkout: ${path}`);

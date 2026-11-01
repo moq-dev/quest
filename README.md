@@ -902,7 +902,8 @@ quest worktree status
 ```
 
 Creation prints JSON with the ID and the detached, locked checkout path under
-`.worktrees/`, and records the `--scratch` paths. `run` restores a released
+`.worktrees/`, and records the `--scratch` paths. Names are unique per
+repository; where several repositories use one, the other commands take the ID. `run` restores a released
 checkout, runs the command there, and once it exits kills any descendants it
 left behind. When no other run remains in the checkout, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
@@ -978,7 +979,9 @@ it declares the main checkout's top-level ignored entries as scratch, except
 reserves the main checkout's disk usage without `.git` and those checkouts. A
 subagent's checkout is released when the subagent finishes or stops to wait for
 an answer, and restored when it resumes, with a note telling it to reinstall
-its scratch. Claude never removes a subagent's checkout itself, so remove a
+its scratch. Another `SubagentStop` hook that keeps a subagent running defeats
+this: Claude continues the subagent without a `SubagentStart`, so it works on
+without its scratch until it reinstalls it. Claude never removes a subagent's checkout itself, so remove a
 finished one with `quest worktree remove`, which also recovers one whose
 session crashed. When Claude removes a session's checkout, `quest worktree
 remove` decides: a checkout holding unpreserved work is kept.

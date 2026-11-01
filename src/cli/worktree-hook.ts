@@ -3,7 +3,16 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { type Merged, type WorktreeRecord, Worktrees, canonical, derivedDefaults, mainCheckout } from "./worktree";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+	Busy,
+	type Merged,
+	type WorktreeRecord,
+	Worktrees,
+	canonical,
+	derivedDefaults,
+	mainCheckout,
+} from "./worktree";
 
 /** The Claude Code events `quest worktree hook` handles, in the order `quest init` installs them. */
 export const HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"] as const;
@@ -31,6 +40,18 @@ function field(input: HookInput, key: "name" | "worktree_path" | "agent_id"): st
 	const value = input[key];
 	if (typeof value !== "string" || value === "") throw new Error(`${input.hook_event_name} input lacks ${key}`);
 	return value;
+}
+
+/** Runs a registry operation, waiting out the short critical sections of concurrent hooks and commands. */
+async function waiting<T>(action: () => T | Promise<T>): Promise<T> {
+	for (;;) {
+		try {
+			return await action();
+		} catch (error) {
+			if (!(error instanceof Busy)) throw error;
+		}
+		await sleep(100);
+	}
 }
 
 function git(path: string, ...args: string[]): string {
@@ -62,9 +83,9 @@ function base(cwd: string): string {
  * The checkout Claude created for this subagent. Claude names a subagent's worktree `agent-<agent_id>`,
  * so a subagent that runs without isolation in another agent's checkout never matches it.
  */
-function subagentCheckout(worktrees: Worktrees, input: HookInput): WorktreeRecord | undefined {
+async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise<WorktreeRecord | undefined> {
 	const path = toplevel(input.cwd);
-	const record = path === undefined ? undefined : worktrees.registered(path);
+	const record = path === undefined ? undefined : await waiting(() => worktrees.registered(path));
 	return record?.name === `agent-${field(input, "agent_id")}` ? record : undefined;
 }
 
@@ -81,25 +102,26 @@ export async function claudeHook(input: unknown, worktrees: Worktrees, merged: M
 		case "WorktreeCreate": {
 			const name = field(hook, "name");
 			const main = mainCheckout(hook.cwd);
-			const existing = worktrees.registered(join(main, ".worktrees", name));
-			if (existing?.name === name) return `${worktrees.restore(existing.id).path}\n`;
+			const existing = await waiting(() => worktrees.registered(join(main, ".worktrees", name)));
+			if (existing?.name === name) return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;
 			const { reserve, scratch } = derivedDefaults(main);
-			return `${worktrees.create(main, name, reserve, base(hook.cwd), scratch).path}\n`;
+			const ref = base(hook.cwd);
+			return `${(await waiting(() => worktrees.create(main, name, reserve, ref, scratch))).path}\n`;
 		}
 		case "WorktreeRemove": {
 			const path = canonical(field(hook, "worktree_path"));
-			const record = worktrees.registered(path);
-			if (record) await worktrees.remove(record.id, merged);
+			const record = await waiting(() => worktrees.registered(path));
+			if (record) await waiting(() => worktrees.remove(record.id, merged));
 			// Claude counts a path that is gone as removed, and keeps one that remains after a failure.
 			else if (existsSync(path))
 				throw new Error(`not a checkout quest worktree owns; remove it by hand: ${path}`);
 			return undefined;
 		}
 		case "SubagentStart": {
-			const record = subagentCheckout(worktrees, hook);
+			const record = await subagentCheckout(worktrees, hook);
 			if (!record) return undefined;
 			const released = record.phase === "released" && record.scratch.length > 0;
-			worktrees.restore(record.id);
+			await waiting(() => worktrees.restore(record.id));
 			if (!released) return undefined;
 			const additionalContext =
 				`Quest released this checkout while you were stopped, deleting its ignored scratch (${record.scratch.join(", ")}). ` +
@@ -107,8 +129,8 @@ export async function claudeHook(input: unknown, worktrees: Worktrees, merged: M
 			return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext } })}\n`;
 		}
 		case "SubagentStop": {
-			const record = subagentCheckout(worktrees, hook);
-			if (record) worktrees.release(record.id);
+			const record = await subagentCheckout(worktrees, hook);
+			if (record) await waiting(() => worktrees.release(record.id));
 			return undefined;
 		}
 		default:
