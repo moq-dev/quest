@@ -16,7 +16,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { launchEnvironment, boundedLines, redactedLines, spawnDirectory } from "../src/cli/agent";
-import { batchArgument, programCommand, which } from "../src/cli/program";
+import { batchArgument, programCommand, programEnvironment, which } from "../src/cli/program";
 import { type Output, main } from "../src/cli/main";
 import { tempDir } from "./fixture";
 import { systemdScopes } from "../src/cli/supervise";
@@ -605,6 +605,23 @@ test("launch settings reach the agent unchanged, whatever characters they hold",
 	expect(argv[argv.indexOf("--model") + 1]).toBe(model);
 });
 
+test.runIf(windows)("a batch shim's own program search never reaches the worktree", async () => {
+	const s = setup();
+	const bin = join(s.worktree, "..", "bin");
+	const shim = join(s.runtime, "shim");
+	mkdirSync(shim);
+	// As npm's shim does without a node.exe beside it, this one runs its interpreter by name.
+	writeFileSync(join(shim, "claude.cmd"), `@interpreter "${join(bin, "claude.js")}" %*\r\n`);
+	writeFileSync(join(shim, "interpreter.cmd"), `@"${process.execPath}" %*\r\n`);
+	const planted = join(s.runtime, "planted.log");
+	writeFileSync(join(s.worktree, "interpreter.cmd"), `@echo ran> "${planted}"\r\n`);
+	vi.stubEnv("PATH", `${shim}${delimiter}${process.env.PATH}`);
+	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	expect(result.code).toBe(0);
+	expect(existsSync(planted)).toBe(false);
+	expect(s.calls()).toHaveLength(1);
+});
+
 test("PATH lookup skips relative entries and, on Windows, tries PATHEXT", () => {
 	const bin = join(tempDir(), "bin");
 	mkdirSync(bin);
@@ -641,6 +658,11 @@ test("a Windows batch file runs through System32's cmd.exe with each argument es
 	expect(batchArgument('a\\"b\\')).toBe('^^^"a\\\\\\^^^"b\\\\^^^"');
 	expect(() => batchArgument("%PATH%")).toThrow("cannot pass");
 	expect(() => batchArgument("a\nb")).toThrow("cannot pass");
+	expect(programEnvironment({ PATH: "C:\\bin" }, "win32")).toEqual({
+		PATH: "C:\\bin",
+		NoDefaultCurrentDirectoryInExePath: "1",
+	});
+	expect(programEnvironment({ PATH: "/bin" }, "linux")).toEqual({ PATH: "/bin" });
 });
 
 test("missing keys, positions past the list, and unknown references are usage errors", async () => {
@@ -726,7 +748,7 @@ posix("Codex rejects a registered path whose Git ownership was replaced before c
 	expect(s.calls()).toEqual([]);
 });
 
-test("a Codex release failure is reported instead of a finished outcome", async () => {
+posix("a Codex release failure is reported instead of a finished outcome", async () => {
 	const s = managed();
 	mkdirSync(join(s.worktree, "cache"));
 	writeFileSync(join(s.worktree, "cache", "tracked"), "keep");

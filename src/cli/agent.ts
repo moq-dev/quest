@@ -31,7 +31,7 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { programCommand, requireProgram, signalProcess } from "./program";
+import { programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
 import { Worktrees, save } from "./worktree";
 
@@ -322,7 +322,7 @@ export const onePassword: Resolver = (references, env) => {
 	const op = programCommand(requireProgram("op", env), ["inject"], env);
 	const injected = spawnSync(op.file, op.args, {
 		encoding: "utf8",
-		env,
+		env: programEnvironment(env),
 		input: `${template}\n`,
 		stdio: ["pipe", "pipe", "inherit"],
 		windowsVerbatimArguments: op.windowsVerbatimArguments,
@@ -663,7 +663,7 @@ export async function runAgent(
 						}),
 					);
 				};
-				const env = launchEnvironment(deps.env, harness.keyVariable, key);
+				const env = programEnvironment(launchEnvironment(deps.env, harness.keyVariable, key));
 				if (command === undefined) {
 					supervised = checkouts!.run(checkout!, [program, ...args], { env, spawned: connect });
 					supervised.catch(reject);

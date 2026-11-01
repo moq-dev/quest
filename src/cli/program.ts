@@ -112,6 +112,20 @@ export function programCommand(
 }
 
 /**
+ * The environment to run a program with. On Windows it sets
+ * NoDefaultCurrentDirectoryInExePath, so neither cmd.exe nor the program
+ * searches its working directory for the programs it starts by name: npm's
+ * shim runs `node` that way when no node.exe sits beside it, and a worktree
+ * could otherwise supply its own.
+ */
+export function programEnvironment(
+	env: NodeJS.ProcessEnv,
+	platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+	return platform === "win32" ? { ...env, NoDefaultCurrentDirectoryInExePath: "1" } : env;
+}
+
+/**
  * Signal `pid`, ignoring a process that has already exited. Windows has no
  * signals: there the process and its descendants, such as the agent a batch
  * shim started, are terminated at once.

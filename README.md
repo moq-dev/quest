@@ -792,7 +792,9 @@ The agent CLI and `op` run from their absolute paths on `PATH`, skipping
 relative entries, so a worktree can never supply its own `claude` and receive
 a key. On native Windows the lookup tries `PATHEXT`'s program and batch
 extensions, a batch shim such as npm's `claude.cmd` runs through System32's
-`cmd.exe` with its arguments escaped, and `stop` ends the agent's whole process
+`cmd.exe` with its arguments escaped, `NoDefaultCurrentDirectoryInExePath`
+keeps the shim and the agent from finding programs such as `node` in the
+worktree, and `stop` ends the agent's whole process
 tree at once, since Windows has no `SIGTERM`.
 
 ## Run kix jobs on your machines
