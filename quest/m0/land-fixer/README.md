@@ -16,9 +16,10 @@ result, so a maintainer sees only behavior and design decisions.
   chain before the sandbox, and pre-checks queued PRs against the base while
   a batch runs. Batch size follows the measured failure rate.
 - The fixer starts from the base with internet access and the batch's PRs and
-  head SHAs. It ignores instructions in their diffs, builds and tests its
-  fixes, and pushes them onto the PRs' branches. The daemon posts the
-  comments the fixer writes into its result.
+  head SHAs. It ignores instructions in their diffs, rebuilds a conflicted
+  lockfile from the base's copy, builds and tests its fixes, and pushes them
+  onto the PRs' branches. The daemon posts the comments the fixer writes into
+  its result.
 - The gate merges locally instead of trusting GitHub's mergeability, and
   reruns a failed module before blaming. A rerun-proven flaky test is
   disabled in a separate PR with a follow-up quest.
@@ -108,10 +109,6 @@ Decision prompts, selected options marked ✅:
   a PR is parked while a fixer job holds it (`src/cli/land-park.ts`), and
   [Local mergeability](/quest/m0/land-fixer/mergeability.md) follows the same
   rule.
-
-The README's landing section and `CONTRIBUTING.md` list what the fixer
-resolves itself and what it hands back; that docs update finishes the epic.
-
 - Audit of the merge-queue plan, 2026-11-01 (an independent read-only
   agent; the maintainer then decided each point). On moq over 24 hours: 128
   landed and 390 ejected; 66 of 138 sandbox checks failed; batches stayed at
@@ -129,11 +126,20 @@ resolves itself and what it hands back; that docs update finishes the epic.
     right after triage; [the batch check](/quest/m0/land-fixer/batch-check.md);
     [pre-checks](/quest/m0/land-fixer/precheck.md); and
     [tuning](/quest/m0/land-fixer/tuning.md)
+- Amended 2026-11-01 (maintainer, /quest-plan in moq-dev/moq): a fixer merge
+  on [moq-dev/moq#7318](https://github.com/moq-dev/moq/pull/7318) rebuilt
+  `bun.lock` from the PR's side and undid the base's advisory fix; see
+  [Lockfile merges](/quest/m0/land-fixer/lockfile.md).
+
+The README's landing section and `CONTRIBUTING.md` list what the fixer
+resolves itself and what it hands back. That docs update is the epic's own
+work, done once the Required quests below have merged.
 
 ## Required
 
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
+- [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
 - [Batch quest check](/quest/m0/land-fixer/batch-check.md) - the daemon runs `quest check` on the batch's chain before spending a sandbox check
 - [Pre-check queued PRs](/quest/m0/land-fixer/precheck.md) - compile and lint the next PRs against the base while a batch runs, parking broken ones before they batch
 - [Throughput tuning](/quest/m0/land-fixer/tuning.md) - batch size from the failure rate, no wasted base-conflict rounds, rerere, a fixer cap, and an explicit reasoning effort
