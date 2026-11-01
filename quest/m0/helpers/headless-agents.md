@@ -11,8 +11,9 @@ invocation alone, with no per-user settings.
 `quest agent start|resume|stop` replaces the launcher each session wrote: it
 resolves `QUEST_API_KEYS` once into a spawn-scoped store, strips the
 harness's variables, passes one key, reports the session, cost, outcome, and
-reply, and exits 3 for an exhausted key. What remains is proving the classifier
-allows it.
+reply, and exits 3 for an exhausted key. It runs the agent CLI from its
+absolute path on `PATH`, on native Windows too. What remains is proving the
+classifier allows it.
 
 Found on 2026-10-20 running `/quest-spawn api` in moq-dev/moq (16 quests,
 three keys): the auto-mode classifier blocked 5 commands, including 3 of about
@@ -34,12 +35,6 @@ every user would have to add it.
   stub contract ("the stub never changes between versions") once: `init` and
   `uninstall` accept only a stub that exactly matches the current text, so they
   must also recognize the known older stub text.
-- Support native Windows, which `quest agent` refuses for now: resolve the
-  agent CLI to an absolute path from `PATH` with `PATHEXT`, never from the
-  worktree (Windows searches the current directory first, so a worktree could
-  supply its own `claude.exe` and receive the key), and launch npm `.cmd` shims,
-  which `spawn` cannot run without a shell. Then run the fake-CLI tests on the
-  native Windows jobs.
 - The command does no load or CPU admission, and the skill no longer caps
   agents: the guide routes their expensive commands through `quest gate`.
 
