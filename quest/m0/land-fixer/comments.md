@@ -4,9 +4,11 @@
 
 The fixer can post and edit comments on the batch's PRs, for example to
 explain a fix, a disabled flaky test, or the decision it needs. It does this
-with a GitHub token limited to issue and PR comments on that one repository,
-which the daemon mints for each job and which expires with it. The token
-cannot push, merge, change labels, or reach any other repository.
+with a GitHub installation token for that one repository with only
+`issues: write`, which the daemon mints for each job and which expires with
+it. The token cannot push code, merge, or reach any other repository. As the
+maintainer accepted, it can also edit or close issues and change labels in
+that repository.
 
 ## Plan
 
@@ -21,6 +23,14 @@ Github." See the [epic](/quest/m0/land-fixer/README.md).
     the proxy key)
   - ✅ A comment-only token in the container
   - Both
+
+- GitHub has no comment-only permission; `issues: write` also allows editing
+  and closing issues and changing labels, and PR code the fixer builds could
+  read the token (Codex review of this plan):
+  - A local comment command: the daemon keeps the credential and exposes
+    only comment operations inside the container (recommended)
+  - ✅ Accept `issues: write` in the container
+  - The daemon posts comments from the result
 
 Mint an installation token for the job's repository with
 `permissions: { issues: "write" }`, which covers PR conversation comments, and
