@@ -177,11 +177,12 @@ export interface Failure {
 	tip: string;
 }
 
-/** How the daemon launches a fixer; `commentToken` mints its job's `issues: write` token. */
-type FixerOptions = Pick<ServeOptions, "state" | "fixer"> & { commentToken?: () => Promise<string> };
-
 /** Finish a failed batch even when the daemon died halfway through its ejections. */
-export async function resumeFailure(root: string, options: FixerOptions, deps: GitHubDependencies): Promise<string[]> {
+export async function resumeFailure(
+	root: string,
+	options: Pick<ServeOptions, "state" | "fixer">,
+	deps: GitHubDependencies,
+): Promise<string[]> {
 	const path = join(options.state, "failure.json");
 	if (!existsSync(path)) return [];
 	const failure = JSON.parse(readFileSync(path, "utf8")) as Failure;
@@ -197,7 +198,7 @@ export async function resumeFailure(root: string, options: FixerOptions, deps: G
 	if (options.fixer && failure.numbers.length > 0) {
 		const checkout = mkdtempSync(join(options.state, "fix-"));
 		try {
-			await startFixer(root, checkout, failure, options.fixer, options.state, deps, options.commentToken);
+			await startFixer(root, checkout, failure, options.fixer, options.state, deps);
 		} catch (error) {
 			rmSync(checkout, { recursive: true, force: true });
 			throw error;
@@ -318,7 +319,7 @@ function nextPolicy(state: string, policy: BatchPolicy, checked: number, passed:
 export async function serveBatch(
 	root: string,
 	plan: Plan,
-	options: Pick<ServeOptions, "state" | "sandbox" | "fixer" | "timeout"> & Pick<FixerOptions, "commentToken">,
+	options: Pick<ServeOptions, "state" | "sandbox" | "fixer" | "timeout">,
 	deps: GitHubDependencies,
 	token: (workflows: boolean) => Promise<string>,
 	read: RemoteRead = readRemote,
@@ -627,18 +628,13 @@ export async function serve(
 			{ fetch, now: Date.now, sleep, warn },
 		);
 
-		// The fixer may only comment, on this repository, until the token expires.
-		const fixerOptions: typeof options & FixerOptions = {
-			...options,
-			commentToken: () => installationToken(repository, options, { issues: "write" }, { fetch, now: Date.now }),
-		};
 		await daemonLoop(async () => {
 			for (const line of await collectFixers(trusted, options.state, deps, mint, undefined, read)) warn(line);
-			for (const line of await resumeFailure(trusted, fixerOptions, deps)) warn(line);
+			for (const line of await resumeFailure(trusted, options, deps)) warn(line);
 			const completed = await finishFallback(trusted, options.state, deps, mint, read);
 			if (completed) warn(completed);
 			const plan = await resolvePreparedQueue(trusted, options.state, repository, options.base, deps);
-			const lines = await serveBatch(trusted, plan, fixerOptions, deps, mint, read);
+			const lines = await serveBatch(trusted, plan, options, deps, mint, read);
 			for (const line of lines) warn(line);
 			return lines.length > 0;
 		}, deps);
