@@ -3,7 +3,7 @@
 ## Goal
 
 When the fixer resolves a lockfile while merging the base (`bun.lock`,
-`Cargo.lock`, `uv.lock`, `go.sum`, `flake.lock`, and the like), it starts
+`Cargo.lock`, `uv.lock`, `go.sum`, and the like), it starts
 from the base's copy and runs the package manager, so the result adds only
 the PR's own dependency changes. A fixer merge never reverts a dependency
 change the base made, such as a security bump.
@@ -37,20 +37,33 @@ merge touches, check out the `base` branch's copy (`git checkout base --
 `Cargo.toml`, and so on), and run the package manager's minimal resolve
 (`bun install`, a `cargo` build or `cargo update --workspace`, `uv lock`,
 `go mod tidy`; never `cargo generate-lockfile` or an unpinned update). Then
-compare the result with the base's copy: every change must trace to a
-manifest change in the PR. The fix reason names the lockfiles it rebuilt.
+compare the result with the base's copy and the merged manifests: every
+lockfile change, and any manifest change the package manager itself made
+(such as `go mod tidy` editing `go.mod`), must trace to a dependency or import
+change in the PR. The fix reason names the lockfiles it rebuilt.
 
-Regeneration fetches packages, which
-[Registry network](/quest/m0/land-fixer/network.md) allows. A lockfile the
-fixer cannot rebuild hands back with the command's output instead of taking
-either side's copy. `flake.lock` follows the same rule once
-[Protected edits](/quest/m0/land-fixer/protected.md) lets the fixer edit it.
-Both PRs also edit `assets/land-fix.md`, so expect to merge their wording.
+Hand back, quoting the command's output or the offending diff, instead of
+taking either side's copy when:
+
+- the package manager cannot rebuild the lockfile;
+- a change does not trace to the PR;
+- the PR's manifest no longer admits a version the base moved to, such as a
+  pin below the base's security bump. Keeping either version is a behavior
+  decision, not a mechanical fix.
+
+The prompt already lets build tools fetch from package registries (from
+[moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356)), which
+regeneration needs. `flake.lock` stays a protected path in `validateFix`, and
+this quest does not open it: a fixer-written `flake.lock` comes back as a
+ready commit through
+[Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md),
+and that edit follows the same rule, rebuilt from the base's copy with
+`nix flake lock`. Both quests edit `assets/land-fix.md`, so whichever lands
+second merges the other's wording.
 
 Cover the rule in `test/land.test.ts`, which already asserts the prompt's
 contents.
 
 ## Related
 
-- [Registry network](/quest/m0/land-fixer/network.md) - lets the fixer fetch what a lockfile names, which regeneration needs
-- [Protected edits](/quest/m0/land-fixer/protected.md) - opens `flake.lock` to the fixer
+- [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - returns a fixer-written `flake.lock` as a ready commit, built by this quest's rule

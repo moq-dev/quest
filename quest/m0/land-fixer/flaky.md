@@ -4,11 +4,11 @@
 
 When a batch's check fails, `quest land` reruns the failing check modules
 once on the same tip before blaming or ejecting anything. A test that failed
-and then passed, or whose failure the fixer judges nondeterministic (for
-example a timeout under load, or a race), is flaky. The gate lands the batch,
-adds a commit to the next batch that disables the test with a reason, and
-files a follow-up quest to fix or delete it in the repository's m0 `flaky`
-epic.
+and then passed on that rerun is flaky. The batch lands, and the fixer opens a
+separate PR that disables the test with a reason and adds a follow-up quest
+to fix or delete it in the repository's m0 `flaky` epic. The gate queues that
+PR like any other, with no human pick needed. A failure the fixer only
+suspects is nondeterministic is not disabled.
 
 ## Plan
 
@@ -28,8 +28,11 @@ was written and landed by hand.
 - Who disables:
   - The fixer opens and queues its own PR
   - The fixer opens a PR, and a maintainer picks it
-  - ✅ Inside the next batch: the gate adds the skip commit to the batch it
-    lands next, tested with it
+  - Inside the next batch: the gate adds the skip commit to the batch it
+    lands next, tested with it (picked first, then superseded)
+  - ✅ Superseded 2026-11-01 (user, second /quest-plan): the fixer pushes the
+    disabling commit, with its investigation quest, onto the batch's base PR,
+    so it lands with this batch: "disable the flaky test in the base PR".
 - What counts as flaky:
   - Only a rerun that passes
   - ✅ A rerun that passes, or a failure the fixer judges nondeterministic
@@ -38,6 +41,14 @@ was written and landed by hand.
     disabled test
   - The earliest milestone, ungrouped
   - m1
+
+- Superseded again 2026-11-01 (maintainer, from the audit of the merge-queue
+  plan): PRs land as squashes, so a disable commit on the batch's base PR
+  would land inside that unrelated PR's commit, under its title; and
+  disabling on the fixer's judgment alone risks hiding real bugs.
+  - ✅ Only a rerun-proven flaky test, disabled in a separate PR the gate
+    queues
+  - Keep: rerun or the fixer's judgment, with the commit on the base PR
 
 How the gate reruns one module is up to the repository. `quest land` passes
 the failed module names to the check command (for example through
@@ -53,9 +64,6 @@ flake.
 
 Flaky verdicts never spend a PR's attempt
 ([Attempt budget](/quest/m0/land-fixer/attempts.md)), and a batch whose only
-failure was flaky lands without ejecting anyone
-([Batch triage](/quest/m0/land-fixer/triage.md)).
-
-## Related
-
-- [Batch triage](/quest/m0/land-fixer/triage.md) - blame runs after the rerun
+failure was flaky lands without ejecting anyone. Since batch triage
+([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)), a failing batch's PRs are parked
+for the fixer rather than ejected; the rerun comes before that.

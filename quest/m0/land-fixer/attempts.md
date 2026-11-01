@@ -33,10 +33,9 @@ existed has no `outcome` and counts as spent, as today, so a deploy never
 hands a pick a second attempt it already used. A head the fixer changed beyond a base merge that then fails its
 checks still hands back, so a bad fix cannot loop.
 
-[Batch triage](/quest/m0/land-fixer/triage.md) keeps a collateral ejection
-from reaching the fixer at all; this quest owns the counting rule for every
-outcome, including the ones triage still produces.
-
-## Related
-
-- [Batch triage](/quest/m0/land-fixer/triage.md) - blames one PR, so collateral PRs are not ejected
+Batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) added the record's
+`blamed` field: the fix job that blamed the pick, or `false` while the pick was
+only collateral of other PRs' failures. `spent` (`src/cli/land-fixer.ts`)
+counts an attempt as spent only once a job blamed it, and a record without
+`blamed` counts as spent. Narrow `spent` to blamed outcomes that are `fixed`
+or a handback; this quest owns the counting rule for every outcome.
