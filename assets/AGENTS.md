@@ -197,7 +197,8 @@ Every fourth round, stop before fixing more findings and reconsider the approach
 Report that judgment and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
-Fix every finding relevant to the PR in the PR: review findings, gaps the change exposes, and bugs in the code it touches. Never defer a relevant fix to a follow-up just to narrow the PR.
+Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.
+Never defer a relevant fix to a follow-up just to narrow the PR.
 Suggest only out-of-scope discoveries as follow-ups.
 
 ## Deletion
