@@ -15,6 +15,7 @@ import {
 	requirements,
 	string,
 } from "./github";
+import type { BatchPolicy } from "./land-policy";
 import { classifyCheck } from "./status";
 import { snapshot } from "./tree";
 
@@ -470,7 +471,7 @@ interface Link {
 	tree: string;
 }
 
-/** The oldest PR conflicts with the base. Conflicting additions are skipped. */
+/** A PR that conflicts with the base, or, in an overlap report, with a PR queued ahead of it. */
 interface Conflict {
 	entry: Entry;
 	files: string[];
@@ -491,23 +492,14 @@ export interface Overlap {
 }
 
 /**
- * A bounded batch of squash commits, or a conflict on its base PR. Rejected PRs are left out of
- * it; overlaps only inform.
+ * A bounded batch of squash commits. PRs that conflicted with the base before the batch had a base
+ * PR, and rejected PRs, are left out of it; overlaps only inform.
  */
 interface Chain {
 	links: Link[];
-	conflict?: Conflict;
+	conflicts: Conflict[];
 	rejected: Rejection[];
 	overlaps: Overlap[];
-}
-
-/**
- * How the next batch is chosen. Batches alternate between the oldest and the newest queued PR as their base, and a
- * failed batch halves the next one's size, which each landed batch grows back toward 1 + floor(log2 n).
- */
-export interface BatchPolicy {
-	order: "oldest" | "newest";
-	size: number;
 }
 
 /**
@@ -515,8 +507,9 @@ export interface BatchPolicy {
  * worktree inside the git directory, resolving quest files with `quest resolve`. Each candidate
  * is first squashed alone onto the base: one that fails `quest check` there with findings the
  * base lacks is rejected, and a fresh one is also squashed onto the PRs landing soonest ahead of
- * it, to report which ones it conflicts with. Stop at the policy's batch limit, skipping
- * conflicting additions; a conflicting base stops the batch.
+ * it, to report which ones it conflicts with. Stop at the policy's batch limit, which is
+ * at most 1 + floor(log2 n), skipping conflicting additions. A PR reached while the batch has no
+ * base PR yet that conflicts with the base is set aside for the caller, and the next one is tried.
  */
 export async function build(
 	root: string,
@@ -534,7 +527,7 @@ export async function build(
 		...plan.queue.map((entry) => entry.head),
 	]);
 	return mergeWorktree(root, plan.base.sha, (dir, driver) => {
-		const chain: Chain = { links: [], rejected: [], overlaps: [] };
+		const chain: Chain = { links: [], conflicts: [], rejected: [], overlaps: [] };
 		const ordered = policy.order === "newest" ? [...plan.queue].reverse() : plan.queue;
 		const limit = Math.max(1, Math.min(policy.size, 1 + Math.floor(Math.log2(plan.queue.length))));
 		const screening = screener(dir, driver, plan);
@@ -546,8 +539,8 @@ export async function build(
 			if (alone === null) {
 				if (chain.links.length > 0) continue;
 				git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
-				chain.conflict = { entry, files: squash(dir, driver, entry)! };
-				break;
+				chain.conflicts.push({ entry, files: squash(dir, driver, entry)! });
+				continue;
 			}
 			if (alone.findings.length > 0) {
 				chain.rejected.push({ entry, commit: alone.commit, findings: alone.findings.map(formatFinding) });

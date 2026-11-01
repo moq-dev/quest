@@ -60,11 +60,11 @@ import {
 	keyPath,
 	lockCheckout,
 	lockRepository,
-	readPolicy,
 	resumeFailure,
 	serveBatch,
 	STALLED_AFTER,
 } from "../src/cli/land-serve";
+import { HISTORY, batchSize, failureRate, readPolicy, recordBatch } from "../src/cli/land-policy";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { tempDir } from "./fixture";
 
@@ -1069,9 +1069,9 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(await numbers("oldest", 2)).toEqual([1, 2]);
 	});
 
-	test("alternates the batch order, halving after a failure and growing after a pass", async () => {
+	test("alternates the batch order and sizes it from the measured failure rate", async () => {
 		const forge = new Forge();
-		for (let i = 0; i < 5; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
+		for (let i = 0; i < 7; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
 		const failing = sandbox("exit 1");
 		const round = async (options: ReturnType<typeof sandbox>) => {
 			const deps = await forge.deps();
@@ -1080,15 +1080,72 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 			forge.settle();
 			return output.map((line) => line.split(" ").slice(0, 2).join(" "));
 		};
-		// Oldest-first at the full 1 + floor(log2 5): three fail together, and the next batch halves.
+		const F = (size: number) => ({ size, passed: false });
+		const T = (size: number) => ({ size, passed: true });
+		// Oldest-first at the full 1 + floor(log2 7): three fail together, and with only failures measured, the next is one PR.
 		expect(await round(failing)).toEqual(["ejected 1", "ejected 2", "ejected 3"]);
-		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 1 });
-		// Newest-first at one.
-		expect(await round(failing)).toEqual(["ejected 5"]);
-		expect(readPolicy(failing.state)).toEqual({ order: "oldest", size: 1 });
-		// The same state with a passing check: oldest-first at one lands, and the next grows.
-		expect(await round({ ...sandbox(), state: failing.state })).toEqual(["landed 4"]);
-		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 2 });
+		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 1, history: [F(3)] });
+		expect(await round(failing)).toEqual(["ejected 7"]);
+		expect(readPolicy(failing.state)).toEqual({ order: "oldest", size: 1, history: [F(3), F(1)] });
+		// Passing checks lower the measured rate (57%, then 43%) until two PRs land the most per check.
+		const passing = { ...sandbox(), state: failing.state };
+		expect(await round(passing)).toEqual(["landed 4"]);
+		expect(readPolicy(failing.state)).toEqual({ order: "newest", size: 1, history: [F(3), F(1), T(1)] });
+		expect(await round(passing)).toEqual(["landed 6"]);
+		expect(readPolicy(failing.state)).toEqual({ order: "oldest", size: 2, history: [F(3), F(1), T(1), T(1)] });
+	});
+
+	test("measures the failure rate over the most recent checked batches", () => {
+		const state = tempDir();
+		for (let i = 0; i < HISTORY + 5; i++)
+			recordBatch(state, readPolicy(state), { size: i < 5 ? 1 : 4, passed: i >= 5 && i % 2 === 0 });
+		const { history, size } = readPolicy(state);
+		expect(history).toHaveLength(HISTORY);
+		expect(history.every((batch) => batch.size === 4)).toBe(true);
+		// Half of the four-PR batches fail: 1 - 0.5^(1/4), about 16% per PR, which six-PR batches land the most of.
+		expect(failureRate(history)).toBeCloseTo(1 - 0.5 ** 0.25, 6);
+		expect(size).toBe(6);
+		// A record from before the history reads as its saved size with none measured yet.
+		writeFileSync(join(state, "batch-policy.json"), JSON.stringify({ order: "newest", size: 2 }));
+		expect(readPolicy(state)).toEqual({ order: "newest", size: 2, history: [] });
+	});
+
+	test("sizes a batch for the most PRs landed per check", () => {
+		expect(failureRate([])).toBe(0);
+		expect(failureRate([{ size: 3, passed: true }])).toBe(0);
+		expect(failureRate([{ size: 3, passed: false }])).toBe(1);
+		// With one-PR batches the rate is simply the share that failed.
+		expect(
+			failureRate([
+				{ size: 1, passed: true },
+				{ size: 1, passed: true },
+				{ size: 1, passed: false },
+				{ size: 1, passed: true },
+			]),
+		).toBeCloseTo(0.25, 6);
+		expect(batchSize(0)).toBe(Number.POSITIVE_INFINITY);
+		expect(batchSize(1)).toBe(1);
+		// moq's measured 22-24% lands the most at four PRs, where halving after each failure held it at one to three.
+		expect([0.05, 0.1, 0.15, 0.22, 0.243, 0.3, 0.6].map(batchSize)).toEqual([19, 9, 6, 4, 4, 3, 1]);
+	});
+
+	test("sets aside a base PR that conflicts with the base and fills the batch in the same round", async () => {
+		const forge = new Forge();
+		forge.pull("Clash", { "code.txt": "one\nII\nthree\n" });
+		forge.pull("Also clash", { "code.txt": "one\nTWO\nthree\n" });
+		forge.advance({ "code.txt": "one\n2\nthree\n" });
+		forge.pull("Clean", { "clean.txt": "ok" });
+		forge.pull("Also clean", { "also.txt": "ok" });
+		const { checked, landing } = await forge.round();
+		// Both conflicts go to the fixer (ejected here, without one) and the clean PRs behind them are checked at once.
+		expect(checked).toEqual([[3, 4]]);
+		expect(landing.map((line) => line.split(" ").slice(0, 2).join(" "))).toEqual([
+			"ejected 1",
+			"ejected 2",
+			"landed 3",
+			"landed 4",
+		]);
+		expect(forge.comment(1)).toContain("code.txt");
 	});
 
 	test("skips a conflicting addition and leaves it queued, adding a later clean PR", async () => {

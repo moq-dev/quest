@@ -578,15 +578,17 @@ or its private bare repository.
 
 Batches alternate between the oldest and the newest queued PR as the base. Add
 up to floor(log2 n) further PRs that merge cleanly in that order, resolving
-quest links with `quest resolve`. A failed batch halves the next batch's size,
-down to one PR, and each batch that lands grows it back by one; the order and
-size persist in the state directory. Conflicting
-additions stay queued. A PR whose required checks are still running stays queued
+quest links with `quest resolve`. The batch size lands the most PRs per check
+at the per-PR failure rate measured over the last 30 checked batches: a batch
+of n PRs passes with probability (1 - p)^n, so the size maximizes n(1 - p)^n,
+four PRs at a 22% rate. The order, size, and those batches persist in the
+state directory. Conflicting additions stay queued. A PR whose required checks are still running stays queued
 and sits out batches until they pass. If any are still pending two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
-bisection: success lands one squash commit per PR. A failure, or a base that
-conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
+bisection: success lands one squash commit per PR. A failure parks its PRs for
+the fixer, as does a conflict with the base on a PR that would start the batch,
+which then starts from the next PR in the same round. Parked PRs keep their
 auto-merge, `quest:merge`, and place, get no comment, and sit out batches while its
 job runs, so the rest of the queue keeps landing. The fixer reads the log and blames
 the PRs that caused it; the others go back to batches unchanged. When it blames

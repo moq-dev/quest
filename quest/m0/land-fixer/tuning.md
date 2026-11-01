@@ -1,34 +1,45 @@
-# [S] Tune batching and the fixer for throughput
+# [XS] Fixer priority and rerere on the land host
 
 ## Goal
 
-Once failing PRs are parked instead of ejected, the gate stops paying for
-choices made while a failure ejected a whole batch:
+The fixer stops slowing the batch check, and the gate stops paying twice for
+a conflict it has already seen:
 
-- Batch size follows the measured per-PR failure rate, not halving on each
-  failure.
-- A conflict on the batch's base PR parks that PR and fills the batch in the
-  same round, without spending a round on it.
+- Fixer containers run below the batch check's CPU and IO priority on the
+  land host, so checks under load stop timing out.
 - The gate's repository enables `git rerere`, so it replays conflict
-  resolutions it has already made.
-- Concurrent fixer jobs are capped and run below the batch check's priority.
-- The fixer runs with an explicit reasoning effort; today Codex reports
-  `reasoning effort: none`.
+  resolutions it has already made, if a measurement shows it can.
 
 ## Plan
 
 Decided 2026-11-01 (maintainer, from the audit of the merge-queue plan; see
-the [epic](/quest/m0/land-fixer/README.md)). Audit findings on moq's 24 hours:
+the [epic](/quest/m0/land-fixer/README.md)). What landed of the original
+quest:
 
-- Halving after each failure kept batches at 2-3 PRs. With failing PRs
-  parked, size from the recent failure rate instead (about 4-5 at today's
-  rate), keeping `batch-policy.json` as the state.
-- 156 rounds were a base-PR conflict that ran no check, about 1.5-2.5 hours
-  of lane time a day.
-- 44 of 79 conflicting PRs conflicted 2-7 times; `rerere` lets the gate's
-  own base merges replay resolutions.
-- Seven fixer jobs started within three minutes on a host already at load
-  18-25 of 32 cores, and timeouts under load caused several flaky failures.
-- Fixer job logs show `reasoning effort: none`. `land-fix.ts` passes a model
-  but no `model_reasoning_effort`; set one, defaulting to `medium`, with a
-  daemon option to override it.
+- Batch size from the measured failure rate, and a base-PR conflict that
+  parks the PR and fills the batch in the same round:
+  [moq-dev/quest#376](https://github.com/moq-dev/quest/pull/376).
+- The fixer's explicit `medium` reasoning effort:
+  [moq-dev/quest#370](https://github.com/moq-dev/quest/pull/370).
+- The fixer cap: the host's `quest-land-fixer.socket` accepts at most three
+  fixer containers across every gate
+  ([kixelated/nixos@aa155d1](https://github.com/kixelated/nixos/commit/aa155d1)).
+
+Remaining:
+
+- Priority is host configuration in
+  [kixelated/nixos#16](https://github.com/kixelated/nixos/pull/16)
+  (`modules/quest-land.nix`). As of 2026-11-01 neither
+  `quest-land-fixer@.service` nor the `quest-land-*-check@.service` units set
+  `CPUWeight` or `IOWeight`; both run at the default 100 in `ci.slice`. Give
+  the fixer unit a lower weight, such as `CPUWeight=20` and `IOWeight=20`.
+  Check with `systemctl show quest-land-fixer@<instance> -p CPUWeight`.
+- rerere: open question. On moq-dev/moq from 2026-10-30 to 11-01, 43 of the
+  89 PRs that conflicted with the base conflicted more than once, but only 20
+  of the 96 repeats named the same files as the PR's previous conflict. The
+  gate never resolves a conflict itself: `squash` in `src/cli/land.ts` resets
+  on any conflict, and the fixer resolves in a fresh container clone, so the
+  gate's `rr-cache` would stay empty. Replaying would mean training rerere
+  from the fixer's pushed merges and letting the gate's own squashes apply
+  them, which lands a resolution the PR's head never had. Recommended: drop
+  this item and delete the quest once priority lands.

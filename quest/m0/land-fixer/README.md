@@ -142,7 +142,7 @@ work, done once the Required quests below have merged.
 - [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
 - [Batch quest check](/quest/m0/land-fixer/batch-check.md) - the daemon runs `quest check` on the batch's chain before spending a sandbox check
 - [Pre-check queued PRs](/quest/m0/land-fixer/precheck.md) - compile and lint the next PRs against the base while a batch runs, parking broken ones before they batch
-- [Throughput tuning](/quest/m0/land-fixer/tuning.md) - batch size from the failure rate, no wasted base-conflict rounds, rerere, a fixer cap, and an explicit reasoning effort
+- [Throughput tuning](/quest/m0/land-fixer/tuning.md) - fixer containers run below the batch check's priority; rerere only if it can replay anything
 - [CI failures park](/quest/m0/land-fixer/ci-park.md) - a PR whose own required CI fails is parked for the fixer with the failing log, not ejected
 - [Queue status in the required check](/quest/m0/land-fixer/check-status.md) - the gate shows each PR's queue state in its required check run, never completing it
 - [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not

@@ -3,6 +3,7 @@ import { authenticatedRead } from "./land-git";
 import { startFixer, startBaseFixer, collectFixers, handbackRepeated } from "./land-fixer";
 import { closeFix, fixing, haltNotice, readHalt, resume, saveHalt } from "./land-halt";
 import { batchable } from "./land-park";
+import { readPolicy, recordBatch } from "./land-policy";
 import { spawn } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
 import {
@@ -23,7 +24,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
 import { forgetHeads, prepareHead, resolvePreparedQueue, landFallback, finishFallback } from "./land-head";
 import {
-	type BatchPolicy,
 	baseRemote,
 	build,
 	commandEnvironment,
@@ -380,27 +380,6 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 	}
 }
 
-/** One batch: check once, then squash through GitHub in order, verifying each resulting tree. */
-const POLICY = "batch-policy.json";
-
-/** The next batch's order and size; a missing or unreadable record starts oldest-first at full size. */
-export function readPolicy(state: string): BatchPolicy {
-	try {
-		const data = JSON.parse(readFileSync(join(state, POLICY), "utf8")) as { order?: unknown; size?: unknown };
-		const order = data.order === "newest" ? "newest" : "oldest";
-		const size = typeof data.size === "number" && data.size >= 1 ? Math.floor(data.size) : Number.POSITIVE_INFINITY;
-		return { order, size };
-	} catch {
-		return { order: "oldest", size: Number.POSITIVE_INFINITY };
-	}
-}
-
-/** After a checked batch of `checked` PRs: flip the order, halve on failure, and grow by one on success. */
-function nextPolicy(state: string, policy: BatchPolicy, checked: number, passed: boolean): void {
-	const size = passed ? checked + 1 : Math.max(1, Math.floor(checked / 2));
-	save(join(state, POLICY), { order: policy.order === "oldest" ? "newest" : "oldest", size });
-}
-
 /** What a batch may do while its check runs. */
 export interface BatchOptions extends Pick<ServeOptions, "state" | "sandbox" | "fixer" | "timeout"> {
 	/** Collect finished fixer jobs while a check runs, so their PRs join the next batch at once. */
@@ -505,6 +484,7 @@ export async function checkBase(
 	return false;
 }
 
+/** One batch: check once, then squash through GitHub in order, verifying each resulting tree. */
 export async function serveBatch(
 	root: string,
 	plan: Plan,
@@ -568,27 +548,27 @@ export async function serveBatch(
 		);
 	}
 	output.push(...(await reportOverlaps(github, plan, options.state, chain.overlaps)));
-	const conflict = chain.conflict;
-	if (!conflict && chain.links.length === 0) return output;
-	const log = join(options.state, `batch-${Date.now()}-${batch.queue[0].number}.log`);
-	if (conflict) {
-		writeFileSync(log, `Conflicts with the base: ${conflict.files.join(", ")}\n`);
+	// A PR that conflicts with the base is parked for the fixer, and the batch went on without it.
+	for (const { entry, files } of chain.conflicts) {
+		const log = join(options.state, `batch-${Date.now()}-${entry.number}.log`);
+		writeFileSync(log, `Conflicts with the base: ${files.join(", ")}\n`, { mode: 0o600 });
 		output.push(
 			...(await fail(root, options, deps, {
 				plan: batch,
-				tip: conflict.entry.head,
+				tip: entry.head,
 				log,
-				entries: [conflict.entry],
-				blame: [conflict.entry.number],
+				entries: [entry],
+				blame: [entry.number],
 				reason: "merge_conflict",
 				detail: excerpt(readFileSync(log, "utf8")),
 			})),
 		);
-		return output;
 	}
+	if (chain.links.length === 0) return output;
+	const log = join(options.state, `batch-${Date.now()}-${chain.links[0].entry.number}.log`);
 	const tip = chain.links.at(-1)!;
 	const code = await runSandbox(root, options, tip.commit, chain.links.length, plan.base.sha, log);
-	nextPolicy(options.state, policy, chain.links.length, code === 0);
+	recordBatch(options.state, policy, { size: chain.links.length, passed: code === 0 });
 	if (code !== 0) {
 		// The fixer reads the failure first and says which PR broke the batch; until then, all of them
 		// sit out. Without a fixer, the whole batch is ejected.
