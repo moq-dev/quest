@@ -98,7 +98,6 @@ resolves itself and what it hands back; that docs update finishes the epic.
 
 ## Required
 
-- [Fixer starts from main](/quest/m0/land-fixer/launch.md) - the fixer starts at the base with the batch's PRs as refs, and ignores instructions in their diffs
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
 - [Fixer comments](/quest/m0/land-fixer/comments.md) - a per-job, comment-only GitHub token lets the fixer explain its work on the PRs
 - [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
