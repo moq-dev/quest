@@ -53,7 +53,9 @@ ownership-manifest design:
   line, and Claude hook entries in `.claude/settings.json` that only call a
   `quest` subcommand. Upgrading never rewrites repository files. (Amended
   2026-10-26 (user), replacing "Nothing is vendored", so `quest init` can
-  install the agent lifecycle hooks.)
+  install the agent lifecycle hooks. Amended 2026-11-01 (user, /quest-plan):
+  `quest init` also rewrites a Quest-written stub nobody edited when its
+  text is out of date; see [Skill stub cleanup](/quest/m0/skill-stubs.md).)
 - The repository's own tool manager pins the version: mise (release binaries)
   or a nix flake input (any rev, built from source). Quest ships no launcher
   and no pin file; an install outside either is simply unpinned.
@@ -71,6 +73,8 @@ ownership-manifest design:
 - [Drop emptied Required headings](/quest/m0/required-heading.md) - a clean driver merge that empties a `Required` list passes `quest check`
 - [Current conflict reports](/quest/m0/land-conflicts-refresh.md) - a queued PR's conflict report updates when the queue ahead of it changes
 - [Land checks at gate priority](/quest/m0/land-priority-sandbox.md) - `quest land serve` passes `QUEST_GATE_PRIORITY` to its sandbox
+- [Squash mismatch comment](/quest/m0/land-squash-mismatch.md) - a post-squash `tree_mismatch` posts a CRITICAL comment on the merged PR
+- [Current landing status](/quest/m0/status-landing.md) - `quest status` drops a stale `landing-stopped` line and ignores superseded cancelled checks
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Review handles expired and environment logins](/quest/m0/review-login.md) - `quest review` says to log in again instead of failing with a 401, and reviews with credentials from the environment
@@ -81,4 +85,12 @@ ownership-manifest design:
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
 - [Gate admission on CI](/quest/m0/gate-ci-admission.md) - gated commands admit on loaded hosted runners like arm64 macOS
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
+- [Review the branch's own change](/quest/m0/review-merge-base.md) - `quest review` diffs against the merge base and accepts a detached `HEAD`
+- [Skill stub cleanup](/quest/m0/skill-stubs.md) - stray skill copies deleted, and `quest init` refreshes unedited outdated stubs
+- [Merge driver upkeep](/quest/m0/merge-driver-upkeep.md) - local merges drop links to finished quests, old drivers upgrade, and `quest-pinned` stays current
+- [Worktree hooks here](/quest/m0/worktree-hooks.md) - `quest` reaches Claude Code's hooks and the merge driver in this repository, then `quest init` installs the hooks
+- [Other worktree routes](/quest/m0/worktree-routes.md) - live-check PR worktrees, agent view, remote-control, and workflow agents against the hooks
+- [Spotlight off in macOS CI](/quest/m0/ci-spotlight.md) - this repository's macOS jobs turn off Spotlight indexing first
+- [Review through a gateway](/quest/m0/review-gateway.md) - `quest review` keeps gateway, cloud-provider, and Codex connection variables
+- [opencode SDK 2.x](/quest/m0/opencode-sdk.md) - the runner moves to `@opencode/sdk` 2.x so the nixpkgs bump lands
 - [Review harness check](/quest/m0/review-harness.md) - recurring each milestone: newest pinned review models, and the live sandbox test passes
