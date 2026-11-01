@@ -23,6 +23,9 @@ when that commit is available. Otherwise don't report the link broken. Test
 all three cases: populated, uninitialized with the object available, and
 uninitialized without it.
 
+`committed` in `src/cli/tree.ts` already resolves a path at a submodule's
+pinned commit for snapshots; reuse that lookup rather than writing a second one.
+
 Decided 2026-10-29 (user, moq.pro follow-ups): plan only this fix upstream. The
 label-queue gaps it was planned with retire once moq.pro lands through
 `quest land`.
