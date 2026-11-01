@@ -505,9 +505,10 @@ The sandbox runs the repository's checks
 is passed to it. The daemon refuses to start without `--sandbox`. The optional
 fixer runs as tracked background work, receiving the full log path followed by
 PR numbers, with the same restricted environment (`PATH` and `LANG` only).
-Its cwd is the standalone repository, with `batch`, `base`, and `pr-<n>` branches.
-For a base that fails its check alone it receives only the log path, and the
-repository has only `base`.
+Its cwd is the standalone repository, checked out at `base` so the agent loads no
+PR's instructions or tooling, with `batch` and `pr-<n>` branches beside it. The
+prompt names each PR's branch and pinned head. For a base that fails its check
+alone it receives only the log path, and the repository has only `base`.
 The wrapper starts an ephemeral container and runs `quest land fix <log> [prs...]`
 there, exposing that repository read/write and the log read-only at the given paths.
 It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses

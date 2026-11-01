@@ -231,7 +231,9 @@ export async function startFixer(
 			`${failure.plan.base.sha}:refs/heads/base`,
 			...entries.map((entry) => `${entry.head}:refs/heads/pr-${entry.number}`),
 		],
-		failure.tip,
+		// Start at the base, never the batch: the agent loads its instructions and tooling only from code
+		// already landed, and inspects the PRs through their branches.
+		failure.plan.base.sha,
 	);
 	const path = join(state, `fix-job-${checkout.split("/").at(-1)}.json`);
 	const job: Job = {
