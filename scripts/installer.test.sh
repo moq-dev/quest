@@ -118,6 +118,6 @@ if sh "$work/quest-installer.sh" >"$work/output" 2>&1; then
     echo 'Expected the failed download to stop the installer' >&2
     exit 1
 fi
-[[ $(cat "$INSTALL_TEST_LOG") == https://github.com/kixelated/quest/releases/download/v0.1.0/quest-x86_64-unknown-linux-gnu.tar.gz ]]
+[[ $(cat "$INSTALL_TEST_LOG") == https://github.com/moq-dev/quest/releases/download/v0.1.0/quest-x86_64-unknown-linux-gnu.tar.gz ]]
 
 echo 'release installer: regression tests passed'

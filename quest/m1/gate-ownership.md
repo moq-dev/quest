@@ -7,7 +7,7 @@ Windows a gate owns its command's descendants, not just the command.
 
 ## Plan
 
-Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-complete run), from [kixelated/quest#261](https://github.com/kixelated/quest/pull/261),
+Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-complete run), from [moq-dev/quest#261](https://github.com/moq-dev/quest/pull/261),
 which made the gate own descendants through systemd scopes on Linux and a
 process group on macOS.
 

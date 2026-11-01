@@ -9,9 +9,9 @@ guide says this, replacing the copies in `complete.md` and `spawn.md`.
 
 ## Plan
 
-Decided 2026-10-28 (user, /quest-plan of the follow-ups from [kixelated/quest#271](https://github.com/kixelated/quest/pull/271)).
+Decided 2026-10-28 (user, /quest-plan of the follow-ups from [moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)).
 
-- [kixelated/quest#266](https://github.com/kixelated/quest/pull/266) made a
+- [moq-dev/quest#266](https://github.com/moq-dev/quest/pull/266) made a
   foreground `/quest-merge`, `/quest-complete`, and `/quest-spawn` plan
   follow-ups without asking. A single `/quest-merge` run as a background
   agent only lists them in its report, and no rule told the caller to plan

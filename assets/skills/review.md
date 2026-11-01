@@ -16,7 +16,6 @@ Commit everything, then run the repository's local checks, unless the guide's Re
 
 Review the committed branch with `quest review`, as the guide's Reviews section describes; `quest review --help` explains the round.
 Run it in the foreground; a round takes minutes.
-Pass `--deep` for a high-stakes change, such as security, a wire format or public API, or a risk of data loss; never for routine work.
 Fix each finding you agree with, or refute it with evidence the reviewer can check.
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted with evidence.
@@ -29,10 +28,12 @@ For your own draft, mark it ready for review yourself, then take it with `quest 
 Do not wait for online reviewers.
 
 Summarize the review and CI from `quest status <pr>`, then interactively prompt the user with your recommendation:
-- `/quest-merge`: If the review left no significant issues.
+- `/quest-merge`: If the PR is landable as `/quest-merge` defines it, which needs its required status checks passed and every automated review finding on GitHub fixed or refuted.
 - `/quest-iterate`: If it raised significant issues or decisions.
 - skip: If the PR should not be merged yet.
 - `/quest-delete`: If the quest should be deleted.
+
+While its required checks or automated reviews are still running, report that instead of asking about it; `/quest-complete` asks once they finish.
 
 A background agent that cannot prompt lists these in its report instead.
 

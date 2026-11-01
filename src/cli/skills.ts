@@ -25,7 +25,7 @@ import start from "../../assets/skills/start.md";
 export const GUIDE: string = guide;
 
 /** Where an agent without the CLI learns to install it. */
-const SETUP = "https://github.com/kixelated/quest/blob/main/SETUP.md";
+const SETUP = "https://github.com/moq-dev/quest/blob/main/SETUP.md";
 
 /** Installed skills carry this prefix so they don't collide with a repository's own. */
 const PREFIX = "quest-";

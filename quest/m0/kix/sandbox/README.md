@@ -12,7 +12,7 @@ maintainer's answer is lifted once it is.
 
 ## Plan
 
-Decided 2026-10-15, from Codex's review of kixelated/quest#121:
+Decided 2026-10-15, from Codex's review of moq-dev/quest#121:
 
 - A Nix devShell is not an isolation boundary, and maintainers' machines
   must not run contributor-controlled code unconfined. Sandbox all jobs, not
@@ -27,7 +27,7 @@ Decided 2026-10-15, from Codex's review of kixelated/quest#121:
   untrusted-head job waits with "needs a Linux runner" while none is online.
   Cloud runners are Linux-only.
 - Decided 2026-10-22 on
-  [kixelated/quest#188](https://github.com/kixelated/quest/pull/188), from
+  [moq-dev/quest#188](https://github.com/moq-dev/quest/pull/188), from
   Codex's security review: a job resumes with an answer from a maintainer
   other than the runner's owner (the job's requester) only after the owner
   approves it in the inbox, since the agent would act on that text with the
@@ -35,7 +35,7 @@ Decided 2026-10-15, from Codex's review of kixelated/quest#121:
   without `approvedAt`. The sandbox lifts this gate once it is verified on
   macOS.
 
-Shipped in [kixelated/quest#212](https://github.com/kixelated/quest/pull/212)
+Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 (`src/runner/sandbox.ts`), and verified live on Linux with Claude Code
 2.1.291 and 2.1.305:
 
@@ -52,7 +52,7 @@ Shipped in [kixelated/quest#212](https://github.com/kixelated/quest/pull/212)
   the filesystem, while a trusted Nix user could reach the daemon's
   root-level options. `nix build` and `nix flake check` run in CI instead.
 - Decided 2026-10-24 on
-  [kixelated/quest#212](https://github.com/kixelated/quest/pull/212): a
+  [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212): a
   trusted revision's commands reach a fixed list of package registries
   (npm, crates.io's index and downloads, PyPI), since most repositories
   cannot run their checks without installing dependencies. An untrusted

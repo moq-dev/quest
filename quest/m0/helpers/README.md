@@ -53,18 +53,18 @@ commands from Sep-Oct. Session counts in each child come from that window.
   the PR state commands, which also rewrite `complete`. Findings that fit an
   existing child went into it: the merge method and the merged-PR refusal
   into the PR state commands, which landed in
-  [kixelated/quest#185](https://github.com/kixelated/quest/pull/185).
+  [moq-dev/quest#185](https://github.com/moq-dev/quest/pull/185).
 
 - Decided 2026-10-26 (user), from moq-dev/moq's serial merge queue: a batched
   merge gate, `quest land`, joins this epic. It ranks after the existing
-  children, and kixelated/quest adopts it first. moq-dev/moq, moq-dev/moq.pro,
-  and kixelated/rust2 plan their own adoption.
+  children, and moq-dev/quest adopts it first. moq-dev/moq, moq-dev/moq.pro,
+  and moq-dev/rust2 plan their own adoption.
 - Decided 2026-10-27 (user), from the follow-ups of
-  [kixelated/quest#229](https://github.com/kixelated/quest/pull/229): the
+  [moq-dev/quest#229](https://github.com/moq-dev/quest/pull/229): the
   gate's rule and setup fixes rank after its adoption, which verifies forks
   live.
 - Decided 2026-10-28 (user), from the follow-ups of
-  [kixelated/quest#271](https://github.com/kixelated/quest/pull/271): the
+  [moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271): the
   delegated follow-up rule ranks right after the review rules, as a prose
   rule, and dropping `review-rounds` follows it.
 
@@ -77,7 +77,7 @@ commands from Sep-Oct. Session counts in each child come from that window.
 - [Drop review-rounds](/quest/m0/helpers/review-rounds.md) - `quest status` stops counting GitHub reviews now that `quest review` numbers rounds
 - [Headless agents](/quest/m0/helpers/headless-agents.md) - `/quest-spawn api` launches, resumes, and stops billed agents through one command auto mode allows
 - [Sibling PRs through a server-side merge](/quest/m0/helpers/queue-siblings.md) - children of one epic land back to back through a merge queue without conflicting on its link list
-- [kixelated/quest lands through quest land](/quest/m0/helpers/land-adopt.md) - this repository's `main` changes only through its own gate
+- [moq-dev/quest lands through quest land](/quest/m0/helpers/land-adopt.md) - this repository's `main` changes only through its own gate
 - [Links into an uninitialized submodule aren't broken](/quest/m0/helpers/submodule-links.md) - `quest check` passes in a fresh checkout without populating submodules
 
 ## Related

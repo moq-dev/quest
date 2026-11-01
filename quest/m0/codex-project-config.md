@@ -10,7 +10,7 @@ deleted.
 
 ## Plan
 
-Decided 2026-10-28 (user, /quest-plan of the follow-ups from [kixelated/quest#271](https://github.com/kixelated/quest/pull/271)).
+Decided 2026-10-28 (user, /quest-plan of the follow-ups from [moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)).
 
 - [openai/codex#49333](https://github.com/openai/codex/issues/49333) reports
   that `--ignore-user-config` also skips the project layer, unlike its help

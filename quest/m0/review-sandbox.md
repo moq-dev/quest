@@ -10,7 +10,7 @@ a trust entry for the reviewed directory into the reviewer's user config.
 
 ## Plan
 
-Decided 2026-10-28 (user, /quest-plan of the follow-ups from [kixelated/quest#271](https://github.com/kixelated/quest/pull/271)).
+Decided 2026-10-28 (user, /quest-plan of the follow-ups from [moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)).
 
 - #271's fake-CLI tests check only that the isolating flags are passed. Its
   P1 (a trusted clone's worktree loading the head's `.codex/config.toml` MCP

@@ -32,7 +32,7 @@ its file tools follow permission rules. Checked against the pinned opencode
   the wrapper strips `OPENCODE_SERVER_PASSWORD`, `OPENCODE_CONFIG_CONTENT`,
   and the other `OPENCODE_*` variables before starting srt. The sandbox's
   filesystem and network policy does not substitute for this (from Codex's
-  review of [kixelated/quest#248](https://github.com/kixelated/quest/pull/248)).
+  review of [moq-dev/quest#248](https://github.com/moq-dev/quest/pull/248)).
 - File tools: today `permission: { "*": "allow" }` overrides opencode's
   `external_directory` check, so the read tool can read the account's
   `auth.json`. Add `external_directory: "deny"` and `webfetch: "deny"` after
@@ -48,7 +48,7 @@ its file tools follow permission rules. Checked against the pinned opencode
   runner adds the checkout's instruction file back through `instructions`.
 - One quest, not split: each piece alone leaves the boundary open.
 - Rerun the hostile-repository boundary test from
-  [kixelated/quest#212](https://github.com/kixelated/quest/pull/212) against
+  [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212) against
   an opencode account on Linux, including a symlink to `auth.json`, a
   project plugin, a `.opencode` MCP server, and a bash tool and a `!` command
   that print the server password and the tools' token. Then remove the "opencode

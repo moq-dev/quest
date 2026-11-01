@@ -7,7 +7,7 @@ their tier, and the reviewers still run nothing from a reviewed head.
 
 ## Plan
 
-Decided 2026-10-28 (user, /quest-plan of the follow-ups from [kixelated/quest#271](https://github.com/kixelated/quest/pull/271)).
+Decided 2026-10-28 (user, /quest-plan of the follow-ups from [moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)).
 
 - Compare `MODELS` in `src/cli/review.ts` with each vendor's current models:
   the default tier is the newest general model at medium effort, and the deep

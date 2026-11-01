@@ -9,7 +9,7 @@ user's own skill with a `quest-` name is never touched.
 
 ## Plan
 
-Decided 2026-10-28 (user, /quest-plan of the follow-ups from [kixelated/quest#271](https://github.com/kixelated/quest/pull/271)).
+Decided 2026-10-28 (user, /quest-plan of the follow-ups from [moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)).
 
 - #271 removed `/quest-ready`, but repositories that ran `quest init`
   earlier still list it, and agents invoke it.

@@ -9,7 +9,7 @@ shell provides a `quest`, so its own merges resolve link lists.
 ## Plan
 
 Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-complete run). The driver config runs `quest resolve` only when `quest` is on PATH, and
-otherwise falls back to `git merge-file` without a word. In kixelated/quest
+otherwise falls back to `git merge-file` without a word. In moq-dev/quest
 the dev shell has no `quest`, so merge agents hand-resolved link lists. A
 hand-resolved conflict needs a fresh review, so link-list conflicts stalled
 merges on Codex reviews (#233, #250, #255). The same merges resolved cleanly

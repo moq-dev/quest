@@ -13,12 +13,12 @@ landing waits, kix says why.
 Decided 2026-10-28 (user, /quest-plan trust audit):
 
 - Today a merge job lands a runner-published head on the maintainer's earlier
-  pick, bounded only by branch rules. kixelated/quest's `main` requires no
+  pick, bounded only by branch rules. moq-dev/quest's `main` requires no
   reviews, so nothing enforces the review policy at that point.
 - Apply the guide's rule: a review counts only on the head being landed. The
   only exemptions are a conflict-free base merge and a reviewer's patch applied
   unchanged. Where a repository's policy names whose review counts (for
-  kixelated/quest, the PR body's `## Review` record naming the head, in
+  moq-dev/quest, the PR body's `## Review` record naming the head, in
   `CONTRIBUTING.md`),
   follow it. Otherwise require a review from someone other than the PR's
   author and the App.
@@ -32,7 +32,7 @@ Decided 2026-10-28 (user, /quest-plan trust audit):
   reviews without dismissing stale ones.
 
 Decided 2026-10-28 (user, /quest-plan of the follow-ups from
-[kixelated/quest#271](https://github.com/kixelated/quest/pull/271)):
+[moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)):
 
 - The PR body's `## Review` record is self-reported: anyone who can edit the
   body can write one. For a head a runner published, kix counts a local

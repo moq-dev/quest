@@ -9,7 +9,7 @@ which prints each round's number itself.
 
 ## Plan
 
-Decided 2026-10-28 (user, /quest-plan of the follow-ups from [kixelated/quest#271](https://github.com/kixelated/quest/pull/271)).
+Decided 2026-10-28 (user, /quest-plan of the follow-ups from [moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)).
 
 - Remove the field from `src/cli/status.ts`, `--help`, the README's status
   table and example, and the tests. The JSON field's removal is breaking, so

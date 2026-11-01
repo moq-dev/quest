@@ -106,7 +106,7 @@ Decided while planning on 2026-10-05, amended 2026-10-14 where noted:
   (above).
 - Decided 2026-10-07: XL quests have no "Elite" tag. XL's colour and its size
   label already stand out.
-- Decided 2026-10-07 on the map's PR (kixelated/quest#78): the map already
+- Decided 2026-10-07 on the map's PR (moq-dev/quest#78): the map already
   uses these terms. A blocked waypoint's tooltip lists what it needs under
   "Required:".
 

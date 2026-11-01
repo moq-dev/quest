@@ -11,9 +11,9 @@ pauses with a decision, since the App cannot write to them.
 
 ## Plan
 
-Decided 2026-10-27 (user) while setting up kix.quest for kixelated/quest and
+Decided 2026-10-27 (user) while setting up kix.quest for moq-dev/quest and
 moq-dev/moq, replacing the per-project forks quest (planned 2026-10-19 as a
-follow-up of [kixelated/quest#145](https://github.com/kixelated/quest/pull/145)):
+follow-up of [moq-dev/quest#145](https://github.com/moq-dev/quest/pull/145)):
 
 - How should kix publish its job branches?
   - Keep forks for launch

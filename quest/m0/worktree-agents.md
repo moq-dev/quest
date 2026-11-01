@@ -60,7 +60,7 @@ Decisions:
 - Decided 2026-10-26 (user): agents are capped only at the harness's
   concurrent sub-agent limit, stated once in the guide; the core-count cap is
   gone, since `quest gate` holds expensive commands. The 2026-10-15 decision
-  stands over [kixelated/quest#227](https://github.com/kixelated/quest/pull/227)'s
+  stands over [moq-dev/quest#227](https://github.com/moq-dev/quest/pull/227)'s
   wording, which kept the core count only incidentally.
 
 Context:
@@ -70,7 +70,7 @@ Context:
   head counts only with exact PR-head evidence), and `stop` ends a crashed
   supervisor's leftover processes. The guide's Workspace section asks for a
   checkpoint before a decision or handoff and a clean checkout at the end
-  ([kixelated/quest#223](https://github.com/kixelated/quest/pull/223)), routes
+  ([moq-dev/quest#223](https://github.com/moq-dev/quest/pull/223)), routes
   expensive commands through `quest gate`, keeps read-only discovery out of
   new checkouts, and caps sub-agents only at the harness's own limit.
 - Measured: this repository's main checkout held 65 Claude subagent worktrees

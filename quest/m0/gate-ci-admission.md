@@ -8,7 +8,7 @@ longer waits until the job times out.
 
 ## Plan
 
-Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-complete run), from [kixelated/quest#261](https://github.com/kixelated/quest/pull/261).
+Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-complete run), from [moq-dev/quest#261](https://github.com/moq-dev/quest/pull/261).
 The 1-minute load average on GitHub's `macos-14` runners stays above their 3
 CPUs, so an end-to-end check through `quest gate` waited out a 10-minute job.
 #261 dropped that check, and its owner tests skip admission.

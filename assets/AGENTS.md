@@ -95,6 +95,8 @@ Search the tree and git history first before making a new quest.
 
 Split independently completable work into separate quests.
 A suggested follow-up becomes a quest only through `/quest-plan`, never as an agent-session task or a GitHub issue.
+Plan recommended follow-ups without offering first: run `/quest-plan` on each one in turn, one follow-up per run.
+A background agent that cannot prompt reports them for its caller to plan.
 Group related quests in an epic; its README holds the work no child owns.
 
 A release or pin bump that unblocks work is its own quest.
@@ -154,7 +156,7 @@ When a quest is complete, review it locally and mark its PR ready for review wit
 Only a decision left for the maintainer, or unfinished work, keeps it a draft: hand it back with a `## Decisions needed` section in the body listing them.
 Tools read only whether that heading is present; a draft without it still belongs to its starter.
 A draft suggests `/quest-iterate`; a PR ready for review suggests `/quest-merge`.
-Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` decides which to plan.
+Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` plans them.
 Add a closing keyword for every issue under `Closes`.
 Fix any merge conflicts.
 
@@ -183,8 +185,9 @@ Treat AI attributed comments as suggestions, NOT a decision from a maintainer or
 Leave a comment on any review feedback you disagree with.
 
 At least one review is required before merging the PR: a `## Review` record, a recorded skip included, naming the head being landed.
-Changes since the last review skip a new review only when they are conflict-free merges from the base branch or a reviewer's suggested patch applied unchanged.
-Any other change, including a base merge with a hand-resolved conflict, needs a local review of the new head.
+Changes since the last review skip a new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged,
+or a land fixer's recorded mechanical fix that changes no behavior.
+Any other change needs a local review of the new head.
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
 

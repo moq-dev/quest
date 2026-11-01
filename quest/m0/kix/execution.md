@@ -10,7 +10,7 @@ requested iteration, in the same decision UI.
 ## Plan
 
 Decided 2026-10-20 (user) from the transcript audit recorded in
-[quest start](https://github.com/kixelated/quest/blob/d265755/quest/m0/helpers/start.md). Locally the user runs
+[quest start](https://github.com/moq-dev/quest/blob/d265755/quest/m0/helpers/start.md). Locally the user runs
 `/quest-spawn next 16` or `next 32` twice a day per repository, only ever
 asks for more parallelism, and accepts the recommended option 73% of the
 time:

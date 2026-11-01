@@ -14,7 +14,7 @@ import { Difficulty } from "./layout";
 // The home page's quest map: the project's own tree, read left to right like
 // a world map. Milestones are regions, epics are paths, and quests are waypoints
 // coloured by size. Statuses use the format's own terms, with no display
-// aliases (decided 2026-10-07 on kixelated/quest#78).
+// aliases (decided 2026-10-07 on moq-dev/quest#78).
 
 /**
  * One path through a region: an epic, or the quests a milestone lists directly.

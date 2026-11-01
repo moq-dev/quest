@@ -11,7 +11,7 @@ are batched. Tests reuse copied fixture repositories with
 
 Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR
 /quest-complete run), from
-[kixelated/quest#233](https://github.com/kixelated/quest/pull/233). `quest mv`
+[moq-dev/quest#233](https://github.com/moq-dev/quest/pull/233). `quest mv`
 runs `git remote get-url origin` twice plus `git config --get
 remote.origin.url`, and `quest start` runs similar sets. Native Windows tests
 needed a file-level time limit in #233. Measure process counts and Windows
