@@ -125,7 +125,7 @@ function samePick(record: Attempt | undefined, entry: Pick<Entry, "enabledAt">):
 }
 /** Whether the pick already spent its attempt on a job other than `job`: only being blamed spends it. */
 function spent(record: Attempt | undefined, entry: Pick<Entry, "enabledAt">, job?: string): boolean {
-	return samePick(record, entry) && record.blamed !== false && record.blamed !== job;
+	return samePick(record, entry) && record.blamed !== false && (job === undefined || record.blamed !== job);
 }
 function identity(pid: number): string | undefined {
 	try {
@@ -612,14 +612,16 @@ async function collectJob(
 			job.handbacks[number] = error;
 			save(path, job);
 		}
-		// A handback takes the PR out of the queue, as parked or as this collection requeued it, never a newer pick.
-		const leaves = handback && (left || (queuedAs !== null && (queuedAs === entry.enabledAt || requeued)));
+		// A handback takes the PR out of the queue, as parked or as this collection requeued it, never a
+		// newer pick, even when a retry finds it already left once.
+		const ours = queuedAs !== null && (queuedAs === entry.enabledAt || requeued);
+		const leaves = handback && (ours || (left && queuedAs === null));
 		if (leaves) {
 			if (!left) {
 				job.left = [...(job.left ?? []), number];
 				save(path, job);
 			}
-			if (queuedAs !== null)
+			if (ours)
 				await github.graphql(
 					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 					{ id: entry.id },

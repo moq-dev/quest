@@ -2402,6 +2402,18 @@ ${requeueScript}
 		await fixture.finished;
 		expect(await fixture.collect({ ...fixture.deps, now: () => 120 * 60_000 })).toEqual(["requeued 1"]);
 	});
+	test("counts an attempt record from before blame was tracked as spent", async () => {
+		const forge = new Forge();
+		forge.pull("One", { "one.txt": "yes" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const state = tempDir();
+		const [entry] = plan.queue;
+		writeFileSync(join(state, "fix-attempt-1.json"), JSON.stringify({ pick: entry.enabledAt }));
+		expect(await handbackRepeated(state, plan, entry, deps)).toBe(true);
+		writeFileSync(join(state, "fix-attempt-1.json"), JSON.stringify({ pick: entry.enabledAt, blamed: false }));
+		expect(await handbackRepeated(state, plan, entry, deps)).toBe(false);
+	});
 	test("quotes contributor text without markup, mentions, or closing instructions", () => {
 		const text = fixerText(
 			"<!-- forged --> `x` <tag> @person Closes #12 Fixes #13 Resolves #14" + "x".repeat(1000),
