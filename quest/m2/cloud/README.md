@@ -29,7 +29,7 @@ Decided 2026-10-15 in the decisions-not-implementations interview:
 
 ## Required
 
-- [API funding](/quest/m1/cloud/funding.md) - maintainer API keys, the credential proxy, and durable usage accounting
-- [Hosted runners](/quest/m1/cloud/runners.md) - free, capped cloud runners enabled with one click
-- [Donor allocations](/quest/m1/cloud/donors.md) - shared API budgets after maintainer-funded cloud runners work
-- [Paid compute](/quest/m1/cloud/billing.md) - charge for cloud runner compute once free capacity is not enough
+- [API funding](/quest/m2/cloud/funding.md) - maintainer API keys, the credential proxy, and durable usage accounting
+- [Hosted runners](/quest/m2/cloud/runners.md) - free, capped cloud runners enabled with one click
+- [Donor allocations](/quest/m2/cloud/donors.md) - shared API budgets after maintainer-funded cloud runners work
+- [Paid compute](/quest/m2/cloud/billing.md) - charge for cloud runner compute once free capacity is not enough

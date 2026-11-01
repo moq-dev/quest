@@ -14,5 +14,5 @@ and supported integration once approval is available.
 
 ## Required
 
-- [ChatGPT approval](/quest/m1/chatgpt-waitlist.md) - OpenAI must approve hosted use
-- [Cloud runners](/quest/m1/cloud/README.md) - the hosted runs this funds
+- [ChatGPT approval](/quest/m2/chatgpt-waitlist.md) - OpenAI must approve hosted use
+- [Cloud runners](/quest/m2/cloud/README.md) - the hosted runs this funds
