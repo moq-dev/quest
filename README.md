@@ -553,7 +553,14 @@ checks every object and link, since the import enables `fetch.fsckObjects=true`.
 the place of the pick it descends from. Healthy PRs go back to batches unchanged,
 without a comment. Forks refusing maintainer edits, refused pushes, invalid results,
 crashes, or the 60-minute fixer deadline hand back with a marked comment naming the exit
-status or signal, with the tail of the job's retained log. A handback disables
+status or signal, with the tail of the job's retained log. A validated fix whose push
+GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
+the `workflows` permission to push, is handed back with its resolution: the PR head,
+the base, the resolved tree, and the fixer's edits as a patch against the merge's
+conflicted result, sized to GitHub's 65,536-character comment limit. A maintainer
+runs `quest land apply <pr>`, which refuses a moved head, rebuilds and checks that
+tree, and prints an unpushed commit and its push command. A resolution too large for
+the comment hands back plainly. A handback disables
 auto-merge, removes `quest:merge`, and carries the reason marker `quest status`
 reads. Each maintainer pick gets one attempt, spent only when a fixer job blames
 the PR: a PR that only shared a broken batch keeps it. A blamed PR whose pick already

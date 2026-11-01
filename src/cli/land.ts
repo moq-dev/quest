@@ -744,6 +744,16 @@ export function commandEnvironment(): NodeJS.ProcessEnv {
 	return { PATH: process.env.PATH, LANG: "C.UTF-8" };
 }
 
+/** Git's environment for trusted work: no system or global configuration, and no prompts. */
+export function gitEnvironment(): NodeJS.ProcessEnv {
+	return {
+		...commandEnvironment(),
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_TERMINAL_PROMPT: "0",
+	};
+}
+
 /** Run git without the repository's hooks, returning its status and output. */
 export function tryGit(
 	cwd: string,
@@ -754,13 +764,7 @@ export function tryGit(
 		cwd,
 		encoding: "utf8",
 		input: options.input,
-		env: {
-			...commandEnvironment(),
-			GIT_CONFIG_NOSYSTEM: "1",
-			GIT_CONFIG_GLOBAL: "/dev/null",
-			GIT_TERMINAL_PROMPT: "0",
-			...options.env,
-		},
+		env: { ...gitEnvironment(), ...options.env },
 		maxBuffer: 1 << 30,
 	});
 	if (result.error) throw result.error;

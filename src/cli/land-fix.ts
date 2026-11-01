@@ -182,6 +182,9 @@ export async function fix(
 		'model_providers.quest-fixer.env_key="OPENAI_API_KEY"',
 		"-c",
 		'model_providers.quest-fixer.wire_api="responses"',
+		// Without this, Codex runs the proxy's model with no reasoning at all ("reasoning effort: none").
+		"-c",
+		'model_reasoning_effort="medium"',
 		...(model ? ["--model", model] : []),
 		"-",
 	];
