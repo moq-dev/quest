@@ -218,6 +218,9 @@ export async function startFixer(
 		return lines;
 	}
 	git(checkout, ["init", "--quiet"]);
+	// No background gc or maintenance may rewrite objects while the daemon imports the fixer's result.
+	git(checkout, ["config", "gc.auto", "0"]);
+	git(checkout, ["config", "maintenance.auto", "false"]);
 	git(checkout, [
 		"fetch",
 		"--quiet",

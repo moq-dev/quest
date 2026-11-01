@@ -41,6 +41,9 @@ export function importFixer(
 	const objects: string[] = [];
 	const walk = (path: string, relative = "") => {
 		for (const name of readdirSync(path)) {
+			// Git lock files are transient: a background `git maintenance` or auto-gc can create and remove one
+			// while this walks (moq-dev/moq#6987 crashed on a vanished `objects/maintenance.lock`). None is imported.
+			if (name.endsWith(".lock")) continue;
 			if (++files > 100_000) throw new Error("fixer repository has too many files");
 			const child = join(path, name);
 			const rel = relative ? `${relative}/${name}` : name;

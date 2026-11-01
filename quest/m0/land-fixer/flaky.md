@@ -5,10 +5,10 @@
 When a batch's check fails, `quest land` reruns the failing check modules
 once on the same tip before blaming or ejecting anything. A test that failed
 and then passed, or whose failure the fixer judges nondeterministic (for
-example a timeout under load, or a race), is flaky. The gate lands the batch,
-adds a commit to the next batch that disables the test with a reason, and
-files a follow-up quest to fix or delete it in the repository's m0 `flaky`
-epic.
+example a timeout under load, or a race), is flaky. The fixer pushes one
+commit onto the batch's base PR that disables the test with a reason and adds
+a follow-up quest to fix or delete it in the repository's m0 `flaky` epic.
+The batch then lands with that commit.
 
 ## Plan
 
@@ -28,8 +28,11 @@ was written and landed by hand.
 - Who disables:
   - The fixer opens and queues its own PR
   - The fixer opens a PR, and a maintainer picks it
-  - ✅ Inside the next batch: the gate adds the skip commit to the batch it
-    lands next, tested with it
+  - Inside the next batch: the gate adds the skip commit to the batch it
+    lands next, tested with it (picked first, then superseded)
+  - ✅ Superseded 2026-11-01 (user, second /quest-plan): the fixer pushes the
+    disabling commit, with its investigation quest, onto the batch's base PR,
+    so it lands with this batch: "disable the flaky test in the base PR".
 - What counts as flaky:
   - Only a rerun that passes
   - ✅ A rerun that passes, or a failure the fixer judges nondeterministic

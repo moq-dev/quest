@@ -32,6 +32,19 @@ the base's own changes to those paths: that is allowed when they come out exactl
 a plain `git merge` of the base leaves them, with no conflict there for you to edit. Never push or contact
 GitHub. Anything needing behavior changes or review must be handed back.
 
+Build tools may fetch the dependencies the repository's manifests and lockfiles
+name: from their package registries, such as crates.io, npm, PyPI, and the Go
+module proxy, and from `github.com` and `codeload.github.com` for git
+dependencies. Do not build with `--offline` to avoid them. These fetches are the
+only GitHub contact allowed: never call GitHub's API yourself (`gh`,
+`api.github.com`), push, or reach any other host.
+
+Before reporting `fixed` or `requeue`, build and test the packages the PR and your
+fix touch, including whatever the failure log shows failing, and name the commands
+you ran in the reason. A PR you cannot get passing mechanically, or whose build or
+tests you cannot run, goes back as a handback quoting the command and the output
+line that shows why in the diagnosis.
+
 Write `quest-land-result.json` in the repository root: a JSON array with exactly
 one entry per supplied PR, no extra fields. Use one of:
 {"number":123,"action":"requeue","reason":"healthy; flaky test"}
