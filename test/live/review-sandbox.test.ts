@@ -16,6 +16,7 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
+	renameSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -215,7 +216,8 @@ function codexHooks(codexHome: string, cwd: string): Promise<{ hooks: CodexHook[
  * Copy the login file at `source` to `copy`, returning what writes a refreshed
  * login back. A refresh may rotate the refresh token, which would sign the
  * user's own home out; the write-back is skipped if that home has itself
- * changed since.
+ * changed since. It replaces the file by rename, so an interrupted write
+ * never leaves the user's login truncated.
  */
 function borrow(source: string, copy: string, variable: string): () => void {
 	if (!existsSync(source)) {
@@ -224,6 +226,7 @@ function borrow(source: string, copy: string, variable: string): () => void {
 	const original = readFileSync(source);
 	writeFileSync(copy, original, { mode: 0o600 });
 	return () => {
+		if (!existsSync(copy)) return;
 		const now = readFileSync(copy);
 		if (now.equals(original)) return;
 		if (!readFileSync(source).equals(original)) {
@@ -232,7 +235,9 @@ function borrow(source: string, copy: string, variable: string): () => void {
 			);
 			return;
 		}
-		writeFileSync(source, now, { mode: 0o600 });
+		const staged = `${source}.quest-live-${process.pid}`;
+		writeFileSync(staged, now, { mode: 0o600 });
+		renameSync(staged, source);
 	};
 }
 
@@ -255,7 +260,7 @@ function clearMarkers() {
  * checkout's. It blocks, so it carries its own bound for a hung CLI.
  */
 function control(home: Home) {
-	const { model } = MODELS[home.harness].default;
+	const { model } = MODELS[home.harness];
 	const argv =
 		home.harness === "codex"
 			? ["exec", "--json", "-m", model, "-c", `model_reasoning_effort="${EFFORT}"`, "-"]
