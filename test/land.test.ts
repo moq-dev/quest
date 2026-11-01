@@ -2151,6 +2151,26 @@ ${requeueScript}
 		await fix(dir, log, [1], agent, ["-"]);
 		expect(readFileSync(join(dir, "prompt.txt"), "utf8")).toContain(`PRs:\n- #1: branch pr-1 at ${head}\n`);
 	});
+	test("runs default Codex with an explicit reasoning effort", async () => {
+		const dir = fixRepository();
+		const agent = join(dir, "agent");
+		const log = join(dir, "failure.log");
+		writeFileSync(log, "failed check");
+		vi.stubEnv("OPENAI_BASE_URL", "http://proxy.test/v1");
+		vi.stubEnv("OPENAI_API_KEY", "proxy-client");
+		writeFileSync(
+			agent,
+			`#!/bin/sh
+set -eu
+printf '%s\\n' "$@" > argv.txt
+cat > prompt.txt
+${requeueScript}
+`,
+			{ mode: 0o755 },
+		);
+		await fix(dir, log, [1], agent);
+		expect(readFileSync(join(dir, "argv.txt"), "utf8").split("\n")).toContain('model_reasoning_effort="medium"');
+	});
 	test("refuses to start an agent without a supplied PR's branch", async () => {
 		const dir = fixRepository();
 		const log = join(dir, "failure.log");
