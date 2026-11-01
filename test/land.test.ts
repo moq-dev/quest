@@ -1779,6 +1779,8 @@ async function fixerFixture(
 		pipe?: boolean;
 		// A second, healthy PR shares the failing batch.
 		collateral?: boolean;
+		// The base the fixer merges already changed a protected file.
+		protectedBase?: boolean;
 	} = {},
 ) {
 	const forge = new Forge();
@@ -1789,6 +1791,7 @@ async function fixerFixture(
 	);
 	const collateral = options.collateral ? forge.pull("Bystander", { "other.txt": "fine\n" }) : undefined;
 	if (options.conflict) forge.advance({ "code.txt": "one\n2\nthree\n" });
+	if (options.protectedBase) forge.advance({ "flake.nix": "base\n" });
 	const deps = await forge.deps();
 	const plan = await resolveQueue(REPOSITORY, undefined, deps);
 	const state = sandbox();
@@ -1910,6 +1913,14 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		);
 		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixture.pull.head!));
 		expect(fixture.pull.labels).toContain("quest:merge");
+	});
+	test("accepts a fix whose base gained protected changes before collection", async () => {
+		const fixture = await fixerFixture(fixedScript(), { conflict: true, protectedBase: true });
+		await fixture.finished;
+		// Another PR lands protected changes while the result waits for the running batch.
+		fixture.forge.advance({ "flake.nix": "later\n", ".github/workflows/later.yml": "on: push\n" });
+		expect(await fixture.collect(await fixture.forge.deps())).toEqual(["requeued 1"]);
+		expect(git(fixture.root, "show", "-s", "--format=%P", fixture.pull.head!)).toContain(fixture.plan.base.sha);
 	});
 	test("waits for GitHub to show the pushed fix before recording it", async () => {
 		const fixture = await fixerFixture(fixedScript(), { conflict: true });
