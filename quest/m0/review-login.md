@@ -4,8 +4,9 @@
 
 When a reviewer CLI's login has expired or been revoked, `quest review` fails
 with the same "`<harness>` is not logged in; run `<login>`" error it gives a
-signed-out CLI, instead of a raw 401 from the reviewer's turn. A reviewer
-whose only credentials come from the environment still reviews.
+signed-out CLI, instead of a raw 401 from the reviewer's turn. The error
+names the Claude profile it checked. A reviewer whose only credentials come
+from the environment still reviews.
 
 ## Plan
 
@@ -38,3 +39,15 @@ Decided 2026-10-30 (user, /quest-plan of the follow-ups from a moq-dev/moq
   variable instead of saying "not logged in".
 - Test with a fake reviewer that authenticates only through an environment
   variable.
+
+Decided 2026-10-31 (user, /quest-plan of the follow-ups from a moq-dev/moq
+`/quest-complete` run): the "not logged in" error names the
+`CLAUDE_CONFIG_DIR` profile it checked, or the default when unset. Sessions
+running with `~/.claude-personal` were told "claude is not logged in" with no
+hint of which profile was read
+([moq-dev/moq#7245](https://github.com/moq-dev/moq/pull/7245),
+[moq-dev/moq#7210](https://github.com/moq-dev/moq/pull/7210)). The error is
+raised in `src/cli/review.ts`'s status check.
+[moq-dev/quest#316](https://github.com/moq-dev/quest/pull/316) (preserve
+reviewer connection credentials) covers the environment-credential part
+above and removes it from this quest when it lands.

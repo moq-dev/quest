@@ -271,8 +271,10 @@ opening link. Prose, headings, an entry both sides rewrote, or one side
 removed while the other edited, keep the usual conflict markers. Any `quest`
 command registers the driver in a fresh clone or worktree whose
 `.gitattributes` names it. Without `quest` on the merge's PATH, the driver
-falls back to `git merge-file`, and GitHub's merges ignore drivers, so a PR
-shows as conflicting until a local merge from its base is pushed.
+falls back to `git merge-file` and, when conflicts remain, prints to stderr
+that the file's link lists were not auto-resolved. GitHub's merges ignore
+drivers, so a PR shows as conflicting until a local merge from its base is
+pushed.
 
 The registered driver passes Git's conflict marker length and revision labels
 to `quest resolve`, including the ancestor label for `diff3` conflicts. A direct
@@ -362,7 +364,8 @@ Each poll makes one conditional timeline request and one conditional
 review-comment request every five minutes once it has read the existing pages,
 following a new page when the current one fills, plus one GraphQL query each
 for reactions and checks. It reads the base branch's required checks once per
-call. It honors GitHub's rate-limit headers and fails loudly on invalid responses.
+call. It honors GitHub's rate-limit headers, retries a 5xx or a dropped
+connection a few times, and fails loudly on invalid responses.
 There is no deadline unless `--timeout <seconds>` is supplied. Activity exits 0,
 timeout exits 3, invalid arguments exit 2, and other failures exit 1; interrupt
 with Ctrl-C to stop waiting. A timeout prints a resume point as its only line:
@@ -390,7 +393,6 @@ auto-merge -
 merge-queue -
 landing-stopped -
 checks success passed=14 failing=0 pending=0
-review-rounds 2 -
 review stale commented kixelated 2026-10-16T06:14:04Z https://github.com/moq-dev/quest/pull/128#pullrequestreview-5543745302
 review current commented chatgpt-codex-connector 2026-10-16T17:57:16Z https://github.com/moq-dev/quest/pull/128#pullrequestreview-5551703054
 thread PRRT_kwDOUhuoys6tUUV2 current chatgpt-codex-connector https://github.com/moq-dev/quest/pull/128#discussion_r4297708263 src/cli/gate.ts:115
@@ -409,7 +411,6 @@ comes last, and a missing value prints as `-`:
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when. |
 | `checks` | The head's rollup state and `passed=`, `failing=`, `pending=` counts. |
 | `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. |
-| `review-rounds` | Count of distinct commits with submitted reviews since the latest comment starting `Design change:`, followed by that marker's time, author, and URL (`-` when absent). Pending reviews and reviews without a commit do not count. This reports history, not whose review satisfies repository policy. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
 | `thread` | Node ID, `current` or `outdated`, last commenter, latest comment URL, and `path:line` of each unresolved thread. |
@@ -421,8 +422,7 @@ The node ID is what GraphQL's `addPullRequestReviewThreadReply` and
 is one branch protection or a ruleset requires for this PR. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
-`landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviewRounds`
-(`count`, and `since` with the marker's `at`, `actor`, `url`, or `null`), `reviews`, `reactions`,
+`landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `reactions`,
 `threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
 failures exit 1.
@@ -505,52 +505,121 @@ The sandbox runs the repository's checks
 is passed to it. The daemon refuses to start without `--sandbox`. The optional
 fixer runs as tracked background work, receiving the full log path followed by
 PR numbers, with the same restricted environment (`PATH` and `LANG` only).
-Its cwd is the standalone repository, with `batch`, `base`, and `pr-<n>` branches.
-The wrapper starts an ephemeral container and runs `quest land fix <log> <prs...>`
+Its cwd is the standalone repository, checked out at `base` so the agent loads no
+PR's instructions or tooling, with `batch` and `pr-<n>` branches beside it. The
+prompt names each PR's branch and pinned head. For a base that fails its check
+alone it receives only the log path, and the repository has only `base`.
+The wrapper starts an ephemeral container and runs `quest land fix <log> [prs...]`
 there, exposing that repository read/write and the log read-only at the given paths.
 It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses
 endpoint, including `/v1`) and `OPENAI_API_KEY` (the gate's proxy client key).
-The daemon never supplies these or any Git/GitHub credential; the wrapper must
-restrict network access to the model proxy. Codex login stays on CLIProxyAPI.
+The daemon never supplies these or any Git/GitHub credential, and the wrapper
+must keep every other credential out of the container. Its network must reach the
+model proxy and, so the fixer can build and test its fix, the package registries
+and `github.com`/`codeload.github.com` that the repository's dependencies come from.
+The prompt allows only those dependency fetches: no GitHub API, no push, no other
+host. Codex login stays on CLIProxyAPI.
 The wrapper waits for the payload, returns its exit status, and tears down its
 container on exit or SIGTERM. On timeout the daemon sends SIGTERM, allows at
 least 10 seconds for container cleanup, then sends SIGKILL on a later collection. The payload defaults
 to `codex exec`; `--agent <executable>` and repeatable `--agent-arg <argument>`
 replace it for another CLI. It writes `<cwd>/quest-land-result.json`: an array of
 `{number, action:"requeue", reason}`, `{number, action:"fixed", head, reason}`, or
-`{number, action:"handback", diagnosis, recommendation}`, with no extra fields.
+`{number, action:"handback", diagnosis, recommendation}`, with no extra fields
+beyond an optional `comment`, an optional `blame: true` on each PR that caused the failure (a blamed PR is
+fixed or handed back), and on a handback an optional `log: [first, last]` citing the
+failure log's lines, which its comment quotes. For the base alone, it writes one
+object instead: `{action:"fixed", head, reason}` with the fix committed on `base`,
+or `{action:"handback", diagnosis, recommendation}`.
 The payload adds `agent` and `model` metadata to each result (`--model <id>`
 selects the default Codex model; unknown models fall back to `Codex`).
 Reasons and diagnoses are single lines. Fixed heads must be committed on `pr-<n>`.
+A `comment` is Markdown of at most 4000 characters that the fixer wants on its PR.
+The fixer holds no GitHub credential, since PR code it builds can read the
+container's environment, so the daemon posts the comment as the bot when it
+collects the job, before any outcome comment of its own. It quotes the text under the
+recorded agent, strips HTML comments so the text can never carry the daemon's
+hidden markers, defuses @-mentions, and redacts GitHub tokens, as it does for
+every fixer text and log it posts.
 
-Jobs and attempts persist across daemon restarts. After the wrapper exits, the
+Jobs and attempts persist across daemon restarts. A running fixer outlives a
+restart only where the host leaves its process group alive (under systemd,
+`KillMode=process` on the daemon's unit); otherwise its handback names the signal
+and the restart. After the wrapper exits, the
 daemon validates every result, ancestry, and protected path before lease-pushing
 as the bot. The protected set as a whole must match the pinned head or its merge with the
 current base, including content and mode. It covers `flake.nix`, `flake.lock`,
 `shell.nix`, `default.nix`, `nix/`, `.envrc`, `.github/`, `.gitmodules`, and gitlinks
-anywhere. Collection copies at most 100 MiB of Git metadata into a clean object
-repository, ignores fixer configuration, and never follows Git alternates. Pack indexes are rebuilt with
+anywhere. Collection copies at most 100 MiB of Git metadata the fixer added into a
+clean object repository. It skips the packs fetched at launch, whose objects the clean
+repository borrows from the daemon's own. It ignores fixer configuration and never
+follows the fixer's Git alternates. Pack indexes are rebuilt with
 `git index-pack` rather than trusted; the fetch into the daemon's repository
 checks every object and link, since the import enables `fetch.fsckObjects=true`. It records `mechanical fix by <recorded agent/model>: <reason>` and the new head in
-`## Review`, enables head-pinned auto-merge, and adds `quest:merge`. Healthy PRs
-requeue unchanged. Forks refusing maintainer edits, refused pushes, invalid results,
-crashes, or the 60-minute fixer deadline hand back with a marked comment. A flaky
-requeue suggests a follow-up. Each maintainer pick gets one attempt; the daemon
-records the fixer's new auto-merge `enabledAt` so its second ejection hands back.
-A new maintainer pick resets the attempt. Host provisioning and isolation
+`## Review`, and enables head-pinned auto-merge again on the fixed head, which keeps
+the place of the pick it descends from. Healthy PRs go back to batches unchanged,
+without a comment. Forks refusing maintainer edits, refused pushes, invalid results,
+crashes, or the 60-minute fixer deadline hand back with a marked comment naming the exit
+status or signal, with the tail of the job's retained log. A validated fix whose push
+GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
+the `workflows` permission to push, is handed back with its resolution: the PR head,
+the base, the resolved tree, and the fixer's edits as a patch against the merge's
+conflicted result, sized to GitHub's 65,536-character comment limit. A maintainer
+runs `quest land apply <pr>`, which refuses a moved head, rebuilds and checks that
+tree, and prints an unpushed commit and its push command. A resolution too large for
+the comment hands back plainly. A handback disables
+auto-merge, removes `quest:merge`, and carries the reason marker `quest status`
+reads. Each maintainer pick gets one attempt, spent only when a fixer job blames
+the PR: a PR that only shared a broken batch keeps it. A blamed PR whose pick already
+spent its attempt hands back. A new maintainer pick resets the attempt. Host provisioning and isolation
 belong to the host; these commands are executable paths, not shell expressions.
 Wrappers must expose only the supplied tree and log, never the state directory
 or its private bare repository.
 
-The oldest queued PR is the base. Add up to floor(log2 n) further PRs that merge
-cleanly in queue order, resolving quest links with `quest resolve`. Conflicting
-additions stay queued. A base conflict ejects only the base. The sandbox checks
-the tip once: success lands one squash commit per PR, while failure ejects every
-PR in that batch, without bisection. Ejection disables auto-merge, removes
-`quest:merge`, and comments with the reason and the last 100 output lines.
-`quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
+Batches alternate between the oldest and the newest queued PR as the base. Add
+up to floor(log2 n) further PRs that merge cleanly in that order, resolving
+quest links with `quest resolve`. A failed batch halves the next batch's size,
+down to one PR, and each batch that lands grows it back by one; the order and
+size persist in the state directory. Conflicting
+additions stay queued. A PR whose required checks are still running stays queued
+and sits out batches until they pass. If any are still pending two hours after
+its pick (twice the default `--timeout`), the daemon comments once on that pick,
+naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
+bisection: success lands one squash commit per PR. A failure, or a base that
+conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
+auto-merge, `quest:merge`, and place, get no comment, and sit out batches while its
+job runs, so the rest of the queue keeps landing. The fixer reads the log and blames
+the PRs that caused it; the others go back to batches unchanged. When it blames
+none, the daemon checks the base alone. A green base leaves every PR to the fixer's
+verdict, as if blamed. A red base releases them all and halts the queue: nothing
+lands until the base moves and its check passes. The fixer then runs on the base
+alone. The daemon validates its fix as it would a PR's, protected paths
+included, pushes it to a `quest-land/fix-<sha>` branch, and opens it as a pull
+request for a maintainer to merge as an administrator. Only when the fixer cannot
+fix the base, or there is no fixer, does an issue say the queue is halted. If the
+base moves and still fails, the daemon closes that fix and runs the fixer on the
+new base. Once a check of a moved base passes, the queue resumes, and the daemon
+closes the issue and any fix it no longer needs. A job collected while the queue is halted releases its PRs without checking its own, possibly older, base. The daemon collects a finished fixer job even while a check runs.
+Without a fixer, a failure ejects the batch instead: ejection disables auto-merge,
+removes `quest:merge`, and comments with the reason and the failing log, bounded by
+size. When GitHub refuses one PR's squash merge, only that PR stops: a conflict is
+parked for the fixer, a moved head or refusal is ejected, and the rest of the batch
+stays queued. `quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
 `$STATE_DIRECTORY` or the XDG state home, never inside the checkout. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
+
+As a batch is filled, each PR it reaches is squashed alone onto the current
+base, and `quest check` runs on the result; PRs the batch does not reach wait
+for a later round, so a long queue costs only each batch's candidates. A PR with findings the base lacks, such as
+a link to a quest the base has since finished, is parked alone for the fixer, blamed
+for those findings, so it never fails a batch; the fixer starts from that squash.
+Without a fixer it is ejected as `failed_checks` with those findings. This check runs
+in the daemon, never the sandbox: it parses quest files read from git objects
+and executes nothing from the tree. A base without a `quest/` directory skips
+it. A newly queued PR the batch reaches is also squashed onto the four PRs
+landing soonest ahead of it; if any conflict, the daemon comments once with their numbers and files, so its author
+can resolve the overlap before its turn. It is screened again only once
+requeued.
 
 Queue reads happen about once a minute and between batches. Pins, required
 checks, reviews, conversations, rulesets, and classic protection remain enforced;
@@ -569,11 +638,16 @@ tested squash to the base as a fast-forward, leased on the expected parent. It
 closes the PR with a comment linking the landed commit and removes `quest:merge`.
 Such a fork PR is closed rather than shown as merged by GitHub. A PR branch lease
 failure ejects `head_moved`. A locally prepared or API squash tree mismatch logs
-CRITICAL and ejects the remaining batch as `tree_mismatch`.
+CRITICAL. A PR whose prepared tree differs ejects alone as `tree_mismatch`; an
+already-squashed one stays merged. Either way, the rest of the batch stays queued
+and is rebuilt and checked on the new base.
 
 After an API refusal, the daemon re-reads mergeability and briefly retries
-pending mergeability or a base refresh. Confirmed conflicts and moved heads eject
-the remainder; a persistent policy refusal ejects as `merge_refused` without the
+pending mergeability or a base refresh. It also retries while GitHub still
+reports the pin as the head of a PR it just prepared, since GitHub can refuse the
+merge for that stale head; only another writer's head ejects `head_moved`.
+A confirmed conflict parks only that PR for the fixer and a moved head ejects
+only that PR; the rest stays queued. A persistent policy refusal ejects as `merge_refused` without the
 fixer. Already-merged PRs are skipped. An unexpected API squash parent means the
 base moved: the remainder is rebuilt without ejection.
 
@@ -678,16 +752,13 @@ branch before it is pushed for review: Codex when run from Claude Code, and
 Claude Code when run from Codex. `--harness` names the reviewer instead; an
 unknown harness, or a missing or logged-out CLI, is an error rather than a
 same-model review. The reviewer uses its CLI's own login, with a
-pinned model and effort: a default tier for routine work and, with `--deep`, a
-stronger one for a high-stakes change such as security, a wire format or public
-API, or a risk of data loss. `quest review --help` lists them; `--model` and
-`--effort` override either.
+pinned model and effort that `quest review --help` lists; `--model` and
+`--effort` override them.
 
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
-quest review --deep                           # the stronger model, for a high-stakes change
 ```
 
 The first round runs the reviewer's own review, `codex exec review --base` or
@@ -709,7 +780,12 @@ execpolicy rules, and Claude Code with only read tools and the Bash commands it
 judges read-only, in `dontAsk` mode. Claude Code loads no settings files, so no
 allow rule, even the user's own, widens that. Codex skips the user's config,
 whose project trust would load the checkout's `.codex/config.toml` and start its
-MCP servers outside the sandbox. The base is fetched first, since
+MCP servers outside the sandbox. Whether those flags isolate is up to each
+CLI's release, so `just review-sandbox`, in this repository, plants project MCP
+servers and hooks for both CLIs on a head, runs `quest review` with the
+installed CLIs and copies of your logins, and fails if any of it runs or the
+review trusts a new directory. It spends real usage, so CI never runs it; run it
+after upgrading either CLI. The base is fetched first, since
 the sandbox has no network. The reviewer follows the base's `AGENTS.md` and `CLAUDE.md`, at the
 root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
@@ -861,11 +937,14 @@ service, such as a systemd user unit with `Restart=on-failure`.
 The experimental `quest worktree` commands share one disk budget across this
 user's repositories and release a checkout's disk by deleting its declared
 scratch in place. They only operate on Git worktrees they create; use the
-owning application for Codex, Claude, or other managed checkouts.
+owning application for Codex or other managed checkouts. Claude Code's
+checkouts are Quest's own once `quest init` installs its hooks (see
+[Claude Code checkouts](#claude-code-checkouts)).
 
 Set a shared capacity and an explicit reservation in bytes, covering the
 checkout and its expected build output. Measure representative jobs before
-choosing the budget. Reservations serialize creators and account for concurrent
+choosing the budget. Until a capacity is set, only free disk space limits new
+reservations. Reservations serialize creators and account for concurrent
 expected growth. They do not enforce filesystem quotas against arbitrary
 writers, and Git objects stored in the shared repository are not charged.
 
@@ -877,7 +956,8 @@ quest worktree status
 ```
 
 Creation prints JSON with the ID and the detached, locked checkout path under
-`.worktrees/`, and records the `--scratch` paths. `run` restores a released
+`.worktrees/`, and records the `--scratch` paths. Names are unique per
+repository; where several repositories use one, the other commands take the ID. `run` restores a released
 checkout, runs the command there, and once it exits kills any descendants it
 left behind. When no other run remains in the checkout, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
@@ -933,6 +1013,32 @@ A failed creation stays charged until `release` drops it. Records live in
 `~/.local/state/quest/worktrees`). The registry lock of a process that exited on
 this host is reclaimed; a live lock, or one held from another host, is never
 stolen. This initial interface refuses unknown or changed checkout ownership.
+
+### Claude Code checkouts
+
+`quest init` adds hook entries to the repository's `.claude/settings.json` that
+run `quest worktree hook` for Claude Code's `WorktreeCreate`, `WorktreeRemove`,
+`SubagentStart`, and `SubagentStop` events, so `quest` must be on the `PATH`
+Claude Code runs hooks with. The hook then creates every worktree Claude makes
+in the repository, for `--worktree`, `EnterWorktree`, isolated subagents, and
+background sessions, and Claude no longer copies `.worktreeinclude` files into
+them.
+
+Each is a `quest worktree` checkout under the main checkout's `.worktrees/`,
+named as Claude names it. Like Claude's default, it starts from the remote's
+default branch as last fetched (`origin/HEAD`), or from the session's commit
+when that is unknown; Claude's `worktree.baseRef` setting no longer applies. With only a name to go on,
+it declares the main checkout's top-level ignored entries as scratch, except
+`.worktrees/`, `.claude/`, and entries holding a nested repository, and
+reserves the main checkout's disk usage without `.git` and those checkouts. A
+subagent's checkout is released when the subagent finishes or stops to wait for
+an answer, and restored when it resumes, with a note telling it to reinstall
+its scratch. Another `SubagentStop` hook that keeps a subagent running defeats
+this: Claude continues the subagent without a `SubagentStart`, so it works on
+without its scratch until it reinstalls it. Claude never removes a subagent's checkout itself, so remove a
+finished one with `quest worktree remove`, which also recovers one whose
+session crashed. When Claude removes a session's checkout, `quest worktree
+remove` decides: a checkout holding unpreserved work is kept.
 
 ## Work with your agents
 

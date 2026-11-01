@@ -13,14 +13,17 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from "../src/cli/supervise";
 import { GitHub, mergedHead } from "../src/cli/github";
 import { main } from "../src/cli/main";
-import { Worktrees, diskUsage } from "../src/cli/worktree";
+import { Worktrees, canonical, derivedDefaults, diskUsage } from "../src/cli/worktree";
+import { claudeHook } from "../src/cli/worktree-hook";
 import { run } from "./fixture";
 
+const source = dirname(dirname(fileURLToPath(import.meta.url)));
 const roots: string[] = [];
 function git(root: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -611,5 +614,155 @@ describe("cgroup kill", () => {
 		expect(existsSync(join(group, "cgroup.kill"))).toBe(false);
 		rmSync(group, { recursive: true });
 		expect(() => kill(group)).not.toThrow();
+	});
+});
+
+describe("Claude Code hooks", { timeout: 20_000 }, () => {
+	const noForge = async () => false;
+	/** A subagent's hook input, as Claude sends it from inside the subagent's checkout. */
+	const subagent = (event: string, cwd: string, agent: string) => ({ hook_event_name: event, cwd, agent_id: agent });
+
+	it("derives scratch from the main checkout's ignored entries and its size as the reserve", () => {
+		const { repo } = fixture();
+		mkdirSync(join(repo, "cache", "deep"), { recursive: true });
+		writeFileSync(join(repo, "cache", "deep", "artifact"), "x".repeat(100_000));
+		writeFileSync(join(repo, ".env"), "secret");
+		writeFileSync(join(repo, "untracked"), "source");
+		// Nested repositories and other checkouts hold work, not scratch, even where ignored.
+		appendFileSync(join(repo, ".gitignore"), "vendor/\n.claude/\n");
+		mkdirSync(join(repo, "vendor", "lib"), { recursive: true });
+		git(join(repo, "vendor", "lib"), "init");
+		mkdirSync(join(repo, ".claude", "worktrees", "old"), { recursive: true });
+		mkdirSync(join(repo, ".worktrees", "big"), { recursive: true });
+		writeFileSync(join(repo, ".worktrees", "big", "blob"), "x".repeat(5_000_000));
+		const { reserve, scratch } = derivedDefaults(repo);
+		expect(scratch).toEqual([".env", "cache"]);
+		expect(reserve).toBeGreaterThan(100_000);
+		expect(reserve).toBeLessThan(5_000_000);
+	});
+	it("admits by free space alone while no capacity is set", () => {
+		const { root, repo } = fixture();
+		expect(new Worktrees(join(root, "fresh")).create(repo, "work", 1_000_000).phase).toBe("active");
+	});
+	it("creates under the main checkout at the remote's default branch, or the session's commit without one, and restores a name it already holds", async () => {
+		const { root, repo, worktrees } = fixture();
+		mkdirSync(join(repo, "cache"));
+		const session = join(root, "session");
+		git(repo, "worktree", "add", "--detach", session);
+		writeFileSync(join(session, "file"), "session\n");
+		git(session, "commit", "-am", "session work");
+		const created = { hook_event_name: "WorktreeCreate", cwd: session, name: "agent-1" };
+		const path = (await claudeHook(created, worktrees, noForge))!.trim();
+		expect(path).toBe(join(canonical(repo), ".worktrees", "agent-1"));
+		expect(git(path, "rev-parse", "HEAD")).toBe(git(session, "rev-parse", "HEAD"));
+		expect(worktrees.status().records[0]).toMatchObject({ name: "agent-1", scratch: ["cache"] });
+		worktrees.release("agent-1");
+		expect((await claudeHook(created, worktrees, noForge))!.trim()).toBe(path);
+		expect(worktrees.status().records).toHaveLength(1);
+		expect(worktrees.status().records[0].phase).toBe("active");
+		// With a known remote default branch, a new checkout starts there, as Claude's do by default.
+		const initial = git(repo, "rev-parse", "main");
+		git(repo, "update-ref", "refs/remotes/origin/main", initial);
+		git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+		const fresh = (await claudeHook({ ...created, name: "agent-2" }, worktrees, noForge))!.trim();
+		expect(git(fresh, "rev-parse", "HEAD")).toBe(initial);
+	});
+	it("releases a stopped subagent's own checkout and restores it on resume", async () => {
+		const { repo, worktrees } = fixture();
+		mkdirSync(join(repo, "cache"));
+		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-abc" };
+		const path = (await claudeHook(create, worktrees, noForge))!.trim();
+		mkdirSync(join(path, "cache", "nested"), { recursive: true });
+		// A subagent without isolation runs in this checkout too, but stops under another ID.
+		expect(await claudeHook(subagent("SubagentStop", path, "other"), worktrees, noForge)).toBeUndefined();
+		expect(existsSync(join(path, "cache"))).toBe(true);
+		await claudeHook(subagent("SubagentStop", join(path, "cache", "nested"), "abc"), worktrees, noForge);
+		expect(existsSync(join(path, "cache"))).toBe(false);
+		expect(worktrees.status().records[0].phase).toBe("released");
+		const resumed = await claudeHook(subagent("SubagentStart", path, "abc"), worktrees, noForge);
+		expect(JSON.parse(resumed!).hookSpecificOutput).toMatchObject({
+			hookEventName: "SubagentStart",
+			additionalContext: expect.stringContaining("cache"),
+		});
+		expect(worktrees.status().records[0].phase).toBe("active");
+		// A fresh subagent's checkout is already active and needs no notice.
+		expect(await claudeHook(subagent("SubagentStart", path, "abc"), worktrees, noForge)).toBeUndefined();
+		// Subagents outside any quest checkout are left alone.
+		expect(await claudeHook(subagent("SubagentStop", repo, "abc"), worktrees, noForge)).toBeUndefined();
+	});
+	it("removes a finished checkout, never forcing, and refuses one it does not own", async () => {
+		const { root, repo, worktrees } = fixture();
+		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name: "session" };
+		const path = (await claudeHook(create, worktrees, noForge))!.trim();
+		const remove = { hook_event_name: "WorktreeRemove", cwd: repo, worktree_path: path };
+		writeFileSync(join(path, "new"), "untracked work");
+		await expect(claudeHook(remove, worktrees, noForge)).rejects.toThrow("untracked");
+		expect(existsSync(path)).toBe(true);
+		rmSync(join(path, "new"));
+		mkdirSync(join(path, "cache"));
+		await claudeHook(remove, worktrees, noForge);
+		expect(existsSync(path)).toBe(false);
+		expect(worktrees.status().records).toEqual([]);
+		// Gone is removed; a checkout some other tool made is refused.
+		await claudeHook(remove, worktrees, noForge);
+		const foreign = join(root, "foreign");
+		git(repo, "worktree", "add", "--detach", foreign);
+		await expect(claudeHook({ ...remove, worktree_path: foreign }, worktrees, noForge)).rejects.toThrow(
+			"not a checkout quest worktree owns",
+		);
+		await expect(claudeHook({ hook_event_name: "Stop", cwd: repo }, worktrees, noForge)).rejects.toThrow(
+			"unsupported hook event",
+		);
+		await expect(claudeHook({ hook_event_name: "WorktreeCreate", cwd: repo }, worktrees, noForge)).rejects.toThrow(
+			"lacks name",
+		);
+	});
+	it("waits out another holder of the registry lock instead of failing", async () => {
+		const { repo, home, worktrees } = fixture();
+		const lock = join(home, "lock");
+		mkdirSync(lock);
+		writeFileSync(join(lock, "live.json"), JSON.stringify(currentOwner()));
+		let settled = false;
+		const created = claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-wait" },
+			worktrees,
+			noForge,
+		);
+		void created.finally(() => (settled = true));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(settled).toBe(false);
+		rmSync(lock, { recursive: true });
+		expect((await created)!.trim()).toBe(join(canonical(repo), ".worktrees", "agent-wait"));
+	});
+	it("keeps names unique per repository, and asks for the ID where several share one", async () => {
+		const { root, repo, worktrees } = fixture();
+		const other = repository(join(root, "other"));
+		const first = worktrees.create(repo, "feature", 1_000_000);
+		const second = worktrees.create(other, "feature", 1_000_000);
+		expect(() => worktrees.create(repo, "feature", 1_000_000)).toThrow("already exists in this repository");
+		expect(() => worktrees.release("feature")).toThrow("give the ID instead");
+		expect(worktrees.release(second.id).phase).toBe("released");
+		await worktrees.remove(first.id);
+		expect(worktrees.release("feature").id).toBe(second.id);
+	});
+	it("reads the event on stdin and exits 1, never 2, on failure", () => {
+		const { repo, home } = fixture();
+		const cli = (input: string) =>
+			spawnSync(
+				"bun",
+				[`--config=${join(source, "bunfig.toml")}`, join(source, "src/cli/bin.ts"), "worktree", "hook"],
+				{
+					input,
+					encoding: "utf8",
+					env: { ...process.env, QUEST_WORKTREE_HOME: home },
+				},
+			);
+		const created = cli(JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-cli" }));
+		expect(created.status).toBe(0);
+		expect(created.stdout).toBe(`${join(canonical(repo), ".worktrees", "agent-cli")}\n`);
+		expect(cli("not json").status).toBe(1);
+		expect(cli(JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-cli/x" })).status).toBe(
+			1,
+		);
 	});
 });

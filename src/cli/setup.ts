@@ -1,8 +1,9 @@
 // `quest init` and `quest uninstall`: install skill stubs and reverse it.
 //
 // Init touches only stubs, one reference line, one `.gitattributes` line, an
-// empty `quest/README.md` when missing, and the clone's merge driver config.
-// Uninstall never deletes the quest tree.
+// empty `quest/README.md` when missing, Quest's hook entries in
+// `.claude/settings.json`, and the clone's merge driver config. Uninstall never
+// deletes the quest tree.
 
 import {
 	existsSync,
@@ -22,6 +23,7 @@ import { dirname, join, resolve } from "node:path";
 import { gitOutput } from "./claims";
 import { DRIVER } from "./resolve";
 import { SKILLS } from "./skills";
+import { HOOK_EVENTS } from "./worktree-hook";
 
 /**
  * Marks Quest's line in the root agent instructions, so a repository can
@@ -37,6 +39,15 @@ const SKILL_DIRS = [".claude/skills", ".agents/skills"] as const;
 
 /** Routes quest files through the `quest` merge driver; uninstall removes lines starting with it. */
 export const ATTRIBUTES_LINE = "quest/** merge=quest";
+
+/** Claude Code's shared project settings, where init installs the worktree lifecycle hooks. */
+const CLAUDE_SETTINGS = ".claude/settings.json";
+
+/** The one command each installed hook entry runs; the logic lives in the binary, so upgrades never rewrite it. */
+export const HOOK_COMMAND = "quest worktree hook";
+
+/** Events whose single hook decides the outcome, so another hook for them conflicts with Quest's. */
+const EXCLUSIVE_EVENTS = new Set(["WorktreeCreate", "WorktreeRemove"]);
 
 const QUEST_ROOT_README = "# Quests\n\n## Goal\n\nWhat this project is working toward.\n";
 
@@ -65,6 +76,8 @@ export function init(root: string): string[] {
 	const instructions = ["AGENTS.md", "CLAUDE.md"].find((name) => isFile(join(root, name))) ?? "AGENTS.md";
 	checkPath(root, instructions, "file");
 	checkPath(root, ".gitattributes", "file");
+	checkPath(root, CLAUDE_SETTINGS, "file");
+	const settings = installHooks(root);
 
 	const changes: string[] = [];
 	for (const { path, stub } of missing) {
@@ -79,6 +92,11 @@ export function init(root: string): string[] {
 		changes.push(readme);
 	}
 
+	if (settings !== undefined) {
+		mkdirSync(join(root, ".claude"), { recursive: true });
+		writeFileSync(join(root, CLAUDE_SETTINGS), settings);
+		changes.push(CLAUDE_SETTINGS);
+	}
 	if (appendLine(root, instructions, REFERENCE_MARKER, REFERENCE_LINE)) changes.push(instructions);
 	if (appendLine(root, ".gitattributes", ATTRIBUTES_LINE, ATTRIBUTES_LINE)) changes.push(".gitattributes");
 	register(root);
@@ -144,6 +162,7 @@ function checkPath(root: string, path: string, expected: "directory" | "file"): 
 /** Remove Quest stubs and markers under `root`. Returns the paths it changed, relative to `root`. */
 export function uninstall(root: string): string[] {
 	const changes: string[] = [];
+	if (uninstallHooks(root)) changes.push(CLAUDE_SETTINGS);
 	for (const skills of SKILL_DIRS) {
 		if (!isRealDir(join(root, skills))) continue;
 		for (const skill of SKILLS) {
@@ -279,5 +298,99 @@ function removeLine(root: string, path: string, marker: string): boolean {
 	} else {
 		writeFileSync(join(root, path), `${kept}${eol}`);
 	}
+	return true;
+}
+
+/** A settings object as Claude Code reads it: hook groups per event, each with handlers. */
+type Settings = { hooks?: Record<string, { hooks?: unknown[] }[]> } & Record<string, unknown>;
+
+const record = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+function isQuestHook(handler: unknown): boolean {
+	return record(handler) && handler.type === "command" && handler.command === HOOK_COMMAND;
+}
+
+/** The settings file parsed and checked for the shape init edits, with its formatting. */
+function readSettings(root: string): { settings: Settings; indent: string; eol: string } | undefined {
+	if (!isFile(join(root, CLAUDE_SETTINGS))) return undefined;
+	const text = read(root, CLAUDE_SETTINGS);
+	const invalid = (why: string) =>
+		new Error(`${CLAUDE_SETTINGS} ${why}; fix it before running \`quest init\` or \`quest uninstall\``);
+	let settings: unknown;
+	try {
+		settings = JSON.parse(text);
+	} catch {
+		throw invalid("is not valid JSON");
+	}
+	if (!record(settings)) throw invalid("is not a JSON object");
+	if (settings.hooks !== undefined) {
+		if (!record(settings.hooks)) throw invalid("has hooks that are not an object");
+		for (const [event, groups] of Object.entries(settings.hooks))
+			if (!Array.isArray(groups) || !groups.every((group) => record(group) && Array.isArray(group.hooks ?? [])))
+				throw invalid(`has ${event} hooks that are not a list of hook groups`);
+	}
+	return { settings: settings as Settings, indent: /\n([ \t]+)"/.exec(text)?.[1] ?? "  ", eol: newline(text) };
+}
+
+function writeSettings(settings: Settings, indent: string, eol: string): string {
+	return `${JSON.stringify(settings, null, indent).replaceAll("\n", eol)}${eol}`;
+}
+
+/**
+ * The settings file with one Quest hook group added for each event that lacks one, or undefined when
+ * nothing changes. Another hook for an event whose single hook decides the outcome is a conflict.
+ */
+function installHooks(root: string): string | undefined {
+	const { settings, indent, eol } = readSettings(root) ?? { settings: {}, indent: "  ", eol: "\n" };
+	const hooks = (settings.hooks ??= {});
+	let changed = false;
+	for (const event of HOOK_EVENTS) {
+		const groups = (hooks[event] ??= []);
+		const handlers = groups.flatMap((group) => group.hooks ?? []);
+		if (EXCLUSIVE_EVENTS.has(event) && handlers.some((handler) => !isQuestHook(handler)))
+			throw new Error(
+				`${CLAUDE_SETTINGS} already has a ${event} hook, and only one can manage Claude's worktrees; ` +
+					"remove it before running `quest init`",
+			);
+		if (handlers.some(isQuestHook)) continue;
+		groups.push({ hooks: [{ type: "command", command: HOOK_COMMAND }] });
+		changed = true;
+	}
+	return changed ? writeSettings(settings, indent, eol) : undefined;
+}
+
+/**
+ * Remove exactly Quest's hook handlers, then the groups, events, and hooks object they leave empty,
+ * deleting the file when nothing else remains. A file that is missing or malformed is left alone.
+ */
+function uninstallHooks(root: string): boolean {
+	let parsed;
+	try {
+		parsed = readSettings(root);
+	} catch {
+		return false;
+	}
+	if (!parsed?.settings.hooks) return false;
+	const { settings, indent, eol } = parsed;
+	const hooks = settings.hooks!;
+	let changed = false;
+	for (const event of HOOK_EVENTS) {
+		const groups = hooks[event];
+		if (!groups) continue;
+		const kept = groups.flatMap((group) => {
+			const handlers = group.hooks ?? [];
+			const others = handlers.filter((handler) => !isQuestHook(handler));
+			if (others.length === handlers.length) return [group];
+			changed = true;
+			return others.length ? [{ ...group, hooks: others }] : [];
+		});
+		if (kept.length) hooks[event] = kept;
+		else delete hooks[event];
+	}
+	if (!changed) return false;
+	if (Object.keys(hooks).length === 0) delete settings.hooks;
+	if (Object.keys(settings).length === 0) rmSync(join(root, CLAUDE_SETTINGS));
+	else writeFileSync(join(root, CLAUDE_SETTINGS), writeSettings(settings, indent, eol));
 	return true;
 }
