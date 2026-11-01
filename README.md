@@ -637,11 +637,16 @@ tested squash to the base as a fast-forward, leased on the expected parent. It
 closes the PR with a comment linking the landed commit and removes `quest:merge`.
 Such a fork PR is closed rather than shown as merged by GitHub. A PR branch lease
 failure ejects `head_moved`. A locally prepared or API squash tree mismatch logs
-CRITICAL and ejects the remaining batch as `tree_mismatch`.
+CRITICAL. A PR whose prepared tree differs ejects alone as `tree_mismatch`; an
+already-squashed one stays merged. Either way, the rest of the batch stays queued
+and is rebuilt and checked on the new base.
 
 After an API refusal, the daemon re-reads mergeability and briefly retries
-pending mergeability or a base refresh. A confirmed conflict parks only that PR for
-the fixer and a moved head ejects only that PR; the rest stays queued. A persistent policy refusal ejects as `merge_refused` without the
+pending mergeability or a base refresh. It also retries while GitHub still
+reports the pin as the head of a PR it just prepared, since GitHub can refuse the
+merge for that stale head; only another writer's head ejects `head_moved`.
+A confirmed conflict parks only that PR for the fixer and a moved head ejects
+only that PR; the rest stays queued. A persistent policy refusal ejects as `merge_refused` without the
 fixer. Already-merged PRs are skipped. An unexpected API squash parent means the
 base moved: the remainder is rebuilt without ejection.
 
