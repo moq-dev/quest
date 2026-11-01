@@ -704,16 +704,13 @@ branch before it is pushed for review: Codex when run from Claude Code, and
 Claude Code when run from Codex. `--harness` names the reviewer instead; an
 unknown harness, or a missing or logged-out CLI, is an error rather than a
 same-model review. The reviewer uses its CLI's own login, with a
-pinned model and effort: a default tier for routine work and, with `--deep`, a
-stronger one for a high-stakes change such as security, a wire format or public
-API, or a risk of data loss. `quest review --help` lists them; `--model` and
-`--effort` override either.
+pinned model and effort that `quest review --help` lists; `--model` and
+`--effort` override them.
 
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
-quest review --deep                           # the stronger model, for a high-stakes change
 ```
 
 The first round runs the reviewer's own review, `codex exec review --base` or

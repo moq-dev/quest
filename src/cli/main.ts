@@ -772,8 +772,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			);
 		});
 
-	const models = (tier: "default" | "deep") =>
-		HARNESSES.map((h) => `${MODELS[h][tier].model} at ${MODELS[h][tier].effort} effort for ${h}`).join(" and ");
+	const models = HARNESSES.map((h) => `${MODELS[h].model} at ${MODELS[h].effort} effort for ${h}`).join(" and ");
 	program
 		.command("review")
 		.summary("Have the other vendor's model review the committed branch, read-only")
@@ -781,8 +780,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Review the checkout's committed branch against its base with the other harness: Codex when run from " +
 				"Claude Code, Claude Code when run from Codex, detected from the variables each sets. --harness names " +
 				"the reviewer instead; there is no other fallback. The reviewer uses its CLI's own login, " +
-				`with ${models("default")}. --deep, for a high-stakes change, picks ${models("deep")}. ` +
-				"--model and --effort override either.\n\n" +
+				`with ${models}. --model and --effort override them.\n\n` +
 				"The first round runs the reviewer's own review (`codex exec review --base`, or Claude Code's " +
 				"`/code-review <effort> <base>...HEAD`), then resumes that session for one turn that applies the base's " +
 				"REVIEW.md, if any, and reports the findings in one JSON schema. Later rounds on the branch resume the " +
@@ -801,8 +799,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
 		.addOption(new Option("--harness <name>", "Reviewer to run instead of the other harness").choices(HARNESSES))
-		.option("--deep", "Review with the stronger model, for a high-stakes change")
-		.addOption(new Option("--model <model>", "Model the reviewer runs instead").conflicts("deep"))
+		.option("--model <model>", "Model the reviewer runs instead")
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
@@ -811,7 +808,6 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			(options: {
 				base?: string;
 				harness?: HarnessName;
-				deep?: boolean;
 				model?: string;
 				effort?: string;
 				responses?: string;
