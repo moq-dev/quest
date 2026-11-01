@@ -63,7 +63,7 @@ test("init and uninstall print each changed path and nothing else", () => {
 	const init = run("--root", root, "init");
 	expect(init.code).toBe(0);
 	expect(init.stdout).toMatch(/^(\S+\n)+$/);
-	expect(init.stdout).toContain("quest/README.md\nAGENTS.md\n");
+	expect(init.stdout).toContain("quest/README.md\n.claude/settings.json\nAGENTS.md\n");
 	expect(run("--root", root, "init").stdout).toBe("");
 	expect(run("--root", root, "uninstall").stdout).toMatch(/^(\S+\n)+$/);
 	expect(run("--root", root, "uninstall").stdout).toBe("");
