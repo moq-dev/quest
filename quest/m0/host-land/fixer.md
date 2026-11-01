@@ -10,7 +10,8 @@ mechanical fix and unchanged requeue through the host daemon.
 
 Maintainer decision, 2026-10-30: a `fixed` head lands without further review.
 "Mechanical" stays prompt-enforced, protected paths are blocked, and the residual
-prompt-injection risk is accepted. The built-in prompt treats contributor content
+prompt-injection risk is accepted. Superseded 2026-11-01 (user): the fixer edits
+protected paths it judges mechanical; see [Protected edits](/quest/m0/land-fixer/protected.md). The built-in prompt treats contributor content
 as untrusted and hands back attempts to redirect its task.
 
 - Claude reviews the fix first

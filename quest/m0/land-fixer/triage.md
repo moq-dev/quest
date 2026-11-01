@@ -1,12 +1,15 @@
-# [M] The fixer triages a failing batch before anything is ejected
+# [M] The fixer triages a failing batch instead of ejecting it
 
 ## Goal
 
 When a batch's check fails, the fixer reads the failure first and names the
-PR that caused it. `quest land` ejects only that PR and keeps the rest
-queued. When the fixer cannot tell, it checks the base tip alone. If the
-base is red, the queue halts and says so, ejecting nothing. If the base is
-green, every PR in the batch is ejected, as today. Bisection stays gone, as
+PR that caused it. `quest land` parks only that PR while the fixer repairs
+it, keeping its auto-merge, and keeps the rest queued; the PR leaves the
+queue only if the fixer hands it back. When the fixer cannot tell, it checks
+the base tip alone. If the base is red, the queue halts and says so,
+parking nothing. If the base is green, every PR in the batch is parked for
+the fixer, still without leaving the queue (2026-11-01, see the
+[epic](/quest/m0/land-fixer/README.md)). Bisection stays gone, as
 the [epic](/quest/m0/host-land/README.md) decided.
 
 ## Plan
@@ -25,8 +28,16 @@ wasting CI on bisection?"
   - Bring back bisection
 - The user's refinement: "The fixer reads the failure, tries to identify the
   PR that caused it, and only ejects that PR. If it can't figure it out, it
-  ejects all PRs".
-- Repairing the blamed PR does not change: one attempt, after it is ejected.
+  ejects all PRs". Superseded 2026-11-01 (user): nothing is ejected for a
+  conflict or a failure; the blamed PR, or every PR when blame is unclear,
+  is parked for the fixer and stays queued, as the Goal says.
+- Repairing the blamed PR uses the outcome rule in
+  [Attempt budget](/quest/m0/land-fixer/attempts.md): only a fix that fails
+  again, or a handback, spends the pick's attempt (2026-11-01).
+- A PR whose required checks have not finished stays queued and sits out
+  batches until they pass, instead of being ejected as `checks_pending`
+  (2026-11-01: [moq-dev/quest#354](https://github.com/moq-dev/quest/pull/354)
+  was ejected that way while its CI ran).
 - Blame is unclear, so check the base tip alone. A red base halts the queue
   with one visible notice instead of ejecting PRs that did nothing wrong
   ([moq-dev/moq#7196](https://github.com/moq-dev/moq/pull/7196),
@@ -56,7 +67,8 @@ wasting CI on bisection?"
   [#7306](https://github.com/moq-dev/moq/pull/7306),
   [#7284](https://github.com/moq-dev/moq/pull/7284) and
   [#7312](https://github.com/moq-dev/moq/pull/7312). Only the blamed PR's
-  attempt is spent.
+  attempt is spent. [Attempt budget](/quest/m0/land-fixer/attempts.md)
+  owns the counting rule for every outcome (2026-11-01).
 - Collect a finished fixer's result without waiting for the running batch
   (user, 2026-10-31). On 2026-10-31 moq's fixer finished at 14:55, having
   fixed [moq-dev/moq#7383](https://github.com/moq-dev/moq/pull/7383) and
