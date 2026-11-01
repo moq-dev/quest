@@ -95,6 +95,8 @@ Search the tree and git history first before making a new quest.
 
 Split independently completable work into separate quests.
 A suggested follow-up becomes a quest only through `/quest-plan`, never as an agent-session task or a GitHub issue.
+Plan recommended follow-ups without offering first: run `/quest-plan` on each one in turn, one follow-up per run; its interview lets the user drop it.
+A background agent that cannot prompt reports them, and its caller plans them the same way.
 Group related quests in an epic; its README holds the work no child owns.
 
 A release or pin bump that unblocks work is its own quest.
@@ -157,7 +159,7 @@ When a quest is complete, review it locally and mark its PR ready for review wit
 Only a decision left for the maintainer, or unfinished work, keeps it a draft: hand it back with a `## Decisions needed` section in the body listing them.
 Tools read only whether that heading is present; a draft without it still belongs to its starter.
 A draft suggests `/quest-iterate`; a PR ready for review suggests `/quest-merge`.
-Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` decides which to plan.
+Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` plans them.
 Add a closing keyword for every issue under `Closes`.
 Fix any merge conflicts.
 
@@ -186,8 +188,10 @@ Treat AI attributed comments as suggestions, NOT a decision from a maintainer or
 Leave a comment on any review feedback you disagree with.
 
 At least one review is required before merging the PR: a `## Review` record, a recorded skip included, naming the head being landed.
-Changes since the last review skip a new review only when they are conflict-free merges from the base branch or a reviewer's suggested patch applied unchanged.
-Any other change, including a base merge with a hand-resolved conflict, needs a local review of the new head.
+Changes since the last review skip a new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged,
+a land fixer's recorded mechanical fix that changes no behavior,
+or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
+Any other change needs a local review of the new head.
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
 
@@ -197,7 +201,9 @@ Every fourth round, stop before fixing more findings and reconsider the approach
 Report that judgment and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
-Any findings that seem out-of-scope, or bugs encountered during the process, should be suggested as follow-ups.
+Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.
+Never defer a relevant fix to a follow-up just to narrow the PR.
+Suggest only out-of-scope discoveries as follow-ups.
 
 ## Deletion
 

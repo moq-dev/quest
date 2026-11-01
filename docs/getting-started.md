@@ -59,7 +59,7 @@ job whose runner goes offline; check it for a live runner lock before starting.
 
 You review each change: `/quest-review` has the other vendor's model review a
 draft locally and marks it ready, and `/quest-merge` (`$quest-merge` in Codex)
-merges it once checks and reviews pass.
+queues it to land once a review covers its head and checks pass.
 The quest is complete, its plan leaves the tree, and the quests that required it
 can become ready.
 
