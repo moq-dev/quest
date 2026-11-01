@@ -48,18 +48,20 @@ export function which(name: string, env: NodeJS.ProcessEnv): string | undefined 
 	return undefined;
 }
 
-const CLIS: Record<AdapterName, { binary: string; variable: string; product: string }> = {
+/** The programs a runner runs: each agent CLI, and sandbox-runtime, which runs opencode's commands. */
+const BINARIES: Record<AdapterName | "srt", { binary: string; variable: string; product: string }> = {
 	claude: { binary: "claude", variable: "QUEST_RUNNER_CLAUDE", product: "Claude Code" },
 	opencode: { binary: "opencode", variable: "QUEST_RUNNER_OPENCODE", product: "opencode" },
+	srt: { binary: "srt", variable: "QUEST_RUNNER_SRT", product: "sandbox-runtime (@anthropic-ai/sandbox-runtime)" },
 };
 
 /**
- * An agent CLI's binary: its `QUEST_RUNNER_*` variable, or the CLI on PATH.
+ * A program's binary: its `QUEST_RUNNER_*` variable, or the program on PATH.
  * It is resolved before any devShell is entered, so a project cannot
- * substitute its own CLI for the one the account signed in with.
+ * substitute its own for the one the runner trusts.
  */
-export function cliBinary(name: AdapterName, env: NodeJS.ProcessEnv): string {
-	const { binary, variable, product } = CLIS[name];
+export function binaryPath(name: keyof typeof BINARIES, env: NodeJS.ProcessEnv): string {
+	const { binary, variable, product } = BINARIES[name];
 	const configured = env[variable];
 	if (configured) {
 		if (!isAbsolute(configured)) throw new RunnerInputError(`${variable} must be an absolute path`);
@@ -70,29 +72,27 @@ export function cliBinary(name: AdapterName, env: NodeJS.ProcessEnv): string {
 	return found;
 }
 
+/** opencode's adapter needs sandbox-runtime too, since that runs its jobs' commands. */
 export function adapterFor(name: AdapterName, env: NodeJS.ProcessEnv): Adapter {
-	const binary = cliBinary(name, env);
-	return name === "opencode" ? new Opencode(binary, env) : new Claude(binary, env);
+	const binary = binaryPath(name, env);
+	return name === "opencode" ? new Opencode(binary, binaryPath("srt", env), env) : new Claude(binary, env);
 }
 
 /**
  * The adapters a running runner launches jobs with, each resolved once, the
- * first time an account needs it. Claude Code sandboxes its jobs' commands,
- * which on Linux needs bubblewrap and socat, so they are checked then; macOS
- * has Seatbelt built in. opencode runs unsandboxed, so it needs neither.
+ * first time an account needs it. On Linux the sandbox needs bubblewrap and
+ * socat, so they are checked then; macOS has Seatbelt built in. Claude Code
+ * runs them itself, and sandbox-runtime for opencode.
  */
 export function runnerAdapters(env: NodeJS.ProcessEnv): (name: AdapterName) => Adapter {
 	const adapters = new Map<AdapterName, Adapter>();
 	return (name) => {
 		let adapter = adapters.get(name);
 		if (adapter) return adapter;
-		const missing =
-			name === "claude" && process.platform === "linux"
-				? ["bwrap", "socat"].filter((tool) => !which(tool, env))
-				: [];
+		const missing = process.platform === "linux" ? ["bwrap", "socat"].filter((tool) => !which(tool, env)) : [];
 		if (missing.length)
 			throw new RunnerInputError(
-				`${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not installed; Claude Code jobs run in an OS sandbox (install bubblewrap and socat, or use the flake's runner package)`,
+				`${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not installed; jobs run their commands in an OS sandbox (install bubblewrap and socat, or use the flake's runner package)`,
 			);
 		adapters.set(name, (adapter = adapterFor(name, env)));
 		return adapter;

@@ -25,7 +25,7 @@ import {
 	signalGroup,
 	STOP_GRACE_MS,
 } from "./adapter";
-import type { Sandbox } from "./sandbox";
+import { keptEnvironment, type Sandbox } from "./sandbox";
 import { WAIT_LIMIT } from "./wait";
 
 const run = promisify(execFile);
@@ -39,22 +39,14 @@ export function accountEnvironment(env: NodeJS.ProcessEnv, home: string): NodeJS
 }
 
 /**
- * The variables a job's agent keeps from the runner's environment. Its
- * commands inherit them, so anything else, such as a cloud credential, stays out.
- */
-const KEPT =
-	/^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_\w+|TZ|TERM|(HTTPS?|ALL|NO)_PROXY|(https?|all|no)_proxy|SSL_CERT_(FILE|DIR)|NIX_SSL_CERT_FILE|NODE_EXTRA_CA_CERTS|__CF_USER_TEXT_ENCODING)$/;
-
-/**
  * A job's environment: the account's home, the sandbox's temporary directory
  * and per-command script, and little else. Not CLAUDE_CODE_SUBPROCESS_ENV_SCRUB:
  * it covers files such as `.env` and `package.json` with mount points that stay
  * behind in the checkout as empty files, which kix would then publish.
  */
 export function jobEnvironment(env: NodeJS.ProcessEnv, home: string, sandbox: Sandbox): NodeJS.ProcessEnv {
-	const kept = Object.fromEntries(Object.entries(env).filter(([name]) => KEPT.test(name)));
 	return {
-		...kept,
+		...keptEnvironment(env),
 		CLAUDE_CONFIG_DIR: home,
 		TMPDIR: sandbox.tmp,
 		CLAUDE_ENV_FILE: sandbox.env,

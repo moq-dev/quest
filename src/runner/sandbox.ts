@@ -1,5 +1,6 @@
 // The OS sandbox every job's commands run in: bubblewrap on Linux, Seatbelt
-// on macOS, through the agent CLI's own sandbox. Commands write only to the
+// on macOS, through Claude Code's own sandbox or, for opencode, the same
+// sandbox-runtime run as its shell. Commands write only to the
 // job's checkout and a private temporary directory, read no account home,
 // runner state, or shared temporary files, and have no Nix daemon. A trusted
 // revision's commands reach only the package registries; an untrusted one's
@@ -81,10 +82,43 @@ export function openSandbox(options: {
 	return { cwd: options.cwd, repository: options.repository, tmp, env, deny, domains };
 }
 
+/**
+ * The variables a job's commands keep from the runner's environment, so
+ * anything else, such as a cloud credential, stays out of their reach.
+ */
+const KEPT =
+	/^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_\w+|TZ|TERM|(HTTPS?|ALL|NO)_PROXY|(https?|all|no)_proxy|SSL_CERT_(FILE|DIR)|NIX_SSL_CERT_FILE|NODE_EXTRA_CA_CERTS|__CF_USER_TEXT_ENCODING)$/;
+
+/** The runner's variables a job's commands may see. */
+export function keptEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(env).filter((entry): entry is [string, string] => KEPT.test(entry[0]) && entry[1] !== undefined),
+	);
+}
+
+/**
+ * sandbox-runtime (`srt`) settings that confine commands as Claude Code's
+ * sandbox settings do, which name the checkout's writes implicitly, and keep
+ * them from writing `denyWrite`, even where it does not exist yet.
+ */
+export function runtimeSettings(sandbox: Sandbox, denyWrite: string[] = []): Record<string, unknown> {
+	return {
+		network: { allowedDomains: sandbox.domains, deniedDomains: [], strictAllowlist: true },
+		filesystem: {
+			denyRead: sandbox.deny,
+			allowRead: [sandbox.cwd, sandbox.repository, sandbox.tmp],
+			allowWrite: [sandbox.cwd, sandbox.tmp],
+			denyWrite,
+		},
+		enableWeakerNestedSandbox: false,
+	};
+}
+
 export function closeSandbox(sandbox: Sandbox): void {
 	rmSync(sandbox.tmp, { recursive: true, force: true });
 }
 
-function quote(value: string): string {
+/** `value` as one word in a POSIX shell. */
+export function quote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }

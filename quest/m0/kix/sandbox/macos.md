@@ -22,7 +22,3 @@ approval: the approval step is gone from kix, the inbox, and the runner.
   account too, through its srt command wrapper, and lift the gate only once
   both agents hold.
 - If the boundary does not hold, record what leaks here and keep the gate.
-
-## Required
-
-- [opencode sandboxing](/quest/m0/kix/sandbox/opencode.md) - opencode jobs' commands run in the same sandbox as Claude Code's

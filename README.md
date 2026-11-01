@@ -820,23 +820,29 @@ jobs use your accounts in.
 
 Every job runs in its own checkout with the project's devShell, which the runner
 builds with `nix print-dev-env` from the job's revision, honoring the flake's
-`nixConfig`; a project without a flake gets a bootstrap job instead. On Claude
-Code accounts, Claude Code's sandbox (bubblewrap on Linux, Seatbelt on macOS)
-confines every command the agent runs, the devShell's shellHook included:
-commands write only to the checkout and a private temporary directory that is
+`nixConfig`; a project without a flake gets a bootstrap job instead. An OS
+sandbox (bubblewrap on Linux, Seatbelt on macOS) confines every command the
+agent runs, the devShell's shellHook included: Claude Code's own sandbox on
+Claude Code accounts, and on opencode accounts the same policy through
+[sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime),
+which the runner sets as opencode's shell. Commands
+write only to the checkout and a private temporary directory that is
 also their `HOME`, cannot read account homes, the runner's state, or shared
 temporary directories, and have no Nix daemon. A trusted revision's commands
 reach only the npm, crates.io, and PyPI package registries, so its checks can
 install dependencies; an untrusted one's reach no network host. npm's registry
 also accepts publishes, so a prompt-injected agent holding someone's npm token
-could publish the checkout there. The agent's file tools edit only the checkout,
-WebFetch is off, and the checkout's own `.claude` settings, hooks, and MCP
-servers are never loaded. Claude Code itself runs outside the sandbox with a
-minimal environment, so its login stays out of the commands' reach. This is an
-OS sandbox, not a VM, and it narrows rather than removes the risk of running
-agent commands on your machine. opencode has no sandbox yet: on opencode
-accounts the agent's commands run unconfined on your machine, in the devShell
-with a private `HOME`.
+could publish the checkout there. The agent's file tools stay in the checkout
+(opencode's may also use the private temporary directory, and its read tool
+the output it saved), WebFetch is off, and nothing the checkout configures is
+loaded: not its `.claude` settings, hooks, and MCP servers, nor its
+`opencode.json` and `.opencode` plugins, tools, and MCP servers, and opencode's
+language servers and formatters are off. The CLI itself, Claude Code or
+`opencode serve`, runs outside the sandbox and outside the devShell, and its
+commands start from a minimal environment, so its login, the opencode server's
+password, and the kix tools' token stay out of their reach. This is an OS
+sandbox, not a VM, and it narrows rather than removes the risk of running
+agent commands on your machine.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
 pins both) and unprivileged user namespaces; on Ubuntu 23.10 and later,
@@ -874,10 +880,10 @@ only once you approve it in the inbox. opencode runs as `opencode serve` on
 localhost behind a password made for each turn.
 
 The flake's `runner` package pins Claude Code 2.1.305 from its official release
-manifest; opencode (and on Linux, bubblewrap and socat) follow this repository's lock
-(`nix run github:moq-dev/quest#runner -- runner`);
-otherwise `claude` and `opencode` come from `QUEST_RUNNER_CLAUDE` and
-`QUEST_RUNNER_OPENCODE`, or `PATH`. State lives in `$QUEST_RUNNER_HOME`, by default
+manifest; opencode, sandbox-runtime (and on Linux, bubblewrap and socat) follow
+this repository's lock (`nix run github:moq-dev/quest#runner -- runner`);
+otherwise `claude`, `opencode`, and `srt` come from `QUEST_RUNNER_CLAUDE`,
+`QUEST_RUNNER_OPENCODE`, and `QUEST_RUNNER_SRT`, or `PATH`. State lives in `$QUEST_RUNNER_HOME`, by default
 `$XDG_DATA_HOME/quest/runner`; one `quest runner` runs in a home at a time. To keep a runner up, run `quest runner` as a user
 service, such as a systemd user unit with `Restart=on-failure`.
 

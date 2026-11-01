@@ -1,7 +1,18 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 
 import type { AdapterName } from "../src/runner/adapter";
@@ -15,6 +26,8 @@ import {
 	credentials,
 	environment,
 	Opencode,
+	PLUGIN,
+	projectConfig,
 	retryLimit,
 	signedIn,
 	turnExit,
@@ -802,6 +815,81 @@ describe("opencode", () => {
 		expect(kept).toEqual({ PATH: "/bin" });
 	});
 
+	posix("keeps the file tools inside the checkout and the attempt's directory, through symlinks too", async () => {
+		const root = realpathSync(tempDir());
+		const [checkout, tmp, output, outside] = ["checkout", "tmp", "tool-output", "outside"].map((name) => {
+			mkdirSync(join(root, name));
+			return join(root, name);
+		});
+		writeFileSync(join(outside, "auth.json"), "{}");
+		writeFileSync(join(checkout, "a.txt"), "a");
+		symlinkSync(join(outside, "auth.json"), join(checkout, "auth.json"));
+		symlinkSync(outside, join(checkout, "out"));
+		symlinkSync(join(outside, "missing"), join(checkout, "dangling"));
+		const file = join(root, "plugin.mjs");
+		writeFileSync(file, PLUGIN);
+		const { default: plugin } = await import(pathToFileURL(file).href);
+		const config = ["opencode.json", ".opencode"].map((name) => join(checkout, name));
+		const hooks = await plugin.server({}, { cwd: checkout, writes: [checkout, tmp], reads: [output], config });
+		const call = (tool: string, args: Record<string, unknown>) =>
+			hooks["tool.execute.before"]({ tool, sessionID: "s", callID: "c" }, { args });
+		const patch = (...headers: string[]) => ({
+			patchText: ["*** Begin Patch", ...headers, "+x", "*** End Patch"].join("\n"),
+		});
+
+		await call("read", { filePath: "a.txt" });
+		await call("write", { filePath: "new/dir/b.txt" });
+		await call("edit", { filePath: join(tmp, "notes.md") });
+		await call("glob", { pattern: "**/*.ts" });
+		await call("grep", { pattern: "x", path: "." });
+		await call("apply_patch", patch("*** Update File: a.txt", "*** Move to: c.txt"));
+		// opencode's saved output is readable, not writable.
+		await call("read", { filePath: join(output, "tool_1") });
+		await expect(call("write", { filePath: join(output, "tool_1") })).rejects.toThrow(/outside the checkout/);
+		// Commands are the sandbox's to confine.
+		await call("bash", { command: "cat /etc/passwd" });
+
+		for (const [tool, args] of [
+			["read", { filePath: "auth.json" }],
+			["read", { filePath: "out/auth.json" }],
+			["write", { filePath: "out/new.txt" }],
+			["write", { filePath: "../outside/new.txt" }],
+			["grep", { pattern: "x", path: outside }],
+			["glob", { pattern: "*", path: "out" }],
+			["apply_patch", patch("*** Add File: out/x")],
+			["apply_patch", patch("*** Update File: a.txt", "*** Move to: /etc/x")],
+		] as const)
+			await expect(call(tool, args), `${tool} ${JSON.stringify(args)}`).rejects.toThrow(/outside the checkout/);
+		// A write would follow a symlink to nothing out of the checkout.
+		await expect(call("write", { filePath: "dangling" })).rejects.toThrow(/symlink to nothing/);
+		// opencode would load its own config from the checkout, outside the sandbox.
+		await call("read", { filePath: "opencode.json" });
+		for (const [tool, args] of [
+			["write", { filePath: "opencode.json" }],
+			["edit", { filePath: ".opencode/plugin/x.js" }],
+			["apply_patch", patch("*** Add File: .opencode/opencode.json")],
+		] as const)
+			await expect(call(tool, args)).rejects.toThrow(/opencode's own config/);
+	});
+
+	posix("refuses a checkout holding opencode's own config, which opencode would load unconfined", () => {
+		const checkout = tempDir();
+		expect(projectConfig(checkout)).toEqual([]);
+		// sandbox-runtime leaves empty files behind as mount points, which opencode ignores.
+		writeFileSync(join(checkout, "opencode.json"), "");
+		writeFileSync(join(checkout, ".opencode"), "");
+		expect(projectConfig(checkout)).toEqual([]);
+		writeFileSync(join(checkout, "opencode.json"), "{}");
+		rmSync(join(checkout, ".opencode"));
+		mkdirSync(join(checkout, ".opencode"));
+		symlinkSync("opencode.json", join(checkout, "opencode.jsonc"));
+		expect(projectConfig(checkout)).toEqual([".opencode", "opencode.json", "opencode.jsonc"]);
+		const launch = { cwd: checkout } as Parameters<Opencode["launch"]>[0];
+		expect(() => new Opencode("/opencode", "/srt").launch(launch)).toThrow(
+			/holds \.opencode and opencode\.json and opencode\.jsonc, which opencode would load outside the sandbox/,
+		);
+	});
+
 	test("reads account limits from retries and errors, not brief rate limits", () => {
 		const retry = { type: "retry" as const, attempt: 1, next: 1_900_000_000_000 };
 		expect(
@@ -998,7 +1086,12 @@ describe("account add", () => {
 		const io = {
 			stdout: (text: string) => out.push(text),
 			stderr: () => {},
-			env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, QUEST_RUNNER_HOME: join(dir, "home") },
+			env: {
+				...process.env,
+				PATH: `${bin}:${process.env.PATH}`,
+				QUEST_RUNNER_HOME: join(dir, "home"),
+				QUEST_RUNNER_SRT: join(bin, "srt"),
+			},
 		};
 		await expect(addAccount(io, { cli: "opencode", console: true })).rejects.toThrow(RunnerInputError);
 		await expect(addAccount(io, { cli: "opencode", console: false, model: "gpt" })).rejects.toThrow(
@@ -1023,27 +1116,26 @@ describe("account add", () => {
 });
 
 describe("runner adapters", () => {
-	test.skipIf(process.platform !== "linux")(
-		"need bubblewrap and socat on Linux only once a Claude Code account needs them",
-		() => {
-			const bin = join(tempDir(), "bin");
-			mkdirSync(bin);
-			const install = (...names: string[]) => {
-				for (const name of names) {
-					writeFileSync(join(bin, name), "#!/bin/sh\n");
-					chmodSync(join(bin, name), 0o755);
-				}
-			};
-			install("claude", "opencode");
-			const adapter = runnerAdapters({ PATH: bin });
-			// An opencode-only runner starts without them.
-			expect(adapter("opencode")).toBeInstanceOf(Opencode);
-			expect(() => adapter("claude")).toThrow(/bwrap and socat are not installed/);
-			// A Claude Code account added while the runner runs is checked then.
-			install("bwrap", "socat");
-			expect(adapter("claude")).toBeInstanceOf(Claude);
-		},
-	);
+	test.skipIf(process.platform !== "linux")("need the sandbox's programs only once an account needs them", () => {
+		const bin = join(tempDir(), "bin");
+		mkdirSync(bin);
+		const install = (...names: string[]) => {
+			for (const name of names) {
+				writeFileSync(join(bin, name), "#!/bin/sh\n");
+				chmodSync(join(bin, name), 0o755);
+			}
+		};
+		install("claude", "opencode");
+		const adapter = runnerAdapters({ PATH: bin });
+		expect(() => adapter("claude")).toThrow(/bwrap and socat are not installed/);
+		// An account added while the runner runs is checked then.
+		install("bwrap", "socat");
+		expect(adapter("claude")).toBeInstanceOf(Claude);
+		// opencode's commands run through sandbox-runtime.
+		expect(() => adapter("opencode")).toThrow(/srt is not installed/);
+		install("srt");
+		expect(adapter("opencode")).toBeInstanceOf(Opencode);
+	});
 });
 
 describe("login", () => {
@@ -1226,12 +1318,16 @@ async function prompt(session, input) {
 	const resume = fs.existsSync(logFile) && fs.readFileSync(logFile, "utf8").includes('"prompted":"' + session + '"');
 	log({
 		argv, cwd: process.cwd(), stdin: input.parts[0].text, system: input.system, session, prompted: session,
-		xdg: process.env.XDG_DATA_HOME, devShell: process.env.IN_DEVSHELL ?? null, gh: process.env.GH_TOKEN ?? null, config,
+		xdg: process.env.XDG_DATA_HOME, home: process.env.HOME, devShell: process.env.IN_DEVSHELL ?? null,
+		gh: process.env.GH_TOKEN ?? null, projectConfig: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null, config,
 	});
 	await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake", version: "0" } });
 	for (const step of steps[resume ? "resume" : "start"] ?? []) {
 		if (step.write) fs.writeFileSync(step.write, step.content);
 		if (step.remove) fs.rmSync(step.remove);
+		// opencode runs a command as its shell's -c, with the server's own environment.
+		if (step.shell)
+			log({ shell: require("node:child_process").execFileSync(config.shell, ["-c", step.shell], { encoding: "utf8" }) });
 		if (step.emit) send({ ...step.emit, properties: { ...step.emit.properties, sessionID: session } });
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
@@ -1261,6 +1357,16 @@ const server = http.createServer(async (request, response) => {
 });
 process.on("SIGTERM", () => process.exit(143));
 server.listen(0, "127.0.0.1", () => console.log("opencode server listening on http://127.0.0.1:" + server.address().port));
+`;
+
+/** A fake sandbox-runtime that records its settings and environment, then runs the command unconfined. */
+const FAKE_SRT = `
+const fs = require("node:fs");
+const { join } = require("node:path");
+const argv = process.argv.slice(2);
+const settings = JSON.parse(fs.readFileSync(argv[argv.indexOf("--settings") + 1], "utf8"));
+fs.appendFileSync(join(__dirname, "..", "calls.log"), JSON.stringify({ srt: argv, settings, env: Object.keys(process.env) }) + "\\n");
+process.exit(require("node:child_process").spawnSync("/bin/sh", ["-c", argv[argv.indexOf("-c") + 1]], { stdio: "inherit" }).status);
 `;
 
 /** A fake `nix` whose `print-dev-env` prints a one-line devShell, or builds until killed when the steps say `nix`. */
@@ -1306,7 +1412,12 @@ function rig(
 	const dir = tempDir();
 	const bin = join(dir, "bin");
 	mkdirSync(bin);
-	for (const [name, body] of Object.entries({ claude: FAKE_CLAUDE, opencode: FAKE_OPENCODE, nix: FAKE_NIX })) {
+	for (const [name, body] of Object.entries({
+		claude: FAKE_CLAUDE,
+		opencode: FAKE_OPENCODE,
+		nix: FAKE_NIX,
+		srt: FAKE_SRT,
+	})) {
 		writeFileSync(join(bin, name), `#!${process.execPath}\n${body}`);
 		chmodSync(join(bin, name), 0o755);
 	}
@@ -1344,7 +1455,9 @@ function rig(
 		login: { url: "http://kix.test", token: "token", id: "r1", name: "laptop" },
 		slots: 2,
 		adapter: () =>
-			cli === "claude" ? new Claude(join(bin, "claude"), env) : new Opencode(join(bin, "opencode"), env),
+			cli === "claude"
+				? new Claude(join(bin, "claude"), env)
+				: new Opencode(join(bin, "opencode"), join(bin, "srt"), env),
 		devShell: (job, repository, signal) => devShell(job, repository, env, signal),
 		remote: () => source.dir,
 		env,
@@ -1688,6 +1801,9 @@ describe("quest runner", () => {
 		r.steps({
 			start: [
 				{ write: "a.txt", content: "draft\n" },
+				{
+					shell: 'printf "%s|%s|%s|%s|%s" "$IN_DEVSHELL" "$HOME" "${OPENCODE_SERVER_PASSWORD:-none}" "${QUEST_COMMAND:-none}" "$TMPDIR"',
+				},
 				{ tool: "checkpoint", args: { summary: "Drafted" } },
 				{
 					tool: "ask",
@@ -1700,23 +1816,63 @@ describe("quest runner", () => {
 		const question = await r.hub.next((m) => m.type === "question");
 		await idle(r.runner);
 		expect(r.hub.of("checkpoint")).toMatchObject([{ summary: "Drafted", session: question.session }]);
-		const [nix, first] = r.calls();
+		const [nix, first, srt, shell] = r.calls();
 		expect(nix.nix.slice(0, 3)).toEqual(["print-dev-env", "--accept-flake-config", "--no-write-lock-file"]);
 		const home = r.home.accountHome("acct1");
-		// The account's XDG home applies to opencode alone, set inside the devShell built from the revision.
+		// The server runs outside the devShell, in the account's own homes, and loads nothing from the checkout.
 		expect(first.argv).toEqual(["serve", "--hostname=127.0.0.1", "--port=0"]);
-		expect(first.devShell).toBe("1");
+		expect(first.devShell).toBeNull();
 		expect(first.xdg).toBe(join(home, "data"));
+		expect(first.home).toBe(home);
+		expect(first.projectConfig).toBe("1");
 		expect(first.gh).toBeNull();
+		// Its commands run through sandbox-runtime with the policy Claude Code's sandbox gets.
+		const checkout = r.home.path("jobs", "job1");
+		const repository = srt.settings.filesystem.allowRead[1];
+		const [tmp] = srt.settings.filesystem.allowWrite.slice(1);
+		expect(srt.srt[0]).toBe("--settings");
+		expect(srt.settings).toEqual({
+			network: { allowedDomains: REGISTRIES, deniedDomains: [], strictAllowlist: true },
+			filesystem: {
+				denyRead: expect.arrayContaining([r.home.dir, "/tmp"]),
+				allowRead: [checkout, repository, tmp],
+				allowWrite: [checkout, tmp],
+				// Nor can they write the opencode config the server would load.
+				denyWrite: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
+			},
+			enableWeakerNestedSandbox: false,
+		});
+		// None of the server's secrets reach them: the devShell and the private HOME are sourced inside.
+		expect(srt.env).not.toContain("OPENCODE_SERVER_PASSWORD");
+		expect(srt.env).not.toContain("OPENCODE_CONFIG_CONTENT");
+		expect(srt.env).not.toContain("AWS_SECRET_ACCESS_KEY");
+		expect(srt.env).not.toContain("XDG_DATA_HOME");
+		expect(shell.shell).toBe(`1|${tmp}/home|none|none|${tmp}`);
 		expect(first.stdin).toContain("kix adds for this job: Extra rule.");
 		expect(first.system).toContain("checkpoint");
 		expect(first.config).toMatchObject({
 			model: "openai/gpt-5.5",
 			enabled_providers: ["openai"],
-			permission: { "*": "allow", question: "deny" },
+			shell: join(home, `kix-${question.session}`, "sandboxed-bash"),
+			// The file tools stay in the checkout and the attempt's directory, and WebFetch is off.
+			permission: {
+				"*": "allow",
+				question: "deny",
+				webfetch: "deny",
+				external_directory: { "*": "deny", [`${tmp}/*`]: "allow" },
+			},
+			lsp: false,
+			formatter: false,
 			mcp: { kix: { type: "remote", headers: { Authorization: expect.stringMatching(/^Bearer /) } } },
 		});
-		expect(first.config.plugin[0][1].env.XDG_DATA_HOME).not.toContain(home);
+		expect(first.config.plugin[0][1]).toEqual({
+			cwd: checkout,
+			writes: [checkout, tmp],
+			reads: [join(home, "data", "opencode", "tool-output")],
+			config: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
+		});
+		// The launch's shell, plugin, and settings are gone once it ends.
+		expect(existsSync(dirname(first.config.shell))).toBe(false);
 		// Events stream as raw output.
 		expect(
 			r.hub
