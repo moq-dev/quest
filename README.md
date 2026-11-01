@@ -510,8 +510,12 @@ The wrapper starts an ephemeral container and runs `quest land fix <log> <prs...
 there, exposing that repository read/write and the log read-only at the given paths.
 It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses
 endpoint, including `/v1`) and `OPENAI_API_KEY` (the gate's proxy client key).
-The daemon never supplies these or any Git/GitHub credential; the wrapper must
-restrict network access to the model proxy. Codex login stays on CLIProxyAPI.
+The daemon never supplies these or any Git/GitHub credential, and the wrapper
+must keep every other credential out of the container. Its network must reach the
+model proxy and, so the fixer can build and test its fix, the package registries
+and `github.com`/`codeload.github.com` that the repository's dependencies come from.
+The prompt allows only those dependency fetches: no GitHub API, no push, no other
+host. Codex login stays on CLIProxyAPI.
 The wrapper waits for the payload, returns its exit status, and tears down its
 container on exit or SIGTERM. On timeout the daemon sends SIGTERM, allows at
 least 10 seconds for container cleanup, then sends SIGKILL on a later collection. The payload defaults
@@ -699,16 +703,13 @@ branch before it is pushed for review: Codex when run from Claude Code, and
 Claude Code when run from Codex. `--harness` names the reviewer instead; an
 unknown harness, or a missing or logged-out CLI, is an error rather than a
 same-model review. The reviewer uses its CLI's own login, with a
-pinned model and effort: a default tier for routine work and, with `--deep`, a
-stronger one for a high-stakes change such as security, a wire format or public
-API, or a risk of data loss. `quest review --help` lists them; `--model` and
-`--effort` override either.
+pinned model and effort that `quest review --help` lists; `--model` and
+`--effort` override them.
 
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
-quest review --deep                           # the stronger model, for a high-stakes change
 ```
 
 The first round runs the reviewer's own review, `codex exec review --base` or
