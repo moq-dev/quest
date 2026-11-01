@@ -16,7 +16,6 @@ Commit everything, then run the repository's local checks, unless the guide's Re
 
 Review the committed branch with `quest review`, as the guide's Reviews section describes; `quest review --help` explains the round.
 Run it in the foreground; a round takes minutes.
-Pass `--deep` for a high-stakes change, such as security, a wire format or public API, or a risk of data loss; never for routine work.
 Fix each finding you agree with, or refute it with evidence the reviewer can check.
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted with evidence.
