@@ -37,6 +37,12 @@ export type Pull = Issue & {
 	body?: string;
 	/** Closed by merging it; set with `closed`. */
 	merged?: boolean;
+	/** Optional squash result supplied by fixtures that model real git merges. */
+	squash?: string;
+	/** REST mergeability can lag the base; fixtures can also model policy refusals. */
+	mergeable?: boolean | null;
+	mergeableState?: string;
+	mergeRefusals?: { status: 405 | 409; message: string }[];
 	/** The commit it ended at, when its branch has moved on since it closed; defaults to the branch's tip. */
 	head?: string;
 	/** GitHub's mergeStateStatus; only CLEAN merges. Defaults to BLOCKED, or DRAFT for a draft. */
@@ -397,7 +403,9 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>, 
 		return { data: { repository: { pullRequest: pull ? holdsTarget(repo, pull) : null } } };
 	}
 	if (query.includes("object(oid: $oid)")) {
-		const pull = repo.pulls.find((p) => headOf(repo, p) === variables.oid);
+		const pull = repo.pulls.find(
+			(p) => headOf(repo, p) === variables.oid || p.autoMerge?.commitBody === `Quest-Land-Head: ${variables.oid}`,
+		);
 		return {
 			data: {
 				repository: {
@@ -556,6 +564,9 @@ export function fakeGitHub(world: World) {
 		node_id: nodeId(repo, pull),
 		html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${pull.number}`,
 		state: pull.closed ? "closed" : "open",
+		merged: pull.merged ?? false,
+		mergeable: pull.mergeable !== undefined ? pull.mergeable : pull.merge !== "DIRTY",
+		mergeable_state: pull.mergeableState ?? (pull.merge === "DIRTY" ? "dirty" : "clean"),
 		title: pull.title,
 		body: pull.body ?? "",
 		draft: !!pull.draft,
@@ -652,6 +663,8 @@ export function fakeGitHub(world: World) {
 		}
 		if (path === "/graphql") {
 			const { query, variables } = body as { query: string; variables: Record<string, any> };
+			if (query.includes("viewer { login }"))
+				return json({ data: { viewer: { login: `${world.app.slug}[bot]` } } });
 			if (query.includes("markPullRequestReadyForReview")) {
 				for (const repo of world.repos)
 					for (const pull of repo.pulls)
@@ -762,6 +775,7 @@ export function fakeGitHub(world: World) {
 				disabled: false,
 				license: { spdx_id: "MIT" },
 				allow_squash_merge: true,
+				allow_auto_merge: true,
 			});
 		const permission = tail.match(/^\/collaborators\/([^/]+)\/permission$/);
 		if (permission) {
@@ -813,6 +827,7 @@ export function fakeGitHub(world: World) {
 				return repo.branches[name] ?? (pull ? headOf(repo, pull) : null);
 			},
 			set: (name: string, sha: string) => (repo.branches[name] = sha),
+			delete: (name: string) => delete repo.branches[name],
 		};
 		const git = gitData(repo, branches, tail, method, body, writes);
 		if (git) return git;
@@ -828,6 +843,17 @@ export function fakeGitHub(world: World) {
 			});
 			// Newest first, as GitHub lists them.
 			return json(found.reverse().map((pull) => restPull(repo, pull)));
+		}
+		if (tail === "/issues" && method === "POST") {
+			if (!writes("issues")) return forbidden();
+			const issue: Issue = {
+				number: Math.max(0, ...repo.issues.map((i) => i.number), ...repo.pulls.map((p) => p.number)) + 1,
+				title: String(body.title),
+				author: `${world.app.slug}[bot]`,
+				body: typeof body.body === "string" ? body.body : undefined,
+			};
+			repo.issues.push(issue);
+			return json({ number: issue.number, title: issue.title, state: "open" }, 201);
 		}
 		if (tail === "/pulls" && method === "POST") {
 			if (!writes("pull_requests")) return forbidden();
@@ -859,28 +885,53 @@ export function fakeGitHub(world: World) {
 			const list: Issue[] = item[1] === "pulls" ? repo.pulls : repo.issues;
 			const found = list.find((i) => String(i.number) === item[2]);
 			if (!found) return notFound();
-			if (item[1] === "issues")
+			if (item[1] === "issues") {
+				if (method === "PATCH") {
+					if (!writes("issues")) return forbidden();
+					if (body.state === "closed") found.closed = true;
+				}
 				return json({ number: found.number, title: found.title, state: found.closed ? "closed" : "open" });
+			}
 			const pull = found as Pull;
 			if (method === "PATCH") {
 				if (!writes("pull_requests")) return forbidden();
 				if (typeof body.title === "string") pull.title = body.title;
 				if (typeof body.body === "string") pull.body = body.body;
+				if (body.state === "closed") {
+					pull.closed = true;
+					pull.landing = false;
+					pull.autoMerge = undefined;
+				}
 			}
 			return json(restPull(repo, pull));
 		}
 		const merge = tail.match(/^\/pulls\/(\d+)\/merge$/);
 		if (merge && method === "PUT") {
 			if (!writes("contents")) return forbidden();
-			const pull = repo.pulls.find((p) => String(p.number) === merge[1] && !p.closed);
+			const pull = repo.pulls.find((p) => String(p.number) === merge[1]);
 			if (!pull) return notFound();
+			if (pull.closed) return json({ message: "Pull Request is not open" }, 405);
+			const refused = pull.mergeRefusals?.shift();
+			if (refused) return json({ message: refused.message }, refused.status);
 			if (body.sha !== headOf(repo, pull)) return json({ message: "Head branch was modified" }, 409);
 			if (pull.merge !== "CLEAN") return json({ message: "Pull Request is not mergeable" }, 405);
 			pull.closed = true;
 			pull.merged = true;
-			return json({ sha: commitOf(repo), merged: true, message: "Pull Request successfully merged" });
+			pull.landing = false;
+			pull.autoMerge = undefined;
+			if (pull.squash) repo.branches[pull.base ?? repo.defaultBranch ?? "main"] = pull.squash;
+			return json({
+				sha: pull.squash ?? commitOf(repo),
+				merged: true,
+				message: "Pull Request successfully merged",
+			});
 		}
 		const comment = tail.match(/^\/issues\/(\d+)\/comments$/);
+		if (comment && method === "GET") {
+			const item = [...repo.pulls, ...repo.issues].find((i) => String(i.number) === comment[1]);
+			if (!item) return notFound();
+			return json((item.comments ?? []).map((c) => ({ body: c.body, user: { login: c.author } })));
+		}
 		if (comment && method === "POST") {
 			if (!writes("issues") && !writes("pull_requests")) return forbidden();
 			const item = [...repo.pulls, ...repo.issues].find((i) => String(i.number) === comment[1]);
@@ -968,6 +1019,7 @@ export function fakeGitHub(world: World) {
 		const branches = {
 			get: (name: string) => upstream.fork[name] ?? null,
 			set: (name: string, sha: string) => (upstream.fork[name] = sha),
+			delete: (name: string) => delete upstream.fork[name],
 		};
 		return gitData(upstream, branches, tail, method, body, writes);
 	}
@@ -979,7 +1031,11 @@ export function fakeGitHub(world: World) {
 	 */
 	function gitData(
 		network: Repo,
-		branches: { get(name: string): string | null; set(name: string, sha: string): void },
+		branches: {
+			get(name: string): string | null;
+			set(name: string, sha: string): void;
+			delete(name: string): void;
+		},
 		tail: string,
 		method: string,
 		body: Record<string, any>,
@@ -1009,6 +1065,11 @@ export function fakeGitHub(world: World) {
 			if (!body.force && !ancestor(body.sha)) return invalid("Update is not a fast forward");
 			branches.set(branch, body.sha);
 			return json({ ref: `refs/heads/${branch}`, object: { type: "commit", sha: body.sha } });
+		}
+		if (branch && method === "DELETE") {
+			if (!branches.get(branch)) return invalid("Reference does not exist");
+			branches.delete(branch);
+			return new Response(null, { status: 204 });
 		}
 		if (tail === "/git/refs" && method === "POST") {
 			const name = typeof body.ref === "string" && body.ref.startsWith("refs/heads/") && body.ref.slice(11);

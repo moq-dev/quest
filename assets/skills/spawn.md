@@ -33,19 +33,11 @@ When done, each agent's claim PR holds its work, still a draft if decisions or u
 Its report lists every open decision with a recommendation.
 Report each sub-agent's final status, staying silent on interim notifications, but do not monitor their PRs.
 
-As each agent reports, explain its result in a few lines, then ask about its PR in the same way, offering:
+As each agent reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
+Stop at the PRs, beyond the `/quest-review` each started agent runs itself: never offer or run `/quest-review`, `/quest-iterate`, or `/quest-merge` on them. Deciding them is `/quest-complete`'s job, run as its own session.
 
-- `/quest-review`: If the PR is a draft ready for review.
-- `/quest-merge`: If the PR is ready for review with no significant issues.
-- `/quest-iterate`: If the PR has significant issues or needs decisions.
-- skip: If the PR should not be merged yet.
-- `/quest-delete`: If the quest should be deleted.
-
-Once every sub-agent has finished, run `/quest-plan` without asking first on the suggested follow-ups that merged PRs' `/quest-merge` sub-agents reported.
+Once every sub-agent has finished, plan the follow-ups the agents suggested, as the guide describes, in the foreground.
 Include quest context, as many quests are concurrently in flight.
-
-Run each selected `/quest-review`, `/quest-merge`, or `/quest-iterate` in a background sub-agent with its own isolated worktree, as for `/quest-start`.
-Run selected `/quest-plan` sessions in the foreground.
 
 Once every sub-agent has finished, remove local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
 Leave the worktree you are running in and any holding uncommitted work; list those in your summary.
