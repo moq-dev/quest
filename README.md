@@ -520,7 +520,12 @@ and `github.com`/`codeload.github.com` that the repository's dependencies come f
 The prompt allows only those dependency fetches: no GitHub API, no push, no other
 host. Codex login stays on CLIProxyAPI.
 The wrapper waits for the payload, returns its exit status, and tears down its
-container on exit or SIGTERM. On timeout the daemon sends SIGTERM, allows at
+container on exit or SIGTERM. A fixer gets 60 minutes from its start. A wrapper
+that queues for a shared launcher prints `quest land fixer: admitted <unix-seconds>`
+as one line to its output when the launcher admits the job, before any agent
+output, so the wait for a slot does not use up the run. Waiting counts against
+a total of 120 minutes from the spawn, which is also the deadline of a wrapper
+that prints no such line. On timeout the daemon sends SIGTERM, allows at
 least 10 seconds for container cleanup, then sends SIGKILL on a later collection. The payload defaults
 to `codex exec`; `--agent <executable>` and repeatable `--agent-arg <argument>`
 replace it for another CLI. It writes `<cwd>/quest-land-result.json`: an array of
@@ -559,7 +564,7 @@ checks every object and link, since the import enables `fetch.fsckObjects=true`.
 `## Review`, and enables head-pinned auto-merge again on the fixed head, which keeps
 the place of the pick it descends from. Healthy PRs go back to batches unchanged,
 without a comment. Forks refusing maintainer edits, refused pushes, invalid results,
-crashes, or the 60-minute fixer deadline hand back with a marked comment naming the exit
+crashes, or the fixer deadline hand back with a marked comment naming the exit
 status or signal, with the tail of the job's retained log. A validated fix whose push
 GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
 the `workflows` permission to push, is handed back with its resolution: the PR head,

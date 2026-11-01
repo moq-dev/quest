@@ -562,7 +562,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"--sandbox <command>",
 			"Sandbox executable called with <checkout> <base-sha> and QUEST_LAND_BASE",
 		)
-		.option("--fixer <command>", "Credential-free fixer wrapper executable (60-minute deadline)")
+		.option(
+			"--fixer <command>",
+			"Credential-free fixer wrapper executable (60 minutes from its admission line, 120 in total)",
+		)
 		.requiredOption("--app-id <id>", "GitHub App id")
 		.option("--timeout <minutes>", "Fail a check that runs longer than this", positiveInteger("timeout"), 60)
 		.action((options: ServeOptions) => {
