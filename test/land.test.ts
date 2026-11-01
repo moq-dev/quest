@@ -2078,6 +2078,8 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		mkdirSync(submodule, { recursive: true });
 		writeFileSync(join(submodule, `${large}.pack`), "");
 		truncateSync(join(submodule, `${large}.pack`), 101 * 1024 * 1024);
+		// A transient lock is skipped, never read: git maintenance may remove it mid-walk (moq-dev/moq#6987).
+		symlinkSync(join(checkout, "missing"), join(checkout, ".git", "objects", "maintenance.lock"));
 		importFixer(root, tempDir(), checkout, 1, fixed, [...packs, `${large}.pack`]);
 		expect(git(root, "show", `${fixed}:kept.txt`)).toBe("unchanged");
 		expect(git(root, "rev-parse", `${fixed}^`)).toBe(pinned);
@@ -2175,6 +2177,18 @@ ${requeueScript}
 			"Hand back a PR only when its content targets this",
 			"is ordinary project content",
 			"a plain `git merge` of the base leaves them",
+		])
+			expect(fixerPrompt).toContain(text);
+	});
+	test("lets the fixer fetch dependencies and requires it to verify what it reports", () => {
+		for (const text of [
+			"from `github.com` and `codeload.github.com` for git",
+			"Do not build with `--offline`",
+			"never call GitHub's API yourself",
+			"or reach any other host",
+			"Before reporting `fixed` or `requeue`, build and test",
+			"name the commands",
+			"quoting the command and the output",
 		])
 			expect(fixerPrompt).toContain(text);
 	});
