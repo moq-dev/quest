@@ -29,8 +29,6 @@ import {
 	commandEnvironment,
 	eject,
 	ejection,
-	type Ejection,
-	type Entry,
 	git,
 	readRemote,
 	type Overlap,
@@ -648,8 +646,8 @@ export async function serveBatch(
 		}
 		if ("reason" in result) {
 			// Only this PR failed to land. The rest of the batch passed its check and stays queued,
-			// to be rebuilt on the new base, except after a tree mismatch, which stops the later ones as batch_stopped.
-			const detail = `${result.detail}; the rest of the batch was not merged`;
+			// to be rebuilt on the new base.
+			const detail = `${result.detail}; the rest of the batch stays queued`;
 			appendFileSync(log, `${detail}\n`);
 			if (result.reason === "merge_conflict") {
 				output.push(
@@ -665,15 +663,11 @@ export async function serveBatch(
 				);
 				return output;
 			}
-			const mismatch = result.reason === "tree_mismatch";
-			const reported = mismatch ? `CRITICAL: ${detail}` : detail;
-			if (mismatch) deps.warn(reported);
-			const rest = mismatch ? chain.links.slice(index + 1) : [];
+			// A prepared tree that differs from the tested one is the gate's own fault, for a maintainer to judge.
+			const reported = result.reason === "tree_mismatch" ? `CRITICAL: ${detail}` : detail;
+			if (reported !== detail) deps.warn(reported);
 			return output.concat(
-				await stop(root, options, deps, batch, [
-					ejection(link.entry, result.reason, excerpt(reported)),
-					...rest.map(({ entry }) => batchStopped(entry, link.entry.number, result.reason, reported)),
-				]),
+				await stop(root, options, deps, batch, [ejection(link.entry, result.reason, excerpt(reported))]),
 			);
 		}
 		const sha = result.sha;
@@ -691,20 +685,11 @@ export async function serveBatch(
 		expectedParent = sha;
 		const tree = string(object(commit.tree).sha);
 		if (tree === link.tree) continue;
-		const detail = `CRITICAL: GitHub squash #${link.entry.number} at ${sha} has tree ${tree}, but the tested chain has ${link.tree}. Already merged PRs stay merged; the remaining batch was stopped`;
+		// The squash is already merged, so there is nothing to eject. The rest of the batch stays queued and
+		// is rebuilt and checked on the base as it now is, like after a moved base.
+		const detail = `CRITICAL: GitHub squash #${link.entry.number} at ${sha} has tree ${tree}, but the tested chain has ${link.tree}. It stays merged; the rest of the batch stays queued, to be rebuilt on the new base`;
 		deps.warn(detail);
 		appendFileSync(log, `${detail}\n`);
-		const remaining = chain.links.slice(index + 1);
-		if (remaining.length)
-			output.push(
-				...(await stop(
-					root,
-					options,
-					deps,
-					batch,
-					remaining.map(({ entry }) => batchStopped(entry, link.entry.number, "tree_mismatch", detail)),
-				)),
-			);
 		return output;
 	}
 	return output;
@@ -714,15 +699,6 @@ export async function serveBatch(
  * Eject PRs that cannot land as tested, such as a moved head, a merge GitHub refuses, or a tree
  * mismatch. The fixer cannot repair these: a writer moved the head, or the repository's settings refuse.
  */
-/** A batch-mate that never reached its merge names the PR that stopped the batch rather than taking its reason. */
-function batchStopped(entry: Entry, by: number, reason: Reason, detail: string): Ejection {
-	return ejection(
-		entry,
-		"batch_stopped",
-		excerpt(`PR #${by} stopped the batch as ${reason} before this PR merged: ${detail}`),
-	);
-}
-
 async function stop(
 	root: string,
 	options: Pick<ServeOptions, "state" | "fixer">,

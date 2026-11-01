@@ -638,9 +638,9 @@ tested squash to the base as a fast-forward, leased on the expected parent. It
 closes the PR with a comment linking the landed commit and removes `quest:merge`.
 Such a fork PR is closed rather than shown as merged by GitHub. A PR branch lease
 failure ejects `head_moved`. A locally prepared or API squash tree mismatch logs
-CRITICAL and stops the batch; a PR whose prepared tree differs ejects as
-`tree_mismatch`, while an already-squashed one stays merged. Every later PR in
-the batch ejects as `batch_stopped`, with a comment naming the PR that stopped it.
+CRITICAL. A PR whose prepared tree differs ejects alone as `tree_mismatch`; an
+already-squashed one stays merged. Either way, the rest of the batch stays queued
+and is rebuilt and checked on the new base.
 
 After an API refusal, the daemon re-reads mergeability and briefly retries
 pending mergeability or a base refresh. It also retries while GitHub still
