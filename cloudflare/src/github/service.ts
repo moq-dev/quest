@@ -12,6 +12,7 @@ import {
 } from "quest/core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
+import { unreviewed } from "./review";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -1572,14 +1573,37 @@ export class GitHubService {
 		});
 	}
 
+	/** Why kix may not land `head` yet, or null when a review counts on it; see `unreviewed`. */
+	#unreviewed(token: string, repo: GitHubRepository, current: Repository, pull: number, head: string) {
+		const path = repositoryPath(repo);
+		return unreviewed(
+			{
+				get: (tail) => this.#api(token, `${path}${tail}`),
+				graphql: (query, variables) => this.#api(token, "/graphql", "POST", { query, variables }),
+			},
+			{
+				owner: repo.owner,
+				name: repo.name,
+				pull: number(pull),
+				head: sha(head),
+				branch: current.default_branch,
+				app: Number(this.#env.GITHUB_APP_ID),
+			},
+		);
+	}
+
 	/**
 	 * Merge exactly `expectedHead` with the first method the repository
-	 * allows: squash, then a merge commit, then rebase. GitHub enforces branch
-	 * rules, reviews, and checks; a refusal says why and is never retried.
+	 * allows: squash, then a merge commit, then rebase, once a review counts on
+	 * it. GitHub enforces branch rules, reviews, and checks; a refusal says why
+	 * and is never retried.
 	 */
 	mergePullRequest(repo: GitHubRepository, userId: string, pull: number, expectedHead: string) {
-		return this.#authorized(repo, userId, { contents: "write", pull_requests: "write" }, async (token, current) => {
+		const permissions: Permissions = { contents: "write", pull_requests: "write", checks: "read" };
+		return this.#authorized(repo, userId, permissions, async (token, current) => {
 			const method = mergeMethod(current);
+			const waiting = await this.#unreviewed(token, repo, current, pull, expectedHead);
+			if (waiting) throw new GitHubError(waiting);
 			let merged: { sha: string };
 			try {
 				merged = await this.#api<{ sha: string }>(
@@ -1737,7 +1761,7 @@ export class GitHubService {
 	 * repository's instructions name, or else the first the repository allows.
 	 * A base that requires the `quest land` check queues it for that gate
 	 * instead, as `quest merge --land` does: squash auto-merge whose commit body
-	 * pins the head.
+	 * pins the head. Either way, only once a review counts on the head.
 	 */
 	landPullRequest(
 		repo: GitHubRepository,
@@ -1748,7 +1772,7 @@ export class GitHubService {
 		return this.#authorized(
 			repo,
 			userId,
-			{ contents: "write", pull_requests: "write" },
+			{ contents: "write", pull_requests: "write", checks: "read" },
 			async (token, current, installation) => {
 				// Landing is a contribution like opening a pull request, so a paused project lands nothing.
 				if ((await this.#state(repo, installation)) !== "enabled")
@@ -1764,6 +1788,9 @@ export class GitHubService {
 				};
 				const holds = await this.#holds(token, repo, pull);
 				check(holds);
+				// The maintainer's pick of merge never stands in for a review of what the job published since.
+				const waiting = await this.#unreviewed(token, repo, current, pull, input.head);
+				if (waiting) throw new PublicationBlocked(waiting);
 				const gated = await this.#gated(token, repo, holds.base);
 				let mutation: "mergePullRequest" | "enablePullRequestAutoMerge" =
 					!gated && immediateMerge(holds.mergeState, holds.queue)

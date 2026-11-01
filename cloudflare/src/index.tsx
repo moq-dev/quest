@@ -253,7 +253,7 @@ app.post("/projects/github/:owner/:repository/skip", async (c) => {
 	await inbox.skip(c.env.DB, session.user.id, repo.id, item, version);
 	return c.redirect(nextURL("skip"), 303);
 });
-// A merge is the maintainer's own click on the head they saw; GitHub's rules decide whether it lands.
+// A merge is the maintainer's own click on the head they saw; it lands once a review counts on that head and GitHub's rules allow it.
 app.post("/projects/github/:owner/:repository/pulls/:number/merge", async (c) => {
 	const session = await createAuth(c.env).api.getSession({ headers: c.req.raw.headers });
 	if (!session) throw new GitHubError("Sign in required");

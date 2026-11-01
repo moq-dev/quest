@@ -27,6 +27,7 @@ export function world(): World {
 		owner: "example",
 		name: "rocket",
 		maintainers: ["dev-maintainer"],
+		writers: ["reviewer"],
 		files: [
 			{ path: "flake.nix", content: "{ outputs = _: { }; }\n" },
 			{

@@ -164,10 +164,11 @@ URL, or closing keyword. Every delivery renders the section again between
 past GitHub's 65,536-character body limit are counted rather than cut.
 
 GitHub keeps pull request status, checks, and reviews. `mergePullRequest`
-merges only an exact head a maintainer explicitly chose, with the first method
-the repository allows: squash, then a merge commit, then rebase. GitHub's
-branch rules and refusals stand, and an agent's recommendation is never
-approval. The decision inbox offers it on a pull request item only when
+merges only an exact head a maintainer explicitly chose, once a review counts
+on it (see [Landing only reviewed heads](#landing-only-reviewed-heads)), with
+the first method the repository allows: squash, then a merge commit, then
+rebase. GitHub's branch rules and refusals stand, and an agent's
+recommendation is never approval. The decision inbox offers it on a pull request item only when
 GitHub reports the PR's merge state as `CLEAN` or `HAS_HOOKS` and no job or
 session holds the PR. The form binds the head on screen. A moved head asks for
 another look, GitHub's refusal is shown in its own words, and neither is
@@ -196,15 +197,48 @@ on a decision.
   refuse auto-merge because nothing is left to wait for. It uses the method the
   job names, else the first the repository allows. A base that requires the
   `quest land` check queues the PR for that gate instead, as `quest merge
---land` does: squash auto-merge whose commit body pins the head. A refusal
-  pauses the job on a decision, in GitHub's words.
+--land` does: squash auto-merge whose commit body pins the head. Either way,
+  kix first requires a review that counts on that head; without one, the job
+  pauses on a decision that says why. A refusal also pauses the job on a
+  decision, in GitHub's words.
 - The label stays while the job runs or waits, and while the PR is queued or
   auto-merging. When the job ends without a landing in progress, or a
   `pull_request` webhook arrives and GitHub shows the landing ended unmerged,
   the App removes its own label. The PR is then an idle decision item again.
 
-Labels need `issues: write` on the upstream; landing needs `contents: write`
-and `pull_requests: write` there, as a direct merge does.
+Labels need `issues: write` on the upstream; landing needs `contents: write`,
+`pull_requests: write`, and `checks: read` there, as a direct merge does.
+
+### Landing only reviewed heads
+
+Picking merge is a maintainer's decision about the head they saw, not a review
+of whatever a runner, or anyone, pushes after it. So both a direct merge and a
+merge job's landing first require a review that counts on the exact head being
+landed (`src/github/review.ts`), read from GitHub's own records rather than any
+text a pull request's author or a runner wrote:
+
+- an approval on GitHub of that commit by a person with write access other than
+  the pull request's author; reviews by Apps never count;
+- or a completed, successful `quest review` check run on that commit, written
+  by this App. Only the App can write one, and GitHub binds it to the commit.
+  The PR body's `## Review` record is self-reported, so it does not count here.
+
+A review also carries to a head whose only changes since the reviewed commit
+are merges of commits the default branch already holds that resolved nothing:
+every file holds the reviewed side's version or the default branch's, whichever
+changed it. kix verifies this from the commits' trees, up to five merges back.
+A file both sides changed, even one Git merged line by line without a
+conflict, needs a new review, as does any other commit, a truncated tree, or a
+read that fails.
+
+kix defers to GitHub only where GitHub enforces the same rule: a ruleset on the
+base that requires an approval and either dismisses stale approvals or requires
+approval of the most recent push, which GitHub reports this App cannot bypass.
+Classic branch protection's review settings need the administration permission
+to read, so kix keeps its own check there.
+
+When no review counts, a direct merge is refused and a merge job pauses on a
+decision. Both say which commit needs a review and how to give one.
 
 Fork pull requests do not make privileged CI safe. Workflows that run a pull
 request's code with secrets or write tokens, such as `pull_request_target` or

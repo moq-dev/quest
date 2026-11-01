@@ -134,6 +134,6 @@ fixes what it finds:
 - [Setup PR](/quest/m0/kix/setup-pr.md) - enrolling a repository without Quest makes the App open its `quest init` pull request
 - [Job sandbox](/quest/m0/kix/sandbox/README.md) - untrusted PR devShells built in a VM on Linux runners, maintainer PR heads trusted, opencode sandboxed, and macOS verified
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs
-- [Land review](/quest/m0/kix/land-review.md) - kix lands only heads with a review that counts on that exact head
+- [Land review](/quest/m0/kix/land-review.md) - kix also counts the `## Review` record a repository's policy names
 - [Onboarding guide](/quest/m0/kix/guide.md) - a complete maintainer path, from runner setup through a reviewed PR
 - [Fast runner continuation test](/quest/m0/kix/runner-timeout.md) - the conflicted-continuation test passes on a loaded host without a longer timeout

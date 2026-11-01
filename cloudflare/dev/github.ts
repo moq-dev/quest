@@ -24,9 +24,11 @@ export type Pull = Issue & {
 	branch: string;
 	checks: "SUCCESS" | "FAILURE" | "PENDING" | null;
 	/** The check runs behind `checks`. */
-	runs?: { name: string; conclusion: string; url: string; app?: number; context?: boolean }[];
+	/** `commit` is the one a run reports on; the head by default. */
+	runs?: { name: string; conclusion: string; url: string; app?: number; context?: boolean; commit?: string }[];
 	review: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
-	reviews?: { state: string; author: string; body?: string }[];
+	/** Oldest first; `commit` is the one a review was submitted on, the head by default. */
+	reviews?: { state: string; author: string; body?: string; commit?: string }[];
 	threads?: Thread[];
 	draft?: boolean;
 	/** Opened from the service fork, so its branch is not on the upstream. */
@@ -74,6 +76,8 @@ export type Repo = {
 	name: string;
 	/** Logins with the maintain role; everyone else can only read. */
 	maintainers: string[];
+	/** Logins that can write without maintaining, whose approvals count as GitHub's writers' do. */
+	writers?: string[];
 	/** Defaults to main. */
 	defaultBranch?: string;
 	/** The default branch's files. */
@@ -103,6 +107,8 @@ export type Repo = {
 	rules?: Record<string, unknown>[];
 	/** The default branch's classic protection, as `GET /branches/main/protection` returns it; none when absent. */
 	protection?: Record<string, any>;
+	/** Rulesets by ID, as `GET /rulesets/<id>` shows them to the App. */
+	rulesets?: Record<number, { current_user_can_bypass: "always" | "pull_requests_only" | "never" }>;
 };
 export type World = {
 	app: { id: number; slug: string };
@@ -245,6 +251,32 @@ function pullTarget(repo: Repo, pull: Pull, after: unknown) {
 					},
 				},
 			],
+		},
+	};
+}
+
+const actor = (login: string) => ({ __typename: login.endsWith("[bot]") ? "Bot" : "User", login });
+
+/** A pull request's author and each writer's latest approval or change request, as the review gate reads them. */
+function reviewTarget(repo: Repo, pull: Pull) {
+	const latest = new Map<string, NonNullable<Pull["reviews"]>[number]>();
+	for (const review of pull.reviews ?? [])
+		if (
+			["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(review.state) &&
+			[...repo.maintainers, ...(repo.writers ?? [])].includes(review.author)
+		)
+			latest.set(review.author, review);
+	return {
+		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
+		headRefOid: headOf(repo, pull),
+		baseRefName: pull.base ?? "main",
+		author: actor(pull.author),
+		latestOpinionatedReviews: {
+			nodes: [...latest.values()].map((r) => ({
+				state: r.state,
+				author: actor(r.author),
+				commit: { oid: r.commit ?? headOf(repo, pull) },
+			})),
 		},
 	};
 }
@@ -398,6 +430,10 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>, 
 		};
 	}
 
+	if (query.includes("latestOpinionatedReviews(")) {
+		const pull = repo.pulls.find((p) => p.number === variables.number);
+		return { data: { repository: { pullRequest: pull ? reviewTarget(repo, pull) : null } } };
+	}
 	if (query.includes("timelineItems(")) {
 		const pull = repo.pulls.find((p) => p.number === variables.number);
 		return { data: { repository: { pullRequest: pull ? holdsTarget(repo, pull) : null } } };
@@ -810,6 +846,32 @@ export function fakeGitHub(world: World) {
 			if (!scope.permissions.administration) return forbidden();
 			return repo.protection ? json(repo.protection) : json({ message: "Branch not protected" }, 404);
 		}
+		const ruleset = tail.match(/^\/rulesets\/(\d+)$/);
+		if (ruleset && method === "GET") {
+			const found = repo.rulesets?.[Number(ruleset[1])];
+			return found ? json({ id: Number(ruleset[1]), ...found }) : notFound();
+		}
+		const runs = tail.match(/^\/commits\/([0-9a-f]{40})\/check-runs$/);
+		if (runs && method === "GET") {
+			if (!scope.permissions.checks) return forbidden();
+			const name = url.searchParams.get("check_name");
+			const app = url.searchParams.get("app_id");
+			const found = repo.pulls.flatMap((pull) =>
+				(pull.runs ?? [])
+					.filter((run) => !run.context && (run.commit ?? headOf(repo, pull)) === runs[1])
+					.map((run) => ({
+						name: run.name,
+						head_sha: runs[1],
+						status: "completed",
+						conclusion: run.conclusion.toLowerCase(),
+						app: { id: run.app ?? ACTIONS_APP },
+					})),
+			);
+			const check_runs = found.filter(
+				(run) => (!name || run.name === name) && (!app || String(run.app.id) === app),
+			);
+			return json({ total_count: check_runs.length, check_runs });
+		}
 		if (tail.startsWith("/rules/branches/main") && method === "GET") {
 			const contexts = (repo.required ?? []).map((context) => ({ context }));
 			return json([
@@ -947,13 +1009,18 @@ export function fakeGitHub(world: World) {
 			pull.labels = current.filter((label) => label !== name);
 			return json(pull.labels.map((label) => ({ name: label })));
 		}
-		const compare = tail.match(/^\/compare\/([0-9a-f]{40})\.\.\.main$/);
+		const compare = tail.match(/^\/compare\/([0-9a-f]{40})\.\.\.(main|[0-9a-f]{40})$/);
 		if (compare && method === "GET") {
-			const base = repo.branches.main ?? commitOf(repo);
 			const from = compare[1]!;
-			if (!repo.commits[from]) return notFound();
-			const reaches = (sha: string, target: string): boolean =>
-				sha === target || (repo.commits[sha]?.parents ?? []).some((parent) => reaches(parent, target));
+			const base = compare[2] === "main" ? (repo.branches.main ?? commitOf(repo)) : compare[2]!;
+			if (!repo.commits[from] || !repo.commits[base]) return notFound();
+			const ancestors = (tip: string, seen = new Set<string>()): Set<string> => {
+				if (seen.has(tip)) return seen;
+				seen.add(tip);
+				for (const parent of repo.commits[tip]?.parents ?? []) ancestors(parent, seen);
+				return seen;
+			};
+			const reaches = (sha: string, target: string) => ancestors(sha).has(target);
 			const status =
 				from === base
 					? "identical"
@@ -962,7 +1029,10 @@ export function fakeGitHub(world: World) {
 						: reaches(from, base)
 							? "behind"
 							: "diverged";
-			return json({ status });
+			// The nearest common ancestor: one no other common ancestor descends from.
+			const common = [...ancestors(from)].filter((sha) => ancestors(base).has(sha));
+			const nearest = common.find((sha) => !common.some((other) => other !== sha && reaches(other, sha)));
+			return json({ status, merge_base_commit: nearest ? { sha: nearest } : null });
 		}
 		if (tail === "/contents/.github" && method === "GET") {
 			const tree = repo.commits[url.searchParams.get("ref") ?? ""]?.tree;

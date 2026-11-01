@@ -65,6 +65,7 @@ export const issue = {
  * null removes the signed-in user from the repository, so GitHub answers 404.
  * `labels` are #2's labels and `events` its label and landing timeline, which
  * label requests change; `landing` says it is queued or auto-merging.
+ * `approved` lists the commits of #2 another maintainer approved.
  */
 export async function maintainerOf() {
 	const github = {
@@ -83,6 +84,7 @@ export async function maintainerOf() {
 		labels: [] as string[],
 		events: [] as { id: string; label: string | null }[],
 		landing: false,
+		approved: [head] as string[],
 	};
 	const who = identity("github");
 	const cookie = (await oauth(who)).session!;
@@ -116,7 +118,13 @@ export async function maintainerOf() {
 				id: 5,
 				app_id: 123,
 				suspended_at: null,
-				permissions: { metadata: "read", contents: "write", issues: "write", pull_requests: "write" },
+				permissions: {
+					metadata: "read",
+					contents: "write",
+					issues: "write",
+					pull_requests: "write",
+					checks: "read",
+				},
 			});
 		if (path === "/graphql" && String(init?.body).includes("signature {"))
 			return Response.json({
@@ -140,6 +148,33 @@ export async function maintainerOf() {
 				},
 			});
 
+		if (path === "/graphql" && String(init?.body).includes("latestOpinionatedReviews(")) {
+			const reviewer = { __typename: "User", login: "reviewer" };
+			return Response.json({
+				data: {
+					repository: {
+						pullRequest: {
+							state: github.pull.toUpperCase(),
+							headRefOid: github.head,
+							baseRefName: "trunk",
+							author: { __typename: "User", login: "contributor" },
+							latestOpinionatedReviews: {
+								nodes: github.approved.map((oid) => ({
+									state: "APPROVED",
+									author: reviewer,
+									commit: { oid },
+								})),
+							},
+						},
+					},
+				},
+			});
+		}
+		if (path === "/repos/upstream/project/rules/branches/trunk") return Response.json([]);
+		if (/^\/repos\/upstream\/project\/commits\/[0-9a-f]{40}\/check-runs$/.test(path))
+			return Response.json({ total_count: 0, check_runs: [] });
+		const commitRead = path.match(/^\/repos\/upstream\/project\/git\/commits\/([0-9a-f]{40})$/)?.[1];
+		if (commitRead) return Response.json({ sha: commitRead, tree: { sha: commit }, parents: [{ sha: commit }] });
 		if (path === "/graphql" && String(init?.body).includes("timelineItems")) {
 			return Response.json({
 				data: {
