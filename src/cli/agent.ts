@@ -228,13 +228,29 @@ const STRIPPED = [
 ];
 
 /** The agent's environment: the user's, minus `STRIPPED`, plus its one key. */
-export function launchEnvironment(env: NodeJS.ProcessEnv, variable: string, key: string): NodeJS.ProcessEnv {
-	return { ...strippedEnvironment(env), [variable]: key };
+export function launchEnvironment(
+	env: NodeJS.ProcessEnv,
+	variable: string,
+	key: string,
+	platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+	return { ...strippedEnvironment(env, platform), [variable]: key };
 }
 
-/** The user's environment minus `STRIPPED`, for an agent that brings its own credentials. */
-export function strippedEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-	return Object.fromEntries(Object.entries(env).filter(([name]) => !STRIPPED.some((pattern) => pattern.test(name))));
+/**
+ * The user's environment minus `STRIPPED`, for an agent that brings its own
+ * credentials. Windows matches variable names case-insensitively, so there
+ * `Op_Service_Account_Token` is stripped too.
+ */
+export function strippedEnvironment(
+	env: NodeJS.ProcessEnv,
+	platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+	const stripped = (name: string) => {
+		const normalized = platform === "win32" ? name.toUpperCase() : name;
+		return STRIPPED.some((pattern) => pattern.test(normalized));
+	};
+	return Object.fromEntries(Object.entries(env).filter(([name]) => !stripped(name)));
 }
 
 /**

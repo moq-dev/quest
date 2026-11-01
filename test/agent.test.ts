@@ -277,6 +277,32 @@ test("the agent environment holds only its own key", () => {
 	});
 });
 
+test("on Windows, the agent environment drops credentials whatever their case", () => {
+	const env = launchEnvironment(
+		{
+			Path: "C:\\bin",
+			op_service_account_token: "t",
+			Anthropic_Auth_Token: "a",
+			Claude_Config_Dir: "C:\\claude",
+			Codex_Home: "C:\\codex",
+		},
+		"ANTHROPIC_API_KEY",
+		"sk-agent",
+		"win32",
+	);
+	expect(env).toEqual({
+		Path: "C:\\bin",
+		Claude_Config_Dir: "C:\\claude",
+		Codex_Home: "C:\\codex",
+		ANTHROPIC_API_KEY: "sk-agent",
+	});
+	// POSIX names are case-sensitive, so only the exact names are credentials there.
+	expect(launchEnvironment({ op_token: "t" }, "ANTHROPIC_API_KEY", "sk-agent", "linux")).toEqual({
+		op_token: "t",
+		ANTHROPIC_API_KEY: "sk-agent",
+	});
+});
+
 test("start runs claude with every launch setting, one resolved key, and no key in its output", async () => {
 	const s = setup();
 	const result = await quest("agent", "start", ...launch("claude", "2"), s.worktree, "/quest-start quest/m0/a.md");
