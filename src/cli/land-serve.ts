@@ -512,10 +512,8 @@ export async function serveBatch(
 		await handbackRepeated(options.state, plan, item, deps);
 	}
 	output.push(...(await reportStalled(github, plan, options.state, deps.now())));
-	// Parked PRs sit out until their fixer job is collected; the rest keep their places.
-	const batch = batchable(options.state, plan);
-	if (batch.queue.length === 0) return output;
-	// A halted queue waits for its base to move, then resumes once the new base passes alone.
+	// A halted queue waits for its base to move, then resumes once the new base passes alone, even
+	// with no PR ready to batch, so its issue and any fix it no longer needs are closed at once.
 	const halt = readHalt(options.state);
 	if (halt) {
 		if (halt.sha === plan.base.sha) {
@@ -534,6 +532,9 @@ export async function serveBatch(
 		if (!(await checkBase(root, plan.repository, plan.base, options, deps, read))) return output;
 		await resume(github, options.state, plan.repository, plan.base);
 	}
+	// Parked PRs sit out until their fixer job is collected; the rest keep their places.
+	const batch = batchable(options.state, plan);
+	if (batch.queue.length === 0) return output;
 	const screened = readScreened(options.state);
 	const policy = readPolicy(options.state);
 	const chain = await build(root, batch, read, (entry) => screened[entry.number] !== entry.enabledAt, policy);

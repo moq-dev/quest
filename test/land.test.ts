@@ -1218,6 +1218,15 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(await serveBatch(root, halted, options, deps, async () => deps.token)).toEqual([]);
 		expect(forge.repo.issues).toHaveLength(1);
 		expect(forge.repo.pulls[0].landing).toBe(true);
+		// The base is repaired while no PR is ready to batch: the queue resumes and closes its issue anyway.
+		forge.repo.pulls[0].landing = false;
+		forge.advance({ "fixed.txt": "yes" });
+		writeFileSync(options.sandbox, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		const empty = await resolveQueue(REPOSITORY, undefined, deps);
+		expect(empty.queue).toEqual([]);
+		expect(await serveBatch(root, empty, options, deps, async () => deps.token)).toEqual([]);
+		expect(forge.repo.issues[0].closed).toBe(true);
+		expect(existsSync(join(options.state, "halt.json"))).toBe(false);
 	});
 
 	test("comments once per pick on a PR whose required check is still pending two hours after its pick", async () => {
