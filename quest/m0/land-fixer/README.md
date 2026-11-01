@@ -129,10 +129,11 @@ resolves itself and what it hands back; that docs update finishes the epic.
 - [Pre-check queued PRs](/quest/m0/land-fixer/precheck.md) - compile and lint the next PRs against the base while a batch runs, parking broken ones before they batch
 - [Throughput tuning](/quest/m0/land-fixer/tuning.md) - batch size from the failure rate, no wasted base-conflict rounds, rerere, a fixer cap, and an explicit reasoning effort
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
-- [Fixer comments](/quest/m0/land-fixer/comments.md) - a per-job, comment-only GitHub token lets the fixer explain its work on the PRs
+- [Fixer comments](/quest/m0/land-fixer/comments.md) - the fixer writes comments into its result and the daemon posts them; no token enters the container
 - [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, and a rerun-proven flaky test is disabled in a separate PR with a follow-up quest
 - [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Fork commits](/quest/m0/land-fixer/fork-commit.md) - a fork push GitHub refuses hands back a commit a maintainer session applies as is
+- [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - a fixer edit `validateFix` rejects for touching protected paths comes back as a commit the maintainer applies
 
 ## Related
 
