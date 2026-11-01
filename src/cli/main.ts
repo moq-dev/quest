@@ -752,6 +752,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"entry may be a 1Password op:// reference: the first launch resolves every reference in one " +
 				"`op inject` and keeps the keys in a user-only store under $XDG_RUNTIME_DIR (or the temporary " +
 				"directory) shared by the repository's worktrees, until `quest agent stop --all`.\n\n" +
+				"The agent CLI and op run from their absolute paths on PATH, never from the worktree; on native Windows " +
+				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
 				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_API_KEYS, and QUEST_GATE_ADMITTED variable, plus " +
 				"its one key as " +
