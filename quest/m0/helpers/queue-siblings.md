@@ -34,6 +34,14 @@ from 2026-10-23 to 10-26, and the link-list conflict for repositories that
 still merge through GitHub's merge queue. Its third option below is what
 `quest land` does.
 
+Narrowed 2026-10-31: before batching, `quest land` runs `quest check` on
+each queued PR squashed alone onto the current base, and ejects a PR whose
+new findings, such as a link to a quest the base finished, fail it, with that
+output. It no longer fails a whole batch. That is the pre-queue check above,
+run against every base the PR waits on. The PR is still ejected and needs a
+fix, so this quest keeps the tolerant check or another way to spare it, on
+every gate.
+
 Open (this quest decides, with a recommendation to the user):
 
 - Change the link-list format so deleting one entry never touches its

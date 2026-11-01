@@ -33,6 +33,14 @@ What remains is the fork path.
   the admin role, which keeps an emergency bypass. It replaced the classic
   protection that required `check`.
 - **Forks (user, 2026-10-27).** The fork path was never verified live. This
-  quest is done only once a fork PR that allows maintainer edits lands
-  through the gate and shows as merged; any fix it needs lands here. GitHub
-  offers maintainer edits only on forks a user owns, not an organization.
+  quest is done only once a fork PR lands through the host gate's squash-merge
+  API and shows as merged; any fix it needs lands here. The API merge needs
+  no maintainer edits to the fork.
+- **Host gate (user, 2026-10-30).** The gate moves to the maintainer's host
+  ([gate host](/quest/m0/host-land/host.md)), which merges through the API with moq-bot's
+  App key instead of the `token.moq.dev` exchange above, and land.yml goes
+  away. Verify the fork path on the host gate.
+
+## Required
+
+- [Gate host](/quest/m0/host-land/host.md) - the live gate the fork path is verified on

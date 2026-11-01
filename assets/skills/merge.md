@@ -1,61 +1,39 @@
 ---
-description: Merge a quest once reviews and CI pass.
+description: Queue a reviewed PR to land, or send it to /quest-iterate.
 ---
 
 Before you begin, run `quest guide` and read its output completely.
+
+This skill runs inline in the session that picked it, never in its own sub-agent: it only decides whether the PR's head can land as is, and queues it.
+It never fixes the PR, pushes, or waits on GitHub; `/quest-iterate` does the fixing, and the merge gate handles conflicts and failures after queueing.
 
 Parse the arguments to determine the PR number, otherwise resolve it from the current context/branch.
 If a draft, stop and offer `/quest-review` instead.
 Take the PR with `quest merge <pr>` before acting, passing a token you already hold from another state to swap it, and keep the hold token it prints; `quest merge --help` explains holds.
 If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
-Hand it back with `quest release <pr> <token>` whenever you stop before it lands, including to ask.
+Hand it back with `quest release <pr> <token>` whenever you stop without queueing it, including to recommend `/quest-iterate` or to ask.
 
-Read the PR's head, checks, merge state, reviews by head, and unresolved threads with `quest status <pr>`, including after each `quest wait` wakes, instead of chaining `gh` queries.
-Fix any mechanical issues with the PR, such as merge conflicts and failing CI checks.
-Address the review findings already posted on the head, fixing those you agree with and leaving a comment on any you disagree with.
-Never wait for or request a review, including an `@codex review` comment or toggling a ready PR to draft and back.
-Before pushing any change, review the new head locally, following the guide's Reviews section, including its design checkpoint across rounds.
+Read the PR's head, checks, merge state, reviews by head, and unresolved threads with one `quest status <pr>`.
+The head is landable when:
 
-Abort the merge if there is a significant decision to be made.
-Interactively prompt the user with your recommendation and any alternatives.
-Suggested follow-ups do not hold the merge; once the PR merges, run `/quest-plan` on them without asking first.
+- a `## Review` record the guide counts names it, or the guide's review exemptions cover the changes since the one it names;
+- every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, and no decision is open;
+- its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base.
 
-A background agent that cannot prompt lists its decisions and suggested follow-ups in its report instead.
+Otherwise recommend `/quest-iterate`, saying what it needs: a review of the head, fixes, or decisions.
+While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
 
-When waiting for CI, run
-`quest wait <pr> --timeout 3300` as one blocking command instead of polling
-GitHub in a loop; it also reports the head's required checks as `checks:failed`
-or `checks:passed`, so no separate check watcher is needed.
-Inspect the events and decide whether they satisfy the wait. If activity is
-irrelevant (including bot notices and reviews), call it again with `--since`
-set to the last field of its last line. Exit 3 means the deadline passed with
-no activity; re-run with `--since` set to the printed cursor, so nothing during
-the first wait is missed.
-Other failures must be reported rather than treated as activity.
-Run each wait so its exit wakes you, such as a background task that notifies on
-exit, and end your turn until then. Never poll its output or rerun it under a
-foreground time limit; each wake rereads your whole context. The hour bound
-keeps that reread cached; a wake after the prompt cache expires rewrites it all.
-A headless process ends when its turn ends, killing its background commands:
-run each wait in the foreground instead, bounded by the shell's own time limit,
-and apply the timeout rule above.
+Before queueing, fetch the PR's base branch and its exact head, check out the head outside your checkout, such as a detached worktree in `.tmp/`, and run `quest --root <head-checkout> check --base <remote>/<base> --branch <head-branch>` with a `quest` the PR cannot modify, from a directory outside the head checkout: the head's files are untrusted, and a stale local base can skip the check.
+A finding means the PR leaves its quest inaccurate: recommend `/quest-iterate`.
 
-Merge the PR *only* after all outstanding decisions have been confirmed.
-Before landing it, fetch the PR's base branch and head, check out the head, and run `quest --root <head-checkout> check --base <remote>/<base> --branch <head-branch>`.
-Run a `quest` the PR cannot modify, such as an installed release or a build from the base, from a directory outside the head checkout: the head's files, including runtime config such as `bunfig.toml`, are untrusted.
-A stale local base can predate the quest and skip the check.
-On a finding, fix the branch: delete the finished quest with `quest rm`, or rewrite it to the remainder the PR body names.
-Then push, re-check, and continue; ask the user only when what remains is unclear.
-Land only a head named by a `## Review` record the guide counts, or one the guide's review exemptions cover.
-When no record the guide counts names the head (none, one naming another head, or one the guide does not count, such as an author without write access), review the checked-out head locally as the guide's Reviews section describes and rewrite the record before landing; when a counted record names this head, run no new round.
-Leave a summary of the changes and decisions made, then land the head you checked with `quest merge <pr> <token> --land <full 40-character head SHA>`.
+Queue the head with `quest merge <pr> <token> --land <full 40-character head SHA>`.
 It makes a merge commit; add `--squash` or `--rebase` when the repository's root instructions name that method for the PR's base.
-On a base that requires the `quest land` check, it queues the PR for `quest land`, whose chain merges and tests against the current base; do not merge the base or rerun checks per PR just to queue it.
-On an ungated base, the command refuses a head that does not contain the current base. Merge the base locally (never rebase), rerun the repository's checks, push, and land the new head after satisfying the guide's review rule for those changes.
+On a base that requires the `quest land` check, it queues the PR for `quest land`, whose chain merges and tests against the current base.
+On an ungated base with auto-merge disabled, it refuses. Follow the repository’s own landing instructions (for example, its label queue); never retry with `--direct` unless the user explicitly asks.
+On an ungated base, it refuses a head that does not contain the current base: recommend `/quest-iterate` to merge the base.
 The `quest:merge` label stays on while the PR is queued or auto-merging.
-Report once it is landing; do not wait for it to merge, since the queue re-checks it without you.
-A PR that left the queue unmerged or lost auto-merge shows why under `landing-stopped` in `quest status <pr>`.
-After `merge_conflict` or `failed_checks`, the pick still holds: fix it and land it again.
-After `checks_pending`, wait for its required checks to pass and land it again.
-Any other reason, such as a person removing it, is the user's call, so report why instead of landing it again.
+
+Report once it is queued, and do not wait for it to merge.
+Plan the PR's suggested follow-ups as soon as it is queued, as if it lands, rather than waiting for the merge, unless a coordinator such as `/quest-complete` called this skill and batches them.
+A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`; it needs the user's pick again.
 Never close a PR to unstick it, and never work around a refused merge; ask instead.

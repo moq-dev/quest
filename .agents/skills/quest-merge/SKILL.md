@@ -1,6 +1,6 @@
 ---
 name: quest-merge
-description: Merge a quest once reviews and CI pass.
+description: Queue a reviewed PR to land, or send it to /quest-iterate.
 ---
 
 Run `quest skill merge` and follow its output.
