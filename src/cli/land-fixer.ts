@@ -243,7 +243,7 @@ export async function startFixer(
 	child.unref();
 }
 
-/** New commits descend from the pin. Protected content/modes at the head must match pin or current base. */
+/** New commits descend from the pin. Protected content/modes at the head must match the pin or its merge with `base`, the base the fixer was given. */
 export function validateFix(root: string, entry: Entry, head: string, base: string): void {
 	if (!contains(root, entry.head, head) || head === entry.head)
 		throw new Error("fixed head must descend from the pinned PR head");
@@ -443,9 +443,11 @@ async function collectJob(
 					} catch (error) {
 						throw new FixerRefusal(String(error));
 					}
-					await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(job.plan), job.plan.base.ref]);
+					// Validate against the base the fixer was given, not the current one: other PRs may
+					// land protected changes while the result waits, and the requeue re-merges anyway.
+					await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(job.plan), job.plan.base.sha]);
 					try {
-						validateFix(root, entry, head, git(root, ["rev-parse", "FETCH_HEAD"]));
+						validateFix(root, entry, head, job.plan.base.sha);
 					} catch (error) {
 						throw new FixerRefusal(String(error));
 					}
