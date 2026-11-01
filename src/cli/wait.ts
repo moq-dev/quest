@@ -384,6 +384,12 @@ async function watch(
 
 	/** The head each auto-merge request was enabled on, by when it was enabled, once that can be told. */
 	const enabledHeads = new Map<string, string>();
+	/** Warnings already printed, so a forbidden activity listing warns once per wait rather than per poll. */
+	const warned = new Set<string>();
+	const warnOnce = (message: string) => {
+		if (!warned.has(message)) deps.warn(message);
+		warned.add(message);
+	};
 	/** Auto-merge left on for a head other than `head`, reported once per head and request. */
 	const movedAutoMerge = async (head: string, pull: ObjectValue): Promise<Activity[]> => {
 		if (pull.autoMergeRequest == null) return [];
@@ -391,7 +397,7 @@ async function watch(
 		const enabledAt = string(request.enabledAt);
 		const id = `${head}:auto-merge:${enabledAt}`;
 		if (cursor.checks.reported.includes(id)) return [];
-		const enabled = enabledHeads.get(enabledAt) ?? (await enabledHead(github, pull));
+		const enabled = enabledHeads.get(enabledAt) ?? (await enabledHead(github, pull, warnOnce));
 		if (enabled === null) return [];
 		enabledHeads.set(enabledAt, enabled);
 		if (enabled === head) return [];

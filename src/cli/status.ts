@@ -3,6 +3,7 @@ import {
 	actor,
 	array,
 	GitHub,
+	GitHubDeadline,
 	type GitHubDependencies,
 	link,
 	object,
@@ -190,7 +191,7 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 	if (ownership.head !== first!.headRefOid)
 		throw new Error("the PR head changed while reading its holds; rerun quest status");
 	const status = summarize(first!, rollup, contexts, reviewNodes, threadNodes, commentNodes);
-	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!);
+	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
 }
 
@@ -199,10 +200,15 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
  * keeps auto-merge across a writer's push but does not say which head it was enabled on. A
  * `quest land` pin names it; otherwise it is the last push to the head branch before auto-merge
  * was enabled, read from the head repository's activity once that lists the current head's push.
- * A push in the same second as enabling is ambiguous. The node needs `headRefOid`, `headRefName`,
- * `headRepository { nameWithOwner }`, and `autoMergeRequest { enabledAt commitBody }`.
+ * A push in the same second as enabling is ambiguous. An activity listing the token cannot read
+ * leaves it unknown, with a warning, rather than failing the caller. The node needs `headRefOid`,
+ * `headRefName`, `headRepository { nameWithOwner }`, and `autoMergeRequest { enabledAt commitBody }`.
  */
-export async function enabledHead(github: GitHub, pull: ObjectValue): Promise<string | null> {
+export async function enabledHead(
+	github: GitHub,
+	pull: ObjectValue,
+	warn: (message: string) => void,
+): Promise<string | null> {
 	if (pull.autoMergeRequest == null) return null;
 	const request = object(pull.autoMergeRequest);
 	const pin = pinned(typeof request.commitBody === "string" ? request.commitBody : "");
@@ -210,11 +216,22 @@ export async function enabledHead(github: GitHub, pull: ObjectValue): Promise<st
 	const enabled = Date.parse(string(request.enabledAt));
 	const head = string(pull.headRefOid);
 	const pushes: { sha: string; time: number }[] = [];
+	const repository = string(object(pull.headRepository).nameWithOwner);
 	let path: string | undefined =
-		`/repos/${string(object(pull.headRepository).nameWithOwner)}/activity?ref=${encodeURIComponent(string(pull.headRefName))}&per_page=100`;
+		`/repos/${repository}/activity?ref=${encodeURIComponent(string(pull.headRefName))}&per_page=100`;
 	// Newest first: read until a push before enabling, which is the head auto-merge was enabled on.
 	while (path && !pushes.some((push) => push.time < enabled)) {
-		const response = await github.request(path, { allow: [404] });
+		let response: Response;
+		try {
+			response = await github.request(path, { allow: [404] });
+		} catch (error) {
+			// A deadline is the caller's to handle; a forbidden listing, as for a token without contents access, is not.
+			if (error instanceof GitHubDeadline || !(error instanceof Error)) throw error;
+			warn(
+				`cannot read ${repository}'s push activity, so the head auto-merge was enabled on is unknown: ${error.message}`,
+			);
+			return null;
+		}
 		if (response.status === 404) return null;
 		for (const row of array(await response.json()))
 			if (["push", "force_push", "branch_creation"].includes(string(row.activity_type)))

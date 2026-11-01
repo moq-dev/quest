@@ -112,7 +112,8 @@ function setup(
 		holdFields?: Node;
 		eventPages?: { rows: Node[]; next?: string }[];
 		/** Pages of the head repository's activity, newest first. */
-		activity?: { rows: Node[]; next?: string }[];
+		activity?: { rows: Node[]; next?: string; status?: number }[];
+		warnings?: string[];
 	} = {},
 ) {
 	const queries: Record<string, unknown>[] = [];
@@ -126,13 +127,15 @@ function setup(
 		token: "test-token",
 		now: () => options.now ?? 0,
 		sleep: async () => {},
-		warn: () => {},
+		warn: (message) => options.warnings?.push(message),
 		fetch: async (url, init) => {
 			const path = new URL(String(url));
 			if (path.pathname === "/repos/fork/project/activity") {
 				activityRequests.push(`${path.pathname}${path.search}`);
 				const page = activityPages.shift();
 				if (!page) return Response.json({ message: "Not Found" }, { status: 404 });
+				if (page.status === 403)
+					return Response.json({ message: "Resource not accessible by integration" }, { status: 403 });
 				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
 			}
 			if (path.pathname !== "/graphql") {
@@ -270,8 +273,9 @@ describe("the head auto-merge was enabled on", () => {
 	const push = (after: string, timestamp: string, activity_type = "push") => ({ after, timestamp, activity_type });
 	const enabled = async (
 		request: Node,
-		activity: { rows: Node[]; next?: string }[] = [],
+		activity: { rows: Node[]; next?: string; status?: number }[] = [],
 		head = B,
+		warnings?: string[],
 	): Promise<{ line: string | undefined; requests: string[] }> => {
 		const body = pull({
 			head,
@@ -287,7 +291,7 @@ describe("the head auto-merge was enabled on", () => {
 				...request,
 			},
 		});
-		const fixture = setup([body], { activity });
+		const fixture = setup([body], { activity, warnings });
 		const status = await pullRequestStatus(pr, fixture.deps);
 		return {
 			line: statusLines(status).find((line) => line.startsWith("auto-merge ")),
@@ -328,8 +332,17 @@ describe("the head auto-merge was enabled on", () => {
 		expect((await enabled({}, [{ rows: [push(B, ENABLED), push(A, "2026-10-07T11:59:00Z")] }])).line).toBe(
 			`auto-merge merge kixelated ${ENABLED} -`,
 		);
-		// A head repository the token cannot read.
+		// A head repository the token cannot see.
 		expect((await enabled({}, [])).line).toBe(`auto-merge merge kixelated ${ENABLED} -`);
+	});
+
+	test("is unknown, with a warning, when the token may not read the activity, and status still prints", async () => {
+		const warnings: string[] = [];
+		const result = await enabled({}, [{ rows: [], status: 403 }], B, warnings);
+		expect(result.line).toBe(`auto-merge merge kixelated ${ENABLED} -`);
+		expect(warnings).toEqual([
+			"cannot read fork/project's push activity, so the head auto-merge was enabled on is unknown: GitHub HTTP 403 for /repos/fork/project/activity; Resource not accessible by integration",
+		]);
 	});
 });
 
