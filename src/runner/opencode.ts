@@ -128,7 +128,10 @@ export function projectConfig(cwd: string): string[] {
  * every symlink, and a path that does not exist yet through its nearest
  * existing directory. A dangling symlink is refused, since a write would
  * follow it. `apply_patch` names its files in the patch's headers. Nothing
- * writes the checkout's own opencode config, which opencode would load.
+ * writes the checkout's own opencode config, which opencode would load. The
+ * tool opens the path after this check, so a command running alongside it
+ * could still swap the path for a symlink in between: the check narrows that
+ * window rather than closing it.
  */
 export const PLUGIN = `import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
