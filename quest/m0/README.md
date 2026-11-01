@@ -69,7 +69,6 @@ ownership-manifest design:
 - [The land fixer handles every mechanical failure](/quest/m0/land-fixer/README.md) - attempts, registry network, triage, flaky tests, local mergeability, protected edits, and fork commits
 - [Landing priority](/quest/m0/land-priority.md) - cheap checks wait a bounded time and the land daemon's check runs ahead of agent builds
 - [Drop emptied Required headings](/quest/m0/required-heading.md) - a clean driver merge that empties a `Required` list passes `quest check`
-- [GitHub retries](/quest/m0/github-retry.md) - one 5xx or dropped connection no longer fails a command or land step
 - [Current conflict reports](/quest/m0/land-conflicts-refresh.md) - a queued PR's conflict report updates when the queue ahead of it changes
 - [Land checks at gate priority](/quest/m0/land-priority-sandbox.md) - `quest land serve` passes `QUEST_GATE_PRIORITY` to its sandbox
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
