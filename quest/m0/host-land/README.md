@@ -89,11 +89,10 @@ can hand off instead.
   landing section describe the host gate.
 - Amended 2026-10-31 (user): the fixer triages a failing batch before
   anything is ejected, and only the PR it blames is ejected. See
-  [batch triage](/quest/m0/host-land/triage.md).
+  [batch triage](/quest/m0/land-fixer/triage.md).
 
 ## Required
 
 - [Gate host](/quest/m0/host-land/host.md) - kixelated/nixos runs the daemon as its own user, checks in nspawn containers, and retires the Actions runner
 - [Fixer proxy access](/quest/m0/host-land/fixer.md) - connect the nixos fixer container to CLIProxyAPI with the gate client key and maintainer login
-- [Batch triage](/quest/m0/host-land/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
 - [Daemon restart keeps its check](/quest/m0/host-land/reattach.md) - a deploy no longer reruns the batch it interrupted

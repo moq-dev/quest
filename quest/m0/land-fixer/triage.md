@@ -56,7 +56,8 @@ wasting CI on bisection?"
   [#7306](https://github.com/moq-dev/moq/pull/7306),
   [#7284](https://github.com/moq-dev/moq/pull/7284) and
   [#7312](https://github.com/moq-dev/moq/pull/7312). Only the blamed PR's
-  attempt is spent.
+  attempt is spent. [Attempt budget](/quest/m0/land-fixer/attempts.md)
+  owns the counting rule for every outcome (2026-11-01).
 - Collect a finished fixer's result without waiting for the running batch
   (user, 2026-10-31). On 2026-10-31 moq's fixer finished at 14:55, having
   fixed [moq-dev/moq#7383](https://github.com/moq-dev/moq/pull/7383) and
