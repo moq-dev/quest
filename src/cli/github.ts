@@ -37,8 +37,13 @@ export type ObjectValue = Record<string, unknown>;
 
 /** Retries of a 5xx or a dropped connection, waiting 1, 2, 4, then 8 seconds unless GitHub says how long. */
 const TRANSIENT_RETRIES = 4;
-/** How far GitHub's clock may run behind ours when looking for what a lost request created. */
+/**
+ * How far GitHub's clock may run behind ours when looking for what a lost request created, before
+ * any response has said what GitHub's clock reads.
+ */
 const CLOCK_SKEW = 60_000;
+/** The slack on GitHub's measured clock: its Date header and created_at are both whole seconds. */
+const DATE_SLACK = 2000;
 /** Statuses whose response has no body. */
 const NULL_BODY = [204, 205, 304];
 
@@ -140,6 +145,8 @@ export function gitHubDependencies(warn: (message: string) => void): GitHubDepen
 export class GitHub {
 	/** The longest X-Poll-Interval GitHub asked for since the caller last set this, in milliseconds. */
 	pollInterval = 0;
+	/** GitHub's clock less ours, from the latest response's Date header; it can only read early, by its latency. */
+	private skew: number | undefined;
 
 	constructor(
 		private readonly deps: GitHubDependencies,
@@ -195,6 +202,8 @@ export class GitHub {
 			let retry: number | undefined;
 			if (response) {
 				this.pollInterval = Math.max(this.pollInterval, seconds(response.headers.get("x-poll-interval")) ?? 0);
+				const date = Date.parse(response.headers.get("date") ?? "");
+				if (Number.isFinite(date)) this.skew = date - this.deps.now();
 				// Read the body here, so a connection that drops mid-body is retried like one that drops before it.
 				const read = await response.text().then(
 					(text) => ({ text }),
@@ -294,9 +303,12 @@ export class GitHub {
 		if (issue?.[1] === "comments" && typeof body.body === "string") {
 			const text = body.body;
 			return async (started) => {
-				const since = new Date(started - CLOCK_SKEW).toISOString();
-				const comments = await this.all(`${url.pathname}?since=${since}&per_page=100`);
-				const found = comments.find((comment) => comment.body === text);
+				const since = this.createdSince(started);
+				// `since` filters by the last update; an identical comment created before this request is not ours.
+				const comments = await this.all(`${url.pathname}?since=${new Date(since).toISOString()}&per_page=100`);
+				const found = comments.find(
+					(comment) => comment.body === text && Date.parse(String(comment.created_at)) >= since,
+				);
 				return found && Response.json(found, { status: 201 });
 			};
 		}
@@ -309,12 +321,22 @@ export class GitHub {
 				);
 				const found = open.rows.find(
 					(pull) =>
-						typeof pull.created_at === "string" && Date.parse(pull.created_at) >= started - CLOCK_SKEW,
+						typeof pull.created_at === "string" &&
+						Date.parse(pull.created_at) >= this.createdSince(started),
 				);
 				return found && Response.json(found, { status: 201 });
 			};
 		}
 		return false;
+	}
+
+	/**
+	 * The earliest created_at, on GitHub's clock, of anything a request we started at `started` created:
+	 * within seconds of it once a response has measured GitHub's clock, so an identical comment
+	 * posted a moment earlier, as when a requeued PR is ejected again, is never taken for this one.
+	 */
+	private createdSince(started: number): number {
+		return this.skew === undefined ? started - CLOCK_SKEW : started + this.skew - DATE_SLACK;
 	}
 
 	/** One page of a REST listing, and its response for the next link. */
