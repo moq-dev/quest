@@ -57,6 +57,7 @@ import { type Snapshot, checkout, collect, exists, load, snapshot, under } from 
 import { pullRequestStatus, statusLines } from "./status";
 import { waitForActivity, WaitTimeout } from "./wait";
 import { Worktrees } from "./worktree";
+import { HOOK_EVENTS, claudeHook } from "./worktree-hook";
 
 /** Where the command writes; the process streams, or a buffer under test. */
 export interface Output {
@@ -583,7 +584,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	const record = (value: unknown) => print(JSON.stringify(value));
 	worktree
 		.command("capacity <bytes>")
-		.description("Set this user's shared disk budget in bytes")
+		.description("Set this user's shared disk budget in bytes; until set, only free disk space limits checkouts")
 		.action((bytes: string) => {
 			state().configure(positiveInteger("bytes")(bytes));
 		});
@@ -685,6 +686,35 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("restore <id>")
 		.description("Reserve a released checkout's disk again before rebuilding its scratch")
 		.action((id: string) => record(state().restore(id)));
+	worktree
+		.command("hook")
+		.summary("Handle a Claude Code worktree or subagent hook event read on stdin")
+		.description(
+			"Handle the Claude Code hook event whose JSON input arrives on stdin; `quest init` installs it in " +
+				".claude/settings.json for " +
+				HOOK_EVENTS.join(", ") +
+				".\n\n" +
+				"WorktreeCreate checks out the session's commit as a quest worktree under the main checkout's " +
+				".worktrees/ and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
+				".worktrees/, .claude/, and entries holding a nested repository; its reserve is the main checkout's disk " +
+				"usage without .git and those checkouts. An existing checkout of that name in the repository is " +
+				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
+				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
+				"when it finishes or stops to wait, and SubagentStart restores it. Other checkouts are left alone. " +
+				"Exits 1 on failure, never 2, which would keep a subagent running.",
+		)
+		.action(() => {
+			pending = (async () => claudeHook(JSON.parse(readFileSync(0, "utf8")), state(), merged))().then(
+				(output) => {
+					if (output) out.stdout(output);
+					return 0;
+				},
+				(error: unknown) => {
+					warn(error instanceof Error ? error.message : String(error));
+					return 1;
+				},
+			);
+		});
 
 	const agent = program
 		.command("agent")
@@ -1019,7 +1049,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("init")
-		.description("Install skill stubs, a quest root, agent pointers, and the merge driver for this repository")
+		.description(
+			"Install skill stubs, a quest root, agent pointers, Claude Code worktree hooks, and the merge driver for this repository",
+		)
 		.action(() => {
 			const changes = init(root());
 			for (const line of theme ? theme.init(changes) : changes) print(line);
@@ -1027,7 +1059,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("uninstall")
-		.description("Remove Quest stubs, markers, and the merge driver installed by `quest init`")
+		.description("Remove Quest stubs, markers, hooks, and the merge driver installed by `quest init`")
 		.action(() => {
 			const changes = uninstall(root());
 			for (const line of theme ? theme.uninstall(changes) : changes) print(line);
