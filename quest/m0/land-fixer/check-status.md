@@ -29,7 +29,7 @@ landing through its own push or the pinned squash merge, as now.
 - Needs the App's `checks: write`, an installation permission the maintainer
   accepts. Check it during this work; it may already be granted for the
   existing check.
-- Fixer comments (planned in [moq-dev/quest#362](https://github.com/moq-dev/quest/pull/362)) explain decisions on
+- [Fixer comments](/quest/m0/land-fixer/comments.md) explain decisions on
   the PR; the check run shows state only.
 
 ## Related
