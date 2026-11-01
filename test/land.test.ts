@@ -58,6 +58,10 @@ import { tempDir } from "./fixture";
 
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
+// Each daemon test drives many git merges. On the land gate's host under load 28 (2026-10-31),
+// tests that take 1.1-1.8 s unloaded took 5.2-6.8 s and failed vitest's 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
+
 const REPOSITORY = { owner: "upstream", repo: "project" };
 
 const PATH = process.env.PATH;
@@ -1070,6 +1074,19 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(forge.comment(1)).toMatch(/quest\/m0\/a\.md:\d+: .*\/quest\/m0\/b\.md/);
 		expect(forge.comment(1)).toContain("<!-- quest land: failed_checks -->");
 		expect(linking.labels).toEqual([]);
+	});
+
+	test("screens only the PRs a batch reaches, leaving the rest of a long queue for later", async () => {
+		const forge = new Forge();
+		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		for (let i = 0; i < 4; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
+		forge.pull("Link b", { "quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n` });
+		// The base finishes b, so the last PR's link dangles, but an oldest-first batch of three never reaches it.
+		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
+		const { checked, landing } = await forge.round();
+		expect(checked).toEqual([[1, 2, 3]]);
+		expect(landing.map((line) => line.split(" ")[0])).toEqual(["landed", "landed", "landed"]);
+		expect(forge.repo.pulls[4].landing).toBe(true);
 	});
 
 	test("blames no PR for a finding the base already has", async () => {
