@@ -143,14 +143,14 @@ function identity(pid: number): string | undefined {
 		return undefined;
 	}
 }
-async function comment(
+/** Post `content` once per pick and kind: a retry finds the bot's own marker and posts nothing. */
+async function post(
 	github: GitHub,
 	plan: Plan,
 	entry: Pick<Entry, "number" | "enabledAt">,
-	text: string,
+	content: string,
 	suffix: string,
-	attribution = "Codex",
-	log = "",
+	attribution: string,
 	reason?: Reason,
 	section?: (room: number) => string,
 ): Promise<void> {
@@ -163,10 +163,23 @@ async function comment(
 		)
 	)
 		return;
-	const lead = `${attribution} land fixer: ${fixerText(text)}${log ? `\n\n<pre>${excerpt(log)}</pre>` : ""}`;
 	const tail = `\n\n${marker}${reason ? `\n<!-- quest land: ${reason} -->` : ""}\n\n(written by ${attribution})`;
-	const extra = section?.(COMMENT_LIMIT - lead.length - tail.length) ?? "";
-	await github.request(path, { body: { body: `${lead}${extra}${tail}` } });
+	const extra = section?.(COMMENT_LIMIT - content.length - tail.length) ?? "";
+	await github.request(path, { body: { body: `${content}${extra}${tail}` } });
+}
+async function comment(
+	github: GitHub,
+	plan: Plan,
+	entry: Pick<Entry, "number" | "enabledAt">,
+	text: string,
+	suffix: string,
+	attribution = "Codex",
+	log = "",
+	reason?: Reason,
+	section?: (room: number) => string,
+): Promise<void> {
+	const content = `${attribution} land fixer: ${fixerText(text)}${log ? `\n\n<pre>${excerpt(redactTokens(log))}</pre>` : ""}`;
+	await post(github, plan, entry, content, suffix, attribution, reason, section);
 }
 
 /** Queue eligibility can eject a previously requeued PR before building another batch. */
@@ -537,9 +550,29 @@ export function validateFix(root: string, entry: Pick<Entry, "head">, head: stri
 		throw new Error("off-limits fixer edit: protected set must equal pinned head or base merge result");
 }
 
+/** Anything the fixer writes may echo a token it read; GitHub tokens never reach a post. */
+export function redactTokens(text: string): string {
+	return text.replace(/\b(?:gh[oprsu]_|github_pat_)[A-Za-z0-9_]{20,}/g, "[redacted token]");
+}
+
+/**
+ * The fixer's own Markdown comment, quoted under its name. It cannot carry a hidden marker, so it never
+ * passes for the daemon's handback, ejection, or apply comments, and it mentions no one.
+ */
+export function fixerMarkdown(text: string): string {
+	let value = redactTokens(text);
+	// Removing one opener can join the text around it into another.
+	while (value.includes("<!--")) value = value.replaceAll("<!--", "");
+	return value
+		.replaceAll("@", "[at]")
+		.split(/\r?\n|\r/)
+		.map((line) => `> ${line}`)
+		.join("\n");
+}
+
 /** Contributor prose is quoted data, never GitHub markup, mentions, or issue-closing instructions. */
 export function fixerText(text: string): string {
-	const value = text
+	const value = redactTokens(text)
 		.replaceAll("<!--", "")
 		.slice(0, 500)
 		.replaceAll("@", "[at]")
@@ -805,6 +838,16 @@ async function collectJob(
 				error = `${String(failure)}; run /quest-iterate before picking it again`;
 			}
 		}
+		// The fixer's own note goes first, so the daemon's outcome comment follows it.
+		if (result?.comment)
+			await post(
+				github,
+				job.plan,
+				entry,
+				`${author(result)} land fixer note:\n\n${fixerMarkdown(result.comment)}`,
+				"note",
+				author(result),
+			);
 		if (!error && result?.action !== "handback") {
 			// A PR that stayed queued needs no comment: its own fix, if any, is recorded in `## Review`.
 			await github.request(`/repos/${job.plan.repository}/issues/${number}/labels`, {

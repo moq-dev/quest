@@ -1,4 +1,5 @@
-// Untrusted agent side. The host wrapper supplies only a model endpoint and its client key.
+// Untrusted agent side. The host wrapper supplies only a model endpoint and its client key; the agent holds no
+// GitHub credential, and the daemon posts the comments it writes into its result.
 import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -21,12 +22,15 @@ export function readFixResult(root: string): string {
 		closeSync(fd);
 	}
 }
+/** The longest Markdown comment a result may ask the daemon to post on its PR. */
+export const COMMENT_LIMIT = 4000;
+
 /**
  * The fixer's verdict on one PR. `blame` names a PR whose own change caused the failure; a blamed PR
  * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
  * to last, that show the failure, which its comment quotes.
  */
-export type FixResult = { agent?: string; model?: string; blame?: boolean } & (
+export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string } & (
 	| { number: number; action: "requeue"; reason: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
@@ -81,6 +85,17 @@ function validate(item: any, pr: boolean): void {
 			throw new Error("invalid fixer log lines");
 		metadata.push("log");
 	}
+	// One optional Markdown comment per PR: multiline, but no other control characters.
+	if (pr && "comment" in item) {
+		if (
+			typeof item.comment !== "string" ||
+			!item.comment.trim() ||
+			item.comment.length > COMMENT_LIMIT ||
+			/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(item.comment)
+		)
+			throw new Error("invalid fixer comment");
+		metadata.push("comment");
+	}
 	if (
 		fields.length === 0 ||
 		Object.keys(item).length !== fields.length + metadata.length ||
@@ -99,7 +114,7 @@ function validate(item: any, pr: boolean): void {
 	if (item.action === "fixed" && !/^[a-f0-9]{40}$/.test(item.head)) throw new Error("invalid fixer head");
 }
 
-/** Reject extra fields, duplicate/missing PRs, multiline reasons, and oversized output. */
+/** Reject extra fields, duplicate/missing PRs, multiline reasons, oversized comments, and oversized output. */
 export function parseFixResult(text: string, numbers: number[]): FixResult[] {
 	const value = json(text);
 	if (!Array.isArray(value) || value.length !== numbers.length)

@@ -526,7 +526,7 @@ to `codex exec`; `--agent <executable>` and repeatable `--agent-arg <argument>`
 replace it for another CLI. It writes `<cwd>/quest-land-result.json`: an array of
 `{number, action:"requeue", reason}`, `{number, action:"fixed", head, reason}`, or
 `{number, action:"handback", diagnosis, recommendation}`, with no extra fields
-beyond an optional `blame: true` on each PR that caused the failure (a blamed PR is
+beyond an optional `comment`, an optional `blame: true` on each PR that caused the failure (a blamed PR is
 fixed or handed back), and on a handback an optional `log: [first, last]` citing the
 failure log's lines, which its comment quotes. For the base alone, it writes one
 object instead: `{action:"fixed", head, reason}` with the fix committed on `base`,
@@ -534,6 +534,13 @@ or `{action:"handback", diagnosis, recommendation}`.
 The payload adds `agent` and `model` metadata to each result (`--model <id>`
 selects the default Codex model; unknown models fall back to `Codex`).
 Reasons and diagnoses are single lines. Fixed heads must be committed on `pr-<n>`.
+A `comment` is Markdown of at most 4000 characters that the fixer wants on its PR.
+The fixer holds no GitHub credential, since PR code it builds can read the
+container's environment, so the daemon posts the comment as the bot when it
+collects the job, before any outcome comment of its own. It quotes the text under the
+recorded agent, strips HTML comments so the text can never carry the daemon's
+hidden markers, defuses @-mentions, and redacts GitHub tokens, as it does for
+every fixer text and log it posts.
 
 Jobs and attempts persist across daemon restarts. A running fixer outlives a
 restart only where the host leaves its process group alive (under systemd,

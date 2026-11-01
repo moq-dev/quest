@@ -51,6 +51,15 @@ one entry per supplied PR, no extra fields. Use one of:
 {"number":123,"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason"}
 {"number":123,"action":"handback","diagnosis":"one line","recommendation":"one line"}
 
+You have no GitHub credential and must not seek one. To tell a PR's maintainer
+something, such as what a fix changed and why, a flaky test, or the decision a
+handback needs, add an optional `"comment"` field to that PR's entry: Markdown of
+at most 4000 characters, one per PR. The daemon posts it on that PR, quoted under
+your name, after it collects the result. Write plain prose with no @-mentions,
+HTML comments, or secrets: the daemon strips mentions, HTML comments, and GitHub
+tokens. A comment decides nothing: the action sets the PR's outcome, and the
+daemon still posts its own outcome comment.
+
 A fixed head must be the tip of pr-<number>, descend from its pinned head, and
 contain only that PR's fix and base history. Leave all other PR branches intact.
 Keep the result file uncommitted.
