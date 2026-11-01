@@ -89,9 +89,15 @@ function save(path: string, value: unknown): void {
 	renameSync(`${path}.new`, path);
 }
 
-/** Only this PR's squash changes need workflow write; no PR branch is moved. */
-export function touchesWorkflows(root: string, parent: string, link: Chain["links"][number]): boolean {
-	return git(root, ["diff", "--name-only", parent, link.commit, "--", ".github/workflows"]) !== "";
+/**
+ * The merge needs workflow write when this PR's squash changes a workflow, or when the head being
+ * merged changes one since the pinned head: GitHub refuses an App's merge of a PR whose commits touch
+ * workflows, such as the gate's own merge of a base that changed one.
+ */
+export function touchesWorkflows(root: string, parent: string, link: Chain["links"][number], head: string): boolean {
+	const changed = (from: string, to: string) =>
+		git(root, ["diff", "--name-only", from, to, "--", ".github/workflows"]) !== "";
+	return changed(parent, link.commit) || changed(link.entry.head, head);
 }
 
 /** A fresh bare repository with no config, objects, or alternates inherited from the user's checkout. */
@@ -338,9 +344,18 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 		const response = await github.request(`${path}/merge`, {
 			method: "PUT",
 			body: { merge_method: "squash", sha: head },
-			allow: [405, 409],
+			allow: [403, 405, 409],
 		});
 		const result = object(await response.json());
+		// A rate limit is transient, but any other 403 is GitHub refusing this PR: it stops this PR alone,
+		// rather than failing the whole batch on every retry.
+		if (
+			response.status === 403 &&
+			(response.headers.has("retry-after") ||
+				response.headers.get("x-ratelimit-remaining") === "0" ||
+				/rate limit/i.test(String(result.message)))
+		)
+			throw new Error(`GitHub rate limited ${path}: ${String(result.message)}`);
 		if (response.ok && result.merged === true) return { sha: string(result.sha) };
 		const pull = object(await (await github.request(path)).json());
 		// A lost response or a manual merge is reconciled by rebuilding the remaining queue.
@@ -638,7 +653,7 @@ export async function serveBatch(
 		const merge =
 			"reason" in prepared
 				? new GitHub(deps)
-				: new GitHub({ ...deps, token: await token(touchesWorkflows(root, parent, link)) });
+				: new GitHub({ ...deps, token: await token(touchesWorkflows(root, parent, link, prepared.head)) });
 		const result = "reason" in prepared ? prepared : await mergePinned(merge, path, prepared.head, link.entry.head);
 		if (result === null) {
 			forgetHeads(options.state, link.entry.number);
