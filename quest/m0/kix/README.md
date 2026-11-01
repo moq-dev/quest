@@ -83,7 +83,7 @@ operator-paid-hosting decisions:
   without introducing another approval flag per quest.
 - **Keep useful infrastructure.** Retain Workers/Hono and D1 for the web
   service. Durable database claims and live WebSocket connections to a
-  per-owner Durable Object (decided 2026-10-16 on kixelated/quest#135)
+  per-owner Durable Object (decided 2026-10-16 on moq-dev/quest#135)
   replace MoQ locks and logs.
 - **Not exclusive.** The web UI is one interface, not the only one. Every
   skill keeps working from a user's own agent (Claude Code, Codex, ...)
@@ -91,7 +91,7 @@ operator-paid-hosting decisions:
   quest branches and PRs, which count as claims and get the usual PR
   decision items. There is no plugin or session mirroring.
 - **One owner per quest and PR** (decided 2026-10-20 from a transcript
-  audit, see [quest start](https://github.com/kixelated/quest/blob/d265755/quest/m0/helpers/start.md)). Claims are draft
+  audit, see [quest start](https://github.com/moq-dev/quest/blob/d265755/quest/m0/helpers/start.md)). Claims are draft
   PRs. A PR is owned while it is a draft without a `## Decisions needed`
   section or carries one `quest:*` state label, shared with local sessions. There is no repository-wide merge agent and no user-facing
   parallelism limit; runner slots and account quota cap it.
@@ -101,7 +101,7 @@ operator-paid-hosting decisions:
 
 The live rehearsal also covers what `quest runner` (`src/runner/`) could not
 check locally (it shipped in
-[kixelated/quest#188](https://github.com/kixelated/quest/pull/188)), and
+[moq-dev/quest#188](https://github.com/moq-dev/quest/pull/188)), and
 fixes what it finds:
 
 - On macOS, two accounts in separate `CLAUDE_CONFIG_DIR` homes keep separate
@@ -119,7 +119,7 @@ fixes what it finds:
   adapter the 2026-10-15 decision allows.
 - A merge job's publication refuses a merge commit that changes
   `.github/workflows` relative to the head it updates, which
-  [kixelated/quest#209](https://github.com/kixelated/quest/pull/209) assumes
+  [moq-dev/quest#209](https://github.com/moq-dev/quest/pull/209) assumes
   is the comparison GitHub makes. Try it with a real PR that edits a
   workflow (decided 2026-10-24, user).
 
@@ -127,10 +127,11 @@ fixes what it finds:
 
 - [Deploy kix.quest](/quest/m0/kix/deploy.md) - the operator registers the App and deploys the Worker with GitHub sign-in at kix.quest
 - [Read-only CI](/quest/m0/kix/ci-read-only.md) - enrolled repositories keep pull-request CI read-only, checked at enrollment, with every trust boundary written down
-- [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on kixelated/quest and moq-dev/moq
+- [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/quest and moq-dev/moq
 - [Pick repositories](/quest/m0/kix/pick-repos.md) - after installing, the maintainer enables repositories from a list
 - [Setup PR](/quest/m0/kix/setup-pr.md) - enrolling a repository without Quest makes the App open its `quest init` pull request
 - [Job sandbox](/quest/m0/kix/sandbox/README.md) - untrusted PR devShells built in a VM on Linux runners, maintainer PR heads trusted, opencode sandboxed, and macOS verified
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs
 - [Land review](/quest/m0/kix/land-review.md) - kix lands only heads with a review that counts on that exact head
 - [Onboarding guide](/quest/m0/kix/guide.md) - a complete maintainer path, from runner setup through a reviewed PR
+- [Fast runner continuation test](/quest/m0/kix/runner-timeout.md) - the conflicted-continuation test passes on a loaded host without a longer timeout

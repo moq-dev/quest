@@ -1,13 +1,14 @@
 // Host-wide command admission, sized from the host itself: every platform waits
-// for CPU load and free memory before starting the command. The gate owns no
-// descendants and holds nothing while the command runs.
+// for CPU load and free memory before starting the command. The gate then owns
+// the command's descendants until they stop, and holds nothing else while it runs.
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, userInfo } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { forwards } from "./interrupt";
+import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, requested } from "./interrupt";
+import { systemdScopes } from "./supervise";
 
 /** One admitted command: a unique id and the wall-clock time it was admitted. */
 export interface Admission {
@@ -367,33 +368,101 @@ export async function admit(limits: Limits, host: Host, signal: AbortSignal, wai
 const ADMITTED = "QUEST_GATE_ADMITTED";
 
 /**
- * Run a command in place, with inherited streams and its exact exit status.
- * Aborting with a signal name forwards that signal unless the command already
- * has it (see `forwards`), so the command's own handling of it runs; any other
- * reason sends SIGTERM.
+ * Runs an admitted command with inherited streams and resolves with its exact exit status.
+ * Asking to cancel forwards the requested signal unless the command already has it (see
+ * `forwards`), so the command's own handling of it runs; killing stops it outright.
  */
-export function run(command: string[], signal: AbortSignal): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(command[0], command.slice(1), {
-			env: { ...process.env, [ADMITTED]: "1" },
-			stdio: "inherit",
-		});
-		const cancel = () => {
-			const name = signal.reason;
-			if (typeof name !== "string" || !(name in constants.signals)) child.kill("SIGTERM");
-			else if (forwards(name as NodeJS.Signals)) child.kill(name as NodeJS.Signals);
+export type Owner = (command: string[], env: NodeJS.ProcessEnv, cancel: Cancellation) => Promise<number>;
+
+/** Run the command as a plain child, for a caller whose own owner already holds its descendants. */
+export const direct: Owner = (command, env, cancel) =>
+	new Promise((resolve, reject) => {
+		const child = spawn(command[0], command.slice(1), { env, stdio: "inherit" });
+		const stop = () => {
+			if (forwards(cancel.signal)) child.kill(requested(cancel.signal));
 		};
-		signal.addEventListener("abort", cancel, { once: true });
-		if (signal.aborted) cancel();
+		const cleanup = follow(cancel, stop, () => child.kill("SIGKILL"));
 		child.once("error", (error) => {
-			signal.removeEventListener("abort", cancel);
+			cleanup();
 			reject(error);
 		});
 		child.once("close", (code, killed) => {
-			signal.removeEventListener("abort", cancel);
+			cleanup();
 			resolve(code ?? (killed ? 128 + constants.signals[killed] : 1));
 		});
 	});
+
+/** Run the command in its own systemd scope, whose cgroup holds every descendant (see supervise.ts). */
+export const scope: Owner = (command, env, cancel) =>
+	systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, { env, cancel });
+
+/**
+ * Run the command as the leader of a new session, whose process group holds every descendant that
+ * does not move to another group or session. Once the command exits, the rest of its group is
+ * killed. The session has no controlling terminal: the command keeps its inherited streams, but a
+ * terminal's signals reach it only through Quest, which stands in for the terminal: every SIGINT
+ * Quest receives goes to the whole group, as a terminal's Ctrl-C would, and Quest inside the group
+ * leaves it there (see `GROUP`).
+ */
+export const group: Owner = (command, env, cancel) =>
+	new Promise((resolve, reject) => {
+		const child = spawn(command[0], command.slice(1), {
+			env: { ...env, [GROUP]: "1" },
+			stdio: "inherit",
+			detached: true,
+		});
+		const signal = (name: NodeJS.Signals) => {
+			try {
+				process.kill(-child.pid!, name);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			}
+		};
+		const stop = () => {
+			const name = requested(cancel.signal);
+			if (name === "SIGINT") signal(name);
+			else child.kill(name);
+		};
+		const terminate = () => signal("SIGKILL");
+		child.once("error", reject);
+		if (child.pid === undefined) return; // It never started.
+		const cleanup = follow(cancel, stop, terminate);
+		child.once("exit", (code, killed) => {
+			cleanup();
+			try {
+				// The group outlives its leader while any member remains, so its ID is not reused yet.
+				terminate();
+			} catch (error) {
+				return reject(error);
+			}
+			resolve(code ?? 128 + constants.signals[killed!]);
+		});
+	});
+
+/** Whether this process already runs in a Quest scope, which then holds whatever it starts. */
+export function scoped(self = "/proc/self/cgroup"): boolean {
+	const unified = readFileSync(self, "utf8")
+		.split("\n")
+		.find((line) => line.startsWith("0::"));
+	return unified !== undefined && /\/quest-[a-z]+-[0-9a-f-]+\.scope$/.test(unified);
+}
+
+/**
+ * The strongest owner this host offers. A nested call runs inside its admitted command, and a call
+ * inside a Quest scope inside that scope: moving into an owner of its own would take its command out
+ * of reach of the enclosing one. Linux owns descendants through a systemd scope, and settles for a
+ * process group, like macOS, without a systemd user manager. Windows owns only the command.
+ */
+export function owner(env = process.env): Owner {
+	if (env[ADMITTED] === "1" || process.platform === "win32") return direct;
+	if (process.platform !== "linux") return group;
+	if (scoped()) return direct;
+	try {
+		systemdScopes.check();
+		return scope;
+	} catch {
+		return group;
+	}
 }
 
 const notices: Record<Waiting, string> = {
@@ -403,34 +472,26 @@ const notices: Record<Waiting, string> = {
 
 /** Run from the CLI. */
 export async function gate(command: string[]): Promise<number> {
-	const controller = new AbortController();
-	let interrupted = 0;
-	const interrupt = (name: "SIGINT" | "SIGTERM" | "SIGHUP") => {
-		interrupted = 128 + constants.signals[name];
-		controller.abort(name);
-	};
-	const handlers = {
-		SIGINT: () => interrupt("SIGINT"),
-		SIGTERM: () => interrupt("SIGTERM"),
-		SIGHUP: () => interrupt("SIGHUP"),
-	};
-	for (const [name, handler] of Object.entries(handlers)) process.on(name, handler);
+	const cancel = interrupts();
 	try {
+		const run = owner();
 		// A nested invocation executes inside the already admitted command.
 		if (process.env[ADMITTED] !== "1") {
 			const shown = new Set<Waiting>();
-			await admit(hostLimits(), fileHost(claimDirectory()), controller.signal, (reason) => {
-				if (shown.has(reason)) return;
-				shown.add(reason);
-				process.stderr.write(`${notices[reason]}\n`);
-			});
+			try {
+				await admit(hostLimits(), fileHost(claimDirectory()), cancel.signal, (reason) => {
+					if (shown.has(reason)) return;
+					shown.add(reason);
+					process.stderr.write(`${notices[reason]}\n`);
+				});
+			} catch (error) {
+				if (cancel.signal.aborted) return cancelled(cancel.signal);
+				throw error;
+			}
 		}
-		const result = await run(command, controller.signal);
-		return interrupted || result;
-	} catch (error) {
-		if (interrupted) return interrupted;
-		throw error;
+		const result = await run(command, { ...process.env, [ADMITTED]: "1" }, cancel);
+		return cancel.signal.aborted ? cancelled(cancel.signal) : result;
 	} finally {
-		for (const [name, handler] of Object.entries(handlers)) process.off(name, handler);
+		cancel.close();
 	}
 }

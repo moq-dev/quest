@@ -29,6 +29,10 @@ import { Workspace } from "../src/runner/workspace";
 import { tempDir } from "./fixture";
 
 const posix = test.skipIf(process.platform === "win32");
+// The runner tests drive real git checkouts. On the land gate's host under load (2026-11-01), the
+// large-conflict continuation took 6.4 s and failed vitest's 5 s default, ejecting a batch of
+// unrelated PRs (moq-dev/quest#363, #365).
+vi.setConfig({ testTimeout: 30_000 });
 
 function git(dir: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", dir, ...args], {
@@ -1589,6 +1593,7 @@ describe("quest runner", () => {
 			enabled: true,
 			failIfUnavailable: true,
 			allowUnsandboxedCommands: false,
+			allowNestedUserNamespaces: false,
 			filesystem: { allowRead: [checkout, repository, launch.tmp], allowWrite: [launch.tmp] },
 			// A trusted revision's commands reach the package registries and nothing else.
 			network: { allowedDomains: REGISTRIES, strictAllowlist: true },

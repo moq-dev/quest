@@ -2,8 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import {
 	chmodSync,
+	existsSync,
 	mkdirSync,
 	readdirSync,
+	readFileSync,
 	renameSync,
 	statSync,
 	symlinkSync,
@@ -13,19 +15,24 @@ import {
 import { constants } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
 	admit,
 	COMMAND_MEMORY,
 	claimDirectory,
+	direct,
 	fileHost,
 	gate,
+	group,
 	type Host,
 	hostLimits,
 	linuxMemory,
+	type Owner,
+	owner,
 	RECENT_MS,
-	run as runCommand,
 	SETTLE_MS,
+	scope,
+	scoped,
 } from "../src/cli/gate";
 import { forwards, foregroundStat } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
@@ -399,9 +406,17 @@ test("cancelling a waiting caller rejects admission", async () => {
 	await expect(admit({ load: 1, memory: 1 }, busy, controller.signal)).rejects.toThrow("cancelled");
 });
 
-test("an admitted command runs in place and is marked nested", async () => {
+/** A cancellation the test drives: `stop` asks the command to stop, and `kill` stops it outright. */
+function cancellation() {
+	const stop = new AbortController();
+	const kill = new AbortController();
+	return { stop, kill, cancel: { signal: stop.signal, kill: kill.signal } };
+}
+
+test("a command runs in place with the given environment and its exact exit status", async () => {
 	const script = "process.exit(process.env.QUEST_GATE_ADMITTED === '1' ? 7 : 1)";
-	expect(await runCommand([process.execPath, "-e", script], new AbortController().signal)).toBe(7);
+	const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
+	expect(await direct([process.execPath, "-e", script], env, cancellation().cancel)).toBe(7);
 });
 
 test("a nested gate runs at once and keeps the exact exit status", async () => {
@@ -411,24 +426,156 @@ test("a nested gate runs at once and keeps the exact exit status", async () => {
 });
 
 test("a command cancelled before listener registration still stops", async () => {
-	const controller = new AbortController();
-	controller.abort();
-	const result = await runCommand([process.execPath, "-e", "setInterval(() => {}, 1000)"], controller.signal);
+	const { stop, cancel } = cancellation();
+	stop.abort();
+	const result = await direct([process.execPath, "-e", "setInterval(() => {}, 1000)"], process.env, cancel);
 	expect(result).not.toBe(0);
 });
 
 // Windows has no POSIX signals to forward; kill() always terminates there.
 test.skipIf(process.platform === "win32")("cancellation forwards the received signal to the command", async () => {
-	const controller = new AbortController();
-	controller.abort("SIGHUP");
-	const result = await runCommand([process.execPath, "-e", "setInterval(() => {}, 1000)"], controller.signal);
+	const { stop, cancel } = cancellation();
+	stop.abort("SIGHUP");
+	const result = await direct([process.execPath, "-e", "setInterval(() => {}, 1000)"], process.env, cancel);
 	expect(result).toBe(128 + constants.signals.SIGHUP);
+});
+
+test("a nested call, or one inside a Quest scope, leaves its command to the enclosing owner", () => {
+	expect(owner({ QUEST_GATE_ADMITTED: "1" })).toBe(direct);
+	const cgroup = join(tempDir(), "cgroup");
+	const slice = "0::/user.slice/user-1000.slice/user@1000.service/app.slice";
+	writeFileSync(cgroup, `${slice}/quest-worktree-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope\n`);
+	expect(scoped(cgroup)).toBe(true);
+	writeFileSync(cgroup, `${slice}/quest-gate-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope\n`);
+	expect(scoped(cgroup)).toBe(true);
+	writeFileSync(cgroup, `${slice}/app-terminal-42.scope\n`);
+	expect(scoped(cgroup)).toBe(false);
+});
+
+/** Gone, or a zombie its new parent has not reaped yet: either way it runs no code. */
+function stopped(pid: number): boolean {
+	const ps = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+	return ps.status !== 0 || ps.stdout.trim().startsWith("Z");
+}
+
+async function until(done: () => boolean, what: string) {
+	for (let tries = 0; !done(); tries++) {
+		if (tries === 200) throw new Error(`timed out waiting for ${what}`);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+}
+
+/** A command that starts a descendant which outlives it unless owned, recording its PID. */
+function descendant(dir: string, rest: string, { leave = false } = {}) {
+	const pid = join(dir, "descendant");
+	// A descendant that leaves its process group starts a new session, as a daemon would.
+	const start = leave
+		? `${JSON.stringify(process.execPath)} -e "const c = require('node:child_process').spawn('sleep', ['1000'], { detached: true, stdio: 'ignore' }); c.unref(); process.stdout.write(String(c.pid))"`
+		: "sleep 1000 & echo $!";
+	return {
+		command: ["/bin/sh", "-c", `${start} > ${JSON.stringify(pid)}; ${rest}`],
+		pid: () => Number(readFileSync(pid, "utf8")),
+	};
+}
+
+const owners: [string, Owner][] =
+	process.platform === "linux"
+		? [
+				["a systemd scope", scope],
+				["a process group", group],
+			]
+		: process.platform === "win32"
+			? []
+			: [["a process group", group]];
+
+describe.each(owners)("an owner using %s", (_name, run) => {
+	test("keeps the exact exit status and stops descendants left behind", { timeout: 30_000 }, async () => {
+		const { command, pid } = descendant(tempDir(), "exit 7");
+		expect(await run(command, process.env, cancellation().cancel)).toBe(7);
+		await until(() => stopped(pid()), "the orphan to stop");
+	});
+
+	test("cancelling stops a grandchild", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const ready = join(dir, "ready");
+		const { command, pid } = descendant(dir, `: > ${JSON.stringify(ready)}; wait`);
+		const { stop, cancel } = cancellation();
+		const result = run(command, process.env, cancel);
+		await until(() => existsSync(ready), "the command to start");
+		stop.abort("SIGTERM");
+		expect(await result).toBe(128 + constants.signals.SIGTERM);
+		await until(() => stopped(pid()), "the grandchild to stop");
+	});
+
+	test("killing stops a command that ignores the request", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const ready = join(dir, "ready");
+		const { command, pid } = descendant(dir, `trap '' TERM; : > ${JSON.stringify(ready)}; wait`);
+		const { stop, kill, cancel } = cancellation();
+		const result = run(command, process.env, cancel);
+		await until(() => existsSync(ready), "the command to start");
+		stop.abort("SIGTERM");
+		kill.abort();
+		expect(await result).not.toBe(0);
+		await until(() => stopped(pid()), "the grandchild to stop");
+	});
+});
+
+describe.runIf(process.platform === "linux")("a systemd scope", () => {
+	test("also stops a descendant that left its process group", { timeout: 30_000 }, async () => {
+		const { command, pid } = descendant(tempDir(), "exit 3", { leave: true });
+		expect(await scope(command, process.env, cancellation().cancel)).toBe(3);
+		await until(() => stopped(pid()), "the daemon to stop");
+	});
+});
+
+describe.skipIf(process.platform === "win32")("a process group", () => {
+	test("delivers SIGINT once to a command under a nested gate", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const ready = join(dir, "ready");
+		const count = join(dir, "count");
+		const child = join(dir, "child.js");
+		writeFileSync(
+			child,
+			`const { writeFileSync } = require("node:fs");
+			let interrupts = 0;
+			process.on("SIGINT", () => interrupts++);
+			writeFileSync(${JSON.stringify(ready)}, "");
+			setTimeout(() => writeFileSync(${JSON.stringify(count)}, String(interrupts)), 1000);`,
+		);
+		const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
+		const { stop, cancel } = cancellation();
+		const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
+		const result = group([process.execPath, bin, "gate", process.execPath, child], env, cancel);
+		await until(() => existsSync(ready), "the command to start");
+		stop.abort("SIGINT");
+		expect(await result).toBe(128 + constants.signals.SIGINT);
+		expect(readFileSync(count, "utf8")).toBe("1");
+	});
+
+	test("leaves a descendant that started its own session", { timeout: 30_000 }, async () => {
+		const { command, pid } = descendant(tempDir(), "exit 3", { leave: true });
+		expect(await group(command, process.env, cancellation().cancel)).toBe(3);
+		try {
+			expect(stopped(pid())).toBe(false);
+		} finally {
+			process.kill(pid(), "SIGKILL");
+		}
+	});
+});
+
+test("a cancellation without a signal's name always passes, even on Windows", () => {
+	expect(forwards(AbortSignal.abort())).toBe(true);
+	expect(forwards(AbortSignal.abort(), { QUEST_GATE_GROUP: "1" })).toBe(true);
 });
 
 test.skipIf(process.platform === "win32")("only a terminal's own SIGINT is left to reach the child", () => {
 	// Signals that may be sent to Quest alone always pass.
-	expect(forwards("SIGHUP")).toBe(true);
-	expect(forwards("SIGTERM")).toBe(true);
+	expect(forwards(AbortSignal.abort("SIGHUP"))).toBe(true);
+	expect(forwards(AbortSignal.abort("SIGTERM"))).toBe(true);
+	// The group owner already delivers a Ctrl-C to everything in its group.
+	expect(forwards(AbortSignal.abort("SIGINT"), { QUEST_GATE_GROUP: "1" })).toBe(false);
+	expect(forwards(AbortSignal.abort("SIGTERM"), { QUEST_GATE_GROUP: "1" })).toBe(true);
 	// pid (comm with spaces) state ppid pgrp session tty_nr tpgid ...
 	expect(foregroundStat("42 (a ) b) S 1 42 42 34816 42 4194560")).toBe(true);
 	expect(foregroundStat("42 (a ) b) S 1 42 42 34816 77 4194560")).toBe(false);

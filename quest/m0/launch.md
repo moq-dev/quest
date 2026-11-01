@@ -18,7 +18,7 @@ scope. The README and the landing page belong to
   [OpenSpec](https://github.com/Fission-AI/OpenSpec) (spec-driven work), as
   checked on 2026-09-19. Re-check them before writing.
 - Use the release rehearsal transcript in the description of
-  kixelated/quest#82 for the demo. v0.1.0 shipped on 2026-10-07.
+  moq-dev/quest#82 for the demo. v0.1.0 shipped on 2026-10-07.
 
 - Decided 2026-10-13: demonstrate the kix.quest issue-to-plan and ready-quest-to-PR
   prompt flow; remove contest positioning. Publishing remains out of scope.

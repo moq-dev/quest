@@ -23,9 +23,10 @@ Fix merge conflicts and failing CI checks.
 Address the automated review findings already posted, without waiting on optional reviewers: fix those you agree with and comment on any you decline.
 One round only; never request a review, including by toggling a ready PR to draft and back.
 
+Before pushing to a PR that is ready for review, review the new head locally as the guide's Reviews section describes.
 Push your changes to the PR and update its summary.
 Summarize the changes made.
 
-Mark the PR ready with `quest ready <pr> <token> --done` once nothing is unfinished and no decisions need the user.
+Once nothing is unfinished and no decisions need the user, run `/quest-review` with your token, which reviews the branch, pushes, and marks the PR ready.
 Hand it back with `quest release <pr> <token>`, using the latest token printed, whenever you stop, including to ask.
 Never merge; that is `/quest-merge`, once the user picks it.

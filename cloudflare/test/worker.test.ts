@@ -29,7 +29,7 @@ describe("Worker", () => {
 		const html = await (await SELF.fetch(origin)).text();
 		// Milestones open their section of the board; epics and waypoints open their pages.
 		expect(html).toContain('href="/repos/quest#m0"');
-		expect(html).not.toContain('href="https://github.com/kixelated/quest/blob/main/quest/');
+		expect(html).not.toContain('href="https://github.com/moq-dev/quest/blob/main/quest/');
 		const waypoints = [...html.matchAll(/class="waypoint [^"]+"><a href="(\/repos\/quest\/quest\/[^"]+)"/g)];
 		const epics = [...html.matchAll(/<p class="path-name"><a href="(\/repos\/quest\/quest\/[^"]+)"/g)];
 		expect(waypoints.length).toBeGreaterThan(0);
@@ -52,7 +52,7 @@ describe("Worker", () => {
 		expect(html).toContain("<title>Use Quest in your repository · Quest</title>");
 		expect(html).toContain('<h2 id="set-it-up">');
 		// Relative links that work on GitHub point at GitHub from the site.
-		expect(html).toContain('href="https://github.com/kixelated/quest/blob/main/SETUP.md"');
+		expect(html).toContain('href="https://github.com/moq-dev/quest/blob/main/SETUP.md"');
 		expect((await SELF.fetch(`${origin}/docs/missing`)).status).toBe(404);
 	});
 	it("renders this repository's quest board", async () => {
@@ -60,7 +60,7 @@ describe("Worker", () => {
 		expect(response.status).toBe(200);
 		const html = await response.text();
 		expect(html).toContain("<h1>Quest log</h1>");
-		expect(html).toContain("kixelated/quest");
+		expect(html).toContain("moq-dev/quest");
 		expect(html).toMatch(/Milestone \d/);
 		expect(html).toContain('role="progressbar"');
 		expect(html).toContain('href="/repos/quest?show=available"');
@@ -101,9 +101,9 @@ describe("Worker", () => {
 		const html = await response.text();
 		expect(html).toContain("Reserved filename");
 		expect(html).toContain(
-			`href="https://github.com/kixelated/quest/blob/${project.commit}/quest/m0/space%20%23%3F%25/literal%2523%23%3F%25.md"`,
+			`href="https://github.com/moq-dev/quest/blob/${project.commit}/quest/m0/space%20%23%3F%25/literal%2523%23%3F%25.md"`,
 		);
-		expect(html).toContain(`href="https://github.com/kixelated/quest/blob/${project.commit}/docs/a.md#goal"`);
+		expect(html).toContain(`href="https://github.com/moq-dev/quest/blob/${project.commit}/docs/a.md#goal"`);
 		const separator = await app.fetch(new Request(`${origin}${href.replace("/m0/", "/m0%2F")}`), env);
 		expect(separator.status).toBe(404);
 	});
@@ -141,7 +141,7 @@ describe("Worker", () => {
 	it("redirects the setup short link to SETUP.md", async () => {
 		const response = await SELF.fetch(`${origin}/setup`, { redirect: "manual" });
 		expect(response.status).toBe(302);
-		expect(response.headers.get("location")).toBe("https://github.com/kixelated/quest/blob/main/SETUP.md");
+		expect(response.headers.get("location")).toBe("https://github.com/moq-dev/quest/blob/main/SETUP.md");
 	});
 	it("links to sign-in without a session", async () => {
 		const response = await SELF.fetch(origin);

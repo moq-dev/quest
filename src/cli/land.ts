@@ -1,13 +1,7 @@
-// `quest land`: a batched merge gate a repository runs from its own CI. Three
-// phases keep the push credential away from PR code. `resolve` reads the queue
-// from GitHub; `check` builds the queue into a chain of squash commits on the
-// base and runs the repository's check on it, with no push credential; `push`
-// rebuilds the same chain, lands the prefix that passed, and ejects what cannot
-// land.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-import { MERGE_LABEL } from "../core";
+import { type Finding, MERGE_LABEL, check, formatFinding } from "../core";
 import { repositoryPath } from "./claims";
 import {
 	GitHub,
@@ -22,6 +16,7 @@ import {
 	string,
 } from "./github";
 import { classifyCheck } from "./status";
+import { snapshot } from "./tree";
 
 /** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
 export const LAND_CHECK = "quest land";
@@ -34,6 +29,35 @@ export function pin(sha: string): string {
 	return `${PIN}: ${sha}`;
 }
 
+/**
+ * Queue `head` for the gate: squash auto-merge whose commit body pins it. GitHub keeps an
+ * existing auto-merge request, and its old commit body, when asked to enable it again, so an
+ * existing request is disabled first and the pin always names `head`.
+ */
+export async function enqueue(github: GitHub, id: string, head: string): Promise<void> {
+	const current = object(
+		await github.graphql(
+			"query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { commitBody } } } }",
+			{
+				id,
+			},
+		),
+	);
+	const request = object(current.node).autoMergeRequest;
+	if (request !== null && request !== undefined) {
+		const body = object(request).commitBody;
+		if (pinned(typeof body === "string" ? body : "") === head) return;
+		await github.graphql(
+			"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+			{ id },
+		);
+	}
+	await github.graphql(
+		"mutation($id: ID!, $sha: GitObjectID!, $body: String!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: SQUASH, commitBody: $body }) { clientMutationId } }",
+		{ id, sha: head, body: pin(head) },
+	);
+}
+
 /** The head an auto-merge commit body pins, if any. */
 function pinned(body: string): string | null {
 	return new RegExp(`^${PIN}: ([0-9a-f]{40})$`, "m").exec(body)?.[1] ?? null;
@@ -43,14 +67,13 @@ function pinned(body: string): string | null {
 export type Reason =
 	| "merge_conflict"
 	| "failed_checks"
-	| "checks_pending"
 	| "review_required"
 	| "changes_requested"
 	| "unresolved_conversations"
-	| "no_maintainer_edits"
 	| "head_moved"
 	| "not_pinned"
-	| "push_failed";
+	| "tree_mismatch"
+	| "merge_refused";
 
 /** The hidden line an ejection comment carries, which `quest status` reads. */
 export const EJECTED = /^<!-- quest land: ([a-z_]+) -->$/m;
@@ -64,11 +87,12 @@ export interface Entry {
 	title: string;
 	/** When auto-merge was enabled: the queue order, and how a later ejection tells a re-queued PR apart. */
 	enabledAt: string;
-	/** The pinned head, which the chain builds and the landing leases. */
+	/** The pinned head, which the chain builds and the merge API must match. */
 	head: string;
-	/** `owner/name` of the repository holding the head branch, which the landing moves. */
+	approved: string;
 	repository: string;
 	branch: string;
+	maintainerCanModify: boolean;
 }
 
 export interface Ejection {
@@ -81,7 +105,7 @@ export interface Ejection {
 	detail: string;
 }
 
-/** What `resolve` hands the other phases. */
+/** A snapshot of the base, approved queue, and pending ejections. */
 export interface Plan {
 	/** `owner/name`. */
 	repository: string;
@@ -89,19 +113,18 @@ export interface Plan {
 	/** Queued PRs in enqueue order. */
 	queue: Entry[];
 	eject: Ejection[];
+	/** Queued PRs whose required checks have not finished: they stay queued and sit out batches until they pass. */
+	waiting?: Waiting[];
 }
 
-/** One run of the check command, on the chain prefix holding these PRs. */
-export interface Tested {
-	numbers: number[];
-	tree: string;
-	passed: boolean;
-}
-
-/** What `check` hands `push`: each prefix it tested, in order. */
-export interface Result {
-	base: string;
-	checks: Tested[];
+/** A queued PR waiting on required checks that are still running or have not reported. */
+export interface Waiting {
+	number: number;
+	url: string;
+	/** Its pick, from which the wait for its checks is measured. */
+	enabledAt: string;
+	/** The required checks still pending on its head. */
+	pending: string[];
 }
 
 /** A page of a commit's check runs and commit statuses, with the app behind each run. */
@@ -118,8 +141,9 @@ const QUEUE = `query($owner: String!, $name: String!, $base: String!, $qualified
 		queue:pullRequests(states: OPEN, baseRefName: $base, first: 100, after: $after) {
 			pageInfo { hasNextPage endCursor }
 			nodes {
-				id number url title isDraft headRefName headRefOid maintainerCanModify reviewDecision
+				id number url title isDraft headRefOid headRefName reviewDecision
 				headRepository { nameWithOwner }
+				maintainerCanModify
 				autoMergeRequest { enabledAt commitBody }
 				commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 100) { ${CONTEXTS} } } } } }
 			}
@@ -135,14 +159,14 @@ const MORE_CONTEXTS = `query($owner: String!, $name: String!, $oid: GitObjectID!
 }`;
 
 /**
- * The ruleset rule types the gate upholds although its push bypasses them, and how: each PR's
+ * The ruleset rule types the gate upholds although its merge bypasses them, and how: each PR's
  * review decision, review threads, and required checks are its own to enforce, and the rest its
- * push satisfies.
+ * merge satisfies.
  */
 export const UPHELD: Record<string, string> = {
 	creation: "the gate never creates the base",
 	deletion: "the gate never deletes the base",
-	non_fast_forward: "the gate only fast-forwards the base",
+	non_fast_forward: "GitHub squashes each PR onto the current base",
 	required_linear_history: "the gate lands squash commits in a line",
 	pull_request:
 		"each PR's review decision must not block it, and its review threads must be resolved if the rule says so",
@@ -168,8 +192,8 @@ function unheld(rule: ObjectValue): string | null {
 }
 
 /**
- * The classic branch protection settings the gate upholds although its push bypasses them, and
- * how. Only an admin's push bypasses classic protection, and `enforce_admins` stops even that one.
+ * The classic branch protection settings the gate upholds although its merge bypasses them, and
+ * how. Classic settings that the gate cannot enforce remain a refusal.
  */
 export const UPHELD_CLASSIC: Record<string, string> = {
 	required_status_checks:
@@ -240,12 +264,14 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 /**
  * Read the queue: open PRs to `base` with auto-merge enabled, in the order it
  * was enabled. A PR is queued while its auto-merge commit body pins its current
- * head; the rest of the auto-merging PRs are ejected with a reason.
+ * head; one whose required checks are still running waits, and the rest of the
+ * auto-merging PRs are ejected with a reason.
  */
 export async function resolveQueue(
 	repository: Repository,
 	base: string | undefined,
 	deps: GitHubDependencies,
+	acceptHead?: (entry: Entry) => boolean,
 ): Promise<Plan> {
 	const github = new GitHub(deps);
 	const name = `${repository.owner}/${repository.repo}`;
@@ -275,7 +301,7 @@ export async function resolveQueue(
 	});
 	if (refused.length > 0) {
 		throw new Error(
-			`${name}'s ${ref} has ruleset rules the gate does not uphold, and its push bypasses them: ${refused.join("; ")}. It upholds only ${Object.keys(UPHELD).join(", ")}`,
+			`${name}'s ${ref} has ruleset rules the gate does not uphold, and its merge bypasses them: ${refused.join("; ")}. It upholds only ${Object.keys(UPHELD).join(", ")}`,
 		);
 	}
 	// Classic protection's required checks are already among `needs.checks`.
@@ -283,7 +309,7 @@ export async function resolveQueue(
 	const unmodeled = classic === null ? [] : unheldClassic(classic);
 	if (unmodeled.length > 0) {
 		throw new Error(
-			`${name}'s ${ref} has classic branch protection settings the gate does not uphold, and its push bypasses them: ${unmodeled.join(", ")}. It upholds only ${Object.keys(UPHELD_CLASSIC).join(", ")}`,
+			`${name}'s ${ref} has classic branch protection settings the gate does not uphold, and its merge bypasses them: ${unmodeled.join(", ")}. It upholds only ${Object.keys(UPHELD_CLASSIC).join(", ")}`,
 		);
 	}
 	const resolution =
@@ -318,14 +344,13 @@ export async function resolveQueue(
 		after = info.hasNextPage === true ? string(info.endCursor) : null;
 	} while (after !== null);
 
-	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [] };
+	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [], waiting: [] };
 	const landing = nodes.filter((node) => node.autoMergeRequest !== null && node.isDraft !== true);
 	const order = (node: ObjectValue) => string(object(node.autoMergeRequest).enabledAt);
 	landing.sort((a, b) => order(a).localeCompare(order(b)) || Number(a.number) - Number(b.number));
 	for (const node of landing) {
 		const request = object(node.autoMergeRequest);
 		const head = string(node.headRefOid);
-		const holder = node.headRepository === null ? null : string(object(node.headRepository).nameWithOwner);
 		const entry: Entry = {
 			id: string(node.id),
 			number: Number(node.number),
@@ -333,7 +358,9 @@ export async function resolveQueue(
 			title: string(node.title),
 			enabledAt: string(request.enabledAt),
 			head,
-			repository: holder ?? "",
+			approved: pinned(typeof request.commitBody === "string" ? request.commitBody : "") ?? head,
+			maintainerCanModify: node.maintainerCanModify === true,
+			repository: node.headRepository === null ? name : string(object(node.headRepository).nameWithOwner),
 			branch: string(node.headRefName),
 		};
 		const eject = (reason: Reason, detail: string) =>
@@ -348,15 +375,8 @@ export async function resolveQueue(
 		const approved = pinned(typeof request.commitBody === "string" ? request.commitBody : "");
 		if (approved === null) {
 			eject("not_pinned", "auto-merge was enabled without `quest merge --land`, which pins the head to land");
-		} else if (approved !== head) {
+		} else if (approved !== head && !acceptHead?.(entry)) {
 			eject("head_moved", `its head moved from ${approved} to ${head} after it was queued`);
-		} else if (holder === null) {
-			eject("no_maintainer_edits", "its head repository was deleted, so the gate cannot move its head");
-		} else if (holder.toLowerCase() !== name.toLowerCase() && node.maintainerCanModify !== true) {
-			eject(
-				"no_maintainer_edits",
-				"it comes from a fork that does not allow edits by maintainers, so the gate cannot move its head; allow them and land it again",
-			);
 		} else if (node.reviewDecision === "REVIEW_REQUIRED") {
 			eject("review_required", "it still needs an approving review");
 		} else if (node.reviewDecision === "CHANGES_REQUESTED") {
@@ -364,14 +384,17 @@ export async function resolveQueue(
 		} else if (resolution && (await unresolved(github, entry.id)) > 0) {
 			eject("unresolved_conversations", "it has unresolved review threads; resolve them and land it again");
 		} else {
-			const unmet = checks(await contexts(github, repository, node), required);
+			const unmet = checks(await contexts(github, repository, { ...node, headRefOid: approved }), required);
 			if (unmet.failing.length > 0) {
 				eject("failed_checks", `required checks failed on its head: ${unmet.failing.join(", ")}`);
 			} else if (unmet.pending.length > 0) {
-				eject(
-					"checks_pending",
-					`required checks had not passed on its head when the gate ran: ${unmet.pending.join(", ")}; land it again once they pass`,
-				);
+				// Still running: it keeps its auto-merge and its place, and joins a batch once they pass.
+				plan.waiting!.push({
+					number: entry.number,
+					url: entry.url,
+					enabledAt: entry.enabledAt,
+					pending: unmet.pending,
+				});
 			} else {
 				plan.queue.push(entry);
 			}
@@ -447,24 +470,185 @@ interface Link {
 	tree: string;
 }
 
-/** The queue built onto the base, in order, without the PRs that conflict. */
-interface Chain {
-	links: Link[];
-	conflicts: { entry: Entry; files: string[] }[];
+/** The oldest PR conflicts with the base. Conflicting additions are skipped. */
+interface Conflict {
+	entry: Entry;
+	files: string[];
+}
+
+/** A queued PR that fails `quest check` squashed alone onto the base, with the findings the base lacks. */
+export interface Rejection {
+	entry: Entry;
+	/** The squash onto the base that fails, which a fixer starts from. */
+	commit: string;
+	findings: string[];
+}
+
+/** A newly screened PR, and the PRs ahead of it that it conflicts with, each squashed alone onto the base. */
+export interface Overlap {
+	entry: Entry;
+	ahead: Conflict[];
 }
 
 /**
- * Fetch the base and every queued head, then squash each head in turn onto the
- * chain in a scratch worktree inside the git directory, resolving quest files
- * with `quest resolve`. A PR that still conflicts is left out. The same plan
- * builds the same trees in every phase.
+ * A bounded batch of squash commits, or a conflict on its base PR. Rejected PRs are left out of
+ * it; overlaps only inform.
  */
-function build(root: string, plan: Plan): Chain {
+interface Chain {
+	links: Link[];
+	conflict?: Conflict;
+	rejected: Rejection[];
+	overlaps: Overlap[];
+}
+
+/**
+ * How the next batch is chosen. Batches alternate between the oldest and the newest queued PR as their base, and a
+ * failed batch halves the next one's size, which each landed batch grows back toward 1 + floor(log2 n).
+ */
+export interface BatchPolicy {
+	order: "oldest" | "newest";
+	size: number;
+}
+
+/**
+ * Fetch the base and every queued head, then fill a batch in `policy`'s order in a scratch
+ * worktree inside the git directory, resolving quest files with `quest resolve`. Each candidate
+ * is first squashed alone onto the base: one that fails `quest check` there with findings the
+ * base lacks is rejected, and a fresh one is also squashed onto the PRs landing soonest ahead of
+ * it, to report which ones it conflicts with. Stop at the policy's batch limit, skipping
+ * conflicting additions; a conflicting base stops the batch.
+ */
+export async function build(
+	root: string,
+	plan: Plan,
+	read: RemoteRead = readRemote,
+	fresh: (entry: Entry) => boolean = () => false,
+	policy: BatchPolicy = { order: "oldest", size: Number.POSITIVE_INFINITY },
+): Promise<Chain> {
+	await read(root, [
+		"fetch",
+		"--quiet",
+		"--no-tags",
+		baseRemote(plan),
+		plan.base.sha,
+		...plan.queue.map((entry) => entry.head),
+	]);
+	return mergeWorktree(root, plan.base.sha, (dir, driver) => {
+		const chain: Chain = { links: [], rejected: [], overlaps: [] };
+		const ordered = policy.order === "newest" ? [...plan.queue].reverse() : plan.queue;
+		const limit = Math.max(1, Math.min(policy.size, 1 + Math.floor(Math.log2(plan.queue.length))));
+		const screening = screener(dir, driver, plan);
+		// Screen each head only as the batch reaches it, so a long queue costs this batch's
+		// candidates, not every queued PR on every round.
+		for (const entry of ordered) {
+			if (chain.links.length >= limit) break;
+			const alone = screening.alone(entry);
+			if (alone === null) {
+				if (chain.links.length > 0) continue;
+				git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+				chain.conflict = { entry, files: squash(dir, driver, entry)! };
+				break;
+			}
+			if (alone.findings.length > 0) {
+				chain.rejected.push({ entry, commit: alone.commit, findings: alone.findings.map(formatFinding) });
+				continue;
+			}
+			if (fresh(entry)) chain.overlaps.push({ entry, ahead: screening.overlaps(entry) });
+			git(dir, ["reset", "--quiet", "--hard", chain.links.at(-1)?.commit ?? plan.base.sha]);
+			if (squash(dir, driver, entry) !== null) continue;
+			chain.links.push({
+				entry,
+				commit: git(dir, ["rev-parse", "HEAD"]),
+				tree: git(dir, ["rev-parse", "HEAD^{tree}"]),
+			});
+		}
+		return chain;
+	});
+}
+
+/** Squash `entry` onto `HEAD` and commit it, or return the conflicting files and leave `HEAD` as it was. */
+function squash(dir: string, driver: string, entry: Entry): string[] | null {
+	const merged = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--squash", entry.head]);
+	if (merged.status !== 0) {
+		const files = lines(git(dir, ["diff", "--name-only", "--diff-filter=U"]));
+		if (files.length === 0) throw new Error(`git merge --squash ${entry.head} failed: ${merged.stderr.trim()}`);
+		git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
+		return files;
+	}
+	git(dir, ["commit", "--quiet", "--allow-empty", "-m", `${entry.title} (#${entry.number})`]);
+	return null;
+}
+
+/** How many queued PRs ahead of a newly queued one its conflict report covers: those landing soonest. */
+const OVERLAP_AHEAD = 4;
+
+/**
+ * Screening for one batch: each head squashed alone onto the base, with `quest check` findings
+ * the base lacks, and a fresh head's conflicts with the PRs landing soonest ahead of it. Results are
+ * memoized, since a head is squashed alone once per batch however often it is needed.
+ */
+function screener(dir: string, driver: string, plan: Plan) {
+	// A base without quests is a repository that does not use them.
+	const known =
+		git(dir, ["ls-tree", "--name-only", plan.base.sha, "quest"]) === "" ? null : questCheck(dir, plan.base.sha);
+	const cache = new Map<Entry, { commit: string; findings: Finding[] } | null>();
+	const alone = (entry: Entry) => {
+		if (cache.has(entry)) return cache.get(entry)!;
+		git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+		let result: { commit: string; findings: Finding[] } | null = null;
+		if (squash(dir, driver, entry) === null) {
+			const commit = git(dir, ["rev-parse", "HEAD"]);
+			// A finding the base already has is not this PR's, even on a line the PR moved.
+			const findings =
+				known === null
+					? []
+					: questCheck(dir, commit).filter(
+							(finding) =>
+								!known.some((old) => old.path === finding.path && old.message === finding.message),
+						);
+			result = { commit, findings };
+		}
+		cache.set(entry, result);
+		return result;
+	};
+	const overlaps = (entry: Entry) => {
+		const index = plan.queue.indexOf(entry);
+		return plan.queue
+			.slice(0, Math.max(0, index))
+			.slice(0, OVERLAP_AHEAD)
+			.flatMap((earlier) => {
+				const base = alone(earlier);
+				if (base === null || base.findings.length > 0) return [];
+				git(dir, ["reset", "--quiet", "--hard", base.commit]);
+				const files = squash(dir, driver, entry);
+				return files === null ? [] : [{ entry: earlier, files }];
+			});
+	};
+	return { alone, overlaps };
+}
+
+/**
+ * `quest check`'s findings on `commit`, read from git objects by this trusted process, so nothing
+ * from the tree runs. A tree it cannot read, such as one with no quests left, is itself a finding,
+ * as it is for `quest check`.
+ */
+function questCheck(dir: string, commit: string): Finding[] {
+	try {
+		const tree = snapshot(dir, commit, false);
+		return check(tree.docs, tree.exists);
+	} catch (error) {
+		// Its messages name the scratch worktree, a host path the PR comment need not show.
+		const message = (error instanceof Error ? error.message : String(error)).replaceAll(`${dir}/`, "");
+		return [{ path: "quest", line: null, message }];
+	}
+}
+
+/** Trusted merge driver/worktree shared by batch construction and PR-head preparation. */
+export function mergeWorktree<T>(root: string, start: string, run: (dir: string, driver: string) => T): T {
 	const probe = spawnSync("quest", ["help", "resolve"], { stdio: "ignore" });
 	if (probe.status !== 0) {
 		throw new Error("quest land merges quest files with `quest resolve`, so `quest` must be on PATH");
 	}
-	git(root, ["fetch", "--quiet", "--no-tags", "origin", plan.base.sha, ...plan.queue.map((entry) => entry.head)]);
 	const dir = resolve(root, git(root, ["rev-parse", "--git-path", "quest-land"]));
 	// The driver runs from the git directory, not the chain's worktree, where a
 	// queued PR's `bunfig.toml` or `.env` would configure the trusted `quest`.
@@ -473,351 +657,46 @@ function build(root: string, plan: Plan): Chain {
 	// A crashed run can leave its worktree registered.
 	tryGit(root, ["worktree", "remove", "--force", dir]);
 	git(root, ["worktree", "prune"]);
-	git(root, ["worktree", "add", "--quiet", "--detach", dir, plan.base.sha]);
-	const chain: Chain = { links: [], conflicts: [] };
+	git(root, ["worktree", "add", "--quiet", "--detach", dir, start]);
 	try {
-		for (const entry of plan.queue) {
-			const merged = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--squash", entry.head]);
-			if (merged.status !== 0) {
-				const files = lines(git(dir, ["diff", "--name-only", "--diff-filter=U"]));
-				if (files.length === 0)
-					throw new Error(`git merge --squash ${entry.head} failed: ${merged.stderr.trim()}`);
-				chain.conflicts.push({ entry, files });
-				git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
-				continue;
-			}
-			const author = authorOf(dir, plan.base.sha, entry.head);
-			git(dir, ["commit", "--quiet", "--allow-empty", "-F", "-"], {
-				input: message(dir, plan.base.sha, entry),
-				env: { GIT_AUTHOR_NAME: author.name, GIT_AUTHOR_EMAIL: author.email },
-			});
-			chain.links.push({
-				entry,
-				commit: git(dir, ["rev-parse", "HEAD"]),
-				tree: git(dir, ["rev-parse", "HEAD^{tree}"]),
-			});
-		}
+		return run(dir, driver);
 	} finally {
 		git(root, ["worktree", "remove", "--force", dir]);
 	}
-	return chain;
 }
 
-/** The squash's author: the author of the PR's first commit, as git recorded it. */
-function authorOf(dir: string, base: string, head: string): { name: string; email: string } {
-	const own = lines(git(dir, ["log", "--reverse", "--no-merges", "--format=%an%x00%ae", `${base}..${head}`]));
-	const [name, email] = (own[0] ?? git(dir, ["log", "-1", "--format=%an%x00%ae", head])).split("\0");
-	return { name, email };
+export function contains(root: string, ancestor: string, head: string): boolean {
+	return tryGit(root, ["merge-base", "--is-ancestor", ancestor, head]).status === 0;
 }
 
-/**
- * GitHub's squash message: the title and number, each commit's message as a
- * bullet, and a Co-authored-by trailer for every other author.
- */
-function message(dir: string, base: string, entry: Entry): string {
-	const range = `${base}..${entry.head}`;
-	const bodies = git(dir, ["log", "--reverse", "--no-merges", "--format=%B%x00", range])
-		.split("\0")
-		.map((body) => body.trim())
-		.filter((body) => body !== "");
-	const author = authorOf(dir, base, entry.head);
-	const others = lines(git(dir, ["log", "--no-merges", "--format=%an <%ae>", range]));
-	const trailers = lines(
-		git(dir, ["log", "--no-merges", "--format=%(trailers:key=Co-authored-by,valueonly,separator=%x0A)", range]),
-	);
-	const coauthors = [...new Set([...others, ...trailers])].filter(
-		(person) => person !== `${author.name} <${author.email}>`,
-	);
-	// Trailers already in a commit's message would repeat at the end.
-	const kept = bodies.map((body) =>
-		body
-			.split("\n")
-			.filter((line) => !/^co-authored-by:/i.test(line))
-			.join("\n")
-			.trim(),
-	);
-	return [
-		`${entry.title} (#${entry.number})`,
-		...kept.map((body) => `* ${body}`),
-		...(coauthors.length > 0 ? [coauthors.map((person) => `Co-authored-by: ${person}`).join("\n")] : []),
-	].join("\n\n");
-}
-
-/**
- * Build the chain and run `command` in `root` on its tip. When it fails, run it
- * on the first half of the chain, and so on, until a prefix passes or a single
- * PR fails alone. The command's output goes to `stderr`.
- */
-export async function checkQueue(
+/** A merge whose first parent remains the approved PR head; no PR hooks or config run. */
+export function mergeBase(
 	root: string,
-	plan: Plan,
-	command: string[],
-	stderr: (text: string) => void,
-): Promise<Result> {
-	const chain = build(root, plan);
-	for (const { entry, files } of chain.conflicts) {
-		stderr(`quest land: #${entry.number} conflicts with the PRs before it in ${files.join(", ")}\n`);
-	}
-	const checks: Tested[] = [];
-	for (let count = chain.links.length; count > 0; count = Math.ceil(count / 2)) {
-		const tip = chain.links[count - 1];
-		const numbers = chain.links.slice(0, count).map((link) => link.entry.number);
-		git(root, ["checkout", "--quiet", "--force", "--detach", tip.commit]);
-		stderr(`quest land: checking ${numbers.map((number) => `#${number}`).join(" ")} at ${tip.commit}\n`);
-		const passed = (await execute(root, command, stderr)) === 0;
-		checks.push({ numbers, tree: tip.tree, passed });
-		if (passed || count === 1) break;
-	}
-	return { base: plan.base.sha, checks };
-}
-
-/** Run `command` in `cwd` with both of its output streams sent to `stderr`, resolving its exit code. */
-function execute(cwd: string, command: string[], stderr: (text: string) => void): Promise<number> {
-	return new Promise((done, fail) => {
-		const child = spawn(command[0], command.slice(1), { cwd, stdio: ["ignore", "pipe", "pipe"] });
-		child.stdout.on("data", (chunk: Buffer) => stderr(chunk.toString()));
-		child.stderr.on("data", (chunk: Buffer) => stderr(chunk.toString()));
-		child.once("error", fail);
-		child.once("close", (code) => done(code ?? 1));
+	head: string,
+	base: string,
+): { head: string; tree: string } | { reason: "merge_conflict"; detail: string } {
+	return mergeWorktree(root, base, (dir, driver) => {
+		// Match build: the driver orders the base/chain inserts before the PR inserts.
+		const result = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--no-ff", "--no-commit", head]);
+		if (result.status !== 0)
+			return { reason: "merge_conflict", detail: `${result.stdout}\n${result.stderr}`.trim() };
+		const tree = git(dir, ["write-tree"]);
+		const commit = git(dir, ["commit-tree", tree, "-p", head, "-p", base], {
+			input: "quest land: merge tested base\n",
+			env: {
+				GIT_AUTHOR_NAME: "moq-bot",
+				GIT_AUTHOR_EMAIL: "moq-bot@users.noreply.github.com",
+				GIT_COMMITTER_NAME: "moq-bot",
+				GIT_COMMITTER_EMAIL: "moq-bot@users.noreply.github.com",
+			},
+		});
+		return { head: commit, tree };
 	});
-}
-
-/**
- * Rebuild the chain, check that `result` tested exactly its prefixes, eject
- * what cannot land, then land the prefix that passed: move each PR's branch to
- * its squash commit with a lease on the head that was tested, and fast-forward
- * the base to the last one. A head that moved stops the landing; the prefix
- * before it lands only if a check passed on exactly that prefix.
- */
-export async function pushQueue(
-	root: string,
-	plan: Plan,
-	result: Result,
-	run: string | undefined,
-	deps: GitHubDependencies,
-): Promise<string[]> {
-	const chain = build(root, plan);
-	validate(chain, plan, result);
-	const ejections = [...plan.eject];
-	const ejectLink = (entry: Entry, reason: Reason, detail: string) => ejections.push(ejection(entry, reason, detail));
-	for (const { entry, files } of chain.conflicts) {
-		ejectLink(
-			entry,
-			"merge_conflict",
-			`it conflicts with the base or the PRs queued before it in ${files.join(", ")}; merge the base, push, and land it again`,
-		);
-	}
-	const last = result.checks.at(-1);
-	if (last !== undefined && !last.passed && last.numbers.length === 1) {
-		ejectLink(
-			chain.links[0].entry,
-			"failed_checks",
-			"the repository's check failed with it alone on the base; fix it and land it again",
-		);
-	}
-	const passed = new Set(result.checks.filter((tested) => tested.passed).map((tested) => tested.numbers.length));
-	let count = last?.passed ? last.numbers.length : 0;
-	if (count > 0) {
-		const base = remoteHead(root, "origin", plan.base.ref);
-		if (base !== plan.base.sha)
-			throw new Error(`${plan.base.ref} moved from ${plan.base.sha} to ${base}; nothing landed`);
-		for (let index = 0; index < count; index++) {
-			const { entry } = chain.links[index];
-			const head = remoteHead(root, remoteOf(plan, entry), entry.branch);
-			if (head === entry.head) continue;
-			ejectLink(
-				entry,
-				"head_moved",
-				`its head moved from ${entry.head} to ${head ?? "nothing"} while the gate checked it`,
-			);
-			// A later PR can mask an earlier one's failure, so only a prefix checked on its own lands.
-			count = passed.has(index) ? index : 0;
-			break;
-		}
-	}
-	// One line per PR: `landed <number> <commit>`, `ejected <number> <reason>`, or `withdrawn <number>`.
-	const output: string[] = [];
-	if (count > 0) {
-		// The queue can change while the gate checks it: land only PRs still queued as they were.
-		const [owner, repo] = plan.repository.split("/");
-		const fresh = await resolveQueue({ owner, repo }, plan.base.ref, deps);
-		for (let index = 0; index < count; index++) {
-			const { entry } = chain.links[index];
-			const now = fresh.queue.find((queued) => queued.number === entry.number);
-			if (now?.head === entry.head && now.enabledAt === entry.enabledAt) continue;
-			const ejected = fresh.eject.find((ejected) => ejected.number === entry.number);
-			if (ejected !== undefined) ejections.push(ejected);
-			// Leave it unqueued, but report it so the rest of the queue gets another run.
-			else output.push(`withdrawn ${entry.number}`);
-			count = passed.has(index) ? index : 0;
-			break;
-		}
-	}
-
-	const github = new GitHub(deps);
-	for (const ejection of ejections) {
-		if (await eject(github, plan, ejection, run)) output.push(`ejected ${ejection.number} ${ejection.reason}`);
-	}
-	if (count === 0) return output;
-
-	const links = chain.links.slice(0, count);
-	const refused = await landLinks(root, plan, links, deps);
-	if (refused === null) {
-		for (const link of links) output.push(`landed ${link.entry.number} ${link.commit}`);
-		return output;
-	}
-	// A refused push stops the landing; it lands again on the next run, without the PR that stopped it.
-	const stop = async (entry: Entry, reason: Reason, detail: string) => {
-		if (await eject(github, plan, ejection(entry, reason, detail), run)) {
-			output.push(`ejected ${entry.number} ${reason}`);
-		}
-		return output;
-	};
-	for (const { entry } of refused.links) {
-		const head = remoteHead(root, remoteOf(plan, entry), entry.branch);
-		if (head !== entry.head) {
-			return stop(
-				entry,
-				"head_moved",
-				`its head moved from ${entry.head} to ${head ?? "nothing"} while the gate checked it`,
-			);
-		}
-	}
-	const [first] = refused.links;
-	if (refused.links.length === 1 && !local(plan, first.entry)) {
-		return stop(first.entry, "push_failed", `the gate could not move its head: ${refused.stderr}`);
-	}
-	throw new Error(`the landing push failed, so nothing landed: ${refused.stderr}`);
-}
-
-/** How long `push` waits for GitHub to show the moved heads before it backs out. */
-const SYNC_MS = 60_000;
-
-/**
- * Move each PR's branch to its squash commit, then fast-forward the base, all or
- * nothing. GitHub marks a PR merged only when the base reaches a head it has
- * already synced: a head that moves in the base's push, or syncs after it,
- * leaves the PR closed or open instead, so the base waits for every head.
- * Heads that moved go back when a later step fails: the gate's own head pushes
- * must not dequeue a PR that did not land. Returns the PRs whose head push git
- * refused, none when the base push failed, with its error, or null once
- * everything landed.
- */
-async function landLinks(
-	root: string,
-	plan: Plan,
-	links: Link[],
-	deps: GitHubDependencies,
-): Promise<{ links: Link[]; stderr: string } | null> {
-	const moved: Link[] = [];
-	let refused: { links: Link[]; stderr: string } | null = null;
-	for (const link of links.filter((link) => !local(plan, link.entry))) {
-		const pushed = tryGit(root, [
-			"push",
-			"--quiet",
-			remoteOf(plan, link.entry),
-			...move(link, link.commit, link.entry.head),
-		]);
-		if (pushed.status !== 0) {
-			refused = { links: [link], stderr: pushed.stderr.trim() };
-			break;
-		}
-		moved.push(link);
-	}
-	const own = links.filter((link) => local(plan, link.entry));
-	if (refused === null && own.length > 0) {
-		const pushed = tryGit(root, [
-			"push",
-			"--quiet",
-			"--atomic",
-			"origin",
-			...own.flatMap((link) => move(link, link.commit, link.entry.head)),
-		]);
-		if (pushed.status === 0) moved.push(...own);
-		else refused = { links: own, stderr: pushed.stderr.trim() };
-	}
-	if (refused === null) {
-		const unsynced = await synced(deps, links);
-		if (unsynced !== null) refused = { links: [], stderr: unsynced };
-	}
-	if (refused === null) {
-		const pushed = tryGit(root, [
-			"push",
-			"--quiet",
-			"origin",
-			`${links[links.length - 1].commit}:refs/heads/${plan.base.ref}`,
-		]);
-		if (pushed.status === 0) return null;
-		refused = { links: [], stderr: pushed.stderr.trim() };
-	}
-	const stuck = moved.filter(
-		(link) =>
-			tryGit(root, ["push", "--quiet", remoteOf(plan, link.entry), ...move(link, link.entry.head, link.commit)])
-				.status !== 0,
-	);
-	if (stuck.length > 0) {
-		throw new Error(
-			`the landing push failed (${refused.stderr}), and ${stuck.map((link) => `#${link.entry.number}`).join(", ")} could not move back to the head it had`,
-		);
-	}
-	return refused;
-}
-
-/** Wait until GitHub shows each PR's head at its squash commit; otherwise, return why not. */
-async function synced(deps: GitHubDependencies, links: Link[]): Promise<string | null> {
-	const github = new GitHub(deps, deps.now() + SYNC_MS);
-	try {
-		for (const link of links) {
-			while (true) {
-				const data = await github.graphql(
-					"query($id: ID!) { node(id: $id) { ... on PullRequest { headRefOid } } }",
-					{ id: link.entry.id },
-				);
-				if (object(data.node).headRefOid === link.commit) break;
-				await github.pause(1000);
-			}
-		}
-		return null;
-	} catch (error) {
-		if (error instanceof GitHubDeadline)
-			return `GitHub did not show the moved heads within ${SYNC_MS / 1000} seconds`;
-		return `cannot read the moved heads: ${error instanceof Error ? error.message : String(error)}`;
-	}
 }
 
 /** Remove `entry` from the queue for `reason`. */
-function ejection(entry: Entry, reason: Reason, detail: string): Ejection {
+export function ejection(entry: Entry, reason: Reason, detail: string): Ejection {
 	return { id: entry.id, number: entry.number, url: entry.url, enabledAt: entry.enabledAt, reason, detail };
-}
-
-/** A refspec that moves a PR's branch to `to`, with a lease on it being at `from`. */
-function move(link: Link, to: string, from: string): string[] {
-	const ref = `refs/heads/${link.entry.branch}`;
-	return [`${to}:${ref}`, `--force-with-lease=${ref}:${from}`];
-}
-
-/** Fail unless `result` tested prefixes of this chain on this base, shrinking, with only the last passing. */
-function validate(chain: Chain, plan: Plan, result: Result): void {
-	const bad = (why: string) => new Error(`the check result does not match the chain: ${why}`);
-	if (result.base !== plan.base.sha) throw bad(`it was built on ${result.base}, not ${plan.base.sha}`);
-	let previous = Infinity;
-	result.checks.forEach((tested, index) => {
-		const count = tested.numbers.length;
-		if (count === 0 || count >= previous || count > chain.links.length)
-			throw bad(`check ${index + 1} is not a shorter prefix`);
-		previous = count;
-		const prefix = chain.links.slice(0, count);
-		if (prefix.some((link, at) => link.entry.number !== tested.numbers[at])) {
-			throw bad(`check ${index + 1} lists other PRs`);
-		}
-		if (prefix[count - 1].tree !== tested.tree) throw bad(`check ${index + 1} tested another tree`);
-		if (tested.passed && index !== result.checks.length - 1)
-			throw bad(`check ${index + 1} passed but was not the last`);
-	});
-	if (result.checks.length === 0 && chain.links.length > 0) throw bad("nothing was checked");
-	if (result.checks.length > 0 && result.checks[0].numbers.length !== chain.links.length) {
-		throw bad("the first check did not cover the whole chain");
-	}
 }
 
 /**
@@ -825,7 +704,7 @@ function validate(chain: Chain, plan: Plan, result: Result): void {
  * and comment with the reason. A PR whose auto-merge was enabled again since
  * the queue was read is a new entry and is left alone. Returns whether it ejected.
  */
-async function eject(github: GitHub, plan: Plan, ejection: Ejection, run: string | undefined): Promise<boolean> {
+export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Promise<boolean> {
 	const data = await github.graphql(
 		"query($id: ID!) { node(id: $id) { ... on PullRequest { state autoMergeRequest { enabledAt } } } }",
 		{ id: ejection.id },
@@ -843,95 +722,40 @@ async function eject(github: GitHub, plan: Plan, ejection: Ejection, run: string
 	const [owner, repo] = plan.repository.split("/");
 	const issue = `${repositoryPath({ owner, repo })}/issues/${ejection.number}`;
 	await github.request(`${issue}/labels/${encodeURIComponent(MERGE_LABEL)}`, { method: "DELETE", allow: [404] });
-	const link = run === undefined ? "" : ` ([run](${run}))`;
 	await github.request(`${issue}/comments`, {
 		body: {
-			body: `quest land removed this pull request from the queue: ${ejection.detail}${link}.\n\n<!-- quest land: ${ejection.reason} -->`,
+			body: `quest land removed this pull request from the queue: ${ejection.detail}.\n\n<!-- quest land: ${ejection.reason} -->`,
 		},
 	});
 	return true;
 }
 
-/** Whether the PR's head branch is in the base repository, which the landing pushes atomically. */
-function local(plan: Plan, entry: Entry): boolean {
-	return entry.repository.toLowerCase() === plan.repository.toLowerCase();
-}
-
-/** Where to push a PR's head branch: origin, or its fork on GitHub. */
-function remoteOf(plan: Plan, entry: Entry): string {
-	return local(plan, entry) ? "origin" : `https://github.com/${entry.repository}.git`;
-}
-
-/** The commit `branch` is at on `remote`, or null when it is gone. */
-function remoteHead(root: string, remote: string, branch: string): string | null {
-	const ref = `refs/heads/${branch}`;
-	const found = lines(git(root, ["ls-remote", remote, ref])).map((line) => line.split("\t"));
-	return found.find(([, name]) => name === ref)?.[0] ?? null;
-}
-
-/** Read a plan written by `resolve`, failing on anything malformed. */
-export function parsePlan(text: string): Plan {
-	const row = object(JSON.parse(text));
-	const base = object(row.base);
-	const entry = (value: ObjectValue): Entry => ({
-		id: string(value.id),
-		number: positive(value.number),
-		url: string(value.url),
-		title: string(value.title),
-		enabledAt: string(value.enabledAt),
-		head: sha(value.head),
-		repository: string(value.repository),
-		branch: string(value.branch),
-	});
-	return {
-		repository: string(row.repository),
-		base: { ref: string(base.ref), sha: sha(base.sha) },
-		queue: array(row.queue).map(entry),
-		eject: array(row.eject).map((value) => ({
-			id: string(value.id),
-			number: positive(value.number),
-			url: string(value.url),
-			enabledAt: string(value.enabledAt),
-			reason: string(value.reason) as Reason,
-			detail: string(value.detail),
-		})),
-	};
-}
-
-/** Read a check result, which the untrusted check job wrote, failing on anything malformed. */
-export function parseResult(text: string): Result {
-	const row = object(JSON.parse(text));
-	return {
-		base: sha(row.base),
-		checks: array(row.checks).map((value) => {
-			if (!Array.isArray(value.numbers) || typeof value.passed !== "boolean") {
-				throw new Error("invalid check result: expected numbers and passed");
-			}
-			return { numbers: value.numbers.map(positive), tree: sha(value.tree), passed: value.passed };
-		}),
-	};
-}
-
-function positive(value: unknown): number {
-	if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-		throw new Error("invalid quest land input: expected a positive integer");
-	}
-	return value;
-}
-
-function sha(value: unknown): string {
-	if (typeof value !== "string" || !/^[0-9a-f]{40}$/.test(value)) {
-		throw new Error("invalid quest land input: expected a full SHA");
-	}
-	return value;
+/** The repository from which approved heads and the base are fetched. */
+export function baseRemote(plan: Pick<Plan, "repository">): string {
+	return `https://github.com/${plan.repository}.git`;
 }
 
 function lines(text: string): string[] {
 	return text.split("\n").filter((line) => line !== "");
 }
 
+/** Deliberately exclude HOME, Git configuration, agents, tokens, and systemd credentials. */
+export function commandEnvironment(): NodeJS.ProcessEnv {
+	return { PATH: process.env.PATH, LANG: "C.UTF-8" };
+}
+
+/** Git's environment for trusted work: no system or global configuration, and no prompts. */
+export function gitEnvironment(): NodeJS.ProcessEnv {
+	return {
+		...commandEnvironment(),
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_TERMINAL_PROMPT: "0",
+	};
+}
+
 /** Run git without the repository's hooks, returning its status and output. */
-function tryGit(
+export function tryGit(
 	cwd: string,
 	args: string[],
 	options: { input?: string; env?: Record<string, string> } = {},
@@ -940,7 +764,7 @@ function tryGit(
 		cwd,
 		encoding: "utf8",
 		input: options.input,
-		env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...options.env },
+		env: { ...gitEnvironment(), ...options.env },
 		maxBuffer: 1 << 30,
 	});
 	if (result.error) throw result.error;
@@ -948,8 +772,16 @@ function tryGit(
 }
 
 /** Run git, failing loudly; returns its trimmed output. */
-function git(cwd: string, args: string[], options: { input?: string; env?: Record<string, string> } = {}): string {
+export function git(
+	cwd: string,
+	args: string[],
+	options: { input?: string; env?: Record<string, string> } = {},
+): string {
 	const result = tryGit(cwd, args, options);
 	if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr.trim()}`);
 	return result.stdout.trim();
 }
+
+/** A remote read is injected separately from local Git work, so credentials cannot reach child clones. */
+export type RemoteRead = (root: string, args: string[]) => Promise<string>;
+export const readRemote: RemoteRead = async (root, args) => git(root, args);

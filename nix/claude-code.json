@@ -1,0 +1,17 @@
+{
+	"version": "2.1.305",
+	"platforms": {
+		"darwin-arm64": {
+			"binary": "claude.zst",
+			"checksum": "1dddc458ce8aacc49677b37c97efbba37a1b8f12bb3cbaf26388a47fbda4a6a9"
+		},
+		"linux-arm64": {
+			"binary": "claude.zst",
+			"checksum": "2823ad5678a72913e8b2f747e4a82fc6b157cb4896e13b8abafc07fbe278446b"
+		},
+		"linux-x64": {
+			"binary": "claude.zst",
+			"checksum": "45cfa7d4f6244024a3b1f0a1e6806afa254013f8065e8ea9ba937d7d696a26a3"
+		}
+	}
+}

@@ -12,7 +12,7 @@ version and installs small stubs that call it.
 Paste this into Claude Code or Codex from your repository root:
 
 ```text
-Follow https://github.com/kixelated/quest/blob/main/SETUP.md to set up Quest here.
+Follow https://github.com/moq-dev/quest/blob/main/SETUP.md to set up Quest here.
 ```
 
 [SETUP.md](../SETUP.md) has the agent install and pin the binary with mise or a
@@ -57,8 +57,9 @@ a fork, already exists. `quest unblocked --unclaimed` lists the ready quests
 nobody holds. kix.quest records each active job in its database and reassigns a
 job whose runner goes offline; check it for a live runner lock before starting.
 
-You review each change: `/quest-ready` takes a draft to review, and
-`/quest-merge` (`$quest-merge` in Codex) merges it once checks and reviews pass.
+You review each change: `/quest-review` has the other vendor's model review a
+draft locally and marks it ready, and `/quest-merge` (`$quest-merge` in Codex)
+queues it to land once a review covers its head and checks pass.
 The quest is complete, its plan leaves the tree, and the quests that required it
 can become ready.
 

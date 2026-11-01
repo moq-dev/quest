@@ -13,12 +13,12 @@ core/lifecycle CI use [Windows Server 2022 x64 and Windows 11 ARM64 runners](htt
 
 This change adds Windows artifacts to the next release containing it. Existing
 releases such as v0.1.0 do not contain them. Choose an actual published tag
-with the matching ZIP before installing. See the [release list](https://github.com/kixelated/quest/releases).
+with the matching ZIP before installing. See the [release list](https://github.com/moq-dev/quest/releases).
 
 ## Install
 
 If your repository already uses mise, pin a release with
-`mise use github:kixelated/quest@<tag>` and confirm `quest --version`.
+`mise use github:moq-dev/quest@<tag>` and confirm `quest --version`.
 [The GitHub backend](https://mise.jdx.dev/dev-tools/backends/github.html)
 selects the matching release asset. Its Windows install is checked separately
 from the manual archive path after publishing.
@@ -36,7 +36,7 @@ $target = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchite
     default { throw 'Quest has no Windows build for this architecture' }
 }
 $archive = "quest-$target.zip"
-$base = "https://github.com/kixelated/quest/releases/download/$tag"
+$base = "https://github.com/moq-dev/quest/releases/download/$tag"
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ('quest download ' + [guid]::NewGuid())
 $install = Join-Path $env:LOCALAPPDATA 'Programs/Quest/bin'
 New-Item -ItemType Directory -Path $work | Out-Null

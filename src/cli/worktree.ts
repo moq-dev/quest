@@ -21,7 +21,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type Owner, Retained, type RunIO, type Scopes, alive, currentOwner, systemdScopes } from "./supervise";
+import { type Owner, Retained, type RunOptions, type Scopes, alive, currentOwner, systemdScopes } from "./supervise";
 
 /** A supervised command, live while its owner runs or its scope holds a process. */
 export interface Run {
@@ -631,7 +631,7 @@ export class Worktrees {
 	 * descendant have stopped, and no other run remains, its declared scratch is pruned. Resolves
 	 * with the command's status; a failed release is recorded and leaves the checkout reserved.
 	 */
-	async run(id: string, command: string[], io?: RunIO): Promise<{ code: number; failure?: string }> {
+	async run(id: string, command: string[], options?: RunOptions): Promise<{ code: number; failure?: string }> {
 		this.scopes.check();
 		const run: Run = { unit: `quest-worktree-${randomUUID()}.scope`, owner: currentOwner() };
 		const record = this.locked((registry) => {
@@ -641,7 +641,7 @@ export class Worktrees {
 			record.runs.push(run); // Recorded before the scope exists, so a crash is reconciled.
 			return { id: record.id, path: record.path };
 		});
-		const result = await this.scopes.run(run.unit, record.path, command, io).then(
+		const result = await this.scopes.run(run.unit, record.path, command, options).then(
 			(code) => ({ code }),
 			(error: unknown) => ({ error }),
 		);

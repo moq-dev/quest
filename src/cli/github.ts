@@ -138,7 +138,7 @@ export class GitHub {
 	 */
 	async request(
 		path: string,
-		options: { etag?: string; body?: unknown; method?: "POST" | "PATCH" | "DELETE"; allow?: number[] } = {},
+		options: { etag?: string; body?: unknown; method?: "POST" | "PUT" | "PATCH" | "DELETE"; allow?: number[] } = {},
 	): Promise<Response> {
 		// Follow only same-origin pagination links; never send a token to another host.
 		const url = new URL(path, API);

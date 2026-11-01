@@ -12,7 +12,7 @@ import { Lexer, Marked, type Token, type Tokens } from "marked";
 import type { Snapshot } from "../src/board/project";
 import { LOG, finished, isQuest } from "./history.ts";
 
-const repo = "https://github.com/kixelated/quest";
+const repo = "https://github.com/moq-dev/quest";
 const worker = join(import.meta.dirname, "..");
 const root = join(worker, "..");
 const docs = join(root, "docs");
@@ -27,7 +27,7 @@ function rewrite(href: string, image: boolean): string {
 	const target = path.startsWith("/") ? path.slice(1) : posix.normalize(posix.join("docs", path));
 	const doc = /^docs\/([^/]+)\.md$/.exec(target);
 	if (doc) return `/docs/${doc[1]}${hash}`;
-	if (image) return `https://raw.githubusercontent.com/kixelated/quest/main/${target}`;
+	if (image) return `https://raw.githubusercontent.com/moq-dev/quest/main/${target}`;
 	return `${repo}/blob/main/${target}${hash}`;
 }
 

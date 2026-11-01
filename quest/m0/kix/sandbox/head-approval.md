@@ -11,12 +11,12 @@ current maintain or admin role each time it relies on the approval.
 ## Plan
 
 Decided 2026-10-28 (user, /quest-plan trust audit, from Codex Security's P1 on
-[kixelated/quest#243](https://github.com/kixelated/quest/pull/243)):
+[moq-dev/quest#243](https://github.com/moq-dev/quest/pull/243)):
 
 - **Publication is not trust.** kix publishes whatever the runner sends. A
   prompt-injected agent or a compromised runner could therefore publish a
   `flake.nix` that host Nix evaluates outside the sandbox. So "kix pushed it"
-  never grants host trust. [kixelated/quest#243](https://github.com/kixelated/quest/pull/243)
+  never grants host trust. [moq-dev/quest#243](https://github.com/moq-dev/quest/pull/243)
   trusts only commits signed by current maintainers and drops the publication
   ledger.
 - This quest adds the explicit path. Show the approval as a decision item

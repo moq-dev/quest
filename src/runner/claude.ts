@@ -73,6 +73,8 @@ export function claudeSettings(sandbox: Sandbox): Record<string, unknown> {
 			enabled: true,
 			failIfUnavailable: true,
 			allowUnsandboxedCommands: false,
+			// Added in 2.1.305; enabling this lets commands escape filesystem isolation.
+			allowNestedUserNamespaces: false,
 			autoAllowBashIfSandboxed: true,
 			filesystem: {
 				denyRead: sandbox.deny,

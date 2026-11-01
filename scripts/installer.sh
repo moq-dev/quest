@@ -17,7 +17,7 @@ main() {
     }
 
     case $tag in
-        v*) default_url="https://github.com/kixelated/quest/releases/download/$tag" ;;
+        v*) default_url="https://github.com/moq-dev/quest/releases/download/$tag" ;;
         *) default_url= ;;
     esac
     base=${QUEST_DOWNLOAD_URL:-$default_url}

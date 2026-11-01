@@ -25,7 +25,7 @@ try {
         $env:MISE_CACHE_DIR = Join-Path $work 'cache'
         $project = New-Item -ItemType Directory -Path (Join-Path $work 'project')
         Set-Location $project.FullName
-        mise use --pin "github:kixelated/quest@$Tag"
+        mise use --pin "github:moq-dev/quest@$Tag"
         if ($LASTEXITCODE -ne 0) { throw 'mise installation failed' }
         $binary = mise which quest
         if ($LASTEXITCODE -ne 0) { throw 'mise could not find the installed Quest' }
@@ -36,7 +36,7 @@ try {
         foreach ($file in @($archive, 'SHA256SUMS')) {
             $destination = Join-Path $work $file
             if ($ReleaseDirectory) { Copy-Item -LiteralPath (Join-Path $ReleaseDirectory $file) -Destination $destination }
-            else { Invoke-WebRequest -Uri "https://github.com/kixelated/quest/releases/download/$Tag/$file" -OutFile $destination }
+            else { Invoke-WebRequest -Uri "https://github.com/moq-dev/quest/releases/download/$Tag/$file" -OutFile $destination }
         }
         $entries = @(Get-Content -LiteralPath (Join-Path $work 'SHA256SUMS') | ForEach-Object {
             $fields = $_ -split '\s+', 2

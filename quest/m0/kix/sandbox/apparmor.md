@@ -8,7 +8,7 @@ each job.
 
 ## Plan
 
-Found on [kixelated/quest#212](https://github.com/kixelated/quest/pull/212):
+Found on [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212):
 Ubuntu's AppArmor restriction on unprivileged user namespaces made the system
 `/usr/bin/bwrap` fail. The Nix-pinned bwrap worked only because that process
 tree ran under the Claude desktop app's profile, which allows them.

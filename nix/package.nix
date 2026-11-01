@@ -118,7 +118,7 @@ stdenvNoCC.mkDerivation {
 
   meta = {
     inherit (manifest) description;
-    homepage = "https://github.com/kixelated/quest";
+    homepage = "https://github.com/moq-dev/quest";
     license = with lib.licenses; [
       mit
       asl20

@@ -13,13 +13,13 @@ states the trust rule for each stage of a job.
 ## Plan
 
 Decided 2026-10-28 (user, /quest-plan trust audit started from
-kixelated/quest#246's Codex Security P1):
+moq-dev/quest#246's Codex Security P1):
 
 - **Rule over gates.** Read-only CI replaces a service fork or a per-push
   review gate as the answer to agent-written code reaching CI. Fork PRs
   already get no secrets; same-repository branches need the repository's own
   settings to match. The guide states the rule for agents
-  ([kixelated/quest#263](https://github.com/kixelated/quest/pull/263)).
+  ([moq-dev/quest#263](https://github.com/moq-dev/quest/pull/263)).
 - **Check and warn, don't refuse.** At enrollment, and on the project's
   settings page, kix reports each problem it finds:
   - the default workflow token can write;
@@ -42,7 +42,7 @@ kixelated/quest#246's Codex Security P1):
 - `SETUP.md` recommends the same settings when a repository adopts Quest,
   beside its advice to skip CI on drafts.
 - The pilot repositories pass the check before contributors are invited:
-  kixelated/quest's `land` environment was limited to `main` on 2026-10-28,
+  moq-dev/quest's `land` environment was limited to `main` on 2026-10-28,
   and moq-dev/moq tracks its fix in
   [read-only secrets](https://github.com/moq-dev/moq/blob/main/quest/m0/ci/read-only-secrets.md).
 

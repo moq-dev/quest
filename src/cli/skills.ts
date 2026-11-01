@@ -16,8 +16,8 @@ import importSkill from "../../assets/skills/import.md";
 import iterate from "../../assets/skills/iterate.md";
 import merge from "../../assets/skills/merge.md";
 import plan from "../../assets/skills/plan.md";
-import ready from "../../assets/skills/ready.md";
 import recurring from "../../assets/skills/recurring.md";
+import review from "../../assets/skills/review.md";
 import spawn from "../../assets/skills/spawn.md";
 import start from "../../assets/skills/start.md";
 
@@ -25,7 +25,7 @@ import start from "../../assets/skills/start.md";
 export const GUIDE: string = guide;
 
 /** Where an agent without the CLI learns to install it. */
-const SETUP = "https://github.com/kixelated/quest/blob/main/SETUP.md";
+const SETUP = "https://github.com/moq-dev/quest/blob/main/SETUP.md";
 
 /** Installed skills carry this prefix so they don't collide with a repository's own. */
 const PREFIX = "quest-";
@@ -77,8 +77,8 @@ export const SKILLS: readonly Skill[] = Object.entries({
 	iterate,
 	merge,
 	plan,
-	ready,
 	recurring,
+	review,
 	spawn,
 	start,
 }).map(([name, text]) => new Skill(name, text));

@@ -1,12 +1,13 @@
-// Process ownership for supervised checkout commands. Each run gets its own systemd user scope,
-// named once and never reused, so its cgroup holds every descendant that does not ask another
-// service manager to start it. Other hosts fail explicitly rather than guess from process groups.
+// Linux process ownership for supervised checkout commands and gated ones. Each run gets its own
+// systemd user scope, named once and never reused, so its cgroup holds every descendant that does
+// not ask another service manager to start it. Other hosts fail explicitly; only the gate settles
+// for a process group there (see `group` in gate.ts).
 import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process";
 import { closeSync, existsSync, constants as fs, openSync, readFileSync, watch, writeSync } from "node:fs";
 import { constants, hostname } from "node:os";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { forwards } from "./interrupt";
+import { type Cancellation, cancelled, follow, forwards, interrupts, requested } from "./interrupt";
 
 /** A process, identified so that a reused PID never looks like its predecessor. */
 export interface Owner {
@@ -46,10 +47,18 @@ export function alive(owner: Owner): boolean {
 	}
 }
 
-/** Optional pipes for a caller that consumes its command's protocol instead of inheriting streams. */
-export interface RunIO {
+/** How a scope runs its command. */
+export interface RunOptions {
+	/** The command's environment; Quest's own when omitted. */
 	env?: NodeJS.ProcessEnv;
-	spawned(child: ChildProcessWithoutNullStreams): void;
+	/**
+	 * Asking stops a command that has not started, and otherwise forwards the requested signal (see
+	 * `forwards`), so the command's own handling of it runs; killing stops the whole scope. Without
+	 * it, the run follows Quest's own signals (see `interrupts`).
+	 */
+	cancel?: Cancellation;
+	/** Pipes the command's streams to a protocol consumer instead of inheriting them. */
+	spawned?(child: ChildProcessWithoutNullStreams): void;
 }
 
 export interface Scopes {
@@ -60,11 +69,11 @@ export interface Scopes {
 	/** Kill every process left in the scope and resolve once it is empty, including when it is already gone. */
 	stop(unit: string): Promise<void>;
 	/**
-	 * Run a command in a new scope with inherited streams, then stop its remaining descendants.
-	 * Resolves with the command's exit status only once the scope is empty. Rejects with `Retained`
-	 * when that cannot be confirmed, and otherwise only when the command never started.
+	 * Run a command in a new scope, then stop its remaining descendants. Resolves with the command's
+	 * exit status, or the cancelled status once asked to stop, only once the scope is empty. Rejects
+	 * with `Retained` when that cannot be confirmed, and otherwise only when the command never started.
 	 */
-	run(unit: string, cwd: string, command: string[], io?: RunIO): Promise<number>;
+	run(unit: string, cwd: string, command: string[], options?: RunOptions): Promise<number>;
 }
 
 /** The command may have started and its scope may still hold processes, so its run stays recorded. */
@@ -194,8 +203,11 @@ export const systemdScopes: Scopes = {
 		await vacated(group);
 	},
 
-	run(unit, cwd, command, io) {
+	run(unit, cwd, command, options = {}) {
 		return new Promise((resolve, reject) => {
+			const own = options.cancel ? undefined : interrupts();
+			const cancel = options.cancel ?? own!;
+			const pipe = options.spawned ? "pipe" : "inherit";
 			const child = spawn(
 				"systemd-run",
 				[
@@ -214,36 +226,32 @@ export const systemdScopes: Scopes = {
 				],
 				{
 					cwd,
-					env: io?.env,
-					stdio: [io ? "pipe" : "inherit", io ? "pipe" : "inherit", io ? "pipe" : "inherit", "pipe", "pipe"],
+					env: options.env,
+					stdio: [pipe, pipe, pipe, "pipe", "pipe"],
 				},
 			);
-			io?.spawned(child as ChildProcessWithoutNullStreams);
+			options.spawned?.(child as ChildProcessWithoutNullStreams);
 			const report = child.stdio[3] as Readable;
 			const admission = (child.stdio as unknown as (Writable | null)[])[4]!;
 			let group: string | undefined;
 			let admitted = false;
 			let interrupted = 0;
 			let failure: Error | undefined;
-			// The first signal reaches the command so its own handling runs; a second stops the whole scope.
-			const interrupt = (name: NodeJS.Signals) => {
-				if (interrupted) {
-					if (group) kill(group);
-					return;
-				}
-				interrupted = 128 + constants.signals[name];
+			const stop = () => {
+				if (interrupted) return;
+				interrupted = cancelled(cancel.signal);
 				if (admitted) {
-					if (forwards(name)) child.kill(name);
+					if (forwards(cancel.signal)) child.kill(requested(cancel.signal));
 				} else admission.destroy(); // The shell reads end-of-file and never starts the command.
 			};
-			const handlers = {
-				SIGINT: () => interrupt("SIGINT"),
-				SIGTERM: () => interrupt("SIGTERM"),
-				SIGHUP: () => interrupt("SIGHUP"),
+			const terminate = () => {
+				stop();
+				if (group) kill(group);
 			};
-			for (const [name, handler] of Object.entries(handlers)) process.on(name, handler);
+			const unfollow = follow(cancel, stop, terminate);
 			const cleanup = () => {
-				for (const [name, handler] of Object.entries(handlers)) process.off(name, handler);
+				unfollow();
+				own?.close();
 			};
 
 			admission.on("error", (error: NodeJS.ErrnoException) => {

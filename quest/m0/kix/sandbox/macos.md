@@ -9,7 +9,7 @@ approval: the approval step is gone from kix, the inbox, and the runner.
 ## Plan
 
 - Rerun the hostile-repository boundary test from
-  [kixelated/quest#212](https://github.com/kixelated/quest/pull/212) on
+  [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212) on
   macOS. Sandboxed commands must not reach the account's Keychain item
   (`security find-generic-password`), `/private/var/folders`, or another
   home, and the realpath'd `/private/tmp` directory must work as `TMPDIR`.

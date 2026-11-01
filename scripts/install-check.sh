@@ -40,7 +40,7 @@ case "$method" in
         export MISE_CACHE_DIR="$work/cache"
         mkdir -p "$work/project"
         cd "$work/project"
-        mise use --pin "github:kixelated/quest@$tag"
+        mise use --pin "github:moq-dev/quest@$tag"
         binary=$(mise which quest)
         case "$binary" in
             "$MISE_DATA_DIR"/*) ;;
@@ -52,7 +52,7 @@ case "$method" in
         ;;
     shell)
         curl --proto '=https' --tlsv1.2 -fLsS \
-            "https://github.com/kixelated/quest/releases/download/$tag/quest-installer.sh" \
+            "https://github.com/moq-dev/quest/releases/download/$tag/quest-installer.sh" \
             -o "$work/quest-installer.sh"
         QUEST_INSTALL_DIR="$work/shell" sh "$work/quest-installer.sh"
         binary="$work/shell/quest"

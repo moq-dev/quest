@@ -46,7 +46,7 @@ export type Project = Snapshot & {
 	name: string;
 	/** An authenticated board may live under project setup. */
 	href?: string;
-	/** How the project names itself, such as `kixelated/quest`. */
+	/** How the project names itself, such as `moq-dev/quest`. */
 	title: string;
 	/** Where the repository's other files can be read, or `null` if nowhere public. */
 	web: string | null;
@@ -65,7 +65,7 @@ export type Project = Snapshot & {
 export const home: Project = {
 	...snapshot,
 	name: "quest",
-	title: "kixelated/quest",
+	title: "moq-dev/quest",
 	web: repo,
 	// Open changes and issues arrive with the Changes and Fork intake quests.
 	changes: [],

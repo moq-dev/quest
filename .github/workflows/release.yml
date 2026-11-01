@@ -123,6 +123,13 @@ jobs:
       - name: Check the binary's lifecycle
         shell: bash
         run: bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest"
+      # Check's suite runs on Linux and Windows only. The gate's owners run live
+      # here without admission, which can wait out the job on a busy runner.
+      - name: Check that the gate owns its command's descendants
+        if: runner.os == 'macOS'
+        run: |
+          bun install --frozen-lockfile
+          bun run test test/gate.test.ts
 
   # Hosted macOS runners can queue past the timeout, which then reports a job
   # that never ran as failed. Pull requests skip these; tags, which publish the
