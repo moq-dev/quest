@@ -22,6 +22,13 @@ function reads(
 		rules?: unknown[];
 		bypass?: string;
 		truncated?: boolean;
+		/** The pull request's body, last edited by `editor` when given. */
+		body?: string;
+		editor?: string;
+		/** The author's permission on the repository. */
+		permission?: string;
+		/** Commits GitHub attributes to an App's bot. */
+		bots?: string[];
 	},
 ): Reads {
 	const ids = new Map(Object.keys(commits).map((name) => [sha(name), name]));
@@ -42,7 +49,11 @@ function reads(
 							state: "OPEN",
 							headRefOid: sha(pull.head),
 							baseRefName: "main",
+							body: pull.body ?? "",
 							author: { __typename: "User", login: "author" },
+							userContentEdits: {
+								nodes: pull.editor ? [{ editor: { __typename: "User", login: pull.editor } }] : [],
+							},
 							latestOpinionatedReviews: {
 								nodes: (pull.approved ?? []).map((name) => ({
 									state: "APPROVED",
@@ -76,6 +87,12 @@ function reads(
 							]
 						: [],
 				} as T;
+			}
+			if (url.pathname === "/collaborators/author/permission")
+				return { permission: pull.permission ?? "write" } as T;
+			if ((match = url.pathname.match(/^\/commits\/(\w+)$/))) {
+				const bot = (pull.bots ?? []).includes(ids.get(match[1]!)!);
+				return { committer: bot ? { login: "kix[bot]", type: "Bot" } : { login: "author", type: "User" } } as T;
 			}
 			if ((match = url.pathname.match(/^\/git\/commits\/(\w+)$/))) {
 				const name = ids.get(match[1]!)!;
@@ -142,7 +159,7 @@ describe("the review a landing needs", () => {
 			await unreviewed(reads(commits, { head: "pr", main: "main", checked: ["pr"] }), landing("pr")),
 		).toBeNull();
 		expect(await unreviewed(reads(commits, { head: "pr", main: "main" }), landing("pr"))).toBe(
-			`No review counts on ${short("pr")} yet. kix lands only a reviewed head. Approve ${short("pr")} on GitHub as someone with write access other than the pull request's author, or have a runner's \`quest review\` check pass on it.`,
+			`No review counts on ${short("pr")} yet. kix lands only a reviewed head. Approve ${short("pr")} on GitHub as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`,
 		);
 	});
 
@@ -168,7 +185,7 @@ describe("the review a landing needs", () => {
 	])("does not carry a review across a merge that %s", async (_, merged) => {
 		const read = reads(history(merged), { head: "merge", main: "main", approved: ["pr"] });
 		expect(await unreviewed(read, landing("merge"))).toBe(
-			`The approval of ${short("pr")} does not carry to ${short("merge")}: what changed since is more than conflict-free merges of main. kix lands only a reviewed head. Approve ${short("merge")} on GitHub as someone with write access other than the pull request's author, or have a runner's \`quest review\` check pass on it.`,
+			`The approval of ${short("pr")} does not carry to ${short("merge")}: what changed since is more than conflict-free merges of main. kix lands only a reviewed head. Approve ${short("merge")} on GitHub as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`,
 		);
 	});
 
@@ -208,5 +225,44 @@ describe("the review a landing needs", () => {
 			expect(
 				await unreviewed(reads(commits, { head: "pr", main: "main", rules, bypass }), landing("pr")),
 			).toContain(carried);
+	});
+
+	describe("the author's own Review record", () => {
+		const record = (name: string) =>
+			`Summary\n\n## Review\n\nRound 1 on head ${sha(name)}: no findings.\n\n(written by a model)`;
+
+		it("counts when a writer names the exact head in the body they last edited", async () => {
+			const commits = history({});
+			for (const editor of [undefined, "author", "Author"])
+				expect(
+					await unreviewed(
+						reads(commits, { head: "pr", main: "main", body: record("pr"), editor }),
+						landing("pr"),
+					),
+				).toBeNull();
+		});
+
+		it.each([
+			["the author cannot write", { permission: "read" }],
+			["someone else last edited the body", { editor: "maintainer" }],
+			["an App committed the head", { bots: ["pr"] }],
+			["it names another commit", { body: record("o") }],
+			["it names no commit, as a skip does", { body: "## Review\n\nSkipped: trivial." }],
+			[
+				"the SHA is outside the Review section",
+				{ body: `${sha("pr")}\n\n## Review\n\nDone.\n\n## Next\n\n${sha("pr")}` },
+			],
+		])("does not count when %s", async (_, overrides) => {
+			const read = reads(history({}), { head: "pr", main: "main", body: record("pr"), ...overrides });
+			expect(await unreviewed(read, landing("pr"))).toContain(carried);
+		});
+
+		it("carries across a merge of the base that resolved no conflict, unless an App committed the merge", async () => {
+			const commits = history({ a: "1", b: "2", c: "2" });
+			const merged = (bots: string[]) =>
+				unreviewed(reads(commits, { head: "merge", main: "main", body: record("pr"), bots }), landing("merge"));
+			expect(await merged([])).toBeNull();
+			expect(await merged(["merge"])).toContain(carried);
+		});
 	});
 });

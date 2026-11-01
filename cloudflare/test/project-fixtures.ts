@@ -157,7 +157,9 @@ export async function maintainerOf() {
 							state: github.pull.toUpperCase(),
 							headRefOid: github.head,
 							baseRefName: "trunk",
+							body: "",
 							author: { __typename: "User", login: "contributor" },
+							userContentEdits: { nodes: [] },
 							latestOpinionatedReviews: {
 								nodes: github.approved.map((oid) => ({
 									state: "APPROVED",

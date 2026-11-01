@@ -37,6 +37,8 @@ export type Pull = Issue & {
 	contributor?: string;
 	/** A `## Decisions needed` section in it hands a draft back to the maintainer. */
 	body?: string;
+	/** Who last edited the body; never edited when absent. */
+	editor?: string;
 	/** Closed by merging it; set with `closed`. */
 	merged?: boolean;
 	/** Optional squash result supplied by fixtures that model real git merges. */
@@ -65,6 +67,8 @@ export type Commit = {
 	parents: string[];
 	tree: string;
 	message: string;
+	/** The account GitHub attributes the commit to; the App's bot for commits written through the API. */
+	committer?: string;
 	/** GitHub's authenticated signature result, independent of author identity. */
 	signature?: { isValid: boolean; signer: { databaseId: number; login: string } | null } | null;
 };
@@ -270,7 +274,9 @@ function reviewTarget(repo: Repo, pull: Pull) {
 		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
 		headRefOid: headOf(repo, pull),
 		baseRefName: pull.base ?? "main",
+		body: pull.body ?? "",
 		author: actor(pull.author),
+		userContentEdits: { nodes: pull.editor ? [{ editor: actor(pull.editor) }] : [] },
 		latestOpinionatedReviews: {
 			nodes: [...latest.values()].map((r) => ({
 				state: r.state,
@@ -817,11 +823,24 @@ export function fakeGitHub(world: World) {
 		if (permission) {
 			const found = world.users.find((u) => u.login === permission[1]);
 			if (!found) return notFound();
-			const role = repo.maintainers.includes(found.login) ? "maintain" : "read";
+			const role = repo.maintainers.includes(found.login)
+				? "maintain"
+				: repo.writers?.includes(found.login)
+					? "write"
+					: "read";
 			return json({
 				user: { id: found.id },
-				permission: role === "maintain" ? "write" : "read",
+				permission: role === "read" ? "read" : "write",
 				role_name: role,
+			});
+		}
+		const listed = tail.match(/^\/commits\/([0-9a-f]{40})$/)?.[1];
+		if (listed && method === "GET") {
+			const found = repo.commits[listed];
+			if (!found) return notFound();
+			return json({
+				sha: listed,
+				committer: found.committer ? { login: found.committer, type: actor(found.committer).__typename } : null,
 			});
 		}
 		if (tail === "/commits/main") return json({ sha: commitOf(repo), commit: { tree: { sha: treeOf(repo) } } });
@@ -1171,7 +1190,13 @@ export function fakeGitHub(world: World) {
 				return invalid("Invalid commit");
 			// GitHub stamps each commit with the time, so even identical changes get a new commit.
 			const sha = sha1(`commit ${Object.keys(network.commits).length} ${body.tree} ${parents} ${body.message}`);
-			network.commits[sha] = { parents, tree: body.tree, message: body.message };
+			// No author or committer: GitHub attributes the commit to the App's bot.
+			network.commits[sha] = {
+				parents,
+				tree: body.tree,
+				message: body.message,
+				committer: `${world.app.slug}[bot]`,
+			};
 			return json({ sha }, 201);
 		}
 		return null;

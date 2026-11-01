@@ -1435,7 +1435,7 @@ describe("merge jobs", () => {
 
 	describe("lands only a reviewed head", () => {
 		const waiting = (head: string) =>
-			`No review counts on ${head.slice(0, 7)} yet. kix lands only a reviewed head. Approve ${head.slice(0, 7)} on GitHub as someone with write access other than the pull request's author, or have a runner's \`quest review\` check pass on it.`;
+			`No review counts on ${head.slice(0, 7)} yet. kix lands only a reviewed head. Approve ${head.slice(0, 7)} on GitHub as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`;
 		/** Land pull request #2 at `head`, returning the decision the job paused on, or null once it landed. */
 		async function land(id: string, head = prHead) {
 			const response = await publish({ job: id, attempt: 1, head, session: "s", land: {} });
@@ -1508,6 +1508,29 @@ describe("merge jobs", () => {
 			expect(lands()).toEqual([]);
 		});
 
+		it.each([
+			["lands at the head it names", false],
+			["waits at a head a runner committed", true],
+		])("counts a writer's own Review record in their pull request, which %s", async (_, moved) => {
+			pull().author = "maintainer";
+			pull().body = `Fixes it\n\n## Review\n\nNo findings on ${prHead}.`;
+			const id = await merging(false);
+			if (!moved) return expect(await land(id)).toBeNull();
+			const decision = await publish({
+				job: id,
+				attempt: 1,
+				head: prHead,
+				session: "s",
+				message: "fix",
+				changes: [file("a", "1")],
+				land: {},
+			});
+			expect(decision.status).toBe(202);
+			const head = project.branches["contributor/fix"]!;
+			expect((await job(id)).questions.at(-1)!.prompt).toMatchObject({ blocked: waiting(head) });
+			expect(lands()).toEqual([]);
+		});
+
 		it("does not carry an approval across a merge that changed what it merged", async () => {
 			const id = await merging();
 			const main = "f".repeat(40);
@@ -1527,7 +1550,7 @@ describe("merge jobs", () => {
 			const head = project.branches["contributor/fix"]!;
 			expect((await job(id)).questions.at(-1)!.prompt).toEqual({
 				type: "publication",
-				blocked: `The approval of ${prHead.slice(0, 7)} does not carry to ${head.slice(0, 7)}: what changed since is more than conflict-free merges of main. kix lands only a reviewed head. Approve ${head.slice(0, 7)} on GitHub as someone with write access other than the pull request's author, or have a runner's \`quest review\` check pass on it.`,
+				blocked: `The approval of ${prHead.slice(0, 7)} does not carry to ${head.slice(0, 7)}: what changed since is more than conflict-free merges of main. kix lands only a reviewed head. Approve ${head.slice(0, 7)} on GitHub as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`,
 			});
 			expect(lands()).toEqual([]);
 		});

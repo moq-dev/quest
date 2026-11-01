@@ -214,14 +214,21 @@ Labels need `issues: write` on the upstream; landing needs `contents: write`,
 Picking merge is a maintainer's decision about the head they saw, not a review
 of whatever a runner, or anyone, pushes after it. So both a direct merge and a
 merge job's landing first require a review that counts on the exact head being
-landed (`src/github/review.ts`), read from GitHub's own records rather than any
-text a pull request's author or a runner wrote:
+landed (`src/github/review.ts`):
 
 - an approval on GitHub of that commit by a person with write access other than
   the pull request's author; reviews by Apps never count;
-- or a completed, successful `quest review` check run on that commit, written
-  by this App. Only the App can write one, and GitHub binds it to the commit.
-  The PR body's `## Review` record is self-reported, so it does not count here.
+- a completed, successful `quest review` check run on that commit, written by
+  this App. Only the App can write one, and GitHub binds it to the commit;
+- or the author's own `## Review` record, as the guide's default review policy
+  counts it in every enrolled repository: the `## Review` section of the PR
+  body names the commit's full SHA, the author has write access, and the body's
+  latest edit is the author's. The record is self-reported, so it never counts
+  on a commit GitHub attributes to an App's bot, as it does every commit a
+  runner publishes; a runner's head needs one of the other two.
+
+A reviewer's suggested patch applied on GitHub is its applier's own commit, so
+the head it makes needs a new review.
 
 A review also carries to a head whose only changes since the reviewed commit
 are merges of commits the default branch already holds that resolved nothing:
@@ -230,6 +237,7 @@ changed it. kix verifies this from the commits' trees, up to five merges back.
 A file both sides changed, even one Git merged line by line without a
 conflict, needs a new review, as does any other commit, a truncated tree, or a
 read that fails.
+An author's record carries only across merges no App committed.
 
 kix defers to GitHub only where GitHub enforces the same rule: a ruleset on the
 base that requires an approval and either dismisses stale approvals or requires

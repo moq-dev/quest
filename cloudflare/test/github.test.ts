@@ -230,7 +230,9 @@ function github(
 							state: "OPEN",
 							headRefOid: "a".repeat(40),
 							baseRefName: "main",
+							body: "",
 							author: { __typename: "User", login: "contributor" },
+							userContentEdits: { nodes: [] },
 							latestOpinionatedReviews: {
 								nodes: [
 									{
