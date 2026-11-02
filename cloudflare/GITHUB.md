@@ -160,10 +160,11 @@ URL, or closing keyword. Every delivery renders the section again between
 past GitHub's 65,536-character body limit are counted rather than cut.
 
 GitHub keeps pull request status, checks, and reviews. `mergePullRequest`
-merges only an exact head a maintainer explicitly chose, with the first method
-the repository allows: squash, then a merge commit, then rebase. GitHub's
-branch rules and refusals stand, and an agent's recommendation is never
-approval. The decision inbox offers it on a pull request item only when
+merges only an exact head a maintainer explicitly chose, once a review counts
+on it (see [Landing only reviewed heads](#landing-only-reviewed-heads)), with
+the first method the repository allows: squash, then a merge commit, then
+rebase. GitHub's branch rules and refusals stand, and an agent's
+recommendation is never approval. The decision inbox offers it on a pull request item only when
 GitHub reports the PR's merge state as `CLEAN` or `HAS_HOOKS` and no job or
 session holds the PR. The form binds the head on screen. A moved head asks for
 another look, GitHub's refusal is shown in its own words, and neither is
@@ -193,15 +194,73 @@ on a decision.
   refuse auto-merge because nothing is left to wait for. It uses the method the
   job names, else the first the repository allows. A base that requires the
   `quest land` check queues the PR for that gate instead, as `quest merge`
-  does: squash auto-merge whose commit body pins the head. A refusal
-  pauses the job on a decision, in GitHub's words.
+  does: squash auto-merge whose commit body pins the head. Either way, kix
+  first requires a review that counts on that head; without one, the job
+  pauses on a decision that says why. A refusal also pauses the job on a
+  decision, in GitHub's words.
 - The label stays while the job runs or waits, and while the PR is queued or
   auto-merging. When the job ends without a landing in progress, or a
   `pull_request` webhook arrives and GitHub shows the landing ended unmerged,
   the App removes its own label. The PR is then an idle decision item again.
 
-Labels need `issues: write` on the upstream; landing needs `contents: write`
-and `pull_requests: write` there, as a direct merge does.
+Labels need `issues: write` on the upstream; landing needs `contents: write`,
+`pull_requests: write`, and `checks: read` there, as a direct merge does.
+
+### Landing only reviewed heads
+
+Picking merge is a maintainer's decision about the head they saw, not a review
+of whatever a runner, or anyone, pushes after it. So both a direct merge and a
+merge job's landing first require a review that counts on the exact head being
+landed (`src/github/review.ts`):
+
+- an approval on GitHub of that commit by a person with write access other than
+  the pull request's author; reviews by Apps never count;
+- a completed, successful `quest review` check run on that commit, written by
+  this App. Only the App can write one, and GitHub binds it to the commit;
+- or the author's own `## Review` record, as the guide's default review policy
+  counts it in every enrolled repository: the `## Review` section of the PR
+  body names the commit's full SHA, the author has write access, and the body's
+  latest edit is the author's. The record is self-reported, so it never counts
+  on a commit GitHub attributes to an App's bot, as it does every commit a
+  runner publishes; a runner's head needs one of the other two.
+
+A reviewer's suggested patch applied on GitHub is its applier's own commit, so
+the head it makes needs a new review.
+
+A review also carries to a head whose only changes since the reviewed commit
+are merges of commits the default branch already holds that resolved nothing:
+every file holds the reviewed side's version or the default branch's, whichever
+changed it. kix verifies this from the commits' trees, up to five merges back.
+A file both sides changed, even one Git merged line by line without a
+conflict, needs a new review, as does any other commit, a truncated tree, or a
+read that fails.
+An author's record carries only across merges no App committed.
+
+kix defers to GitHub only where GitHub enforces the same rule: a ruleset on the
+base that requires an approval and either dismisses stale approvals or requires
+approval of the most recent push, which GitHub reports this App cannot bypass.
+Classic branch protection's review settings need the administration permission
+to read, so kix keeps its own check there.
+
+When no review counts, a direct merge is refused and a merge job pauses on a
+decision. Both say which commit needs a review and how to give one.
+
+GitHub keeps auto-merge enabled across a push by anyone with write access, the
+App's included, and checks the `expectedHeadOid` kix pins only when auto-merge
+is enabled. Its merge queue likewise keeps a queued pull request across such a
+push. So once a merge job arms auto-merge on a reviewed head while its checks
+run, whatever a writer pushes after it lands with it, unreviewed. Only the
+`quest land` gate's pin, or a ruleset GitHub enforces that requires a new
+approval of every push, refuses such a head. The maintainer accepted this gap
+on 2026-11-02, matching `quest merge --land`, rather than make a merge job wait
+for its checks and merge only at once.
+
+kix closes it for its own pushes: a job pushing to a pull request that is
+auto-merging would land its new head with no review of it. Before a job moves
+or resets a branch that heads an open pull request, its own or an iterated
+one, kix turns that pull request's auto-merge off. If GitHub refuses or does
+not show whether it is on, the job pushes nothing and pauses on a decision. The
+new head lands only through a new landing.
 
 kix pull requests come from upstream branches, and GitHub gives workflows on
 same-repository branches the repository's secrets, unlike fork pull requests.
@@ -216,11 +275,12 @@ grants runners no GitHub credentials.
 Installation grants are broader than any one publication: `contents: write`
 and `pull_requests: write` cover every installed repository. Each token names
 one repository ID and only the permissions that step needs. Branch writes get
-`contents: write` on the upstream alone, and pull request delivery gets
-`pull_requests: write` there. That token could write any unprotected upstream
-branch; the service restricts it to the job's branch or the pull request's head
-and refuses the default branch. Repositories should still protect their default
-branch.
+`contents: write` on the upstream alone, plus `pull_requests: write` to turn
+off the auto-merge of a pull request the branch heads, and pull request
+delivery gets `pull_requests: write` there. That token could write any
+unprotected upstream branch; the service restricts it to the job's branch or
+the pull request's head and refuses the default branch. Repositories should
+still protect their default branch.
 
 Mocked tests cover this path. These GitHub behaviors still need a live check
 against real installations ([operator setup](../quest/m0/kix/operator-setup.md)):

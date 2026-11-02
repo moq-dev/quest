@@ -218,6 +218,32 @@ function github(
 		if (path === "/installation/token")
 			return options.cleanupFails ? json({}, 500) : new Response(null, { status: 204 });
 		if (path === "/user/7") return json({ id: options.account ?? 7, login: "maintainer" });
+		// Pull request #1's head, which another maintainer approved.
+		if (path === "/graphql" && body.query.includes("latestOpinionatedReviews("))
+			return json({
+				data: {
+					repository: {
+						pullRequest: {
+							state: "OPEN",
+							headRefOid: "a".repeat(40),
+							baseRefName: "main",
+							body: "",
+							author: { __typename: "User", login: "contributor" },
+							userContentEdits: { nodes: [] },
+							latestOpinionatedReviews: {
+								nodes: [
+									{
+										state: "APPROVED",
+										author: { __typename: "User", login: "reviewer" },
+										commit: { oid: "a".repeat(40) },
+									},
+								],
+							},
+						},
+					},
+				},
+			});
+		if (path.endsWith("/rules/branches/main")) return json([]);
 		if (path.endsWith("/permission"))
 			return json({
 				user: { id: 7 },
@@ -319,6 +345,7 @@ describe("trusted App operations", () => {
 			metadata: "read",
 			contents: "write",
 			pull_requests: "write",
+			checks: "read",
 		});
 	});
 	it("refuses to merge when the repository allows no merge method", async () => {

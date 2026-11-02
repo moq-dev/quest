@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
+import { unreviewed } from "./review";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -1259,7 +1260,9 @@ export class GitHubService {
 
 	/**
 	 * Hand `action` the one upstream branch a job may write: its own branch,
-	 * or an iterated pull request's head on the enrolled repository.
+	 * or an iterated pull request's head on the enrolled repository. Before
+	 * moving either, it turns off the auto-merge of any open pull request the
+	 * branch heads.
 	 * Rechecks the requester's current authority and the project's enrollment.
 	 */
 	contribute<T>(
@@ -1272,7 +1275,7 @@ export class GitHubService {
 		return this.#authorized(
 			upstream,
 			userId,
-			pulled ? { contents: "read", pull_requests: "read" } : { contents: "write" },
+			pulled ? { contents: "read", pull_requests: "read" } : { contents: "write", pull_requests: "write" },
 			async (token, current, installation) => {
 				this.#public(current);
 				if ((await this.#state(upstream, installation)) === null)
@@ -1292,7 +1295,16 @@ export class GitHubService {
 					}
 				};
 				// A job's own branch starts from the default branch's current commit, so it merges nothing in.
-				if (!pulled) return action(this.#branch(token, current, job.branch, async () => false));
+				// A delivered job, or one started over, may publish again onto its open pull request.
+				if (!pulled)
+					return action(
+						this.#disarming(
+							token,
+							current,
+							job.branch,
+							this.#branch(token, current, job.branch, async () => false),
+						),
+					);
 				const pull = await this.#api<PullHead>(
 					token,
 					`${repositoryPath(upstream)}/pulls/${pullNumber(job.target)}`,
@@ -1302,14 +1314,84 @@ export class GitHubService {
 				const head = pull.head.repo;
 				const base = based(pull.base.ref);
 				if (head?.id === upstream.id)
-					return this.#withRepository(upstream, { contents: "write" }, async (writeToken, latest) =>
-						action(this.#branch(writeToken, latest, job.branch, base)),
+					return this.#withRepository(
+						upstream,
+						{ contents: "write", pull_requests: "write" },
+						async (writeToken, latest) =>
+							action(
+								this.#disarming(
+									writeToken,
+									latest,
+									job.branch,
+									this.#branch(writeToken, latest, job.branch, base),
+								),
+							),
 					);
 				throw new PublicationBlocked(
 					"The pull request's head is in a contributor's fork, which the bot cannot update. Ask its author to apply the changes, or close it and start new work.",
 				);
 			},
 		);
+	}
+
+	/**
+	 * Wrap `branch`, named `name` on `repo`, so that moving it, or resetting it,
+	 * first turns off auto-merge on every open pull request it heads, whatever
+	 * their bases. Creating the branch needs nothing, since no pull request can
+	 * come from it yet.
+	 */
+	#disarming(token: string, repo: Repository, name: string, branch: Branch): Branch {
+		const label = `${repo.owner.login}:${name}`;
+		const disarm = async () => {
+			const open = await this.#api<PullHead[]>(
+				token,
+				`/repos/${repo.owner.login}/${repo.name}/pulls?state=open&per_page=100&head=${encodeURIComponent(label)}`,
+			);
+			for (const pull of open) await this.#disarm(token, pull.node_id);
+		};
+		return {
+			...branch,
+			move: async (from, to) => {
+				if (from !== null) await disarm();
+				return branch.move(from, to);
+			},
+			reset: async (to) => {
+				await disarm();
+				await branch.reset(to);
+			},
+		};
+	}
+
+	/**
+	 * Turn off auto-merge on a pull request before kix moves its head. GitHub
+	 * keeps auto-merge across a writer's push, the App's included, so it would
+	 * land the new head with no review that counts on it.
+	 */
+	async #disarm(token: string, pull: string) {
+		const read = await this.#api<{ data?: { node: { autoMergeRequest?: unknown } | null }; errors?: unknown[] }>(
+			token,
+			"/graphql",
+			"POST",
+			{
+				query: `query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }`,
+				variables: { id: pull },
+			},
+		);
+		// Only a read that shows no auto-merge lets the push go ahead without turning it off.
+		const node = read.data?.node;
+		if (read.errors?.length || !node || node.autoMergeRequest === undefined)
+			throw new PublicationBlocked(
+				"GitHub did not say whether the pull request is auto-merging, which would land this push unreviewed, so nothing was pushed.",
+			);
+		if (node.autoMergeRequest === null) return;
+		const result = await this.#api<{ errors?: unknown[] }>(token, "/graphql", "POST", {
+			query: `mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }`,
+			variables: { id: pull },
+		});
+		if (result.errors?.length)
+			throw new PublicationBlocked(
+				"GitHub refused to turn off the pull request's auto-merge, which would land this push unreviewed, so nothing was pushed.",
+			);
 	}
 
 	#branch(token: string, repo: Repository, branch: string, based: Branch["based"]): Branch {
@@ -1510,14 +1592,37 @@ export class GitHubService {
 		});
 	}
 
+	/** Why kix may not land `head` yet, or null when a review counts on it; see `unreviewed`. */
+	#unreviewed(token: string, repo: GitHubRepository, current: Repository, pull: number, head: string) {
+		const path = repositoryPath(repo);
+		return unreviewed(
+			{
+				get: (tail) => this.#api(token, `${path}${tail}`),
+				graphql: (query, variables) => this.#api(token, "/graphql", "POST", { query, variables }),
+			},
+			{
+				owner: repo.owner,
+				name: repo.name,
+				pull: number(pull),
+				head: sha(head),
+				branch: current.default_branch,
+				app: Number(this.#env.GITHUB_APP_ID),
+			},
+		);
+	}
+
 	/**
 	 * Merge exactly `expectedHead` with the first method the repository
-	 * allows: squash, then a merge commit, then rebase. GitHub enforces branch
-	 * rules, reviews, and checks; a refusal says why and is never retried.
+	 * allows: squash, then a merge commit, then rebase, once a review counts on
+	 * it. GitHub enforces branch rules, reviews, and checks; a refusal says why
+	 * and is never retried.
 	 */
 	mergePullRequest(repo: GitHubRepository, userId: string, pull: number, expectedHead: string) {
-		return this.#authorized(repo, userId, { contents: "write", pull_requests: "write" }, async (token, current) => {
+		const permissions: Permissions = { contents: "write", pull_requests: "write", checks: "read" };
+		return this.#authorized(repo, userId, permissions, async (token, current) => {
 			const method = mergeMethod(current);
+			const waiting = await this.#unreviewed(token, repo, current, pull, expectedHead);
+			if (waiting) throw new GitHubError(waiting);
 			let merged: { sha: string };
 			try {
 				merged = await this.#api<{ sha: string }>(
@@ -1670,7 +1775,7 @@ export class GitHubService {
 	 * repository's instructions name, or else the first the repository allows.
 	 * A base that requires the `quest land` check queues it for that gate
 	 * instead, as `quest merge` does: squash auto-merge whose commit body
-	 * pins the head.
+	 * pins the head. Either way, only once a review counts on the head.
 	 */
 	landPullRequest(
 		repo: GitHubRepository,
@@ -1681,7 +1786,7 @@ export class GitHubService {
 		return this.#authorized(
 			repo,
 			userId,
-			{ contents: "write", pull_requests: "write" },
+			{ contents: "write", pull_requests: "write", checks: "read" },
 			async (token, current, installation) => {
 				// Landing is a contribution like opening a pull request, so a paused project lands nothing.
 				if ((await this.#state(repo, installation)) !== "enabled")
@@ -1697,6 +1802,9 @@ export class GitHubService {
 				};
 				const holds = await this.#holds(token, repo, pull);
 				check(holds);
+				// The maintainer's pick of merge never stands in for a review of what the job published since.
+				const waiting = await this.#unreviewed(token, repo, current, pull, input.head);
+				if (waiting) throw new PublicationBlocked(waiting);
 				const gated = await this.#gated(token, repo, holds.base);
 				let mutation: "mergePullRequest" | "enablePullRequestAutoMerge" =
 					!gated && immediateMerge(holds.mergeState, holds.queue)

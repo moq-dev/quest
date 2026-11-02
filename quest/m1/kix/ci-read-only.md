@@ -55,5 +55,4 @@ moq-dev/quest#246's Codex Security P1):
 ## Related
 
 - [Operator setup](/quest/m0/kix/operator-setup.md) - pilot repositories should pass this check
-- [Land review](/quest/m0/kix/land-review.md) - the land stage's trust rule
 - [Head approval](/quest/m0/kix/sandbox/head-approval.md) - the devShell stage's trust rule for heads without signatures
