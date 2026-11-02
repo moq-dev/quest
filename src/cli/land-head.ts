@@ -1,6 +1,7 @@
 // Trusted preparation and publication. Sandboxes and fixers never receive this repository or state.
 import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { gitAuthentication } from "./land-git";
 import { MERGE_LABEL } from "../core";
 import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
 import {
@@ -9,6 +10,8 @@ import {
 	eject,
 	ejection,
 	git,
+	readRemote,
+	type RemoteRead,
 	mergeBase,
 	resolveQueue,
 	tryGit,
@@ -65,7 +68,7 @@ export function forgetHeads(state: string, number: number): void {
 		if (name.startsWith(`head-${number}-`) && name.endsWith(".json")) unlinkSync(join(state, name));
 }
 
-function isPrepared(root: string, state: string, entry: Entry): boolean {
+export function isPrepared(root: string, state: string, entry: Entry): boolean {
 	const path = recordPath(state, entry.number, entry.head);
 	if (!existsSync(path)) return false;
 	const record = JSON.parse(readFileSync(path, "utf8")) as Prepared;
@@ -88,22 +91,21 @@ export async function push(
 	to: string,
 	ref: string,
 	token: (workflows: boolean) => Promise<string>,
+	/** What `ref` must be before the push; empty when it must not exist yet. */
+	lease = from,
 ) {
-	const workflows = git(root, ["diff", "--name-only", from, to, "--", ".github/workflows"]) !== "";
+	// A push that replaces another head than the one it builds on can change workflows relative to either.
+	const workflows = [...new Set([from, lease])].some(
+		(old) => old !== "" && git(root, ["diff", "--name-only", old, to, "--", ".github/workflows"]) !== "",
+	);
 	const credential = await token(workflows);
-	return tryGit(root, ["push", "--quiet", remote, `${to}:${ref}`, `--force-with-lease=${ref}:${from}`], {
-		env: {
-			GIT_CONFIG_COUNT: "2",
-			GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-			GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${credential}`).toString("base64")}`,
-			GIT_CONFIG_KEY_1: "credential.helper",
-			GIT_CONFIG_VALUE_1: "",
-		},
+	return tryGit(root, ["push", "--quiet", remote, `${to}:${ref}`, `--force-with-lease=${ref}:${lease}`], {
+		env: gitAuthentication(credential),
 	});
 }
-function remoteHead(root: string, remote: string, ref: string): string | null {
+export async function remoteHead(root: string, remote: string, ref: string, read: RemoteRead): Promise<string | null> {
 	return (
-		git(root, ["ls-remote", remote, ref])
+		(await read(root, ["ls-remote", remote, ref]))
 			.split("\n")
 			.find((line) => line.endsWith(`\t${ref}`))
 			?.split("\t")[0] ?? null
@@ -122,11 +124,12 @@ export async function prepareHead(
 	base: string,
 	tree: string,
 	token: (workflows: boolean) => Promise<string>,
+	read: RemoteRead = readRemote,
 ): Promise<Preparation> {
-	git(root, ["fetch", "--quiet", "--no-tags", baseRemote(plan), base]);
+	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(plan), base]);
 	const remote = `https://github.com/${entry.repository}.git`;
 	const ref = `refs/heads/${entry.branch}`;
-	const actual = remoteHead(root, remote, ref);
+	const actual = await remoteHead(root, remote, ref, read);
 	if (actual !== entry.head) {
 		const updated = actual === null ? null : { ...entry, head: actual };
 		if (!updated || !isPrepared(root, state, updated))
@@ -157,7 +160,7 @@ export async function prepareHead(
 	});
 	const result = await push(root, remote, entry.head, prepared.head, ref, token);
 	if (result.status === 0) return { head: prepared.head };
-	if (remoteHead(root, remote, ref) !== entry.head)
+	if ((await remoteHead(root, remote, ref, read)) !== entry.head)
 		return { reason: "head_moved", detail: `PR #${entry.number}'s head moved while preparing its merge` };
 	if (entry.repository !== plan.repository) return { fallback: true };
 	return { reason: "merge_refused", detail: `PR #${entry.number} merge push failed: ${result.stderr.trim()}` };
@@ -175,12 +178,13 @@ export async function finishFallback(
 	state: string,
 	deps: GitHubDependencies,
 	token: (workflows: boolean) => Promise<string>,
+	read: RemoteRead = readRemote,
 ): Promise<string | null> {
 	const path = join(state, "fallback.json");
 	if (!existsSync(path)) return null;
 	const { plan, entry, commit, parent } = JSON.parse(readFileSync(path, "utf8")) as Fallback;
 	const remote = baseRemote(plan);
-	git(root, ["fetch", "--quiet", remote, plan.base.ref]);
+	await read(root, ["fetch", "--quiet", remote, plan.base.ref]);
 	if (!contains(root, commit, "FETCH_HEAD")) {
 		if (git(root, ["rev-parse", "FETCH_HEAD"]) !== parent) {
 			unlinkSync(path);
@@ -199,7 +203,7 @@ export async function finishFallback(
 		if (fresh.base.sha !== parent) throw new Error("fallback base is not yet reflected in the queue; retrying");
 		const result = await push(root, remote, parent, commit, `refs/heads/${plan.base.ref}`, token);
 		if (result.status !== 0) {
-			git(root, ["fetch", "--quiet", remote, plan.base.ref]);
+			await read(root, ["fetch", "--quiet", remote, plan.base.ref]);
 			if (!contains(root, commit, "FETCH_HEAD")) {
 				unlinkSync(path);
 				if (git(root, ["rev-parse", "FETCH_HEAD"]) !== parent) return null;
@@ -259,6 +263,7 @@ export async function landFallback(
 	parent: string,
 	deps: GitHubDependencies,
 	token: (workflows: boolean) => Promise<string>,
+	read: RemoteRead = readRemote,
 ): Promise<string | null> {
 	// The local chain parent has a different SHA from an API squash, but the same verified tree.
 	// Reparent without changing the tested tree so the fallback is strictly a fast-forward.
@@ -269,5 +274,5 @@ export async function landFallback(
 			? commit
 			: git(root, ["commit-tree", tree, "-p", parent], { input: message });
 	save(join(state, "fallback.json"), { plan, entry, commit: landed, parent });
-	return finishFallback(root, state, deps, token);
+	return finishFallback(root, state, deps, token, read);
 }

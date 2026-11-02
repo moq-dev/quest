@@ -176,6 +176,7 @@ export async function land(
 	sha: string,
 	method: Method,
 	deps: GitHubDependencies,
+	direct = false,
 ): Promise<Hold> {
 	const labels = new Labels(pr, deps);
 	const current = (snapshot: Snapshot) => {
@@ -183,13 +184,35 @@ export async function land(
 			throw new Refusal(`${snapshot.url} head moved to ${snapshot.head}; check the new head before landing it`);
 		}
 	};
-	// Check the head before swapping labels, so a stale SHA leaves the caller's token valid.
-	const { hold, snapshot } = await acquire(labels, "merge", token, current);
-	return holding(hold, async () => {
+	// Pre-check before any label changes, preserving the caller's token on refusal.
+	let gated = false;
+	let checkedBase = "";
+	const { hold, snapshot } = await acquire(labels, "merge", token, async (snapshot) => {
 		current(snapshot);
-		const gated = (await requirements(labels.github, pr, snapshot.base)).checks.some(
+		checkedBase = snapshot.base;
+		gated = (await requirements(labels.github, pr, snapshot.base)).checks.some(
 			(check) => check.name === LAND_CHECK,
 		);
+		// A merge queue is the repository's own gate, so it decides; otherwise auto-merge must be on.
+		if (!gated && !direct && !snapshot.queue) {
+			const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
+			// GitHub shows the merge settings only to writers; fail closed, with a next step.
+			if (typeof repository.allow_auto_merge !== "boolean")
+				throw new Refusal(
+					`${snapshot.url} repository's auto-merge setting is not visible to this token, so a direct merge cannot be ruled out; follow its landing instructions in CONTRIBUTING.md or AGENTS.md`,
+				);
+			if (!repository.allow_auto_merge)
+				throw new Refusal(
+					`${snapshot.url} repository has auto-merge disabled; follow its landing instructions in CONTRIBUTING.md or AGENTS.md (for example, its label queue). Only use --direct if the user explicitly asks`,
+				);
+		}
+	});
+	return holding(hold, async () => {
+		// The policy above was decided for the base read before acquiring; a retarget since then decides nothing.
+		if (snapshot.base !== checkedBase) {
+			throw new Refusal(`${snapshot.url} was retargeted from ${checkedBase} to ${snapshot.base}; land it again`);
+		}
+		current(snapshot);
 		if (gated) {
 			if (method !== "squash") deps.warn(`${snapshot.url} lands through quest land, which squashes`);
 			await enqueue(labels.github, snapshot.id, snapshot.head);
@@ -282,18 +305,18 @@ async function acquire(
 	labels: Labels,
 	state: State,
 	token: string | undefined,
-	check?: (snapshot: Snapshot) => void,
+	check?: (snapshot: Snapshot) => void | Promise<void>,
 ): Promise<{ hold: Hold; snapshot: Snapshot }> {
 	const label = HOLD_PREFIX + state;
 	let snapshot = await labels.read();
 	if (snapshot.state !== "OPEN") {
 		throw new Refusal(`${snapshot.url} is ${snapshot.state.toLowerCase()}; a push now would bring its branch back`);
 	}
+	await check?.(snapshot);
 	snapshot = await labels.dequeued(snapshot);
 	const mine = token === undefined ? undefined : held(snapshot, token);
 	const other = snapshot.labels.find((name) => name !== mine);
 	if (other !== undefined) throw new Refusal(holder(snapshot, other, labels.deps.now()));
-	check?.(snapshot);
 	if (mine === label) return { hold: { label, token: token! }, snapshot };
 	if (mine === undefined && starterHeld(snapshot)) {
 		throw new Refusal(

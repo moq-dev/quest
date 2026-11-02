@@ -5,11 +5,16 @@
 `quest merge --land` lands a PR without per-repository workarounds, and
 auto-merge never merges a head nobody landed. On a repository that allows only
 squash it squashes without `--squash`. It works from outside a checkout when
-given a PR URL. A direct merge releases its `quest:merge` label. When
+given a PR URL. With auto-merge disabled, it refuses unless the user explicitly
+requests `--direct`, preserving the repository’s own landing queue. A direct merge releases its `quest:merge` label. When
 auto-merge is left on for a head other than the one landed, `quest status`
 and `quest wait` say so.
 
 ## Plan
+
+Implemented: the 2026-10-28 decision to refuse an ungated landing when repository
+auto-merge is disabled, unless `--direct` was explicitly requested. Follow the
+repository’s own landing instructions on refusal. The remaining gaps follow.
 
 Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-complete run). Merge agents hit each of these repeatedly:
 

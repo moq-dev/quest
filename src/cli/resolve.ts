@@ -14,13 +14,19 @@ const MARKER_SIZE = 7;
  * names for `%A`, `%O`, and `%B` and runs it with a shell. A `quest` missing
  * from the merge's PATH, or one without `resolve`, falls back to git's own
  * merge with conflict markers: `quest help <unknown>` exits non-zero, while
- * `quest <unknown> --help` prints the top-level help and exits zero.
+ * `quest <unknown> --help` prints the top-level help and exits zero. A
+ * fallback that leaves conflicts says why on stderr, naming the file (`%P`),
+ * since those markers may be link-list edits `quest resolve` would have
+ * merged. Git keeps a placeholder it does not know, such as printf's `%s`.
  */
 export const DRIVER =
 	"if quest help resolve >/dev/null 2>&1; " +
 	"then quest resolve %A %O %B --marker-size=%L --ours-label=%X --base-label=%S --theirs-label=%Y; " +
-	'quest_merge_status=$?; if [ "$quest_merge_status" -le 1 ]; then exit "$quest_merge_status"; fi; fi; ' +
-	"git merge-file --marker-size=%L -L %X -L %S -L %Y %A %O %B";
+	'quest_merge_status=$?; if [ "$quest_merge_status" -le 1 ]; then exit "$quest_merge_status"; fi; ' +
+	"quest_merge_reason='quest resolve failed'; else quest_merge_reason='no quest resolve on PATH'; fi; " +
+	"git merge-file --marker-size=%L -L %X -L %S -L %Y %A %O %B && exit 0; quest_merge_status=$?; " +
+	"printf 'quest: %s, so link lists in %s were not auto-resolved\\n' \"$quest_merge_reason\" %P >&2; " +
+	'exit "$quest_merge_status"';
 
 export interface ResolveOptions {
 	markerSize?: number;
