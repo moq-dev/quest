@@ -798,6 +798,11 @@ export function fakeGitHub(world: World) {
 									},
 								});
 							if (!writes("pull_requests")) return json({ errors: [{ type: "FORBIDDEN" }] });
+							// A merged or closed PR still reports the auto-merge it had, but GitHub refuses to disable it.
+							if (pull.closed)
+								return json({
+									errors: [{ message: "Can't disable auto-merge for this pull request" }],
+								});
 							if (!pull.landing)
 								return json({
 									errors: [{ message: "Auto-merge is not enabled for this pull request" }],

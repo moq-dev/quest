@@ -827,8 +827,14 @@ export async function collectFixers(
 				deps.warn(`quest land fixer: base check pending for ${name}: ${String(error.cause)}`);
 				continue;
 			}
-			// Keep the first reason: a GitHub error while handing back a crash must not replace the crash.
-			job.error ??= `fixer collection failed: ${String(error)}; run /quest-iterate`;
+			// Keep the first reason: a GitHub error while handing back a crash must not replace the crash. A
+			// failure collecting one PR hands back only that PR; the rest keep their own results.
+			if (!job.error) {
+				const reason = `fixer collection failed: ${String(error)}; run /quest-iterate`;
+				const number = job.numbers[0];
+				if (number === undefined) job.error = reason;
+				else (job.handbacks ??= {})[number] ??= reason;
+			}
 			try {
 				save(path, job);
 				output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read)));
@@ -903,6 +909,14 @@ async function collectJob(
 		let error = job.handbacks?.[number] ?? job.error;
 		const pullPath = `/repos/${job.plan.repository}/pulls/${number}`;
 		const pull = object(await (await github.request(pullPath)).json());
+		// A PR merged, as by its auto-merge, or closed while parked has left the queue: nothing is left to
+		// requeue or hand back, and GitHub refuses to disable the auto-merge it still reports.
+		if (pull.state !== "open") {
+			output.push(`dropped ${number} ${pull.merged === true ? "merged" : "closed"}`);
+			job.numbers.shift();
+			save(path, job);
+			continue;
+		}
 		const current = string(object(pull.head).sha);
 		const queued = await github.graphql(
 			"query($id: ID!) { node(id: $id) { ... on PullRequest { state autoMergeRequest { enabledAt } } } }",
@@ -928,9 +942,9 @@ async function collectJob(
 			(!previous.requeued || previous.requeued === queuedAs);
 		if (!samePick(previous, entry))
 			error = "fixer was superseded by a newer maintainer pick; keeping its work untouched";
-		// Never displace a newer maintainer pick, closed PR, or writer's commit.
-		if (pull.state !== "open" || (current !== standing && !(job.published.includes(number) && current === head)))
-			error = "PR closed or head moved while fixing; inspect and pick it again";
+		// Never displace a newer maintainer pick or writer's commit.
+		if (current !== standing && !(job.published.includes(number) && current === head))
+			error = "head moved while fixing; inspect and pick it again";
 		const left = job.left?.includes(number) ?? false;
 		// A parked PR keeps its auto-merge; one an older job's ejection left without it is requeued below.
 		if (job.parked && queuedAs === null && !left)

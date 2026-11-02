@@ -2971,6 +2971,45 @@ fi`);
 		// Collateral is never a round of its pick, however often it shares a broken batch.
 		expect(history(fixture.state.state, 2)!.rounds).toEqual([]);
 	});
+	const blameFirst = `printf '[{"number":1,"action":"handback","diagnosis":"breaks the check","recommendation":"run quest-iterate","blame":true},{"number":2,"action":"requeue","reason":"collateral: shared the batch with 1"}]' > quest-land-result.json`;
+	test.each(["merged", "closed"])(
+		"drops a parked PR %s meanwhile, never touching its auto-merge, and goes on to the next",
+		async (mode) => {
+			const fixture = await fixerFixture(blameFirst, { collateral: true });
+			await fixture.finished;
+			// GitHub merged it through its auto-merge, or a maintainer closed it, while its batch was parked: it
+			// still reports that auto-merge, but refuses to disable it.
+			fixture.pull.closed = true;
+			if (mode === "merged") fixture.pull.merged = true;
+			expect(await fixture.collect()).toEqual([`dropped 1 ${mode}`, "requeued 2"]);
+			expect(fixture.jobs()).toEqual([]);
+			expect(fixture.forge.comment(1)).toBeUndefined();
+			expect(history(fixture.state.state, 1)!.rounds).toEqual([]);
+			const collateral = fixture.collateral!;
+			expect(collateral.landing).toBe(true);
+			expect(collateral.autoMerge?.commitBody).toBe(pin(collateral.head!));
+			expect(fixture.forge.comment(2)).toBeUndefined();
+		},
+	);
+	test("hands back only the PR whose collection GitHub failed, and keeps the rest of its job's results", async () => {
+		const fixture = await fixerFixture(blameFirst, { collateral: true });
+		await fixture.finished;
+		const deps = await fixture.forge.deps();
+		let failures = 1;
+		const original = deps.fetch;
+		deps.fetch = (async (input, init) => {
+			if (String(input).endsWith("/pulls/1") && (init?.method ?? "GET") === "GET" && failures-- > 0)
+				return Response.json({ message: "Not Found" }, { status: 404 });
+			return original(input, init);
+		}) as typeof fetch;
+		expect(await fixture.collect(deps)).toEqual(["handback 1", "requeued 2"]);
+		expect(fixture.jobs()).toEqual([]);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("fixer collection failed");
+		const collateral = fixture.collateral!;
+		expect(collateral.landing).toBe(true);
+		expect(fixture.forge.comment(2)).toBeUndefined();
+	});
 	const editJob = (state: string, change: (job: Record<string, unknown>) => void) => {
 		const path = join(
 			state,
