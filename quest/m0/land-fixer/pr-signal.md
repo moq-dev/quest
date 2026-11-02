@@ -36,8 +36,6 @@ refuses such a head, `quest merge` fails when GitHub refuses it, and either
 way the PR needs `/quest-iterate`.
 
 Retargeted 2026-11-01 to the [queue watcher](/quest/m0/queue-watcher/README.md),
-which replaces the batched host gate.
-
-## Related
-
-- [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - where the fixer uses the signal
+which replaces the batched host gate. The watcher starts the fixer on each PR
+the queue drops in `take` (`src/cli/land-watch-fix.ts`), with the removal's
+`merge_group` log; the PR's own checks go beside it.

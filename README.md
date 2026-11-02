@@ -760,10 +760,12 @@ the unreported required `quest land` check must be verified on the live host.
 
 On a base that lands through GitHub's merge queue, `quest land watch` runs on a
 maintainer's host, one process per repository, and tells each PR the queue
-drops unmerged why. It polls; the host needs no public endpoint.
+drops unmerged why. With `--fixer`, it also runs the land fixer on each PR the
+queue dropped for a failure or a conflict, and puts it back at the back of the
+queue. It polls; the host needs no public endpoint.
 
 ```sh
-QUEST_LAND_KEY=/run/credentials/quest-land/key quest land watch --app-id 1039466
+QUEST_LAND_KEY=/run/credentials/quest-land/key quest land watch --app-id 1039466 --fixer /path/to/fixer-wrapper
 ```
 
 Once a minute it reads the base's open PRs and their merge queue removals since
@@ -774,18 +776,62 @@ quotes each failing job, its failed step, and its log's tail; at build
 concurrency 1 a group holds only that PR, so the failure is its own. A merge,
 and the App's own removals, get no comment.
 
-Each pick starts with an enqueue by a writer; the App re-enqueues only within
-one. A failed build or a conflict is recorded for the land fixer in
-`removal-<n>.json`, with the full log beside it. A push since the removal, a
-person's removal, or a reason the watcher does not know ends the pick, and the
-comment says the PR waits for a maintainer to enqueue it again. The state
-directory remembers each removal handled, so a restart neither misses nor
-repeats one; a crash between commenting and recording finds its own comment's
-marker and posts nothing. The first pass reads the ten minutes before it.
+Each pick starts with an enqueue, by a writer or by the App, as when a
+workflow enqueues Dependabot's PRs with the App's token. An App enqueue of a
+head the watcher itself put back in the queue continues the watcher's pick
+instead, until a handback ends it: the watcher's re-enqueue, GitHub's
+auto-merge of it, or such a workflow picking the fixer's push. A failed build
+or a conflict is recorded for the land fixer in `removal-<n>.json`, with the
+full log beside it. A push since the removal, a person's removal, or a reason
+the watcher does not know ends the pick, and the comment says the PR waits for
+a maintainer to enqueue it again. The state directory remembers each removal
+handled, so a restart neither misses nor repeats one; a crash between
+commenting and recording finds its own comment's marker and posts nothing. The
+first pass reads the ten minutes before it.
 
-It shares `quest land serve`'s App key, state directory, and locks, so the two
-never run for the same repository at once. Its token asks for `contents: read`,
-`pull_requests: write`, and `actions: read`, which the App needs for the logs.
+With `--fixer`, the watcher takes each recorded removal, oldest first, while
+its PR still waits as the queue dropped it:
+
+- A conflict is first merged with the current base by the quest merge driver,
+  in the daemon's private repository, as the host gate merges a base. A clean
+  merge needs no fixer: the watcher lease-pushes it to the PR branch, records
+  it in the PR body's Review, and re-enqueues it.
+- Otherwise the fixer runs in the background, as for the host gate: the same
+  credential-free wrapper, given the failure log and the PR's number, with the
+  dropped head on `pr-<n>`, starting from the base the `merge_group` build
+  was built on, or from the current base for a conflict, with the merge's
+  conflicts as its log. At most `--fixer-jobs` (2) run at once; the rest wait
+  for a slot. `--fixer-effort` (medium) sets the fixer's
+  `model_reasoning_effort`, passed to the wrapper in `QUEST_LAND_FIXER_EFFORT`,
+  which `quest land fix --effort` reads by default.
+
+Each finished round is recorded in its pick's history, as the host gate
+records its rounds: `fixed` for a fixer commit, `merged` for a clean merge,
+`flaky` for a failed build the fixer requeued unchanged, and `unchanged` for a
+conflict it requeued unchanged. Its failure signature is the test or step the
+fixer names, falling back to the failing job and step, or, for a conflict, the
+base it conflicted with. The pick keeps going while each round makes progress:
+a round with no new commit for a failure that isn't flaky, the failure a fix
+addressed recurring right after it, or three flaky rounds in a row hand it
+back. A fix is validated, lease-pushed, and recorded in Review as for the host
+gate, and a push GitHub refuses is handed back with its resolution for
+`quest land apply`. The watcher then puts the fixed, merged, or flaky head back
+in the queue with `expectedHeadOid` bound to it: it enqueues a head whose
+required checks have passed, and arms auto-merge on one whose checks still
+run, so GitHub enqueues it once they pass. Either joins the back of the queue.
+It comments on the PR with what it did, after any note the fixer wrote. A
+handback, from a stop rule, the fixer, a refusal, a crash, or a timeout, is
+posted with its reason and a recommendation, and the PR leaves the watcher's
+care until a maintainer enqueues it again. A round whose pick ended while it
+ran, by a writer's push or enqueue, is not applied, and its comment says so.
+
+It shares `quest land serve`'s App key, state directory, private repository,
+and locks, so the two never run for the same repository at once. Without a
+fixer its token asks for `contents: read`, `pull_requests: write`, and
+`actions: read`, which the App needs for the logs. With one it also asks for
+`merge_queues: write`, which `enqueuePullRequest` needs, and `contents: write`,
+for arming auto-merge and pushing fixes; a push that carries a workflow change
+asks for `workflows: write`.
 
 ## Gate expensive commands
 

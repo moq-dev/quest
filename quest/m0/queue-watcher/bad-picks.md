@@ -39,3 +39,7 @@ decision 8).
 - An armed pick whose own required checks fail, or that turns conflicting,
   is left alone: it needs `/quest-iterate` and a new pick, and
   `quest status` shows its checks.
+- The watcher's own re-enqueues are among these: it arms auto-merge on a head
+  the fixer pushed, or merged with the quest driver, while that head's
+  required checks run (`requeue` in `src/cli/land-watch-fix.ts`), and GitHub
+  may leave it out of the queue as it does any armed pick.

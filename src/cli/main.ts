@@ -46,7 +46,7 @@ import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, readRemo
 import { type Hold, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
 import { apply, pushCommand } from "./land-apply";
-import { fix, FixerAgentError } from "./land-fix";
+import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
@@ -565,19 +565,32 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			(value: string, previous: string[]) => [...previous, value],
 			[] as string[],
 		)
-		.action((log: string, prs: string[], options: { agent: string; agentArg: string[]; model?: string }) => {
-			settle(
-				fix(
-					root(),
-					log,
-					prs.map(Number),
-					options.agent,
-					options.agentArg.length ? options.agentArg : undefined,
-					options.model,
-				),
-				() => print("fixer result written"),
-			);
-		});
+		.addOption(
+			new Option(
+				"--effort <level>",
+				`Default Codex's model_reasoning_effort (default: $${EFFORT_VARIABLE}, or medium)`,
+			).choices(EFFORTS),
+		)
+		.action(
+			(
+				log: string,
+				prs: string[],
+				options: { agent: string; agentArg: string[]; model?: string; effort?: string },
+			) => {
+				settle(
+					fix(
+						root(),
+						log,
+						prs.map(Number),
+						options.agent,
+						options.agentArg.length ? options.agentArg : undefined,
+						options.model,
+						options.effort ?? (process.env[EFFORT_VARIABLE] || "medium"),
+					),
+					() => print("fixer result written"),
+				);
+			},
+		);
 	landCommand
 		.command("apply")
 		.description(
@@ -628,11 +641,24 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	landCommand
 		.command("watch")
 		.description(
-			"Watch the base's GitHub merge queue as a daemon, one per repository: once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A pick is the latest enqueue by anyone but the App, which re-enqueues only within one. State keeps each removal handled, so a restart neither misses nor repeats one, and each removal's full log. It shares `quest land serve`'s App key, state directory, and locks, so the two never run beside each other. The App needs `actions: read` for the logs.",
+			"Watch the base's GitHub merge queue as a daemon, one per repository: once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A pick is the latest enqueue by anyone, the App included (as for Dependabot's PRs), except the App's enqueues of heads the watcher itself put back in the queue for the pick. With --fixer, a conflict is first merged with the base by the quest merge driver; otherwise the fixer runs in the background on the failure, at most --fixer-jobs at once, oldest removal first. A fixed or merged head is lease-pushed and recorded in Review, and each fixed, merged, or flaky head is re-enqueued at the back of the queue (or armed with auto-merge while its checks run). The pick keeps going while each round makes progress: a round with no new commit for a failure that isn't flaky, the failure a fix addressed recurring right after it, or three flaky rounds in a row hand it back, as does the fixer, with a comment. State keeps each removal handled, so a restart neither misses nor repeats one, each removal's full log, the fixer's jobs, and each pick's rounds. It shares `quest land serve`'s App key, state directory, private repository, and locks, so the two never run beside each other. The App needs `actions: read` for the logs, and with a fixer `merge_queues: write` to re-enqueue, `contents: write`, and `workflows: write` to push fixes that touch workflows.",
 		)
 		.option("--base <branch>", "Base branch (default: repository default)")
 		.option("--state <path>", "Private daemon state directory (default: $STATE_DIRECTORY or the XDG state home)")
 		.requiredOption("--app-id <id>", "GitHub App id")
+		.option(
+			"--fixer <command>",
+			"Credential-free fixer wrapper executable, called with the failure log and the PR number (60 minutes from its admission line, 120 in total)",
+		)
+		.option("--fixer-jobs <count>", "Most fixer jobs to run at once", positiveInteger("fixer-jobs"), 2)
+		.addOption(
+			new Option(
+				"--fixer-effort <level>",
+				`The fixer's model_reasoning_effort, passed to the wrapper in $${EFFORT_VARIABLE}`,
+			)
+				.choices(EFFORTS)
+				.default("medium"),
+		)
 		.action((options: WatchOptions) => {
 			const origin = readRemote(root(), "origin");
 			const repository = origin && remoteRepository(origin).repository;

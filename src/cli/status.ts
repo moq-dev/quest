@@ -205,23 +205,38 @@ export async function enabledHead(
 	const request = object(pull.autoMergeRequest);
 	const pin = pinned(typeof request.commitBody === "string" ? request.commitBody : "");
 	if (pin !== null || pull.headRepository == null) return pin;
-	const enabled = Date.parse(string(request.enabledAt));
+	return headBefore(github, pull, Date.parse(string(request.enabledAt)), "the head auto-merge was enabled on", warn);
+}
+
+/**
+ * The PR's head just before `time`: the last push or merge to its head branch before then, read from
+ * the head repository's activity once that lists the current head's push. A push in the same second
+ * is ambiguous. An activity listing the token cannot read leaves it unknown (null), with a warning
+ * naming `what`, rather than failing the caller. The node needs `headRefOid`, `headRefName`, and
+ * `headRepository { nameWithOwner }`.
+ */
+export async function headBefore(
+	github: GitHub,
+	pull: ObjectValue,
+	time: number,
+	what: string,
+	warn: (message: string) => void,
+): Promise<string | null> {
+	if (pull.headRepository == null) return null;
 	const head = string(pull.headRefOid);
 	const pushes: { sha: string; time: number }[] = [];
 	const repository = string(object(pull.headRepository).nameWithOwner);
 	let path: string | undefined =
 		`/repos/${repository}/activity?ref=${encodeURIComponent(string(pull.headRefName))}&per_page=100`;
-	// Newest first: read until a push before enabling, which is the head auto-merge was enabled on.
-	while (path && !pushes.some((push) => push.time < enabled)) {
+	// Newest first: read until a push before `time`, which is the head then.
+	while (path && !pushes.some((push) => push.time < time)) {
 		let response: Response;
 		try {
 			response = await github.request(path, { allow: [404] });
 		} catch (error) {
 			// A deadline is the caller's to handle; a forbidden listing, as for a token without contents access, is not.
 			if (error instanceof GitHubDeadline || !(error instanceof Error)) throw error;
-			warn(
-				`cannot read ${repository}'s push activity, so the head auto-merge was enabled on is unknown: ${error.message}`,
-			);
+			warn(`cannot read ${repository}'s push activity, so ${what} is unknown: ${error.message}`);
 			return null;
 		}
 		if (response.status === 404) return null;
@@ -231,8 +246,8 @@ export async function enabledHead(
 		path = link(response, "next");
 	}
 	// GitHub lists a push seconds to minutes late; until the current head's is listed, an earlier one may be missing.
-	if (!pushes.some((push) => push.sha === head) || pushes.some((push) => push.time === enabled)) return null;
-	return pushes.find((push) => push.time < enabled)?.sha ?? null;
+	if (!pushes.some((push) => push.sha === head) || pushes.some((push) => push.time === time)) return null;
+	return pushes.find((push) => push.time < time)?.sha ?? null;
 }
 
 function summarize(

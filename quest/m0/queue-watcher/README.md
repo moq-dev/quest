@@ -130,7 +130,6 @@ Shared shape, for the children to follow:
 
 ## Required
 
-- [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - the fixer runs on each dropped PR in the background, and the watcher re-enqueues it at the back
 - [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - a pick whose auto-merge is armed on a ready PR GitHub never queued is enqueued at the head it was armed on
 - [Flaky failures](/quest/m0/queue-watcher/flaky.md) - a flaky failure is re-enqueued unchanged, and a test seen flaking twice is disabled in a separate PR with a follow-up quest
 - [Watcher on the host](/quest/m0/queue-watcher/host.md) - kixelated/nixos runs the watcher for moq-dev/moq beside its fixer container

@@ -2971,6 +2971,27 @@ fi`);
 		// Collateral is never a round of its pick, however often it shares a broken batch.
 		expect(history(fixture.state.state, 2)!.rounds).toEqual([]);
 	});
+	test("a PR merged while the fixer ran is left alone, and the rest of its batch is still collected", async () => {
+		const fixture = await fixerFixture(
+			`printf '[{"number":1,"action":"handback","diagnosis":"breaks the check","recommendation":"run quest-iterate","blame":true,"log":[1,1]},{"number":2,"action":"requeue","reason":"collateral: shared the batch with 1"}]' > quest-land-result.json`,
+			{ collateral: true },
+		);
+		await fixture.finished;
+		// Merged around the gate while the fixer ran (moq-dev/moq.pro#3317); GitHub still reports its auto-merge.
+		fixture.pull.closed = fixture.pull.merged = true;
+		expect(await fixture.collect()).toEqual(["merged 1", "requeued 2"]);
+		expect(fixture.forge.comment(1)).toBeUndefined();
+		expect(fixture.collateral!.landing).toBe(true);
+		expect(fixture.jobs()).toEqual([]);
+	});
+	test("a PR closed while the fixer ran is handed back without disabling its auto-merge", async () => {
+		const fixture = await fixerFixture(requeueScript);
+		await fixture.finished;
+		fixture.pull.closed = true;
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.forge.comment(1)).toContain("head moved while fixing");
+		expect(fixture.jobs()).toEqual([]);
+	});
 	const editJob = (state: string, change: (job: Record<string, unknown>) => void) => {
 		const path = join(
 			state,
@@ -3135,6 +3156,12 @@ ${requeueScript}
 		);
 		await fix(dir, log, [1], agent);
 		expect(readFileSync(join(dir, "argv.txt"), "utf8").split("\n")).toContain('model_reasoning_effort="medium"');
+		// A daemon's --fixer-effort reaches it as --effort.
+		await fix(dir, log, [1], agent, undefined, undefined, "high");
+		expect(readFileSync(join(dir, "argv.txt"), "utf8").split("\n")).toContain('model_reasoning_effort="high"');
+		await expect(fix(dir, log, [1], agent, undefined, undefined, 'high"\nx')).rejects.toThrow(
+			"fix effort must be one of",
+		);
 	});
 	test("refuses to start an agent without a supplied PR's branch", async () => {
 		const dir = fixRepository();
