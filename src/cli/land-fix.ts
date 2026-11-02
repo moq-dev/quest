@@ -2,8 +2,9 @@
 // GitHub credential, and the daemon posts the comments it writes into its result.
 import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import prompt from "../../assets/land-fix.md";
+import { programEnvironment, requireProgram } from "./program";
 
 export class FixerAgentError extends Error {
 	constructor(readonly exitCode: number) {
@@ -165,9 +166,12 @@ export async function fix(
 		if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error(`fix needs a ${ref} branch`);
 		return `- #${number}: branch ${ref} at ${head}`;
 	});
+	// The agent runs in the PRs' checkout, so neither it nor its commands are found there: a name is
+	// looked up in PATH's absolute directories, and a path is resolved here rather than in the checkout.
+	const program = agent.includes("/") ? resolve(agent) : requireProgram(agent, process.env);
 	rmSync(join(root, FIX_RESULT), { force: true });
 	const env: NodeJS.ProcessEnv = {
-		PATH: process.env.PATH,
+		...programEnvironment({ PATH: process.env.PATH }),
 		HOME: process.env.HOME,
 		LANG: "C.UTF-8",
 		OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
@@ -207,7 +211,7 @@ export async function fix(
 		// Relay the agent's output through pipes of its own rather than letting it inherit ours. Once Bun writes
 		// to a pipe it marks that pipe non-blocking, and an inheriting child shares the flag: Codex then panicked
 		// (exit 101) with EAGAIN as soon as one command's output outran the host's reader.
-		const child = spawn(agent, argv, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(program, argv, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
 		child.stdout.pipe(process.stdout, { end: false });
 		child.stderr.pipe(process.stderr, { end: false });
 		child.once("error", reject);

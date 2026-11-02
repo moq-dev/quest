@@ -40,7 +40,3 @@ needs a runner before a project can enroll:
   adapting existing instructions. kix jobs do not need either, because runners
   bring their own `quest`. A missing `flake.nix` still leads to the existing
   `bootstrap` job.
-
-## Required
-
-- [Upstream branches](/quest/m0/kix/upstream-branches.md) - the App publishes on the upstream, where this pull request's branch lives

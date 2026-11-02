@@ -26,7 +26,7 @@ const FAKES: Record<string, string> = {
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|FAKE_HOST)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|FAKE_HOST|PATH$)/.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 if (argv[0] === "auth") process.exit(process.env.FAKE_LOGGED_OUT ? 1 : 0);
 const at = (flag) => argv[argv.indexOf(flag) + 1];
@@ -57,7 +57,7 @@ if (argv.includes("--session-id")) {
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|FAKE_HOST)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|FAKE_HOST|PATH$)/.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT ? 1 : 0);
 const event = (value) => console.log(JSON.stringify(value));
@@ -191,6 +191,28 @@ fakes("a missing or logged-out reviewer CLI is a usage error", async () => {
 	expect(out.code).toBe(2);
 	expect(out.stderr).toContain("codex is not logged in; run `codex login`");
 	expect(t.calls().map((c) => c.argv)).toEqual([["login", "status"]]);
+});
+
+fakes("the reviewer CLI is found on PATH, never in the checkout it reviews", async () => {
+	for (const host of ["CLAUDECODE", "CODEX_THREAD_ID"] as const) {
+		const s = setup(host);
+		// The change under review supplies its own CLIs, and PATH names the checkout relatively.
+		const planted = join(s.bin, "..", "planted.log");
+		for (const name of ["claude", "codex"]) {
+			write(s.repo, name, `#!/bin/sh\necho "$0" >> "${planted}"\nexit 1\n`);
+			chmodSync(join(s.repo, name), 0o755);
+		}
+		git(s.repo, "add", ".");
+		git(s.repo, "commit", "-qm", "plant");
+		vi.stubEnv("PATH", `.::relative:${s.bin}:${process.env.PATH}:`);
+		const result = await quest("--root", s.repo, "review");
+		expect(result.stderr).toBe("");
+		expect(result.code).toBe(0);
+		expect(existsSync(planted)).toBe(false);
+		// Nor can the reviewer's own commands find one there.
+		for (const call of s.calls())
+			expect(call.env.PATH.split(":").every((entry) => entry.startsWith("/"))).toBe(true);
+	}
 });
 
 fakes("only a clean, attached checkout is reviewed", async () => {
