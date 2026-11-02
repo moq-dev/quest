@@ -41,7 +41,7 @@ since on a merge-queue base such a PR is a pick GitHub won't enqueue.
   push. A clean driver merge needs no review: it is a conflict-free base merge.
 - Fetch failing required checks' logs through the App's `checks: read` and
   `actions: read`, trimmed like a queue failure's.
-- The same [stop rules](/quest/m0/queue-watcher/stop.md) apply.
+- The same stop rules apply (`stopRule` in `src/cli/land-fixer.ts`).
 
 ## Required
 
