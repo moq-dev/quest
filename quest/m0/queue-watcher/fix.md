@@ -32,8 +32,17 @@ going while each round makes progress.
   queue's builds in `quest gate`, and pass an explicit
   `model_reasoning_effort` (default `medium`, with a daemon option), since
   fixer logs show `reasoning effort: none`.
-- When to stop is [Stop rules](/quest/m0/queue-watcher/stop.md); flaky
-  handling is [Flaky failures](/quest/m0/queue-watcher/flaky.md).
+- Apply the stop rules the host gate already applies
+  ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)): record
+  each round in the pick's history with `saveRound` and ask `stopRule`
+  (`src/cli/land-fixer.ts`) whether it hands back, as `collectJob` does. A
+  round is `fixed` for a fixer commit, `merged` for a clean quest-driver merge
+  of a conflict, `flaky` for the fixer's flaky verdict, and `unchanged` for
+  any other round with no new commit. Its failure signature is the test or
+  step the fixer names in its result's `failure`, falling back to the failing
+  job and step of the `merge_group` run; a conflict's is `conflictFailure`
+  of the base it conflicted with. A rule's handback posts `stopReason`.
+  Flaky handling is [Flaky failures](/quest/m0/queue-watcher/flaky.md).
 
 ## Required
 

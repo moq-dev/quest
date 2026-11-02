@@ -574,9 +574,15 @@ runs `quest land apply <pr>`, which refuses a moved head, rebuilds and checks th
 tree, and prints an unpushed commit and its push command. A resolution too large for
 the comment hands back plainly. A handback disables
 auto-merge and carries the reason marker `quest status`
-reads. Each maintainer pick gets one attempt, spent only when a fixer job blames
-the PR: a PR that only shared a broken batch keeps it. A blamed PR whose pick already
-spent its attempt hands back. A new maintainer pick resets the attempt. Host provisioning and isolation
+reads. Each failure a fixer job blames a PR for is a round of its maintainer pick; a PR
+that only shared a broken batch has none. The fixer keeps going while each round
+changes something, and a handback names the stop rule that ended it: a round with no
+new commit for a failure that isn't flaky, such as a conflict requeued unchanged; the
+failure a fix addressed recurring right after it; or three flaky rounds in a row,
+where the fixer requeued a PR unchanged and the base passed alone. The fixer names
+each failure's test or step, else the round counts the gate's check as one; a
+conflict names the base it conflicts with, so one after the base moved is new. A new
+maintainer pick starts a fresh history. Host provisioning and isolation
 belong to the host; these commands are executable paths, not shell expressions.
 Wrappers must expose only the supplied tree and log, never the state directory
 or its private bare repository.

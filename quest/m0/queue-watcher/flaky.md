@@ -38,8 +38,9 @@ apply (2026-11-01, user and maintainer):
 What counts: the second flaky verdict for the same test, across any PRs, in
 the watcher's state. A single verdict only re-enqueues, since disabling on one
 judgment alone risks hiding a real bug. Each verdict names the test in the
-same signature [Stop rules](/quest/m0/queue-watcher/stop.md) uses, and three
-flaky re-enqueues of one PR in a row hand it back there.
+same signature the stop rules use (the fixer result's `failure`), and the
+third flaky round of one PR in a row hands it back there (`stopRule` in
+`src/cli/land-fixer.ts`).
 
 The fixer container holds no GitHub credentials, so the fixer returns the
 disabling commit in its result and the watcher pushes it to a new branch and

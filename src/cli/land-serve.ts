@@ -1,6 +1,6 @@
 // Host orchestration: PR code runs only through the configured sandbox.
 import { authenticatedRead } from "./land-git";
-import { startFixer, startBaseFixer, collectFixers, handbackRepeated } from "./land-fixer";
+import { startFixer, startBaseFixer, collectFixers } from "./land-fixer";
 import { closeFix, fixing, haltNotice, readHalt, resume, saveHalt } from "./land-halt";
 import { batchable } from "./land-park";
 import { spawn } from "node:child_process";
@@ -533,10 +533,7 @@ export async function serveBatch(
 		if (await eject(github, plan, item)) output.push(`ejected ${item.number} ${item.reason}`);
 		forgetHeads(options.state, item.number);
 	};
-	for (const item of plan.eject) {
-		await report(item);
-		await handbackRepeated(options.state, plan, item, deps);
-	}
+	for (const item of plan.eject) await report(item);
 	output.push(...(await reportStalled(github, plan, options.state, deps.now())));
 	// A halted queue waits for its base to move, then resumes once the new base passes alone, even
 	// with no PR ready to batch, so its issue and any fix it no longer needs are closed at once.
