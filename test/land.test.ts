@@ -145,8 +145,6 @@ class Forge {
 		this.world = {
 			app: { id: 1, slug: "gate" },
 			installation: 5,
-			forkInstallation: 6,
-			forks: "service-forks",
 			users: [{ id: 1, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" }],
 			repos: [
 				{
@@ -158,7 +156,6 @@ class Forge {
 					issues: [],
 					pulls: [],
 					branches: { main: forgeBase! },
-					fork: {},
 					commits: {},
 					trees: {},
 					required: ["quest land", "test"],

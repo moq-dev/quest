@@ -54,8 +54,6 @@ interface Repository {
 	owner: { login: string };
 	archived: boolean;
 	disabled: boolean;
-	fork: boolean;
-	parent?: { id: number };
 	private: boolean;
 	visibility: string;
 	default_branch: string;
@@ -157,7 +155,6 @@ interface GitHubEnvironment {
 	DB: D1Database;
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY: string;
-	GITHUB_FORK_OWNER: string;
 }
 
 function name(value: string) {
@@ -637,7 +634,7 @@ export class GitHubService {
 			occupancy:
 				previous && !previous.occupancy.complete && row!.invalidated !== 1
 					? previous.occupancy
-					: { open: null, refs: null, pulls: [], claims: [], complete: false },
+					: { open: null, refs: null, pulls: [], claims: [], heads: {}, complete: false },
 		};
 		// What webhooks named is read by number, so it is current after one read
 		// however far the history pass is from it.
@@ -1271,8 +1268,8 @@ export class GitHubService {
 	}
 
 	/**
-	 * Hand `action` the one branch a job may write: its branch on the service
-	 * fork, or an iterated pull request's head when the bot can update it.
+	 * Hand `action` the one upstream branch a job may write: its own branch,
+	 * or an iterated pull request's head on the enrolled repository.
 	 * Rechecks the requester's current authority and the project's enrollment.
 	 */
 	contribute<T>(
@@ -1285,7 +1282,7 @@ export class GitHubService {
 		return this.#authorized(
 			upstream,
 			userId,
-			pulled ? { contents: "read", pull_requests: "read" } : {},
+			pulled ? { contents: "read", pull_requests: "read" } : { contents: "write" },
 			async (token, current, installation) => {
 				this.#public(current);
 				if ((await this.#state(upstream, installation)) === null)
@@ -1305,10 +1302,7 @@ export class GitHubService {
 					}
 				};
 				// A job's own branch starts from the default branch's current commit, so it merges nothing in.
-				if (!pulled)
-					return this.#fork(upstream, upstream.name, { contents: "write" }, (forkToken, fork) =>
-						action(this.#branch(forkToken, fork, job.branch, async () => false)),
-					);
+				if (!pulled) return action(this.#branch(token, current, job.branch, async () => false));
 				const pull = await this.#api<PullHead>(
 					token,
 					`${repositoryPath(upstream)}/pulls/${pullNumber(job.target)}`,
@@ -1321,51 +1315,11 @@ export class GitHubService {
 					return this.#withRepository(upstream, { contents: "write" }, async (writeToken, latest) =>
 						action(this.#branch(writeToken, latest, job.branch, base)),
 					);
-				if (head && this.#forkOwner(head.owner.login))
-					return this.#fork(upstream, head.name, { contents: "write" }, (forkToken, fork) => {
-						if (fork.id !== head.id) throw new GitHubError("Repository identity or availability changed");
-						return action(this.#branch(forkToken, fork, job.branch, base));
-					});
 				throw new PublicationBlocked(
 					"The pull request's head is in a contributor's fork, which the bot cannot update. Ask its author to apply the changes, or close it and start new work.",
 				);
 			},
 		);
-	}
-
-	#forkOwner(owner: string) {
-		return !!this.#env.GITHUB_FORK_OWNER && owner.toLowerCase() === this.#env.GITHUB_FORK_OWNER.toLowerCase();
-	}
-
-	/** The operator-provisioned fork of `upstream` in the service namespace, verified by parent ID. */
-	async #fork<T>(
-		upstream: GitHubRepository,
-		repository: string,
-		permissions: Permissions,
-		action: (token: string, fork: Repository) => Promise<T>,
-	) {
-		const owner = this.#env.GITHUB_FORK_OWNER;
-		if (!owner || !name(owner)) throw new GitHubError("Configured service fork namespace required");
-		const missing = new GitHubError(`Provision the service fork ${owner}/${repository} of this upstream first`);
-		// Only a missing installation or repository means the fork is unprovisioned.
-		let found = false;
-		try {
-			return await this.#withInstallation({ owner, name: repository }, permissions, async (token) => {
-				const fork = await this.#api<Repository>(token, `/repos/${owner}/${repository}`);
-				if (
-					!fork.fork ||
-					fork.parent?.id !== upstream.id ||
-					!this.#forkOwner(fork.owner.login) ||
-					fork.archived ||
-					fork.disabled
-				)
-					throw missing;
-				found = true;
-				return action(token, fork);
-			});
-		} catch (error) {
-			throw !found && error instanceof GitHubError && error.status === 404 ? missing : error;
-		}
 	}
 
 	#branch(token: string, repo: Repository, branch: string, based: Branch["based"]): Branch {
@@ -1494,7 +1448,7 @@ export class GitHubService {
 	}
 
 	/**
-	 * Open the job's pull request from its service fork branch, or update the
+	 * Open the job's pull request from its upstream branch, or update the
 	 * one it already opened. A closed pull request is not replaced.
 	 */
 	deliver(
@@ -1509,9 +1463,8 @@ export class GitHubService {
 			this.#public(current);
 			if ((await this.#state(upstream, installation)) !== "enabled")
 				throw new GitHubError("Contributions are paused");
-			const fork = await this.#fork(upstream, upstream.name, {}, async (_token, fork) => fork);
 			const pulls = `${repositoryPath(upstream)}/pulls`;
-			const label = `${fork.owner.login}:${job.branch}`;
+			const label = `${current.owner.login}:${job.branch}`;
 			// An unrecorded earlier delivery may have opened one. The branch is
 			// where the job left it, so its only open pull request is the job's,
 			// even one a failed job this retry continues opened. Otherwise one
@@ -1529,23 +1482,18 @@ export class GitHubService {
 				);
 			};
 			let pull = job.pull ? await this.#api<PullHead>(token, `${pulls}/${number(job.pull)}`) : await opened();
-			if (pull && (pull.head.repo?.id !== fork.id || pull.head.ref !== job.branch))
+			if (pull && (pull.head.repo?.id !== current.id || pull.head.ref !== job.branch))
 				throw new GitHubError("The job's pull request no longer comes from its branch");
 			if (pull && pull.state !== "open")
 				throw new GitHubError("The job's pull request was closed; reopen it on GitHub to deliver again");
 			if (!pull) {
 				try {
 					pull = await this.#api<PullHead>(token, pulls, "POST", {
-						head: label,
-						// GitHub requires the head repository for cross-organization pull requests.
-						head_repo: fork.name,
+						head: job.branch,
 						base: current.default_branch,
 						title: input.title,
 						body: input.body,
 						draft: input.draft,
-						// Installation tokens cannot span both owners, so the upstream
-						// token cannot grant maintainers edits on the fork branch.
-						maintainer_can_modify: false,
 					});
 				} catch (error) {
 					// A concurrent delivery may have opened it first.

@@ -228,7 +228,7 @@ untrusted, and folds the runner and account behind an automatic default. A
 plan's thread keeps what it started from and links its draft proposal once
 delivered; a running job names its runner and account. A `publication` decision lists the refused
 paths or why the branch is blocked, and takes the maintainer's reply as text.
-A service fork branch that changed outside its job also offers Start over,
+A job's own upstream branch that changed outside its job also offers Start over,
 which resets the branch to the job's revision and queues a new job there.
 Another maintainer's answer shows the job's requester the answer with an
 approve button above the usual form, and shows everyone else the job waiting.
@@ -369,8 +369,8 @@ tool permission, or an account limit.
 
 `dev/github.ts` fakes GitHub for every outbound request, so nothing leaves
 localhost and no real credential is used. It models what publication needs:
-commits and trees, fast-forward branch updates on the upstream and its service
-fork, and pull request creation, so a runner's job publishes end to end. Like
+commits and trees, fast-forward branch updates on the upstream, and pull
+request creation, so a runner's job publishes end to end. Like
 GitHub, it scopes each installation token to the repositories and permissions
 it was minted for. Notifications are off, since a push
 would reach a real push service. Sign in with GitHub completes as the
