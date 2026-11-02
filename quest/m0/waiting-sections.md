@@ -16,9 +16,8 @@ Decided 2026-11-02 (maintainer, /quest-plan of the follow-ups from the
 [moq-dev/quest#390](https://github.com/moq-dev/quest/pull/390)): ✅ plan it,
 m0.
 
-- Start only once #390 has landed: CI checks a PR's quests with main's
-  `quest`, which rejects `## Waiting` until then. That is why #390 left the
-  migrations out.
+- #390 landed on 2026-11-02 without these migrations, because CI checks a
+  PR's quests with main's `quest`, which rejected `## Waiting` until then.
 - #390's original commit `4e6fd679` holds the edits for the seven quests;
   reapply them, then search the tree for other prose waits ("Waiting on",
   "Waits on", "Condition:").
