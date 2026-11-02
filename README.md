@@ -524,6 +524,11 @@ The commands accept the same PR argument and authentication as
 `quest wait`, and exit 0 when done, 3 when refused, 2 for invalid arguments,
 and 1 for other failures.
 
+This repository lands through GitHub's merge queue. Its required `Queue` check
+runs `just check` and `just test` on each merge group on the self-hosted runner;
+it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
+re-enqueues healthy heads at the back of the queue.
+
 ## Land a batch with quest land
 
 `quest land serve` runs on a maintainer's host, with one process per repository.
