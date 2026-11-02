@@ -71,3 +71,4 @@ commands from Sep-Oct. Session counts in each child come from that window.
 ## Required
 
 - [Headless agents](/quest/m0/helpers/headless-agents.md) - `/quest-spawn api` launches, resumes, and stops billed agents through one command auto mode allows
+- [Links into an uninitialized submodule aren't broken](/quest/m0/helpers/submodule-links.md) - `quest check` passes in a fresh checkout without populating submodules
