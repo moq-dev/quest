@@ -146,6 +146,9 @@ A PR that another session pushed to in the last hour is theirs: report its event
 Before each push to a branch that already has a PR, confirm the PR is still open: a push after it merges brings the deleted branch back.
 The claim push from `quest start`, made before its draft PR exists, is exempt.
 
+Prefer the exhaustive solution: a quest's PR handles every case of its problem, including those its reviews find, rather than landing part of it and splitting the rest into new quests.
+Leave work for later only when it waits on an outside condition or a maintainer decision, or lies outside the quest's Goal.
+
 A quest's PR leaves its quest accurate when it merges.
 The PR that finishes a quest deletes its file and every link to it.
 A PR that leaves work rewrites the quest to what remains, rather than noting it only in the PR body.
