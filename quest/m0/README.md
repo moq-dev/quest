@@ -103,5 +103,5 @@ ownership-manifest design:
 - [Other worktree routes](/quest/m0/worktree-routes.md) - live-check PR worktrees, agent view, remote-control, and workflow agents against the hooks
 - [Spotlight off in macOS CI](/quest/m0/ci-spotlight.md) - this repository's macOS jobs turn off Spotlight indexing first
 - [Review through a gateway](/quest/m0/review-gateway.md) - `quest review` keeps gateway, cloud-provider, and Codex connection variables
-- [opencode SDK 2.x](/quest/m0/opencode-sdk.md) - the runner moves to `@opencode/sdk` 2.x so the nixpkgs bump lands
+- [opencode 2.x](/quest/m0/opencode-sdk.md) - the runner drives opencode 2.x through `@opencode/client`, dropping the flake's temporary `nixpkgs-opencode` input
 - [Review harness check](/quest/m0/review-harness.md) - recurring each milestone: newest pinned review models, and the live sandbox test passes
