@@ -470,22 +470,28 @@ hold a PR like any `quest:*` label; passing their token to `quest iterate`
 swaps them for `quest:active`. Their `quest:merge` holds nothing and is
 ignored.
 
-`quest merge` takes no label: the head-pinned auto-merge it enables is the
-queue signal, so a queued PR shows no hold. It refuses while any session holds
-the PR, so release your own hold first. `--land` needs the full 40-character
+`quest merge` takes no label: the head-pinned auto-merge or merge-queue entry
+it creates is the queue signal, so a queued PR shows no hold. It refuses while
+any session holds the PR, so release your own hold first. `--land` needs the full 40-character
 head SHA and refuses once the head moves.
-It enables auto-merge bound to that SHA, which enters GitHub's merge queue
-when the base has one, or merges at once when nothing is left to wait for.
-`--squash` or `--rebase` picks the method, and it refuses one the repository
-disallows; otherwise it uses the only method the repository allows, or else a
-merge commit, and refuses when merge commits are off and more than one method
-remains. A merge queue applies its own. On a base that requires the `quest land` check, it
+It enables auto-merge bound to that SHA, or merges at once when nothing is
+left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
+the repository disallows; otherwise it uses the only method the repository
+allows, or else a merge commit, and refuses when merge commits are off and more
+than one method remains. On a base that requires the `quest land` check, it
 queues the PR for [`quest land`](#land-a-batch-with-quest-land) instead.
-On an ungated base with auto-merge disabled, it refuses. Follow the repository’s own landing
+On a base with GitHub's merge queue, which applies its own method, it enqueues
+that head, or arms auto-merge bound to it while required checks may still be
+pending. The queue builds each PR on the current base, so a head behind it is
+enqueued as is. When GitHub refuses to enqueue the head, such as after the
+base moved into a conflict, the command fails: fix the PR, for example with
+`/quest-iterate`, and land it again.
+On a base with neither the `quest land` check nor a merge queue, it refuses
+while repository auto-merge is disabled. Follow the repository’s own landing
 instructions in CONTRIBUTING.md or AGENTS.md, such as its label queue; never
 retry with `--direct` unless the user asks. `--direct` permits the usual landing
 behavior despite that repository setting.
-On an ungated base, it compares the live base against that head and refuses a
+On such a base, it also compares the live base against that head and refuses a
 head that is behind or diverged: merge the base, rerun the repository's checks,
 and land the new head. This is a preflight check; GitHub can still move the base
 between that comparison and its head-pinned merge mutation. A PR that leaves

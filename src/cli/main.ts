@@ -480,12 +480,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("merge")
 		.summary("Land a PR's reviewed head")
 		.description(
-			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, which enters the " +
-				"base's merge queue when it has one, or merge at once when nothing is left to wait for. It takes no " +
-				"label: the auto-merge it enables is the queue signal. It refuses while a session holds the PR, so " +
-				"release your own hold first, and once the head has moved. It uses the method --squash or " +
-				"--rebase names, refusing one the repository disallows; otherwise the only method the repository " +
-				"allows, or else a merge commit. A merge queue applies its own. On a base " +
+			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, or merge at " +
+				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
+				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
+				"first, and once the head has moved. It uses the method --squash or --rebase names, refusing one " +
+				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
+				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
+				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
+				"is, and a head GitHub refuses to enqueue fails, to be fixed and landed again. On a base " +
 				`that requires the \`${LAND_CHECK}\` check, it queues the PR for \`quest land\` instead: squash ` +
 				"auto-merge whose commit body pins the head. On an ungated base with auto-merge disabled, it refuses " +
 				"unless --direct is passed. Follow the repository landing instructions in CONTRIBUTING.md or " +
