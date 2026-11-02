@@ -19,9 +19,9 @@ import {
 	remoteBranches,
 	repositoryPath,
 	upstream,
-	upstreamHead,
+	upstreamRefs,
 } from "./claims";
-import { object, string } from "./github";
+import { object, requireRemote, string } from "./github";
 
 /** Someone else holds the quest, or the claim cannot be released; distinct from a failure. */
 export class Refusal extends Error {}
@@ -46,14 +46,14 @@ export function notUpstream(path: string): Refusal {
  */
 export async function startQuest(
 	root: string,
-	{ remote, up, base, tree }: Target,
+	{ remote, up, base, branches, tree }: Target,
 	path: string,
 	title: string,
 	deps: ClaimDependencies,
 ): Promise<Started> {
 	const branch = questBranch(path);
 	if (!tree.docs.some((doc) => doc.path === path)) throw notUpstream(path);
-	const { claims, landed } = await held(root, up, [branch]);
+	const { claims, landed } = await held(root, up, [branch], branches);
 	const [claim] = claims;
 	if (claim) throw new Refusal(`${path} is held by ${describe(claim.branch, claim.pull, Date.now())}`);
 	// A nonce keeps two claimers on the same base, identity, and second from building the same commit.
@@ -178,7 +178,7 @@ async function openDraft(
 	const { owner, repo } = github.repository;
 	const fork = github.head.owner !== owner || github.head.repo !== repo;
 	// The quest's path in the repository, which differs from `path` when the tree sits below the top level.
-	const file = encodeURI(gitOutput(root, ["rev-parse", "--show-prefix"]) + path);
+	const file = encodeURI(github.prefix + path);
 	let created: OpenPull;
 	try {
 		const response = await github.client.request(`${repositoryPath(github.repository)}/pulls`, {
@@ -235,11 +235,11 @@ export async function releaseQuest(
 	deps: ClaimDependencies,
 ): Promise<Released> {
 	const branch = questBranch(path);
-	const up = await upstream(root, remote, deps);
+	const up = await upstream(root, requireRemote(root, remote), deps);
 	const tip = remoteBranches(root, up.push).get(branch);
 	if (!tip) throw new Error(`${remote} has no branch ${branch} to release`);
 	ensure(root, up.push, tip);
-	const base = upstreamHead(root, up.git);
+	const { base } = upstreamRefs(root, up.git);
 	const parents = gitOutput(root, ["rev-list", "--parents", "-n", "1", tip]).split(" ").slice(1);
 	// Only the claim itself: one empty commit straight on the default branch, not one following pushed work.
 	const claim =
