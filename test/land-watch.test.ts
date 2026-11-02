@@ -48,6 +48,8 @@ interface Pull {
 	state?: string;
 	/** `mergeStateStatus`, CLEAN by default. */
 	mergeState?: string;
+	/** Its base branch, main by default. */
+	base?: string;
 	/** When it joined the merge queue, while it is in it. */
 	queued?: string;
 	/** When auto-merge was armed, while it is. */
@@ -165,6 +167,7 @@ function deps(world: World): GitHubDependencies {
 						data: {
 							node: {
 								state: pull.state ?? "OPEN",
+								baseRefName: pull.base ?? "main",
 								headRefOid: headOf(world, pull),
 								mergeStateStatus: pull.mergeState ?? "CLEAN",
 								mergeQueueEntry: pull.queued ? { enqueuedAt: pull.queued } : null,
@@ -970,12 +973,14 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 	});
 
 	test("a pick that ends while the fixer runs is left alone, and every handback ends the pick", async () => {
-		const { repo, state, fix, context } = setup(4);
+		const { repo, state, fix, context } = setup(5);
 		const base = repo.main();
 		const moved = repo.pull(8, { "feature.txt": "new\n" });
 		const stuck = repo.pull(9, { "other.txt": "new\n" });
 		const again = repo.pull(10, { "again.txt": "new\n" });
 		const crashed = repo.pull(11, { "crash.txt": "new\n" });
+		const retargeted = repo.pull(13, { "retarget.txt": "new\n" });
+		const waiting = repo.pull(14, { "waiting.txt": "new\n" });
 		const removed = (number: number, head: string): Pull => ({
 			number,
 			head,
@@ -990,7 +995,15 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 				},
 			],
 		});
-		const pulls = [removed(8, moved), removed(9, stuck), removed(10, again), removed(11, crashed)];
+		const pulls = [
+			removed(8, moved),
+			removed(9, stuck),
+			removed(10, again),
+			removed(11, crashed),
+			removed(13, retargeted),
+			// Retargeted before its fixer could start.
+			{ ...removed(14, waiting), base: "release" },
+		];
 		const github = {
 			...world(
 				pulls,
@@ -1006,17 +1019,24 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		);
 		fix.round(10, fixScript("fixed.txt"));
 		fix.round(11, "echo 'agent crashed' >&2\nexit 3\n");
+		fix.round(13, fixScript("fixed.txt"));
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
 			"removed 8 failed_checks fix",
 			"removed 9 failed_checks fix",
 			"removed 10 failed_checks fix",
 			"removed 11 failed_checks fix",
+			"removed 13 failed_checks fix",
+			"removed 14 failed_checks fix",
 			"fixing 8",
 			"fixing 9",
 			"fixing 10",
 			"fixing 11",
+			"fixing 13",
+			"dropped 14 retargeted",
 		]);
-		await exited(state, 4);
+		await exited(state, 5);
+		// 13 was retargeted while its fixer ran.
+		pulls[4].base = "release";
 		// While the fixers ran, a writer pushed to 8, and a maintainer enqueued 10 again, which the queue
 		// dropped again before the watcher collected the first round.
 		const pushed = repo.push(8, { "feature.txt": "newer\n" });
@@ -1033,6 +1053,7 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		fix.round(10, flakyScript);
 		expect((await watchPass(REPOSITORY, { state }, deps(github), context)).sort()).toEqual([
 			"dropped 10 ended",
+			"dropped 13 ended",
 			"dropped 8 ended",
 			"fixing 10",
 			"handback 11",
@@ -1043,6 +1064,9 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(git(repo.origin, "rev-parse", "refs/heads/branch-10")).toBe(again);
 		expect(github.mutations).toEqual([]);
 		expect(github.comments[8].at(-1)!.body).toContain(`its head moved to ${pushed} while the fixer ran`);
+		expect(github.comments[13].at(-1)!.body).toContain("it was retargeted to `release` while the fixer ran");
+		expect(git(repo.origin, "rev-parse", "refs/heads/branch-13")).toBe(retargeted);
+		expect(fix.calls().some((call) => call.endsWith(" 14"))).toBe(false);
 		expect(github.comments[10].at(-1)!.body).toContain("the pick it was fixing ended");
 		const handback = github.comments[9].at(-1)!.body;
 		expect(handback).toContain(

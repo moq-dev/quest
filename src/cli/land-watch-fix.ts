@@ -87,7 +87,7 @@ const REMOVAL = /^removal-\d+\.json$/;
 const MERGER = "quest land watch";
 
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
-	state headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
+	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 } } }`;
 
 async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
@@ -235,9 +235,18 @@ async function take(
 	const number = removal.number;
 	const mark = (taken: string) => save(removalPath(state, number), { ...removal, taken } satisfies Removal);
 	const pull = await readPull(github, entry.id);
-	// The pick ended while the PR waited: closed, a writer's push, or a writer's new enqueue.
-	if (pull.state !== "OPEN" || string(pull.headRefOid) !== removal.head || queued(pull, removal.at)) {
-		const why = pull.state !== "OPEN" ? "closed" : string(pull.headRefOid) !== removal.head ? "pushed" : "picked";
+	// The pick ended while the PR waited: closed, retargeted, a writer's push, or a writer's new enqueue.
+	const why =
+		pull.state !== "OPEN"
+			? "closed"
+			: string(pull.baseRefName) !== failure.plan.base.ref
+				? "retargeted"
+				: string(pull.headRefOid) !== removal.head
+					? "pushed"
+					: queued(pull, removal.at)
+						? "picked"
+						: undefined;
+	if (why) {
 		mark(why);
 		return `dropped ${number} ${why}`;
 	}
@@ -431,8 +440,10 @@ async function collect(
 	// The pick ended while the round ran: a writer's push, a writer's new enqueue, or the queue dropping a
 	// newer enqueue of it. Its result is not applied; a head or request this round made is still its own.
 	const ours = job.published !== undefined && current === job.published;
-	const ended =
-		current !== entry.head && !ours
+	const retargeted = string(pull.baseRefName) !== job.base.ref;
+	const ended = retargeted
+		? `it was retargeted to ${fixerText(string(pull.baseRefName))} while the fixer ran, so it no longer lands on ${fixerText(job.base.ref)}`
+		: current !== entry.head && !ours
 			? `its head moved to ${current} while the fixer ran, and a push by anyone but the land fixer ends the pick`
 			: record?.pick !== entry.enabledAt || newer
 				? "the pick it was fixing ended: the pull request was enqueued, or removed, again while the fixer ran"
@@ -500,7 +511,7 @@ async function collect(
 				job.requeuing = head;
 				save(path, job);
 			}
-			job.requeued = await requeue(github, entry.id, head, job.dropped);
+			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped);
 			save(path, job);
 		} catch (failure) {
 			if (!(failure instanceof FixerRefusal)) throw failure;
@@ -546,13 +557,14 @@ async function collect(
 type Requeue = "enqueued" | "armed";
 
 /**
- * Put `head` back in the merge queue, at the back. A PR queued or armed at it since the queue dropped
- * it, at `dropped`, needs nothing more: a restart finds its own request, and a workflow may pick the
- * fixer's push first. A refusal hands the PR back.
+ * Put `head` back in `base`'s merge queue, at the back. A PR queued or armed at it since the queue
+ * dropped it, at `dropped`, needs nothing more: a restart finds its own request, and a workflow may pick
+ * the fixer's push first. A refusal, or a PR retargeted from `base`, hands the PR back.
  */
-async function requeue(github: GitHub, id: string, head: string, dropped: string): Promise<Requeue> {
+async function requeue(github: GitHub, id: string, head: string, base: string, dropped: string): Promise<Requeue> {
 	const how = (pull: ObjectValue): Requeue => (pull.mergeQueueEntry != null ? "enqueued" : "armed");
 	let pull = await readPull(github, id);
+	if (string(pull.baseRefName) !== base) throw new FixerRefusal(`retargeted from ${base} before it was re-enqueued`);
 	if (string(pull.headRefOid) !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 	if (!queued(pull, dropped)) {
 		try {
