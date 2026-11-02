@@ -457,16 +457,23 @@ ignored.
 queue signal, so a queued PR shows no hold. It refuses while any session holds
 the PR, so release your own hold first. `--land` needs the full 40-character
 head SHA and refuses once the head moves.
-It enables auto-merge bound to that SHA, which enters GitHub's merge queue
-when the base has one, or merges at once when nothing is left to wait for. It
-makes a merge commit; `--squash` or `--rebase` picks another method, and a
-merge queue applies its own. On a base that requires the `quest land` check, it
-queues the PR for [`quest land`](#land-a-batch-with-quest-land) instead.
+It enables auto-merge bound to that SHA, or merges at once when nothing is
+left to wait for. It makes a merge commit; `--squash` or `--rebase` picks
+another method. On a base that requires the `quest land` check, it queues the
+PR for [`quest land`](#land-a-batch-with-quest-land) instead.
+On a base with GitHub's merge queue, which applies its own method, it first
+records the pick for the queue watcher: a comment naming the head, ending in
+`<!-- quest pick: <sha> -->`. It then enqueues that head, or arms auto-merge
+bound to it while required checks may still be pending. The queue builds each
+PR on the current base, so a head behind it is enqueued as is. When GitHub
+refuses to enqueue the pick, such as for a conflict or failing required checks,
+the pick stays recorded and the command warns that the watcher fixes it, rather
+than failing; where no watcher runs, fix it and land it again.
 On an ungated base with auto-merge disabled, it refuses. Follow the repository’s own landing
 instructions in CONTRIBUTING.md or AGENTS.md, such as its label queue; never
 retry with `--direct` unless the user asks. `--direct` permits the usual landing
 behavior despite that repository setting.
-On an ungated base, it compares the live base against that head and refuses a
+On an ungated base without a merge queue, it compares the live base against that head and refuses a
 head that is behind or diverged: merge the base, rerun the repository's checks,
 and land the new head. This is a preflight check; GitHub can still move the base
 between that comparison and its head-pinned merge mutation. A PR that leaves

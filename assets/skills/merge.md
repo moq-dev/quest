@@ -30,7 +30,7 @@ Queue the head with `quest merge <pr> --land <full 40-character head SHA>`.
 It makes a merge commit; add `--squash` or `--rebase` when the repository's root instructions name that method for the PR's base.
 On a base that requires the `quest land` check, it queues the PR for `quest land`, whose chain merges and tests against the current base.
 On an ungated base with auto-merge disabled, it refuses. Follow the repository’s own landing instructions (for example, its label queue); never retry with `--direct` unless the user explicitly asks.
-On an ungated base, it refuses a head that does not contain the current base: recommend `/quest-iterate` to merge the base.
+On an ungated base without a merge queue, it refuses a head that does not contain the current base: recommend `/quest-iterate` to merge the base.
 
 Report once it is queued, and do not wait for it to merge.
 Plan the PR's suggested follow-ups as soon as it is queued, as if it lands, rather than waiting for the merge, unless a coordinator such as `/quest-complete` called this skill and batches them.

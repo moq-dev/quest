@@ -107,7 +107,6 @@ Shared shape, for the children to follow:
 
 ## Required
 
-- [Picks enter the merge queue](/quest/m0/queue-watcher/pick.md) - `quest merge --land` enqueues the pinned head into GitHub's merge queue and records the pick where the watcher reads it
 - [Queue removals](/quest/m0/queue-watcher/removals.md) - the watcher sees each PR the queue drops, why, and the failing build's log
 - [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - the fixer runs on each dropped PR in the background, and the watcher re-enqueues it at the back
 - [Stop rules](/quest/m0/queue-watcher/stop.md) - the fixer keeps going while each round changes something, and hands back on a no-op fix, a repeated failure, or three flaky re-enqueues

@@ -17,14 +17,19 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 - Poll, don't receive webhooks: the host has no public endpoint. Reconcile
   from the picks, not from queue snapshots alone: a PR enqueued and dropped
   between two polls, or while the watcher was down, never shows in a
-  snapshot. Each pass reads every open PR holding an active pick (the marker
-  [Picks enter the merge queue](/quest/m0/queue-watcher/pick.md) records) with
+  snapshot. Each pass reads every open PR holding an active pick with
   its `mergeQueueEntry` and its `RemovedFromMergeQueueEvent`s newer than the
   last one handled, with `reason`, `actor`, and `enqueuer`. `quest status`
   already reads that event (`src/cli/status.ts`). The base's
   `mergeQueue { entries }` can still serve as a cheap change signal. The App's
   installation token has its own rate limit, separate from the maintainers'
   sessions.
+- A pick is the PR comment `quest merge --land` posts on a merge-queue base,
+  ending in `<!-- quest pick: <sha> -->`; `pickedHead` in `src/cli/pick.ts`
+  reads it. Anyone can comment, so honor a pick only from an author who can
+  write to the repository. A pick covers the head it names and the heads the
+  fixer pushes from it, and stays active until a handback, a push by anyone
+  else, or a person's removal; a newer pick comment starts a new one.
 - For a failed build, find the PR's `merge_group` workflow runs (event
   `merge_group`, head branch `gh-readonly-queue/<base>/pr-<n>-<sha>`) and
   fetch the failing jobs' logs through the App's `actions: read`, trimmed the
@@ -39,7 +44,3 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 - Start it as `quest land watch` beside `quest land serve`, sharing its App
   credential options, state directory, and comment marker and
   deduplication.
-
-## Required
-
-- [Picks enter the merge queue](/quest/m0/queue-watcher/pick.md) - the durable pick marker the watcher reconciles from

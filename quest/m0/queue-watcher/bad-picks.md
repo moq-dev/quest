@@ -32,10 +32,18 @@ the fixer with the failing check's log (decided 2026-11-01, settling
 [moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)'s decision 8),
 since on a merge-queue base such a PR is a pick GitHub won't enqueue.
 
-- The watcher learns of refused picks from the marker
-  [Picks enter the merge queue](/quest/m0/queue-watcher/pick.md) records, and
-  from picks whose auto-merge stays armed while the PR is conflicting or its
-  required checks failed.
+- The watcher learns of refused picks from the pick comments
+  `quest merge --land` posts (see
+  [Queue removals](/quest/m0/queue-watcher/removals.md)) on PRs not in the
+  queue, and from picks whose auto-merge stays armed while the PR is
+  conflicting or its required checks failed. `quest merge` arms auto-merge
+  only while required checks may be pending (`BLOCKED` or `UNKNOWN`);
+  otherwise it calls `enqueuePullRequest`, and GitHub's refusal leaves just
+  the comment.
+- Enqueue a pick whose auto-merge is armed on a ready PR that never entered
+  the queue: since about 2026-09-10 GitHub often leaves such PRs out
+  ([community#209348](https://github.com/orgs/community/discussions/209348)),
+  while `enqueuePullRequest` works.
 - Merge locally with `mergeBase` (`src/cli/land.ts`), which already uses the
   driver; the host gate's `prepareHead` (`src/cli/land-head.ts`) shows the
   push. A clean driver merge needs no review: it is a conflict-free base merge.
@@ -46,4 +54,3 @@ since on a merge-queue base such a PR is a pick GitHub won't enqueue.
 ## Required
 
 - [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - the fixer path and re-enqueue this reuses
-- [Picks enter the merge queue](/quest/m0/queue-watcher/pick.md) - the pick marker a refused pick leaves
