@@ -1260,8 +1260,9 @@ export class GitHubService {
 
 	/**
 	 * Hand `action` the one upstream branch a job may write: its own branch,
-	 * or an iterated pull request's head on the enrolled repository, whose
-	 * auto-merge it turns off before moving that head.
+	 * or an iterated pull request's head on the enrolled repository. Before
+	 * moving either, it turns off the auto-merge of any open pull request the
+	 * branch heads.
 	 * Rechecks the requester's current authority and the project's enrollment.
 	 */
 	contribute<T>(
@@ -1274,7 +1275,7 @@ export class GitHubService {
 		return this.#authorized(
 			upstream,
 			userId,
-			pulled ? { contents: "read", pull_requests: "read" } : { contents: "write" },
+			pulled ? { contents: "read", pull_requests: "read" } : { contents: "write", pull_requests: "write" },
 			async (token, current, installation) => {
 				this.#public(current);
 				if ((await this.#state(upstream, installation)) === null)
@@ -1294,7 +1295,24 @@ export class GitHubService {
 					}
 				};
 				// A job's own branch starts from the default branch's current commit, so it merges nothing in.
-				if (!pulled) return action(this.#branch(token, current, job.branch, async () => false));
+				if (!pulled) {
+					const label = `${current.owner.login}:${job.branch}`;
+					// A delivered job, or one started over, may publish again onto its open pull request.
+					const heads = async () => {
+						const open = await this.#api<PullHead[]>(
+							token,
+							`${repositoryPath(upstream)}/pulls?state=open&per_page=100&head=${encodeURIComponent(label)}`,
+						);
+						return open.map((pull) => pull.node_id);
+					};
+					return action(
+						this.#disarming(
+							token,
+							this.#branch(token, current, job.branch, async () => false),
+							heads,
+						),
+					);
+				}
 				const pull = await this.#api<PullHead>(
 					token,
 					`${repositoryPath(upstream)}/pulls/${pullNumber(job.target)}`,
@@ -1307,27 +1325,42 @@ export class GitHubService {
 					return this.#withRepository(
 						upstream,
 						{ contents: "write", pull_requests: "write" },
-						async (writeToken, latest) => {
-							const branch = this.#branch(writeToken, latest, job.branch, base);
-							const disarm = () => this.#disarm(writeToken, pull.node_id);
-							return action({
-								...branch,
-								move: async (from, to) => {
-									await disarm();
-									return branch.move(from, to);
-								},
-								reset: async (to) => {
-									await disarm();
-									await branch.reset(to);
-								},
-							});
-						},
+						async (writeToken, latest) =>
+							action(
+								this.#disarming(
+									writeToken,
+									this.#branch(writeToken, latest, job.branch, base),
+									async () => [pull.node_id],
+								),
+							),
 					);
 				throw new PublicationBlocked(
 					"The pull request's head is in a contributor's fork, which the bot cannot update. Ask its author to apply the changes, or close it and start new work.",
 				);
 			},
 		);
+	}
+
+	/**
+	 * Wrap `branch` so that moving an existing branch, or resetting it, first
+	 * turns off auto-merge on the open pull requests `heads` names. Creating
+	 * the branch needs nothing, since no pull request can come from it yet.
+	 */
+	#disarming(token: string, branch: Branch, heads: () => Promise<string[]>): Branch {
+		const disarm = async () => {
+			for (const pull of await heads()) await this.#disarm(token, pull);
+		};
+		return {
+			...branch,
+			move: async (from, to) => {
+				if (from !== null) await disarm();
+				return branch.move(from, to);
+			},
+			reset: async (to) => {
+				await disarm();
+				await branch.reset(to);
+			},
+		};
 	}
 
 	/**

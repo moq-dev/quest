@@ -276,7 +276,9 @@ describe("runner publication", () => {
 		const scopes = requests()
 			.filter((r) => r.path.endsWith("/access_tokens"))
 			.map((r) => r.body);
-		expect(scopes).toEqual([{ repository_ids: [10], permissions: { metadata: "read", contents: "write" } }]);
+		expect(scopes).toEqual([
+			{ repository_ids: [10], permissions: { metadata: "read", contents: "write", pull_requests: "write" } },
+		]);
 		expect((await job(id)).head).toBe(head);
 
 		// A stale base is refused without writing anything.
@@ -684,6 +686,42 @@ describe("runner publication", () => {
 		expect(project.commits[next.head]!.parents).toEqual([revision]);
 		expect(next.pull.number).toBe(5);
 		expect(opened()).toHaveLength(1);
+	});
+
+	it("turns off the job's own pull request's auto-merge before publishing onto it again or starting over", async () => {
+		const id = await running();
+		const delivered = await publish({
+			job: id,
+			attempt: 1,
+			head: null,
+			message: "one",
+			changes: [file("a", "1")],
+			pull: { title: "T", body: "B" },
+		});
+		const { head } = (await delivered.json()) as { head: string };
+		const pull = opened()[0]!;
+		pull.landing = true;
+		const next = await publish({ job: id, attempt: 1, head, message: "two", changes: [file("a", "2")] });
+		expect(next.status).toBe(200);
+		expect(pull.landing).toBe(false);
+
+		// Starting over resets the branch only after turning auto-merge off again.
+		const { head: pushed } = (await next.json()) as { head: string };
+		project.branches["quest/first"] = prHead;
+		const blocked = await publish({
+			job: id,
+			attempt: 1,
+			head: pushed,
+			session: "s",
+			message: "three",
+			changes: [file("a", "3")],
+		});
+		expect(blocked.status).toBe(202);
+		pull.landing = true;
+		const waiting = await job(id);
+		await restart(testEnv, user, upstream, waiting, waiting.questions[0]!.id);
+		expect(project.branches["quest/first"]).toBe(revision);
+		expect(pull.landing).toBe(false);
 	});
 
 	it("lets only the requester start over in place of another maintainer's answer awaiting approval", async () => {
