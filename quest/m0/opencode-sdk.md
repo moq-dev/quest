@@ -28,8 +28,8 @@ Decision prompts, selected options marked ✅:
 
 - How the runner drives opencode 2:
   - ✅ The 2.1.1 binary as a server, driven by `@opencode/client` 2.1.1. It
-    keeps the split [the opencode sandbox](/quest/m0/kix/sandbox/opencode.md)
-    relies on: the server process holds the provider credentials, the server
+    keeps the split the opencode sandbox
+    ([moq-dev/quest#338](https://github.com/moq-dev/quest/pull/338)) relies on: the server process holds the provider credentials, the server
     password, and the kix tools' token, outside the commands' boundary.
   - `@opencode/sdk` in the runner's process, dropping the binary. The
     runner would hold the credentials, and the sandbox's process boundary
@@ -50,14 +50,10 @@ What the change does:
   Dependabot's ignore for the SDK (it must move with nixpkgs' opencode) at
   `@opencode/client`.
 - Recheck each of the sandbox's rules on 2.x: the `shell` wrapper through
-  srt, stripping `OPENCODE_*` from the commands' environment,
+  srt, the commands' environment allowlist (`keptEnvironment`),
   `OPENCODE_DISABLE_PROJECT_CONFIG`, `external_directory` and `webfetch`
   denies, the plugin's realpath check, and `lsp`/`formatter` off. Rerun the
   sandbox's hostile-repository boundary test against 2.x.
 - Run the runner's live opencode checks that the
   [Kix decision UI](/quest/m0/kix/README.md) rehearsal lists, if a runner is
   available.
-
-## Required
-
-- [Sandbox opencode jobs' commands](/quest/m0/kix/sandbox/opencode.md) - the sandbox this migration must keep, in [moq-dev/quest#338](https://github.com/moq-dev/quest/pull/338)
