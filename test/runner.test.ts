@@ -26,7 +26,7 @@ import { Runner } from "../src/runner/runner";
 import { REGISTRIES, type Sandbox, closeSandbox, openSandbox } from "../src/runner/sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "../src/runner/wait";
 import { Workspace } from "../src/runner/workspace";
-import { tempDir } from "./fixture";
+import { initRepository, template, tempDir } from "./fixture";
 
 const posix = test.skipIf(process.platform === "win32");
 // The runner tests drive real git checkouts. On the land gate's host under load (2026-11-01), the
@@ -47,18 +47,23 @@ function git(dir: string, ...args: string[]): string {
 	}).trim();
 }
 
-/** An upstream repository with one commit, as a job's revision. */
-function upstream(): { dir: string; commit: string } {
-	const dir = join(tempDir(), "upstream");
-	mkdirSync(dir);
-	git(dir, "init", "-q", "-b", "main");
+/** The commit every copy of `upstreams` holds. */
+let upstreamCommit: string | undefined;
+const upstreams = template((dir) => {
+	initRepository(dir);
 	writeFileSync(join(dir, "AGENTS.md"), "Always run the tests.\n");
 	writeFileSync(join(dir, "flake.nix"), "{}\n");
 	writeFileSync(join(dir, "old.txt"), "old\n");
 	writeFileSync(join(dir, ".gitignore"), "ignored/\n");
 	git(dir, "add", ".");
 	git(dir, "commit", "-q", "-m", "init");
-	return { dir, commit: git(dir, "rev-parse", "HEAD") };
+	upstreamCommit = git(dir, "rev-parse", "HEAD");
+});
+
+/** An upstream repository with one commit, as a job's revision. */
+function upstream(): { dir: string; commit: string } {
+	const dir = upstreams(join(tempDir(), "upstream"));
+	return { dir, commit: upstreamCommit! };
 }
 
 function job(revision: string, extra: Partial<Job> = {}): Job {

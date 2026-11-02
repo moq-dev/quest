@@ -36,7 +36,7 @@ import { COMMENT_LIMIT, resolution, resolutionSection, type Resolution } from ".
 import { readFixResult, parseBaseFix, parseFixResult, type BaseFix, type FixResult } from "./land-fix";
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
-import { push, remoteHead } from "./land-head";
+import { isPrepared, push, remoteHead } from "./land-head";
 import { BASE_JOB, type Halt, haltNotice, readHalt, saveHalt } from "./land-halt";
 import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
@@ -725,7 +725,12 @@ async function collectJob(
 		);
 		const auto = object(queued.node).autoMergeRequest;
 		let previous = attempt(state, number)!;
-		const head = result?.action === "fixed" ? result.head : entry.head;
+		// The head the PR stands at: its pinned head, or the gate's own base merge on it for this pick, as
+		// when the gate pushed that merge and then failed to land it (moq-dev/quest#342). The gate's merge is
+		// known only from its private record, never from its forgeable author or message.
+		const standing =
+			current !== entry.head && isPrepared(root, state, { ...entry, head: current }) ? current : entry.head;
+		const head = result?.action === "fixed" ? result.head : standing;
 		const actor = { agent: result?.agent, model: result?.model };
 		const queuedAs = auto == null ? null : string(object(auto).enabledAt);
 		// This collection already enabled auto-merge again on the fixed head, before a restart.
@@ -739,7 +744,7 @@ async function collectJob(
 		if (!samePick(previous, entry))
 			error = "fixer was superseded by a newer maintainer pick; keeping its work untouched";
 		// Never displace a newer maintainer pick, closed PR, or writer's commit.
-		if (pull.state !== "open" || (current !== entry.head && !(job.published.includes(number) && current === head)))
+		if (pull.state !== "open" || (current !== standing && !(job.published.includes(number) && current === head)))
 			error = "PR closed or head moved while fixing; inspect and pick it again";
 		const left = job.left?.includes(number) ?? false;
 		// A parked PR keeps its auto-merge; one an older job's ejection left without it is requeued below.
@@ -781,6 +786,9 @@ async function collectJob(
 					save(path, job);
 				}
 				if (result?.action === "fixed" && current !== head) {
+					// The fix descends from the pin, not from a gate merge the PR stands at: it replaces that
+					// merge, as the gate replaces its own, since building on it would revert the newer base it
+					// merged. The lease still refuses any writer's commit.
 					const pushed = await push(
 						root,
 						`https://github.com/${entry.repository}.git`,
@@ -788,12 +796,17 @@ async function collectJob(
 						head,
 						`refs/heads/${entry.branch}`,
 						token,
+						standing,
 					);
 					if (pushed.status !== 0) {
 						// GitHub refuses an App's push of a workflow change it lacks the permission for, and a
-						// fork's branch rules may refuse any. The maintainer's own push may still pass.
+						// fork's branch rules may refuse any. The maintainer's own push may still pass, but
+						// `quest land apply` rebuilds only on the head the fixer worked from.
 						try {
-							const ready = resolution(root, entry.head, job.plan.base.sha, head);
+							const ready =
+								standing === entry.head
+									? resolution(root, entry.head, job.plan.base.sha, head)
+									: undefined;
 							if (ready) (job.resolutions ??= {})[number] = ready;
 						} catch (error) {
 							deps.warn(`quest land fixer: cannot hand back #${number}'s resolution: ${String(error)}`);
@@ -805,7 +818,7 @@ async function collectJob(
 				if (result?.action === "fixed") {
 					// GitHub shows a push a moment later. Wait for our own head; only a third head is a real move.
 					let latest = object(await (await github.request(pullPath)).json());
-					for (let wait = 0; object(latest.head).sha === entry.head && wait < SYNC_PAUSES; wait++) {
+					for (let wait = 0; object(latest.head).sha === standing && wait < SYNC_PAUSES; wait++) {
 						await github.pause(1000);
 						latest = object(await (await github.request(pullPath)).json());
 					}

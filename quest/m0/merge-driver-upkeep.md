@@ -32,7 +32,3 @@ Decided 2026-11-01 (user, /quest-plan of the follow-ups from the
   added the `quest-pinned` input, which only a manual `nix flake update
   quest-pinned` bumps. Pick how it stays current, such as Dependabot's nix
   updates, a step in the release checklist, or a recurring quest, and do it.
-
-## Related
-
-- [Merge queue siblings](/quest/m0/helpers/queue-siblings.md) - the landing-time drop this quest brings to local merges

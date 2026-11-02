@@ -66,7 +66,7 @@ import {
 } from "../src/cli/land-serve";
 import { HISTORY, batchSize, failureRate, readPolicy, recordBatch } from "../src/cli/land-policy";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { tempDir } from "./fixture";
+import { GIT_SETTINGS, configure, initRepository, template, tempDir } from "./fixture";
 
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
@@ -97,6 +97,34 @@ const QUEST = (title: string) => `# [S] ${title}\n\n## Goal\n\n${title}.\n`;
 const EPIC = (entries: string[]) =>
 	`# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
 
+/** The tip of every forge's main, which the template sets. */
+let forgeBase: string | undefined;
+
+/**
+ * Upstream's bare repository with one commit on main, and a work clone whose
+ * origin is its github.com URL, before routing that URL to the copy.
+ */
+const forge = template((dir) => {
+	const origin = initRepository(join(dir, "github", "upstream", "project.git"), { bare: true });
+	const work = initRepository(join(dir, "work"));
+	const files: Record<string, string> = {
+		".gitattributes": "quest/** merge=quest\n",
+		"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
+		"quest/m0/README.md": EPIC(["a"]),
+		"quest/m0/a.md": "# [S] A\n\n## Goal\n\nA.\n",
+		"code.txt": "one\ntwo\nthree\n",
+	};
+	for (const [path, content] of Object.entries(files)) {
+		mkdirSync(join(work, path, ".."), { recursive: true });
+		writeFileSync(join(work, path), content);
+	}
+	git(work, "add", ".");
+	git(work, "commit", "--quiet", "-m", "base");
+	git(work, "push", "--quiet", origin, "HEAD:refs/heads/main");
+	git(work, "remote", "add", "origin", "https://github.com/upstream/project.git");
+	forgeBase = git(work, "rev-parse", "HEAD");
+});
+
 /**
  * github.com as local bare repositories: `upstream/project`, a fork for each
  * contributor, and a clone per CI job that reaches them through
@@ -112,21 +140,8 @@ class Forge {
 	private nextPull = 1;
 
 	constructor() {
-		mkdirSync(this.origin, { recursive: true });
-		git(this.origin, "init", "--quiet", "--bare", "--initial-branch=main");
-		git(this.dir, "init", "--quiet", "--initial-branch=main", this.work);
+		forge(this.dir);
 		this.configure(this.work);
-		git(this.work, "remote", "add", "origin", "https://github.com/upstream/project.git");
-		this.write({
-			".gitattributes": "quest/** merge=quest\n",
-			"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
-			"quest/m0/README.md": EPIC(["a"]),
-			"quest/m0/a.md": "# [S] A\n\n## Goal\n\nA.\n",
-			"code.txt": "one\ntwo\nthree\n",
-		});
-		git(this.work, "add", ".");
-		git(this.work, "commit", "--quiet", "-m", "base");
-		git(this.work, "push", "--quiet", "origin", "HEAD:refs/heads/main");
 		this.world = {
 			app: { id: 1, slug: "gate" },
 			installation: 5,
@@ -142,7 +157,7 @@ class Forge {
 					files: [],
 					issues: [],
 					pulls: [],
-					branches: { main: this.main() },
+					branches: { main: forgeBase! },
 					fork: {},
 					commits: {},
 					trees: {},
@@ -156,19 +171,17 @@ class Forge {
 		return this.world.repos[0];
 	}
 
-	/** Route github.com URLs to the local bare repositories, and give commits an identity. */
+	/** Route github.com URLs to the local bare repositories. */
 	configure(dir: string): void {
-		git(dir, "config", `url.${this.hub}/.insteadOf`, "https://github.com/");
-		git(dir, "config", "user.name", "Gate");
-		git(dir, "config", "user.email", "gate@example.test");
+		configure(dir, { [`url.${this.hub}/.insteadOf`]: "https://github.com/" });
 	}
 
-	/** A fresh clone of upstream, as a CI job checks out. */
+	/** A fresh clone of upstream, as a CI job checks out, routed and with the fixture settings. */
 	clone(): string {
 		const dir = join(this.dir, `clone-${Math.random().toString(36).slice(2)}`);
-		git(this.dir, "clone", "--quiet", this.origin, dir);
-		this.configure(dir);
-		git(dir, "remote", "set-url", "origin", "https://github.com/upstream/project.git");
+		const settings = { [`url.${this.hub}/.insteadOf`]: "https://github.com/", ...GIT_SETTINGS };
+		const options = Object.entries(settings).flatMap(([key, value]) => ["-c", `${key}=${value}`]);
+		git(this.dir, "clone", "--quiet", ...options, "https://github.com/upstream/project.git", dir);
 		return dir;
 	}
 
@@ -255,16 +268,16 @@ class Forge {
 			"Co-Authored-By: Helper <helper@example.test>",
 		);
 		const head = git(this.work, "rev-parse", "HEAD");
+		// GitHub keeps every PR's head in the upstream, forks' included.
+		const keep = `${head}:refs/pull/${number}/head`;
 		if (options.contributor) {
 			const fork = join(this.hub, options.contributor, "project.git");
-			mkdirSync(fork, { recursive: true });
-			spawnSync("git", ["init", "--quiet", "--bare", fork]);
+			if (!existsSync(fork)) initRepository(fork, { bare: true });
 			git(this.work, "push", "--quiet", fork, `${head}:refs/heads/${branch}`);
+			git(this.work, "push", "--quiet", "origin", keep);
 		} else {
-			git(this.work, "push", "--quiet", "origin", `${head}:refs/heads/${branch}`);
+			git(this.work, "push", "--quiet", "origin", `${head}:refs/heads/${branch}`, keep);
 		}
-		// GitHub keeps every PR's head in the upstream, forks' included.
-		git(this.work, "push", "--quiet", "origin", `${head}:refs/pull/${number}/head`);
 		const pull: Pull = {
 			number,
 			title,
@@ -296,29 +309,41 @@ class Forge {
 			this.lag--;
 			return;
 		}
-		for (const pull of this.repo.pulls) {
-			if (pull.closed) continue;
-			const holder = pull.contributor ? `${pull.contributor}/project` : "upstream/project";
-			const tip = spawnSync(
-				"git",
-				["-C", join(this.hub, `${holder}.git`), "rev-parse", `refs/heads/${pull.branch}`],
-				{
-					encoding: "utf8",
-				},
-			);
-			if (tip.status === 0) {
-				pull.head = tip.stdout.trim();
-				if (pull.contributor)
-					git(
-						join(this.hub, `${holder}.git`),
-						"push",
-						"--quiet",
-						this.origin,
-						`${pull.head}:refs/pull/${pull.number}/head`,
-					);
-				else git(this.origin, "update-ref", `refs/pull/${pull.number}/head`, pull.head);
+		const open = this.repo.pulls.filter((pull) => !pull.closed);
+		if (open.length === 0) return;
+		// One read of each repository's refs, and one write of the upstream's PR refs that moved.
+		const refs = new Map<string, Map<string, string>>();
+		const read = (holder: string) => {
+			let found = refs.get(holder);
+			if (found === undefined) {
+				found = new Map();
+				const listing = git(
+					join(this.hub, `${holder}.git`),
+					"for-each-ref",
+					"--format=%(refname) %(objectname)",
+				);
+				for (const line of listing.split("\n").filter(Boolean)) {
+					const [ref, sha] = line.split(" ");
+					found.set(ref, sha);
+				}
+				refs.set(holder, found);
 			}
+			return found;
+		};
+		const pulled = read("upstream/project");
+		const updates: string[] = [];
+		for (const pull of open) {
+			const holder = pull.contributor ? `${pull.contributor}/project` : "upstream/project";
+			const tip = read(holder).get(`refs/heads/${pull.branch}`);
+			if (tip === undefined) continue;
+			pull.head = tip;
+			const ref = `refs/pull/${pull.number}/head`;
+			if (pulled.get(ref) === tip) continue;
+			if (pull.contributor) git(join(this.hub, `${holder}.git`), "push", "--quiet", this.origin, `${tip}:${ref}`);
+			else updates.push(`update ${ref} ${tip}\n`);
 		}
+		if (updates.length > 0)
+			execFileSync("git", ["update-ref", "--stdin"], { cwd: this.origin, input: updates.join("") });
 	}
 
 	/** GitHub's view after a landing: a PR whose head it had synced and that reached main merged. */
@@ -372,7 +397,8 @@ class Forge {
 					});
 					if (tip.status === 0) this.repo.branches[branch] = tip.stdout.trim();
 				}
-				let root: string | undefined;
+				/** main before a squash this request made. */
+				let base: string | undefined;
 				if (number && init?.method === "PUT") {
 					const body = JSON.parse(String(init.body));
 					this.merges.push({
@@ -382,41 +408,41 @@ class Forge {
 					});
 					const pull = this.repo.pulls.find((pull) => pull.number === Number(number))!;
 					if (pull.head === body.sha && pull.merge === "CLEAN") {
-						root = this.clone();
-						git(root, "checkout", "--quiet", "--detach", this.main());
-						const result = spawnSync(
-							"git",
-							["-c", "core.hooksPath=/dev/null", "merge", "--squash", pull.head!],
-							{ cwd: root },
-						);
-						if (result.status !== 0) pull.merge = "DIRTY";
+						// Squash in the upstream itself: the merged tree, committed onto main.
+						const main = this.main();
+						const merged = spawnSync("git", ["merge-tree", "--write-tree", main, pull.head!], {
+							cwd: this.origin,
+							encoding: "utf8",
+						});
+						if (merged.status !== 0) pull.merge = "DIRTY";
 						else {
-							git(
-								root,
-								"commit",
-								"--quiet",
-								"--allow-empty",
+							const tree = merged.stdout.split("\n")[0];
+							const message = `${pull.title} (#${pull.number})`;
+							pull.squash = git(
+								this.origin,
+								"commit-tree",
+								tree,
+								"-p",
+								main,
 								"-m",
-								`${pull.title} (#${pull.number})`,
+								message,
 								"-m",
 								"Native GitHub squash",
 							);
-							pull.squash = git(root, "rev-parse", "HEAD");
+							base = main;
 							this.repo.commits[pull.squash] = {
-								parents: [this.main()],
-								tree:
-									this.mismatch === pull.number
-										? "f".repeat(40)
-										: git(root, "rev-parse", "HEAD^{tree}"),
-								message: `${pull.title} (#${pull.number})`,
+								parents: [main],
+								tree: this.mismatch === pull.number ? "f".repeat(40) : tree,
+								message,
 							};
 						}
 					}
 				}
 				const response = await fetch(input, init);
-				if (root && response.ok && ((await response.clone().json()) as { merged?: boolean }).merged) {
+				if (base && response.ok && ((await response.clone().json()) as { merged?: boolean }).merged) {
 					const pull = this.repo.pulls.find((pull) => pull.number === Number(number))!;
-					git(root, "push", "--quiet", "origin", `${pull.squash}:refs/heads/main`);
+					// A fast-forward, as the push of a squash on main was: it fails if main moved.
+					git(this.origin, "update-ref", "refs/heads/main", pull.squash!, base);
 				}
 				return response;
 			},
@@ -791,6 +817,73 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(seen[1]).toBe(pin);
 		expect(pauses).toEqual([500]);
 		expect(forge.comment(1)).toBeUndefined();
+	});
+
+	// moq-dev/quest#342: GitHub already showed the gate's base merge as the head, but still called it
+	// conflicting from the pin's mergeability, and the gate parked it for the fixer as a merge_conflict.
+	test.each(["false", "dirty"])(
+		"a pushed head's stale conflict report (mergeable %s) is retried rather than parked",
+		async (mode) => {
+			const forge = new Forge();
+			const pull = forge.pull("Old", { "old.txt": "yes" });
+			const pin = pull.head;
+			forge.advance({ "new.txt": "yes" });
+			const deps = await forge.deps();
+			const plan = await resolveQueue(REPOSITORY, undefined, deps);
+			pull.mergeRefusals = [{ status: 405, message: "Pull Request has merge conflicts" }];
+			let attempts = 0;
+			forge.beforeMerge = () => {
+				attempts++;
+				// GitHub settles by the second attempt.
+				pull.mergeable = attempts === 1 && mode === "false" ? false : undefined;
+				pull.mergeableState = attempts === 1 && mode === "dirty" ? "dirty" : undefined;
+			};
+			const pauses: number[] = [];
+			deps.sleep = async (delay) => {
+				pauses.push(delay);
+			};
+			expect(await serveBatch(forge.clone(), plan, sandbox(), deps, async () => deps.token)).toEqual([
+				`landed 1 ${pull.squash}`,
+			]);
+			// Both attempts merge the gate's merge, which GitHub already showed, never the pin.
+			expect(forge.merges.map(({ body }) => body.sha)).toEqual([pull.head, pull.head]);
+			expect(pull.head).not.toBe(pin);
+			expect(pauses).toEqual([500]);
+			expect(forge.comment(1)).toBeUndefined();
+		},
+	);
+
+	test("a pushed head GitHub keeps calling conflicting is left queued for the next round, which lands it", async () => {
+		const forge = new Forge();
+		const pull = forge.pull("Old", { "old.txt": "yes" });
+		forge.advance({ "new.txt": "yes" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		pull.mergeRefusals = Array.from({ length: 6 }, () => ({
+			status: 405 as const,
+			message: "Pull Request has merge conflicts",
+		}));
+		pull.mergeable = false;
+		const pauses: number[] = [];
+		deps.sleep = async (delay) => {
+			pauses.push(delay);
+		};
+		const root = forge.clone();
+		const options = sandbox();
+		await expect(serveBatch(root, plan, options, deps, async () => deps.token)).rejects.toThrow(
+			"mergeability did not settle",
+		);
+		expect(pauses).toEqual([500, 1000, 2000, 4000, 8000]);
+		expect(forge.comment(1)).toBeUndefined();
+		expect(pull.landing).toBe(true);
+		expect(pull.labels).toContain("quest:merge");
+		// Once GitHub settles, the next round accepts the gate's recorded merge and lands it.
+		pull.mergeable = undefined;
+		const next = await resolvePreparedQueue(root, options.state, REPOSITORY, undefined, deps);
+		expect(next.queue[0].head).toBe(pull.head);
+		expect(await serveBatch(root, next, options, deps, async () => deps.token)).toEqual([
+			`landed 1 ${pull.squash}`,
+		]);
 	});
 
 	test("restart rejects a writer's commit after a recorded merge", async () => {
@@ -1196,19 +1289,90 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 	test("ejects alone a PR that fails quest check on the current base, before batching", async () => {
 		const forge = new Forge();
 		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		// A mistyped link never named a quest, so nothing the base did explains it.
 		const linking = forge.pull("Link b", {
-			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n`,
+			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/bb.md) - b\n`,
 		});
 		forge.pull("Clean", { "clean.txt": "ok" });
-		// The base finishes b after the PR was queued, leaving its link dangling.
-		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
 		const { checked, landing } = await forge.round();
 		expect(landing).toEqual(["ejected 1 failed_checks", `landed 2 ${forge.repo.pulls[1].squash}`]);
 		expect(checked).toEqual([[2]]);
 		expect(forge.comment(1)).toContain("`quest check` fails with it squashed alone onto the base");
-		expect(forge.comment(1)).toMatch(/quest\/m0\/a\.md:\d+: .*\/quest\/m0\/b\.md/);
+		expect(forge.comment(1)).toMatch(/quest\/m0\/a\.md:\d+: .*\/quest\/m0\/bb\.md/);
 		expect(forge.comment(1)).toContain("<!-- quest land: failed_checks -->");
 		expect(linking.labels).toEqual([]);
+	});
+
+	test("drops a queued PR's list links to a quest the base finished, in the chain and the landed head", async () => {
+		const forge = new Forge();
+		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		const pull = forge.pull("Plan c", {
+			"quest/m0/README.md": EPIC(["a", "b", "c"]),
+			"quest/m0/c.md": `${QUEST("C")}\n## Required\n\n- [B](/quest/m0/b.md) - b first\n`,
+			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n- [C](/quest/m0/c.md) - c\n`,
+		});
+		const pin = pull.head!;
+		// The base finishes b after the PR was queued, leaving both of its links to b dangling.
+		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
+		const base = forge.main();
+		const { checked, landing } = await forge.round();
+		expect(checked).toEqual([[1]]);
+		expect(landing).toEqual([`landed 1 ${pull.squash}`]);
+		// c is no longer blocked, and a keeps its other link.
+		expect(git(forge.origin, "show", "main:quest/m0/c.md")).toBe(QUEST("C").trim());
+		expect(git(forge.origin, "show", "main:quest/m0/a.md")).toBe(
+			`${QUEST("A")}\n## Related\n\n- [C](/quest/m0/c.md) - c`,
+		);
+		expect(git(forge.origin, "show", "-s", "--format=%P", pull.head!)).toBe(`${pin} ${base}`);
+		expect(git(forge.origin, "show", "-s", "--format=%B", pull.head!)).toContain(
+			"Drop links to quests the base finished from quest/m0/a.md, quest/m0/c.md.",
+		);
+	});
+
+	test("two sibling PRs land together when one finishes a quest the other links", async () => {
+		const forge = new Forge();
+		forge.advance({
+			"quest/m0/README.md": EPIC(["a", "b", "c"]),
+			"quest/m0/b.md": QUEST("B"),
+			"quest/m0/c.md": QUEST("C"),
+		});
+		// Each passes `quest check` alone on the base; chained, the first leaves the second's link dangling.
+		const one = forge.pull("Finish b", { "quest/m0/README.md": EPIC(["a", "c"]), "quest/m0/b.md": null });
+		const two = forge.pull("Finish c", {
+			"quest/m0/README.md": EPIC(["a", "b"]),
+			"quest/m0/c.md": null,
+			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n`,
+		});
+		const { checked, landing } = await forge.round();
+		expect(checked).toEqual([[1, 2]]);
+		expect(landing).toEqual([`landed 1 ${one.squash}`, `landed 2 ${two.squash}`]);
+		expect(git(forge.origin, "show", "main:quest/m0/README.md")).toBe(EPIC(["a"]).trim());
+		expect(git(forge.origin, "show", "main:quest/m0/a.md")).toBe(QUEST("A").trim());
+	});
+
+	test("ejects a PR whose prose links a quest the base finished, and keeps links to a quest the base moved", async () => {
+		const forge = new Forge();
+		forge.advance({
+			"quest/m0/README.md": EPIC(["a", "b", "c"]),
+			"quest/m0/b.md": QUEST("B"),
+			"quest/m0/c.md": `${QUEST("C")}\nMore about c, so a move keeps enough of it to read as a rename.\n`,
+		});
+		const prose = forge.pull("Mention b", { "quest/m0/a.md": `${QUEST("A")}\nSee [B](/quest/m0/b.md).\n` });
+		const moving = forge.pull("Link c", {
+			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [C](/quest/m0/c.md) - c\n`,
+		});
+		// The base finishes b and moves c to d.
+		forge.advance({
+			"quest/m0/README.md": EPIC(["a", "d"]),
+			"quest/m0/b.md": null,
+			"quest/m0/c.md": null,
+			"quest/m0/d.md": `${QUEST("C")}\nMore about c, so a move keeps enough of it to read as a rename.\n`,
+		});
+		const { landing } = await forge.round();
+		expect(landing).toEqual(["ejected 1 failed_checks", "ejected 2 failed_checks"]);
+		expect(forge.comment(1)).toMatch(/quest\/m0\/a\.md:\d+: .*\/quest\/m0\/b\.md/);
+		expect(forge.comment(2)).toMatch(/quest\/m0\/a\.md:\d+: .*\/quest\/m0\/c\.md/);
+		expect([prose.labels, moving.labels]).toEqual([[], []]);
 	});
 
 	test("screens only the PRs a batch reaches, leaving the rest of a long queue for later", async () => {
@@ -1552,9 +1716,7 @@ mv '${result}.new' '${result}'
 
 	test("starts the fixer on a PR that fails quest check alone, from its squash onto the base", async () => {
 		const forge = new Forge();
-		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
 		forge.pull("Link b", { "quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n` });
-		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
 		const deps = await forge.deps();
 		const plan = await resolveQueue(REPOSITORY, undefined, deps);
 		const options = { ...sandbox(), fixer: join(tempDir(), "fixer") };
@@ -1634,16 +1796,29 @@ mv '${result}.new' '${result}'
 			);
 			const launched = eventFile(options.state, (name) => name === "fixer-result");
 			try {
-				const output = await serveBatch(forge.clone(), plan, options, deps, async () => deps.token);
-				expect(forge.merges.map(({ number }) => number)).toEqual([1, 2]);
+				const root = forge.clone();
+				const run = serveBatch(root, plan, options, deps, async () => deps.token);
+				let output: string[] = [];
+				if (reason === "merge_conflict") {
+					// The gate's own merge of PR 1's squash into PR 2 holds that base, so GitHub calling it
+					// conflicting right after the push is not taken as a conflict: the next round rebuilds it.
+					await expect(run).rejects.toThrow("mergeability did not settle");
+					expect(forge.comment(2)).toBeUndefined();
+				} else output = await run;
+				expect([...new Set(forge.merges.map(({ number }) => number))]).toEqual([1, 2]);
 				expect(forge.repo.pulls[0].merged).toBe(true);
 				// PR 3 passed the check with it: it stays queued, without a comment, to be rebuilt on the new base.
 				expect(forge.repo.pulls[2].landing).toBe(true);
 				expect(forge.comment(3)).toBeUndefined();
 				expect(forge.repo.pulls[3].landing).toBe(true);
 				if (reason === "merge_conflict") {
-					// A conflict parks the PR for the fixer, keeping its auto-merge.
-					expect(output).toEqual([`landed 1 ${forge.repo.pulls[0].squash}`, "parked 2"]);
+					// A round on PR 2 alone merges that recorded head as it stands, with no push, and GitHub
+					// still calls it conflicting: a conflict parks the PR for the fixer, keeping its auto-merge.
+					forge.settle();
+					const next = await resolvePreparedQueue(root, options.state, REPOSITORY, undefined, deps);
+					const alone = { ...next, queue: next.queue.filter((entry) => entry.number === 2) };
+					expect(alone.queue[0].head).toBe(forge.repo.pulls[1].head);
+					expect(await serveBatch(root, alone, options, deps, async () => deps.token)).toEqual(["parked 2"]);
 					await launched;
 					expect(readFileSync(result, "utf8").trim().split("\n").slice(1)).toEqual(["2"]);
 					expect(forge.repo.pulls[1].landing).toBe(true);
@@ -1702,7 +1877,7 @@ mv '${result}.new' '${result}'
 			const plan = await resolveQueue(REPOSITORY, undefined, deps);
 			const message =
 				mode === "base modified" ? "Base branch was modified. Review and try the merge again" : mode;
-			pull.mergeRefusals = Array.from({ length: 4 }, () => ({ status: 405 as const, message }));
+			pull.mergeRefusals = Array.from({ length: 6 }, () => ({ status: 405 as const, message }));
 			forge.beforeMerge = () => {
 				pull.mergeable = mode === "false" ? false : mode === "pending" ? null : true;
 				pull.mergeableState = mode === "dirty" ? "dirty" : mode === "required check" ? "blocked" : "clean";
@@ -1737,7 +1912,7 @@ mv '${result}.new' '${result}'
 				expect(forge.comment(1)).toBeUndefined();
 				expect(pull.labels).toContain("quest:merge");
 			}
-			if (mode === "pending" || mode === "base modified") expect(pauses).toEqual([500, 1000, 2000]);
+			if (mode === "pending" || mode === "base modified") expect(pauses).toEqual([500, 1000, 2000, 4000, 8000]);
 		},
 	);
 
@@ -2598,6 +2773,99 @@ printf '{"action":"fixed","head":"%s","reason":"edit the flake"}' "$(git rev-par
 		expect(await fixture.collect(deps)).toEqual(["requeued 1"]);
 		expect(fixture.pull.body).toContain(`(head ${fixture.pull.head})`);
 	});
+
+	/**
+	 * moq-dev/quest#342: once another PR landed, the gate pushed and recorded its own merge of the new
+	 * base into PR 1's pin, then failed to land it and parked the PR, so its fixer job holds the pin.
+	 */
+	async function gateMerge(fixture: Awaited<ReturnType<typeof fixerFixture>>): Promise<string> {
+		fixture.forge.advance({ "landed.txt": "another PR\n" });
+		const deps = await fixture.forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const link = (await build(fixture.root, plan)).links[0];
+		const prepared = await prepareHead(
+			fixture.root,
+			fixture.state.state,
+			plan,
+			plan.queue[0],
+			plan.base.sha,
+			link.tree,
+			async () => deps.token,
+		);
+		if (!("head" in prepared)) throw new Error(`no gate merge: ${JSON.stringify(prepared)}`);
+		expect(prepared.head).not.toBe(fixture.plan.queue[0].head);
+		return prepared.head;
+	}
+	test("requeues a PR at the gate's own merge pushed while it was parked, pinned there", async () => {
+		const fixture = await fixerFixture(requeueScript);
+		await fixture.finished;
+		const merged = await gateMerge(fixture);
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+		expect(fixture.pull.head).toBe(merged);
+		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(merged));
+		expect(fixture.pull.labels).toContain("quest:merge");
+		expect(fixture.forge.comment(1)).toBeUndefined();
+		const next = await resolveQueue(REPOSITORY, undefined, fixture.deps);
+		expect(next.eject).toEqual([]);
+		expect(next.queue.map(({ head, approved }) => [head, approved])).toEqual([[merged, merged]]);
+	});
+	test("replaces the gate's own merge with a fix built on the pin, and pins the fix", async () => {
+		const fixture = await fixerFixture(fixedScript());
+		await fixture.finished;
+		const merged = await gateMerge(fixture);
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+		const fixed = fixture.pull.head!;
+		expect(fixed).not.toBe(merged);
+		expect(git(fixture.root, "rev-parse", `${fixed}^`)).toBe(fixture.plan.queue[0].head);
+		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixed));
+		expect(fixture.pull.body).toContain(`(head ${fixed})`);
+		expect(fixture.pull.labels).toContain("quest:merge");
+	});
+	test("hands back with the fixer's diagnosis at the gate's own merge, not as a moved head", async () => {
+		const fixture = await fixerFixture(
+			`printf '[{"number":1,"action":"handback","diagnosis":"behavior change required","recommendation":"run quest-iterate"}]' > quest-land-result.json`,
+		);
+		await fixture.finished;
+		const merged = await gateMerge(fixture);
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.pull.head).toBe(merged);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("behavior change required");
+		expect(fixture.forge.comment(1)).not.toContain("head moved");
+	});
+	test.each(["forged", "writer"])(
+		"hands back a %s commit at the gate merge's place, keeping the fix unpushed",
+		async (mode) => {
+			const fixture = await fixerFixture(fixedScript());
+			await fixture.finished;
+			const merged = await gateMerge(fixture);
+			// A copy of the gate's merge in everything but its timestamp, or a writer's commit on it.
+			const [tree, parents] = git(fixture.forge.origin, "show", "-s", "--format=%T|%P", merged).split("|");
+			const env = {
+				...process.env,
+				GIT_AUTHOR_NAME: "moq-bot",
+				GIT_AUTHOR_EMAIL: "moq-bot@users.noreply.github.com",
+				GIT_COMMITTER_NAME: "moq-bot",
+				GIT_COMMITTER_EMAIL: "moq-bot@users.noreply.github.com",
+				GIT_AUTHOR_DATE: "2001-01-01T00:00:00Z",
+				GIT_COMMITTER_DATE: "2001-01-01T00:00:00Z",
+			};
+			const moved = execFileSync(
+				"git",
+				[
+					"commit-tree",
+					tree,
+					...(mode === "forged" ? parents.split(" ") : [merged]).flatMap((parent) => ["-p", parent]),
+				],
+				{ cwd: fixture.forge.origin, encoding: "utf8", input: "quest land: merge tested base\n", env },
+			).trim();
+			git(fixture.forge.origin, "update-ref", "refs/heads/topic-1", moved);
+			expect(await fixture.collect()).toEqual(["handback 1"]);
+			expect(fixture.pull.head).toBe(moved);
+			expect(fixture.pull.landing).toBe(false);
+			expect(fixture.forge.comment(1)).toContain("head moved");
+		},
+	);
 	test.each([
 		[
 			"handback",
@@ -2937,8 +3205,7 @@ ${requeueScript}`);
 	test("does not import private objects through alternates", async () => {
 		const fixture = await fixerFixture(fixedScript());
 		await fixture.finished;
-		const privateRepo = tempDir();
-		git(privateRepo, "init", "--quiet");
+		const privateRepo = initRepository();
 		fixture.forge.configure(privateRepo);
 		writeFileSync(join(privateRepo, "private"), "private data");
 		git(privateRepo, "add", ".");
