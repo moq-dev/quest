@@ -19,7 +19,3 @@ so it never sees the heading. After resolving, drop a `Required` heading
 whose section is now empty. Leave other empty sections to `quest check`, which
 should report them. Test it with both sides each removing one of the last two
 entries.
-
-## Related
-
-- [Visible merge-driver fallback](/quest/m0/helpers/merge-driver.md) - the driver's other gap

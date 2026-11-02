@@ -1,20 +1,29 @@
-# [S] Deploy the Worker to kix.quest
+# [S] Deploy the Worker to quest.moq.dev
 
 ## Goal
 
-An operator registers the GitHub App and deploys `main` to `https://kix.quest`
-with GitHub sign-in pointed at it. The condition clears when
-`https://kix.quest/health` returns `{"status":"ok"}`, `https://kix.quest/setup`
-redirects to `SETUP.md`, a browser sign-in and sign-out on kix.quest succeed,
-and the App's ping to `https://kix.quest/webhooks/github` shows a successful
-delivery. Follow the Deployment section of `cloudflare/README.md` and steps 1,
-2 and 4 of `cloudflare/GITHUB.md`; delete this quest once verified.
+The Worker's checked-in origin is `https://quest.moq.dev`, and an operator
+registers the GitHub App and deploys `main` there with GitHub sign-in pointed
+at it. The condition clears when `https://quest.moq.dev/health` returns
+`{"status":"ok"}`, `https://quest.moq.dev/setup` redirects to `SETUP.md`, a
+browser sign-in and sign-out succeed, and the App's ping to
+`https://quest.moq.dev/webhooks/github` shows a successful delivery. Follow
+the Deployment section of `cloudflare/README.md` and steps 1, 2 and 4 of
+`cloudflare/GITHUB.md`; delete this quest once verified.
 
 ## Plan
 
+- ✅ Decided 2026-10-30 (user, /quest-plan): host at quest.moq.dev, not
+  kix.quest, until [the public release](/quest/m1/open.md), so nothing public
+  is launched before it works for moq-dev. Change the origin in
+  `cloudflare/wrangler.jsonc` (route and `AUTH_URL`),
+  `cloudflare/worker-configuration.d.ts`,
+  `cloudflare/github-app-manifest.json`, `quest runner`'s `DEFAULT_URL`
+  (`src/runner/cli.ts`) and its examples, and the docs that name kix.quest as
+  the live origin. The product keeps the kix name.
 - ✅ Decided 2026-10-14: deprecate kixel.quest without redirects or legacy
-  auth handling, because nobody uses it. kix.quest is the only site and
-  authentication origin. Remove the Worker's kixel.quest custom domain when
+  auth handling, because nobody uses it. quest.moq.dev is the only site and
+  authentication origin (amended 2026-10-30, was kix.quest). Remove the Worker's kixel.quest custom domain when
   deploying; the checked-in config no longer lists it.
 - Merging to `main` does not deploy: no workflow runs Wrangler, and
   deployment is a manual `bun run deploy` from `cloudflare/`.
@@ -31,11 +40,13 @@ delivery. Follow the Deployment section of `cloudflare/README.md` and steps 1,
   adds to the README's Deployment section, and confirm the rule with
   `bun run wrangler r2 bucket lifecycle list quest-output`. Until then,
   `main` has no R2 binding and needs no bucket. Decided 2026-10-18.
-- Add the `kix.quest` zone to the Worker's Cloudflare account. Keep the
+- Serve the Worker on `quest.moq.dev` from the `moq.dev` zone, which
+  already hosts `token.moq.dev`; if that zone sits in another Cloudflare
+  account, say which in `cloudflare/README.md`. Keep the
   Worker name, D1 database ID, and `AUTH_SECRET`; do not create a new
   production database.
-- Set the production GitHub App's homepage to `https://kix.quest` and
-  its callback to `https://kix.quest/api/auth/callback/github`.
+- Set the production GitHub App's homepage to `https://quest.moq.dev` and
+  its callback to `https://quest.moq.dev/api/auth/callback/github`.
 - The deploy deletes the legacy `RepositoryCoordinator` Durable Object and
   any storage it held, approved 2026-10-14 since nothing is stored. Afterwards
   remove its `exports` tombstone from `cloudflare/wrangler.jsonc`.

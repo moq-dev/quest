@@ -10,7 +10,7 @@ import { move, remove } from "../src/core";
 import { openPullRequests } from "../src/cli/claims";
 import { GitHub, type GitHubDependencies } from "../src/cli/github";
 import { main } from "../src/cli/main";
-import { ROOT_README, Tree, tempDir } from "./fixture";
+import { ROOT_README, Tree, initRepository } from "./fixture";
 
 // Each test spawns git up to a dozen times, which a busy Windows runner can stretch past 5 s.
 vi.setConfig({ testTimeout: 30_000 });
@@ -21,9 +21,9 @@ function git(dir: string, ...args: string[]): string {
 
 /** `tree` as a git repository with everything committed. */
 function committed(tree: Tree): Tree {
-	git(tree.path, "init", "-q", "-b", "main");
+	initRepository(tree.path);
 	git(tree.path, "add", "-A");
-	git(tree.path, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "init");
+	git(tree.path, "commit", "-q", "-m", "init");
 	return tree;
 }
 
@@ -152,7 +152,7 @@ describe("remove", () => {
 
 describe("quest mv", () => {
 	test("moves a quest, rewrites its links, and stages the change", async () => {
-		const tree = committed(Tree.baseline());
+		const tree = Tree.committed();
 		const out = await quest(tree, "mv", "/quest/m0/epic/one.md", "quest/m0/epic/first.md");
 		expect(out).toEqual({
 			code: 0,
@@ -169,7 +169,7 @@ describe("quest mv", () => {
 	});
 
 	test("moves an epic into a new directory", async () => {
-		const tree = committed(Tree.baseline());
+		const tree = Tree.committed();
 		const out = await quest(tree, "mv", "quest/m0/epic", "quest/m1/later/epic");
 		expect(out.stdout).toBe(
 			"R quest/m0/epic -> quest/m1/later/epic\nM quest/m0/README.md\nM quest/m1/later/epic/README.md\nM quest/m1/later/epic/two.md\n",
@@ -231,16 +231,15 @@ describe("quest mv", () => {
 	});
 
 	test("refuses a destination that exists", async () => {
-		const tree = committed(Tree.baseline());
+		const tree = Tree.committed();
 		const out = await quest(tree, "mv", "quest/m0/epic/one.md", "quest/m0/epic/two.md");
 		expect(out).toEqual({ code: 1, stdout: "", stderr: "quest: quest/m0/epic/two.md already exists\n" });
 		expect(staged(tree)).toEqual([]);
 	});
 
 	test("refuses a claimed quest", async () => {
-		const tree = committed(Tree.baseline());
-		const remote = tempDir();
-		git(remote, "init", "-q", "--bare");
+		const tree = Tree.committed();
+		const remote = initRepository(undefined, { bare: true });
 		git(tree.path, "remote", "add", "origin", remote);
 		git(tree.path, "push", "-q", "origin", "HEAD:refs/heads/quest/m0/epic/two");
 		const out = await quest(tree, "mv", "quest/m0/epic", "quest/m0/feature");
@@ -304,7 +303,7 @@ describe("quest rm", () => {
 	});
 
 	test("refuses an epic that holds quests without -r, by directory or README", async () => {
-		const tree = committed(Tree.baseline());
+		const tree = Tree.committed();
 		for (const path of ["quest/m0/epic", "quest/m0/epic/README.md"]) {
 			const out = await quest(tree, "rm", path);
 			expect(out.code).toBe(1);
@@ -316,7 +315,7 @@ describe("quest rm", () => {
 	});
 
 	test("refuses the root epic and milestones", async () => {
-		const tree = committed(Tree.baseline());
+		const tree = Tree.committed();
 		for (const path of ["quest/m0", "quest/m0/README.md", "quest/README.md"]) {
 			expect((await quest(tree, "rm", "-r", path)).stderr).toContain("is permanent");
 		}

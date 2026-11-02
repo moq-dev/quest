@@ -3,17 +3,22 @@
 // github.com remote name reach a local bare repository.
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterAll, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { claims, target } from "../src/cli/claims";
-import { type GitHubDependencies, type ObjectValue, githubRepository } from "../src/cli/github";
+import {
+	type GitHubDependencies,
+	type ObjectValue,
+	githubRepository,
+	readRemote,
+	remoteRepository,
+} from "../src/cli/github";
 import { type Output, main } from "../src/cli/main";
 import { Refusal, ago, releaseQuest, startQuest } from "../src/cli/start";
-import { EPIC_README, TWO, Tree, tempDir } from "./fixture";
+import { EPIC_README, GIT_SETTINGS, TWO, Tree, configure, initRepository, template, tempDir } from "./fixture";
 
 const ONE = "quest/m0/epic/one.md";
 const BRANCH = "quest/m0/epic/one";
@@ -27,57 +32,29 @@ function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-/** An identity, so commits work without one in the caller's configuration. */
-const IDENTITY = "[user]\n\tname = Test\n\temail = test@example.com\n";
-
-/** A new repository on main. */
-function setup(dir: string): void {
-	git(dir, "init", "-q", "-b", "main");
-	appendFileSync(join(dir, ".git", "config"), IDENTITY);
-}
-
-/**
- * Built once and copied per test, since spawning git dominates these tests: a
- * bare repository whose main holds the baseline tree, and a clone of it.
- */
-const templates = (() => {
-	let built: { bare: string; clone: string } | undefined;
-	const root = mkdtempSync(join(tmpdir(), "quest-start-"));
-	afterAll(() => rmSync(root, { recursive: true, force: true }));
-	return () => {
-		if (built) return built;
-		const bare = join(root, "bare");
-		const clone = join(root, "clone");
-		cpSync(Tree.baseline().path, clone, { recursive: true });
-		setup(clone);
-		git(clone, "add", ".");
-		git(clone, "commit", "-q", "-m", "seed");
-		git(root, "clone", "-q", "--bare", clone, bare);
-		git(clone, "remote", "add", "origin", bare);
-		git(clone, "fetch", "-q", "origin");
-		git(clone, "branch", "-q", "--set-upstream-to", "origin/main");
-		built = { bare, clone };
-		return built;
-	};
-})();
-
 /** A bare repository whose default branch holds the baseline tree. */
-function upstream(): string {
-	const bare = tempDir();
-	cpSync(templates().bare, bare, { recursive: true });
-	return bare;
-}
+const upstream = template((dir) => {
+	git(dir, "clone", "-q", "--bare", Tree.committed().path, ".");
+	configure(dir, GIT_SETTINGS);
+});
+
+/** The committed baseline, tracking origin's main, with no origin URL until `clone` sets one. */
+const baselineClone = template((dir) => {
+	Tree.committed(dir);
+	git(dir, "remote", "add", "origin", upstream());
+	git(dir, "fetch", "-q", "origin");
+	git(dir, "branch", "-q", "--set-upstream-to", "origin/main");
+	git(dir, "config", "--unset", "remote.origin.url");
+});
 
 /**
  * A clone of the baseline whose origin is `url`, rewritten to the bare
  * repositories in `routes`. Without routes, origin is a bare path.
  */
 function clone(url: string, routes: Record<string, string> = {}): string {
-	const dir = tempDir();
-	cpSync(templates().clone, dir, { recursive: true });
-	git(dir, "remote", "set-url", "origin", url);
-	// git config escapes Windows paths, which a hand-written section would not.
-	for (const [from, to] of Object.entries(routes)) git(dir, "config", `url.${to}.insteadOf`, from);
+	const dir = baselineClone();
+	configure(dir, { "remote.origin.url": url });
+	for (const [from, to] of Object.entries(routes)) configure(dir, { [`url.${to}.insteadOf`]: from });
 	return dir;
 }
 
@@ -278,10 +255,9 @@ describe("start on GitHub", () => {
 	});
 
 	test("links the quest by its repository path when the tree is below the top level", async () => {
-		const bare = tempDir();
-		git(bare, "init", "-q", "--bare", "-b", "main");
+		const bare = initRepository(undefined, { bare: true });
 		const work = tempDir();
-		setup(work);
+		initRepository(work);
 		mkdirSync(join(work, "sub"));
 		cpSync(join(Tree.baseline().path, "quest"), join(work, "sub", "quest"), { recursive: true });
 		git(work, "add", ".");
@@ -319,8 +295,7 @@ describe("start on GitHub", () => {
 
 	test("reaches a fork's parent with the scheme a URL alias resolves to", async () => {
 		const bare = upstream();
-		const forkBare = tempDir();
-		git(forkBare, "init", "-q", "--bare", "-b", "main");
+		const forkBare = initRepository(undefined, { bare: true });
 		const github = new FakeGitHub();
 		github.fork("me/project");
 		// `corp:me/project` expands to the fork's HTTPS URL, so the parent is read over HTTPS too.
@@ -390,8 +365,7 @@ describe("start on GitHub", () => {
 
 	test("pushes where the push URL points, as a fork, when the remote fetches from upstream", async () => {
 		const bare = upstream();
-		const forkBare = tempDir();
-		git(forkBare, "init", "-q", "--bare", "-b", "main");
+		const forkBare = initRepository(undefined, { bare: true });
 		const github = new FakeGitHub();
 		github.fork("me/project");
 		const forkSsh = "git@github.com:me/project.git";
@@ -462,8 +436,7 @@ describe("start on GitHub", () => {
 
 	test("a fork pushes to itself and opens the PR on its parent", async () => {
 		const bare = upstream();
-		const forkBare = tempDir();
-		git(forkBare, "init", "-q", "--bare", "-b", "main");
+		const forkBare = initRepository(undefined, { bare: true });
 		const github = new FakeGitHub();
 		github.fork("me/project");
 		const work = clone(FORK, { [FORK]: forkBare, [UPSTREAM]: bare });
@@ -485,8 +458,7 @@ describe("start on GitHub", () => {
 	});
 
 	test("a fork whose parent keeps no quests claims on itself", async () => {
-		const parentBare = tempDir();
-		git(parentBare, "init", "-q", "--bare", "-b", "main");
+		const parentBare = initRepository(undefined, { bare: true });
 		const forkBare = upstream();
 		const github = new FakeGitHub();
 		github.files.delete("example/project/quest/README.md");
@@ -507,8 +479,7 @@ describe("start on GitHub", () => {
 		["keeps quests too", "example/project", true],
 	])("a fork of a fork with quests whose parent %s claims on %s", async (_, expected, rooted) => {
 		const bares: Record<string, string> = { "example/project": upstream(), "me/project": upstream() };
-		const ownBare = tempDir();
-		git(ownBare, "init", "-q", "--bare", "-b", "main");
+		const ownBare = initRepository(undefined, { bare: true });
 		const github = new FakeGitHub();
 		if (!rooted) github.files.delete("example/project/quest/README.md");
 		github.files.set("me/project/quest/README.md", 200);
@@ -526,13 +497,11 @@ describe("start on GitHub", () => {
 	});
 
 	test("looks up a parent's README below a directory whose name a URL would cut short", async () => {
-		const parentBare = tempDir();
-		git(parentBare, "init", "-q", "--bare", "-b", "main");
-		const forkBare = tempDir();
-		git(forkBare, "init", "-q", "--bare", "-b", "main");
+		const parentBare = initRepository(undefined, { bare: true });
+		const forkBare = initRepository(undefined, { bare: true });
 		const dir = "sub#1";
 		const work = tempDir();
-		setup(work);
+		initRepository(work);
 		mkdirSync(join(work, dir));
 		cpSync(join(Tree.baseline().path, "quest"), join(work, dir, "quest"), { recursive: true });
 		git(work, "add", ".");
@@ -663,10 +632,9 @@ describe("start on another forge", () => {
 	});
 
 	test("claims a quest whose tree is below the repository root", async () => {
-		const bare = tempDir();
-		git(bare, "init", "-q", "--bare", "-b", "main");
+		const bare = initRepository(undefined, { bare: true });
 		const work = tempDir();
-		setup(work);
+		initRepository(work);
 		mkdirSync(join(work, "sub"));
 		cpSync(join(Tree.baseline().path, "quest"), join(work, "sub", "quest"), { recursive: true });
 		git(work, "add", ".");
@@ -779,8 +747,7 @@ test("claims reports the earliest open PR on each branch", async () => {
 
 test("claims from a fork count the parent's branches and PRs, and the fork's own", async () => {
 	const bare = upstream();
-	const forkBare = tempDir();
-	git(forkBare, "init", "-q", "--bare", "-b", "main");
+	const forkBare = initRepository(undefined, { bare: true });
 	const github = new FakeGitHub();
 	github.fork("me/project");
 	const work = clone(FORK, { [FORK]: forkBare, [UPSTREAM]: bare });
@@ -825,6 +792,61 @@ test("githubRepository reads HTTPS, ssh://, and scp-like remote URLs", () => {
 	]) {
 		expect(githubRepository(url), url).toBeNull();
 	}
+});
+
+test("readRemote reads configured URLs, and rewritten ones as git uses them", () => {
+	const dir = initRepository();
+	expect(readRemote(dir, "origin")).toBeNull();
+	// A name with regex characters matches only itself.
+	configure(dir, { "remote.a.b+.url": "https://github.com/example/other.git" });
+	expect(readRemote(dir, "a.b")).toBeNull();
+	expect(readRemote(dir, "a.b+")?.used()).toEqual({
+		fetch: "https://github.com/example/other.git",
+		push: "https://github.com/example/other.git",
+	});
+
+	configure(dir, {
+		"remote.origin.url": "https://github.com/example/project.git",
+		"remote.origin.pushurl": "https://github.com/me/project.git",
+	});
+	const plain = readRemote(dir, "origin")!;
+	expect(plain.configured).toEqual({
+		fetch: "https://github.com/example/project.git",
+		push: "https://github.com/me/project.git",
+	});
+	expect(plain.used()).toEqual({
+		fetch: "https://github.com/example/project.git",
+		push: "https://github.com/me/project.git",
+	});
+	expect(remoteRepository(plain).repository).toEqual({ owner: "example", repo: "project" });
+	expect(remoteRepository(plain, true).repository).toEqual({ owner: "me", repo: "project" });
+
+	// A rewrite to another host still names GitHub by the configured URL, and git applies it.
+	configure(dir, { "url.C:\\srv\\git\\.insteadOf": "https://github.com/" });
+	const rewritten = readRemote(dir, "origin")!;
+	expect(rewritten.used()).toEqual({
+		fetch: "C:\\srv\\git\\example/project.git",
+		push: "C:\\srv\\git\\me/project.git",
+	});
+	expect(remoteRepository(rewritten)).toEqual({
+		url: "https://github.com/example/project.git",
+		repository: { owner: "example", repo: "project" },
+	});
+});
+
+test("readRemote uses the first of several URLs, as git does, with or without rewrites", () => {
+	const dir = initRepository();
+	git(dir, "remote", "add", "origin", "https://github.com/example/first.git");
+	git(dir, "config", "--add", "remote.origin.url", "https://github.com/example/second.git");
+	git(dir, "config", "--add", "remote.origin.pushurl", "https://github.com/me/first.git");
+	git(dir, "config", "--add", "remote.origin.pushurl", "https://github.com/me/second.git");
+	const first = { fetch: "https://github.com/example/first.git", push: "https://github.com/me/first.git" };
+	expect(readRemote(dir, "origin")!.used()).toEqual(first);
+	// A partial clone's filter follows its fetch URL in `git remote -v`.
+	git(dir, "config", "remote.origin.promisor", "true");
+	git(dir, "config", "remote.origin.partialclonefilter", "blob:none");
+	git(dir, "config", "url.https://github.com/.insteadOf", "https://example.invalid/");
+	expect(readRemote(dir, "origin")!.used()).toEqual(first);
 });
 
 test("ago rounds to minutes, hours, then days", () => {
