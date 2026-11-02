@@ -34,10 +34,27 @@
         "type": "github"
       }
     },
+    "quest-pinned": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793505952,
+        "narHash": "sha256-jDq0fsxzLGIu6FsFfIsnUgvb23Pb+Rja4KZwIxGa34I=",
+        "owner": "moq-dev",
+        "repo": "quest",
+        "rev": "7a191e6197c691f477b4c55edba34cc425c3e77c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "moq-dev",
+        "repo": "quest",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "quest-pinned": "quest-pinned"
       }
     },
     "systems": {

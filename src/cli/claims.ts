@@ -8,10 +8,12 @@ import { handedBack, landed } from "../core";
 import {
 	type GitHubDependencies,
 	type Repository,
+	type Remote,
 	GitHub,
 	object,
+	readRemote,
 	remoteRepository,
-	remoteUrl,
+	requireRemote,
 	string,
 } from "./github";
 import { type Snapshot, snapshot } from "./tree";
@@ -54,8 +56,8 @@ export interface ClaimDependencies {
 export interface Upstream {
 	/** The remote's name, or the upstream's URL when that is an ancestor; git reads upstream branches from it. */
 	git: string;
-	/** The URL the remote pushes to, where a claim branch is pushed. */
-	push: string;
+	/** The URL the remote pushes to, where a claim branch is pushed. Read from git on first use. */
+	readonly push: string;
 	github: {
 		client: GitHub;
 		/** Where PRs open and claims are checked. */
@@ -63,6 +65,8 @@ export interface Upstream {
 		/** The repository the remote pushes to: `repository` itself, or a fork. */
 		head: Repository;
 		defaultBranch: string;
+		/** Where this checkout's tree sits in the repository: empty at the top level, else a path ending in `/`. */
+		prefix: string;
 	} | null;
 }
 
@@ -74,29 +78,38 @@ export interface Upstream {
  * remote. Off GitHub, the remote is its own upstream. The head repository is
  * where the remote pushes, which may be a fork even when it fetches from upstream.
  */
-export async function upstream(root: string, remote: string, deps: ClaimDependencies): Promise<Upstream> {
-	const source = remoteRepository(root, remote);
-	const push = gitOutput(root, ["remote", "get-url", "--push", remote]);
-	if (source.repository === null) return { git: remote, push, github: null };
+export async function upstream(root: string, remote: Remote, deps: ClaimDependencies): Promise<Upstream> {
+	const source = remoteRepository(remote);
+	if (source.repository === null)
+		return {
+			git: remote.name,
+			get push() {
+				return remote.used().push;
+			},
+			github: null,
+		};
 
 	const client = new GitHub(deps.github());
 	const self = await repositoryInfo(client, source.repository);
 	// Push somewhere other than the fetched repository, such as a fork, and that is the head; a push
 	// URL off GitHub can open no PR, so it falls back to the fetched repository.
-	const pushed = remoteRepository(root, remote, true).repository;
+	const pushed = remoteRepository(remote, true).repository;
 	const head =
 		pushed === null || same(pushed, self.repository)
 			? self.repository
 			: (await repositoryInfo(client, pushed)).repository;
 	// The README where this checkout's tree sits, which may be below the top level.
-	const readme = `${gitOutput(root, ["rev-parse", "--show-prefix"])}quest/README.md`;
+	const prefix = gitOutput(root, ["rev-parse", "--show-prefix"]);
 	let up = self;
-	while (up.parent !== null && (await has(client, up.parent, readme))) up = await repositoryInfo(client, up.parent);
+	while (up.parent !== null && (await has(client, up.parent, `${prefix}quest/README.md`)))
+		up = await repositoryInfo(client, up.parent);
 	return {
 		// Reach an ancestor the way the remote is reached, so the same credentials work.
-		git: up === self ? remote : /^https:/.test(source.url) ? up.https : up.ssh,
-		push,
-		github: { client, repository: up.repository, head, defaultBranch: up.defaultBranch },
+		git: up === self ? remote.name : /^https:/.test(source.url) ? up.https : up.ssh,
+		get push() {
+			return remote.used().push;
+		},
+		github: { client, repository: up.repository, head, defaultBranch: up.defaultBranch, prefix },
 	};
 }
 
@@ -135,12 +148,25 @@ export function repositoryPath(repository: Repository): string {
 
 /** The `quest/*` branches on `remote` (a name or URL), with their tips. Plain git, so it works with any forge. */
 export function remoteBranches(root: string, remote: string): Map<string, string> {
-	const branches = new Map<string, string>();
-	for (const line of gitOutput(root, ["ls-remote", remote, "refs/heads/quest/*"]).split("\n")) {
+	return questBranches(listRemote(root, remote, ["refs/heads/quest/*"]));
+}
+
+/** The refs on `remote` matching `patterns`, by name, with their tips. */
+function listRemote(root: string, remote: string, patterns: string[]): Map<string, string> {
+	const refs = new Map<string, string>();
+	for (const line of gitOutput(root, ["ls-remote", remote, ...patterns]).split("\n")) {
 		if (line === "") continue;
 		const [sha, ref] = line.split("\t");
-		branches.set(ref.replace(/^refs\/heads\//, ""), sha);
+		refs.set(ref, sha);
 	}
+	return refs;
+}
+
+/** The `quest/*` branches among `refs`, by branch name. */
+function questBranches(refs: Map<string, string>): Map<string, string> {
+	const branches = new Map<string, string>();
+	for (const [ref, sha] of refs)
+		if (ref.startsWith("refs/heads/quest/")) branches.set(ref.slice("refs/heads/".length), sha);
 	return branches;
 }
 
@@ -187,15 +213,14 @@ export async function claims(
  * The upstream of `remote` for reading claims, warning when off GitHub that
  * only branches count. Without the remote it warns and returns `null`.
  */
-export async function reach(root: string, remote: string, deps: ClaimDependencies): Promise<Upstream | null> {
-	try {
-		remoteUrl(root, remote);
-	} catch {
-		deps.warn(`no ${remote} remote, so claims were not checked`);
+export async function reach(root: string, name: string, deps: ClaimDependencies): Promise<Upstream | null> {
+	const remote = readRemote(root, name);
+	if (remote === null) {
+		deps.warn(`no ${name} remote, so claims were not checked`);
 		return null;
 	}
 	const up = await upstream(root, remote, deps);
-	if (up.github === null) deps.warn(`${remote} is not on GitHub, so only its branches were checked for claims`);
+	if (up.github === null) deps.warn(`${name} is not on GitHub, so only its branches were checked for claims`);
 	return up;
 }
 
@@ -211,15 +236,21 @@ export interface Holdings {
 }
 
 /**
- * Which of `branches` someone holds. A fork's own branches and PRs count too,
+ * Which of `branches` someone holds. `tips` are the upstream's `quest/*`
+ * branches, when already read. A fork's own branches and PRs count too,
  * so a claim pushed there is seen before its PR opens. On GitHub, a branch
  * whose tip is a merged PR's head holds nothing: its work landed. A closed,
  * unmerged PR's branch still holds its quest, since that work may be wanted back.
  */
-export async function held(root: string, up: Upstream, branches: string[]): Promise<Holdings> {
+export async function held(
+	root: string,
+	up: Upstream,
+	branches: string[],
+	tips: Map<string, string> = remoteBranches(root, up.git),
+): Promise<Holdings> {
 	// Where claim branches live: upstream, then the fork the remote pushes to.
 	const sources: { repository: Repository | null; tips: Map<string, string> }[] = [
-		{ repository: up.github?.repository ?? null, tips: remoteBranches(root, up.git) },
+		{ repository: up.github?.repository ?? null, tips },
 	];
 	const pulls: OpenPull[] = [];
 	if (up.github) {
@@ -277,27 +308,34 @@ export async function mergedPull(
 }
 
 /** Where a claim lands: the remote, its upstream, and the upstream default branch's tip and quest tree. */
-export interface Target {
+export interface Target extends UpstreamRefs {
 	remote: string;
 	up: Upstream;
-	/** The upstream default branch's tip, fetched. */
-	base: string;
 	tree: Snapshot;
 }
 
 /** The target for claims pushed to `remote`, read from the fetched upstream default branch. */
 export async function target(root: string, remote: string, deps: ClaimDependencies): Promise<Target> {
-	const up = await upstream(root, remote, deps);
-	const base = upstreamHead(root, up.git);
-	return { remote, up, base, tree: snapshot(root, base) };
+	const up = await upstream(root, requireRemote(root, remote), deps);
+	const refs = upstreamRefs(root, up.git);
+	return { remote, up, ...refs, tree: snapshot(root, refs.base) };
 }
 
-/** The tip of `remote`'s default branch (a name or URL), fetched so it can be read and built on. */
-export function upstreamHead(root: string, remote: string): string {
-	const sha = gitOutput(root, ["ls-remote", remote, "HEAD"]).split("\t")[0];
-	if (!sha) throw new Error(`${remote} has no default branch`);
-	ensure(root, remote, sha);
-	return sha;
+/** What the upstream holds, read with one `ls-remote`. */
+export interface UpstreamRefs {
+	/** The default branch's tip, fetched so it can be read and built on. */
+	base: string;
+	/** The `quest/*` branches, with their tips. */
+	branches: Map<string, string>;
+}
+
+/** The refs of `remote` (a name or URL) that claims read. */
+export function upstreamRefs(root: string, remote: string): UpstreamRefs {
+	const refs = listRemote(root, remote, ["HEAD", "refs/heads/quest/*"]);
+	const base = refs.get("HEAD");
+	if (!base) throw new Error(`${remote} has no default branch`);
+	ensure(root, remote, base);
+	return { base, branches: questBranches(refs) };
 }
 
 /** Make `sha` from `remote` available locally. */
