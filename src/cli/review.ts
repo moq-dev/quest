@@ -12,6 +12,7 @@ import { join, posix } from "node:path";
 
 import { type HarnessName, LINE_LIMIT, boundedLines, strippedEnvironment } from "./agent";
 import { gitOutput } from "./claims";
+import { programEnvironment, requireProgram } from "./program";
 import { save } from "./worktree";
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
@@ -19,21 +20,11 @@ export class ReviewInputError extends Error {}
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
 
-/**
- * Each reviewer's model and effort: `default` for routine work, and `deep`
- * for a high-stakes change such as security, a wire format or public API, or a
- * risk of data loss. `--model` and `--effort` override either.
- */
+/** Each reviewer's pinned model and effort; `--model` and `--effort` override them. */
 export const MODELS = {
-	claude: {
-		default: { model: "claude-opus-5-5", effort: "medium" },
-		deep: { model: "claude-fable-5-1", effort: "medium" },
-	},
-	codex: {
-		default: { model: "gpt-6.1-sol", effort: "medium" },
-		deep: { model: "gpt-6-astra", effort: "medium" },
-	},
-} as const satisfies Record<HarnessName, Record<"default" | "deep", { model: string; effort: string }>>;
+	claude: { model: "claude-opus-5-5", effort: "medium" },
+	codex: { model: "gpt-6.1-sol", effort: "medium" },
+} as const satisfies Record<HarnessName, { model: string; effort: string }>;
 
 export interface Finding {
 	/** Repository-relative path. */
@@ -115,8 +106,6 @@ export interface ReviewOptions {
 	base?: string;
 	/** The reviewer; defaults to the harness this command is not running under. */
 	harness?: HarnessName;
-	/** Review with the reviewer's `deep` tier in `MODELS`. */
-	deep?: boolean;
 	model?: string;
 	effort?: string;
 	/** The author's fixes and refutations of the last round's findings. */
@@ -375,10 +364,25 @@ const reported = (usage: Omit<Usage, "turn"> | undefined): usage is Omit<Usage, 
 /** The longest stderr tail kept for an error message. */
 const TAIL = 16 * 1024;
 
-/** Run one turn in `cwd`, forwarding termination signals so the reviewer never outlives the command. */
+/**
+ * Run one turn in `cwd`, forwarding termination signals so the reviewer never
+ * outlives the command. The CLI is found on PATH's absolute directories, never
+ * in the checkout under review, and the CLI's own commands keep only those too.
+ */
 function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string, reader?: Reader) {
 	return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
-		const child = spawn(argv[0], argv.slice(1), { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+		let program: string;
+		try {
+			program = requireProgram(argv[0], env);
+		} catch (error) {
+			reject(new ReviewInputError((error as Error).message));
+			return;
+		}
+		const child = spawn(program, argv.slice(1), {
+			cwd,
+			env: programEnvironment(env),
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 		const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 		const handlers = signals.map((name) => [name, () => child.kill(name)] as const);
 		for (const [name, handler] of handlers) process.on(name, handler);
@@ -616,7 +620,7 @@ function load(path: string): State | undefined {
 
 /** Review the checkout's committed branch: one round, resuming the branch's session unless `fresh`. */
 export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Round> {
-	// Native Windows searches the checkout before PATH, so a checkout could supply its own reviewer CLI.
+	// Native Windows installs the reviewer CLIs as batch shims, which `run` cannot start without a shell.
 	if (process.platform === "win32")
 		throw new ReviewInputError("quest review does not support native Windows yet; use WSL");
 	const root = gitOutput(options.root, ["rev-parse", "--show-toplevel"]);
@@ -668,7 +672,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const schemaFile = join(dir, "schema.json");
 	save(schemaFile, SCHEMA);
 	const files = baseInstructions(root, baseSha, changed);
-	const tier = MODELS[harness][options.deep ? "deep" : "default"];
+	const tier = MODELS[harness];
 	const context: Context = {
 		base: baseRef,
 		instructions: instructionsPrompt(baseSha, files),

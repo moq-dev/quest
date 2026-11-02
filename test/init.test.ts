@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { REFERENCE_LINE, init, uninstall } from "../src/cli/setup";
+import { HOOK_COMMAND, REFERENCE_LINE, init, uninstall } from "../src/cli/setup";
 import { SKILLS } from "../src/cli/skills";
 import { tempDir } from "./fixture";
 
@@ -339,3 +339,67 @@ test("uninstall removes stubs that older versions installed", () => {
 	expect(existsSync(join(dir, ".claude"))).toBe(false);
 	expect(existsSync(join(dir, ".agents"))).toBe(false);
 });
+
+const QUEST_HOOK = { type: "command", command: HOOK_COMMAND };
+const SESSION_HOOK = { hooks: [{ type: "command", command: "bash .claude/hooks/direnv.sh" }] };
+
+test("init installs Quest's worktree hooks in Claude's project settings, and uninstall removes them", () => {
+	const dir = tempDir();
+	init(dir);
+	const settings = JSON.parse(read(dir, ".claude/settings.json"));
+	expect(Object.keys(settings.hooks)).toEqual(["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"]);
+	for (const groups of Object.values(settings.hooks)) expect(groups).toEqual([{ hooks: [QUEST_HOOK] }]);
+	uninstall(dir);
+	expect(existsSync(join(dir, ".claude"))).toBe(false);
+});
+
+test("init merges hooks into existing settings, keeping their formatting, and uninstall restores them", () => {
+	const dir = tempDir();
+	mkdirSync(join(dir, ".claude"));
+	const original = {
+		$schema: "https://json.schemastore.org/claude-code-settings.json",
+		hooks: { SessionStart: [SESSION_HOOK], SubagentStop: [SESSION_HOOK] },
+	};
+	const text = `${JSON.stringify(original, null, "\t")}\n`;
+	writeFileSync(join(dir, ".claude/settings.json"), text);
+	expect(init(dir)).toContain(".claude/settings.json");
+	const merged = read(dir, ".claude/settings.json");
+	expect(merged).toContain('\n\t"hooks"');
+	const settings = JSON.parse(merged);
+	expect(settings.hooks.SessionStart).toEqual([SESSION_HOOK]);
+	expect(settings.hooks.SubagentStop).toEqual([SESSION_HOOK, { hooks: [QUEST_HOOK] }]);
+	expect(init(dir)).not.toContain(".claude/settings.json");
+	expect(uninstall(dir)).toContain(".claude/settings.json");
+	expect(read(dir, ".claude/settings.json")).toBe(text);
+});
+
+test("uninstall removes only Quest's handler from a group it shares", () => {
+	const dir = tempDir();
+	mkdirSync(join(dir, ".claude"));
+	const shared = { matcher: "", hooks: [QUEST_HOOK, SESSION_HOOK.hooks[0]] };
+	writeFileSync(join(dir, ".claude/settings.json"), JSON.stringify({ hooks: { SubagentStart: [shared] } }));
+	init(dir);
+	uninstall(dir);
+	expect(JSON.parse(read(dir, ".claude/settings.json"))).toEqual({
+		hooks: { SubagentStart: [{ matcher: "", hooks: SESSION_HOOK.hooks }] },
+	});
+});
+
+for (const [why, content, error] of [
+	[
+		"another WorktreeCreate hook",
+		JSON.stringify({ hooks: { WorktreeCreate: [SESSION_HOOK] } }),
+		"already has a WorktreeCreate hook",
+	],
+	["invalid JSON", "{", "is not valid JSON"],
+	["hooks that are not hook groups", JSON.stringify({ hooks: { SubagentStop: {} } }), "not a list of hook groups"],
+] as const) {
+	test(`init refuses settings with ${why} and writes nothing`, () => {
+		const dir = tempDir();
+		mkdirSync(join(dir, ".claude"));
+		writeFileSync(join(dir, ".claude/settings.json"), content);
+		const before = snapshot(dir);
+		expect(() => init(dir)).toThrow(error);
+		expect(snapshot(dir)).toEqual(before);
+	});
+}

@@ -2,7 +2,7 @@
 
 ## Goal
 
-A maintainer starts ready work through kix.quest, follows it through agent
+A maintainer starts ready work through kix, follows it through agent
 summaries, answers its questions, and receives a normal contribution PR. New
 PR notifications present useful next actions, including explicitly
 requested iteration, in the same decision UI.
@@ -68,4 +68,4 @@ Earlier guidance:
 
 ## Required
 
-- [Job sandbox](/quest/m0/kix/sandbox/README.md) - safe iteration on PRs with contributors' commits
+- [Job sandbox](/quest/m0/kix/sandbox/README.md) - iterate and merge jobs on approved kix-pushed heads, with opencode sandboxed

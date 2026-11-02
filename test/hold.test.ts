@@ -28,6 +28,8 @@ class FakePull {
 	mergeState = "BLOCKED";
 	queue = false;
 	allowAutoMerge: boolean | null = true;
+	/** The repository's merge method settings, hidden from the token when null. */
+	methods: Record<string, boolean> | null = null;
 	baseRef = "main";
 	/** Runs after each pull request read, to change it between reads. */
 	afterRead?: () => void;
@@ -44,6 +46,8 @@ class FakePull {
 	readonly writes: string[] = [];
 	/** Runs before each label is added, as when another session adds one at the same moment. */
 	beforeAdd?: () => void;
+	/** Runs after each label is added, as when another session adds one a moment later. */
+	afterAdd?: () => void;
 	beforeAutoMerge?: () => string | undefined;
 	reads = 0;
 	private clock = Date.parse("2026-10-21T12:00:00Z");
@@ -76,12 +80,16 @@ class FakePull {
 		const body = init.body ? (JSON.parse(String(init.body)) as ObjectValue) : {};
 		const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status });
 		if (url.pathname === "/repos/example/project")
-			return json(200, this.allowAutoMerge === null ? {} : { allow_auto_merge: this.allowAutoMerge });
+			return json(200, {
+				...(this.allowAutoMerge === null ? {} : { allow_auto_merge: this.allowAutoMerge }),
+				...this.methods,
+			});
 		if (url.pathname === "/graphql")
 			return json(200, this.graphql(String(body.query), body.variables as ObjectValue));
 		if (url.pathname === "/repos/example/project/issues/7/labels" && method === "POST") {
 			this.beforeAdd?.();
 			for (const name of body.labels as string[]) this.label(name);
+			this.afterAdd?.();
 			this.writes.push(`add ${(body.labels as string[]).join(",")}`);
 			return json(
 				200,
@@ -181,153 +189,183 @@ async function refused(work: Promise<unknown>): Promise<string> {
 }
 
 describe("taking a PR", () => {
-	test("labels it with its state and prints the event that added the label as the token", async () => {
+	test("labels it quest:active and prints the event that added the label as the token", async () => {
 		const pull = new FakePull();
-		const hold = await take(PR, "iterate", undefined, pull.deps());
-		expect(hold).toEqual({ label: "quest:iterate", token: "LabeledEvent_1" });
-		expect(pull.labels).toEqual(["quest:iterate"]);
+		const hold = await take(PR, undefined, pull.deps());
+		expect(hold).toEqual({ label: "quest:active", token: "LabeledEvent_1" });
+		expect(pull.labels).toEqual(["quest:active"]);
 	});
 
 	test("refuses a draft its starter still holds, and takes one handed back", async () => {
 		const pull = new FakePull();
 		pull.draft = true;
-		expect(await refused(take(PR, "ready", undefined, pull.deps()))).toContain("its starter still holds");
+		expect(await refused(take(PR, undefined, pull.deps()))).toContain("its starter still holds");
 		expect(pull.writes).toEqual([]);
 
 		pull.body = "Summary.\r\n\r\n## Decisions needed\r\n\r\n1. Pick one.\r\n";
-		expect((await take(PR, "ready", undefined, pull.deps())).label).toBe("quest:ready");
+		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
 	});
 
 	test("refuses a merged or closed PR", async () => {
 		for (const state of ["MERGED", "CLOSED"]) {
 			const pull = new FakePull();
 			pull.state = state;
-			expect(await refused(take(PR, "iterate", undefined, pull.deps()))).toContain(
+			expect(await refused(take(PR, undefined, pull.deps()))).toContain(
 				`is ${state.toLowerCase()}; a push now would bring its branch back`,
 			);
 			expect(pull.writes).toEqual([]);
 		}
 	});
 
-	test("refuses a second session taking the same state, naming the holder's token", async () => {
+	test("refuses a second session, naming the holder's token", async () => {
 		const pull = new FakePull();
-		const first = await take(PR, "merge", undefined, pull.deps());
-		const message = await refused(take(PR, "merge", undefined, pull.deps()));
-		expect(message).toContain(`held by quest:merge, added just now as token ${first.token}`);
-		expect(pull.labels).toEqual(["quest:merge"]);
+		const first = await take(PR, undefined, pull.deps());
+		const message = await refused(take(PR, undefined, pull.deps()));
+		expect(message).toContain(`held by quest:active, added just now as token ${first.token}`);
+		expect(pull.labels).toEqual(["quest:active"]);
 	});
 
-	test("in a race for one PR, the first label added keeps it and the later one backs off", async () => {
+	test.each(["quest:iterate", "quest:ready", "quest:kix"])(
+		"refuses while %s holds it, as an older quest version or kix adds",
+		async (label) => {
+			const pull = new FakePull();
+			const token = pull.label(label);
+			expect(await refused(take(PR, undefined, pull.deps()))).toContain(`held by ${label}`);
+			expect(pull.labels).toEqual([label]);
+			// Its token releases it.
+			expect(await release(PR, token!, pull.deps())).toBe(label);
+			expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
+		},
+	);
+
+	test("ignores the quest:merge label older quest versions left on queued PRs", async () => {
 		const pull = new FakePull();
-		// Both sessions see no label, then both add theirs before either rereads.
-		const [iterate, merge] = await Promise.allSettled([
-			take(PR, "iterate", undefined, pull.deps()),
-			take(PR, "merge", undefined, pull.deps()),
-		]);
-		expect(iterate).toEqual({ status: "fulfilled", value: { label: "quest:iterate", token: "LabeledEvent_1" } });
-		expect(merge.status).toBe("rejected");
-		expect((merge as PromiseRejectedResult).reason).toBeInstanceOf(Refusal);
-		expect(pull.labels).toEqual(["quest:iterate"]);
-		expect(pull.writes).toEqual(["add quest:iterate", "add quest:merge", "remove quest:merge"]);
+		pull.label("quest:merge");
+		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
+		expect(pull.labels).toEqual(["quest:merge", "quest:active"]);
 	});
 
 	test("backs off when another session's label lands between its check and its add", async () => {
 		const pull = new FakePull();
 		pull.beforeAdd = () => {
 			pull.beforeAdd = undefined;
-			pull.label("quest:merge");
+			pull.label("quest:iterate");
 		};
-		expect(await refused(take(PR, "iterate", undefined, pull.deps()))).toContain("held by quest:merge");
-		expect(pull.labels).toEqual(["quest:merge"]);
-	});
-
-	test("swaps the label its token holds, and taking its own state again keeps the token", async () => {
-		const pull = new FakePull();
-		const iterate = await take(PR, "iterate", undefined, pull.deps());
-		expect(await take(PR, "iterate", iterate.token, pull.deps())).toEqual(iterate);
-		const merge = await take(PR, "merge", iterate.token, pull.deps());
-		expect(merge).toEqual({ label: "quest:merge", token: "LabeledEvent_2" });
-		expect(pull.labels).toEqual(["quest:merge"]);
-		expect(pull.writes).toEqual(["add quest:iterate", "add quest:merge", "remove quest:iterate"]);
-	});
-
-	test("refuses a swap once another session holds the label", async () => {
-		const pull = new FakePull();
-		const stale = await take(PR, "iterate", undefined, pull.deps());
-		pull.labels = [];
-		const current = await take(PR, "iterate", undefined, pull.deps());
-		expect(await refused(take(PR, "merge", stale.token, pull.deps()))).toContain(
-			`quest:iterate was added to ${URL_} again after ${stale.token}`,
-		);
-		expect(await refused(take(PR, "merge", "LabeledEvent_99", pull.deps()))).toContain("is not an event");
+		expect(await refused(take(PR, undefined, pull.deps()))).toContain("held by quest:iterate");
 		expect(pull.labels).toEqual(["quest:iterate"]);
+		expect(pull.writes).toEqual(["add quest:active", "remove quest:active"]);
+	});
+
+	test("keeps the PR when another session's label lands after its own", async () => {
+		const pull = new FakePull();
+		pull.afterAdd = () => {
+			pull.afterAdd = undefined;
+			pull.label("quest:iterate");
+		};
+		expect(await take(PR, undefined, pull.deps())).toEqual({ label: "quest:active", token: "LabeledEvent_1" });
+		// The later session sees the earlier label and backs off.
+		expect(pull.labels).toEqual(["quest:active", "quest:iterate"]);
+	});
+
+	test("keeps the hold its token names, and swaps an older version's label for quest:active", async () => {
+		const pull = new FakePull();
+		const hold = await take(PR, undefined, pull.deps());
+		expect(await take(PR, hold.token, pull.deps())).toEqual(hold);
+		expect(pull.writes).toEqual(["add quest:active"]);
+
+		const legacy = new FakePull();
+		const token = legacy.label("quest:ready")!;
+		expect(await take(PR, token, legacy.deps())).toEqual({ label: "quest:active", token: "LabeledEvent_2" });
+		expect(legacy.labels).toEqual(["quest:active"]);
+		expect(legacy.writes).toEqual(["add quest:active", "remove quest:ready"]);
+	});
+
+	test("refuses a token once another session holds the label", async () => {
+		const pull = new FakePull();
+		const stale = await take(PR, undefined, pull.deps());
+		pull.labels = [];
+		const current = await take(PR, undefined, pull.deps());
+		expect(await refused(take(PR, stale.token, pull.deps()))).toContain(
+			`quest:active was added to ${URL_} again after ${stale.token}`,
+		);
+		expect(await refused(take(PR, "LabeledEvent_99", pull.deps()))).toContain("is not an event");
+		expect(pull.labels).toEqual(["quest:active"]);
 		expect(current.token).toBe("LabeledEvent_2");
 	});
 });
 
-describe("ready --done", () => {
-	test("drops the Decisions needed section and marks the draft ready", async () => {
+describe("ready", () => {
+	test("drops the Decisions needed section and marks the draft ready, keeping the hold", async () => {
 		const pull = new FakePull();
 		pull.draft = true;
 		pull.body = "Summary.\n\n## Decisions needed\n\n1. Pick one.\n\n## Validation\n\nTests pass.";
-		const { token } = await take(PR, "iterate", undefined, pull.deps());
-		const hold = await finish(PR, token, pull.deps());
-		expect(hold.label).toBe("quest:ready");
+		const hold = await take(PR, undefined, pull.deps());
+		expect(await finish(PR, hold.token, pull.deps())).toEqual(hold);
 		expect(pull.body).toBe("Summary.\n\n## Validation\n\nTests pass.");
 		expect(pull.draft).toBe(false);
+		expect(pull.labels).toEqual(["quest:active"]);
 		expect(pull.writes.slice(-2)).toEqual(["edit body", "markPullRequestReadyForReview"]);
 	});
 });
 
 describe("merge --land", () => {
-	test.each(["CLEAN", "BLOCKED", "UNKNOWN"])("refuses auto-merge off before changing labels (%s)", async (state) => {
+	test.each(["CLEAN", "BLOCKED", "UNKNOWN"])("refuses auto-merge off (%s)", async (state) => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = false;
 		pull.mergeState = state;
-		const { token } = await take(PR, "iterate", undefined, pull.deps());
-		const writes = [...pull.writes];
-		expect(await refused(land(PR, token, HEAD, "squash", pull.deps()))).toContain("CONTRIBUTING.md or AGENTS.md");
-		expect(pull.writes).toEqual(writes);
+		expect(await refused(land(PR, HEAD, "squash", pull.deps()))).toContain("CONTRIBUTING.md or AGENTS.md");
+		expect(pull.writes).toEqual([]);
 		expect(pull.state).toBe("OPEN");
-		expect(pull.labels).toEqual(["quest:iterate"]);
-		await release(PR, token, pull.deps());
-		expect(pull.labels).toEqual([]);
 	});
 
-	test("refuses, keeping the token, when the token cannot see the auto-merge setting", async () => {
+	test("refuses when the token cannot see the auto-merge setting", async () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = null;
 		pull.mergeState = "CLEAN";
-		const { token } = await take(PR, "iterate", undefined, pull.deps());
-		const writes = [...pull.writes];
-		expect(await refused(land(PR, token, HEAD, "squash", pull.deps()))).toContain("not visible to this token");
-		expect(pull.writes).toEqual(writes);
-		expect(pull.labels).toEqual(["quest:iterate"]);
+		expect(await refused(land(PR, HEAD, "squash", pull.deps()))).toContain("not visible to this token");
+		expect(pull.writes).toEqual([]);
 	});
 
-	test("refuses a PR retargeted while its hold was taken", async () => {
+	test("takes no label, and refuses while a session holds the PR", async () => {
 		const pull = new FakePull();
-		// Swapping from another state rereads the PR after its label changes.
-		const { token } = await take(PR, "iterate", undefined, pull.deps());
+		const { token } = await take(PR, undefined, pull.deps());
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
+			`held by quest:active, added just now as token ${token}`,
+		);
+		pull.label("quest:iterate");
+		await release(PR, token, pull.deps());
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:iterate");
+		pull.labels = ["quest:merge"];
+		await land(PR, HEAD, "merge", pull.deps());
+		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+		expect(pull.labels).toEqual(["quest:merge"]);
+	});
+
+	test.each([false, true])("refuses a PR retargeted while its policy was read (gated: %s)", async (gated) => {
+		const pull = new FakePull();
+		pull.required = gated ? ["quest land"] : [];
 		pull.afterRead = () => {
+			pull.afterRead = undefined;
 			pull.baseRef = "release";
 		};
-		expect(await refused(land(PR, token, HEAD, "squash", pull.deps()))).toContain(
-			"retargeted from main to release",
-		);
-		expect(
-			pull.writes.some(
-				(write) => write.startsWith("enablePullRequestAutoMerge") || write.startsWith("mergePullRequest"),
-			),
-		).toBe(false);
+		expect(await refused(land(PR, HEAD, "squash", pull.deps()))).toContain("retargeted from main to release");
+		expect(pull.writes).toEqual([]);
+	});
+
+	test("refuses a merged PR or a draft its starter still holds", async () => {
+		const pull = new FakePull();
+		pull.draft = true;
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("its starter still holds");
+		pull.state = "MERGED";
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("is merged");
+		expect(pull.writes).toEqual([]);
 	});
 
 	test("leaves a merge queue to decide, even with auto-merge off", async () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = false;
 		pull.queue = true;
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		await land(PR, token, HEAD, "merge", pull.deps());
+		await land(PR, HEAD, "merge", pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 	});
 
@@ -335,17 +373,18 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = false;
 		pull.mergeState = "CLEAN";
-		const { token } = await take(PR, "merge", undefined, pull.deps());
 		vi.stubEnv("GH_TOKEN", "token");
 		vi.stubGlobal("fetch", pull.deps().fetch);
 		try {
+			let stdout = "";
 			expect(
-				await main(["merge", URL_, token, "--land", HEAD, "--direct"], {
-					stdout: () => undefined,
+				await main(["merge", URL_, "--land", HEAD, "--direct"], {
+					stdout: (text) => void (stdout += text),
 					stderr: () => undefined,
 				}),
 			).toBe(0);
-			expect(pull.writes.at(-1)).toBe(`mergePullRequest ${HEAD} MERGE`);
+			expect(pull.writes).toEqual([`mergePullRequest ${HEAD} MERGE`]);
+			expect(stdout).toBe("");
 		} finally {
 			vi.unstubAllEnvs();
 			vi.unstubAllGlobals();
@@ -357,13 +396,12 @@ describe("merge --land", () => {
 		async (status) => {
 			const pull = new FakePull();
 			pull.comparison = status;
-			const { token } = await take(PR, "merge", undefined, pull.deps());
-			const refusal = await refused(land(PR, token, HEAD, "squash", pull.deps()));
+			const refusal = await refused(land(PR, HEAD, "squash", pull.deps()));
 			expect(refusal).toContain(`head ${HEAD} does not contain main at ${BASE}`);
-			expect(pull.writes.at(-1)).toBe("add quest:merge");
+			expect(pull.writes).toEqual([]);
 			pull.head = "c".repeat(40);
 			pull.comparison = "ahead";
-			await land(PR, token, pull.head, "squash", pull.deps());
+			await land(PR, pull.head, "squash", pull.deps());
 			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${pull.head} SQUASH`);
 		},
 	);
@@ -372,27 +410,86 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.comparison = "identical";
 		pull.base = HEAD;
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		await land(PR, token, HEAD, "merge", pull.deps());
+		await land(PR, HEAD, "merge", pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 	});
 
 	test("enables auto-merge with a merge commit by default, bound to the head", async () => {
 		const pull = new FakePull();
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		await land(PR, token, HEAD, "merge", pull.deps());
-		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
-		expect(pull.labels).toEqual(["quest:merge"]);
+		await land(PR, HEAD, "merge", pull.deps());
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
+		expect(pull.labels).toEqual([]);
 	});
 
 	test("merges at once when nothing is left to wait for, with --squash or --rebase", async () => {
 		for (const method of ["squash", "rebase"] as const) {
 			const pull = new FakePull();
 			pull.mergeState = "CLEAN";
-			const { token } = await take(PR, "merge", undefined, pull.deps());
-			await land(PR, token, HEAD, method, pull.deps());
+			await land(PR, HEAD, method, pull.deps());
 			expect(pull.writes.at(-1)).toBe(`mergePullRequest ${HEAD} ${method.toUpperCase()}`);
 		}
+	});
+
+	describe("picks the repository's merge method", () => {
+		const allowing = (...methods: string[]) => {
+			const pull = new FakePull();
+			pull.methods = {
+				allow_merge_commit: methods.includes("merge"),
+				allow_squash_merge: methods.includes("squash"),
+				allow_rebase_merge: methods.includes("rebase"),
+			};
+			return pull;
+		};
+
+		test("uses the only method allowed without a flag", async () => {
+			for (const method of ["squash", "rebase"]) {
+				const pull = allowing(method);
+				await land(PR, HEAD, undefined, pull.deps());
+				expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} ${method.toUpperCase()}`);
+			}
+		});
+
+		test("keeps a merge commit by default while one is allowed", async () => {
+			const pull = allowing("merge", "squash");
+			await land(PR, HEAD, undefined, pull.deps());
+			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+		});
+
+		test("also applies with --direct", async () => {
+			const pull = allowing("squash");
+			pull.allowAutoMerge = false;
+			pull.mergeState = "CLEAN";
+			await land(PR, HEAD, undefined, pull.deps(), true);
+			expect(pull.writes).toEqual([`mergePullRequest ${HEAD} SQUASH`]);
+		});
+
+		test("refuses a named method the repository disallows, or a choice it leaves open", async () => {
+			const cases: [string[], "merge" | "squash" | "rebase" | undefined, string][] = [
+				[["squash"], "merge", "does not allow merge commits; it allows squash merges"],
+				[["merge", "squash"], "rebase", "does not allow rebase merges; it allows merge commits, squash merges"],
+				[["squash", "rebase"], undefined, "pass --squash or --rebase"],
+				[[], undefined, "allows no merge method"],
+			];
+			for (const [methods, named, refusal] of cases) {
+				const pull = allowing(...methods);
+				expect(await refused(land(PR, HEAD, named, pull.deps()))).toContain(refusal);
+				expect(pull.writes).toEqual([]);
+			}
+		});
+
+		test("leaves a gated base or a merge queue to its own method", async () => {
+			const gated = allowing("merge");
+			gated.required = ["quest land"];
+			await land(PR, HEAD, undefined, gated.deps());
+			expect(gated.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`);
+
+			const queued = allowing("squash");
+			queued.queue = true;
+			const warnings: string[] = [];
+			await land(PR, HEAD, undefined, queued.deps(warnings));
+			expect(queued.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+			expect(warnings).toEqual([]);
+		});
 	});
 
 	test("enters the merge queue through auto-merge even when clean", async () => {
@@ -400,8 +497,7 @@ describe("merge --land", () => {
 		pull.mergeState = "CLEAN";
 		pull.queue = true;
 		const warnings: string[] = [];
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		await land(PR, token, HEAD, "squash", pull.deps(warnings));
+		await land(PR, HEAD, "squash", pull.deps(warnings));
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} SQUASH`);
 		expect(warnings).toEqual([`${URL_} lands through a merge queue, which applies its own merge method`]);
 	});
@@ -412,9 +508,8 @@ describe("merge --land", () => {
 		pull.allowAutoMerge = false; // The host-gated path does not use the ungated pre-check.
 		pull.comparison = "diverged";
 		const warnings: string[] = [];
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		await land(PR, token, HEAD, "merge", pull.deps(warnings));
-		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`);
+		await land(PR, HEAD, "merge", pull.deps(warnings));
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`]);
 		expect(warnings).toEqual([`${URL_} lands through quest land, which squashes`]);
 		expect(pull.comparisons).toEqual([]);
 	});
@@ -423,8 +518,7 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.required = ["test", "quest land"];
 		pull.autoMerge = { enabledAt: "2026-10-20T12:00:00Z", commitBody: `Quest-Land-Head: ${"0".repeat(40)}` };
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		await land(PR, token, HEAD, "squash", pull.deps());
+		await land(PR, HEAD, "squash", pull.deps());
 		expect(pull.writes.slice(-2)).toEqual([
 			"disablePullRequestAutoMerge",
 			`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`,
@@ -436,8 +530,7 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.required = ["test", "quest land"];
 		pull.autoMerge = { enabledAt: "2026-10-20T12:00:00Z", commitBody: "" };
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		await land(PR, token, HEAD, "squash", pull.deps());
+		await land(PR, HEAD, "squash", pull.deps());
 		expect(pull.autoMerge?.commitBody).toBe(`Quest-Land-Head: ${HEAD}`);
 	});
 
@@ -450,14 +543,12 @@ describe("merge --land", () => {
 				pull.mergeState = state;
 				return "Pull request is in clean status";
 			};
-			const { token } = await take(PR, "merge", undefined, pull.deps());
-			const before = pull.reads;
-			await land(PR, token, HEAD, "squash", pull.deps());
-			expect(pull.writes.slice(-2)).toEqual([
+			await land(PR, HEAD, "squash", pull.deps());
+			expect(pull.writes).toEqual([
 				`enablePullRequestAutoMerge ${HEAD} SQUASH`,
 				`mergePullRequest ${HEAD} SQUASH`,
 			]);
-			expect(pull.reads - before).toBe(2); // The usual hold read, then one reread after refusal.
+			expect(pull.reads).toBe(3); // The first read, the reread before landing, then one after refusal.
 			expect(pull.state).toBe("MERGED");
 		},
 	);
@@ -465,11 +556,9 @@ describe("merge --land", () => {
 	test("keeps UNKNOWN on auto-merge when GitHub accepts it", async () => {
 		const pull = new FakePull();
 		pull.mergeState = "UNKNOWN";
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		const before = pull.reads;
-		await land(PR, token, HEAD, "merge", pull.deps());
+		await land(PR, HEAD, "merge", pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
-		expect(pull.reads - before).toBe(1);
+		expect(pull.reads).toBe(2);
 		expect(pull.state).toBe("OPEN");
 	});
 
@@ -479,15 +568,13 @@ describe("merge --land", () => {
 			const pull = new FakePull();
 			pull.mergeState = "UNKNOWN";
 			pull.beforeAutoMerge = () => reason;
-			const { token } = await take(PR, "merge", undefined, pull.deps());
-			const before = pull.reads;
-			await expect(land(PR, token, HEAD, "merge", pull.deps())).rejects.toThrow(reason);
-			expect(pull.reads - before).toBe(reason.includes("clean status") ? 2 : 1);
+			await expect(land(PR, HEAD, "merge", pull.deps())).rejects.toThrow(reason);
+			expect(pull.reads).toBe(reason.includes("clean status") ? 3 : 2);
 			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 		},
 	);
 
-	test.each(["head", "hold", "gate", "queue"])(
+	test.each(["head", "hold", "base", "gate", "queue"])(
 		"does not merge after the clean refusal changes its %s",
 		async (change) => {
 			const pull = new FakePull();
@@ -495,13 +582,13 @@ describe("merge --land", () => {
 			pull.beforeAutoMerge = () => {
 				pull.mergeState = "CLEAN";
 				if (change === "head") pull.head = "b".repeat(40);
-				if (change === "hold") pull.labels = [];
+				if (change === "hold") pull.label("quest:active");
+				if (change === "base") pull.baseRef = "release";
 				if (change === "gate") pull.required = ["quest land"];
 				if (change === "queue") pull.queue = true;
 				return "Pull request is in clean status";
 			};
-			const { token } = await take(PR, "merge", undefined, pull.deps());
-			await expect(land(PR, token, HEAD, "merge", pull.deps())).rejects.toThrow();
+			await expect(land(PR, HEAD, "merge", pull.deps())).rejects.toThrow();
 			expect(pull.state).toBe("OPEN");
 			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 		},
@@ -509,69 +596,31 @@ describe("merge --land", () => {
 
 	test("refuses a head that moved", async () => {
 		const pull = new FakePull();
-		const { token } = await take(PR, "merge", undefined, pull.deps());
 		pull.head = "b".repeat(40);
-		expect(await refused(land(PR, token, HEAD, "merge", pull.deps()))).toContain(`head moved to ${"b".repeat(40)}`);
-		expect(pull.writes.at(-1)).toBe("add quest:merge");
-	});
-
-	test("refuses a stale head before swapping, so the caller's token stays valid", async () => {
-		const pull = new FakePull();
-		const { token } = await take(PR, "iterate", undefined, pull.deps());
-		pull.head = "b".repeat(40);
-		expect(await refused(land(PR, token, HEAD, "merge", pull.deps()))).toContain("head moved");
-		expect(pull.labels).toEqual(["quest:iterate"]);
-		expect((await land(PR, token, pull.head, "merge", pull.deps())).label).toBe("quest:merge");
-	});
-
-	test("names the swapped-in hold when landing fails after the swap", async () => {
-		const pull = new FakePull();
-		const { token } = await take(PR, "iterate", undefined, pull.deps());
-		pull.beforeAdd = () => {
-			pull.beforeAdd = undefined;
-			pull.head = "b".repeat(40);
-		};
-		const message = await refused(land(PR, token, HEAD, "merge", pull.deps()));
-		expect(message).toContain("head moved");
-		expect(message).toContain("this session holds quest:merge as token LabeledEvent_2");
-		expect(pull.labels).toEqual(["quest:merge"]);
-	});
-
-	test("a PR that left the queue unmerged drops quest:merge", async () => {
-		const pull = new FakePull();
-		const { token } = await take(PR, "merge", undefined, pull.deps());
-		await land(PR, token, HEAD, "merge", pull.deps());
-		// Auto-merge is disabled, as when a required check fails.
-		pull.autoMerge = null;
-		const warnings: string[] = [];
-		expect(await refused(land(PR, token, HEAD, "merge", pull.deps(warnings)))).toContain("no longer holds it");
-		expect(warnings).toEqual([
-			`${URL_} left the merge queue unmerged, so quest:merge was removed; quest status shows why under landing-stopped`,
-		]);
-		expect(pull.labels).toEqual([]);
-		expect((await take(PR, "iterate", undefined, pull.deps())).label).toBe("quest:iterate");
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(`head moved to ${"b".repeat(40)}`);
+		expect(pull.writes).toEqual([]);
 	});
 });
 
 describe("release", () => {
 	test("removes the label its token holds", async () => {
 		const pull = new FakePull();
-		const { token } = await take(PR, "iterate", undefined, pull.deps());
-		expect(await release(PR, token, pull.deps())).toBe("quest:iterate");
+		const { token } = await take(PR, undefined, pull.deps());
+		expect(await release(PR, token, pull.deps())).toBe("quest:active");
 		expect(pull.labels).toEqual([]);
 	});
 
 	test("refuses a stale token and treats a label already off as released", async () => {
 		const pull = new FakePull();
-		const stale = await take(PR, "iterate", undefined, pull.deps());
+		const stale = await take(PR, undefined, pull.deps());
 		pull.labels = [];
 		const warnings: string[] = [];
-		expect(await release(PR, stale.token, pull.deps(warnings))).toBe("quest:iterate");
-		expect(warnings).toEqual([`quest:iterate is already off ${URL_}`]);
+		expect(await release(PR, stale.token, pull.deps(warnings))).toBe("quest:active");
+		expect(warnings).toEqual([`quest:active is already off ${URL_}`]);
 
-		await take(PR, "iterate", undefined, pull.deps());
+		await take(PR, undefined, pull.deps());
 		expect(await refused(release(PR, stale.token, pull.deps()))).toContain("another session holds it");
-		expect(pull.labels).toEqual(["quest:iterate"]);
+		expect(pull.labels).toEqual(["quest:active"]);
 	});
 });
 
@@ -590,11 +639,10 @@ describe("arguments", () => {
 	}
 
 	test.each([
-		[["ready", URL_, "--done"], "--done needs the hold token"],
-		[["merge", URL_, "--land", HEAD], "--land needs the hold token"],
-		[["merge", URL_, "token", "--land", "abc"], "--land needs a full 40-character SHA"],
-		[["merge", URL_, "--direct"], "--direct needs --land"],
-		[["merge", URL_, "--squash"], "--squash and --rebase need --land"],
+		[["ready", URL_], "missing required argument 'token'"],
+		[["merge", URL_], "required option '--land <sha>' not specified"],
+		[["merge", URL_, "--land", "abc"], "--land needs a full 40-character SHA"],
+		[["merge", URL_, "token", "--land", HEAD], "too many arguments"],
 		[["iterate", "https://example.com/pull/1"], "expected a GitHub pull request URL"],
 	])("%j is a usage error", async (args, message) => {
 		const result = await cli(...args);
@@ -603,7 +651,7 @@ describe("arguments", () => {
 	});
 
 	test("--squash and --rebase conflict", async () => {
-		expect((await cli("merge", URL_, "token", "--land", HEAD, "--squash", "--rebase")).code).toBe(2);
+		expect((await cli("merge", URL_, "--land", HEAD, "--squash", "--rebase")).code).toBe(2);
 	});
 });
 
@@ -617,7 +665,7 @@ test("iterate and release exit 0 when stdout returns a value", async () => {
 		const out = { stdout: (text: string) => ((stdout += text), true), stderr: () => true } as Output;
 		expect(await main(["iterate", URL_], out)).toBe(0);
 		const token = stdout.trim();
-		expect(pull.labels).toEqual(["quest:iterate"]);
+		expect(pull.labels).toEqual(["quest:active"]);
 		expect(await main(["release", URL_, token], out)).toBe(0);
 		expect(pull.labels).toEqual([]);
 	} finally {

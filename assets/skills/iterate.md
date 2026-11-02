@@ -6,7 +6,7 @@ Before you begin, run `quest guide` and `quest skill grill`, and read their outp
 
 You own this PR until it is landable.
 Parse the arguments to determine the PR number. Any other text is the user's feedback on the PR; interpret it against the diff.
-Take it with `quest iterate <pr>` before acting, and keep the hold token it prints; `quest iterate --help` explains holds.
+Take it with `quest iterate <pr>` before acting, passing a token you already hold for it to keep that hold, and keep the hold token it prints; `quest iterate --help` explains holds.
 If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
 If you cannot push to the PR's branch, stop and report.
 
@@ -24,6 +24,7 @@ Address the automated review findings already posted, without waiting on optiona
 One round only; never request a review, including by toggling a ready PR to draft and back.
 
 Before pushing to a PR that is ready for review, review the new head locally as the guide's Reviews section describes.
+If `quest status <pr>` shows auto-merge enabled, disable it with `gh pr merge <pr> --disable-auto` before any push: GitHub keeps it across a writer's push and would land the new head unreviewed.
 Push your changes to the PR and update its summary.
 Summarize the changes made.
 
