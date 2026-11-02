@@ -7,7 +7,7 @@ import { commitOf, fakeGitHub, headOf, intercept, type World } from "../dev/gith
 import { seed, world } from "../dev/seed";
 import { app } from "../src/index";
 import { inboxURL } from "../src/jobs/routes";
-import { cancel, createJob, createRunner, dispatch, report } from "../src/jobs/store";
+import { cancel, createJob, createRunner, dispatch, finish, report } from "../src/jobs/store";
 import { privateKey } from "./github-key";
 import { origin } from "./login-fixtures";
 
@@ -20,7 +20,7 @@ afterEach(() => vi.restoreAllMocks());
  * returning it, a request helper, and the session cookie.
  */
 async function seeded(edit: (world: World) => void = () => {}) {
-	const data = { ...world(), forks: env.GITHUB_FORK_OWNER };
+	const data = world();
 	edit(data);
 	vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(data));
 	// Webhooks read and notify in the background, so each request finishes its `waitUntil` work.
@@ -221,7 +221,7 @@ it("gets failed and blocked jobs moving again from the inbox", async () => {
 	const question = await startOver(page);
 	const restarted = await post("/jobs/seed-start-fonts/answer", { question, restart: "1" });
 	expect(restarted.status).toBe(303);
-	expect(rocket.fork["quest/m1/fonts"]).toBe(commitOf(rocket));
+	expect(rocket.branches["quest/m1/fonts"]).toBe(commitOf(rocket));
 	expect(await db.prepare("SELECT state FROM jobs WHERE id='seed-start-fonts'").first()).toEqual({
 		state: "cancelled",
 	});
@@ -246,32 +246,121 @@ it("gets failed and blocked jobs moving again from the inbox", async () => {
 	expect(await latest(followups)).toMatchObject({ state: "queued" });
 });
 
+it.each([true, false])(
+	"retries a published branch without a PR only while its head is still the job's: %j",
+	async (unchanged) => {
+		const { request, user, rocket, page, post } = await seeded();
+		const now = Date.now();
+		const { id, token } = await createRunner(db, user, "test", "linux", true, now);
+		const machine = { id, owner: user, name: "test", platform: "linux" as const, vm: 1 };
+		await report(
+			db,
+			machine,
+			[{ id: "main", provider: "anthropic", kind: "subscription", label: "main", limited: false }],
+			[],
+			now,
+		);
+		await dispatch(db, user, new Map([[id, 1]]), now);
+		const body = JSON.stringify({
+			job: "seed-start-offline",
+			attempt: 1,
+			head: null,
+			message: "feat: offline",
+			changes: [{ path: "src/offline.ts", content: Buffer.from("export {};\n").toString("base64") }],
+		});
+		const response = await request("/api/runner/publish", {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token}`,
+				"Content-Type": "application/json",
+				"Content-Length": String(new TextEncoder().encode(body).length),
+			},
+			body,
+		});
+		expect(response.status).toBe(200);
+		const { head } = (await response.json()) as { head: string };
+		expect(rocket.pulls.some((pull) => pull.branch === "quest/m1/offline")).toBe(false);
+		await finish(
+			db,
+			machine,
+			"seed-start-offline",
+			1,
+			{ outcome: "failed", summary: "Failed before PR", result: undefined },
+			now,
+		);
+		if (!unchanged) rocket.branches["quest/m1/offline"] = "e".repeat(40);
+		await post("/refresh", {});
+		const failed = await page("quest/m1/offline.md");
+		expect(failed.includes("no longer ready to start")).toBe(!unchanged);
+		const retried = await post("/jobs", {
+			workflow: "start",
+			target: "quest/m1/offline.md",
+			revision: commitOf(rocket),
+		});
+		if (unchanged) {
+			expect(retried.status).toBe(303);
+			expect(await latest("quest/m1/offline.md")).toMatchObject({
+				state: "queued",
+				head,
+				continues: "seed-start-offline",
+			});
+		} else {
+			expect(retried.status).toBe(409);
+			expect(await latest("quest/m1/offline.md")).toMatchObject({
+				id: "seed-start-offline",
+				state: "failed",
+				head,
+			});
+		}
+	},
+);
+
+it("does not retry a failed job through a different same-repository PR claim", async () => {
+	const { page } = await seeded((data) => {
+		const rocket = data.repos[0]!;
+		const original = rocket.pulls.find((p) => p.number === 20)!;
+		original.closed = true;
+		rocket.pulls.push({ ...original, number: 21, author: "another-maintainer", closed: false });
+	});
+	// This failed job recorded the original PR. Another PR now holds its branch.
+	await db.prepare("UPDATE jobs SET pull=20 WHERE id='seed-start-import'").run();
+	expect(await page("quest/m0/import.md")).toContain("no longer ready to start");
+});
+
+it("does not let a contributor PR hide a same-named upstream branch claim on retry", async () => {
+	const { page } = await seeded((data) => {
+		data.repos[0]!.pulls.find((p) => p.number === 20)!.contributor = "another-contributor";
+	});
+	expect(await page("quest/m0/import.md")).toContain("no longer ready to start");
+});
+
 it("never resets the branch for a Start over that a concurrent cancel beat", async () => {
 	const { data, rocket, page, post } = await seeded();
 	const question = await startOver(page);
 	// Another maintainer cancels the job after this request read it, while it rechecks GitHub.
 	meanwhile(
 		data,
-		(url) => url.pathname === `/repos/${data.forks}/${rocket.name}`,
+		(url) => url.pathname === `/repos/${rocket.owner}/${rocket.name}`,
 		() => cancel(db, "seed-start-fonts", "another-maintainer", Date.now()),
 	);
 	const restarted = await post("/jobs/seed-start-fonts/answer", { question, restart: "1" });
 	expect(restarted.status).toBe(409);
-	expect(rocket.fork["quest/m1/fonts"]).toBe("f".repeat(40));
+	expect(rocket.branches["quest/m1/fonts"]).toBe("f".repeat(40));
 	expect(await latest("quest/m1/fonts.md")).toMatchObject({ id: "seed-start-fonts", state: "cancelled" });
 });
 
-it("leaves a Start over whose reset failed waiting to start over again", async () => {
+it.each([403, 422, 502])("leaves a Start over whose reset returned %i waiting to start over again", async (status) => {
 	const { data, rocket, page, post } = await seeded();
 	const question = await startOver(page);
 	meanwhile(
 		data,
-		(url, method) => method === "PATCH" && url.pathname.startsWith(`/repos/${data.forks}/${rocket.name}/git/refs/`),
-		async () => Response.json({ message: "Server Error" }, { status: 502 }),
+		(url, method) =>
+			method === "PATCH" && url.pathname.startsWith(`/repos/${rocket.owner}/${rocket.name}/git/refs/`),
+		async () => Response.json({ message: "Branch reset refused" }, { status }),
 	);
 	const restarted = await post("/jobs/seed-start-fonts/answer", { question, restart: "1" });
 	expect(restarted.status).not.toBe(303);
-	expect(rocket.fork["quest/m1/fonts"]).toBe("f".repeat(40));
+	expect(rocket.branches["quest/m1/fonts"]).toBe("f".repeat(40));
 	// The claim stands: the old job ended, and its replacement waits on the same decision instead of running.
 	expect(await db.prepare("SELECT state FROM jobs WHERE id='seed-start-fonts'").first()).toEqual({
 		state: "cancelled",
@@ -285,11 +374,11 @@ it("leaves a Start over whose reset failed waiting to start over again", async (
 	expect(retry).not.toBe(question);
 	const again = await post(`/jobs/${held!.id}/answer`, { question: retry, restart: "1" });
 	expect(again.status).toBe(303);
-	expect(rocket.fork["quest/m1/fonts"]).toBe(commitOf(rocket));
+	expect(rocket.branches["quest/m1/fonts"]).toBe(commitOf(rocket));
 	expect(await latest("quest/m1/fonts.md")).toMatchObject({ state: "queued", head: commitOf(rocket) });
 });
 
-it("publishes jobs' work end to end, through the fork branch to the pull request", async () => {
+it("publishes jobs' work end to end, through the upstream branch to the pull request", async () => {
 	const { request, user, rocket } = await seeded();
 	const now = Date.now();
 	// A retry of the failed import job continues from the branch and pull request it left.
@@ -332,24 +421,24 @@ it("publishes jobs' work end to end, through the fork branch to the pull request
 	};
 	const pull = { title: "Keep working offline", body: "Queues edits while offline." };
 
-	// The queued job commits on a new fork branch, then opens a draft pull request from it.
+	// The queued job commits on a new upstream branch, then opens a draft pull request from it.
 	const first = await publish({
 		job: "seed-start-offline",
 		head: null,
 		message: "feat: queue offline edits",
 		changes: [{ path: "src/offline.ts", content: Buffer.from("export {};\n").toString("base64") }],
 	});
-	expect(rocket.fork["quest/m1/offline"]).toBe(first.head);
+	expect(rocket.branches["quest/m1/offline"]).toBe(first.head);
 	expect(rocket.commits[first.head]!.parents).toEqual([commitOf(rocket)]);
 	const opened = await publish({ job: "seed-start-offline", head: first.head, pull });
 	expect(opened.pull).toMatchObject({ number: 21, draft: true });
-	expect(rocket.pulls.at(-1)).toMatchObject({ number: 21, branch: "quest/m1/offline", fork: true, draft: true });
+	expect(rocket.pulls.at(-1)).toMatchObject({ number: 21, branch: "quest/m1/offline", draft: true });
 	// Finished work marks it ready for review.
 	await publish({ job: "seed-start-offline", head: first.head, pull: { ...pull, draft: false } });
 	expect(rocket.pulls.at(-1)!.draft).toBe(false);
 
 	const continued = await latest("quest/m0/import.md");
-	expect(continued).toMatchObject({ id: retry.id, state: "running", head: rocket.fork["quest/m0/import"] });
+	expect(continued).toMatchObject({ id: retry.id, state: "running", head: rocket.branches["quest/m0/import"] });
 	const adopted = await publish({ job: retry.id, head: continued!.head, pull: { title: "Import", body: "Done" } });
 	expect(adopted.pull).toMatchObject({ number: 20 });
 	expect(rocket.pulls.filter((p) => p.branch === "quest/m0/import")).toHaveLength(1);

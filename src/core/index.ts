@@ -35,11 +35,10 @@ export { type Chunk, type Clean, type Conflict, LABELS, chunks, render, resolveL
 
 export {
 	HOLD_PREFIX,
-	MERGE_LABEL,
+	ACTIVE_LABEL,
 	type HoldEvent,
 	type HoldSnapshot,
 	isHoldLabel,
 	latestHold,
 	heldToken,
-	spentMergeHold,
 } from "./hold";

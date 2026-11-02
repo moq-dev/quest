@@ -3,13 +3,15 @@ import {
 	actor,
 	array,
 	GitHub,
+	GitHubDeadline,
 	type GitHubDependencies,
+	link,
 	object,
 	type ObjectValue,
 	type PullRequest,
 	string,
 } from "./github";
-import { EJECTED } from "./land";
+import { EJECTED, pinned } from "./land";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
 
 /**
@@ -17,12 +19,13 @@ import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
  * connection already read in full is skipped on later pages.
  */
 const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
-	$checks: String, $reviews: String, $threads: String, $comments: String,
-	$moreChecks: Boolean!, $moreReviews: Boolean!, $moreThreads: Boolean!, $moreComments: Boolean!) {
+	$checks: String, $reviews: String, $threads: String,
+	$moreChecks: Boolean!, $moreReviews: Boolean!, $moreThreads: Boolean!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
-			url state isDraft headRefOid mergeable mergeStateStatus reviewDecision
-			autoMergeRequest { enabledAt mergeMethod enabledBy { login } }
+			url state isDraft headRefOid headRefName mergeable mergeStateStatus reviewDecision
+			headRepository { nameWithOwner }
+			autoMergeRequest { enabledAt mergeMethod commitBody enabledBy { login } }
 			mergeQueueEntry { state position enqueuedAt }
 			timelineItems(last: 100, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT, AUTO_MERGE_DISABLED_EVENT, ISSUE_COMMENT]) { nodes {
 				__typename
@@ -44,10 +47,6 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 			reviews(first: 100, after: $reviews) @include(if: $moreReviews) {
 				pageInfo { hasNextPage endCursor }
 				nodes { author { login } state submittedAt url commit { oid } reactions(last: 100) { nodes { ...reaction } } }
-			}
-			comments(first: 100, after: $comments) @include(if: $moreComments) {
-				pageInfo { hasNextPage endCursor }
-				nodes { body createdAt url author { login } }
 			}
 			reviewThreads(first: 100, after: $threads) @include(if: $moreThreads) {
 				pageInfo { hasNextPage endCursor }
@@ -110,13 +109,12 @@ export interface Status {
 	mergeable: string;
 	mergeState: string;
 	reviewDecision: string | null;
-	autoMerge: { method: string; enabledBy: string; enabledAt: string } | null;
+	/** `head` is the head it was enabled on, or null when that cannot be told; see {@link enabledHead}. */
+	autoMerge: { method: string; enabledBy: string; enabledAt: string; head: string | null } | null;
 	mergeQueue: { state: string; position: number; enqueuedAt: string } | null;
 	/** The latest exit from the merge queue, auto-merge, or `quest land`'s queue, and the reason for it. */
 	landingStopped: { reason: string; actor: string; at: string } | null;
 	checks: { state: string | null; passed: number; failing: Check[]; pending: Check[] };
-	/** Distinct commits with submitted reviews after the latest Design change marker. */
-	reviewRounds: { count: number; since: { at: string; actor: string; url: string } | null };
 	/** Each reviewer's latest submitted review, oldest first. */
 	reviews: Review[];
 	reactions: Reaction[];
@@ -130,16 +128,14 @@ export interface Status {
 /** Read the paged PR state, then the state commands’ ownership snapshot. */
 export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencies): Promise<Status> {
 	const github = new GitHub(deps);
-	const cursors: Record<"checks" | "reviews" | "threads" | "comments", string | null | undefined> = {
+	const cursors: Record<"checks" | "reviews" | "threads", string | null | undefined> = {
 		checks: null,
 		reviews: null,
 		threads: null,
-		comments: null,
 	};
 	const contexts: ObjectValue[] = [];
 	const reviewNodes: ObjectValue[] = [];
 	const threadNodes: ObjectValue[] = [];
-	const commentNodes: ObjectValue[] = [];
 	let first: ObjectValue | undefined;
 	let rollup: ObjectValue | null = null;
 	// A cursor is null to read the first page and undefined once its list is complete.
@@ -157,11 +153,9 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 			checks: cursors.checks ?? null,
 			reviews: cursors.reviews ?? null,
 			threads: cursors.threads ?? null,
-			comments: cursors.comments ?? null,
 			moreChecks: cursors.checks !== undefined,
 			moreReviews: cursors.reviews !== undefined,
 			moreThreads: cursors.threads !== undefined,
-			moreComments: cursors.comments !== undefined,
 		});
 		const repository = data.repository;
 		if (repository === null) throw new Error(`cannot read ${pr.owner}/${pr.repo}; check the repository and token`);
@@ -181,16 +175,64 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 		}
 		if (cursors.reviews !== undefined) page(current.reviews, "reviews", reviewNodes);
 		if (cursors.threads !== undefined) page(current.reviewThreads, "threads", threadNodes);
-		if (cursors.comments !== undefined) page(current.comments, "comments", commentNodes);
 	}
 	const ownership = await readHoldStatus(pr, deps);
 	if (ownership.head !== first!.headRefOid)
 		throw new Error("the PR head changed while reading its holds; rerun quest status");
-	return {
-		...summarize(first!, rollup, contexts, reviewNodes, threadNodes, commentNodes),
-		holds: ownership.holds,
-		starterHold: ownership.starter,
-	};
+	const status = summarize(first!, rollup, contexts, reviewNodes, threadNodes);
+	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
+	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
+}
+
+/** Repository activity types that move a branch to a new head, including merges into it. */
+const BRANCH_UPDATES = ["push", "force_push", "branch_creation", "pr_merge", "merge_queue_merge"];
+
+/**
+ * The head a PR node's auto-merge request was enabled on, or null when that cannot be told. GitHub
+ * keeps auto-merge across a writer's push but does not say which head it was enabled on. A
+ * `quest land` pin names it; otherwise it is the last push or merge to the head branch before auto-merge
+ * was enabled, read from the head repository's activity once that lists the current head's push.
+ * A push in the same second as enabling is ambiguous. An activity listing the token cannot read
+ * leaves it unknown, with a warning, rather than failing the caller. The node needs `headRefOid`,
+ * `headRefName`, `headRepository { nameWithOwner }`, and `autoMergeRequest { enabledAt commitBody }`.
+ */
+export async function enabledHead(
+	github: GitHub,
+	pull: ObjectValue,
+	warn: (message: string) => void,
+): Promise<string | null> {
+	if (pull.autoMergeRequest == null) return null;
+	const request = object(pull.autoMergeRequest);
+	const pin = pinned(typeof request.commitBody === "string" ? request.commitBody : "");
+	if (pin !== null || pull.headRepository == null) return pin;
+	const enabled = Date.parse(string(request.enabledAt));
+	const head = string(pull.headRefOid);
+	const pushes: { sha: string; time: number }[] = [];
+	const repository = string(object(pull.headRepository).nameWithOwner);
+	let path: string | undefined =
+		`/repos/${repository}/activity?ref=${encodeURIComponent(string(pull.headRefName))}&per_page=100`;
+	// Newest first: read until a push before enabling, which is the head auto-merge was enabled on.
+	while (path && !pushes.some((push) => push.time < enabled)) {
+		let response: Response;
+		try {
+			response = await github.request(path, { allow: [404] });
+		} catch (error) {
+			// A deadline is the caller's to handle; a forbidden listing, as for a token without contents access, is not.
+			if (error instanceof GitHubDeadline || !(error instanceof Error)) throw error;
+			warn(
+				`cannot read ${repository}'s push activity, so the head auto-merge was enabled on is unknown: ${error.message}`,
+			);
+			return null;
+		}
+		if (response.status === 404) return null;
+		for (const row of array(await response.json()))
+			if (BRANCH_UPDATES.includes(string(row.activity_type)))
+				pushes.push({ sha: string(row.after), time: Date.parse(string(row.timestamp)) });
+		path = link(response, "next");
+	}
+	// GitHub lists a push seconds to minutes late; until the current head's is listed, an earlier one may be missing.
+	if (!pushes.some((push) => push.sha === head) || pushes.some((push) => push.time === enabled)) return null;
+	return pushes.find((push) => push.time < enabled)?.sha ?? null;
 }
 
 function summarize(
@@ -199,7 +241,6 @@ function summarize(
 	contexts: ObjectValue[],
 	reviewNodes: ObjectValue[],
 	threadNodes: ObjectValue[],
-	commentNodes: ObjectValue[],
 ): Status {
 	const head = string(pull.headRefOid);
 	const url = string(pull.url);
@@ -228,20 +269,6 @@ function summarize(
 	reacted(pull, url);
 	// A pending review is the viewer's unsubmitted draft, not a review.
 	const submitted = reviewNodes.filter((row) => row.state !== "PENDING");
-	const changed = commentNodes
-		.filter((row) => typeof row.body === "string" && row.body.startsWith("Design change:"))
-		.sort((a, b) => Date.parse(string(a.createdAt)) - Date.parse(string(b.createdAt)))
-		.at(-1);
-	const since = changed
-		? { at: string(changed.createdAt), actor: actor(changed.author), url: string(changed.url) }
-		: null;
-	const rounds = new Set(
-		submitted.flatMap((row) =>
-			row.commit !== null && (!since || Date.parse(string(row.submittedAt)) >= Date.parse(since.at))
-				? [string(object(row.commit).oid)]
-				: [],
-		),
-	);
 	const latest = new Map<string, Review>();
 	for (const row of submitted) {
 		reacted(row, string(row.url));
@@ -293,6 +320,7 @@ function summarize(
 						method: lower(autoMerge.mergeMethod),
 						enabledBy: actor(autoMerge.enabledBy),
 						enabledAt: string(autoMerge.enabledAt),
+						head: null,
 					},
 		mergeQueue:
 			queue === null
@@ -307,7 +335,6 @@ function summarize(
 						at: string(stopped.createdAt),
 					},
 		checks,
-		reviewRounds: { count: rounds.size, since },
 		reviews: [...latest.values()],
 		reactions,
 		threads,
@@ -366,7 +393,7 @@ export function statusLines(status: Status): string[] {
 		`review-decision ${dash(status.reviewDecision)}`,
 		status.autoMerge === null
 			? "auto-merge -"
-			: `auto-merge ${status.autoMerge.method} ${status.autoMerge.enabledBy} ${status.autoMerge.enabledAt}`,
+			: `auto-merge ${status.autoMerge.method} ${status.autoMerge.enabledBy} ${status.autoMerge.enabledAt} ${dash(status.autoMerge.head)}`,
 		status.mergeQueue === null
 			? "merge-queue -"
 			: `merge-queue ${status.mergeQueue.state} ${status.mergeQueue.position} ${status.mergeQueue.enqueuedAt}`,
@@ -376,7 +403,6 @@ export function statusLines(status: Status): string[] {
 		`checks ${dash(status.checks.state)} passed=${status.checks.passed} failing=${status.checks.failing.length} pending=${status.checks.pending.length}`,
 		...status.checks.failing.map((c) => check("failing", c)),
 		...status.checks.pending.map((c) => check("pending", c)),
-		`review-rounds ${status.reviewRounds.count} ${status.reviewRounds.since ? `${status.reviewRounds.since.at} ${status.reviewRounds.since.actor} ${status.reviewRounds.since.url}` : "-"}`,
 		...status.reviews.map(
 			(r) => `review ${r.current ? "current" : "stale"} ${r.state} ${r.reviewer} ${r.submittedAt} ${r.url}`,
 		),

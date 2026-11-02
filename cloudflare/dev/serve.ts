@@ -77,7 +77,6 @@ const mf = new Miniflare(
 					GITHUB_APP_ID: String(data.app.id),
 					GITHUB_APP_PRIVATE_KEY: privateKey,
 					GITHUB_WEBHOOK_SECRET: secret,
-					GITHUB_FORK_OWNER: data.forks,
 					GOOGLE_CLIENT_ID: "",
 					GOOGLE_CLIENT_SECRET: "",
 					// Notifications stay off: a push would leave localhost for a real push service.
