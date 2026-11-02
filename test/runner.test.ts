@@ -1966,31 +1966,6 @@ describe("quest runner", () => {
 		await r.runner.shutdown();
 	});
 
-	posix("a merge job delivers again after kix publishes its head without landing it yet", async () => {
-		const r = rig((body) => {
-			if (!body.land) return undefined;
-			const first = r.publishes.filter((sent) => sent.land).length === 1;
-			return {
-				status: 200,
-				body: first
-					? { head: r.upstream.commit, waiting: "GitHub cannot merge it yet: its merge state is BLOCKED." }
-					: { head: r.upstream.commit, landed: { merged: true } },
-			};
-		});
-		const deliver = { tool: "deliver", args: { summary: "Merged" } };
-		r.steps({ start: [deliver, deliver] });
-		r.assign(job(r.upstream.commit, { workflow: "merge", target: "pulls/2", head: r.upstream.commit }));
-		const result = await r.result();
-		await idle(r.runner);
-		const replies = r.calls().flatMap((call) => (call.tool === "deliver" ? [JSON.stringify(call.reply)] : []));
-		expect(replies[0]).toContain("kix did not land it: GitHub cannot merge it yet");
-		expect(replies[0]).toContain("then call `deliver` again");
-		expect(replies[1]).toContain("Merged. End your turn now.");
-		// Only the delivery that landed completes the job.
-		expect(result).toMatchObject({ outcome: "completed", result: { landed: { merged: true } } });
-		await r.runner.shutdown();
-	});
-
 	posix("gives an issue's planning job the issue through the context tool", async () => {
 		const r = rig();
 		r.steps({

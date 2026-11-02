@@ -58,8 +58,6 @@ export type Pull = Issue & {
 	timeline?: { id: string; label: string | null }[];
 	/** Auto-merge is enabled, so it lands once its requirements pass. */
 	landing?: boolean;
-	/** Its base requires GitHub's merge queue. */
-	queue?: boolean;
 	/** The enabled auto-merge's time and commit body; `quest land` reads its queue from them. */
 	autoMerge?: { enabledAt: string; commitBody: string };
 	/** A fork's head branch accepts pushes from the upstream's maintainers. */
@@ -291,7 +289,7 @@ function holdsTarget(repo: Repo, pull: Pull) {
 		baseRefName: "main",
 		headRefOid: headOf(repo, pull),
 		mergeStateStatus: mergeState(pull),
-		isMergeQueueEnabled: pull.queue === true,
+		isMergeQueueEnabled: false,
 		autoMergeRequest: pull.landing ? { enabledAt: updatedAt } : null,
 		mergeQueueEntry: null,
 		labels: { nodes: (pull.labels ?? []).map((name) => ({ name })) },

@@ -189,25 +189,15 @@ on a decision.
   PR's upstream base branch already holds it; kix then publishes a merge
   commit whose files are the changes applied to the merged commit's.
 - Landing is a publication with `land`: kix verifies the published head and
-  the job's hold, and requires a review that counts on that head; without
-  one, the job pauses on a decision that says why. When GitHub can merge the
-  head at once, kix merges it with `expectedHeadOid` pinned to it, using the
-  method the job names, else the first the repository allows. Otherwise kix
-  leaves a landing armed only where GitHub cannot land a later head with it
-  (see [Landing only reviewed heads](#landing-only-reviewed-heads)):
-  - A base that requires the `quest land` check queues the PR for that gate,
-    as `quest merge` does: squash auto-merge whose commit body pins the head.
-    The gate ejects a PR whose head no longer matches its pin.
-  - A base whose ruleset makes GitHub require a review of every push, as
-    below, gets auto-merge bound to the head, entering its merge queue if it
-    has one.
-  - On any other base, kix publishes the head without landing it and tells
-    the agent why. The agent waits with `wait`, such as for its checks to
-    pass, then delivers again. A merge queue there pauses the job on a
-    decision, since no wait helps.
-
-  A refusal also pauses the job on a decision, in GitHub's words.
-
+  the job's hold, then enables auto-merge bound to that head, entering the
+  merge queue when the base has one, or merges it at once when GitHub would
+  refuse auto-merge because nothing is left to wait for. It uses the method the
+  job names, else the first the repository allows. A base that requires the
+  `quest land` check queues the PR for that gate instead, as `quest merge`
+  does: squash auto-merge whose commit body pins the head. Either way, kix
+  first requires a review that counts on that head; without one, the job
+  pauses on a decision that says why. A refusal also pauses the job on a
+  decision, in GitHub's words.
 - The label stays while the job runs or waits, and while the PR is queued or
   auto-merging. When the job ends without a landing in progress, or a
   `pull_request` webhook arrives and GitHub shows the landing ended unmerged,
@@ -255,23 +245,22 @@ to read, so kix keeps its own check there.
 When no review counts, a direct merge is refused and a merge job pauses on a
 decision. Both say which commit needs a review and how to give one.
 
-GitHub keeps auto-merge enabled across a writer's push, the App's included, so
-whatever anyone with write access pushes after a landing is armed rides along
-with it. GitHub checks the `expectedHeadOid` kix pins only when auto-merge is
-enabled, and its merge queue likewise keeps a queued pull request across a
-push.
-So kix arms a landing only where something refuses a moved head: the `quest
-land` gate's pin, or a ruleset GitHub enforces that requires a new review of
-every push. On any other base it merges only at once, pinned to the reviewed
-head, which GitHub refuses once the head moved. Turning auto-merge off when a
-`synchronize` webhook arrives would race GitHub merging the pushed head first.
+GitHub keeps auto-merge enabled across a push by anyone with write access, the
+App's included, and checks the `expectedHeadOid` kix pins only when auto-merge
+is enabled. Its merge queue likewise keeps a queued pull request across such a
+push. So once a merge job arms auto-merge on a reviewed head while its checks
+run, whatever a writer pushes after it lands with it, unreviewed. Only the
+`quest land` gate's pin, or a ruleset GitHub enforces that requires a new
+approval of every push, refuses such a head. The maintainer accepted this gap
+on 2026-11-02, matching `quest merge --land`, rather than make a merge job wait
+for its checks and merge only at once.
 
-For the same reason, a job pushing to a pull request that is auto-merging would
-land its new head with no review of it. Before a job moves or resets a branch
-that heads an open pull request, its own or an iterated one, kix turns that
-pull request's auto-merge off. If GitHub refuses or does not show whether it is on, the job
-pushes nothing and pauses on a decision. The new head lands only through a new
-landing.
+kix closes it for its own pushes: a job pushing to a pull request that is
+auto-merging would land its new head with no review of it. Before a job moves
+or resets a branch that heads an open pull request, its own or an iterated
+one, kix turns that pull request's auto-merge off. If GitHub refuses or does
+not show whether it is on, the job pushes nothing and pauses on a decision. The
+new head lands only through a new landing.
 
 kix pull requests come from upstream branches, and GitHub gives workflows on
 same-repository branches the repository's secrets, unlike fork pull requests.

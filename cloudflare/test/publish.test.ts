@@ -1182,21 +1182,6 @@ describe("merge jobs", () => {
 			return github.call(this, input, init);
 		});
 	}
-	/**
-	 * A ruleset on main, which the App cannot bypass, requiring an approval of
-	 * every push: GitHub then refuses a head pushed after auto-merge was enabled,
-	 * so kix may enable it.
-	 */
-	function bind() {
-		project.rules = [
-			{
-				type: "pull_request",
-				ruleset_id: 42,
-				parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true },
-			},
-		];
-		project.rulesets = { 42: { current_user_can_bypass: "never" } };
-	}
 	/** A maintainer's approval of `commit` on pull request #2. */
 	const approve = (commit: string) =>
 		(pull().reviews = [...(pull().reviews ?? []), { state: "APPROVED", author: "maintainer", commit }]);
@@ -1217,7 +1202,7 @@ describe("merge jobs", () => {
 		return id;
 	}
 
-	it("merges its base in, waits until GitHub can merge it, then lands exactly the head it published", async () => {
+	it("merges its base in, lands exactly the head it published, and keeps its hold while queued", async () => {
 		const id = await merging();
 		expect(pull().labels).toEqual(["quest:kix"]);
 		// The base branch moved on; the job merged it into the checkout.
@@ -1242,38 +1227,16 @@ describe("merge jobs", () => {
 			land: { method: "merge" },
 		});
 		expect(response.status).toBe(200);
-		const { head, waiting } = (await response.json()) as { head: string; waiting: unknown };
+		const { head, landed } = (await response.json()) as { head: string; landed: unknown };
 		const commit = project.commits[head]!;
 		expect(commit.parents).toEqual([prHead, main]);
 		expect(project.trees[commit.tree]!.base).toBe("1".repeat(40));
 		expect(project.branches["contributor/fix"]).toBe(head);
-		// Nothing binds auto-merge to the head on main, so kix arms none and the job keeps running.
-		expect(waiting).toBe(
-			`GitHub cannot merge ${head.slice(0, 7)} yet: its merge state is BLOCKED. Auto-merge stays enabled across a push by anyone with write access, so kix enables it only behind the \`quest land\` gate or a ruleset on main that this App cannot bypass, requiring an approval and either dismissing stale approvals or requiring approval of the most recent push; elsewhere it merges ${head.slice(0, 7)} only once GitHub can merge it at once.`,
-		);
-		expect(lands()).toEqual([]);
-		expect(pull().landing).toBeFalsy();
-		expect(await job(id)).toMatchObject({ state: "running" });
-
-		// Once its checks pass, the job lands it again, pinned to the head it published.
-		pull().merge = "CLEAN";
-		const landed = await publish({ job: id, attempt: 1, head, land: { method: "merge" } });
-		expect(await landed.json()).toEqual({ head, landed: { merged: true } });
-		expect(lands()).toEqual([
-			{ mutation: "mergePullRequest", variables: { id: "PR_10002", sha: head, method: "MERGE", body: null } },
-		]);
-		expect(pull()).toMatchObject({ merged: true, closed: true });
-	});
-
-	it("enables auto-merge bound to the head where a ruleset requires a review of every push, and keeps its hold while it is on", async () => {
-		bind();
-		const id = await merging(false);
-		const response = await publish({ job: id, attempt: 1, head: prHead, land: { method: "merge" } });
-		expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+		expect(landed).toEqual({ merged: false });
 		expect(lands()).toEqual([
 			{
 				mutation: "enablePullRequestAutoMerge",
-				variables: { id: "PR_10002", sha: prHead, method: "MERGE", body: null },
+				variables: { id: "PR_10002", sha: head, method: "MERGE", body: null },
 			},
 		]);
 
@@ -1286,45 +1249,6 @@ describe("merge jobs", () => {
 		await landing.release(testEnv, 10, "pulls/2");
 		expect(pull().labels).toEqual([]);
 		expect(await job(id)).toMatchObject({ hold: null });
-	});
-
-	it("rereads an UNKNOWN merge state once where nothing binds auto-merge, merging only a head GitHub can merge at once", async () => {
-		const id = await merging();
-		pull().merge = "UNKNOWN";
-		const unknown = await publish({ job: id, attempt: 1, head: prHead, land: {} });
-		expect(await unknown.json()).toMatchObject({
-			head: prHead,
-			waiting: expect.stringContaining("its merge state is UNKNOWN"),
-		});
-		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-			const response = await github(input, init);
-			// GitHub finishes computing the merge state after the first read.
-			if (String(init?.body ?? "").includes("timelineItems(")) pull().merge = "CLEAN";
-			return response;
-		});
-		const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
-		expect(await response.json()).toEqual({ head: prHead, landed: { merged: true } });
-		expect(lands().map((l) => [l.mutation, l.variables.sha])).toEqual([["mergePullRequest", prHead]]);
-	});
-
-	it.each([
-		["pauses on a decision, since no wait ends what it would land,", false],
-		["enables auto-merge into it", true],
-	])("on a base with a merge queue %s unless a ruleset binds the head", async (_, bound) => {
-		if (bound) bind();
-		const id = await merging();
-		pull().queue = true;
-		const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
-		if (bound) {
-			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
-			return expect(lands().map((l) => l.mutation)).toEqual(["enablePullRequestAutoMerge"]);
-		}
-		expect(response.status).toBe(202);
-		expect((await job(id)).questions.at(-1)!.prompt).toEqual({
-			type: "publication",
-			blocked: `main lands through GitHub's merge queue, which keeps a pull request queued, like auto-merge enabled, across a push by anyone with write access, so queuing ${prHead.slice(0, 7)} would land whatever is pushed after it. kix queues a pull request only behind the \`quest land\` gate or a ruleset on main that this App cannot bypass, requiring an approval and either dismissing stale approvals or requiring approval of the most recent push. Add one, or merge the pull request yourself.`,
-		});
-		expect(lands()).toEqual([]);
 	});
 
 	it("queues for quest land on a base that requires its check, even when nothing else is left to wait for", async () => {
@@ -1359,7 +1283,6 @@ describe("merge jobs", () => {
 
 	it("lands an UNKNOWN head after GitHub refuses auto-merge as clean, with one reread", async () => {
 		const id = await merging();
-		bind();
 		pull().merge = "UNKNOWN";
 		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
 			if (String(init?.body ?? "").includes("enablePullRequestAutoMerge(")) {
@@ -1382,7 +1305,6 @@ describe("merge jobs", () => {
 
 	it("leaves an accepted UNKNOWN head on auto-merge", async () => {
 		const id = await merging();
-		bind();
 		pull().merge = "UNKNOWN";
 		const response = await publish({ job: id, attempt: 1, head: prHead, land: { method: "squash" } });
 		expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
@@ -1393,7 +1315,6 @@ describe("merge jobs", () => {
 		"preserves an UNKNOWN auto-merge refusal: %s",
 		async (reason) => {
 			const id = await merging();
-			bind();
 			pull().merge = "UNKNOWN";
 			refuseLanding(reason);
 			const reads = () =>
@@ -1412,7 +1333,6 @@ describe("merge jobs", () => {
 
 	it.each(["head", "hold", "gate"])("does not merge if its %s changes after a clean refusal", async (change) => {
 		const id = await merging();
-		bind();
 		pull().merge = "UNKNOWN";
 		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
 			if (String(init?.body ?? "").includes("enablePullRequestAutoMerge(")) {
@@ -1596,7 +1516,6 @@ describe("merge jobs", () => {
 			],
 			[() => refuseLanding(reason), `GitHub refused to land the pull request: ${reason}`],
 		];
-		bind();
 		for (const [change, blocked] of cases) {
 			pull().labels = [];
 			const id = await merging();
@@ -1630,7 +1549,6 @@ describe("merge jobs", () => {
 			await store.cancel(db, id, user, 0);
 			pull().labels = [];
 			const again = await merging();
-			pull().merge = "CLEAN";
 			expect(await land(again)).toBeNull();
 			expect(lands().map((l) => l.variables.sha)).toEqual([prHead]);
 		});

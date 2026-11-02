@@ -2,7 +2,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
-import { enforced, type Reads, unreviewed } from "./review";
+import { unreviewed } from "./review";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -1593,24 +1593,22 @@ export class GitHubService {
 	}
 
 	/** Why kix may not land `head` yet, or null when a review counts on it; see `unreviewed`. */
-	/** Reads on `repo` through `token`, as `review.ts` takes them. */
-	#reads(token: string, repo: GitHubRepository): Reads {
-		const path = repositoryPath(repo);
-		return {
-			get: (tail) => this.#api(token, `${path}${tail}`),
-			graphql: (query, variables) => this.#api(token, "/graphql", "POST", { query, variables }),
-		};
-	}
-
 	#unreviewed(token: string, repo: GitHubRepository, current: Repository, pull: number, head: string) {
-		return unreviewed(this.#reads(token, repo), {
-			owner: repo.owner,
-			name: repo.name,
-			pull: number(pull),
-			head: sha(head),
-			branch: current.default_branch,
-			app: Number(this.#env.GITHUB_APP_ID),
-		});
+		const path = repositoryPath(repo);
+		return unreviewed(
+			{
+				get: (tail) => this.#api(token, `${path}${tail}`),
+				graphql: (query, variables) => this.#api(token, "/graphql", "POST", { query, variables }),
+			},
+			{
+				owner: repo.owner,
+				name: repo.name,
+				pull: number(pull),
+				head: sha(head),
+				branch: current.default_branch,
+				app: Number(this.#env.GITHUB_APP_ID),
+			},
+		);
 	}
 
 	/**
@@ -1771,20 +1769,13 @@ export class GitHubService {
 
 	/**
 	 * Land a merge job's pull request at exactly `head`, while the job still
-	 * holds it and once a review counts on the head. When GitHub can merge it
-	 * at once, merge it pinned to the head; GitHub refuses that once the head
-	 * moves. `method` is the one the repository's instructions name, or else
-	 * the first the repository allows.
-	 *
-	 * Otherwise land it only where a later push cannot ride along: GitHub
-	 * keeps auto-merge enabled, and a pull request in its merge queue, across
-	 * a push by anyone with write access. A base that requires the `quest
-	 * land` check queues it for that gate, as `quest merge` does: squash
-	 * auto-merge whose commit body pins the head, which the gate ejects once
-	 * the head moves. A base whose ruleset makes GitHub require a review of
-	 * every push gets auto-merge, entering its merge queue if it has one. On
-	 * any other base, the job waits until GitHub can merge the head at once,
-	 * and a merge queue there needs the maintainer.
+	 * holds it: enable auto-merge bound to that head, which enters the merge
+	 * queue when the base has one, or merge at once when GitHub would refuse
+	 * auto-merge because nothing is left to wait for. `method` is the one the
+	 * repository's instructions name, or else the first the repository allows.
+	 * A base that requires the `quest land` check queues it for that gate
+	 * instead, as `quest merge` does: squash auto-merge whose commit body
+	 * pins the head. Either way, only once a review counts on the head.
 	 */
 	landPullRequest(
 		repo: GitHubRepository,
@@ -1796,7 +1787,7 @@ export class GitHubService {
 			repo,
 			userId,
 			{ contents: "write", pull_requests: "write", checks: "read" },
-			async (token, current, installation): Promise<Landing> => {
+			async (token, current, installation) => {
 				// Landing is a contribution like opening a pull request, so a paused project lands nothing.
 				if ((await this.#state(repo, installation)) !== "enabled")
 					throw new GitHubError("Contributions are paused");
@@ -1819,29 +1810,6 @@ export class GitHubService {
 					!gated && immediateMerge(holds.mergeState, holds.queue)
 						? "mergePullRequest"
 						: "enablePullRequestAutoMerge";
-				// GitHub computes the merge state lazily, so it may report UNKNOWN for a pull request it can merge.
-				const reread = async () => {
-					const fresh = await this.#holds(token, repo, pull);
-					check(fresh);
-					return fresh;
-				};
-				const mergeable = async (fresh: Holds) =>
-					immediateMerge(fresh.mergeState, fresh.queue) && !(await this.#gated(token, repo, fresh.base));
-				// GitHub keeps auto-merge enabled, and a pull request in its merge queue, across a writer's push,
-				// so either would land a head pushed after the reviewed one. kix arms them only where GitHub
-				// refuses a moved head itself: the gate's pin, or a ruleset requiring a review of every push.
-				// Elsewhere it merges at once, pinned to the head, or the job waits.
-				if (
-					mutation === "enablePullRequestAutoMerge" &&
-					!gated &&
-					!(await enforced(this.#reads(token, repo), holds.base))
-				) {
-					// No wait ends a merge queue's hold on whatever is pushed next, so that needs the maintainer.
-					if (holds.queue) throw new PublicationBlocked(unboundQueue(holds.base, input.head));
-					const fresh = holds.mergeState === "UNKNOWN" ? await reread() : null;
-					if (!fresh || !(await mergeable(fresh))) return { waiting: notYet(fresh ?? holds, input.head) };
-					mutation = "mergePullRequest";
-				}
 				const submit = async () => {
 					const result = await this.#api<{ errors?: { message?: unknown }[] }>(token, "/graphql", "POST", {
 						query: `mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!, $body: String) { ${mutation}(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: $method, commitBody: $body }) { clientMutationId } }`,
@@ -1870,7 +1838,10 @@ export class GitHubService {
 					)
 						throw error;
 					// The refusal can race GitHub computing UNKNOWN. Reread once, keeping the original head pinned.
-					if (!(await mergeable(await reread()))) throw error;
+					const fresh = await this.#holds(token, repo, pull);
+					check(fresh);
+					if (!immediateMerge(fresh.mergeState, fresh.queue) || (await this.#gated(token, repo, fresh.base)))
+						throw error;
 					mutation = "mergePullRequest";
 					await submit();
 				}
@@ -1882,25 +1853,6 @@ export class GitHubService {
 }
 
 export type MergeMethod = "merge" | "squash" | "rebase";
-
-/** A merge job's landing: merged at once, queued or auto-merging, or waiting until GitHub can merge it at once, and why. */
-export type Landing = { merged: boolean } | { waiting: string };
-
-/** The requirements that bind a landing to the head it was armed for, so kix may arm one on `base`. */
-const binding = (base: string) =>
-	`the \`${LAND_CHECK}\` gate or a ruleset on ${base} that this App cannot bypass, requiring an approval and either dismissing stale approvals or requiring approval of the most recent push`;
-
-/** Why a merge job pauses rather than queue `head` on a merge queue that nothing binds to it. */
-function unboundQueue(base: string, head: string): string {
-	const at = head.slice(0, 7);
-	return `${base} lands through GitHub's merge queue, which keeps a pull request queued, like auto-merge enabled, across a push by anyone with write access, so queuing ${at} would land whatever is pushed after it. kix queues a pull request only behind ${binding(base)}. Add one, or merge the pull request yourself.`;
-}
-
-/** Why kix leaves a reviewed `head` that GitHub cannot merge at once for the job to land later. */
-function notYet(holds: Holds, head: string): string {
-	const at = head.slice(0, 7);
-	return `GitHub cannot merge ${at} yet: its merge state is ${holds.mergeState}. Auto-merge stays enabled across a push by anyone with write access, so kix enables it only behind ${binding(holds.base)}; elsewhere it merges ${at} only once GitHub can merge it at once.`;
-}
 
 /** The first merge method the repository allows: squash, then a merge commit, then rebase. */
 function mergeMethod(current: Repository): MergeMethod {

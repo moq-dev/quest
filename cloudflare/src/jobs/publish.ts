@@ -180,8 +180,6 @@ type Published = {
 	pull?: { number: number; url: string; draft: boolean };
 	/** A merge job's landing: merged at once, or queued or auto-merging. */
 	landed?: { merged: boolean };
-	/** Why a merge job's published head did not land yet: the job waits, then lands it again. */
-	waiting?: string;
 };
 
 const DECISION = "Publishing this work needs a maintainer's decision";
@@ -306,7 +304,7 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 				hold: current.hold,
 				method: input.land.method,
 			});
-			return "waiting" in landed ? { head, waiting: landed.waiting } : { head, landed };
+			return { head, landed };
 		} catch (error) {
 			if (!(error instanceof PublicationBlocked)) throw error;
 			return decide(db, runner, input, { type: "publication", blocked: error.message });
