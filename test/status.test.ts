@@ -22,11 +22,10 @@ function pull(
 		checks?: ReturnType<typeof page> | null;
 		reviews?: ReturnType<typeof page>;
 		threads?: ReturnType<typeof page>;
-		comments?: ReturnType<typeof page>;
 		reactions?: Node[];
 	} & Node = {},
 ) {
-	const { head = A, checks, reviews, threads, comments = page([]), reactions = [], ...rest } = fields;
+	const { head = A, checks, reviews, threads, reactions = [], ...rest } = fields;
 	return {
 		data: {
 			repository: {
@@ -47,7 +46,6 @@ function pull(
 					autoMergeRequest: null,
 					mergeQueueEntry: null,
 					timelineItems: { nodes: [] },
-					comments,
 					reactions: { nodes: reactions },
 					commits: {
 						nodes: [
@@ -212,7 +210,6 @@ test("reports checks by requiredness, each reviewer's latest review against the 
 		"check failing optional error - ci/legacy",
 		"check pending required in_progress https://github.com/example/project/actions/runs/1/job/test test",
 		"check pending required expected - deploy",
-		"review-rounds 2 -",
 		`review stale changes_requested bob 2026-10-07T12:02:00Z ${URL_}#pullrequestreview-2`,
 		`review current commented alice 2026-10-07T12:03:00Z ${URL_}#pullrequestreview-3`,
 		`review stale commented gone 2026-10-07T12:05:00Z ${URL_}#pullrequestreview-5`,
@@ -363,44 +360,6 @@ test("an invalid PR argument is a usage error before authentication", () => {
 	expect(errors.join("")).toContain("GitHub pull request URL");
 });
 
-test("review rounds count distinct submitted commits since the latest design marker across every comment page", async () => {
-	const marker = (id: number, time: string, body = "Design change: simpler boundary") => ({
-		body,
-		createdAt: time,
-		url: `${URL_}#issuecomment-${id}`,
-		author: { login: "maintainer" },
-	});
-	const fixture = setup([
-		pull({
-			checks: null,
-			threads: page([]),
-			reviews: page([
-				review("alice", "APPROVED", A, 1),
-				review("bob", "COMMENTED", B, 4),
-				review("alice", "COMMENTED", B, 5),
-				review("pending", "PENDING", A, 6),
-			]),
-			comments: page([marker(1, "2026-10-07T12:00:00Z")], "comments-next"),
-		}),
-		pull({
-			comments: page([marker(2, "2026-10-07T12:03:00Z"), marker(3, "2026-10-07T12:06:00Z", "A normal comment")]),
-		}),
-	]);
-	const status = await pullRequestStatus(pr, fixture.deps);
-	expect(status.reviewRounds).toEqual({
-		count: 1,
-		since: { at: "2026-10-07T12:03:00Z", actor: "maintainer", url: `${URL_}#issuecomment-2` },
-	});
-	expect(statusLines(status)).toContain(`review-rounds 1 2026-10-07T12:03:00Z maintainer ${URL_}#issuecomment-2`);
-	expect(fixture.queries[1]).toMatchObject({
-		comments: "comments-next",
-		moreComments: true,
-		moreReviews: false,
-		moreChecks: false,
-		moreThreads: false,
-	});
-});
-
 const holdEvent = (id: string, label: string, at = "2026-10-07T11:00:00Z") => ({
 	__typename: "LabeledEvent",
 	id,
@@ -450,13 +409,15 @@ test("never attaches a URL from a different label or event to a hold token", asy
 		checks: null,
 		reviews: page([]),
 		threads: page([]),
-		labels: { nodes: [{ name: "quest:merge" }] },
+		// Older quest versions' quest:merge holds nothing, so it reports no hold.
+		labels: { nodes: [{ name: "quest:merge" }, { name: "quest:active" }] },
 	});
 	const fixture = setup([body], {
-		holdFields: { timelineItems: { nodes: [holdEvent("token", "quest:merge")] } },
+		holdFields: { timelineItems: { nodes: [holdEvent("token", "quest:active")] } },
 		eventPages: [{ rows: [{ node_id: "token", event: "labeled", label: { name: "bug" }, url: "wrong" }] }],
 	});
-	expect((await pullRequestStatus(pr, fixture.deps)).holds[0].eventUrl).toBeNull();
+	const { holds } = await pullRequestStatus(pr, fixture.deps);
+	expect(holds.map((hold) => [hold.label, hold.eventUrl])).toEqual([["quest:active", null]]);
 });
 
 test("reports draft starter ownership as last activity, and does not invent its acquisition time", async () => {

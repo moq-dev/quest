@@ -320,14 +320,14 @@ describe("decision inbox", () => {
 			["revision", head],
 		]);
 		expect(picked.status).toBe(303);
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		const [job] = await store.listJobs(db, 10);
 		expect(job).toMatchObject({ workflow: "merge", hold: "LE_1" });
 		expect(thread(await inbox({ project: "10", item: "pulls/2" }))).not.toContain("Merge this PR");
 		await db.prepare("DELETE FROM jobs").run();
 		// A pull request a session holds with a label is its work in progress, until the label goes.
 		await db
-			.prepare("UPDATE github_project_activity SET data=json_set(data,'$.hold','quest:merge') WHERE id='21'")
+			.prepare("UPDATE github_project_activity SET data=json_set(data,'$.hold','quest:kix') WHERE id='21'")
 			.run();
 		expect(await inbox()).toMatch(/<h2>In progress<\/h2>[\s\S]*Fix/);
 		active = thread(await inbox({ project: "10", item: "pulls/2" }));

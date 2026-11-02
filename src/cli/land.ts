@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-import { type Finding, MERGE_LABEL, check, formatFinding } from "../core";
+import { type Finding, check, formatFinding, isQuest, remove } from "../core";
 import { repositoryPath } from "./claims";
+import { programEnvironment } from "./program";
 import {
 	GitHub,
 	GitHubDeadline,
@@ -16,7 +17,7 @@ import {
 	string,
 } from "./github";
 import { classifyCheck } from "./status";
-import { snapshot } from "./tree";
+import { committedSources, snapshot } from "./tree";
 
 /** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
 export const LAND_CHECK = "quest land";
@@ -67,7 +68,6 @@ function pinned(body: string): string | null {
 export type Reason =
 	| "merge_conflict"
 	| "failed_checks"
-	| "checks_pending"
 	| "review_required"
 	| "changes_requested"
 	| "unresolved_conversations"
@@ -114,6 +114,18 @@ export interface Plan {
 	/** Queued PRs in enqueue order. */
 	queue: Entry[];
 	eject: Ejection[];
+	/** Queued PRs whose required checks have not finished: they stay queued and sit out batches until they pass. */
+	waiting?: Waiting[];
+}
+
+/** A queued PR waiting on required checks that are still running or have not reported. */
+export interface Waiting {
+	number: number;
+	url: string;
+	/** Its pick, from which the wait for its checks is measured. */
+	enabledAt: string;
+	/** The required checks still pending on its head. */
+	pending: string[];
 }
 
 /** A page of a commit's check runs and commit statuses, with the app behind each run. */
@@ -253,7 +265,8 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 /**
  * Read the queue: open PRs to `base` with auto-merge enabled, in the order it
  * was enabled. A PR is queued while its auto-merge commit body pins its current
- * head; the rest of the auto-merging PRs are ejected with a reason.
+ * head; one whose required checks are still running waits, and the rest of the
+ * auto-merging PRs are ejected with a reason.
  */
 export async function resolveQueue(
 	repository: Repository,
@@ -332,7 +345,7 @@ export async function resolveQueue(
 		after = info.hasNextPage === true ? string(info.endCursor) : null;
 	} while (after !== null);
 
-	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [] };
+	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [], waiting: [] };
 	const landing = nodes.filter((node) => node.autoMergeRequest !== null && node.isDraft !== true);
 	const order = (node: ObjectValue) => string(object(node.autoMergeRequest).enabledAt);
 	landing.sort((a, b) => order(a).localeCompare(order(b)) || Number(a.number) - Number(b.number));
@@ -376,10 +389,13 @@ export async function resolveQueue(
 			if (unmet.failing.length > 0) {
 				eject("failed_checks", `required checks failed on its head: ${unmet.failing.join(", ")}`);
 			} else if (unmet.pending.length > 0) {
-				eject(
-					"checks_pending",
-					`required checks had not passed on its head when the gate ran: ${unmet.pending.join(", ")}; land it again once they pass`,
-				);
+				// Still running: it keeps its auto-merge and its place, and joins a batch once they pass.
+				plan.waiting!.push({
+					number: entry.number,
+					url: entry.url,
+					enabledAt: entry.enabledAt,
+					pending: unmet.pending,
+				});
 			} else {
 				plan.queue.push(entry);
 			}
@@ -560,8 +576,54 @@ function squash(dir: string, driver: string, entry: Entry): string[] | null {
 		git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
 		return files;
 	}
+	prune(dir, entry.head);
 	git(dir, ["commit", "--quiet", "--allow-empty", "-m", `${entry.title} (#${entry.number})`]);
 	return null;
+}
+
+/**
+ * Finish a clean merge of `head` into `HEAD`, staged in the index, by dropping each list entry
+ * that links to a quest `HEAD` finished since `head` branched, as `quest rm` drops links to a
+ * quest it deletes. The PR wrote that link while the quest was open, so the base finishing it
+ * leaves the link dangling through no fault of the PR, and `quest check` would reject it.
+ * Deletion since the merge base tells a finished quest from a mistyped link, and a quest the base
+ * moved is a rename, not a deletion. A link in prose stays, for `quest check` to report. Both the
+ * chain and a prepared head merge through here, so the head lands the tree the chain tested.
+ * Returns the documents it changed.
+ */
+function prune(dir: string, head: string): string[] {
+	const since = git(dir, ["merge-base", "HEAD", head]);
+	const finished = new Set(
+		git(dir, [
+			"diff",
+			"--no-ext-diff",
+			"--find-renames",
+			"--diff-filter=D",
+			"--name-only",
+			"-z",
+			since,
+			"HEAD",
+			"--",
+			"quest",
+		])
+			.split("\0")
+			.filter(isQuest),
+	);
+	if (finished.size === 0) return [];
+	let tree: ReturnType<typeof committedSources>;
+	try {
+		tree = committedSources(dir, git(dir, ["write-tree"]), false);
+	} catch {
+		// A tree `quest check` cannot read is its finding to report, not this edit's.
+		return [];
+	}
+	const modes = new Map(tree.sources.map((source) => [source.path, source.mode]));
+	const texts = remove(tree.sources, (path) => finished.has(path) && !tree.exists(path));
+	for (const [path, text] of texts) {
+		const oid = git(dir, ["hash-object", "-w", "--no-filters", "--stdin"], { input: text });
+		git(dir, ["update-index", "--cacheinfo", `${modes.get(path)},${oid},${path}`]);
+	}
+	return [...texts.keys()];
 }
 
 /** How many queued PRs ahead of a newly queued one its conflict report covers: those landing soonest. */
@@ -665,9 +727,13 @@ export function mergeBase(
 		const result = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--no-ff", "--no-commit", head]);
 		if (result.status !== 0)
 			return { reason: "merge_conflict", detail: `${result.stdout}\n${result.stderr}`.trim() };
+		const pruned = prune(dir, head);
 		const tree = git(dir, ["write-tree"]);
+		const message = pruned.length
+			? `quest land: merge tested base\n\nDrop links to quests the base finished from ${pruned.join(", ")}.\n`
+			: "quest land: merge tested base\n";
 		const commit = git(dir, ["commit-tree", tree, "-p", head, "-p", base], {
-			input: "quest land: merge tested base\n",
+			input: message,
 			env: {
 				GIT_AUTHOR_NAME: "moq-bot",
 				GIT_AUTHOR_EMAIL: "moq-bot@users.noreply.github.com",
@@ -685,9 +751,9 @@ export function ejection(entry: Entry, reason: Reason, detail: string): Ejection
 }
 
 /**
- * Remove `ejection` from the queue: disable its auto-merge, drop `quest:merge`,
- * and comment with the reason. A PR whose auto-merge was enabled again since
- * the queue was read is a new entry and is left alone. Returns whether it ejected.
+ * Remove `ejection` from the queue: disable its auto-merge and comment with the
+ * reason. A PR whose auto-merge was enabled again since the queue was read is a
+ * new entry and is left alone. Returns whether it ejected.
  */
 export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Promise<boolean> {
 	const data = await github.graphql(
@@ -706,7 +772,6 @@ export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Pro
 	}
 	const [owner, repo] = plan.repository.split("/");
 	const issue = `${repositoryPath({ owner, repo })}/issues/${ejection.number}`;
-	await github.request(`${issue}/labels/${encodeURIComponent(MERGE_LABEL)}`, { method: "DELETE", allow: [404] });
 	await github.request(`${issue}/comments`, {
 		body: {
 			body: `quest land removed this pull request from the queue: ${ejection.detail}.\n\n<!-- quest land: ${ejection.reason} -->`,
@@ -716,7 +781,7 @@ export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Pro
 }
 
 /** The repository from which approved heads and the base are fetched. */
-export function baseRemote(plan: Plan): string {
+export function baseRemote(plan: Pick<Plan, "repository">): string {
 	return `https://github.com/${plan.repository}.git`;
 }
 
@@ -724,9 +789,23 @@ function lines(text: string): string[] {
 	return text.split("\n").filter((line) => line !== "");
 }
 
-/** Deliberately exclude HOME, Git configuration, agents, tokens, and systemd credentials. */
+/**
+ * Deliberately exclude HOME, Git configuration, agents, tokens, and systemd
+ * credentials. PATH keeps only its absolute directories: these commands run in
+ * a PR's checkout, which could otherwise supply its own `git` or `sh`.
+ */
 export function commandEnvironment(): NodeJS.ProcessEnv {
-	return { PATH: process.env.PATH, LANG: "C.UTF-8" };
+	return { ...programEnvironment({ PATH: process.env.PATH }), LANG: "C.UTF-8" };
+}
+
+/** Git's environment for trusted work: no system or global configuration, and no prompts. */
+export function gitEnvironment(): NodeJS.ProcessEnv {
+	return {
+		...commandEnvironment(),
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_TERMINAL_PROMPT: "0",
+	};
 }
 
 /** Run git without the repository's hooks, returning its status and output. */
@@ -739,13 +818,7 @@ export function tryGit(
 		cwd,
 		encoding: "utf8",
 		input: options.input,
-		env: {
-			...commandEnvironment(),
-			GIT_CONFIG_NOSYSTEM: "1",
-			GIT_CONFIG_GLOBAL: "/dev/null",
-			GIT_TERMINAL_PROMPT: "0",
-			...options.env,
-		},
+		env: { ...gitEnvironment(), ...options.env },
 		maxBuffer: 1 << 30,
 	});
 	if (result.error) throw result.error;

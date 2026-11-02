@@ -171,25 +171,26 @@ export function world(): World {
 			},
 		],
 		// A claim pushed without a pull request.
-		branches: { "quest/m0/docs": "d".repeat(40) },
-		// Changed outside its waiting job, which can start over.
-		fork: { "quest/m1/fonts": "f".repeat(40) },
+		branches: {
+			"quest/m0/docs": "d".repeat(40),
+			// Changed outside its waiting job, which can start over.
+			"quest/m1/fonts": "f".repeat(40),
+		},
 		commits: {},
 		trees: {},
 	};
-	// kix opened this one from its fork branch for a job that then failed before recording it.
+	// kix opened this one from its upstream branch for a job that then failed before recording it.
 	const imported: Pull = {
 		number: 20,
 		title: "Import a project from a ZIP archive",
 		author: "quest-dev[bot]",
 		branch: "quest/m0/import",
-		fork: true,
 		checks: "PENDING",
 		review: null,
 		draft: true,
 	};
 	rocket.pulls.push(imported);
-	rocket.fork[imported.branch] = headOf(rocket, imported);
+	rocket.branches[imported.branch] = headOf(rocket, imported);
 	const archive: Repo = {
 		id: 9102,
 		owner: "example",
@@ -211,15 +212,12 @@ export function world(): World {
 		issues: [{ number: 1, title: "Archive the old site", author: "reporter" }],
 		pulls: [],
 		branches: {},
-		fork: {},
 		commits: {},
 		trees: {},
 	};
 	return {
 		app: { id: 123, slug: "quest-dev" },
 		installation: 9201,
-		forkInstallation: 9202,
-		forks: "quest-dev-forks",
 		users: [{ id: 9001, login: "dev-maintainer", name: "Dev Maintainer", email: "maintainer@example.test" }],
 		repos: [rocket, archive],
 	};
