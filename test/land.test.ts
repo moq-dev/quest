@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/dev/github";
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import {
+	ADMITTED,
 	collectFixers,
 	validateFix,
 	fixerMarkdown,
@@ -2366,6 +2367,8 @@ async function fixerFixture(
 		protectedBase?: boolean;
 		// The base the fixer merges already changed a workflow.
 		workflowBase?: boolean;
+		// A line the wrapper prints before the agent starts, as the host's does when its launcher admits the job.
+		admitted?: string;
 	} = {},
 ) {
 	const forge = new Forge();
@@ -2410,6 +2413,7 @@ set -eu
 [ -z "\${GITHUB_TOKEN-}" ]
 [ -z "\${QUEST_LAND_KEY-}" ]
 [ -z "\${CREDENTIALS_DIRECTORY-}" ]
+${options.admitted === undefined ? "" : `printf '%s\\n' '${options.admitted}' >&2`}
 ${options.raw ? `exec '${agent}' "$@"` : options.pipe ? `quest land fix --agent '${agent}' --agent-arg=- "$@" 2>&1 | { sleep 1; cat; }` : `exec quest land fix --agent '${agent}' --agent-arg=- "$@"`}
 `,
 		{ mode: 0o755 },
@@ -2822,14 +2826,39 @@ printf '{"action":"fixed","head":"%s","reason":"edit the flake"}' "$(git rev-par
 		expect(fixture.forge.comment(1)).toContain(message);
 		expect(fixture.forge.comment(1)).toContain("<!-- quest land fixer:");
 	});
-	test("times out a running fixer without waiting for it", async () => {
-		const fixture = await fixerFixture(requeueScript, { blocked: true });
-		await fixture.ready;
-		expect(await fixture.collect({ ...fixture.deps, now: () => 61 * 60_000 })).toEqual([]);
-		expect(await fixture.collect({ ...fixture.deps, now: () => 61 * 60_000 + 11_000 })).toEqual(["handback 1"]);
+	const minutes = (value: number) => value * 60_000;
+	/** Collect at each minute mark, expecting the fixer to stay running until the last two terminate it. */
+	async function timesOut(fixture: Awaited<ReturnType<typeof fixerFixture>>, alive: number[], expired: number) {
+		for (const at of alive) expect(await fixture.collect({ ...fixture.deps, now: () => minutes(at) })).toEqual([]);
+		expect(await fixture.collect({ ...fixture.deps, now: () => minutes(expired) })).toEqual([]);
+		expect(await fixture.collect({ ...fixture.deps, now: () => minutes(expired) + 11_000 })).toEqual([
+			"handback 1",
+		]);
 		expect(fixture.pull.landing).toBe(false);
 		expect(fixture.forge.comment(1)).toContain("fixer timed out");
 		fixture.finished.cancel();
+	}
+	test("times out a fixer whose wrapper never reports admission after twice the timeout", async () => {
+		const fixture = await fixerFixture(requeueScript, { blocked: true });
+		await fixture.ready;
+		await timesOut(fixture, [61, 119], 121);
+	});
+	test("counts the fixer deadline from the launcher's admission, not the spawn", async () => {
+		// A burst of parked PRs queued this job for 30 minutes before a launcher slot freed.
+		const fixture = await fixerFixture(requeueScript, { blocked: true, admitted: `${ADMITTED} 1800` });
+		await fixture.ready;
+		await timesOut(fixture, [61, 89], 91);
+	});
+	test("bounds the total wait when admission comes late, or claims a future time", async () => {
+		const fixture = await fixerFixture(requeueScript, { blocked: true, admitted: `${ADMITTED} 999999999` });
+		await fixture.ready;
+		// First seen at 70 minutes, the claim is clamped to then; the total still ends it at 120.
+		await timesOut(fixture, [70, 119], 121);
+	});
+	test("ignores a malformed admission line", async () => {
+		const fixture = await fixerFixture(requeueScript, { blocked: true, admitted: `${ADMITTED} soon` });
+		await fixture.ready;
+		await timesOut(fixture, [61, 119], 121);
 	});
 	// moq's fixer panicked (exit 101) on every ejection of 2026-10-31: Codex's stderr was the launcher's pipe, which
 	// Bun had made non-blocking, so one command's output burst failed with EAGAIN.

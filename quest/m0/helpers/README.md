@@ -72,4 +72,4 @@ commands from Sep-Oct. Session counts in each child come from that window.
 
 - [quest merge --land gaps](/quest/m0/helpers/merge-land.md) - squash on squash-only repositories, PR URLs outside a checkout, labels released after direct merges, and a warning when auto-merge outlives its head
 - [Headless agents](/quest/m0/helpers/headless-agents.md) - `/quest-spawn api` launches, resumes, and stops billed agents through one command auto mode allows
-- [moq-dev/quest lands through quest land](/quest/m0/helpers/land-adopt.md) - this repository's `main` changes only through its own gate
+- [Links into an uninitialized submodule aren't broken](/quest/m0/helpers/submodule-links.md) - `quest check` passes in a fresh checkout without populating submodules

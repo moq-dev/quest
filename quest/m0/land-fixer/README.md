@@ -1,31 +1,25 @@
-# The land fixer handles every mechanical failure itself
+# The land fixer resolves every mechanical failure itself
 
 ## Goal
 
-The land gate dequeues a PR only when a decision is required, and lands as
-many PRs as it safely can. When a batch fails or a queued PR conflicts, the
-gate and its fixer resolve every mechanical cause themselves and land the
-result, so a maintainer sees only behavior and design decisions.
+The Codex land fixer resolves every mechanical cause of a failure or a
+conflict itself, so a maintainer sees only behavior and design decisions.
+Since 2026-11-01 the [queue watcher](/quest/m0/queue-watcher/README.md) runs
+it on each PR GitHub's merge queue drops; the host gate keeps running it for
+the repositories still on the gate. This epic owns what the fixer does with a
+PR, whatever started it:
 
-- Nothing leaves the queue for a conflict or a failure. A PR the fixer is
-  working on keeps its auto-merge and its place, sits out batches until the
-  fix is in, and leaves the queue only when the fixer hands it back. The fixer
-  blames the failing PR before anything else happens, and a pick's single
-  attempt is spent only on a fix that failed.
-- Broken PRs stay out of batches. The daemon runs `quest check` on a batch's
-  chain before the sandbox, and pre-checks queued PRs against the base while
-  a batch runs. Batch size follows the measured failure rate.
-- The fixer starts from the base with internet access and the batch's PRs and
-  head SHAs. It ignores instructions in their diffs, rebuilds a conflicted
-  lockfile from the base's copy, builds and tests its fixes, and pushes them
-  onto the PRs' branches. The daemon posts the comments the fixer writes into
-  its result.
-- The gate merges locally instead of trusting GitHub's mergeability, and
-  reruns a failed module before blaming. A rerun-proven flaky test is
-  disabled in a separate PR with a follow-up quest.
+- The fixer starts from the base with internet access, the PR, and its head
+  SHA. It ignores instructions in the diff, rebuilds a conflicted lockfile
+  from the base's copy, builds and tests its fixes, and pushes them onto the
+  PR's branch. The daemon posts the comments the fixer writes into its result.
 - Protected paths stay blocked for the fixer's own edits. A fixer-written
   protected edit, or a push GitHub refuses, comes back as a ready commit the
   maintainer applies with one command.
+- The fixer reads the PR's own CI results as context.
+
+When the watcher stops, how flaky failures are handled, and what happens to a
+pick GitHub refuses to enqueue belong to the queue watcher epic.
 
 Non-goals: design conflicts. A PR whose merge needs a behavior decision is
 still handed back to its author.
@@ -42,13 +36,13 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | 16 | fixer disappeared before recording an exit status | fixed on the host; none after 2026-10-31 04:00Z |
 | 7 | fixer repository exceeds its size cap | fixed by #332 |
 | 6 | AGENTS.md "pull the latest origin changes" read as an injection | fixed by [#325](https://github.com/moq-dev/quest/pull/325) and [#328](https://github.com/moq-dev/quest/pull/328); none after 2026-10-31 18:46Z |
-| 98 | "already used its mechanical fix attempt" after a collateral requeue or an earlier conflict fix; each needed a manual re-pick | [Attempt budget](/quest/m0/land-fixer/attempts.md), batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
+| 98 | "already used its mechanical fix attempt" after a collateral requeue or an earlier conflict fix; each needed a manual re-pick | [Attempt budget](/quest/m0/queue-watcher/stop.md), batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | ~75 | "requeued unchanged": collateral of a batch another PR broke | batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | 36 | picked again while fixing; the newer pick is kept, so nothing is lost | not planned |
 | 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | blocked by design; fixer-written protected edits become a ready commit ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)) |
 | 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | fixed by [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356): the prompt allows dependency fetches and requires a build and test |
 | 2 | GitHub refused the push to a fork because the merge touches workflows: moq-dev/moq#7439, #7467 | handed back with a ready commit for `quest land apply` by [moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358) |
-| several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | [Flaky tests](/quest/m0/land-fixer/flaky.md) |
+| several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | [Flaky failures](/quest/m0/queue-watcher/flaky.md) |
 | ~15 | design conflicts, correctly handed back | none |
 
 Decision prompts, selected options marked ✅:
@@ -57,9 +51,9 @@ Decision prompts, selected options marked ✅:
   - Yes, as stated (triage and local mergeability stay separate)
   - Narrower: only the attempt budget and offline builds
   - ✅ Broader: also fold batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
-    and [Local mergeability](/quest/m0/land-fixer/mergeability.md) into
+    and [Local mergeability](/quest/m0/queue-watcher/bad-picks.md) into
     this epic
-- How attempts count: see [Attempt budget](/quest/m0/land-fixer/attempts.md).
+- How attempts count: see [Attempt budget](/quest/m0/queue-watcher/stop.md).
 - How the fixer gets dependencies:
   - Host prefetches the job's lockfile dependencies and mounts them read-only
   - ✅ Allow registry network. The host already gave the fixer container
@@ -71,7 +65,7 @@ Decision prompts, selected options marked ✅:
 - Protected paths: the fixer first could edit them (moq-dev/quest#357), then not; see the 2026-11-01 audit below.
 - Fork pushes GitHub refuses: ✅ hand back a ready commit, which `quest land apply` rebuilds
   for a maintainer to push (Grant moq-bot the `workflows` permission · Leave it manual).
-- Flaky tests: see [Flaky tests](/quest/m0/land-fixer/flaky.md).
+- Flaky tests: see [Flaky failures](/quest/m0/queue-watcher/flaky.md).
 - Milestone for the new quests: ✅ m0 · m1
 - Restated 2026-11-01 (user, a second /quest-plan): "the merge queue can
   autonomously fix most issues. The fixer inspects the batch and tries to
@@ -107,7 +101,7 @@ Decision prompts, selected options marked ✅:
   disables auto-merge. Batch triage
   ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) built this parking:
   a PR is parked while a fixer job holds it (`src/cli/land-park.ts`), and
-  [Local mergeability](/quest/m0/land-fixer/mergeability.md) follows the same
+  [Local mergeability](/quest/m0/queue-watcher/bad-picks.md) follows the same
   rule.
 - Audit of the merge-queue plan, 2026-11-01 (an independent read-only
   agent; the maintainer then decided each point). On moq over 24 hours: 128
@@ -122,14 +116,31 @@ Decision prompts, selected options marked ✅:
     the daemon's markers, `quest status`) · keep the token
   - Flaky tests: ✅ disable only a rerun-proven flaky test, in a separate PR
     · keep the fixer's judgment and the base PR
-  - New work, all picked: ship [Attempt budget](/quest/m0/land-fixer/attempts.md)
-    right after triage; [the batch check](/quest/m0/land-fixer/batch-check.md);
-    [pre-checks](/quest/m0/land-fixer/precheck.md); and
-    [tuning](/quest/m0/land-fixer/tuning.md)
+  - New work, all picked: ship the attempt budget (now
+    [Stop rules](/quest/m0/queue-watcher/stop.md)) right after triage; the
+    batch check ([moq-dev/quest#379](https://github.com/moq-dev/quest/pull/379));
+    pre-checks ([#377](https://github.com/moq-dev/quest/pull/377)); and
+    tuning ([#376](https://github.com/moq-dev/quest/pull/376)). All three were
+    closed unmerged by the merge-queue switch below.
 - Amended 2026-11-01 (maintainer, /quest-plan in moq-dev/moq): a fixer merge
   on [moq-dev/moq#7318](https://github.com/moq-dev/moq/pull/7318) rebuilt
   `bun.lock` from the PR's side and undid the base's advisory fix; see
   [Lockfile merges](/quest/m0/land-fixer/lockfile.md).
+
+- Superseded 2026-11-01 (maintainer, /quest-plan; see the
+  [queue watcher](/quest/m0/queue-watcher/README.md)): repositories land
+  through GitHub's merge queue one PR at a time, and a host watcher runs this
+  fixer on each PR the queue drops and re-enqueues it. Batching is gone, so
+  this epic keeps only the fixer's own quality work. Moved to the watcher:
+  the attempt budget (now [Stop rules](/quest/m0/queue-watcher/stop.md)),
+  local mergeability and CI-failure parking (now
+  [Bad picks](/quest/m0/queue-watcher/bad-picks.md)), and flaky tests (now
+  [Flaky failures](/quest/m0/queue-watcher/flaky.md), without the rerun).
+  Deleted: the batch quest check, pre-checks, and throughput tuning, which
+  only served batches (the fixer cap and reasoning effort moved to
+  [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md)); and queue status in
+  the required check, since GitHub's merge queue shows each PR's position
+  itself.
 
 The README's landing section and `CONTRIBUTING.md` list what the fixer
 resolves itself and what it hands back. That docs update is the epic's own
@@ -138,18 +149,11 @@ work, done once the Required quests below have merged.
 ## Required
 
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
-- [Attempt budget](/quest/m0/land-fixer/attempts.md) - only a fix that fails again spends a pick's single attempt
 - [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
-- [Batch quest check](/quest/m0/land-fixer/batch-check.md) - the daemon runs `quest check` on the batch's chain before spending a sandbox check
-- [Pre-check queued PRs](/quest/m0/land-fixer/precheck.md) - compile and lint the next PRs against the base while a batch runs, parking broken ones before they batch
-- [Throughput tuning](/quest/m0/land-fixer/tuning.md) - batch size from the failure rate, no wasted base-conflict rounds, rerere, a fixer cap, and an explicit reasoning effort
-- [CI failures park](/quest/m0/land-fixer/ci-park.md) - a PR whose own required CI fails is parked for the fixer with the failing log, not ejected
-- [Queue status in the required check](/quest/m0/land-fixer/check-status.md) - the gate shows each PR's queue state in its required check run, never completing it
-- [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
-- [Flaky tests](/quest/m0/land-fixer/flaky.md) - the gate reruns a failed module, and a rerun-proven flaky test is disabled in a separate PR with a follow-up quest
-- [Local mergeability](/quest/m0/land-fixer/mergeability.md) - `quest land` merges with the quest driver instead of ejecting on GitHub's conflict flag
 - [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - a fixer edit `validateFix` rejects for touching protected paths comes back as a commit the maintainer applies
+- [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
 
 ## Related
 
-- [Merge through a host gate](/quest/m0/host-land/README.md) - the gate and fixer this epic extends
+- [Queue watcher](/quest/m0/queue-watcher/README.md) - runs this fixer on each PR the merge queue drops
+- [Merge through a host gate](/quest/m0/host-land/README.md) - the gate that runs it for the repositories not yet switched
