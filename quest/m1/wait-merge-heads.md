@@ -17,8 +17,10 @@ around it.
 
 - `quest wait`'s setup (`src/cli/wait.ts`) matches the point only among the
   branch's `push`, `force_push` and `branch_creation` activities. Also
-  accept `pr_merge` and `merge_queue_merge`, which #347 taught
-  `quest status`'s enabled-head lookup to count as moving the head; reuse
-  `BRANCH_UPDATES` (`src/cli/status.ts`) rather than keeping a second list.
-- Keep reporting force pushes as before: the new activity types only resolve
-  the starting point.
+  accept `pr_merge` and `merge_queue_merge` when resolving the point, the
+  types #347 taught `quest status`'s enabled-head lookup to count as moving
+  the head. Export `BRANCH_UPDATES` from `src/cli/status.ts`, or move it to a
+  module both import, rather than keeping a second list.
+- Use that merge-inclusive list only to find the starting point. The pushes
+  `quest wait` reports keep using the existing push list, so a merge into the
+  branch is never reported as `pushed`, and force pushes print as before.
