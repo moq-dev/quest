@@ -66,7 +66,8 @@ can become ready.
 ## Update or remove it
 
 Upgrade by changing the pin, then rerun `quest init` to add stubs for new
-skills; existing stubs stay as they are. To remove Quest, ask
+skills and remove the unmodified stubs of retired ones; existing stubs stay as
+they are. To remove Quest, ask
 your agent to follow SETUP.md to remove Quest. It exports active quests to
 GitHub issues, runs `quest uninstall`, and drops the pin. Uninstall never
 deletes your quest tree, and completed plans remain in Git history.

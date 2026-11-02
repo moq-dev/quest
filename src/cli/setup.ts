@@ -1,7 +1,8 @@
 // `quest init` and `quest uninstall`: install skill stubs and reverse it.
 //
-// Init touches only stubs, one reference line, one `.gitattributes` line, an
-// empty `quest/README.md` when missing, Quest's hook entries in
+// Init touches only stubs (writing missing ones and removing those of retired
+// skills), one reference line, one `.gitattributes` line, an empty
+// `quest/README.md` when missing, Quest's hook entries in
 // `.claude/settings.json`, and the clone's merge driver config. Uninstall never
 // deletes the quest tree.
 
@@ -18,11 +19,11 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { gitOutput } from "./claims";
 import { DRIVER } from "./resolve";
-import { SKILLS } from "./skills";
+import { PREFIX, SKILLS } from "./skills";
 import { HOOK_EVENTS } from "./worktree-hook";
 
 /**
@@ -63,7 +64,8 @@ export function init(root: string): string[] {
 			const path = `${dir}/SKILL.md`;
 			checkPath(root, path, "file");
 			if (isFile(join(root, path))) {
-				if (isStub(root, path, skill.stub)) return [];
+				// An older version's stub stays as it is; only a missing one is written.
+				if (isStub(root, path, skill.installed)) return [];
 				throw new Error(`${path} is not a Quest stub; remove or rename it before running \`quest init\``);
 			} else if (existsSync(join(root, dir))) {
 				throw new Error(`${dir} exists without SKILL.md; remove or rename it before running \`quest init\``);
@@ -71,6 +73,8 @@ export function init(root: string): string[] {
 			return [{ path, stub: skill.stub }];
 		}),
 	);
+	const current = new Set(SKILLS.map((skill) => skill.installed));
+	const retired = dirs.flatMap((skills) => stubs(root, skills).filter((dir) => !current.has(basename(dir))));
 	const readme = "quest/README.md";
 	checkPath(root, readme, "file");
 	const instructions = ["AGENTS.md", "CLAUDE.md"].find((name) => isFile(join(root, name))) ?? "AGENTS.md";
@@ -85,6 +89,7 @@ export function init(root: string): string[] {
 		writeFileSync(join(root, path), stub);
 		changes.push(path);
 	}
+	for (const dir of retired) changes.push(removeStub(root, dir));
 
 	if (!existsSync(join(root, readme))) {
 		mkdirSync(join(root, "quest"), { recursive: true });
@@ -165,14 +170,7 @@ export function uninstall(root: string): string[] {
 	if (uninstallHooks(root)) changes.push(CLAUDE_SETTINGS);
 	for (const skills of SKILL_DIRS) {
 		if (!isRealDir(join(root, skills))) continue;
-		for (const skill of SKILLS) {
-			const dir = `${skills}/${skill.installed}`;
-			const path = `${dir}/SKILL.md`;
-			if (!isFile(join(root, path)) || !isStub(root, path, skill.stub)) continue;
-			rmSync(join(root, path));
-			changes.push(path);
-			removeIfEmpty(join(root, dir));
-		}
+		for (const dir of stubs(root, skills)) changes.push(removeStub(root, dir));
 		removeIfEmpty(join(root, skills));
 	}
 	// Remove only the conventional link from an older Quest install whose target went away.
@@ -213,10 +211,11 @@ function skillDirs(root: string): string[] {
 }
 
 /** What sits at `path` without following a symlink, or `null` for nothing. */
-function kind(path: string): "dir" | "symlink" | "other" | null {
+function kind(path: string): "dir" | "file" | "symlink" | "other" | null {
 	try {
 		const stat = lstatSync(path);
-		return stat.isDirectory() ? "dir" : stat.isSymbolicLink() ? "symlink" : "other";
+		if (stat.isDirectory()) return "dir";
+		return stat.isFile() ? "file" : stat.isSymbolicLink() ? "symlink" : "other";
 	} catch {
 		return null;
 	}
@@ -247,9 +246,49 @@ function read(root: string, path: string): string {
 	return readFileSync(join(root, path), "utf8");
 }
 
-// Git may check out unchanged stubs with CRLF in an adopting repository.
-function isStub(root: string, path: string, stub: string): boolean {
-	return read(root, path).replaceAll("\r\n", "\n") === stub;
+/**
+ * Any version's stub: frontmatter naming the skill, then the pointer to
+ * `quest skill`. Descriptions and the setup link change between versions, so
+ * only this shape identifies a file Quest wrote. Skill frontmatter has only
+ * ever held `name` and `description`, so any other field marks an edited stub.
+ */
+const STUB =
+	/^---\nname: (\S+)\n(?:(?:name|description): .*\n)*---\n\nRun `quest skill (\S+)` and follow its output\.\nIf `quest` is not installed, follow \S+ first\.\n$/;
+
+/**
+ * Whether `path` holds a Quest stub of any version for the skill installed as
+ * `installed`. Git may check out unchanged stubs with CRLF in an adopting repository.
+ */
+function isStub(root: string, path: string, installed: string): boolean {
+	const match = STUB.exec(read(root, path).replaceAll("\r\n", "\n"));
+	return match?.[1] === installed && `${PREFIX}${match[2]}` === installed;
+}
+
+/**
+ * The skill directories under `skills`, relative to `root`, that hold a Quest
+ * stub of any version, including skills this version no longer ships. Quest
+ * writes neither links nor other files there, so it skips symlinks.
+ */
+function stubs(root: string, skills: string): string[] {
+	if (kind(join(root, skills)) === null) return [];
+	return readdirSync(join(root, skills))
+		.filter((name) => name.startsWith(PREFIX))
+		.map((name) => `${skills}/${name}`)
+		.filter(
+			(dir) =>
+				isRealDir(join(root, dir)) &&
+				kind(join(root, dir, "SKILL.md")) === "file" &&
+				isStub(root, `${dir}/SKILL.md`, basename(dir)),
+		)
+		.sort();
+}
+
+/** Delete the stub in skill directory `dir`, and the directory once empty. Returns the stub's path. */
+function removeStub(root: string, dir: string): string {
+	const path = `${dir}/SKILL.md`;
+	rmSync(join(root, path));
+	removeIfEmpty(join(root, dir));
+	return path;
 }
 
 function newline(content: string): string {
