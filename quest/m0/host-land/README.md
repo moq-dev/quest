@@ -1,22 +1,20 @@
-# Merge through a host gate
+# Merge through a host gate until the merge queue replaces it
 
 ## Goal
 
-Picking a PR to merge starts no long-lived agent. `/quest-merge` queues it
-inline only when a counted review names its head, or the head is trivial;
-otherwise `/quest-iterate` runs first. A gate on the maintainer's host lands
-small batches: a base PR plus up to floor(log₂ n) others that merge cleanly,
-checked once on the chain's tip and pushed as one squash commit per PR. A
-conflict on the base PR or a failing batch hands the PRs to an asynchronous
-Codex fixer, which makes only mechanical fixes and requeues the healthy PRs.
-Bisection goes away. Since 2026-11-01 those PRs stay queued and parked while
-the fixer works, and only a handback takes one out of the queue; see the
-[land fixer epic](/quest/m0/land-fixer/README.md).
+The maintainer's host runs the land fixer in ephemeral nspawn containers for
+the [queue watcher](/quest/m0/queue-watcher/README.md), and keeps landing the
+repositories not yet on GitHub's merge queue (moq-dev/quest, moq.pro, rust2
+and rind) through the host gate until they
+[follow](/quest/m0/queue-watcher/follow.md). The gate is frozen: it gets only
+fixes the switch needs, and is
+[retired](/quest/m0/queue-watcher/retire.md) once nothing lands through it.
 
-Non-goals: other repositories adopting the gate (moq-dev/moq, moq-dev/moq.pro
-plan their own; moq.pro needs only `allow_auto_merge` and the ruleset, since
-moq-dev is on GitHub Team), and changing the review policy beyond the
-mechanical-fix exemption.
+`/quest-merge` queues a pick inline only when a counted review names its head,
+or the head is trivial; otherwise `/quest-iterate` runs first. That part of
+the 2026-10-30 design stands.
+
+Non-goals: changing the review policy beyond the mechanical-fix exemption.
 
 ## Plan
 
@@ -95,9 +93,20 @@ can hand off instead.
   ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) went further: nothing is ejected for a failure, and the
   blamed PR is parked for the fixer.
 
+- Superseded 2026-11-01 (maintainer, /quest-plan; see the
+  [queue watcher](/quest/m0/queue-watcher/README.md)): each repository lands
+  through GitHub's merge queue again, one PR at a time, and a host watcher
+  runs this epic's fixer on each PR the queue drops and re-enqueues it.
+  moq-dev/moq moves first. The batched gate described above keeps serving the
+  other repositories until they follow, with its work frozen except for fixes
+  the switch needs. Its end-to-end batch run and its docs are dropped; the
+  watcher epic has its own. Deleted with it: keeping an in-flight batch check
+  across daemon restarts, current queue-conflict reports, the post-squash
+  mismatch comment, and gate priority for batch checks, all host-gate
+  improvements the freeze stops.
+
 ## Required
 
 - [Gate host](/quest/m0/host-land/host.md) - kixelated/nixos runs the daemon as its own user, checks in nspawn containers, and retires the Actions runner
 - [Fixer proxy access](/quest/m0/host-land/fixer.md) - connect the nixos fixer container to CLIProxyAPI with the gate client key and maintainer login
 - [Fixer TLS](/quest/m0/host-land/fixer-tls.md) - the fixer's container trusts public certificates, so workerd and the Worker tests run there
-- [Daemon restart keeps its check](/quest/m0/host-land/reattach.md) - a deploy no longer reruns the batch it interrupted
