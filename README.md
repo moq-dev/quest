@@ -438,7 +438,7 @@ failures exit 1.
 GitHub keeps auto-merge enabled across a writer's push without saying which head
 it was enabled on, so the `auto-merge` line reads it from the auto-merge commit
 body's `Quest-Land-Head` pin when [`quest land`](#land-a-batch-with-quest-land)
-queued the PR. Otherwise it is the last push to the head branch before
+queued the PR. Otherwise it is the last push or merge to the head branch before
 auto-merge was enabled, from the head repository's activity; it prints `-`
 until GitHub lists the current head's push, which takes seconds to minutes, and
 when a push shares the second auto-merge was enabled. A head there that differs

@@ -184,10 +184,13 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
 }
 
+/** Repository activity types that move a branch to a new head, including merges into it. */
+const BRANCH_UPDATES = ["push", "force_push", "branch_creation", "pr_merge", "merge_queue_merge"];
+
 /**
  * The head a PR node's auto-merge request was enabled on, or null when that cannot be told. GitHub
  * keeps auto-merge across a writer's push but does not say which head it was enabled on. A
- * `quest land` pin names it; otherwise it is the last push to the head branch before auto-merge
+ * `quest land` pin names it; otherwise it is the last push or merge to the head branch before auto-merge
  * was enabled, read from the head repository's activity once that lists the current head's push.
  * A push in the same second as enabling is ambiguous. An activity listing the token cannot read
  * leaves it unknown, with a warning, rather than failing the caller. The node needs `headRefOid`,
@@ -223,7 +226,7 @@ export async function enabledHead(
 		}
 		if (response.status === 404) return null;
 		for (const row of array(await response.json()))
-			if (["push", "force_push", "branch_creation"].includes(string(row.activity_type)))
+			if (BRANCH_UPDATES.includes(string(row.activity_type)))
 				pushes.push({ sha: string(row.after), time: Date.parse(string(row.timestamp)) });
 		path = link(response, "next");
 	}

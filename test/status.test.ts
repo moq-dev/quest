@@ -317,6 +317,18 @@ describe("the head auto-merge was enabled on", () => {
 		]);
 	});
 
+	test("counts a merge into the head branch as moving its head", async () => {
+		const result = await enabled({}, [
+			{
+				rows: [
+					push(B, "2026-10-07T12:05:00Z", "pr_merge"),
+					push(A, "2026-10-07T11:59:00Z", "merge_queue_merge"),
+				],
+			},
+		]);
+		expect(result.line).toBe(`auto-merge merge kixelated ${ENABLED} ${A}`);
+	});
+
 	test("matches the head when no push followed", async () => {
 		const result = await enabled({ commitBody: "" }, [{ rows: [push(B, "2026-10-07T11:59:59Z")] }]);
 		expect(result.line).toBe(`auto-merge merge kixelated ${ENABLED} ${B}`);
