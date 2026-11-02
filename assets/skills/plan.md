@@ -25,6 +25,5 @@ Once complete, create, update, or delete the relevant quests and epics.
 Record each settled decision and its reason in the quest's Plan, so later sessions don't ask it again, and the decision prompts in the PR.
 New work joins the milestone the user picked, at its rank; an epic groups related quests, and its README holds the work no child owns (the end-to-end test, the docs page).
 
-When done, commit, open the PR ready for review, and run `/quest-merge` on it.
-Quests planned as follow-ups of an open PR may be committed to that PR instead.
-The quest should be reviewed before it is merged.
+When done, commit, open the PR as a draft, and run `/quest-review` on it, which reviews the branch, records the `## Review` section, and marks the PR ready.
+Quests planned as follow-ups of an open PR may be committed to that PR instead, whose next push is reviewed as the guide's Reviews section describes.
