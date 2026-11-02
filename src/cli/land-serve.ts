@@ -342,8 +342,15 @@ type MergeResult =
 	{ sha: string } | { reason: "head_moved" | "merge_conflict" | "merge_refused"; detail: string } | null;
 
 /**
+ * How many times a merge is retried while GitHub catches up on a push, 15.5 s of backoff in all. A
+ * merge still unsettled after them throws, and the next round rebuilds the queue as GitHub then shows it.
+ */
+const SETTLE_RETRIES = 5;
+
+/**
  * Retry only GitHub's pending mergeability or base refresh. Any other refusal, such as squash being
  * disabled or a rule the bot cannot bypass, would refuse every round after a full check, so it ejects.
+ * `previous` is the head before the gate pushed its own base merge as `head`, if it did.
  */
 async function mergePinned(github: GitHub, path: string, head: string, previous = head): Promise<MergeResult> {
 	for (let attempt = 0; ; attempt++) {
@@ -365,14 +372,20 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 		// for it: a 409, or a 405 when the pin conflicts with the base that push merged. Neither is a writer.
 		const current = object(pull.head).sha;
 		if (previous !== head && (current === previous || (response.status === 409 && current === head))) {
-			if (attempt >= 3) throw new Error(`${detail}; prepared head has not propagated`);
+			if (attempt >= SETTLE_RETRIES) throw new Error(`${detail}; prepared head has not propagated`);
 			await github.pause(500 * 2 ** attempt);
 			continue;
 		}
 		if (current !== head) return { reason: "head_moved", detail };
-		if (pull.mergeable === false || pull.mergeable_state === "dirty") return { reason: "merge_conflict", detail };
-		if (pull.mergeable === null || /base branch was modified/i.test(String(result.message))) {
-			if (attempt >= 3) throw new Error(`${detail}; mergeability did not settle`);
+		const conflict = pull.mergeable === false || pull.mergeable_state === "dirty";
+		// Once GitHub shows the gate's own merge, it can still call it conflicting from the pin's stale
+		// mergeability, in its refusal or in the PR (moq-dev/quest#342). That merge already holds the
+		// base it was checked on, so it cannot conflict with it: wait. Only a base that moved since can
+		// conflict, and then the retries run out and the next round rebuilds on that base.
+		const stale = previous !== head && (conflict || /merge conflict/i.test(String(result.message)));
+		if (conflict && !stale) return { reason: "merge_conflict", detail };
+		if (stale || pull.mergeable === null || /base branch was modified/i.test(String(result.message))) {
+			if (attempt >= SETTLE_RETRIES) throw new Error(`${detail}; mergeability did not settle`);
 			await github.pause(500 * 2 ** attempt);
 			continue;
 		}

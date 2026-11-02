@@ -819,6 +819,73 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(forge.comment(1)).toBeUndefined();
 	});
 
+	// moq-dev/quest#342: GitHub already showed the gate's base merge as the head, but still called it
+	// conflicting from the pin's mergeability, and the gate parked it for the fixer as a merge_conflict.
+	test.each(["false", "dirty"])(
+		"a pushed head's stale conflict report (mergeable %s) is retried rather than parked",
+		async (mode) => {
+			const forge = new Forge();
+			const pull = forge.pull("Old", { "old.txt": "yes" });
+			const pin = pull.head;
+			forge.advance({ "new.txt": "yes" });
+			const deps = await forge.deps();
+			const plan = await resolveQueue(REPOSITORY, undefined, deps);
+			pull.mergeRefusals = [{ status: 405, message: "Pull Request has merge conflicts" }];
+			let attempts = 0;
+			forge.beforeMerge = () => {
+				attempts++;
+				// GitHub settles by the second attempt.
+				pull.mergeable = attempts === 1 && mode === "false" ? false : undefined;
+				pull.mergeableState = attempts === 1 && mode === "dirty" ? "dirty" : undefined;
+			};
+			const pauses: number[] = [];
+			deps.sleep = async (delay) => {
+				pauses.push(delay);
+			};
+			expect(await serveBatch(forge.clone(), plan, sandbox(), deps, async () => deps.token)).toEqual([
+				`landed 1 ${pull.squash}`,
+			]);
+			// Both attempts merge the gate's merge, which GitHub already showed, never the pin.
+			expect(forge.merges.map(({ body }) => body.sha)).toEqual([pull.head, pull.head]);
+			expect(pull.head).not.toBe(pin);
+			expect(pauses).toEqual([500]);
+			expect(forge.comment(1)).toBeUndefined();
+		},
+	);
+
+	test("a pushed head GitHub keeps calling conflicting is left queued for the next round, which lands it", async () => {
+		const forge = new Forge();
+		const pull = forge.pull("Old", { "old.txt": "yes" });
+		forge.advance({ "new.txt": "yes" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		pull.mergeRefusals = Array.from({ length: 6 }, () => ({
+			status: 405 as const,
+			message: "Pull Request has merge conflicts",
+		}));
+		pull.mergeable = false;
+		const pauses: number[] = [];
+		deps.sleep = async (delay) => {
+			pauses.push(delay);
+		};
+		const root = forge.clone();
+		const options = sandbox();
+		await expect(serveBatch(root, plan, options, deps, async () => deps.token)).rejects.toThrow(
+			"mergeability did not settle",
+		);
+		expect(pauses).toEqual([500, 1000, 2000, 4000, 8000]);
+		expect(forge.comment(1)).toBeUndefined();
+		expect(pull.landing).toBe(true);
+		expect(pull.labels).toContain("quest:merge");
+		// Once GitHub settles, the next round accepts the gate's recorded merge and lands it.
+		pull.mergeable = undefined;
+		const next = await resolvePreparedQueue(root, options.state, REPOSITORY, undefined, deps);
+		expect(next.queue[0].head).toBe(pull.head);
+		expect(await serveBatch(root, next, options, deps, async () => deps.token)).toEqual([
+			`landed 1 ${pull.squash}`,
+		]);
+	});
+
 	test("restart rejects a writer's commit after a recorded merge", async () => {
 		const forge = new Forge();
 		forge.pull("Old", { "old.txt": "yes" });
@@ -1603,16 +1670,29 @@ mv '${result}.new' '${result}'
 			);
 			const launched = eventFile(options.state, (name) => name === "fixer-result");
 			try {
-				const output = await serveBatch(forge.clone(), plan, options, deps, async () => deps.token);
-				expect(forge.merges.map(({ number }) => number)).toEqual([1, 2]);
+				const root = forge.clone();
+				const run = serveBatch(root, plan, options, deps, async () => deps.token);
+				let output: string[] = [];
+				if (reason === "merge_conflict") {
+					// The gate's own merge of PR 1's squash into PR 2 holds that base, so GitHub calling it
+					// conflicting right after the push is not taken as a conflict: the next round rebuilds it.
+					await expect(run).rejects.toThrow("mergeability did not settle");
+					expect(forge.comment(2)).toBeUndefined();
+				} else output = await run;
+				expect([...new Set(forge.merges.map(({ number }) => number))]).toEqual([1, 2]);
 				expect(forge.repo.pulls[0].merged).toBe(true);
 				// PR 3 passed the check with it: it stays queued, without a comment, to be rebuilt on the new base.
 				expect(forge.repo.pulls[2].landing).toBe(true);
 				expect(forge.comment(3)).toBeUndefined();
 				expect(forge.repo.pulls[3].landing).toBe(true);
 				if (reason === "merge_conflict") {
-					// A conflict parks the PR for the fixer, keeping its auto-merge.
-					expect(output).toEqual([`landed 1 ${forge.repo.pulls[0].squash}`, "parked 2"]);
+					// A round on PR 2 alone merges that recorded head as it stands, with no push, and GitHub
+					// still calls it conflicting: a conflict parks the PR for the fixer, keeping its auto-merge.
+					forge.settle();
+					const next = await resolvePreparedQueue(root, options.state, REPOSITORY, undefined, deps);
+					const alone = { ...next, queue: next.queue.filter((entry) => entry.number === 2) };
+					expect(alone.queue[0].head).toBe(forge.repo.pulls[1].head);
+					expect(await serveBatch(root, alone, options, deps, async () => deps.token)).toEqual(["parked 2"]);
 					await launched;
 					expect(readFileSync(result, "utf8").trim().split("\n").slice(1)).toEqual(["2"]);
 					expect(forge.repo.pulls[1].landing).toBe(true);
@@ -1671,7 +1751,7 @@ mv '${result}.new' '${result}'
 			const plan = await resolveQueue(REPOSITORY, undefined, deps);
 			const message =
 				mode === "base modified" ? "Base branch was modified. Review and try the merge again" : mode;
-			pull.mergeRefusals = Array.from({ length: 4 }, () => ({ status: 405 as const, message }));
+			pull.mergeRefusals = Array.from({ length: 6 }, () => ({ status: 405 as const, message }));
 			forge.beforeMerge = () => {
 				pull.mergeable = mode === "false" ? false : mode === "pending" ? null : true;
 				pull.mergeableState = mode === "dirty" ? "dirty" : mode === "required check" ? "blocked" : "clean";
@@ -1706,7 +1786,7 @@ mv '${result}.new' '${result}'
 				expect(forge.comment(1)).toBeUndefined();
 				expect(pull.labels).toContain("quest:merge");
 			}
-			if (mode === "pending" || mode === "base modified") expect(pauses).toEqual([500, 1000, 2000]);
+			if (mode === "pending" || mode === "base modified") expect(pauses).toEqual([500, 1000, 2000, 4000, 8000]);
 		},
 	);
 
@@ -2567,6 +2647,99 @@ printf '{"action":"fixed","head":"%s","reason":"edit the flake"}' "$(git rev-par
 		expect(await fixture.collect(deps)).toEqual(["requeued 1"]);
 		expect(fixture.pull.body).toContain(`(head ${fixture.pull.head})`);
 	});
+
+	/**
+	 * moq-dev/quest#342: once another PR landed, the gate pushed and recorded its own merge of the new
+	 * base into PR 1's pin, then failed to land it and parked the PR, so its fixer job holds the pin.
+	 */
+	async function gateMerge(fixture: Awaited<ReturnType<typeof fixerFixture>>): Promise<string> {
+		fixture.forge.advance({ "landed.txt": "another PR\n" });
+		const deps = await fixture.forge.deps();
+		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+		const link = (await build(fixture.root, plan)).links[0];
+		const prepared = await prepareHead(
+			fixture.root,
+			fixture.state.state,
+			plan,
+			plan.queue[0],
+			plan.base.sha,
+			link.tree,
+			async () => deps.token,
+		);
+		if (!("head" in prepared)) throw new Error(`no gate merge: ${JSON.stringify(prepared)}`);
+		expect(prepared.head).not.toBe(fixture.plan.queue[0].head);
+		return prepared.head;
+	}
+	test("requeues a PR at the gate's own merge pushed while it was parked, pinned there", async () => {
+		const fixture = await fixerFixture(requeueScript);
+		await fixture.finished;
+		const merged = await gateMerge(fixture);
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+		expect(fixture.pull.head).toBe(merged);
+		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(merged));
+		expect(fixture.pull.labels).toContain("quest:merge");
+		expect(fixture.forge.comment(1)).toBeUndefined();
+		const next = await resolveQueue(REPOSITORY, undefined, fixture.deps);
+		expect(next.eject).toEqual([]);
+		expect(next.queue.map(({ head, approved }) => [head, approved])).toEqual([[merged, merged]]);
+	});
+	test("replaces the gate's own merge with a fix built on the pin, and pins the fix", async () => {
+		const fixture = await fixerFixture(fixedScript());
+		await fixture.finished;
+		const merged = await gateMerge(fixture);
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+		const fixed = fixture.pull.head!;
+		expect(fixed).not.toBe(merged);
+		expect(git(fixture.root, "rev-parse", `${fixed}^`)).toBe(fixture.plan.queue[0].head);
+		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixed));
+		expect(fixture.pull.body).toContain(`(head ${fixed})`);
+		expect(fixture.pull.labels).toContain("quest:merge");
+	});
+	test("hands back with the fixer's diagnosis at the gate's own merge, not as a moved head", async () => {
+		const fixture = await fixerFixture(
+			`printf '[{"number":1,"action":"handback","diagnosis":"behavior change required","recommendation":"run quest-iterate"}]' > quest-land-result.json`,
+		);
+		await fixture.finished;
+		const merged = await gateMerge(fixture);
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.pull.head).toBe(merged);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("behavior change required");
+		expect(fixture.forge.comment(1)).not.toContain("head moved");
+	});
+	test.each(["forged", "writer"])(
+		"hands back a %s commit at the gate merge's place, keeping the fix unpushed",
+		async (mode) => {
+			const fixture = await fixerFixture(fixedScript());
+			await fixture.finished;
+			const merged = await gateMerge(fixture);
+			// A copy of the gate's merge in everything but its timestamp, or a writer's commit on it.
+			const [tree, parents] = git(fixture.forge.origin, "show", "-s", "--format=%T|%P", merged).split("|");
+			const env = {
+				...process.env,
+				GIT_AUTHOR_NAME: "moq-bot",
+				GIT_AUTHOR_EMAIL: "moq-bot@users.noreply.github.com",
+				GIT_COMMITTER_NAME: "moq-bot",
+				GIT_COMMITTER_EMAIL: "moq-bot@users.noreply.github.com",
+				GIT_AUTHOR_DATE: "2001-01-01T00:00:00Z",
+				GIT_COMMITTER_DATE: "2001-01-01T00:00:00Z",
+			};
+			const moved = execFileSync(
+				"git",
+				[
+					"commit-tree",
+					tree,
+					...(mode === "forged" ? parents.split(" ") : [merged]).flatMap((parent) => ["-p", parent]),
+				],
+				{ cwd: fixture.forge.origin, encoding: "utf8", input: "quest land: merge tested base\n", env },
+			).trim();
+			git(fixture.forge.origin, "update-ref", "refs/heads/topic-1", moved);
+			expect(await fixture.collect()).toEqual(["handback 1"]);
+			expect(fixture.pull.head).toBe(moved);
+			expect(fixture.pull.landing).toBe(false);
+			expect(fixture.forge.comment(1)).toContain("head moved");
+		},
+	);
 	test.each([
 		[
 			"handback",

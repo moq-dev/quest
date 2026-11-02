@@ -558,7 +558,10 @@ follows the fixer's Git alternates. Pack indexes are rebuilt with
 checks every object and link, since the import enables `fetch.fsckObjects=true`. It records `mechanical fix by <recorded agent/model>: <reason>` and the new head in
 `## Review`, and enables head-pinned auto-merge again on the fixed head, which keeps
 the place of the pick it descends from. Healthy PRs go back to batches unchanged,
-without a comment. Forks refusing maintainer edits, refused pushes, invalid results,
+without a comment. A PR the daemon moved to its own recorded base merge before
+parking it is collected at that merge: a requeue pins it, and a fix, built on the
+pin, replaces it with a lease, since building on it would revert its newer base.
+Any other moved head hands back. Forks refusing maintainer edits, refused pushes, invalid results,
 crashes, or the 60-minute fixer deadline hand back with a marked comment naming the exit
 status or signal, with the tail of the job's retained log. A validated fix whose push
 GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
@@ -645,7 +648,10 @@ and is rebuilt and checked on the new base.
 After an API refusal, the daemon re-reads mergeability and briefly retries
 pending mergeability or a base refresh. It also retries while GitHub still
 reports the pin as the head of a PR it just prepared, since GitHub can refuse the
-merge for that stale head; only another writer's head ejects `head_moved`.
+merge for that stale head; only another writer's head ejects `head_moved`. It
+likewise retries while GitHub calls the merge it just pushed conflicting, since
+that merge holds the tested base; if GitHub still does after about 15 seconds,
+the next round rebuilds the queue on the base as it then is.
 A confirmed conflict parks only that PR for the fixer and a moved head ejects
 only that PR; the rest stays queued. A persistent policy refusal ejects as `merge_refused` without the
 fixer. Already-merged PRs are skipped. An unexpected API squash parent means the
