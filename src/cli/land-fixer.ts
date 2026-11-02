@@ -903,6 +903,14 @@ async function collectJob(
 		let error = job.handbacks?.[number] ?? job.error;
 		const pullPath = `/repos/${job.plan.repository}/pulls/${number}`;
 		const pull = object(await (await github.request(pullPath)).json());
+		// A PR merged while the fixer ran has landed: there is nothing to apply, hand back, or take out
+		// of the queue, and GitHub refuses to disable a merged PR's auto-merge, which it still reports.
+		if (pull.merged === true) {
+			output.push(`merged ${number}`);
+			job.numbers.shift();
+			save(path, job);
+			continue;
+		}
 		const current = string(object(pull.head).sha);
 		const queued = await github.graphql(
 			"query($id: ID!) { node(id: $id) { ... on PullRequest { state autoMergeRequest { enabledAt } } } }",
@@ -1040,7 +1048,8 @@ async function collectJob(
 				job.left = [...(job.left ?? []), number];
 				save(path, job);
 			}
-			if (ours)
+			// A closed PR is out of the queue already, and GitHub refuses to disable its auto-merge.
+			if (ours && pull.state === "open")
 				await github.graphql(
 					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 					{ id: entry.id },
