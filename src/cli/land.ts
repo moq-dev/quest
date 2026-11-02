@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-import { type Finding, MERGE_LABEL, check, formatFinding } from "../core";
+import { type Finding, check, formatFinding, isQuest, remove } from "../core";
 import { repositoryPath } from "./claims";
+import { programEnvironment } from "./program";
 import {
 	GitHub,
 	GitHubDeadline,
@@ -16,7 +17,7 @@ import {
 	string,
 } from "./github";
 import { classifyCheck } from "./status";
-import { snapshot } from "./tree";
+import { committedSources, snapshot } from "./tree";
 
 /** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
 export const LAND_CHECK = "quest land";
@@ -575,8 +576,54 @@ function squash(dir: string, driver: string, entry: Entry): string[] | null {
 		git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
 		return files;
 	}
+	prune(dir, entry.head);
 	git(dir, ["commit", "--quiet", "--allow-empty", "-m", `${entry.title} (#${entry.number})`]);
 	return null;
+}
+
+/**
+ * Finish a clean merge of `head` into `HEAD`, staged in the index, by dropping each list entry
+ * that links to a quest `HEAD` finished since `head` branched, as `quest rm` drops links to a
+ * quest it deletes. The PR wrote that link while the quest was open, so the base finishing it
+ * leaves the link dangling through no fault of the PR, and `quest check` would reject it.
+ * Deletion since the merge base tells a finished quest from a mistyped link, and a quest the base
+ * moved is a rename, not a deletion. A link in prose stays, for `quest check` to report. Both the
+ * chain and a prepared head merge through here, so the head lands the tree the chain tested.
+ * Returns the documents it changed.
+ */
+function prune(dir: string, head: string): string[] {
+	const since = git(dir, ["merge-base", "HEAD", head]);
+	const finished = new Set(
+		git(dir, [
+			"diff",
+			"--no-ext-diff",
+			"--find-renames",
+			"--diff-filter=D",
+			"--name-only",
+			"-z",
+			since,
+			"HEAD",
+			"--",
+			"quest",
+		])
+			.split("\0")
+			.filter(isQuest),
+	);
+	if (finished.size === 0) return [];
+	let tree: ReturnType<typeof committedSources>;
+	try {
+		tree = committedSources(dir, git(dir, ["write-tree"]), false);
+	} catch {
+		// A tree `quest check` cannot read is its finding to report, not this edit's.
+		return [];
+	}
+	const modes = new Map(tree.sources.map((source) => [source.path, source.mode]));
+	const texts = remove(tree.sources, (path) => finished.has(path) && !tree.exists(path));
+	for (const [path, text] of texts) {
+		const oid = git(dir, ["hash-object", "-w", "--no-filters", "--stdin"], { input: text });
+		git(dir, ["update-index", "--cacheinfo", `${modes.get(path)},${oid},${path}`]);
+	}
+	return [...texts.keys()];
 }
 
 /** How many queued PRs ahead of a newly queued one its conflict report covers: those landing soonest. */
@@ -680,9 +727,13 @@ export function mergeBase(
 		const result = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--no-ff", "--no-commit", head]);
 		if (result.status !== 0)
 			return { reason: "merge_conflict", detail: `${result.stdout}\n${result.stderr}`.trim() };
+		const pruned = prune(dir, head);
 		const tree = git(dir, ["write-tree"]);
+		const message = pruned.length
+			? `quest land: merge tested base\n\nDrop links to quests the base finished from ${pruned.join(", ")}.\n`
+			: "quest land: merge tested base\n";
 		const commit = git(dir, ["commit-tree", tree, "-p", head, "-p", base], {
-			input: "quest land: merge tested base\n",
+			input: message,
 			env: {
 				GIT_AUTHOR_NAME: "moq-bot",
 				GIT_AUTHOR_EMAIL: "moq-bot@users.noreply.github.com",
@@ -700,9 +751,9 @@ export function ejection(entry: Entry, reason: Reason, detail: string): Ejection
 }
 
 /**
- * Remove `ejection` from the queue: disable its auto-merge, drop `quest:merge`,
- * and comment with the reason. A PR whose auto-merge was enabled again since
- * the queue was read is a new entry and is left alone. Returns whether it ejected.
+ * Remove `ejection` from the queue: disable its auto-merge and comment with the
+ * reason. A PR whose auto-merge was enabled again since the queue was read is a
+ * new entry and is left alone. Returns whether it ejected.
  */
 export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Promise<boolean> {
 	const data = await github.graphql(
@@ -721,7 +772,6 @@ export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Pro
 	}
 	const [owner, repo] = plan.repository.split("/");
 	const issue = `${repositoryPath({ owner, repo })}/issues/${ejection.number}`;
-	await github.request(`${issue}/labels/${encodeURIComponent(MERGE_LABEL)}`, { method: "DELETE", allow: [404] });
 	await github.request(`${issue}/comments`, {
 		body: {
 			body: `quest land removed this pull request from the queue: ${ejection.detail}.\n\n<!-- quest land: ${ejection.reason} -->`,
@@ -739,9 +789,13 @@ function lines(text: string): string[] {
 	return text.split("\n").filter((line) => line !== "");
 }
 
-/** Deliberately exclude HOME, Git configuration, agents, tokens, and systemd credentials. */
+/**
+ * Deliberately exclude HOME, Git configuration, agents, tokens, and systemd
+ * credentials. PATH keeps only its absolute directories: these commands run in
+ * a PR's checkout, which could otherwise supply its own `git` or `sh`.
+ */
 export function commandEnvironment(): NodeJS.ProcessEnv {
-	return { PATH: process.env.PATH, LANG: "C.UTF-8" };
+	return { ...programEnvironment({ PATH: process.env.PATH }), LANG: "C.UTF-8" };
 }
 
 /** Git's environment for trusted work: no system or global configuration, and no prompts. */

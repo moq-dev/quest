@@ -72,5 +72,3 @@ commands from Sep-Oct. Session counts in each child come from that window.
 
 - [quest merge --land gaps](/quest/m0/helpers/merge-land.md) - squash on squash-only repositories, PR URLs outside a checkout, labels released after direct merges, and a warning when auto-merge outlives its head
 - [Headless agents](/quest/m0/helpers/headless-agents.md) - `/quest-spawn api` launches, resumes, and stops billed agents through one command auto mode allows
-- [Sibling PRs through a server-side merge](/quest/m0/helpers/queue-siblings.md) - children of one epic land back to back through a merge queue without conflicting on its link list
-- [moq-dev/quest lands through quest land](/quest/m0/helpers/land-adopt.md) - this repository's `main` changes only through its own gate

@@ -16,7 +16,6 @@
 	"vars": {
 		"AUTH_URL": "https://kix.quest",
 		"GITHUB_APP_ID": "",
-		"GITHUB_FORK_OWNER": "",
 		"GOOGLE_CLIENT_ID": "",
 		// The Web Push application server key; see README.md. Notifications stay off while it is empty.
 		"VAPID_PUBLIC_KEY": "",
