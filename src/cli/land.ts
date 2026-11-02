@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-import { type Finding, MERGE_LABEL, check, formatFinding, isQuest, remove } from "../core";
+import { type Finding, check, formatFinding, isQuest, remove } from "../core";
 import { repositoryPath } from "./claims";
+import { programEnvironment } from "./program";
 import {
 	GitHub,
 	GitHubDeadline,
@@ -750,9 +751,9 @@ export function ejection(entry: Entry, reason: Reason, detail: string): Ejection
 }
 
 /**
- * Remove `ejection` from the queue: disable its auto-merge, drop `quest:merge`,
- * and comment with the reason. A PR whose auto-merge was enabled again since
- * the queue was read is a new entry and is left alone. Returns whether it ejected.
+ * Remove `ejection` from the queue: disable its auto-merge and comment with the
+ * reason. A PR whose auto-merge was enabled again since the queue was read is a
+ * new entry and is left alone. Returns whether it ejected.
  */
 export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Promise<boolean> {
 	const data = await github.graphql(
@@ -771,7 +772,6 @@ export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Pro
 	}
 	const [owner, repo] = plan.repository.split("/");
 	const issue = `${repositoryPath({ owner, repo })}/issues/${ejection.number}`;
-	await github.request(`${issue}/labels/${encodeURIComponent(MERGE_LABEL)}`, { method: "DELETE", allow: [404] });
 	await github.request(`${issue}/comments`, {
 		body: {
 			body: `quest land removed this pull request from the queue: ${ejection.detail}.\n\n<!-- quest land: ${ejection.reason} -->`,
@@ -789,9 +789,13 @@ function lines(text: string): string[] {
 	return text.split("\n").filter((line) => line !== "");
 }
 
-/** Deliberately exclude HOME, Git configuration, agents, tokens, and systemd credentials. */
+/**
+ * Deliberately exclude HOME, Git configuration, agents, tokens, and systemd
+ * credentials. PATH keeps only its absolute directories: these commands run in
+ * a PR's checkout, which could otherwise supply its own `git` or `sh`.
+ */
 export function commandEnvironment(): NodeJS.ProcessEnv {
-	return { PATH: process.env.PATH, LANG: "C.UTF-8" };
+	return { ...programEnvironment({ PATH: process.env.PATH }), LANG: "C.UTF-8" };
 }
 
 /** Git's environment for trusted work: no system or global configuration, and no prompts. */

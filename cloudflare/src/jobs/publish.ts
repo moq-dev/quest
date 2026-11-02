@@ -279,7 +279,7 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 		});
 	} catch (error) {
 		if (!(error instanceof PublicationBlocked)) throw error;
-		// Only a service fork branch is kix's to reset; a pull request's own head is not.
+		// Only a job's own upstream branch is kix's to reset; a pull request's own head is not.
 		const restart = error instanceof BranchChanged && !onPull(job.workflow);
 		const moved =
 			error instanceof BranchChanged && job.workflow === "merge" && job.head !== null && job.pending === null
@@ -327,7 +327,7 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 }
 
 /**
- * Start a job over after a publication found its service fork branch changed
+ * Start a job over after a publication found its own upstream branch changed
  * or left by earlier work: replace the job with a fresh one at its revision,
  * then reset the branch there. The new job's delivery adopts the branch's
  * pull request if it is still open, and otherwise opens another.

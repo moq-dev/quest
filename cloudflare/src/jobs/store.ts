@@ -60,7 +60,7 @@ export type Job = {
 	pull: number | null;
 	/** The failed job this retry continues. */
 	continues: string | null;
-	/** A merge job's `quest:merge` label: the timeline event that added it, until kix releases it. */
+	/** A merge job's `quest:kix` label: the timeline event that added it, until kix releases it. */
 	hold: string | null;
 	/** A new plan's request: the maintainer's idea, and pasted context the agent reads as untrusted. */
 	idea: string | null;
@@ -1187,7 +1187,7 @@ export async function hold(db: D1Database, job: string, input: { summary: string
 }
 
 /**
- * Record the acquired `quest:merge` label even if the job was stopped meanwhile,
+ * Record the acquired `quest:kix` label even if the job was stopped meanwhile,
  * so the sweep can recover a failed immediate release. Returns whether the job
  * is still queued and may start.
  */

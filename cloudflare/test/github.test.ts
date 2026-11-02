@@ -9,7 +9,6 @@ import { delivery } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
 const repo: GitHubRepository = { owner: "upstream", name: "project", id: 10 };
-const fork: GitHubRepository = { owner: "quest-bot-forks", name: "project", id: 20 };
 
 function installation(action: string) {
 	return { action, installation: { id: 5, app_id: 123 } };
@@ -187,7 +186,6 @@ function github(
 		suspended?: boolean;
 		missing?: boolean;
 		permissions?: Record<string, string>;
-		parent?: number;
 		merges?: ("squash" | "merge" | "rebase")[];
 		cleanupFails?: boolean;
 		failMutation?: boolean;
@@ -203,7 +201,7 @@ function github(
 		if (path.endsWith("/installation")) {
 			if (options.missing) return json({}, 404);
 			return json({
-				id: path.includes("quest-bot-forks") ? 6 : 5,
+				id: 5,
 				app_id: 123,
 				suspended_at: options.suspended ? "2026-10-13" : null,
 				permissions: options.permissions ?? {
@@ -216,8 +214,7 @@ function github(
 				},
 			});
 		}
-		if (path.endsWith("/access_tokens"))
-			return json({ token: path.includes("/6/") ? "fork-token" : "upstream-token" });
+		if (path.endsWith("/access_tokens")) return json({ token: "upstream-token" });
 		if (path === "/installation/token")
 			return options.cleanupFails ? json({}, 500) : new Response(null, { status: 204 });
 		if (path === "/user/7") return json({ id: options.account ?? 7, login: "maintainer" });
@@ -227,16 +224,13 @@ function github(
 				permission: options.role === "admin" ? "admin" : "write",
 				role_name: options.role ?? "maintain",
 			});
-		if (path === "/repos/upstream/project" || path === "/repos/quest-bot-forks/project") {
-			const isFork = path.includes("quest-bot-forks");
+		if (path === "/repos/upstream/project") {
 			return json({
-				id: isFork ? 20 : 10,
+				id: 10,
 				name: "project",
-				owner: { login: isFork ? fork.owner : repo.owner },
+				owner: { login: repo.owner },
 				archived: false,
 				disabled: false,
-				fork: isFork,
-				parent: { id: options.parent ?? 10 },
 				allow_squash_merge: (options.merges ?? ["squash", "merge", "rebase"]).includes("squash"),
 				allow_merge_commit: (options.merges ?? ["squash", "merge", "rebase"]).includes("merge"),
 				allow_rebase_merge: (options.merges ?? ["squash", "merge", "rebase"]).includes("rebase"),

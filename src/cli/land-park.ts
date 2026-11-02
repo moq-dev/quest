@@ -9,8 +9,8 @@ import type { Entry, Plan } from "./land";
  * still hold a PR that a newer pick parked again. A PR is parked from the
  * moment `startFixer` records its job until the job's result for it is collected, so parking never
  * outlives its job: a collected `requeue` or `fixed` puts the PR back in batches, and only a handback
- * takes it out of the queue. Parking changes nothing on GitHub: the PR keeps its auto-merge, its
- * `quest:merge` label, and its place, and gets no ejection comment. A new maintainer pick (a new
+ * takes it out of the queue. Parking changes nothing on GitHub: the PR keeps its auto-merge and its
+ * place, and gets no ejection comment. A new maintainer pick (a new
  * `enabledAt`) is not parked, so it rejoins batches at once.
  */
 export function parked(state: string): Map<number, Set<string>> {
