@@ -51,7 +51,3 @@ naming the follow-up quest: `#[ignore = "flaky: /quest/m0/flaky/<name>.md"]`,
 fix the test or delete it, and links the `merge_group` runs that showed the
 flake. A disabled test that is a quest's acceptance test still counts as its
 quest's work.
-
-## Required
-
-- [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - the fixer's flaky verdict and the re-enqueue

@@ -140,8 +140,8 @@ Decision prompts, selected options marked ✅:
   pick GitHub refuses fails `quest merge` instead), and flaky tests (now
   [Flaky failures](/quest/m0/queue-watcher/flaky.md), without the rerun).
   Deleted: the batch quest check, pre-checks, and throughput tuning, which
-  only served batches (the fixer cap and reasoning effort moved to
-  [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md)); and queue status in
+  only served batches (the fixer cap and reasoning effort moved to the
+  watcher, as `quest land watch --fixer-jobs` and `--fixer-effort`); and queue status in
   the required check, since GitHub's merge queue shows each PR's position
   itself.
 
