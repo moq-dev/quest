@@ -61,7 +61,8 @@ export interface RequestOptions {
 /** Accept a GitHub PR URL, or a number in the origin repository. */
 export function pullRequest(value: string, root: string): PullRequest {
 	if (/^[1-9]\d*$/.test(value)) {
-		const { repository } = remoteRepository(root, "origin");
+		const origin = readRemote(root, "origin");
+		const repository = origin && remoteRepository(origin).repository;
 		if (!repository) throw new Error("origin must name a github.com repository; pass a GitHub PR URL instead");
 		return { ...repository, number: Number(value) };
 	}
@@ -70,12 +71,82 @@ export function pullRequest(value: string, root: string): PullRequest {
 	return { owner: match[1], repo: match[2], number: Number(match[3]) };
 }
 
-/** The URL a git remote fetches from. */
-export function remoteUrl(root: string, remote: string): string {
-	return execFileSync("git", ["-C", root, "remote", "get-url", remote], {
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "pipe"],
-	}).trim();
+/**
+ * A git remote, read once per command so repeated lookups spawn no more git:
+ * its URLs as configured, and the URLs git uses after `insteadOf` rewrites.
+ */
+export interface Remote {
+	name: string;
+	/** `remote.<name>.url`, and `.pushurl` or `null` when unset, as configured: the last value of each, as `git config --get` prints. */
+	configured: { fetch: string; push: string | null };
+	/** The URLs fetches and pushes use, as `git remote get-url [--push]` prints them. */
+	used(): { fetch: string; push: string };
+}
+
+/**
+ * Read `name` from the repository at `root` with one git process, or `null`
+ * when it has no configured URL. Only when the configuration rewrites URLs do
+ * the rewritten ones cost another, on first use.
+ */
+export function readRemote(root: string, name: string): Remote | null {
+	const key = `remote.${name}.`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	// Every value in order: the last is what `git config --get` prints, the first what git uses.
+	const fetch: string[] = [];
+	const push: string[] = [];
+	let rewrites = false;
+	// `-z` prints `key\nvalue\0` for each value.
+	const listing = git(root, [
+		"config",
+		"-z",
+		"--get-regexp",
+		`^(${key}(url|pushurl)|url\\..*\\.(insteadof|pushinsteadof))$`,
+	]);
+	for (const entry of listing.split("\0")) {
+		const at = entry.indexOf("\n");
+		if (at < 0) continue;
+		const [variable, value] = [entry.slice(0, at), entry.slice(at + 1)];
+		if (variable.startsWith("url.")) rewrites = true;
+		else if (variable.endsWith(".pushurl")) push.push(value);
+		else fetch.push(value);
+	}
+	if (fetch.length === 0) return null;
+	const configured = { fetch: fetch.at(-1)!, push: push.at(-1) ?? null };
+	let used = rewrites ? null : { fetch: fetch[0], push: push[0] ?? fetch[0] };
+	return {
+		name,
+		configured,
+		used: () => (used ??= rewritten(root, name)),
+	};
+}
+
+/** The URLs `git remote get-url [--push]` prints for `name`, from one `git remote -v`. */
+function rewritten(root: string, name: string): { fetch: string; push: string } {
+	const urls: { fetch?: string; push?: string } = {};
+	// `<name>\t<url> (fetch|push)` for each URL of every remote, a partial clone's fetch followed by
+	// ` [<filter>]`; get-url prints the first of each.
+	for (const line of git(root, ["remote", "-v"]).split("\n")) {
+		const match = /^([^\t]+)\t(.*) \((fetch|push)\)(?: \[[^\]]*\])?$/.exec(line);
+		if (match !== null && match[1] === name) urls[match[3] as "fetch" | "push"] ??= match[2];
+	}
+	if (urls.fetch === undefined) throw new Error(`no ${name} remote`);
+	return { fetch: urls.fetch, push: urls.push ?? urls.fetch };
+}
+
+/** Run git in `root` for its output; a lookup that matches nothing, which exits 1, is empty. */
+function git(root: string, args: string[]): string {
+	try {
+		return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	} catch (error) {
+		if (args[0] === "config" && (error as { status?: number }).status === 1) return "";
+		throw error;
+	}
+}
+
+/** Read `name` like `readRemote`, failing when there is no such remote. */
+export function requireRemote(root: string, name: string): Remote {
+	const remote = readRemote(root, name);
+	if (remote === null) throw new Error(`no ${name} remote`);
+	return remote;
 }
 
 /**
@@ -83,28 +154,11 @@ export function remoteUrl(root: string, remote: string): string {
  * repository it names. The configured URL comes first, so a rewrite
  * (`insteadOf`) to another host still names GitHub; otherwise the rewritten one.
  */
-export function remoteRepository(
-	root: string,
-	remote: string,
-	push = false,
-): { url: string; repository: Repository | null } {
-	const git = (args: string[]) => {
-		try {
-			return execFileSync("git", ["-C", root, ...args], {
-				encoding: "utf8",
-				stdio: ["ignore", "pipe", "pipe"],
-			}).trim();
-		} catch {
-			// An unset config key exits 1.
-			return "";
-		}
-	};
-	const configured =
-		(push ? git(["config", "--get", `remote.${remote}.pushurl`]) : "") ||
-		git(["config", "--get", `remote.${remote}.url`]);
+export function remoteRepository(remote: Remote, push = false): { url: string; repository: Repository | null } {
+	const configured = (push ? remote.configured.push : null) ?? remote.configured.fetch;
 	const named = githubRepository(configured);
 	if (named !== null) return { url: configured, repository: named };
-	const url = push ? git(["remote", "get-url", "--push", remote]) : remoteUrl(root, remote);
+	const url = push ? remote.used().push : remote.used().fetch;
 	return { url, repository: githubRepository(url) };
 }
 
