@@ -33,7 +33,7 @@ export type Pull = Issue & {
 	draft?: boolean;
 	/** Opened from this contributor's own fork, which the bot cannot update. */
 	contributor?: string;
-	/** A `## Decisions needed` section in it hands a draft back to the maintainer. */
+	/** A `## Waiting` section in it hands a draft back to the maintainer. */
 	body?: string;
 	/** Who last edited the body; never edited when absent. */
 	editor?: string;

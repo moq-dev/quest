@@ -281,7 +281,7 @@ export function ago(now: number, time: number): string {
 export function describe(branch: string, pull: OpenPull | null, now: number): string {
 	if (pull === null) return `branch ${branch}, with no open PR`;
 	// A draft without the hand-back heading is still its starter's; the others wait on the maintainer.
-	const state = !pull.draft ? "ready for review" : pull.handedBack ? "draft, decisions needed" : "draft";
+	const state = !pull.draft ? "ready for review" : pull.handedBack ? "draft, waiting" : "draft";
 	return `${pull.url} (${state}, last active ${ago(now, pull.updated)})`;
 }
 

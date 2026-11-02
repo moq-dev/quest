@@ -2,7 +2,7 @@
 // a time. It holds the `quest:active` label, and the ID of the timeline event
 // that added the label is its hold token, since sessions often share an account.
 // `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
-import { ACTIVE_LABEL, handedBack, isHoldLabel, latestHold, heldToken } from "../core";
+import { ACTIVE_LABEL, handedBack, isHoldLabel, latestHold, heldToken, withoutHandBack } from "../core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../github/merge";
 import { repositoryPath } from "./claims";
 import {
@@ -130,8 +130,9 @@ export async function take(pr: PullRequest, token: string | undefined, deps: Git
 }
 
 /**
- * While `token` holds `pr`, hand it to reviewers: drop its `## Decisions needed`
- * section and mark a draft ready for review. The hold stays.
+ * While `token` holds `pr`, hand it to reviewers: drop its `## Waiting` section
+ * (or the older `## Decisions needed`) and mark a draft ready for review. The
+ * hold stays.
  */
 export async function finish(pr: PullRequest, token: string, deps: GitHubDependencies): Promise<Hold> {
 	const labels = new Labels(pr, deps);
@@ -448,7 +449,7 @@ function unheld(snapshot: Snapshot, mine: string | undefined, now: number): void
 	if (other !== undefined) throw new Refusal(holder(snapshot, other, now));
 	if (mine === undefined && starterHeld(snapshot)) {
 		throw new Refusal(
-			`${snapshot.url} is a draft its starter still holds: its body has no ## Decisions needed section, so taking it over is the user's choice`,
+			`${snapshot.url} is a draft its starter still holds: its body has no ## Waiting section, so taking it over is the user's choice`,
 		);
 	}
 }
@@ -479,18 +480,6 @@ function holder(snapshot: Snapshot, label: string, now: number): string {
 	const added = latestHold(snapshot.events, label);
 	const since = added ? `, added ${ago(now, added.time)} as token ${added.id}` : "";
 	return `${snapshot.url} is held by ${label}${since}; if it looks stale, ask the user before releasing it`;
-}
-
-/** `body` without its `## Decisions needed` sections, each running to the next heading of level 1 or 2. */
-export function withoutHandBack(body: string): string {
-	const kept: string[] = [];
-	let skipping = false;
-	for (const line of body.split("\n")) {
-		if (handedBack(line)) skipping = true;
-		else if (/^#{1,2}[ \t]/.test(line)) skipping = false;
-		if (!skipping) kept.push(line);
-	}
-	return kept.join("\n").trimEnd();
 }
 
 /** One PR's labels on GitHub. */

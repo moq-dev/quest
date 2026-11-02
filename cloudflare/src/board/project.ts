@@ -34,7 +34,7 @@ export type Change = {
 	href: string;
 	/** The pull request's number, when the change is one observed on GitHub. */
 	number?: number;
-	/** A draft its author still holds, without a `## Decisions needed` section: a claim, not yet turned in. */
+	/** A draft its author still holds, without a `## Waiting` (or older `## Decisions needed`) section: a claim, not yet turned in. */
 	owned?: boolean;
 };
 

@@ -394,7 +394,7 @@ describe("start on GitHub", () => {
 
 		await expect(attempt()).rejects.toThrow(`${ONE} is held by ${pull.html_url} (draft, last active just now)`);
 		pull.body = "Work so far.\n\n## Decisions needed\n\n1. Which name?\n";
-		await expect(attempt()).rejects.toThrow(`held by ${pull.html_url} (draft, decisions needed,`);
+		await expect(attempt()).rejects.toThrow(`held by ${pull.html_url} (draft, waiting,`);
 		pull.draft = false;
 		await expect(attempt()).rejects.toThrow(`held by ${pull.html_url} (ready for review,`);
 		expect(tip(bare)).toBe("");

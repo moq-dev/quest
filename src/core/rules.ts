@@ -26,13 +26,14 @@ import {
 	withoutFragment,
 } from "./doc";
 import { comparePaths, join } from "./path";
+import { MAINTAINER, WAITING, parseWait } from "./waiting";
 
 /**
  * The `## ` headings a quest document may use. Readiness greps `## Required`
  * literally, so a typo turns a blocked quest ready and fails nowhere else: the
  * closed vocabulary is what catches it.
  */
-const HEADINGS = ["Goal", "Plan", "Required", "Closes", "Related"];
+const HEADINGS = ["Goal", "Plan", "Waiting", "Required", "Closes", "Related"];
 const SIZES = ["XS", "S", "M", "L", "XL"];
 
 /**
@@ -40,7 +41,7 @@ const SIZES = ["XS", "S", "M", "L", "XL"];
  * last entry was removed is a bug: an empty `Required` blocks its quest
  * forever.
  */
-export const LIST_SECTIONS = ["Required", "Closes", "Related"];
+export const LIST_SECTIONS = ["Waiting", "Required", "Closes", "Related"];
 
 /** The permanent root epic; the one document nothing has to list. */
 export const ROOT = "quest/README.md";
@@ -151,6 +152,18 @@ function headings(found: Finding[], doc: Doc) {
 					? "; an empty one blocks the quest forever, so remove the heading with its last entry"
 					: "; remove the heading with its last entry";
 			found.push({ path: doc.path, line: heading.line, message: `'## ${heading.text}' is empty${why}` });
+		}
+	}
+
+	// `quest waiting` sorts on who acts, so an item that does not name its
+	// party would hide a decision the maintainer owes.
+	for (const entry of entries(doc, WAITING)) {
+		if (parseWait(entry) === null) {
+			found.push({
+				path: doc.path,
+				line: entry.line,
+				message: `'## ${WAITING}' item must open with who acts, as '${MAINTAINER}: ...' or '<party>: ...'`,
+			});
 		}
 	}
 }

@@ -9,7 +9,7 @@ If its body lists open decisions or unfinished work, offer `/quest-iterate` firs
 
 Take the PR with `quest iterate <pr>`, passing a token you already hold for it to keep that hold, and keep the hold token it prints; `quest iterate --help` explains holds.
 If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
-A draft you started in this session has no `## Decisions needed` section, so it is still yours and the command refuses it: review it without taking it.
+A draft you started in this session has no `## Waiting` section, nor the older `## Decisions needed`, so it is still yours and the command refuses it: review it without taking it.
 
 Work in a checkout of the PR's head branch, checking out the head first when someone else opened it.
 Commit everything, then run the repository's local checks, unless the guide's Reviews section says to run no code from the head, and fix any failure.
@@ -20,11 +20,11 @@ Run it in the foreground; a round takes minutes.
 Fix each finding you agree with, or refute it with evidence the reviewer can check.
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted with evidence.
-A finding the reviewer keeps against such a refutation is a decision for the user; a background agent lists it under `## Decisions needed`.
+A finding the reviewer keeps against such a refutation is a decision for the user; a background agent lists it under `## Waiting`.
 If you judge the change too trivial to review, skip the review instead and record why.
 
 Rewrite the PR body's `## Review` section after each round, or once for a skip.
-Push, then flip the PR to "Ready for Review" with `quest ready <pr> <token>`, which also drops its `## Decisions needed` section.
+Push, then flip the PR to "Ready for Review" with `quest ready <pr> <token>`, which also drops its `## Waiting` section.
 For your own draft, mark it ready for review yourself.
 Do not wait for online reviewers.
 

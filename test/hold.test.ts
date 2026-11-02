@@ -3,7 +3,8 @@
 import { describe, expect, test, vi } from "vitest";
 
 import type { GitHubDependencies, ObjectValue } from "../src/cli/github";
-import { finish, land, release, take, withoutHandBack } from "../src/cli/hold";
+import { finish, land, release, take } from "../src/cli/hold";
+import { withoutHandBack } from "../src/core";
 import { type Output, main } from "../src/cli/main";
 import { Refusal } from "../src/cli/start";
 
@@ -708,6 +709,12 @@ describe("release", () => {
 		expect(await refused(release(PR, stale.token, pull.deps()))).toContain("another session holds it");
 		expect(pull.labels).toEqual(["quest:active"]);
 	});
+});
+
+test("drops each Waiting section up to the next heading", () => {
+	expect(withoutHandBack("Summary.\n\n## Waiting\n\n- Maintainer: pick.\n\n## Validation\n\nTests pass.")).toBe(
+		"Summary.\n\n## Validation\n\nTests pass.",
+	);
 });
 
 test("drops each Decisions needed section up to the next heading", () => {

@@ -30,7 +30,7 @@ export interface OpenPull {
 	created: number;
 	/** Epoch milliseconds of the last push, comment, or edit. */
 	updated: number;
-	/** Its body has a `## Decisions needed` section, so it waits on the maintainer. */
+	/** Its body has a `## Waiting` section (or the older `## Decisions needed`), so it waits on the maintainer. */
 	handedBack: boolean;
 }
 

@@ -15,9 +15,9 @@ Read the PR, its linked issues and quest, the reviews and comments posted on it,
 Judge the approach before touching anything: would you take a different one?
 Follow the guide's Reviews section for the shared design checkpoint across review rounds.
 
-Settle every decision this PR needs with the grill skill's interview, starting from the user's feedback: those its `## Decisions needed` section lists, those your judgment of the approach or the review findings raise, and any you find along the way.
+Settle every decision this PR needs with the grill skill's interview, starting from the user's feedback: those its `## Waiting` section lists, those your judgment of the approach or the review findings raise, and any you find along the way.
 Record the settled decisions in this PR's description as the paper trail, then implement them.
-A sub-agent that cannot prompt leaves each in `## Decisions needed` with a recommendation.
+A sub-agent that cannot prompt leaves each in `## Waiting` with a recommendation.
 
 Fix merge conflicts and failing CI checks.
 Address the automated review findings already posted, without waiting on optional reviewers: fix those you agree with and comment on any you decline.

@@ -45,7 +45,7 @@ export type Pull = Entity & {
 	/** Whether its head is on a different repository; absent in older observations. */
 	isCrossRepository?: boolean;
 	isDraft: boolean;
-	/** Its body has a `## Decisions needed` section; the body itself is not kept. Absent in older observations. */
+	/** Its body has a `## Waiting` (or older `## Decisions needed`) section; the body itself is not kept. Absent in older observations. */
 	handedBack?: boolean;
 	reviewDecision: string | null;
 	/** GitHub's merge readiness for the App, such as CLEAN, BLOCKED, or DIRTY; absent in older observations. */
@@ -201,7 +201,7 @@ function observed(kind: "issue" | "pull", item: Entity): Entity {
 
 /**
  * A draft its starter still holds: claimed work in progress until its body
- * hands it back with `## Decisions needed`, as the guide defines.
+ * hands it back with `## Waiting`, as the guide defines.
  */
 export function owned(pull: Pull) {
 	return pull.isDraft && !pull.handedBack;
