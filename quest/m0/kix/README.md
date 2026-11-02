@@ -2,7 +2,8 @@
 
 ## Goal
 
-kix.quest is a cloud for creating software. Maintainers make decisions in a
+kix is a cloud for creating software, served at `https://quest.moq.dev`
+for moq-dev's repositories in m0. Maintainers make decisions in a
 phone-friendly web app with push notifications, while kix routes the work to
 any runner they own, using whatever agent accounts they connect. CLIs and
 providers stay hidden behind summaries and prompts.
@@ -27,6 +28,12 @@ live rehearsal on the operator's runner.
 
 ## Plan
 
+Decided 2026-10-30 (user, /quest-plan): m0 serves moq-dev/moq, then
+moq-dev/quest, then the private moq-dev/moq.pro, at quest.moq.dev with only
+moq-dev allowed to enroll. Onboarding, read-only CI checks, contributor
+sandboxing, and the guide moved to [m1](/quest/m1/kix/README.md), and
+kix.quest opens in [m1](/quest/m1/open.md).
+
 Decided on 2026-10-15 through the decisions-not-implementations interview,
 superseding the 2026-10-13 hosted-first, Claude-SDK-only, and
 operator-paid-hosting decisions:
@@ -36,12 +43,12 @@ operator-paid-hosting decisions:
   the whole default UI. Raw agent output is collapsed behind a per-job
   disclosure that only current maintainers can expand.
 - **Phone first.** m0 ships an installable PWA with Web Push for decision
-  items. A [native mobile app](/quest/m1/mobile-app.md) follows in m1.
+  items. A [native mobile app](/quest/m2/mobile-app.md) follows in m2.
 - **Your own runners first.** `quest runner` turns any Linux or macOS machine
   into a runner. It claims jobs over HTTPS and drives the official CLIs with
   that machine's own logins, so kix never holds provider tokens. There are no
-  Windows runners. Free, capped [cloud runners](/quest/m1/cloud/README.md)
-  and API-key or donor funding follow in m1, with paid compute later.
+  Windows runners. Free, capped [cloud runners](/quest/m2/cloud/README.md)
+  and API-key or donor funding follow in m2, with paid compute later.
 - **Abstract the CLIs.** A runner adapter interface hides each CLI: start or
   resume, structured questions, checkpoint summaries, and results. Claude
   Code covers Claude subscriptions; opencode covers OpenCode Go, ChatGPT
@@ -56,7 +63,7 @@ operator-paid-hosting decisions:
   shell, with no other way to install dependencies, for cache efficiency and
   reproducibility. The runner pins the agent CLIs through Nix as well.
   Runners keep a persistent local store and honor the flake's substituters;
-  a [shared cache](/quest/m1/automation/cache.md) follows in m1.
+  a [shared cache](/quest/m2/automation/cache.md) follows in m2.
 - **Sandboxed jobs.** Every job's commands run in an OS sandbox. PR heads
   with non-maintainer commits route to Linux runners, which build the PR's
   devShell in a VM first; macOS runners take trusted revisions only. Cloud
@@ -126,14 +133,12 @@ fixes what it finds:
 
 ## Required
 
-- [Deploy kix.quest](/quest/m0/kix/deploy.md) - the operator registers the App and deploys the Worker with GitHub sign-in at kix.quest
+- [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the operator registers the App and deploys the Worker with GitHub sign-in at quest.moq.dev
 - [Upstream branches](/quest/m0/kix/upstream-branches.md) - jobs publish on the enrolled repository itself, with no service forks
-- [Read-only CI](/quest/m0/kix/ci-read-only.md) - enrolled repositories keep pull-request CI read-only, checked at enrollment, with every trust boundary written down
-- [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/quest and moq-dev/moq
-- [Pick repositories](/quest/m0/kix/pick-repos.md) - after installing, the maintainer enables repositories from a list
-- [Setup PR](/quest/m0/kix/setup-pr.md) - enrolling a repository without Quest makes the App open its `quest init` pull request
-- [Job sandbox](/quest/m0/kix/sandbox/README.md) - untrusted PR devShells built in a VM on Linux runners, maintainer PR heads trusted, opencode sandboxed, and macOS verified
+- [Owner allowlist](/quest/m0/kix/owners.md) - only moq-dev may enroll until the public release
+- [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/moq and moq-dev/quest
+- [Private repositories](/quest/m0/kix/private.md) - moq-dev/moq.pro enrolls, visible only to signed-in users who can read it
+- [Job sandbox](/quest/m0/kix/sandbox/README.md) - head approval for kix-pushed heads, and opencode sandboxed
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs
 - [Land review](/quest/m0/kix/land-review.md) - kix lands only heads with a review that counts on that exact head
-- [Onboarding guide](/quest/m0/kix/guide.md) - a complete maintainer path, from runner setup through a reviewed PR
-- [Fast runner continuation test](/quest/m0/kix/runner-timeout.md) - the conflicted-continuation test passes on a loaded host without a longer timeout
+- [Runner review checks](/quest/m0/kix/review-check.md) - runners publish the App's `quest review` check, so their heads land without a human approval
