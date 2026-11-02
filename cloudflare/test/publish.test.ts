@@ -1075,6 +1075,30 @@ describe("runner publication", () => {
 		const next = await publish({ job: id, attempt: 1, head, message: "fix: more", changes: [file("a", "2")] });
 		expect(next.status).toBe(200);
 		expect(disabled()).toHaveLength(1);
+
+		// A read that does not show the auto-merge state pushes nothing.
+		const { head: pushed } = (await next.json()) as { head: string };
+		project.pulls[0]!.landing = true;
+		vi.mocked(globalThis.fetch).mockImplementation((input, init) =>
+			String(init?.body).includes("autoMergeRequest { enabledAt } } } }")
+				? Promise.resolve(Response.json({ errors: [{ message: "Something went wrong" }] }))
+				: github(input, init),
+		);
+		const blocked = await publish({
+			job: id,
+			attempt: 1,
+			head: pushed,
+			session: "s",
+			message: "fix: last",
+			changes: [file("a", "3")],
+		});
+		expect(blocked.status).toBe(202);
+		expect(project.branches["contributor/fix"]).toBe(pushed);
+		expect(project.pulls[0]!.landing).toBe(true);
+		expect((await job(id)).questions[0]!.prompt).toEqual({
+			type: "publication",
+			blocked: expect.stringContaining("did not say whether the pull request is auto-merging"),
+		});
 	});
 
 	it("validates the request before touching the job", async () => {

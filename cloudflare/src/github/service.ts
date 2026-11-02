@@ -1336,7 +1336,7 @@ export class GitHubService {
 	 * land the new head with no review that counts on it.
 	 */
 	async #disarm(token: string, pull: string) {
-		const read = await this.#api<{ data?: { node: { autoMergeRequest: unknown } | null } }>(
+		const read = await this.#api<{ data?: { node: { autoMergeRequest?: unknown } | null }; errors?: unknown[] }>(
 			token,
 			"/graphql",
 			"POST",
@@ -1345,7 +1345,13 @@ export class GitHubService {
 				variables: { id: pull },
 			},
 		);
-		if (!read.data?.node?.autoMergeRequest) return;
+		// Only a read that shows no auto-merge lets the push go ahead without turning it off.
+		const node = read.data?.node;
+		if (read.errors?.length || !node || node.autoMergeRequest === undefined)
+			throw new PublicationBlocked(
+				"GitHub did not say whether the pull request is auto-merging, which would land this push unreviewed, so nothing was pushed.",
+			);
+		if (node.autoMergeRequest === null) return;
 		const result = await this.#api<{ errors?: unknown[] }>(token, "/graphql", "POST", {
 			query: `mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }`,
 			variables: { id: pull },
