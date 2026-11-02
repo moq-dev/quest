@@ -276,7 +276,9 @@ describe("runner publication", () => {
 		const scopes = requests()
 			.filter((r) => r.path.endsWith("/access_tokens"))
 			.map((r) => r.body);
-		expect(scopes).toEqual([{ repository_ids: [10], permissions: { metadata: "read", contents: "write" } }]);
+		expect(scopes).toEqual([
+			{ repository_ids: [10], permissions: { metadata: "read", contents: "write", pull_requests: "write" } },
+		]);
 		expect((await job(id)).head).toBe(head);
 
 		// A stale base is refused without writing anything.
@@ -686,6 +688,42 @@ describe("runner publication", () => {
 		expect(opened()).toHaveLength(1);
 	});
 
+	it("turns off the job's own pull request's auto-merge before publishing onto it again or starting over", async () => {
+		const id = await running();
+		const delivered = await publish({
+			job: id,
+			attempt: 1,
+			head: null,
+			message: "one",
+			changes: [file("a", "1")],
+			pull: { title: "T", body: "B" },
+		});
+		const { head } = (await delivered.json()) as { head: string };
+		const pull = opened()[0]!;
+		pull.landing = true;
+		const next = await publish({ job: id, attempt: 1, head, message: "two", changes: [file("a", "2")] });
+		expect(next.status).toBe(200);
+		expect(pull.landing).toBe(false);
+
+		// Starting over resets the branch only after turning auto-merge off again.
+		const { head: pushed } = (await next.json()) as { head: string };
+		project.branches["quest/first"] = prHead;
+		const blocked = await publish({
+			job: id,
+			attempt: 1,
+			head: pushed,
+			session: "s",
+			message: "three",
+			changes: [file("a", "3")],
+		});
+		expect(blocked.status).toBe(202);
+		pull.landing = true;
+		const waiting = await job(id);
+		await restart(testEnv, user, upstream, waiting, waiting.questions[0]!.id);
+		expect(project.branches["quest/first"]).toBe(revision);
+		expect(pull.landing).toBe(false);
+	});
+
 	it("lets only the requester start over in place of another maintainer's answer awaiting approval", async () => {
 		project.branches["quest/first"] = prHead;
 		const id = await running();
@@ -1025,7 +1063,7 @@ describe("runner publication", () => {
 				.map((r) => r.body.permissions),
 		).toEqual([
 			{ metadata: "read", contents: "read", pull_requests: "read" },
-			{ metadata: "read", contents: "write" },
+			{ metadata: "read", contents: "write", pull_requests: "write" },
 		]);
 		expect((await publish({ job: id, attempt: 1, head, pull: { title: "T", body: "B" } })).status).toBe(409);
 
@@ -1042,6 +1080,72 @@ describe("runner publication", () => {
 		expect((await job(id)).questions[0]!.prompt).toEqual({
 			type: "publication",
 			blocked: expect.stringContaining("contributor's fork"),
+		});
+	});
+
+	it("turns off an iterated pull request's auto-merge before pushing, so the new head never lands unreviewed", async () => {
+		const id = await running({
+			workflow: "iterate",
+			target: "pulls/2",
+			revision: prHead,
+			branch: "contributor/fix",
+			trusted: false,
+		});
+		const disabled = () =>
+			requests().filter(
+				(r) => r.path === "/graphql" && String(r.body.query).includes("disablePullRequestAutoMerge("),
+			);
+		project.pulls[0]!.landing = true;
+		// Another open pull request from the same branch, to another base, would land the push too.
+		const sibling = {
+			...project.pulls[0]!,
+			number: 9,
+			base: "release",
+			threads: [],
+			runs: [],
+		};
+		project.pulls.push(sibling);
+		const response = await publish({
+			job: id,
+			attempt: 1,
+			head: prHead,
+			message: "fix: review",
+			changes: [file("a", "1")],
+		});
+		expect(response.status).toBe(200);
+		const { head } = (await response.json()) as { head: string };
+		expect(project.branches["contributor/fix"]).toBe(head);
+		expect(project.pulls[0]!.landing).toBe(false);
+		expect(sibling.landing).toBe(false);
+		expect(disabled()).toHaveLength(2);
+
+		// With auto-merge already off, it pushes without turning anything off.
+		const next = await publish({ job: id, attempt: 1, head, message: "fix: more", changes: [file("a", "2")] });
+		expect(next.status).toBe(200);
+		expect(disabled()).toHaveLength(2);
+
+		// A read that does not show the auto-merge state pushes nothing.
+		const { head: pushed } = (await next.json()) as { head: string };
+		project.pulls[0]!.landing = true;
+		vi.mocked(globalThis.fetch).mockImplementation((input, init) =>
+			String(init?.body).includes("autoMergeRequest { enabledAt } } } }")
+				? Promise.resolve(Response.json({ errors: [{ message: "Something went wrong" }] }))
+				: github(input, init),
+		);
+		const blocked = await publish({
+			job: id,
+			attempt: 1,
+			head: pushed,
+			session: "s",
+			message: "fix: last",
+			changes: [file("a", "3")],
+		});
+		expect(blocked.status).toBe(202);
+		expect(project.branches["contributor/fix"]).toBe(pushed);
+		expect(project.pulls[0]!.landing).toBe(true);
+		expect((await job(id)).questions[0]!.prompt).toEqual({
+			type: "publication",
+			blocked: expect.stringContaining("did not say whether the pull request is auto-merging"),
 		});
 	});
 
@@ -1078,8 +1182,12 @@ describe("merge jobs", () => {
 			return github.call(this, input, init);
 		});
 	}
-	/** A running merge job on pull request #2 that holds it, as picking merge leaves it. */
-	async function merging() {
+	/** A maintainer's approval of `commit` on pull request #2. */
+	const approve = (commit: string) =>
+		(pull().reviews = [...(pull().reviews ?? []), { state: "APPROVED", author: "maintainer", commit }]);
+	/** A running merge job on pull request #2 that holds it, as picking merge leaves it, its head approved unless `reviewed` is false. */
+	async function merging(reviewed = true) {
+		if (reviewed) approve(prHead);
 		const id = await running({
 			workflow: "merge",
 			target: "pulls/2",
@@ -1108,12 +1216,13 @@ describe("merge jobs", () => {
 		expect(await refused.json()).toEqual({
 			error: "A merge commit may only merge in a commit its upstream base branch already holds",
 		});
+		// The merge resolved nothing, so the approval of the pull request's head carries to it.
 		const response = await publish({
 			job: id,
 			attempt: 1,
 			head: prHead,
 			message: "Merge main",
-			changes: [file("a", "1")],
+			changes: [],
 			merge: main,
 			land: { method: "merge" },
 		});
@@ -1420,6 +1529,155 @@ describe("merge jobs", () => {
 		}
 		// The landing GitHub refused used the first merge method the repository allows.
 		expect(lands().map((l) => l.variables.method)).toEqual(["SQUASH"]);
+	});
+
+	describe("lands only a reviewed head", () => {
+		const waiting = (head: string) =>
+			`No review counts on ${head.slice(0, 7)} yet. kix lands only a reviewed head. Approve ${head.slice(0, 7)} on GitHub as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`;
+		/** Land pull request #2 at `head`, returning the decision the job paused on, or null once it landed. */
+		async function land(id: string, head = prHead) {
+			const response = await publish({ job: id, attempt: 1, head, session: "s", land: {} });
+			if (response.status === 200) return null;
+			expect(response.status).toBe(202);
+			return ((await job(id)).questions.at(-1)!.prompt as { blocked: string }).blocked;
+		}
+
+		it("waits, saying why, for a review of the exact head, then lands once a maintainer approves it", async () => {
+			const id = await merging(false);
+			expect(await land(id)).toBe(waiting(prHead));
+			expect(lands()).toEqual([]);
+			await store.cancel(db, id, user, 0);
+			pull().labels = [];
+			const again = await merging();
+			expect(await land(again)).toBeNull();
+			expect(lands().map((l) => l.variables.sha)).toEqual([prHead]);
+		});
+
+		it.each([
+			[
+				"an approval by the pull request's own author",
+				() => pull().reviews!.push({ state: "APPROVED", author: "contributor" }),
+			],
+			["an approval by a bot", () => pull().reviews!.push({ state: "APPROVED", author: "reviewer[bot]" })],
+			[
+				"a comment from the author's account",
+				() => pull().comments!.push({ author: "contributor", body: "LGTM (written by an AI)", at }),
+			],
+			["a body-only Review record", () => (pull().body = `Fixes it\n\n## Review\n\nNo findings on ${prHead}.`)],
+			[
+				"another App's quest review check",
+				() => pull().runs!.push({ name: "quest review", conclusion: "SUCCESS", url: "u", app: 1 }),
+			],
+			["a request for changes", () => pull().reviews!.push({ state: "CHANGES_REQUESTED", author: "maintainer" })],
+		])("counts no review from %s", async (_, add) => {
+			pull().comments = [];
+			add();
+			const id = await merging(false);
+			expect(await land(id)).toBe(waiting(prHead));
+			expect(lands()).toEqual([]);
+		});
+
+		it.each([
+			["lands at the head it passed on", false],
+			["waits at a later head", true],
+		])("counts the App's passing quest review check, which %s", async (_, moved) => {
+			pull().runs!.push({
+				name: "quest review",
+				conclusion: "SUCCESS",
+				url: "u",
+				app: Number(env.GITHUB_APP_ID),
+			});
+			const id = await merging(false);
+			if (!moved) return expect(await land(id)).toBeNull();
+			// The check stays on the commit it passed on when someone pushes past it.
+			pull().runs!.at(-1)!.commit = prHead;
+			const decision = await publish({
+				job: id,
+				attempt: 1,
+				head: prHead,
+				session: "s",
+				message: "fix",
+				changes: [file("a", "1")],
+				land: {},
+			});
+			expect(decision.status).toBe(202);
+			const head = project.branches["contributor/fix"]!;
+			expect((await job(id)).questions.at(-1)!.prompt).toMatchObject({ blocked: waiting(head) });
+			expect(lands()).toEqual([]);
+		});
+
+		it.each([
+			["lands at the head it names", false],
+			["waits at a head a runner committed", true],
+		])("counts a writer's own Review record in their pull request, which %s", async (_, moved) => {
+			pull().author = "maintainer";
+			pull().body = `Fixes it\n\n## Review\n\nNo findings on ${prHead}.`;
+			const id = await merging(false);
+			if (!moved) return expect(await land(id)).toBeNull();
+			const decision = await publish({
+				job: id,
+				attempt: 1,
+				head: prHead,
+				session: "s",
+				message: "fix",
+				changes: [file("a", "1")],
+				land: {},
+			});
+			expect(decision.status).toBe(202);
+			const head = project.branches["contributor/fix"]!;
+			expect((await job(id)).questions.at(-1)!.prompt).toMatchObject({ blocked: waiting(head) });
+			expect(lands()).toEqual([]);
+		});
+
+		it("does not carry an approval across a merge that changed what it merged", async () => {
+			const id = await merging();
+			const main = "f".repeat(40);
+			project.commits[main] = { parents: [revision], tree: "1".repeat(40), message: "main" };
+			project.branches.main = main;
+			const response = await publish({
+				job: id,
+				attempt: 1,
+				head: prHead,
+				session: "s",
+				message: "Merge main",
+				changes: [file("a", "resolved by hand")],
+				merge: main,
+				land: {},
+			});
+			expect(response.status).toBe(202);
+			const head = project.branches["contributor/fix"]!;
+			expect((await job(id)).questions.at(-1)!.prompt).toEqual({
+				type: "publication",
+				blocked: `The approval of ${prHead.slice(0, 7)} does not carry to ${head.slice(0, 7)}: what changed since is more than conflict-free merges of main. kix lands only a reviewed head. Approve ${head.slice(0, 7)} on GitHub as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`,
+			});
+			expect(lands()).toEqual([]);
+		});
+
+		it.each([
+			["dismisses stale approvals", { dismiss_stale_reviews_on_push: true }, "never", true],
+			["requires approval of the last push", { require_last_push_approval: true }, "never", true],
+			["accepts an approval of an older head", {}, "never", false],
+			[
+				"dismisses stale approvals but lets the App bypass it",
+				{ dismiss_stale_reviews_on_push: true },
+				"always",
+				false,
+			],
+		] as const)(
+			"defers to a ruleset that %s only when it enforces the current head",
+			async (_, rule, bypass, defers) => {
+				project.rules = [
+					{
+						type: "pull_request",
+						ruleset_id: 42,
+						parameters: { required_approving_review_count: 1, ...rule },
+					},
+				];
+				project.rulesets = { 42: { current_user_can_bypass: bypass } };
+				const id = await merging(false);
+				expect(await land(id)).toBe(defers ? null : waiting(prHead));
+			},
+		);
 	});
 
 	it("gives the pull request back when the job fails, and lands nothing for other workflows", async () => {
