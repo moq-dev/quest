@@ -611,10 +611,17 @@ stays queued. `quest status` reads the hidden reason marker. Full logs stay in t
 `$STATE_DIRECTORY` or the XDG state home, never inside the checkout. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
+Every squash the daemon builds, and every base it merges into a PR head, drops
+each `Required`, `Related`, or `Closes` entry linking to a quest the base
+deleted since the PR branched, as `quest rm` would have. The PR wrote that link
+while the quest was open, so the base finishing it is no fault of the PR's: a
+sibling PR that links a quest another sibling finishes lands in the same batch.
+A quest the base moved is a rename, not a deletion, and a link in prose stays.
+
 As a batch is filled, each PR it reaches is squashed alone onto the current
 base, and `quest check` runs on the result; PRs the batch does not reach wait
 for a later round, so a long queue costs only each batch's candidates. A PR with findings the base lacks, such as
-a link to a quest the base has since finished, is parked alone for the fixer, blamed
+a mistyped link, is parked alone for the fixer, blamed
 for those findings, so it never fails a batch; the fixer starts from that squash.
 Without a fixer it is ejected as `failed_checks` with those findings. This check runs
 in the daemon, never the sandbox: it parses quest files read from git objects
