@@ -152,6 +152,14 @@ export function parseBaseFix(text: string): BaseFix {
 	return value as BaseFix;
 }
 
+/** Codex's reasoning efforts, for `model_reasoning_effort`. */
+export const EFFORTS = ["minimal", "low", "medium", "high", "xhigh"];
+/**
+ * The variable a daemon sets for its fixer wrapper to pass on as `quest land fix --effort`, since the
+ * wrapper's arguments are only the failure log and the PR numbers.
+ */
+export const EFFORT_VARIABLE = "QUEST_LAND_FIXER_EFFORT";
+
 export async function fix(
 	root: string,
 	log: string,
@@ -159,7 +167,9 @@ export async function fix(
 	agent = "codex",
 	args?: string[],
 	model?: string,
+	effort = "medium",
 ): Promise<void> {
+	if (!EFFORTS.includes(effort)) throw new Error(`fix effort must be one of ${EFFORTS.join(", ")}`);
 	// No PR numbers fixes the base alone, which fails its check without any PR.
 	if (
 		numbers.some((number) => !Number.isSafeInteger(number) || number <= 0) ||
@@ -216,7 +226,7 @@ export async function fix(
 		'model_providers.quest-fixer.wire_api="responses"',
 		// Without this, Codex runs the proxy's model with no reasoning at all ("reasoning effort: none").
 		"-c",
-		'model_reasoning_effort="medium"',
+		`model_reasoning_effort=${JSON.stringify(effort)}`,
 		...(model ? ["--model", model] : []),
 		"-",
 	];

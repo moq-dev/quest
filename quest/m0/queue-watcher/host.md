@@ -26,9 +26,29 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 - The runner's own setup and the `merge_group` workflow are moq's switch,
   not this quest.
 
-## Required
+The watcher command, from
+[moq-dev/quest#389](https://github.com/moq-dev/quest/pull/389), run as the
+same user and with the same state directory as moq's `quest land serve`
+instance, and with `quest` and `flock` on PATH as for it, since the watcher
+merges conflicts with the quest merge driver in the same private repository:
 
-- [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - the watcher command this deploys
+```sh
+quest land watch --app-id 1039466 --fixer <moq's fixer launcher client>
+```
+
+The fixer launcher client is the one `serve --fixer` uses, reaching
+`/run/quest-land-fixer.sock` with the failure log and the PR's number. The
+watcher needs no check sandbox: the `merge_group` builds run on GitHub's side.
+`--fixer-jobs` (default 2) caps the watcher's own fixer jobs below the
+launcher's shared slots, and `--fixer-effort` (default `medium`) sets
+`QUEST_LAND_FIXER_EFFORT` in the wrapper's environment. The launcher passes
+only the log and the PR numbers into the container, where `quest land fix`
+defaults to `medium`, so a non-default effort needs the launcher to forward
+that variable as `quest land fix --effort`. With a fixer, the watcher's
+installation token asks for `merge_queues: write` (re-enqueueing, granted to
+moq-bot on 2026-11-02), `contents: write` (arming auto-merge and pushing
+fixes), `pull_requests: write`, and `actions: read`, and a push that carries a
+workflow change asks for `workflows: write`.
 
 ## Related
 
