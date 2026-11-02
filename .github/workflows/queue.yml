@@ -1,0 +1,104 @@
+name: Queue
+
+# GitHub's merge queue tests each picked PR on top of main, one at a time, on
+# the host's self-hosted runner, and merges exactly the tree it tested. When the
+# queue drops a PR, moq-dev/quest's queue watcher on the host runs the land
+# fixer and re-enqueues it at the back of the queue.
+#
+# `main`'s ruleset requires this job's `Queue` context. GitHub admits a PR to
+# the queue only once its required checks pass on the PR itself, so the job
+# also runs, as skipped, on main pull requests; a skipped job satisfies the
+# requirement. Only the merge group build runs code, and only a maintainer's
+# pick enters the queue.
+on:
+  pull_request:
+    branches: [main]
+    # `edited` covers a PR retargeted to main, which needs the context too.
+    types: [opened, synchronize, reopened, edited]
+  merge_group:
+    types: [checks_requested]
+  # Reports the skipped context on a PR's head without a pull_request event.
+  # A PR whose test merge commit predates this workflow gets no pull_request
+  # run from it (GitHub runs PR workflows from that commit, and a dispatch reads
+  # the workflow from the ref it runs on), so
+  # `gh workflow run queue.yml -f sha=<head>` on main reports it there.
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: The PR head commit to report the skipped Queue context on.
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# Each group has its own ref, so a group never cancels another; a pull request's
+# skipped runs replace their own. Dispatches all run on main, so each PR head's
+# report has its own group too.
+concurrency:
+  group: queue-${{ github.ref }}-${{ inputs.sha }}
+  cancel-in-progress: true
+
+jobs:
+  queue:
+    name: Queue
+    if: github.event_name == 'merge_group'
+    runs-on: [self-hosted, quest-queue]
+    # Below the queue's 90-minute response window, so a hung build reports
+    # before the group expires.
+    timeout-minutes: 60
+    env:
+      BASE: ${{ github.event.merge_group.base_sha }}
+    steps:
+      # Validate quest completion with the base's CLI, which the PR cannot weaken.
+      - name: Check out the base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.merge_group.base_sha }}
+          persist-credentials: false
+      - name: Build quest from the base
+        run: nix build --out-link "$RUNNER_TEMP/quest-base" .#quest
+      - name: Check out the merge group
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check that the PR leaves its quest accurate
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          # Build concurrency and group size are both one in main's ruleset.
+          [[ "$QUEUE_REF" =~ ^refs/heads/gh-readonly-queue/main/pr-([0-9]+)- ]] || { echo "::error::unexpected merge group ref" >&2; exit 1; }
+          head_ref=$(gh api "repos/$REPO/pulls/${BASH_REMATCH[1]}" --jq .head.ref)
+          ./quest-base/bin/quest --root "$GITHUB_WORKSPACE" check --base "$BASE" --branch "$head_ref"
+      - name: Install dependencies
+        run: nix develop --command just install
+      - name: Check
+        run: nix develop --command just check
+      - name: Test
+        run: nix develop --command just test
+      - name: Check Nix package
+        run: nix flake check
+
+  # The merge queue still builds every group with the job above; this only
+  # satisfies the PR-side requirement, as a pull_request run's skipped job does.
+  report:
+    name: Report Queue
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write
+    steps:
+      - name: Report the skipped Queue context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full commit SHA" >&2; exit 1; }
+          gh api "repos/$REPO/check-runs" -f name=Queue -f head_sha="$SHA" -f status=completed -f conclusion=skipped \
+            -f 'output[title]=Queue' -f 'output[summary]=Skipped on the pull request; the merge queue builds the group.' --silent
