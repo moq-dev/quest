@@ -216,10 +216,9 @@ the way, or work on the branch), 2 for invalid arguments, and 1 for other
 failures. On GitHub it
 uses `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`.
 
-Draft claims are placeholders, so CI can skip them. This repository runs its
-checks only on PRs ready for review: the `pull_request` trigger lists
-`ready_for_review`, and each job has the condition
-`github.event_name != 'pull_request' || github.event.pull_request.draft == false`.
+Draft claims are placeholders. This repository reports skipped checks on PRs;
+its `Queue` workflow runs the checks when a reviewed head enters GitHub's merge
+queue. Platform verification also runs after pushes to `main`.
 
 ## Check a quest's PR
 
