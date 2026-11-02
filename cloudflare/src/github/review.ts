@@ -145,8 +145,12 @@ async function botCommitted(reads: Reads, sha: string) {
 	return committer?.type === "Bot";
 }
 
-/** Whether a ruleset the App cannot bypass makes GitHub itself require a review of the current head. */
-async function enforced(reads: Reads, base: string) {
+/**
+ * Whether a ruleset the App cannot bypass makes GitHub itself require a review
+ * of the current head, so GitHub also refuses to land a head pushed later
+ * until someone reviews it.
+ */
+export async function enforced(reads: Reads, base: string) {
 	const rules = await reads.get<Rule[]>(`/rules/branches/${encodeURIComponent(base)}?per_page=100`);
 	for (const rule of rules) {
 		const p = rule.parameters ?? {};

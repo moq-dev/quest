@@ -343,7 +343,7 @@ export class Attempt {
 	#publish(
 		message: string,
 		delivery: { pull?: Pull; land?: Land } = {},
-	): Promise<{ head: string | null; pull?: Delivery["pull"]; landed?: Delivery["landed"] } | null> {
+	): Promise<{ head: string | null; pull?: Delivery["pull"]; landed?: Delivery["landed"]; waiting?: string } | null> {
 		const { pull, land } = delivery;
 		const next = this.#publishing.then(async () => {
 			const workspace = this.#workspace!;
@@ -391,6 +391,7 @@ export class Attempt {
 				head,
 				...(body.pull ? { pull: body.pull as Delivery["pull"] } : {}),
 				...(body.landed ? { landed: body.landed as Delivery["landed"] } : {}),
+				...(typeof body.waiting === "string" ? { waiting: body.waiting } : {}),
 			};
 		});
 		this.#publishing = next.catch(() => {});
@@ -585,7 +586,7 @@ export class Attempt {
 				name: "deliver",
 				description:
 					job.workflow === "merge"
-						? "Land the pull request once its decisions are settled: kix publishes the working tree to its head, then lands exactly that head through GitHub, enabling auto-merge bound to it or merging at once. End your turn after."
+						? "Land the pull request once its decisions are settled: kix publishes the working tree to its head, then lands exactly that head through GitHub, or says why it did not land yet. End your turn once it landed or is landing."
 						: job.workflow === "iterate"
 							? "Deliver the finished work: kix publishes the working tree to the pull request's head. End your turn after."
 							: "Deliver the finished work: kix publishes the working tree and opens or updates the job's pull request. End your turn after.",
@@ -641,6 +642,9 @@ export class Attempt {
 						{ pull, land },
 					);
 					if (!published) return PAUSED;
+					// The head is published but not landed, so the job is not delivered until a later landing.
+					if (published.waiting)
+						return `Published ${published.head}, but kix did not land it: ${published.waiting} Call \`wait\` until GitHub can merge it, such as once its checks pass, then call \`deliver\` again. If GitHub cannot merge it for a reason waiting does not end, follow the workflow for it, or ask the maintainer.`;
 					this.#delivered = {
 						summary: text,
 						head: published.head,
