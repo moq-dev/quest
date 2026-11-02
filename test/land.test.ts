@@ -3135,6 +3135,12 @@ ${requeueScript}
 		);
 		await fix(dir, log, [1], agent);
 		expect(readFileSync(join(dir, "argv.txt"), "utf8").split("\n")).toContain('model_reasoning_effort="medium"');
+		// A daemon's --fixer-effort reaches it as --effort.
+		await fix(dir, log, [1], agent, undefined, undefined, "high");
+		expect(readFileSync(join(dir, "argv.txt"), "utf8").split("\n")).toContain('model_reasoning_effort="high"');
+		await expect(fix(dir, log, [1], agent, undefined, undefined, 'high"\nx')).rejects.toThrow(
+			"fix effort must be one of",
+		);
 	});
 	test("refuses to start an agent without a supplied PR's branch", async () => {
 		const dir = fixRepository();

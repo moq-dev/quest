@@ -1,6 +1,6 @@
 // The merge queue watcher: notice each PR GitHub's merge queue drops unmerged, record why, and say so on it.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
 	array,
@@ -13,6 +13,7 @@ import {
 	string,
 } from "./github";
 import type { Entry } from "./land";
+import { authenticatedRead } from "./land-git";
 import { fixerText, post, redactTokens } from "./land-fixer";
 import {
 	apiDependencies,
@@ -21,15 +22,25 @@ import {
 	excerpt,
 	type Failure,
 	installationToken,
+	privateRepository,
 	save,
 	startDaemon,
 } from "./land-serve";
+import { advanceFixes, endPick, type FixContext, readRemoval, requeuedHeads } from "./land-watch-fix";
+
+export { readRemoval } from "./land-watch-fix";
 
 export interface WatchOptions {
 	base?: string;
 	/** Empty for the default, `defaultState`, which `quest land serve` shares. */
 	state: string;
 	appId: string;
+	/** The credential-free fixer wrapper; without one, removals are only recorded. */
+	fixer?: string;
+	/** The most fixer jobs that run at once. */
+	fixerJobs: number;
+	/** The fixer's `model_reasoning_effort`. */
+	fixerEffort: string;
 }
 
 /**
@@ -77,6 +88,10 @@ export interface Removal {
 	log: string;
 	/** For a `fix` verdict: the fixer's input, the dropped head as the pick's one entry on the base it was built on. */
 	failure?: Failure;
+	/** What the fixer step made of a `fix` verdict; unset while it waits for one. */
+	taken?: string;
+	/** For a conflict: the base the quest merge driver could not merge, retried only once the base moves. */
+	unmerged?: string;
 }
 
 /** The watcher's progress, in `watch.json`. */
@@ -155,28 +170,41 @@ async function removalsOf(github: GitHub, pull: ObjectValue, since: string): Pro
 }
 
 /**
- * The pick a removal belongs to: the latest enqueue at or before it by anyone but the App, which only
- * enqueues within a pick, and the latest enqueue of any kind, from which its builds are looked for.
+ * The pick a removal belongs to, and the latest enqueue of any kind, from which its builds are looked
+ * for. A pick is the latest enqueue at or before the removal by anyone, the App included, as when a
+ * workflow enqueues Dependabot's PRs with its token, except one continuing the watcher's own pick: an
+ * App enqueue since that pick began, of a head the watcher put back in the queue for it
+ * (`requeuedHeads`), which is the watcher's re-enqueue, GitHub's auto-merge of it, or such a workflow
+ * picking the fixer's push.
  */
 async function pickOf(
 	github: GitHub,
 	id: string,
 	removal: ObjectValue,
+	head: string,
 	app: string,
+	own: { pick: string; heads: string[] } | undefined,
 ): Promise<{ pick: QueuePick; queued?: string }> {
 	const at = string(removal.createdAt);
 	const data = await github.graphql(ENQUEUES, { id });
 	const enqueues = array(object(object(data.node).timelineItems).nodes).filter(
 		(node) => typeof node.createdAt === "string" && node.createdAt <= at,
 	);
-	const writer = enqueues.filter((node) => account(login(node.actor)) !== app).at(-1);
+	const continues = own !== undefined && own.heads.includes(head);
+	const picks = enqueues.filter(
+		(node) => !(continues && account(login(node.actor)) === app && string(node.createdAt) > own.pick),
+	);
+	const writer = picks.at(-1);
 	const queued = enqueues.at(-1)?.createdAt as string | undefined;
 	if (writer)
 		return {
 			pick: { by: login(writer.enqueuer) || login(writer.actor), at: string(writer.createdAt) },
 			...(queued ? { queued } : {}),
 		};
-	return { pick: { by: login(removal.enqueuer), at: queued ?? at }, ...(queued ? { queued } : {}) };
+	return {
+		pick: { by: login(removal.enqueuer), at: continues ? own.pick : (queued ?? at) },
+		...(queued ? { queued } : {}),
+	};
 }
 
 /** A job log as GitHub serves it, without its byte-order mark or per-line timestamps, and with no token. */
@@ -286,9 +314,12 @@ export function jobsSection(blocks: string[], room: number): string {
 	return text;
 }
 
-/** What the watcher does about it, if anything it needs to say. */
-const AFTER: Record<Verdict, (current: string) => string> = {
-	fix: () => "",
+/** What the watcher does about it, if anything it needs to say; `fixing` when a land fixer is configured. */
+const AFTER: Record<Verdict, (current: string, fixing: boolean) => string> = {
+	fix: (_, fixing) =>
+		fixing
+			? "\n\nThe land fixer works on it in the background, and the watcher re-enqueues it at the back of the queue once it is fixed or judged flaky, or hands it back here with what it needs."
+			: "",
 	pushed: (current) =>
 		`\n\nIts head has moved to ${current} since, and a push by anyone but the land fixer ends the pick: the watcher leaves this pull request alone until a maintainer enqueues it again.`,
 	removed: () =>
@@ -308,6 +339,7 @@ async function handle(
 	base: { ref: string; sha: string },
 	state: string,
 	app: string,
+	fixing: boolean,
 	pull: ObjectValue,
 	event: ObjectValue,
 ): Promise<string | undefined> {
@@ -318,7 +350,7 @@ async function handle(
 	const current = string(pull.headRefOid);
 	const head = event.beforeCommit == null ? current : string(object(event.beforeCommit).oid);
 	const at = string(event.createdAt);
-	const { pick, queued } = await pickOf(github, string(pull.id), event, app);
+	const { pick, queued } = await pickOf(github, string(pull.id), event, head, app, requeuedHeads(state, number));
 	const verdict: Verdict =
 		head !== current
 			? "pushed"
@@ -369,7 +401,7 @@ async function handle(
 		github,
 		{ repository },
 		{ number, enabledAt: pick.at },
-		`quest land watch: the merge queue removed this pull request at ${head} because ${because(reason, actor, base.ref)} (\`${reason.replace(/[^a-z_]/g, "")}\`).${AFTER[verdict](current)}${missing}`,
+		`quest land watch: the merge queue removed this pull request at ${head} because ${because(reason, actor, base.ref)} (\`${reason.replace(/[^a-z_]/g, "")}\`).${AFTER[verdict](current, fixing)}${missing}`,
 		`removed ${string(event.id)}`,
 		"quest land watch",
 		undefined,
@@ -416,25 +448,25 @@ async function handle(
 			: {}),
 	};
 	// A removal GitHub showed late never replaces the record of a newer one.
-	if ((readRemoval(state, number)?.at ?? "") <= at) save(join(state, `removal-${number}.json`), removal);
+	if ((readRemoval(state, number)?.at ?? "") <= at) {
+		save(join(state, `removal-${number}.json`), removal);
+		// Any other verdict ends the pick: its fixer history goes, so a later enqueue starts afresh.
+		if (verdict !== "fix") endPick(state, number, pick.at);
+	}
 	return `removed ${number} ${reason} ${verdict}`;
-}
-
-/** The latest removal the watcher recorded for PR `number`, if any. */
-export function readRemoval(state: string, number: number): Removal | undefined {
-	const path = join(state, `removal-${number}.json`);
-	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Removal) : undefined;
 }
 
 /**
  * One pass over the base's open PRs: handle each removal from the merge queue since the last pass,
  * oldest first, and remember each one handled, so a restart neither misses nor repeats one. The
  * first pass starts `SETTLE` before it. A PR closed before a pass reads its removal is not read.
+ * With a fixer, `fix` then starts it on the PRs the queue dropped and collects its rounds.
  */
 export async function watchPass(
 	repository: Repository,
 	options: Pick<WatchOptions, "base" | "state">,
 	deps: GitHubDependencies,
+	fix?: FixContext,
 ): Promise<string[]> {
 	const github = new GitHub(deps);
 	const name = `${repository.owner}/${repository.repo}`;
@@ -493,7 +525,16 @@ export async function watchPass(
 			const id = string(event.id);
 			const handled = (progress.handled[number] ??= {});
 			if (id in handled) continue;
-			const line = await handle(github, name, { ref, sha: sha! }, options.state, app, pull, event);
+			const line = await handle(
+				github,
+				name,
+				{ ref, sha: sha! },
+				options.state,
+				app,
+				fix !== undefined,
+				pull,
+				event,
+			);
 			if (line) output.push(line);
 			handled[id] = at;
 			save(path, progress);
@@ -507,30 +548,69 @@ export async function watchPass(
 	}
 	progress.since = started;
 	save(path, progress);
+	if (fix) output.push(...(await advanceFixes(name, { ref, sha: sha! }, options.state, fix, deps)));
 	return output;
 }
 
-/** Watch the merge queue of `repository`'s base, one pass a minute, until the process stops. */
+type Permissions = Record<string, "read" | "write">;
+
+/**
+ * The installation token permissions the watcher asks for. `api` reads the queue's events, comments,
+ * and the `merge_group` logs (`actions: read`); with a fixer it also re-enqueues, which needs
+ * `merge_queues: write` for `enqueuePullRequest` and `contents: write` for arming auto-merge, and it
+ * edits the PR body's Review. `push` lease-pushes a fix or merge, and `pushWorkflows` one that carries
+ * a workflow change, as `quest land serve` does; `read` fetches.
+ */
+export function watchPermissions(fixing: boolean): {
+	api: Permissions;
+	push?: Permissions;
+	pushWorkflows?: Permissions;
+	read?: Permissions;
+} {
+	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read" } };
+	const push: Permissions = { contents: "write", pull_requests: "write" };
+	return {
+		api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" },
+		push,
+		pushWorkflows: { ...push, workflows: "write" },
+		read: { contents: "read" },
+	};
+}
+
+/**
+ * Watch the merge queue of `repository`'s base, one pass a minute, until the process stops. With a
+ * fixer, the PRs it drops are fixed from the daemon's private repository in the state directory.
+ */
 export async function watch(
 	root: string,
 	repository: Repository,
 	options: WatchOptions,
 	warn: (text: string) => void,
 ): Promise<void> {
+	// The wrapper runs in the fixer's checkout, where a relative path would name the PR's own file.
+	if (options.fixer) {
+		options.fixer = resolve(options.fixer);
+		accessSync(options.fixer, constants.X_OK);
+	}
 	const unlock = await startDaemon(root, repository, options);
 	try {
-		const deps = apiDependencies(
-			() =>
-				installationToken(
-					repository,
-					options,
-					{ contents: "read", pull_requests: "write", actions: "read" },
-					{ fetch, now: Date.now },
-				),
-			{ fetch, now: Date.now, sleep, warn },
-		);
+		const now = { fetch, now: Date.now };
+		const permissions = watchPermissions(options.fixer !== undefined);
+		const mint = (wanted: Permissions) => installationToken(repository, options, wanted, now);
+		const deps = apiDependencies(() => mint(permissions.api), { ...now, sleep, warn });
+		const fix: FixContext | undefined = options.fixer
+			? {
+					root: privateRepository(options.state),
+					fixer: options.fixer,
+					jobs: options.fixerJobs,
+					effort: options.fixerEffort,
+					timeout: 60,
+					token: (workflows) => mint(workflows ? permissions.pushWorkflows! : permissions.push!),
+					read: authenticatedRead(() => mint(permissions.read!)),
+				}
+			: undefined;
 		await daemonLoop(async () => {
-			for (const line of await watchPass(repository, options, deps)) warn(line);
+			for (const line of await watchPass(repository, options, deps, fix)) warn(line);
 			return false;
 		}, deps);
 	} finally {
