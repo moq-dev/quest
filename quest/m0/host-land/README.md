@@ -7,9 +7,11 @@ inline only when a counted review names its head, or the head is trivial;
 otherwise `/quest-iterate` runs first. A gate on the maintainer's host lands
 small batches: a base PR plus up to floor(log₂ n) others that merge cleanly,
 checked once on the chain's tip and pushed as one squash commit per PR. A
-conflict on the base PR or a failing batch ejects the PRs and hands them to an
-asynchronous Codex fixer, which makes only mechanical fixes and requeues the
-healthy PRs. Bisection goes away.
+conflict on the base PR or a failing batch hands the PRs to an asynchronous
+Codex fixer, which makes only mechanical fixes and requeues the healthy PRs.
+Bisection goes away. Since 2026-11-01 those PRs stay queued and parked while
+the fixer works, and only a handback takes one out of the queue; see the
+[land fixer epic](/quest/m0/land-fixer/README.md).
 
 Non-goals: other repositories adopting the gate (moq-dev/moq, moq-dev/moq.pro
 plan their own; moq.pro needs only `allow_auto_merge` and the ruleset, since
@@ -40,7 +42,8 @@ can hand off instead.
   the unreported `quest land` check. GitHub keeps auto-merge across a
   writer's push, so the gate compares the head to the pin and ejects
   `head_moved`.
-  - ✅ Pinned auto-merge (`quest merge --land`) plus `quest:merge`
+  - ✅ Pinned auto-merge (`quest merge --land`) plus `quest:merge`; the label
+    was deleted on 2026-10-31 (user), leaving pinned auto-merge alone
   - Label only, with the label's time against the last push
 - Retry cap for the fixer:
   - 2 attempts
@@ -68,7 +71,7 @@ can hand off instead.
   [moq-dev/quest#289](https://github.com/moq-dev/quest/pull/289) now, as it
   fixes live wrong ejections until the host gate replaces that code; close
   [moq-dev/quest#277](https://github.com/moq-dev/quest/pull/277), since an
-  ejection now removes `quest:merge` and the fixer adds it back.
+  ejection now disables auto-merge and the fixer re-enables it.
 - Security (user, 2026-10-30): the gate runs as a dedicated user under a
   hardened unit. PR code and Codex run in ephemeral nspawn containers with no
   credentials. moq-bot tokens are minted per push and scoped to this
@@ -79,21 +82,23 @@ can hand off instead.
 - No GitHub Actions in landing (user, 2026-10-30): the daemon replaces the
   Land workflow and the host's `quest-land` Actions runner, and ejection
   comments carry the failing log's tail.
-- This epic ranks first in m0. It replaces the hook-started kix fixer that
-  [moq-dev/quest#276](https://github.com/moq-dev/quest/pull/276) proposes
-  (`kix/eject-fix`).
+- This epic ranks first in m0. It replaces the hook-started kix fixer
+  (`kix/eject-fix`) that
+  [moq-dev/quest#276](https://github.com/moq-dev/quest/pull/276) proposed;
+  #276 was closed as superseded on 2026-11-01.
 - The epic finishes with an end-to-end run on moq-dev/quest: a batch with one
   PR that fails a check, one that conflicts with the base, and one healthy
   PR. The healthy PR lands after the requeue, the mechanical one lands after
   its fix, and the other is handed back. `CONTRIBUTING.md` and the README's
   landing section describe the host gate.
 - Amended 2026-10-31 (user): the fixer triages a failing batch before
-  anything is ejected, and only the PR it blames is ejected. See
-  [batch triage](/quest/m0/host-land/triage.md).
+  anything is ejected, and only the PR it blames is ejected. Batch triage
+  ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) went further: nothing is ejected for a failure, and the
+  blamed PR is parked for the fixer.
 
 ## Required
 
 - [Gate host](/quest/m0/host-land/host.md) - kixelated/nixos runs the daemon as its own user, checks in nspawn containers, and retires the Actions runner
 - [Fixer proxy access](/quest/m0/host-land/fixer.md) - connect the nixos fixer container to CLIProxyAPI with the gate client key and maintainer login
-- [Batch triage](/quest/m0/host-land/triage.md) - the fixer blames the failing PR before ejection, and a red base halts the queue
+- [Fixer TLS](/quest/m0/host-land/fixer-tls.md) - the fixer's container trusts public certificates, so workerd and the Worker tests run there
 - [Daemon restart keeps its check](/quest/m0/host-land/reattach.md) - a deploy no longer reruns the batch it interrupted

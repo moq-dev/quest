@@ -49,7 +49,7 @@ interface Registry {
 }
 
 /** Another live process holds the registry lock. */
-class Busy extends Error {}
+export class Busy extends Error {}
 
 function git(root: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", root, ...args], {
@@ -89,7 +89,7 @@ function device(path: string): number {
 	}
 }
 /** One spelling per path: Git prints `C:/...`, Node `C:\...`, and Windows may use 8.3 names. */
-function canonical(path: string): string {
+export function canonical(path: string): string {
 	return existsSync(path) ? realpathSync.native(path) : resolve(path);
 }
 /** Git's registered checkouts, with canonical paths and lock reasons. */
@@ -197,8 +197,12 @@ function unreached(root: string): string[] {
 /** Whether the forge merged a change, such as a squash-merged PR, whose head is exactly `commit`. */
 export type Merged = (repository: string, commit: string) => Promise<boolean>;
 
-/** Allocated blocks, including ignored build output; symlinks are never traversed and hard links count once. */
-export function diskUsage(path: string, seen = new Set<string>()): number {
+/**
+ * Allocated blocks, including ignored build output; symlinks are never traversed and hard links count once.
+ * Paths in `skip` are left out with everything under them.
+ */
+export function diskUsage(path: string, seen = new Set<string>(), skip = new Set<string>()): number {
+	if (skip.has(path)) return 0;
 	const stat = entry(path);
 	if (!stat) return 0;
 	if (stat.nlink > 1 && !stat.isDirectory()) {
@@ -208,8 +212,46 @@ export function diskUsage(path: string, seen = new Set<string>()): number {
 	}
 	// Allocated blocks, not logical length, so sparse files are not overcharged. Windows reports no blocks.
 	let bytes = process.platform === "win32" ? stat.size : stat.blocks * 512;
-	if (stat.isDirectory()) for (const child of readdirSync(path)) bytes += diskUsage(join(path, child), seen);
+	if (stat.isDirectory()) for (const child of readdirSync(path)) bytes += diskUsage(join(path, child), seen, skip);
 	return bytes;
+}
+
+/** The first repository or linked worktree, marked by a `.git` entry, at or under `path`; symlinks are never followed. */
+function repositoryWithin(path: string): string | undefined {
+	if (!entry(path)?.isDirectory()) return undefined;
+	const children = readdirSync(path, { withFileTypes: true });
+	if (children.some((child) => child.name === ".git")) return path;
+	for (const child of children) {
+		const found = child.isDirectory() ? repositoryWithin(join(path, child.name)) : undefined;
+		if (found) return found;
+	}
+	return undefined;
+}
+
+/** The repository's main checkout, which every linked worktree of it shares, from any path inside one. */
+export function mainCheckout(path: string): string {
+	const [main] = git(path, "worktree", "list", "--porcelain", "-z").split("\0\0");
+	const lines = main?.split("\0") ?? [];
+	const found = lines.find((line) => line.startsWith("worktree "))?.slice(9);
+	if (!found || lines.includes("bare")) throw new Error(`repository has no main checkout: ${path}`);
+	return canonical(found);
+}
+
+/** Directories holding other checkouts, which neither count toward a checkout's size nor become its scratch. */
+const CHECKOUTS = [".worktrees", ".claude"];
+
+/**
+ * Defaults for a checkout of `main`'s repository when its creator gives only a name. The scratch is
+ * `main`'s top-level ignored entries, leaving out the directories that hold checkouts and any entry
+ * holding a nested repository, whose commits are work rather than scratch. The reserve is `main`'s
+ * disk usage without its Git directory and the checkouts under it.
+ */
+export function derivedDefaults(main: string): { reserve: number; scratch: string[] } {
+	const names = readdirSync(main).filter((name) => name !== ".git" && !CHECKOUTS.includes(name));
+	const matched = names.length ? ignored(main, names) : new Set<string>();
+	const scratch = names.filter((name) => matched.has(name) && !repositoryWithin(join(main, name))).sort();
+	const skip = new Set([join(main, ".git"), join(main, ".worktrees"), join(main, ".claude", "worktrees")]);
+	return { reserve: Math.max(1, diskUsage(main, new Set(), skip)), scratch };
 }
 
 /**
@@ -322,10 +364,17 @@ export class Worktrees {
 			await sleep(100);
 		}
 	}
+	/** Names are unique per repository, so a name that several repositories use needs the ID. */
 	private find(registry: Registry, id: string): WorktreeRecord {
-		const record = registry.records.find((item) => item.id === id || item.name === id);
-		if (!record) throw new Error(`unknown worktree: ${id}`);
-		return record;
+		const byId = registry.records.find((item) => item.id === id);
+		if (byId) return byId;
+		const named = registry.records.filter((item) => item.name === id);
+		if (named.length > 1)
+			throw new Error(
+				`worktree name is used in several repositories; give the ID instead: ${named.map((item) => `${item.id} (${item.repository})`).join(", ")}`,
+			);
+		if (!named[0]) throw new Error(`unknown worktree: ${id}`);
+		return named[0];
 	}
 	/** Unknown counts as running, so scratch is never deleted under a process that may use it. */
 	private running(run: Run): boolean {
@@ -381,9 +430,10 @@ export class Worktrees {
 		}
 		return { used, growth, local };
 	}
+	/** An unset capacity leaves admission to the free-space check alone. */
 	private admit(registry: Registry, reserve: number, parent: string): void {
 		const { used, growth, local } = this.usage(registry, parent);
-		if (used + growth + reserve > registry.capacity)
+		if (registry.capacity && used + growth + reserve > registry.capacity)
 			throw new Error(
 				`disk capacity exceeded: ${used + growth} allocated + ${reserve} requested > ${registry.capacity}`,
 			);
@@ -421,10 +471,12 @@ export class Worktrees {
 				throw new Error("name must contain only letters, digits, dots, underscores, or hyphens");
 			if (!Number.isSafeInteger(reserve) || reserve <= 0)
 				throw new Error("reserve must be a positive safe integer in bytes, including expected build growth");
-			if (registry.records.some((item) => item.name === name))
-				throw new Error(`worktree name already exists; use restore or another name: ${name}`);
 			const declared = scratch.map(childPath);
 			const repository = canonical(git(root, "rev-parse", "--show-toplevel").trim());
+			if (registry.records.some((item) => item.name === name && item.repository === repository))
+				throw new Error(
+					`worktree name already exists in this repository; use restore or another name: ${name}`,
+				);
 			const path = join(repository, ".worktrees", name);
 			mkdirSync(dirname(path), { recursive: true });
 			if (existsSync(path)) throw new Error(`refusing to adopt an existing checkout: ${path}`);

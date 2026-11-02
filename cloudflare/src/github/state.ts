@@ -1,4 +1,4 @@
-import { branchQuest, handedBack, isHoldLabel, landed, parse, ready } from "quest/core";
+import { branchQuest, handedBack, isHoldLabel, landed, parse, questBranch, ready } from "quest/core";
 import type { Project, Snapshot } from "../board/project";
 import { GitHubError, type GitHubRepository, ProjectChanged } from "./service";
 import { positiveId } from "./webhook";
@@ -17,7 +17,15 @@ export type Scan = {
 		full?: boolean;
 	};
 	/** Pages only what availability depends on: open PRs and quest branches. */
-	occupancy: { open: Cursor; refs: Cursor; pulls: string[]; claims: string[]; complete: boolean };
+	occupancy: {
+		open: Cursor;
+		refs: Cursor;
+		pulls: string[];
+		claims: string[];
+		/** Observed tips; absent until old cached observations are refreshed. */
+		heads?: Record<string, string>;
+		complete: boolean;
+	};
 };
 type Connection<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 type Entity = {
@@ -34,13 +42,15 @@ type Entity = {
 export type Pull = Entity & {
 	headRefName: string;
 	headRefOid: string;
+	/** Whether its head is on a different repository; absent in older observations. */
+	isCrossRepository?: boolean;
 	isDraft: boolean;
 	/** Its body has a `## Decisions needed` section; the body itself is not kept. Absent in older observations. */
 	handedBack?: boolean;
 	reviewDecision: string | null;
 	/** GitHub's merge readiness for the App, such as CLEAN, BLOCKED, or DIRTY; absent in older observations. */
 	mergeStateStatus?: string;
-	/** The `quest:*` label a session holds it with, such as a queued merge's; absent in older observations. */
+	/** The hold label a session holds it with, such as a merge job's; absent in older observations. */
 	hold?: string | null;
 	reviews: { totalCount: number };
 	latestReviews: {
@@ -79,6 +89,8 @@ export type ProjectState = {
 	project: Project;
 	activity: Activity[];
 	claims: string[];
+	/** Each claimed branch at the same occupancy observation as `claims`. */
+	branchHeads: Record<string, string>;
 	complete: boolean;
 	observedAt: number;
 	revision: number;
@@ -98,7 +110,7 @@ export const RETENTION = 30 * 24 * 60 * 60 * 1000;
 
 const entityFields =
 	"databaseId:fullDatabaseId number title state updatedAt closedAt author { login } comments { totalCount }";
-const pullFields = `${entityFields} headRefName headRefOid isDraft reviewDecision mergeStateStatus labels(first:20) { nodes { name } } reviews { totalCount } latestReviews(first:20) { nodes { state author {login} commit {oid} } pageInfo {hasNextPage} } commits(last:1) { nodes { commit { oid statusCheckRollup { state } } } }`;
+const pullFields = `${entityFields} headRefName headRefOid isCrossRepository isDraft reviewDecision mergeStateStatus labels(first:20) { nodes { name } } reviews { totalCount } latestReviews(first:20) { nodes { state author {login} commit {oid} } pageInfo {hasNextPage} } commits(last:1) { nodes { commit { oid statusCheckRollup { state } } } }`;
 // Cursor variables are declared only for unfinished connections (GraphQL rejects
 // unused variables). Fixed page sizes bound subrequests, independent of tree size.
 export function activityQuery({ history, occupancy }: Scan, stale: Stale[] = []) {
@@ -177,7 +189,7 @@ function validate(kind: "issue" | "pull", item: Entity) {
 
 /**
  * What is kept of an observed entity: a PR's body only as whether it hands
- * its draft back, and its labels only as the `quest:*` one a session holds it with.
+ * its draft back, and its labels only as the hold label a session holds it with.
  */
 function observed(kind: "issue" | "pull", item: Entity): Entity {
 	if (kind === "issue") return item;
@@ -259,6 +271,7 @@ export async function reconcile(
 			refs: next(page.refs, occupancy.refs),
 			pulls: [...occupancy.pulls],
 			claims: [...occupancy.claims],
+			heads: { ...occupancy.heads },
 			complete: false,
 		},
 	};
@@ -278,6 +291,7 @@ export async function reconcile(
 			if (landed(tip, pulls) !== undefined) continue;
 			// Ref.name is relative to the requested prefix.
 			updated.occupancy.claims.push(`quest/${ref.name}`);
+			updated.occupancy.heads![`quest/${ref.name}`] = tip;
 		}
 	updated.history.complete = updated.history.issues === false && updated.history.pulls === false;
 	updated.occupancy.complete = updated.occupancy.open === false && updated.occupancy.refs === false;
@@ -375,18 +389,36 @@ export async function reconcile(
 	if (result.at(-1)!.meta.changes !== 1) throw new ProjectChanged();
 }
 
+type PublishedBranch = { branch: string; head: string | null; pending: string | null; pull: number | null };
+
 /**
- * Whether `quest` can start on current observations: ready and unclaimed, or
- * occupied only by `retry`, the open pull request of the quest's own failed
- * job, which retrying it continues. Never while occupancy is unknown.
+ * Whether `quest` is ready and unclaimed, or occupied only by the failed job's
+ * own published branch and PR. Never while occupancy is unknown.
  */
-export function startable(state: ProjectState, quest: string, retry: number | null) {
+export function startable(state: ProjectState, quest: string, failed: PublishedBranch | null) {
 	const { available, changes, documents } = state.project;
 	if (!available) return false;
 	if (available.includes(quest)) return true;
+	if (!failed || failed.branch !== questBranch(quest)) return false;
+	const retry = continued(state, failed);
+	const tip = state.branchHeads[failed.branch];
+	// A failed publication owns its observed branch at a recorded commit even
+	// before a PR exists. A different PR still blocks it through `changes` below.
+	const ownsBranch = tip !== undefined && (tip === failed.head || tip === failed.pending);
+	// An already recorded upstream PR can have moved since the job failed; the
+	// publication's branch verification will turn that change into a decision.
+	const ownsPull = state.activity.some((item) => {
+		const pull = item.kind === "pull" && item.number === retry ? (item.data as Pull | null) : null;
+		return (
+			!item.missing &&
+			state.open?.includes(item.id) &&
+			pull?.state === "OPEN" &&
+			pull.headRefName === questBranch(quest) &&
+			pull.isCrossRepository === false
+		);
+	});
 	return (
-		retry !== null &&
-		!state.claims.includes(quest) &&
+		(!state.claims.includes(quest) || ownsBranch || ownsPull) &&
 		changes.every((change) => change.quest !== quest || change.number === retry) &&
 		ready(documents.map((d) => parse(d.path, d.content))).includes(quest)
 	);
@@ -399,16 +431,18 @@ export function startable(state: ProjectState, quest: string, retry: number | nu
  * number. Matching the commit, not only the branch name, keeps a
  * contributor's pull request from a same-named branch a claim.
  */
-export function continued(
-	state: ProjectState,
-	job: { branch: string; head: string | null; pending: string | null; pull: number | null },
-) {
+function continued(state: ProjectState, job: PublishedBranch) {
 	if (job.pull !== null || state.open === null) return job.pull;
 	const open = new Set(state.open);
 	const published = [job.head, job.pending].filter((commit) => commit !== null);
 	const pulls = state.activity.filter((item) => {
 		const pull = item.kind === "pull" && !item.missing && open.has(item.id) ? (item.data as Pull | null) : null;
-		return pull?.state === "OPEN" && pull.headRefName === job.branch && published.includes(pull.headRefOid);
+		return (
+			pull?.state === "OPEN" &&
+			pull.isCrossRepository === false &&
+			pull.headRefName === job.branch &&
+			published.includes(pull.headRefOid)
+		);
 	});
 	return pulls.length === 1 ? pulls[0]!.number : null;
 }
@@ -521,6 +555,7 @@ export async function readState(db: D1Database, repo: GitHubRepository): Promise
 		project,
 		activity,
 		claims,
+		branchHeads: scan.occupancy.heads ?? {},
 		complete: scan.history.complete,
 		observedAt: row.observedAt,
 		revision: row.revision,

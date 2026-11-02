@@ -19,8 +19,8 @@ import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
  * connection already read in full is skipped on later pages.
  */
 const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
-	$checks: String, $reviews: String, $threads: String, $comments: String,
-	$moreChecks: Boolean!, $moreReviews: Boolean!, $moreThreads: Boolean!, $moreComments: Boolean!) {
+	$checks: String, $reviews: String, $threads: String,
+	$moreChecks: Boolean!, $moreReviews: Boolean!, $moreThreads: Boolean!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
 			url state isDraft headRefOid headRefName mergeable mergeStateStatus reviewDecision
@@ -47,10 +47,6 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 			reviews(first: 100, after: $reviews) @include(if: $moreReviews) {
 				pageInfo { hasNextPage endCursor }
 				nodes { author { login } state submittedAt url commit { oid } reactions(last: 100) { nodes { ...reaction } } }
-			}
-			comments(first: 100, after: $comments) @include(if: $moreComments) {
-				pageInfo { hasNextPage endCursor }
-				nodes { body createdAt url author { login } }
 			}
 			reviewThreads(first: 100, after: $threads) @include(if: $moreThreads) {
 				pageInfo { hasNextPage endCursor }
@@ -119,8 +115,6 @@ export interface Status {
 	/** The latest exit from the merge queue, auto-merge, or `quest land`'s queue, and the reason for it. */
 	landingStopped: { reason: string; actor: string; at: string } | null;
 	checks: { state: string | null; passed: number; failing: Check[]; pending: Check[] };
-	/** Distinct commits with submitted reviews after the latest Design change marker. */
-	reviewRounds: { count: number; since: { at: string; actor: string; url: string } | null };
 	/** Each reviewer's latest submitted review, oldest first. */
 	reviews: Review[];
 	reactions: Reaction[];
@@ -134,16 +128,14 @@ export interface Status {
 /** Read the paged PR state, then the state commands’ ownership snapshot. */
 export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencies): Promise<Status> {
 	const github = new GitHub(deps);
-	const cursors: Record<"checks" | "reviews" | "threads" | "comments", string | null | undefined> = {
+	const cursors: Record<"checks" | "reviews" | "threads", string | null | undefined> = {
 		checks: null,
 		reviews: null,
 		threads: null,
-		comments: null,
 	};
 	const contexts: ObjectValue[] = [];
 	const reviewNodes: ObjectValue[] = [];
 	const threadNodes: ObjectValue[] = [];
-	const commentNodes: ObjectValue[] = [];
 	let first: ObjectValue | undefined;
 	let rollup: ObjectValue | null = null;
 	// A cursor is null to read the first page and undefined once its list is complete.
@@ -161,11 +153,9 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 			checks: cursors.checks ?? null,
 			reviews: cursors.reviews ?? null,
 			threads: cursors.threads ?? null,
-			comments: cursors.comments ?? null,
 			moreChecks: cursors.checks !== undefined,
 			moreReviews: cursors.reviews !== undefined,
 			moreThreads: cursors.threads !== undefined,
-			moreComments: cursors.comments !== undefined,
 		});
 		const repository = data.repository;
 		if (repository === null) throw new Error(`cannot read ${pr.owner}/${pr.repo}; check the repository and token`);
@@ -185,12 +175,11 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 		}
 		if (cursors.reviews !== undefined) page(current.reviews, "reviews", reviewNodes);
 		if (cursors.threads !== undefined) page(current.reviewThreads, "threads", threadNodes);
-		if (cursors.comments !== undefined) page(current.comments, "comments", commentNodes);
 	}
 	const ownership = await readHoldStatus(pr, deps);
 	if (ownership.head !== first!.headRefOid)
 		throw new Error("the PR head changed while reading its holds; rerun quest status");
-	const status = summarize(first!, rollup, contexts, reviewNodes, threadNodes, commentNodes);
+	const status = summarize(first!, rollup, contexts, reviewNodes, threadNodes);
 	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
 }
@@ -249,7 +238,6 @@ function summarize(
 	contexts: ObjectValue[],
 	reviewNodes: ObjectValue[],
 	threadNodes: ObjectValue[],
-	commentNodes: ObjectValue[],
 ): Status {
 	const head = string(pull.headRefOid);
 	const url = string(pull.url);
@@ -278,20 +266,6 @@ function summarize(
 	reacted(pull, url);
 	// A pending review is the viewer's unsubmitted draft, not a review.
 	const submitted = reviewNodes.filter((row) => row.state !== "PENDING");
-	const changed = commentNodes
-		.filter((row) => typeof row.body === "string" && row.body.startsWith("Design change:"))
-		.sort((a, b) => Date.parse(string(a.createdAt)) - Date.parse(string(b.createdAt)))
-		.at(-1);
-	const since = changed
-		? { at: string(changed.createdAt), actor: actor(changed.author), url: string(changed.url) }
-		: null;
-	const rounds = new Set(
-		submitted.flatMap((row) =>
-			row.commit !== null && (!since || Date.parse(string(row.submittedAt)) >= Date.parse(since.at))
-				? [string(object(row.commit).oid)]
-				: [],
-		),
-	);
 	const latest = new Map<string, Review>();
 	for (const row of submitted) {
 		reacted(row, string(row.url));
@@ -358,7 +332,6 @@ function summarize(
 						at: string(stopped.createdAt),
 					},
 		checks,
-		reviewRounds: { count: rounds.size, since },
 		reviews: [...latest.values()],
 		reactions,
 		threads,
@@ -427,7 +400,6 @@ export function statusLines(status: Status): string[] {
 		`checks ${dash(status.checks.state)} passed=${status.checks.passed} failing=${status.checks.failing.length} pending=${status.checks.pending.length}`,
 		...status.checks.failing.map((c) => check("failing", c)),
 		...status.checks.pending.map((c) => check("pending", c)),
-		`review-rounds ${status.reviewRounds.count} ${status.reviewRounds.since ? `${status.reviewRounds.since.at} ${status.reviewRounds.since.actor} ${status.reviewRounds.since.url}` : "-"}`,
 		...status.reviews.map(
 			(r) => `review ${r.current ? "current" : "stale"} ${r.state} ${r.reviewer} ${r.submittedAt} ${r.url}`,
 		),
