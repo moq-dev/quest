@@ -90,7 +90,6 @@ ownership-manifest design:
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Review handles expired and environment logins](/quest/m0/review-login.md) - `quest review` says to log in again instead of failing with a 401, and reviews with credentials from the environment
-- [Stale skill stubs](/quest/m0/init-prune.md) - `quest init` and `quest uninstall` remove stubs of retired skills such as `quest-ready`
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - condition: Bun fixes concurrent `rmSync` on Windows; report it, then drop the workaround
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - condition: Codex keeps a supported way to skip a project's `.codex/` layer; then reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
@@ -103,5 +102,5 @@ ownership-manifest design:
 - [Other worktree routes](/quest/m0/worktree-routes.md) - live-check PR worktrees, agent view, remote-control, and workflow agents against the hooks
 - [Spotlight off in macOS CI](/quest/m0/ci-spotlight.md) - this repository's macOS jobs turn off Spotlight indexing first
 - [Review through a gateway](/quest/m0/review-gateway.md) - `quest review` keeps gateway, cloud-provider, and Codex connection variables
-- [opencode SDK 2.x](/quest/m0/opencode-sdk.md) - the runner moves to `@opencode/sdk` 2.x so the nixpkgs bump lands
+- [opencode 2.x](/quest/m0/opencode-sdk.md) - the runner drives the opencode 2.x binary through `@opencode/client`, removing the interim 1.19.0 pin
 - [Review harness check](/quest/m0/review-harness.md) - recurring each milestone: newest pinned review models, and the live sandbox test passes

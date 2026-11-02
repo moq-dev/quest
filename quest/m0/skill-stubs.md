@@ -28,7 +28,3 @@ Decided 2026-11-01 (user, /quest-plan of the follow-ups from the
 - The refresh amends m0's "Upgrading never rewrites repository files"; the
   [milestone's Plan](/quest/m0/README.md) records it. `docs/getting-started.md`
   says "existing stubs stay as they are"; update it.
-
-## Related
-
-- [Stale skill stubs](/quest/m0/init-prune.md) - removes stubs of retired skills; this quest refreshes those of current ones

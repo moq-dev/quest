@@ -52,7 +52,8 @@ concurrent edits to quest link lists. It adds hook entries running
 `quest worktree hook` to `.claude/settings.json`, keeping the file's other
 settings, so Quest creates and reclaims Claude Code's worktrees; Claude Code
 then needs `quest` on its `PATH` to create any worktree in the repository. It
-prints each path it changed and is safe to rerun.
+prints each path it changed and is safe to rerun. Rerun after an upgrade, it
+also removes the unmodified stubs of skills the new version no longer ships.
 
 If init refuses, it names the conflicting path. Report it and ask the user how
 to proceed; never delete or rename their files to get past it.
@@ -88,9 +89,9 @@ work or `/quest-import` to bring in open GitHub issues.
 
 1. Run `quest skill export` and follow it, so active quests become GitHub
    issues. Skip this only if the user says so.
-2. Run `quest uninstall`. It removes only unmodified stubs, the `Quests: `
-   line, Quest's hook entries, and the merge driver, and never deletes the
-   quest tree.
+2. Run `quest uninstall`. It removes only unmodified stubs of any version, the
+   `Quests: ` line, Quest's hook entries, and the merge driver, and never
+   deletes the quest tree.
 3. Remove the pin added above: the mise entry, or the flake input and dev
    shell package. For an unpinned install, delete the `quest` binary the
    installer placed (`~/.local/bin/quest` by default, or `quest.exe` in the

@@ -1,9 +1,9 @@
 // The agent skills and the quest guide, bundled into the CLI.
 //
 // A repository installs only a stub per skill, which asks the agent to run
-// `quest skill <name>`. The stub never changes between versions, so the
-// version a repository pins decides which instructions its agents follow and
-// upgrading never rewrites repository files.
+// `quest skill <name>`. The stub only points at the binary, so the version a
+// repository pins decides which instructions its agents follow, and upgrading
+// never rewrites repository files.
 
 import guide from "../../assets/AGENTS.md";
 import afk from "../../assets/skills/afk.md";
@@ -28,7 +28,7 @@ export const GUIDE: string = guide;
 const SETUP = "https://github.com/moq-dev/quest/blob/main/SETUP.md";
 
 /** Installed skills carry this prefix so they don't collide with a repository's own. */
-const PREFIX = "quest-";
+export const PREFIX = "quest-";
 
 /** One skill: YAML frontmatter, then the instructions. */
 export class Skill {
