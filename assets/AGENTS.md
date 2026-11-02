@@ -37,6 +37,11 @@ The observable outcome and important boundaries.
 
 Current decisions, open questions, or implementation guidance.
 
+## Waiting
+
+- Maintainer: the decision or action only they can take, and how to check it is done
+- moq-dev/moq: a condition another party must meet, and how to check or advance it
+
 ## Required
 
 - [Child quest](/quest/foo/bar.md) - the outcome, so the list reads without opening it
@@ -56,6 +61,10 @@ The `Goal` section is required; everything else is optional. Use these exact hea
 
 Size the title `[XS]` to `[XL]` for implementation, verification, and landing.
 An epic carries no size until its last child is removed; its README is then the epic's remaining work.
+
+`Waiting` lists what the work waits on outside the tree; each item opens with who acts, `Maintainer:` or the outside party, before a colon.
+A decision item gives its options and a recommendation.
+Remove an item once its condition clears, and the heading with its last item.
 
 `Required` lists the quests that must finish before the work starts.
 The list is ordered by priority, inserted at rank.
@@ -102,8 +111,9 @@ Group related quests in an epic; its README holds the work no child owns.
 A release or pin bump that unblocks work is its own quest.
 
 So is anything waiting on an outside party or a human action (an upstream fix, a customer, a decision).
-Its Goal names the condition and how to check or advance it; it is deleted once the condition clears.
+Its `Waiting` section names who acts, the condition, and how to check or advance it; it is deleted once the condition clears.
 Unlike a blocked quest it stays ready, so it resurfaces every time ready work is triaged instead of stalling in the backlog.
+`quest waiting` lists every waiting item, the maintainer's first, ranked by what each unblocks, and `/quest-unblock` walks the maintainer through them.
 
 ## Execution
 
@@ -129,7 +139,7 @@ In a fork's clone, it pushes to the fork and opens the PR upstream; a fork
 whose parent keeps no quests is its own upstream.
 It exits 3 when the quest is blocked or someone else holds it; pick other work.
 `quest start --release <quest>` gives back a claim before any work is pushed.
-If a claim looks stale, such as a draft without `## Decisions needed` or a
+If a claim looks stale, such as a draft without `## Waiting` or a
 branch with no open PR that has been quiet a long time, offer the user to take
 it over, saying how long ago it was last active.
 
@@ -156,8 +166,9 @@ A PR that leaves work rewrites the quest to what remains, rather than noting it 
 
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
 When a quest is complete, review it locally and mark its PR ready for review with `/quest-review`, even if you made choices without asking; list those choices in the PR body for review.
-Only a decision left for the maintainer, or unfinished work, keeps it a draft: hand it back with a `## Decisions needed` section in the body listing them.
+Only a decision left for the maintainer, an outside condition, or unfinished work keeps it a draft: hand it back with a `## Waiting` section in the body listing them, in the same form as a quest's.
 Tools read only whether that heading is present; a draft without it still belongs to its starter.
+Drafts handed back before `## Waiting` replaced it use `## Decisions needed`, which counts the same.
 A draft suggests `/quest-iterate`; a PR ready for review suggests `/quest-merge`.
 Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` plans them.
 Add a closing keyword for every issue under `Closes`.

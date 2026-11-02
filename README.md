@@ -133,6 +133,27 @@ $ quest --root examples/export unblocked --json --limit 1
 [{"path":"quest/m0/export.md","dependents":1}]
 ```
 
+## Find what waits on you
+
+A quest waiting outside the tree says so in a `## Waiting` section, one item
+per condition, each opening with who acts: `Maintainer:` for a decision or
+action only the maintainer can take, or the outside party, such as
+`moq-dev/moq:`. `quest check` rejects an item that names nobody.
+
+```markdown
+## Waiting
+
+- Maintainer: open a Hetzner account; `GET /server` on the Robot API answers 200
+- moq-dev/moq: a release carries the VA-API bindings
+```
+
+`quest waiting` lists every item, the maintainer's first, then by milestone and
+the same downstream impact `quest unblocked` counts. Each line gives the
+dependents, whether the quest is otherwise ready or still blocked, its path,
+and the item; `--maintainer` keeps only the maintainer's, and `--json` prints
+`{path, dependents, ready, waits}` objects. A draft PR hands itself back to
+the maintainer with the same heading. `/quest-unblock` walks you through both.
+
 Each plain output line contains the count, a tab, and the path. On a terminal,
 a heading explains the count. `--json` prints an ordered array, including `[]`
 when no quests are ready; `--limit <count>` requires a positive integer.
@@ -186,8 +207,9 @@ the branch without a PR.
 
 `--release` deletes the branch, with a lease on its tip, and closes its PR, but
 only while the tip is still an empty commit. Once work is on the branch, hand
-the draft back instead: a `## Decisions needed` section in its body marks it as
-waiting on the maintainer.
+the draft back instead: a `## Waiting` section in its body marks it as
+waiting on the maintainer. Drafts handed back with the older `## Decisions
+needed` heading count the same.
 
 `quest start` exits 0 when done, 3 when it refuses (blocked, held, a branch in
 the way, or work on the branch), 2 for invalid arguments, and 1 for other
@@ -451,7 +473,7 @@ never work on one PR at once:
 
 ```sh
 quest iterate 128            # add quest:active, printing a hold token
-quest ready 128 <token>      # drop "Decisions needed" and mark it ready
+quest ready 128 <token>      # drop "Waiting" and mark it ready
 quest release 128 <token>    # hand it back
 quest merge 128 --land <sha> # auto-merge bound to that head; takes no label
 ```
@@ -461,7 +483,7 @@ Sessions often share a GitHub account, so taking it prints a hold token: the
 ID of the timeline event that added the label. Every command refuses while a
 `quest:*` label it holds no token for is on the PR, including another
 session's `quest:active`; a draft its starter still holds, one without a
-`## Decisions needed` section; and a merged or closed PR, since a push after
+`## Waiting` section; and a merged or closed PR, since a push after
 the merge brings the branch back. The refusal names the holder's label, age,
 and token, so you can decide whether to release a stale hold. When two
 sessions add labels at once, the first label added keeps the PR and the other
@@ -1163,6 +1185,7 @@ the version you pin decides what your agents follow:
 | `quest-merge` | Queue a reviewed PR to land, or send it to `quest-iterate`. |
 | `quest-complete` | Decide which open PRs to merge, then queue them. |
 | `quest-afk` | Keep starting agreed work while you are away, leaving every decision for your return. |
+| `quest-unblock` | Settle what quests and draft PRs wait on you, and clear waits that have resolved. |
 | `quest-delete` | Abandon a quest, deleting it in its own PR. |
 
 Use `/quest-plan` in Claude Code or `$quest-plan` in Codex. Skills coordinate
@@ -1204,7 +1227,7 @@ Hosted work will use explicitly selected maintainer or donor API funding.
 Automatic project history passes read updates since their prior issue/PR
 boundaries, including timestamp ties. Explicit Refresh starts or resumes a full
 history pass; successive refreshes repair cached issues deleted without a
-webhook. Open draft bodies are read only to classify `## Decisions needed`.
+webhook. Open draft bodies are read only to classify `## Waiting`.
 [The first milestone](quest/m0/README.md) lists the quests that remain.
 
 ## Contributing

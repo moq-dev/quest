@@ -157,7 +157,7 @@ export function world(): World {
 				checks: "SUCCESS",
 				review: null,
 				draft: true,
-				body: "Titles are indexed.\n\n## Decisions needed\n\n1. Index quest bodies too?\n",
+				body: "Titles are indexed.\n\n## Waiting\n\n- Maintainer: index quest bodies too?\n",
 			},
 			// Clean when first read; `seed` rereads it while GitHub reports UNKNOWN.
 			{

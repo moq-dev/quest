@@ -1,10 +1,11 @@
 // How a quest's PR and branch say whose move it is. A draft is its starter's
-// claim until its body hands it back with a `## Decisions needed` section, and
-// a branch whose work merged holds nothing (the guide's Execution section);
-// the CLI and the Worker read both the same way.
+// claim until its body hands it back with a `## Waiting` section, and a branch
+// whose work merged holds nothing (the guide's Execution section); the CLI and
+// the Worker read both the same way.
 
-// Web edits end lines in CRLF.
-const HAND_BACK = /^#{2}[ \t]+Decisions needed[ \t]*#*[ \t]*\r?$/im;
+// Web edits end lines in CRLF. `Decisions needed` is the heading `Waiting`
+// replaced; drafts opened before it still hand back with it.
+const HAND_BACK = /^#{2}[ \t]+(?:Waiting|Decisions needed)[ \t]*#*[ \t]*\r?$/im;
 
 /** Whether a PR body hands its draft back to the maintainer; only the heading's presence matters. */
 export function handedBack(body: string): boolean {

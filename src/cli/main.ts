@@ -17,6 +17,8 @@ import {
 	questBranch,
 	renderBlocker,
 	unblocked,
+	onMaintainer,
+	waiting,
 } from "../core";
 import {
 	AgentInputError,
@@ -296,6 +298,44 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		);
 
 	program
+		.command("waiting")
+		.summary("List quests waiting on the maintainer or an outside party")
+		.description(
+			"List every quest with a ## Waiting section: those waiting on the maintainer first, then milestone " +
+				"priority, distinct transitive dependents as quest unblocked counts them, ready before blocked, then " +
+				"tree order. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
+				"followed by the condition and how to check or advance it.\n\n" +
+				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the path, " +
+				"and the item. --json prints an ordered array of {path, dependents, ready, waits: [{line, party, text}]} " +
+				"objects. --maintainer keeps only the items the maintainer settles. Invalid trees fail before printing. " +
+				"Outside conditions are never checked. Draft PRs hand back with the same heading; this reads only the " +
+				"quest tree.",
+		)
+		.option("--json", "Print a deterministic JSON array")
+		.option("--maintainer", "Only items waiting on the maintainer")
+		.option("--limit <count>", "Maximum number of quests to print", positiveInteger("limit"))
+		.action((options: { json?: boolean; maintainer?: boolean; limit?: number }) => {
+			const tree = checkout(root());
+			if (!valid(tree)) return;
+			const quests = waiting(tree.docs)
+				.map((quest) => (options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest))
+				.filter((quest) => quest.waits.length > 0)
+				.slice(0, options.limit);
+			if (options.json) {
+				print(JSON.stringify(quests));
+				return;
+			}
+			if (theme) print("Quests waiting, the maintainer's first, by milestone and downstream impact:");
+			for (const quest of quests) {
+				for (const wait of quest.waits) {
+					print(
+						`${quest.dependents}\t${quest.ready ? "ready" : "blocked"}\t${quest.path}\t${wait.party}: ${wait.text}`,
+					);
+				}
+			}
+		});
+
+	program
 		.command("start")
 		.summary("Claim a ready quest with a draft PR, or release that claim")
 		.description(
@@ -440,7 +480,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		"release. A taken PR carries the quest:active label; iterate prints a hold token, the ID of the timeline " +
 		"event that added it, since sessions often share an account. A command refuses while a quest:* label " +
 		"it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
-		"holds (one whose body has no Decisions needed heading). A refusal names the holder's label, age, and " +
+		"holds (one whose body has no Waiting heading). A refusal names the holder's label, age, and " +
 		"token; releasing a stale hold with that token is the user's choice. Given a token, a command refuses " +
 		"unless the token is still the latest add of its label. When two sessions add the label at once, the " +
 		"first added keeps the PR; GitHub records no event when a label already on the PR is added again, so two " +
@@ -468,7 +508,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("ready")
 		.summary("Hand a PR this session holds to reviewers")
 		.description(
-			"Hand a PR this session holds to reviewers: remove the body's Decisions needed section and mark a " +
+			"Hand a PR this session holds to reviewers: remove the body's Waiting section (or the older Decisions needed) and mark a " +
 				`draft ready for review. The hold stays; it prints the token again.\n\n${OWNERSHIP}`,
 		)
 		.argument("<pr>", "GitHub PR URL, or a PR number in origin")

@@ -7,9 +7,7 @@ permission, and every installation the land fixer pushes to, through the
 queue watcher or the host gate, has accepted it: moq-dev/moq, moq.pro, rust2,
 rind and quest. GitHub then accepts
 a fixer push that touches `.github/workflows`, including a base merge pushed
-to a fork's branch. This quest waits on the maintainer. To check, open the
-App's settings under Permissions; GitHub lists pending permission requests on
-each installation.
+to a fork's branch.
 
 ## Plan
 
@@ -28,3 +26,9 @@ each by hand. Once this permission is granted, the refusal that
 `quest land apply` handback handles should stop happening.
 
 Delete this quest once the permission is granted and accepted.
+
+## Waiting
+
+- Maintainer: grant moq-bot `workflows: write` and accept it on each
+  installation above. To check, open the App's settings under Permissions;
+  GitHub lists pending permission requests on each installation.

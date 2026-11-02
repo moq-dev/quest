@@ -130,8 +130,9 @@ export async function take(pr: PullRequest, token: string | undefined, deps: Git
 }
 
 /**
- * While `token` holds `pr`, hand it to reviewers: drop its `## Decisions needed`
- * section and mark a draft ready for review. The hold stays.
+ * While `token` holds `pr`, hand it to reviewers: drop its `## Waiting` section
+ * (or the older `## Decisions needed`) and mark a draft ready for review. The
+ * hold stays.
  */
 export async function finish(pr: PullRequest, token: string, deps: GitHubDependencies): Promise<Hold> {
 	const labels = new Labels(pr, deps);
@@ -434,7 +435,7 @@ function unheld(snapshot: Snapshot, mine: string | undefined, now: number): void
 	if (other !== undefined) throw new Refusal(holder(snapshot, other, now));
 	if (mine === undefined && starterHeld(snapshot)) {
 		throw new Refusal(
-			`${snapshot.url} is a draft its starter still holds: its body has no ## Decisions needed section, so taking it over is the user's choice`,
+			`${snapshot.url} is a draft its starter still holds: its body has no ## Waiting section, so taking it over is the user's choice`,
 		);
 	}
 }
@@ -467,7 +468,7 @@ function holder(snapshot: Snapshot, label: string, now: number): string {
 	return `${snapshot.url} is held by ${label}${since}; if it looks stale, ask the user before releasing it`;
 }
 
-/** `body` without its `## Decisions needed` sections, each running to the next heading of level 1 or 2. */
+/** `body` without its `## Waiting` (or older `## Decisions needed`) sections, each running to the next heading of level 1 or 2. */
 export function withoutHandBack(body: string): string {
 	const kept: string[] = [];
 	let skipping = false;

@@ -17,5 +17,9 @@ Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-comp
   processes `rmSync` the same file on `windows-11-arm` and `windows-2022`.
 - Search existing Bun issues first, and comment on a match instead of opening
   a duplicate.
-- This quest waits on Bun. Check the report's state each time ready work is
-  triaged.
+
+## Waiting
+
+- oven-sh/bun: a release fixes `rmSync` throwing `EFAULT` when two processes
+  remove one file on Windows, and Quest's pin includes it. Check the report's
+  state each time ready work is triaged.

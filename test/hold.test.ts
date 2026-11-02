@@ -710,6 +710,12 @@ describe("release", () => {
 	});
 });
 
+test("drops each Waiting section up to the next heading", () => {
+	expect(withoutHandBack("Summary.\n\n## Waiting\n\n- Maintainer: pick.\n\n## Validation\n\nTests pass.")).toBe(
+		"Summary.\n\n## Validation\n\nTests pass.",
+	);
+});
+
 test("drops each Decisions needed section up to the next heading", () => {
 	expect(withoutHandBack("Summary.\r\n\r\n## Decisions needed\r\n\r\n1. Pick.\r\n### Detail\r\nMore.\r\n")).toBe(
 		"Summary.",

@@ -2,12 +2,7 @@
 
 ## Goal
 
-Condition: the maintainer judges moq-dev/moq's merge queue and watcher
-proven, from the live evidence moq's
-[land quest](https://github.com/moq-dev/moq/blob/main/quest/m0/ci/land.md)
-collects. Ask the maintainer once the watcher has run on moq.
-
-Then moq-dev/quest lands through GitHub's merge queue with the watcher: a
+Once moq-dev/moq's merge queue and watcher are proven, moq-dev/quest lands through GitHub's merge queue with the watcher: a
 `merge_group` workflow runs `just check` and `just test`, `main`'s ruleset
 requires it and the merge queue instead of the unreported `quest land`
 check, the host's `quest land serve` instance for quest is disabled, and a
@@ -33,6 +28,13 @@ queues on private repositories only under Enterprise Cloud, so check whether
 moq.pro can enable one before planning its switch; if it can't, it stays on
 the host gate, and [Retire the batching gate](/quest/m0/queue-watcher/retire.md)
 needs a maintainer decision. moq-dev/quest, rust2 and rind are public.
+
+## Waiting
+
+- Maintainer: judge moq-dev/moq's merge queue and watcher proven, from the
+  live evidence moq's
+  [land quest](https://github.com/moq-dev/moq/blob/main/quest/m0/ci/land.md)
+  collects. Ask once the watcher has run on moq.
 
 ## Required
 

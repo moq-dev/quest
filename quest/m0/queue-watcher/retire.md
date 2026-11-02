@@ -2,10 +2,8 @@
 
 ## Goal
 
-Condition: no repository lands through `quest land serve` any more (moq,
-moq-dev/quest, moq.pro, rust2 and rind have all switched to the merge queue).
-
-Then the batching gate is gone: `quest land serve`'s batching, parking,
+Once no repository lands through `quest land serve` any more, the batching
+gate is gone: `quest land serve`'s batching, parking,
 halting, and squash-push code, its tests, and its README and `CONTRIBUTING.md`
 sections are deleted, keeping only what the watcher and `quest land apply`
 use. The host's `quest-land` daemon instances and check containers are
@@ -20,6 +18,13 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 batched gate, and gate work is frozen until then. Once nothing uses it, the
 code goes rather than staying as an unmaintained option. Check each
 repository's ruleset for a `quest land` requirement before deleting.
+
+## Waiting
+
+- moq.pro, rust2, rind: each lands through the merge queue instead of
+  `quest land serve`, as moq and moq-dev/quest will after
+  [the other repositories follow](/quest/m0/queue-watcher/follow.md). Check
+  each repository's ruleset for a `quest land` requirement.
 
 ## Required
 
