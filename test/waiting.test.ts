@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { type Doc, check, handedBack, parse, parseWait, waiting, withoutHandBack } from "../src/core";
+import { type Doc, check, handedBack, parse, parseWait, unblocked, waiting, withoutHandBack } from "../src/core";
 
 const ROOT = "# Quests\n\n## Goal\n\nAll.\n\n## Required\n\n- [m0](/quest/m0/README.md)\n- [m1](/quest/m1/README.md)\n";
 
@@ -69,6 +69,16 @@ test("lists the maintainer's waits first, then by milestone and impact", () => {
 			waits: [{ line: 9, party: "moq-dev/moq", text: "a release." }],
 		},
 	]);
+});
+
+test("ties keep the tree's priority order, as unblocked does", () => {
+	// The CLI loads documents by path, so a.md comes first.
+	const docs = tree({
+		"z.md": "\n## Waiting\n\n- Maintainer: pick one.\n",
+		"a.md": "\n## Waiting\n\n- Maintainer: pick another.\n",
+	}).sort((x, y) => x.path.localeCompare(y.path));
+	expect(unblocked(docs).map((quest) => quest.path)).toEqual(["quest/m0/z.md", "quest/m0/a.md"]);
+	expect(waiting(docs).map((quest) => quest.path)).toEqual(["quest/m0/z.md", "quest/m0/a.md"]);
 });
 
 test("a draft hands back with Waiting, or the Decisions needed heading it replaced", () => {

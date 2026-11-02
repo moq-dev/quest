@@ -1,7 +1,7 @@
 // Rank ready work without mistaking the epic index for downstream work.
 
 import { type Doc, children, entries, permanent, rooted } from "./doc";
-import { ready } from "./ready";
+import { ready, treeOrder } from "./ready";
 import { ROOT, check, formatFinding } from "./rules";
 import { type Wait, onMaintainer, waits } from "./waiting";
 
@@ -102,8 +102,10 @@ export function waiting(docs: Doc[]): WaitingQuest[] {
 	const rank = ranking(docs);
 	const startable = new Set(ready(docs));
 	const maintainer = (quest: WaitingQuest) => (quest.waits.some(onMaintainer) ? 0 : 1);
-	return docs
-		.map((doc) => ({ path: doc.path, waits: waits(doc) }))
+	const byPath = new Map(docs.map((doc) => [doc.path, doc]));
+	// The sort is stable, so ties keep tree order, as they do in `unblocked`.
+	return treeOrder(docs)
+		.map((path) => ({ path, waits: waits(byPath.get(path)!) }))
 		.filter((quest) => quest.waits.length > 0)
 		.map((quest) => ({
 			path: quest.path,
