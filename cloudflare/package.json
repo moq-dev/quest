@@ -14,9 +14,9 @@
 		"deploy": "wrangler deploy"
 	},
 	"dependencies": {
-		"@better-auth/passkey": "1.7.12",
-		"better-auth": "1.7.12",
-		"hono": "4.13.13",
+		"@better-auth/passkey": "1.7.13",
+		"better-auth": "1.7.13",
+		"hono": "4.13.14",
 		"marked": "18.1.1",
 		"quest": "file:.."
 	},
