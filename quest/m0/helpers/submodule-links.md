@@ -29,7 +29,3 @@ pinned commit for snapshots; reuse that lookup rather than writing a second one.
 Decided 2026-10-29 (user, moq.pro follow-ups): plan only this fix upstream. The
 label-queue gaps it was planned with retire once moq.pro lands through
 `quest land`.
-
-## Related
-
-- [quest merge --land gaps](/quest/m0/helpers/merge-land.md) - the other merge-agent friction from these runs

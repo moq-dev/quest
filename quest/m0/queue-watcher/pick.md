@@ -41,5 +41,4 @@ changes:
 
 ## Related
 
-- [quest merge --land gaps](/quest/m0/helpers/merge-land.md) - the same command's other gaps, in [moq-dev/quest#347](https://github.com/moq-dev/quest/pull/347)
 - [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - what the watcher does with a refused pick

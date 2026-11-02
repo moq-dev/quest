@@ -15,7 +15,7 @@ import {
 	string,
 } from "./github";
 import { LAND_CHECK } from "./land";
-import { classifyCheck } from "./status";
+import { classifyCheck, enabledHead } from "./status";
 
 const POLL = 5 * 60_000;
 /**
@@ -51,6 +51,9 @@ const CHECKS = `query($owner: String!, $repo: String!, $number: Int!, $after: St
 		pullRequest(number: $number) {
 			baseRefName
 			headRefOid
+			headRefName
+			headRepository { nameWithOwner }
+			autoMergeRequest { enabledAt commitBody enabledBy { login } }
 			commits(last: 1) { nodes { commit { oid statusCheckRollup {
 				contexts(first: 100, after: $after) {
 					pageInfo { hasNextPage endCursor }
@@ -339,7 +342,9 @@ async function watch(
 		return { viewer, events };
 	};
 	/** GraphQL says which checks the base branch requires, through branch protection or rulesets. */
-	const checks = async (): Promise<{ head: string; base: string; checks: Check[] } | undefined> => {
+	const checks = async (): Promise<
+		{ head: string; base: string; checks: Check[]; pull: ObjectValue } | undefined
+	> => {
 		const result: Check[] = [];
 		let head: string | undefined;
 		let after: string | null = null;
@@ -357,7 +362,7 @@ async function watch(
 			const page = object(contexts.pageInfo);
 			after = page.hasNextPage === true ? string(page.endCursor) : null;
 		} while (after !== null);
-		return { head: head!, base: string(pull.baseRefName), checks: result };
+		return { head: head!, base: string(pull.baseRefName), checks: result, pull };
 	};
 	/**
 	 * What the base branch requires, read once per wait. Only a requirement says whether a missing
@@ -375,6 +380,30 @@ async function watch(
 		};
 		known.set(branch, needs);
 		return needs;
+	};
+
+	/** The head each auto-merge request was enabled on, by when it was enabled, once that can be told. */
+	const enabledHeads = new Map<string, string>();
+	/** Warnings already printed, so a forbidden activity listing warns once per wait rather than per poll. */
+	const warned = new Set<string>();
+	const warnOnce = (message: string) => {
+		if (!warned.has(message)) deps.warn(message);
+		warned.add(message);
+	};
+	/** Auto-merge left on for a head other than `head`, reported once per head and request. */
+	const movedAutoMerge = async (head: string, pull: ObjectValue): Promise<Activity[]> => {
+		if (pull.autoMergeRequest == null) return [];
+		const request = object(pull.autoMergeRequest);
+		const enabledAt = string(request.enabledAt);
+		const id = `${head}:auto-merge:${enabledAt}`;
+		if (cursor.checks.reported.includes(id)) return [];
+		const enabled = enabledHeads.get(enabledAt) ?? (await enabledHead(github, pull, warnOnce));
+		if (enabled === null) return [];
+		enabledHeads.set(enabledAt, enabled);
+		if (enabled === head) return [];
+		const point = new Date(deps.now()).toISOString();
+		const url = `${prUrl}/commits/${enabled}`;
+		return [{ point, time: deps.now(), type: "auto-merge:moved", actor: actor(request.enabledBy), url, id }];
 	};
 
 	const timeline = pager(`${base}/issues/${pr.number}/timeline?per_page=${PAGE}`);
@@ -454,7 +483,10 @@ async function watch(
 		// Check results are state rather than a log, so each poll reads them afresh.
 		const head = await checks();
 		const reached = head
-			? checkActivities(head.head, head.checks, await required(head.base), cursor.checks, prUrl)
+			? [
+					...checkActivities(head.head, head.checks, await required(head.base), cursor.checks, prUrl),
+					...(await movedAutoMerge(head.head, head.pull)),
+				]
 			: [];
 
 		if (reached.length || SOURCES.some((source) => found[source].length)) {
