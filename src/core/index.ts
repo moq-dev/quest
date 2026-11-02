@@ -25,7 +25,7 @@ export {
 	resolve,
 	rooted,
 } from "./doc";
-export { type ClosedPull, handedBack, landed } from "./claim";
+export { type ClosedPull, handedBack, landed, withoutHandBack } from "./claim";
 export { type Missed, type Moved, type Source, move, relocate, remove } from "./edit";
 export { comparePaths, normalize } from "./path";
 export { type Blocker, blockers, label, lookup, ready, renderBlocker } from "./ready";

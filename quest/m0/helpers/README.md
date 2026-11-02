@@ -38,8 +38,9 @@ commands from Sep-Oct. Session counts in each child come from that window.
   replaced with a label queue, and PR ownership covers the remaining
   collisions.
 - Decided 2026-10-21 (user): no `quest:start` label; a draft belongs to its
-  starter until its body has a `## Waiting` section, which the guide
-  defines as the hand-back marker. Commands read only whether it is present.
+  starter until its body has a `## Waiting` section (formerly
+  `## Decisions needed`, which still counts), which the guide defines as the
+  hand-back marker. Commands read only whether it is present.
   This narrows the 2026-10-19 decision above: `quest status` still does not
   parse the decisions listed in a PR body. It also amends the 2026-10-20
   decision: a PR is owned while it carries a `quest:*` label or is a draft

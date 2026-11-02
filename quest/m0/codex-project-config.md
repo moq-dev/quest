@@ -18,10 +18,6 @@ Decided 2026-10-28 (user, /quest-plan of the follow-ups from [moq-dev/quest#271]
   hooks from running. A fix that matches the help text would reopen that hole.
 - Do not post upstream, on #49333 or a new issue; the maintainer declined.
   Only watch for the change.
-
-## Waiting
-
-- openai/codex: a release offers a supported way to skip a project's
-  `.codex/` layer. Check #49333 and Codex release notes each time ready work
-  is triaged; the live sandbox test, `just review-sandbox`, catches a release
-  that changes the behavior first.
+- This quest waits on Codex. Check #49333 and Codex release notes each time
+  ready work is triaged; the live sandbox test, `just review-sandbox`,
+  catches a release that changes the behavior first.

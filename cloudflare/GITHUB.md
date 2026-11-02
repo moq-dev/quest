@@ -559,7 +559,7 @@ path without `.md` (or an epic's `/README.md`). An unrelated human PR remains in
 activity without a guessed association. Open associated PRs and observed quest
 branch claims exclude that quest from candidate data; branch claims display as
 Claimed on the board. So does a draft PR its starter still holds, one without a
-`## Waiting` section, which the inbox lists as in progress rather than
+`## Waiting` (or older `## Decisions needed`) section, which the inbox lists as in progress rather than
 as a decision; a ready PR or a handed-back draft is Ready to turn in.
 As in the CLI, a `quest/` branch whose tip is the head of a merged PR from it
 claims nothing, since its work landed; one whose PR closed unmerged, or with

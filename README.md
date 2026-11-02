@@ -133,27 +133,6 @@ $ quest --root examples/export unblocked --json --limit 1
 [{"path":"quest/m0/export.md","dependents":1}]
 ```
 
-## Find what waits on you
-
-A quest waiting outside the tree says so in a `## Waiting` section, one item
-per condition, each opening with who acts: `Maintainer:` for a decision or
-action only the maintainer can take, or the outside party, such as
-`moq-dev/moq:`. `quest check` rejects an item that names nobody.
-
-```markdown
-## Waiting
-
-- Maintainer: open a Hetzner account; `GET /server` on the Robot API answers 200
-- moq-dev/moq: a release carries the VA-API bindings
-```
-
-`quest waiting` lists every item, the maintainer's first, then by milestone and
-the same downstream impact `quest unblocked` counts. Each line gives the
-dependents, whether the quest is otherwise ready or still blocked, its path,
-and the item; `--maintainer` keeps only the maintainer's, and `--json` prints
-`{path, dependents, ready, waits}` objects. A draft PR hands itself back to
-the maintainer with the same heading. `/quest-unblock` walks you through both.
-
 Each plain output line contains the count, a tab, and the path. On a terminal,
 a heading explains the count. `--json` prints an ordered array, including `[]`
 when no quests are ready; `--limit <count>` requires a positive integer.
@@ -177,6 +156,27 @@ lookup, such as an expired token or a network error, fails the command rather
 than picking a different upstream. `--remote` picks a remote other than `origin`.
 Off GitHub, only branches are checked.
 Neither form inspects kix.quest runner locks or outside conditions.
+
+## Find what waits on you
+
+A quest waiting outside the tree says so in a `## Waiting` section, one item
+per condition, each opening with who acts: `Maintainer:` for a decision or
+action only the maintainer can take, or the outside party, such as
+`moq-dev/moq:`. `quest check` rejects an item that names nobody.
+
+```markdown
+## Waiting
+
+- Maintainer: open a Hetzner account; `GET /server` on the Robot API answers 200
+- moq-dev/moq: a release carries the VA-API bindings
+```
+
+`quest waiting` lists every item, the maintainer's first, then by milestone and
+the same downstream impact `quest unblocked` counts. Each line gives the
+dependents, whether the quest is otherwise ready or still blocked, its path,
+and the item; `--maintainer` keeps only the maintainer's, and `--json` prints
+`{path, dependents, ready, waits}` objects. A draft PR hands itself back to
+the maintainer with the same heading. `/quest-unblock` walks you through both.
 
 ## Claim a quest
 
@@ -483,7 +483,7 @@ Sessions often share a GitHub account, so taking it prints a hold token: the
 ID of the timeline event that added the label. Every command refuses while a
 `quest:*` label it holds no token for is on the PR, including another
 session's `quest:active`; a draft its starter still holds, one without a
-`## Waiting` section; and a merged or closed PR, since a push after
+`## Waiting` (or older `## Decisions needed`) section; and a merged or closed PR, since a push after
 the merge brings the branch back. The refusal names the holder's label, age,
 and token, so you can decide whether to release a stale hold. When two
 sessions add labels at once, the first label added keeps the PR and the other

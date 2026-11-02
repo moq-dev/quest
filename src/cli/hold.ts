@@ -2,7 +2,7 @@
 // a time. It holds the `quest:active` label, and the ID of the timeline event
 // that added the label is its hold token, since sessions often share an account.
 // `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
-import { ACTIVE_LABEL, handedBack, isHoldLabel, latestHold, heldToken } from "../core";
+import { ACTIVE_LABEL, handedBack, isHoldLabel, latestHold, heldToken, withoutHandBack } from "../core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../github/merge";
 import { repositoryPath } from "./claims";
 import {
@@ -480,18 +480,6 @@ function holder(snapshot: Snapshot, label: string, now: number): string {
 	const added = latestHold(snapshot.events, label);
 	const since = added ? `, added ${ago(now, added.time)} as token ${added.id}` : "";
 	return `${snapshot.url} is held by ${label}${since}; if it looks stale, ask the user before releasing it`;
-}
-
-/** `body` without its `## Waiting` (or older `## Decisions needed`) sections, each running to the next heading of level 1 or 2. */
-export function withoutHandBack(body: string): string {
-	const kept: string[] = [];
-	let skipping = false;
-	for (const line of body.split("\n")) {
-		if (handedBack(line)) skipping = true;
-		else if (/^#{1,2}[ \t]/.test(line)) skipping = false;
-		if (!skipping) kept.push(line);
-	}
-	return kept.join("\n").trimEnd();
 }
 
 /** One PR's labels on GitHub. */

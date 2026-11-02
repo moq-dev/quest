@@ -9,7 +9,7 @@ If its body lists open decisions or unfinished work, offer `/quest-iterate` firs
 
 Take the PR with `quest iterate <pr>`, passing a token you already hold for it to keep that hold, and keep the hold token it prints; `quest iterate --help` explains holds.
 If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
-A draft you started in this session has no `## Waiting` section, so it is still yours and the command refuses it: review it without taking it.
+A draft you started in this session has no `## Waiting` section, nor the older `## Decisions needed`, so it is still yours and the command refuses it: review it without taking it.
 
 Work in a checkout of the PR's head branch, checking out the head first when someone else opened it.
 Commit everything, then run the repository's local checks, unless the guide's Reviews section says to run no code from the head, and fix any failure.

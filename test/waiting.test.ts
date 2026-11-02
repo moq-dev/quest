@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { type Doc, check, handedBack, parse, parseWait, waiting } from "../src/core";
+import { type Doc, check, handedBack, parse, parseWait, waiting, withoutHandBack } from "../src/core";
 
 const ROOT = "# Quests\n\n## Goal\n\nAll.\n\n## Required\n\n- [m0](/quest/m0/README.md)\n- [m1](/quest/m1/README.md)\n";
 
@@ -76,4 +76,18 @@ test("a draft hands back with Waiting, or the Decisions needed heading it replac
 	expect(handedBack("Work.\r\n\r\n## Decisions needed\r\n\r\n1. Pick one.\r\n")).toBe(true);
 	expect(handedBack("Work.\n\n### Waiting\n\nNot a hand-back.\n")).toBe(false);
 	expect(handedBack("Waiting on CI.\n")).toBe(false);
+});
+
+test("a hand-back heading inside a fence, list, or quote is an example, not a hand-back", () => {
+	expect(handedBack("Docs.\n\n````markdown\n## Waiting\n\n- Maintainer: pick.\n````\n")).toBe(false);
+	expect(handedBack("Docs.\n\n~~~\n## Decisions needed\n~~~\n")).toBe(false);
+	expect(handedBack("- ## Waiting\n\n> ## Waiting\n")).toBe(false);
+});
+
+test("withoutHandBack keeps fenced examples and drops fenced text inside a hand-back", () => {
+	const example = "Docs.\n\n```markdown\n## Waiting\n\n- Maintainer: pick.\n```\n\n## Validation\n\nPasses.";
+	expect(withoutHandBack(example)).toBe(example);
+	expect(withoutHandBack("Work.\n\n## Waiting\n\n```\n## Not a heading\n```\n\n## Validation\n\nPasses.")).toBe(
+		"Work.\n\n## Validation\n\nPasses.",
+	);
 });

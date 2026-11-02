@@ -10,7 +10,7 @@ The skill argument, if any, filters the quests or PRs in scope.
 Gather what waits:
 
 - `quest waiting --json` lists each quest's `## Waiting` items, the maintainer's first, ranked by what each unblocks.
-- Open draft PRs whose body has a `## Waiting` section, or the older `## Decisions needed`. Read each with `quest status <pr>`, and skip one another session holds as `/quest-complete` does.
+- Open draft PRs whose body has a `## Waiting` section, or the older `## Decisions needed`. List the open drafts with their bodies, such as with `gh pr list --draft --json number,title,body`, and read each section's items. Check each one's holds with `quest status <pr>`, and skip one another session holds as `/quest-complete` does.
 - Quests that wait in prose without the section, such as a Goal opening "Waiting on the maintainer" or "Waits on moq-dev/moq". Rewrite each into a `## Waiting` section in this skill's PR, and treat it like the rest.
 
 Checking a condition is your job, never the user's. Check every item yourself, outside parties' and the maintainer's alike: run its check, or dispatch sub-agents to run several at once.
@@ -28,7 +28,7 @@ Record each answer where its wait lives:
 - **Quest:** record the decision and its reason in the quest's Plan, as `Decided <date> (maintainer, /quest-unblock): ...`, and remove the item. Delete a quest whose only purpose was the wait.
 - **PR:** dispatch `/quest-iterate` in a sub-agent with its own worktree, with the answers in its brief. It applies them, runs the PR's reviews, and leaves merging to the user's pick through `/quest-merge` or `/quest-complete`.
 
-Make every quest edit in one PR on a `quest-unblock/<slug>` branch, run `quest check`, review it as the guide's Reviews section says, open it ready for review, and run `/quest-merge` on it.
+Make every quest edit in one PR on a `quest-unblock/<slug>` branch, run `quest check`, open it as a draft, and run `/quest-review` on it, which reviews the branch, marks the PR ready, and offers its merge picks; merging it waits on the user's pick, like any PR.
 
 End with the final summary the guide describes, covering:
 
