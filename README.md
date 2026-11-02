@@ -806,6 +806,8 @@ none keeps the credential it reads from the environment (`ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code,
 `CODEX_API_KEY` for Codex), unless a stripped `ANTHROPIC_BASE_URL` or
 `CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, or `_FOUNDRY` would send it elsewhere.
+A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME`, or the default when unset.
 Every review runs with a pinned model and effort that `quest review --help`
 lists; `--model` and `--effort` override them.
 

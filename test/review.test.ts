@@ -170,7 +170,9 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	const log = join(dir, "calls.log");
 	vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 	vi.stubEnv("FAKE_LOG", log);
-	for (const name of [...HOST_CREDENTIALS, "CLAUDECODE", "CODEX_THREAD_ID", "FAKE_LOGGED_OUT", "FAKE_REJECTED"]) {
+	// The session's own profile would change the logged-out errors.
+	const unset = [...HOST_CREDENTIALS, "CLAUDECODE", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+	for (const name of [...unset, "FAKE_LOGGED_OUT", "FAKE_REJECTED"]) {
 		vi.stubEnv(name, undefined);
 	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
@@ -233,17 +235,58 @@ fakes("a missing or logged-out reviewer CLI is a usage error", async () => {
 	vi.stubEnv("FAKE_LOGGED_OUT", "1");
 	const out = await quest("--root", t.repo, "review");
 	expect(out.code).toBe(2);
-	expect(out.stderr).toContain("codex is not logged in; run `codex login`");
+	expect(out.stderr).toContain(
+		"codex is not logged in to its default profile (CODEX_HOME is unset); run `codex login`",
+	);
 	expect(t.calls().map((c) => c.argv)).toEqual([["login", "status"]]);
+});
+
+fakes("a logged-out error names the profile its status check read", async () => {
+	const codex = "codex is not logged in to the profile CODEX_HOME=/work; run `codex login`";
+	const claude = "claude is not logged in to the profile CLAUDE_CONFIG_DIR=/work; run `claude auth login`";
+	// Signed out at the status check, and rejected by the API after it passed.
+	for (const [host, variable, flag, value, message] of [
+		["CLAUDECODE", "CODEX_HOME", "FAKE_LOGGED_OUT", "1", codex],
+		["CLAUDECODE", "CODEX_HOME", "FAKE_REJECTED", "turn", codex],
+		["CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "FAKE_LOGGED_OUT", "1", claude],
+		["CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "FAKE_REJECTED", "status", claude],
+	] as const) {
+		const s = setup(host);
+		vi.stubEnv(variable, "/work");
+		vi.stubEnv(flag, value);
+		const result = await quest("--root", s.repo, "review");
+		expect(result.code, result.stderr).toBe(2);
+		expect(result.stderr).toContain(message);
+	}
 });
 
 fakes("a login the API rejects fails as logged out, whatever the status check said", async () => {
 	for (const [host, variant, message] of [
-		["CLAUDECODE", "turn", "codex is not logged in; run `codex login`"],
-		["CLAUDECODE", "stderr", "codex is not logged in; run `codex login`"],
-		["CODEX_THREAD_ID", "status", "claude is not logged in; run `claude auth login`"],
-		["CODEX_THREAD_ID", "text", "claude is not logged in; run `claude auth login`"],
-		["CODEX_THREAD_ID", "stderr", "claude is not logged in; run `claude auth login`"],
+		[
+			"CLAUDECODE",
+			"turn",
+			"codex is not logged in to its default profile (CODEX_HOME is unset); run `codex login`",
+		],
+		[
+			"CLAUDECODE",
+			"stderr",
+			"codex is not logged in to its default profile (CODEX_HOME is unset); run `codex login`",
+		],
+		[
+			"CODEX_THREAD_ID",
+			"status",
+			"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`",
+		],
+		[
+			"CODEX_THREAD_ID",
+			"text",
+			"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`",
+		],
+		[
+			"CODEX_THREAD_ID",
+			"stderr",
+			"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`",
+		],
 	] as const) {
 		const s = setup(host);
 		vi.stubEnv("FAKE_REJECTED", variant);
@@ -311,7 +354,7 @@ fakes("a credential meant for another endpoint stays stripped, and the error nam
 	const result = await quest("--root", s.repo, "review");
 	expect(result.code).toBe(2);
 	expect(result.stderr).toContain(
-		"claude is not logged in, and quest review strips ANTHROPIC_BASE_URL, which would reroute it; run `claude auth login`",
+		"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset), and quest review strips ANTHROPIC_BASE_URL, which would reroute it; run `claude auth login`",
 	);
 	expect(s.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
 });

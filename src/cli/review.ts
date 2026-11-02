@@ -173,6 +173,8 @@ interface Reviewer {
 	status: string[];
 	/** How the user logs in. */
 	login: string;
+	/** The variable naming the configuration directory, and so the stored login, the status check reads. */
+	profile: string;
 	/** Credentials the CLI reads from the environment, passed only when it has no stored login. */
 	credentials: string[];
 	/**
@@ -213,6 +215,7 @@ const text = (value: unknown) => (typeof value === "string" ? value : undefined)
 const claude: Reviewer = {
 	status: ["claude", "auth", "status"],
 	login: "claude auth login",
+	profile: "CLAUDE_CONFIG_DIR",
 	credentials: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
 	// Claude Code turns a provider on only for `1`, `true`, `yes`, or `on`, so `0` or `false` reroutes nothing.
 	reroutes: (env) => [
@@ -309,6 +312,7 @@ const claudeEnv = () => ({ CLAUDE_CODE_PROMPT_CACHE_TTL: "1h" });
 const codex: Reviewer = {
 	status: ["codex", "login", "status"],
 	login: "codex login",
+	profile: "CODEX_HOME",
 	// `codex exec` reads CODEX_API_KEY, though `codex login status` does not count it; it ignores OPENAI_API_KEY.
 	credentials: ["CODEX_API_KEY"],
 	// OPENAI_BASE_URL is never stripped, so a passed key goes where the CLI already sends its requests.
@@ -449,6 +453,12 @@ interface Cli {
 
 const names = (list: string[]) => list.join(" and ");
 
+/** The stored login the status check read, so a session running with another profile can tell. */
+function profile(reviewer: Reviewer, env: NodeJS.ProcessEnv): string {
+	const dir = env[reviewer.profile];
+	return dir ? `the profile ${reviewer.profile}=${dir}` : `its default profile (${reviewer.profile} is unset)`;
+}
+
 /**
  * Prepare the reviewer: the user's environment minus `STRIPPED`, so the CLI
  * uses its stored login, as any launched agent does. A CLI with no stored
@@ -460,14 +470,15 @@ const names = (list: string[]) => list.join(" and ");
 async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv): Promise<Cli> {
 	const reviewer = REVIEWERS[harness];
 	const stripped = strippedEnvironment(env);
-	const loggedOut = `${harness} is not logged in; run \`${reviewer.login}\``;
+	const notLoggedIn = `${harness} is not logged in to ${profile(reviewer, env)}`;
+	const loggedOut = `${notLoggedIn}; run \`${reviewer.login}\``;
 	if ((await run(reviewer.status, cwd, stripped, "")).code === 0) {
 		return { reviewer, env: stripped, unauthorized: loggedOut };
 	}
 	const reroutes = reviewer.reroutes(env);
 	if (reroutes.length > 0) {
 		throw new ReviewInputError(
-			`${harness} is not logged in, and quest review strips ${names(reroutes)}, which would reroute it; ` +
+			`${notLoggedIn}, and quest review strips ${names(reroutes)}, which would reroute it; ` +
 				`run \`${reviewer.login}\``,
 		);
 	}

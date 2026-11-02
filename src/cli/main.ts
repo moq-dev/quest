@@ -836,7 +836,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"the reviewer instead; there is no other fallback. The reviewer uses its CLI's own stored login or, " +
 				"without one, the credential it reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or " +
 				"CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY for Codex) unless a stripped ANTHROPIC_BASE_URL or " +
-				"CLAUDE_CODE_USE_BEDROCK, _VERTEX, or _FOUNDRY would send it elsewhere. It runs " +
+				"CLAUDE_CODE_USE_BEDROCK, _VERTEX, or _FOUNDRY would send it elsewhere. A logged-out error names the " +
+				"profile it checked, CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset. It runs " +
 				`with ${models}. --model and --effort override them.\n\n` +
 				"The first round runs the reviewer's own review (`codex exec review --base`, or Claude Code's " +
 				"`/code-review <effort> <base>...HEAD`), then resumes that session for one turn that applies the base's " +
