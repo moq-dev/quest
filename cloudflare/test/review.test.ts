@@ -242,6 +242,12 @@ describe("the review a landing needs", () => {
 				).toBeNull();
 		});
 
+		it("counts a recorded skip that names the exact head", async () => {
+			const body = `## Review\n\nSkipped on head ${sha("pr")}: a conflict-free merge of the base.`;
+			const read = reads(history({}), { head: "pr", main: "main", body });
+			expect(await unreviewed(read, landing("pr"))).toBeNull();
+		});
+
 		it.each([
 			["the author cannot write", { permission: "read" }],
 			["someone else last edited the body", { editor: "maintainer" }],
