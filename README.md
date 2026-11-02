@@ -734,6 +734,37 @@ backoff. Grant the App the base ruleset's bypass and the read permissions needed
 to inspect branch protection. The bypass actor's API merge of a pinned PR with
 the unreported required `quest land` check must be verified on the live host.
 
+## Watch GitHub's merge queue with quest land watch
+
+On a base that lands through GitHub's merge queue, `quest land watch` runs on a
+maintainer's host, one process per repository, and tells each PR the queue
+drops unmerged why. It polls; the host needs no public endpoint.
+
+```sh
+QUEST_LAND_KEY=/run/credentials/quest-land/key quest land watch --app-id 1039466
+```
+
+Once a minute it reads the base's open PRs and their merge queue removals since
+its last pass, and comments once on each PR the queue dropped, naming GitHub's
+reason. For a failed or timed-out `merge_group` build, it finds the PR's last
+merge group's runs (branch `gh-readonly-queue/<base>/pr-<n>-<base-sha>`) and
+quotes each failing job, its failed step, and its log's tail; at build
+concurrency 1 a group holds only that PR, so the failure is its own. A merge,
+and the App's own removals, get no comment.
+
+Each pick starts with an enqueue by a writer; the App re-enqueues only within
+one. A failed build or a conflict is recorded for the land fixer in
+`removal-<n>.json`, with the full log beside it. A push since the removal, a
+person's removal, or a reason the watcher does not know ends the pick, and the
+comment says the PR waits for a maintainer to enqueue it again. The state
+directory remembers each removal handled, so a restart neither misses nor
+repeats one; a crash between commenting and recording finds its own comment's
+marker and posts nothing. The first pass reads the ten minutes before it.
+
+It shares `quest land serve`'s App key, state directory, and locks, so the two
+never run for the same repository at once. Its token asks for `contents: read`,
+`pull_requests: write`, and `actions: read`, which the App needs for the logs.
+
 ## Gate expensive commands
 
 `quest gate <command> [args...]` holds an expensive command until the host has

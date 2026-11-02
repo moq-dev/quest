@@ -26,8 +26,9 @@ PR whose own required checks fail for the fixer
 ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)'s
 decision 8).
 
-- Find the candidates in the pass
-  [Queue removals](/quest/m0/queue-watcher/removals.md) runs: open PRs with an
+- Find the candidates in the pass `quest land watch` runs (`watchPass` in
+  `src/cli/land-watch.ts`), adding `autoMergeRequest`, `mergeQueueEntry`,
+  and `mergeStateStatus` to its query of the base's open PRs: open PRs with an
   `autoMergeRequest`, no `mergeQueueEntry`, and a ready `mergeStateStatus`
   (`CLEAN`, `HAS_HOOKS`, or `UNSTABLE`).
 - Enqueue with `enqueuePullRequest` and `expectedHeadOid` set to the head
@@ -38,7 +39,3 @@ decision 8).
 - An armed pick whose own required checks fail, or that turns conflicting,
   is left alone: it needs `/quest-iterate` and a new pick, and
   `quest status` shows its checks.
-
-## Required
-
-- [Queue removals](/quest/m0/queue-watcher/removals.md) - the pass that reads each PR's auto-merge and queue state

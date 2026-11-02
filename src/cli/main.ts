@@ -46,6 +46,7 @@ import { LAND_CHECK } from "./land";
 import { apply, pushCommand } from "./land-apply";
 import { fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
+import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
@@ -576,6 +577,27 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const repository = origin && remoteRepository(origin).repository;
 			if (!repository) throw new Error("origin must name a github.com repository");
 			pending = serve(root(), repository, options, warn).then(
+				() => 0,
+				(error: unknown) => {
+					warn(error instanceof Error ? error.message : String(error));
+					return 1;
+				},
+			);
+		});
+
+	landCommand
+		.command("watch")
+		.description(
+			"Watch the base's GitHub merge queue as a daemon, one per repository: once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A pick is the latest enqueue by anyone but the App, which re-enqueues only within one. State keeps each removal handled, so a restart neither misses nor repeats one, and each removal's full log. It shares `quest land serve`'s App key, state directory, and locks, so the two never run beside each other. The App needs `actions: read` for the logs.",
+		)
+		.option("--base <branch>", "Base branch (default: repository default)")
+		.option("--state <path>", "Private daemon state directory (default: $STATE_DIRECTORY or the XDG state home)")
+		.requiredOption("--app-id <id>", "GitHub App id")
+		.action((options: WatchOptions) => {
+			const origin = readRemote(root(), "origin");
+			const repository = origin && remoteRepository(origin).repository;
+			if (!repository) throw new Error("origin must name a github.com repository");
+			pending = watch(root(), repository, options, warn).then(
 				() => 0,
 				(error: unknown) => {
 					warn(error instanceof Error ? error.message : String(error));

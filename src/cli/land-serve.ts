@@ -84,7 +84,8 @@ export async function installationToken(
 }
 
 type Chain = Awaited<ReturnType<typeof build>>;
-function save(path: string, value: unknown): void {
+/** Replace `path` atomically, readable only by the daemon's user. */
+export function save(path: string, value: unknown): void {
 	writeFileSync(`${path}.new`, JSON.stringify(value), { mode: 0o600 });
 	renameSync(`${path}.new`, path);
 }
@@ -256,11 +257,11 @@ async function fail(
 }
 
 /** GitHub refuses comments over 65,536 characters. Escaping grows a character at most 5x (`&amp;`). */
-const EXCERPT = 12_000;
+export const EXCERPT = 12_000;
 
 /** The end of a log, escaped for `<pre>` and bounded so the comment always posts. */
-export function excerpt(tail: string): string {
-	const cut = tail.length > EXCERPT ? `…${tail.slice(-EXCERPT)}` : tail;
+export function excerpt(tail: string, limit = EXCERPT): string {
+	const cut = tail.length > limit ? `…${tail.slice(-limit)}` : tail;
 	return cut.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
 }
 
@@ -745,7 +746,7 @@ export async function lockCheckout(path: string): Promise<() => void> {
 	await new Promise<void>((done, reject) => {
 		child.stdout.once("data", () => done());
 		child.once("error", reject);
-		child.once("exit", () => reject(new Error("another quest land serve holds this checkout (or flock failed)")));
+		child.once("exit", () => reject(new Error("another quest land daemon holds this checkout (or flock failed)")));
 	});
 	return () => child.stdin.end();
 }
@@ -755,6 +756,32 @@ export function lockRepository(root: string): Promise<() => void> {
 	return lockCheckout(
 		join(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), "quest-land.lock"),
 	);
+}
+
+/**
+ * Prepare a daemon for `repository`: resolve and create its state directory in `options`, check the
+ * App key, and hold one lock per checkout's repository and one per state directory, whichever two
+ * daemons would share, so `quest land serve` and `quest land watch` never run beside each other.
+ * Returns the unlock.
+ */
+export async function startDaemon(
+	root: string,
+	repository: Repository,
+	options: { state: string },
+): Promise<() => void> {
+	options.state = resolve(root, options.state || defaultState(repository));
+	mkdirSync(options.state, { recursive: true, mode: 0o700 });
+	// These are startup configuration failures; transient network failures in the loop are recoverable.
+	createPrivateKey(readFileSync(keyPath()));
+	const unlockRepository = await lockRepository(root);
+	const unlockState = await lockCheckout(join(options.state, "lock")).catch((error: unknown) => {
+		unlockRepository();
+		throw error;
+	});
+	return () => {
+		unlockState();
+		unlockRepository();
+	};
 }
 
 /** Retry a failed batch independently of the lifetime of the daemon. */
@@ -788,25 +815,12 @@ export async function serve(
 	warn: (text: string) => void,
 ): Promise<void> {
 	if (!options.sandbox) throw new Error("quest land serve requires --sandbox");
-	options.state = resolve(root, options.state || defaultState(repository));
-	mkdirSync(options.state, { recursive: true, mode: 0o700 });
-	// These are startup configuration failures; transient network/batch failures below are recoverable.
-	createPrivateKey(readFileSync(keyPath()));
 	// Both run in a PR's checkout, where a relative path would otherwise name the PR's own file.
 	options.sandbox = resolve(options.sandbox);
 	if (options.fixer) options.fixer = resolve(options.fixer);
 	accessSync(options.sandbox, constants.X_OK);
 	if (options.fixer) accessSync(options.fixer, constants.X_OK);
-	// One daemon per checkout's repository and per state directory, whichever two daemons would share.
-	const unlockRepository = await lockRepository(root);
-	const unlockState = await lockCheckout(join(options.state, "lock")).catch((error: unknown) => {
-		unlockRepository();
-		throw error;
-	});
-	const unlock = () => {
-		unlockState();
-		unlockRepository();
-	};
+	const unlock = await startDaemon(root, repository, options);
 	try {
 		const trusted = privateRepository(options.state);
 

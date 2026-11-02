@@ -242,9 +242,9 @@ function identity(pid: number): string | undefined {
 	}
 }
 /** Post `content` once per pick and kind: a retry finds the bot's own marker and posts nothing. */
-async function post(
+export async function post(
 	github: GitHub,
-	plan: Plan,
+	plan: Pick<Plan, "repository">,
 	entry: Pick<Entry, "number" | "enabledAt">,
 	content: string,
 	suffix: string,
