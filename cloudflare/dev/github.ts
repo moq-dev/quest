@@ -37,6 +37,8 @@ export type Pull = Issue & {
 	merged?: boolean;
 	/** Optional squash result supplied by fixtures that model real git merges. */
 	squash?: string;
+	/** The commit a REST merge made. */
+	mergeCommit?: string;
 	/** REST mergeability can lag the base; fixtures can also model policy refusals. */
 	mergeable?: boolean | null;
 	mergeableState?: string;
@@ -546,6 +548,7 @@ export function fakeGitHub(world: World) {
 		html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${pull.number}`,
 		state: pull.closed ? "closed" : "open",
 		merged: pull.merged ?? false,
+		merge_commit_sha: pull.mergeCommit ?? null,
 		mergeable: pull.mergeable !== undefined ? pull.mergeable : pull.merge !== "DIRTY",
 		mergeable_state: pull.mergeableState ?? (pull.merge === "DIRTY" ? "dirty" : "clean"),
 		title: pull.title,
@@ -890,8 +893,9 @@ export function fakeGitHub(world: World) {
 			pull.landing = false;
 			pull.autoMerge = undefined;
 			if (pull.squash) repo.branches[pull.base ?? repo.defaultBranch ?? "main"] = pull.squash;
+			pull.mergeCommit = pull.squash ?? commitOf(repo);
 			return json({
-				sha: pull.squash ?? commitOf(repo),
+				sha: pull.mergeCommit,
 				merged: true,
 				message: "Pull Request successfully merged",
 			});

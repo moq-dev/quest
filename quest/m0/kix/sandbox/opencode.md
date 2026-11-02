@@ -54,5 +54,5 @@ its file tools follow permission rules. Checked against the pinned opencode
   that print the server password and the tools' token. Then remove the "opencode
   runs unconfined" notes from the README, `src/runner/opencode.ts`, and
   `src/runner/cli.ts`, and the epic's 2026-10-24 decision.
-- [macOS sandbox](/quest/m0/kix/sandbox/macos.md) reruns the test for
+- [macOS sandbox](/quest/m1/kix/sandbox/macos.md) reruns the test for
   opencode under Seatbelt.

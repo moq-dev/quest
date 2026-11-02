@@ -3,15 +3,17 @@
 ## Goal
 
 The operator installs the registered GitHub App on the pilot repositories,
-moq-dev/quest and moq-dev/moq, and enrolls them. A real issue event and a
+moq-dev/moq and moq-dev/quest, and enrolls them on quest.moq.dev. A real issue event and a
 bounded test PR verify the integration before contributors are invited.
 
 ## Plan
 
 - This is an operator/setup outcome. App registration and its secrets belong
-  to [Deploy kix.quest](/quest/m0/kix/deploy.md), because every deploy needs them.
+  to [Deploy quest.moq.dev](/quest/m0/kix/deploy.md), because every deploy needs them.
 - Pilot repositories decided 2026-10-27 (user): moq-dev/quest and
-  moq-dev/moq, ranked first so kix.quest is usable on moq-dev/moq soonest.
+  moq-dev/moq, ranked first so kix is usable on moq-dev/moq soonest.
+  Decided 2026-10-30 (user): start with moq-dev/moq; the private
+  moq-dev/moq.pro follows in [Private repositories](/quest/m0/kix/private.md).
   Job branches publish on the upstream itself (decided the same day), so
   there is no fork namespace to set up.
 - Validate real installation-token behavior, which publication's tests only
@@ -39,4 +41,5 @@ bounded test PR verify the integration before contributors are invited.
 
 ## Required
 
-- [Deploy kix.quest](/quest/m0/kix/deploy.md) - the live origin and registered App
+- [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the live origin and registered App
+- [Owner allowlist](/quest/m0/kix/owners.md) - only moq-dev can enroll before contributors are invited
