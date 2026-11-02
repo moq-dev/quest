@@ -53,25 +53,57 @@ function cited(log: string, [first, last]: [number, number]): string {
 		.trimEnd();
 }
 
-/** Read a bounded tail, retaining the complete per-job log for host diagnosis. */
-function fixerLog(path: string): string {
+/** Read a bounded window of the job's log, or "" when it is missing or not a regular file. */
+function readLog(path: string, window: "head" | "tail"): string {
 	if (!existsSync(`${path}.log`)) return "";
 	const fd = openSync(`${path}.log`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
 		const stat = fstatSync(fd);
 		if (!stat.isFile()) return "";
 		const buffer = Buffer.alloc(Math.min(stat.size, 16_384));
-		const length = readSync(fd, buffer, 0, buffer.length, Math.max(0, stat.size - buffer.length));
-		return buffer.subarray(0, length).toString("utf8").trimEnd().split("\n").slice(-100).join("\n");
+		const length = readSync(fd, buffer, 0, buffer.length, window === "head" ? 0 : stat.size - buffer.length);
+		return buffer.subarray(0, length).toString("utf8");
 	} finally {
 		closeSync(fd);
 	}
+}
+
+/** Read a bounded tail, retaining the complete per-job log for host diagnosis. */
+function fixerLog(path: string): string {
+	return readLog(path, "tail").trimEnd().split("\n").slice(-100).join("\n");
+}
+
+/**
+ * A wrapper that queues for a shared launcher prints this line, followed by the Unix time in
+ * seconds, once the launcher admits the job. Only the first one counts: the agent's own output
+ * starts after admission, so it cannot forge an earlier one.
+ */
+export const ADMITTED = "quest land fixer: admitted";
+
+/**
+ * The run gets `timeout` minutes from its admission, so a fixer queued for a shared launcher's slot
+ * keeps its whole run. Waiting counts against a total of twice that from the spawn, which also
+ * bounds a launcher that never admits the job and a wrapper that never reports admission.
+ */
+function deadline(path: string, job: Process, now: number, timeout: number): number {
+	if (job.admitted === undefined) {
+		const match = new RegExp(`^${ADMITTED} (\\d{1,15})$`, "m").exec(readLog(path, "head"));
+		if (match) {
+			// Kept within [started, now], so a wrong clock or a forged line cannot move it out of the run.
+			job.admitted = Math.min(Math.max(Number(match[1]) * 1000, job.started), now);
+			save(path, job);
+		}
+	}
+	const total = job.started + 2 * timeout * 60_000;
+	return job.admitted === undefined ? total : Math.min(job.admitted + timeout * 60_000, total);
 }
 
 /** A fixer process the daemon tracks across restarts, and how it ended. */
 interface Process {
 	checkout: string;
 	started: number;
+	/** When the wrapper reported the launcher admitted it; unset while queued or for a wrapper that never reports. */
+	admitted?: number;
 	terminating?: number;
 	pid?: number;
 	identity?: string;
@@ -488,7 +520,7 @@ function settle(path: string, job: Process, deps: GitHubDependencies, timeout: n
 			} catch (error) {
 				job.error = `invalid fixer result: ${String(error)}; run /quest-iterate`;
 			}
-	} else if (deps.now() - job.started > timeout * 60_000) {
+	} else if (deps.now() > deadline(path, job, deps.now(), timeout)) {
 		if (job.terminating === undefined) {
 			job.terminating = deps.now();
 			if (job.pid && job.identity && identity(job.pid) === job.identity) {
