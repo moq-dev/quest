@@ -27,6 +27,7 @@ import {
 	startDaemon,
 } from "./land-serve";
 import { advanceFixes, endPick, type FixContext, readRemoval, requeuedHeads } from "./land-watch-fix";
+import { headBefore } from "./status";
 
 export { readRemoval } from "./land-watch-fix";
 
@@ -117,7 +118,7 @@ const FIXABLE = ["failed_checks", "checks_timed_out", "merge_conflict"];
 const REMOVALS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		... on RemovedFromMergeQueueEvent {
-			id createdAt reason actor { login } enqueuer { login } beforeCommit { oid }
+			id createdAt reason actor { login } enqueuer { login }
 		}
 	}`;
 
@@ -342,15 +343,22 @@ async function handle(
 	fixing: boolean,
 	pull: ObjectValue,
 	event: ObjectValue,
+	note: (text: string) => void,
 ): Promise<string | undefined> {
 	const reason = string(event.reason).toLowerCase();
 	const actor = login(event.actor);
 	if (reason === "merged" || account(actor) === app) return undefined;
 	const number = Number(pull.number);
 	const current = string(pull.headRefOid);
-	const head = event.beforeCommit == null ? current : string(object(event.beforeCommit).oid);
 	const at = string(event.createdAt);
-	const { pick, queued } = await pickOf(github, string(pull.id), event, head, app, requeuedHeads(state, number));
+	const own = requeuedHeads(state, number);
+	// The dropped head is the PR's head when it entered the queue: the removal's `beforeCommit` is the
+	// merge group's own commit, never the PR's head. The enqueue time does not depend on the head.
+	const first = await pickOf(github, string(pull.id), event, current, app, own);
+	const enqueued = first.queued ?? first.pick.at;
+	const head =
+		(await headBefore(github, pull, Date.parse(enqueued), `the head ${number} was enqueued at`, note)) ?? current;
+	const { pick, queued } = head === current ? first : await pickOf(github, string(pull.id), event, head, app, own);
 	const verdict: Verdict =
 		head !== current
 			? "pushed"
@@ -534,6 +542,7 @@ export async function watchPass(
 				fix !== undefined,
 				pull,
 				event,
+				(text) => output.push(text),
 			);
 			if (line) output.push(line);
 			handled[id] = at;

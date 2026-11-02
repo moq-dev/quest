@@ -24,6 +24,8 @@ const BASE = "b".repeat(40);
 /** The base the merge group was built on, which its branch names. */
 const BUILT = "c".repeat(40);
 const HEAD = "a".repeat(40);
+/** A merge group commit, which a removal names as its `beforeCommit`. */
+const GROUP = "9".repeat(40);
 const PUSHED = "d".repeat(40);
 const APP = "moq-bot";
 
@@ -112,8 +114,30 @@ function removalNode(event: Removed) {
 		reason: event.reason,
 		actor: { login: event.actor },
 		enqueuer: event.enqueuer === undefined ? { login: "maintainer" } : { login: event.enqueuer },
-		beforeCommit: event.before === null ? null : { oid: event.before ?? HEAD },
+		// GitHub's `beforeCommit` is the merge group's commit on the base, never the PR's head.
+		beforeCommit: event.before === null ? null : { oid: GROUP },
 	};
+}
+
+/**
+ * The head branch's push activity, newest first, as GitHub's `/activity` lists it. Each removal's
+ * dropped head (`before`) was pushed a second before the enqueue that preceded the removal; a current
+ * head that is none of them was pushed after the last removal, as a push that ends the pick is.
+ */
+function pushes(world: World, pull: Pull) {
+	const rows: { activity_type: string; after: string; timestamp: string }[] = [];
+	const stamp = (time: number) => new Date(time).toISOString().replace(".000", "");
+	for (const event of pull.removals) {
+		const enqueued = pull.enqueues.filter((added) => added.createdAt <= event.createdAt).at(-1)?.createdAt;
+		const time = Date.parse(enqueued ?? event.createdAt) - 1000;
+		rows.push({ activity_type: "push", after: event.before ?? HEAD, timestamp: stamp(time) });
+	}
+	const current = headOf(world, pull);
+	if (!rows.some((row) => row.after === current)) {
+		const last = Math.max(Date.parse(at(-100)), ...pull.removals.map((event) => Date.parse(event.createdAt)));
+		rows.push({ activity_type: "push", after: current, timestamp: stamp(last + 1000) });
+	}
+	return rows.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 }
 
 /** Removals since `since`, paged two at a time so a PR's further pages are read by node. */
@@ -274,6 +298,11 @@ function deps(world: World): GitHubDependencies {
 					return Response.json(comment, { status: 201 });
 				}
 				return Response.json(list);
+			}
+			const activity = /^\/repos\/upstream\/project\/activity$/.exec(path);
+			if (activity) {
+				const pull = world.pulls.find((item) => `branch-${item.number}` === url.searchParams.get("ref"))!;
+				return Response.json(pushes(world, pull));
 			}
 			throw new Error(`unexpected request: ${path}`);
 		}) as typeof fetch,
