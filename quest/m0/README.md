@@ -43,6 +43,21 @@ Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
 
   The land work is what moq-dev's repositories use every day, and the
   maintainer ranked it first in the 2026-10-30 and 2026-11-01 sessions.
+- How do moq-dev's repositories land? Decided 2026-11-01 (maintainer,
+  /quest-plan), reversing the 2026-10-26 move to a batched gate:
+  - ✅ Through GitHub's merge queue again, one PR at a time, with no batching
+    and no pre-checks. A host watcher runs the Codex land fixer on each PR the
+    queue drops and re-enqueues it, so only decisions reach a person. The
+    batched gate was left for GitHub's inability to resolve quest-file
+    conflicts (71% of moq's 246 removals); the async fixer now absorbs those.
+  - Keep the host queue, serial
+
+  The [queue watcher](/quest/m0/queue-watcher/README.md) ranks first and
+  records the full interview: moq first, self-hosted `merge_group` runners,
+  host-gate work frozen, build concurrency 1, re-enqueue at the back,
+  unlimited attempts while progressing, flaky re-enqueues, and fixing picks
+  GitHub refuses. The land work above now means the watcher first, then the
+  fixer and its host.
 
 Decided while planning m0 (2026-09-26), replacing the earlier copied-files and
 ownership-manifest design:
@@ -67,17 +82,13 @@ ownership-manifest design:
 
 ## Required
 
-- [Merge through a host gate](/quest/m0/host-land/README.md) - inline merge picks, small batches landed from the maintainer's host, and a Codex fixer instead of bisection
-- [The land fixer handles every mechanical failure](/quest/m0/land-fixer/README.md) - attempts, registry network, triage, flaky tests, local mergeability, protected edits, and fork commits
+- [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
+- [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
+- [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - lockfile merges, protected edits as ready commits, workflow pushes, and the PR's own CI as context
 - [Landing priority](/quest/m0/land-priority.md) - cheap checks wait a bounded time and the land daemon's check runs ahead of agent builds
-- [Drop emptied Required headings](/quest/m0/required-heading.md) - a clean driver merge that empties a `Required` list passes `quest check`
-- [Current conflict reports](/quest/m0/land-conflicts-refresh.md) - a queued PR's conflict report updates when the queue ahead of it changes
-- [Land checks at gate priority](/quest/m0/land-priority-sandbox.md) - `quest land serve` passes `QUEST_GATE_PRIORITY` to its sandbox
-- [Squash mismatch comment](/quest/m0/land-squash-mismatch.md) - a post-squash `tree_mismatch` posts a CRITICAL comment on the merged PR
 - [Current landing status](/quest/m0/status-landing.md) - `quest status` drops a stale `landing-stopped` line and ignores superseded cancelled checks
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
-- [Agent test environment](/quest/m0/agent-test-env.md) - `just test` passes inside agent sessions
 - [Stale skill stubs](/quest/m0/init-prune.md) - `quest init` and `quest uninstall` remove stubs of retired skills such as `quest-ready`
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - condition: Bun fixes concurrent `rmSync` on Windows; report it, then drop the workaround
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - condition: Codex keeps a supported way to skip a project's `.codex/` layer; then reviews keep the user's config

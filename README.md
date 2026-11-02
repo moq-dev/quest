@@ -291,7 +291,8 @@ quest command to register the current one.
 
 `quest wait` blocks until a GitHub PR has a review, comment, review-thread
 reply, reaction to the PR or one of its reviews, push, merge, close, removal
-from the merge queue, disabled auto-merge, or required CI result:
+from the merge queue, disabled auto-merge or auto-merge left on a moved head, or
+required CI result:
 
 ```sh
 quest wait 101
@@ -299,7 +300,8 @@ quest wait https://github.com/moq-dev/quest/pull/101 --since 2026-10-07T12:00:00
 quest wait 101 --since abcdef0123456789abcdef0123456789abcdef01
 ```
 
-A number uses the repository's `origin`; a URL works from any directory.
+A number uses the repository's `origin`, so it needs a checkout or `--root`
+naming one; a URL works from any directory.
 Authentication comes from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`.
 Without `--since`, the point is the current head's push time, so an existing
 review on that head is included. GitHub lists a push seconds to minutes after
@@ -347,6 +349,12 @@ If the base branch requires no checks, every check is required. A result counts 
 was reached at or after the starting point, so a wait started after CI finished
 still reports it; a push starts over for the new head, and the cursor records
 what was reported, so resuming never replays it.
+
+GitHub keeps auto-merge across a push by anyone with write access, so it can
+land a head nobody approved. While auto-merge stays enabled on a head other
+than the current one, `auto-merge:moved` prints once per head, with the account
+that enabled it as the actor and `<pr-url>/commits/<sha>` naming the head it was
+enabled on, read as `quest status` reads it.
 
 Review-thread replies and reactions never reach the PR timeline, so they are
 read separately. A reply prints as `replied`; a thread's first comment is part
@@ -396,7 +404,7 @@ checks success passed=14 failing=0 pending=0
 review stale commented kixelated 2026-10-16T06:14:04Z https://github.com/moq-dev/quest/pull/128#pullrequestreview-5543745302
 review current commented chatgpt-codex-connector 2026-10-16T17:57:16Z https://github.com/moq-dev/quest/pull/128#pullrequestreview-5551703054
 thread PRRT_kwDOUhuoys6tUUV2 current chatgpt-codex-connector https://github.com/moq-dev/quest/pull/128#discussion_r4297708263 src/cli/gate.ts:115
-hold quest:merge LE_example 2026-10-16T17:57:16.000Z https://api.github.com/repos/moq-dev/quest/issues/events/123456 1 hour ago
+hold quest:active LE_example 2026-10-16T17:57:16.000Z https://api.github.com/repos/moq-dev/quest/issues/events/123456 1 hour ago
 ```
 
 Each line starts with its record type; any free text, a check name or a path,
@@ -406,7 +414,7 @@ comes last, and a missing value prints as `-`:
 | --- | --- |
 | `url`, `state`, `draft`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the head SHA. |
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
-| `auto-merge` | Method, who enabled it, and when. |
+| `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when. |
 | `checks` | The head's rollup state and `passed=`, `failing=`, `pending=` counts. |
@@ -427,49 +435,64 @@ same facts as one object with the fields `url`, `state`, `draft`, `head`,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
 failures exit 1.
 
+GitHub keeps auto-merge enabled across a writer's push without saying which head
+it was enabled on, so the `auto-merge` line reads it from the auto-merge commit
+body's `Quest-Land-Head` pin when [`quest land`](#land-a-batch-with-quest-land)
+queued the PR. Otherwise it is the last push or merge to the head branch before
+auto-merge was enabled, from the head repository's activity; it prints `-`
+until GitHub lists the current head's push, which takes seconds to minutes, and
+when a push shares the second auto-merge was enabled. A head there that differs
+from `head` means a push followed auto-merge: disable it, or land the new head.
+
 ## Own a pull request
 
-Before a session pushes to an existing PR, it takes the PR, so two sessions
-never iterate on or merge one PR at once:
+Before a session pushes to an existing PR, it takes the PR, so two agents
+never work on one PR at once:
 
 ```sh
-quest iterate 128                    # prints a hold token
-quest ready 128 <token>              # swap to quest:ready, printing a new token
-quest ready 128 <token> --done       # drop "Decisions needed" and mark it ready
-quest merge 128 <token>              # swap to quest:merge for the fix loop
-quest merge 128 <token> --land <sha> # auto-merge bound to that head
-quest release 128 <token>            # hand it back
+quest iterate 128            # add quest:active, printing a hold token
+quest ready 128 <token>      # drop "Decisions needed" and mark it ready
+quest release 128 <token>    # hand it back
+quest merge 128 --land <sha> # auto-merge bound to that head; takes no label
 ```
 
-A taken PR carries one label, `quest:iterate`, `quest:ready`, or
-`quest:merge`. Sessions often share a GitHub account, so taking a label prints
-a hold token: the ID of the timeline event that added it. Every command refuses
-while a `quest:*` label it holds no token for is on the PR, including its own
-state's; a draft its starter still holds, one without a `## Decisions needed`
-section; and a merged or closed PR, since a push after the merge brings the
-branch back. The refusal names the holder's label, age, and token, so you can
-decide whether to release a stale hold. When two sessions add different labels
-at once, the first label added keeps the PR and the other backs off.
+A taken PR carries the `quest:active` label while an agent works on it.
+Sessions often share a GitHub account, so taking it prints a hold token: the
+ID of the timeline event that added the label. Every command refuses while a
+`quest:*` label it holds no token for is on the PR, including another
+session's `quest:active`; a draft its starter still holds, one without a
+`## Decisions needed` section; and a merged or closed PR, since a push after
+the merge brings the branch back. The refusal names the holder's label, age,
+and token, so you can decide whether to release a stale hold. When two
+sessions add labels at once, the first label added keeps the PR and the other
+backs off. Older quest versions add `quest:iterate` and `quest:ready`, which
+hold a PR like any `quest:*` label; passing their token to `quest iterate`
+swaps them for `quest:active`. Their `quest:merge` holds nothing and is
+ignored.
 
-`--land` needs the full 40-character head SHA and refuses once the head moves,
-before swapping labels, so the token you passed stays valid. If a step fails
-after a swap, the error names the new token.
+`quest merge` takes no label: the head-pinned auto-merge it enables is the
+queue signal, so a queued PR shows no hold. It refuses while any session holds
+the PR, so release your own hold first. `--land` needs the full 40-character
+head SHA and refuses once the head moves.
 It enables auto-merge bound to that SHA, which enters GitHub's merge queue
-when the base has one, or merges at once when nothing is left to wait for. It
-makes a merge commit; `--squash` or `--rebase` picks another method, and a
-merge queue applies its own. On a base that requires the `quest land` check, it
+when the base has one, or merges at once when nothing is left to wait for.
+`--squash` or `--rebase` picks the method, and it refuses one the repository
+disallows; otherwise it uses the only method the repository allows, or else a
+merge commit, and refuses when merge commits are off and more than one method
+remains. A merge queue applies its own. On a base that requires the `quest land` check, it
 queues the PR for [`quest land`](#land-a-batch-with-quest-land) instead.
-On an ungated base with auto-merge disabled, it refuses before changing labels
-and keeps the caller’s hold token valid. Follow the repository’s own landing
+On an ungated base with auto-merge disabled, it refuses. Follow the repository’s own landing
 instructions in CONTRIBUTING.md or AGENTS.md, such as its label queue; never
 retry with `--direct` unless the user asks. `--direct` permits the usual landing
 behavior despite that repository setting.
 On an ungated base, it compares the live base against that head and refuses a
 head that is behind or diverged: merge the base, rerun the repository's checks,
 and land the new head. This is a preflight check; GitHub can still move the base
-between that comparison and its head-pinned merge mutation. `quest:merge` stays
-on while the PR is queued or auto-merging; once the PR leaves the queue unmerged, the next command removes
-it. The commands accept the same PR argument and authentication as
+between that comparison and its head-pinned merge mutation. A PR that leaves
+the queue unmerged shows why under `landing-stopped` in `quest status`.
+GitHub keeps auto-merge across a writer's push, so disable it before pushing
+to the PR; `quest status` and `quest wait` report a head that moved since.
+The commands accept the same PR argument and authentication as
 `quest wait`, and exit 0 when done, 3 when refused, 2 for invalid arguments,
 and 1 for other failures.
 
@@ -478,7 +501,7 @@ and 1 for other failures.
 `quest land serve` runs on a maintainer's host, with one process per repository.
 It replaces the Land workflow; landing needs no GitHub Actions.
 The base requires the unreported `quest land` check, keeping auto-merge waiting.
-Queue an approved head with `quest merge <pr> <token> --land <sha>`.
+Queue an approved head with `quest merge <pr> --land <sha>`.
 
 ```sh
 QUEST_LAND_KEY=/run/credentials/quest-land/key quest land serve --app-id 1039466 \
@@ -520,7 +543,12 @@ and `github.com`/`codeload.github.com` that the repository's dependencies come f
 The prompt allows only those dependency fetches: no GitHub API, no push, no other
 host. Codex login stays on CLIProxyAPI.
 The wrapper waits for the payload, returns its exit status, and tears down its
-container on exit or SIGTERM. On timeout the daemon sends SIGTERM, allows at
+container on exit or SIGTERM. A fixer gets 60 minutes from its start. A wrapper
+that queues for a shared launcher prints `quest land fixer: admitted <unix-seconds>`
+as one line to its output when the launcher admits the job, before any agent
+output, so the wait for a slot does not use up the run. Waiting counts against
+a total of 120 minutes from the spawn, which is also the deadline of a wrapper
+that prints no such line. On timeout the daemon sends SIGTERM, allows at
 least 10 seconds for container cleanup, then sends SIGKILL on a later collection. The payload defaults
 to `codex exec`; `--agent <executable>` and repeatable `--agent-arg <argument>`
 replace it for another CLI. It writes `<cwd>/quest-land-result.json`: an array of
@@ -558,8 +586,11 @@ follows the fixer's Git alternates. Pack indexes are rebuilt with
 checks every object and link, since the import enables `fetch.fsckObjects=true`. It records `mechanical fix by <recorded agent/model>: <reason>` and the new head in
 `## Review`, and enables head-pinned auto-merge again on the fixed head, which keeps
 the place of the pick it descends from. Healthy PRs go back to batches unchanged,
-without a comment. Forks refusing maintainer edits, refused pushes, invalid results,
-crashes, or the 60-minute fixer deadline hand back with a marked comment naming the exit
+without a comment. A PR the daemon moved to its own recorded base merge before
+parking it is collected at that merge: a requeue pins it, and a fix, built on the
+pin, replaces it with a lease, since building on it would revert its newer base.
+Any other moved head hands back. Forks refusing maintainer edits, refused pushes, invalid results,
+crashes, or the fixer deadline hand back with a marked comment naming the exit
 status or signal, with the tail of the job's retained log. A validated fix whose push
 GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
 the `workflows` permission to push, is handed back with its resolution: the PR head,
@@ -568,10 +599,16 @@ conflicted result, sized to GitHub's 65,536-character comment limit. A maintaine
 runs `quest land apply <pr>`, which refuses a moved head, rebuilds and checks that
 tree, and prints an unpushed commit and its push command. A resolution too large for
 the comment hands back plainly. A handback disables
-auto-merge, removes `quest:merge`, and carries the reason marker `quest status`
-reads. Each maintainer pick gets one attempt, spent only when a fixer job blames
-the PR: a PR that only shared a broken batch keeps it. A blamed PR whose pick already
-spent its attempt hands back. A new maintainer pick resets the attempt. Host provisioning and isolation
+auto-merge and carries the reason marker `quest status`
+reads. Each failure a fixer job blames a PR for is a round of its maintainer pick; a PR
+that only shared a broken batch has none. The fixer keeps going while each round
+changes something, and a handback names the stop rule that ended it: a round with no
+new commit for a failure that isn't flaky, such as a conflict requeued unchanged; the
+failure a fix addressed recurring right after it; or three flaky rounds in a row,
+where the fixer requeued a PR unchanged and the base passed alone. The fixer names
+each failure's test or step, else the round counts the gate's check as one; a
+conflict names the base it conflicts with, so one after the base moved is new. A new
+maintainer pick starts a fresh history. Host provisioning and isolation
 belong to the host; these commands are executable paths, not shell expressions.
 Wrappers must expose only the supplied tree and log, never the state directory
 or its private bare repository.
@@ -587,7 +624,7 @@ its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
 bisection: success lands one squash commit per PR. A failure, or a base that
 conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
-auto-merge, `quest:merge`, and place, get no comment, and sit out batches while its
+auto-merge and place, get no comment, and sit out batches while its
 job runs, so the rest of the queue keeps landing. The fixer reads the log and blames
 the PRs that caused it; the others go back to batches unchanged. When it blames
 none, the daemon checks the base alone. A green base leaves every PR to the fixer's
@@ -600,18 +637,25 @@ fix the base, or there is no fixer, does an issue say the queue is halted. If th
 base moves and still fails, the daemon closes that fix and runs the fixer on the
 new base. Once a check of a moved base passes, the queue resumes, and the daemon
 closes the issue and any fix it no longer needs. A job collected while the queue is halted releases its PRs without checking its own, possibly older, base. The daemon collects a finished fixer job even while a check runs.
-Without a fixer, a failure ejects the batch instead: ejection disables auto-merge,
-removes `quest:merge`, and comments with the reason and the failing log, bounded by
+Without a fixer, a failure ejects the batch instead: ejection disables auto-merge
+and comments with the reason and the failing log, bounded by
 size. When GitHub refuses one PR's squash merge, only that PR stops: a conflict is
 parked for the fixer, a moved head or refusal is ejected, and the rest of the batch
 stays queued. `quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
 `$STATE_DIRECTORY` or the XDG state home, never inside the checkout. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
+Every squash the daemon builds, and every base it merges into a PR head, drops
+each `Required`, `Related`, or `Closes` entry linking to a quest the base
+deleted since the PR branched, as `quest rm` would have. The PR wrote that link
+while the quest was open, so the base finishing it is no fault of the PR's: a
+sibling PR that links a quest another sibling finishes lands in the same batch.
+A quest the base moved is a rename, not a deletion, and a link in prose stays.
+
 As a batch is filled, each PR it reaches is squashed alone onto the current
 base, and `quest check` runs on the result; PRs the batch does not reach wait
 for a later round, so a long queue costs only each batch's candidates. A PR with findings the base lacks, such as
-a link to a quest the base has since finished, is parked alone for the fixer, blamed
+a mistyped link, is parked alone for the fixer, blamed
 for those findings, so it never fails a batch; the fixer starts from that squash.
 Without a fixer it is ejected as `failed_checks` with those findings. This check runs
 in the daemon, never the sandbox: it parses quest files read from git objects
@@ -635,7 +679,7 @@ and tree before proceeding to the next PR.
 
 If the PR branch push is refused for permissions, the daemon instead pushes the
 tested squash to the base as a fast-forward, leased on the expected parent. It
-closes the PR with a comment linking the landed commit and removes `quest:merge`.
+closes the PR with a comment linking the landed commit.
 Such a fork PR is closed rather than shown as merged by GitHub. A PR branch lease
 failure ejects `head_moved`. A locally prepared or API squash tree mismatch logs
 CRITICAL. A PR whose prepared tree differs ejects alone as `tree_mismatch`; an
@@ -645,7 +689,10 @@ and is rebuilt and checked on the new base.
 After an API refusal, the daemon re-reads mergeability and briefly retries
 pending mergeability or a base refresh. It also retries while GitHub still
 reports the pin as the head of a PR it just prepared, since GitHub can refuse the
-merge for that stale head; only another writer's head ejects `head_moved`.
+merge for that stale head; only another writer's head ejects `head_moved`. It
+likewise retries while GitHub calls the merge it just pushed conflicting, since
+that merge holds the tested base; if GitHub still does after about 15 seconds,
+the next round rebuilds the queue on the base as it then is.
 A confirmed conflict parks only that PR for the fixer and a moved head ejects
 only that PR; the rest stays queued. A persistent policy refusal ejects as `merge_refused` without the
 fixer. Already-merged PRs are skipped. An unexpected API squash parent means the

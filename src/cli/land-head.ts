@@ -2,7 +2,6 @@
 import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gitAuthentication } from "./land-git";
-import { MERGE_LABEL } from "../core";
 import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
 import {
 	baseRemote,
@@ -68,7 +67,7 @@ export function forgetHeads(state: string, number: number): void {
 		if (name.startsWith(`head-${number}-`) && name.endsWith(".json")) unlinkSync(join(state, name));
 }
 
-function isPrepared(root: string, state: string, entry: Entry): boolean {
+export function isPrepared(root: string, state: string, entry: Entry): boolean {
 	const path = recordPath(state, entry.number, entry.head);
 	if (!existsSync(path)) return false;
 	const record = JSON.parse(readFileSync(path, "utf8")) as Prepared;
@@ -94,7 +93,10 @@ export async function push(
 	/** What `ref` must be before the push; empty when it must not exist yet. */
 	lease = from,
 ) {
-	const workflows = git(root, ["diff", "--name-only", from, to, "--", ".github/workflows"]) !== "";
+	// A push that replaces another head than the one it builds on can change workflows relative to either.
+	const workflows = [...new Set([from, lease])].some(
+		(old) => old !== "" && git(root, ["diff", "--name-only", old, to, "--", ".github/workflows"]) !== "",
+	);
 	const credential = await token(workflows);
 	return tryGit(root, ["push", "--quiet", remote, `${to}:${ref}`, `--force-with-lease=${ref}:${lease}`], {
 		env: gitAuthentication(credential),
@@ -238,12 +240,6 @@ export async function finishFallback(
 		await github.request(`/repos/${plan.repository}/pulls/${entry.number}`, {
 			method: "PATCH",
 			body: { state: "closed" },
-		});
-	}
-	if (pull.state !== "OPEN" || unchanged) {
-		await github.request(`${issue}/labels/${encodeURIComponent(MERGE_LABEL)}`, {
-			method: "DELETE",
-			allow: [404],
 		});
 	}
 	unlinkSync(path);
