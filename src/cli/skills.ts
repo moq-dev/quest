@@ -1,9 +1,9 @@
 // The agent skills and the quest guide, bundled into the CLI.
 //
 // A repository installs only a stub per skill, which asks the agent to run
-// `quest skill <name>`. The stub never changes between versions, so the
-// version a repository pins decides which instructions its agents follow and
-// upgrading never rewrites repository files.
+// `quest skill <name>`. The stub only points at the binary, so the version a
+// repository pins decides which instructions its agents follow, and upgrading
+// never rewrites repository files.
 
 import guide from "../../assets/AGENTS.md";
 import afk from "../../assets/skills/afk.md";
@@ -20,6 +20,7 @@ import recurring from "../../assets/skills/recurring.md";
 import review from "../../assets/skills/review.md";
 import spawn from "../../assets/skills/spawn.md";
 import start from "../../assets/skills/start.md";
+import unblock from "../../assets/skills/unblock.md";
 
 /** The quest contract: the format, workflow, and rules every skill builds on. */
 export const GUIDE: string = guide;
@@ -28,7 +29,7 @@ export const GUIDE: string = guide;
 const SETUP = "https://github.com/moq-dev/quest/blob/main/SETUP.md";
 
 /** Installed skills carry this prefix so they don't collide with a repository's own. */
-const PREFIX = "quest-";
+export const PREFIX = "quest-";
 
 /** One skill: YAML frontmatter, then the instructions. */
 export class Skill {
@@ -81,6 +82,7 @@ export const SKILLS: readonly Skill[] = Object.entries({
 	review,
 	spawn,
 	start,
+	unblock,
 }).map(([name, text]) => new Skill(name, text));
 
 /** The skill called `name`, if this version ships one. */

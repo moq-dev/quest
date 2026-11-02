@@ -6,7 +6,13 @@
 // variables, and reads the agent's session, reply, and cost. Its own arguments
 // name the harness, worktree, key, model, effort, and permission mode, so a
 // permission classifier reading the call sees the whole launch.
-import { type ChildProcess, type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process";
+import {
+	type ChildProcess,
+	type ChildProcessWithoutNullStreams,
+	execFileSync,
+	spawn,
+	spawnSync,
+} from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	chmodSync,
@@ -25,6 +31,7 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { alive, programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
 import { Worktrees, save } from "./worktree";
 
@@ -221,13 +228,29 @@ const STRIPPED = [
 ];
 
 /** The agent's environment: the user's, minus `STRIPPED`, plus its one key. */
-export function launchEnvironment(env: NodeJS.ProcessEnv, variable: string, key: string): NodeJS.ProcessEnv {
-	return { ...strippedEnvironment(env), [variable]: key };
+export function launchEnvironment(
+	env: NodeJS.ProcessEnv,
+	variable: string,
+	key: string,
+	platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+	return { ...strippedEnvironment(env, platform), [variable]: key };
 }
 
-/** The user's environment minus `STRIPPED`, for an agent that brings its own credentials. */
-export function strippedEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-	return Object.fromEntries(Object.entries(env).filter(([name]) => !STRIPPED.some((pattern) => pattern.test(name))));
+/**
+ * The user's environment minus `STRIPPED`, for an agent that brings its own
+ * credentials. Windows matches variable names case-insensitively, so there
+ * `Op_Service_Account_Token` is stripped too.
+ */
+export function strippedEnvironment(
+	env: NodeJS.ProcessEnv,
+	platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+	const stripped = (name: string) => {
+		const normalized = platform === "win32" ? name.toUpperCase() : name;
+		return STRIPPED.some((pattern) => pattern.test(normalized));
+	};
+	return Object.fromEntries(Object.entries(env).filter(([name]) => !stripped(name)));
 }
 
 /**
@@ -288,15 +311,6 @@ function load<T>(path: string): T | undefined {
 	}
 }
 
-function alive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
-	}
-}
-
 interface KeyStore {
 	/** Which `QUEST_API_KEYS` value the keys were resolved from. */
 	fingerprint: string;
@@ -312,18 +326,18 @@ export type Resolver = (references: string[], env: NodeJS.ProcessEnv) => string[
  */
 export const onePassword: Resolver = (references, env) => {
 	const template = references.map((reference) => `{{ ${reference} }}`).join("\n");
-	let output: string;
-	try {
-		output = execFileSync("op", ["inject"], {
-			encoding: "utf8",
-			env,
-			input: `${template}\n`,
-			stdio: ["pipe", "pipe", "inherit"],
-		});
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("op is not installed");
+	const op = programCommand(requireProgram("op", env), ["inject"], env);
+	const injected = spawnSync(op.file, op.args, {
+		encoding: "utf8",
+		env: programEnvironment(env),
+		input: `${template}\n`,
+		stdio: ["pipe", "pipe", "inherit"],
+		windowsVerbatimArguments: op.windowsVerbatimArguments,
+	});
+	if (injected.error !== undefined || injected.status !== 0) {
 		throw new Error("op inject failed to resolve QUEST_API_KEYS");
 	}
+	const output = injected.stdout;
 	const keys = output.split("\n").slice(0, references.length);
 	if (keys.length !== references.length || keys.some((key) => !/^\S+$/.test(key))) {
 		throw new Error("op inject did not resolve every QUEST_API_KEYS reference to one key");
@@ -534,15 +548,6 @@ export function boundedLines(limit: number, read: (line: string) => void) {
 }
 
 /**
- * Native Windows is refused until the agent CLI is resolved to an absolute
- * path: its program search looks in the worktree before PATH, so a worktree
- * could supply its own `claude.exe` and receive the key.
- */
-export function refuseUnsupported(platform: NodeJS.Platform = process.platform): void {
-	if (platform === "win32") throw new AgentInputError("quest agent does not support native Windows yet; use WSL");
-}
-
-/**
  * Run one agent turn in the foreground: a new session with `prompt`, or
  * `session` resumed with it. Prints the session id as soon as it is known,
  * then the cost, outcome, and final reply. Returns the exit status.
@@ -553,7 +558,6 @@ export async function runAgent(
 	session: string | undefined,
 	deps: AgentDependencies,
 ): Promise<number> {
-	refuseUnsupported();
 	let worktree: string;
 	try {
 		worktree = realpathSync(launch.worktree);
@@ -572,6 +576,12 @@ export async function runAgent(
 				`Codex requires a registered Quest checkout; create it with \`quest worktree create\`: ${worktree}`,
 			);
 	}
+	const harness = HARNESS[launch.harness];
+	const id = session ?? randomUUID();
+	const [name, ...args] = session === undefined ? harness.start(launch, id) : harness.resume(launch, id);
+	// The CLI is found on PATH, never in the worktree, before any key is resolved.
+	const program = requireProgram(name, deps.env);
+	const command = checkouts ? undefined : programCommand(program, args, deps.env);
 	const dir = spawnDirectory(deps.base, worktree);
 	const keys = await spawnKeys(dir, deps.env, deps.resolve);
 	const key = keys[launch.key - 1];
@@ -582,16 +592,24 @@ export async function runAgent(
 	const redact = (value: string) =>
 		keys.reduce((result, k, index) => result.replaceAll(k, `<key ${index + 1}>`), value);
 
-	const harness = HARNESS[launch.harness];
 	const reader = harness.reader();
-	const id = session ?? randomUUID();
-	const argv = session === undefined ? harness.start(launch, id) : harness.resume(launch, id);
 	// Claude Code takes the id this command assigns; Codex announces its own.
 	const known = launch.harness === "claude" ? id : session;
 	const record = claim(dir, worktree);
 	const state: Running = { pid: process.pid, worktree };
 
 	let child: ChildProcess | undefined;
+	// On Windows the agent may run under a batch shim, so its whole tree is ended.
+	const terminate = (signal: NodeJS.Signals) => {
+		if (process.platform !== "win32") child?.kill(signal);
+		else if (child?.pid !== undefined) {
+			try {
+				signalProcess(child.pid, signal, deps.env);
+			} catch (error) {
+				deps.stderr(`quest: ${(error as Error).message}\n`);
+			}
+		}
+	};
 	// An agent whose record cannot be saved, for example because `stop --all`
 	// deleted the state, could not be stopped, so it is killed.
 	let lost: unknown;
@@ -601,7 +619,7 @@ export async function runAgent(
 			save(record, state);
 		} catch (error) {
 			lost ??= error;
-			child?.kill("SIGKILL");
+			terminate("SIGKILL");
 		}
 	};
 	const announce = (value: string | undefined) => {
@@ -613,9 +631,9 @@ export async function runAgent(
 
 	const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 	let interrupted = 0;
-	const forward = (name: (typeof signals)[number]) => {
-		interrupted ||= 128 + constants.signals[name];
-		child?.kill(name);
+	const forward = (signal: (typeof signals)[number]) => {
+		interrupted ||= 128 + constants.signals[signal];
+		terminate(signal);
 	};
 	const handlers = signals.map((name) => [name, () => forward(name)] as const);
 	for (const [name, handler] of handlers) process.on(name, handler);
@@ -648,7 +666,7 @@ export async function runAgent(
 					agent.stdin.on("error", () => {}); // An agent that exits early closes its stdin.
 					agent.stdin.end(prompt);
 					agent.once("error", (error: NodeJS.ErrnoException) =>
-						reject(error.code === "ENOENT" ? new Error(`${argv[0]} is not installed`) : error),
+						reject(error.code === "ENOENT" ? new Error(`${name} is not installed`) : error),
 					);
 					agent.once("close", (status, signal) =>
 						resolve({
@@ -658,11 +676,20 @@ export async function runAgent(
 						}),
 					);
 				};
-				const env = launchEnvironment(deps.env, harness.keyVariable, key);
-				if (checkouts) {
-					supervised = checkouts.run(checkout!, argv, { env, spawned: connect });
+				const env = programEnvironment(launchEnvironment(deps.env, harness.keyVariable, key));
+				if (command === undefined) {
+					supervised = checkouts!.run(checkout!, [program, ...args], { env, spawned: connect });
 					supervised.catch(reject);
-				} else connect(spawn(argv[0], argv.slice(1), { cwd: worktree, env, stdio: ["pipe", "pipe", "pipe"] }));
+				} else {
+					connect(
+						spawn(command.file, command.args, {
+							cwd: worktree,
+							env,
+							stdio: ["pipe", "pipe", "pipe"],
+							windowsVerbatimArguments: command.windowsVerbatimArguments,
+						}),
+					);
+				}
 			},
 		);
 		const released = await supervised;
@@ -681,10 +708,10 @@ export async function runAgent(
 						? "exhausted"
 						: "failed";
 		if (dropped > 0) {
-			deps.stderr(`quest: dropped ${dropped} line(s) of ${argv[0]} output over ${LINE_LIMIT} characters\n`);
+			deps.stderr(`quest: dropped ${dropped} line(s) of ${name} output over ${LINE_LIMIT} characters\n`);
 		}
 		if (outcome === "failed" && result.reply === undefined && stdout.trim() !== "") {
-			deps.stderr(`quest: ${argv[0]} printed no result; its output ended with:\n${stdout}\n`);
+			deps.stderr(`quest: ${name} printed no result; its output ended with:\n${stdout}\n`);
 		}
 		if (result.cost !== undefined) deps.stdout(`cost ${result.cost}\n`);
 		deps.stdout(`outcome ${outcome}\n`);
@@ -728,13 +755,7 @@ async function stopRecord(record: string, deps: AgentDependencies): Promise<bool
 	const child = running.child;
 	// Signal the agent CLI, never the reporting process, which then prints the
 	// stopped outcome and removes its record.
-	const signal = (name: NodeJS.Signals) => {
-		try {
-			process.kill(child, name);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-		}
-	};
+	const signal = (name: NodeJS.Signals) => signalProcess(child, name, deps.env);
 	signal("SIGTERM");
 	const deadline = Date.now() + STOP_GRACE_MS;
 	let killed = false;

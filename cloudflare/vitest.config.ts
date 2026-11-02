@@ -26,7 +26,6 @@ export default defineConfig({
 					GITHUB_WEBHOOK_SECRET: "test-webhook-secret",
 					// Background work, such as a push's authority check, signs with the test App key.
 					GITHUB_APP_PRIVATE_KEY: privateKey,
-					GITHUB_FORK_OWNER: "quest-bot-forks",
 					// A test-only key pair from scripts/vapid.ts.
 					VAPID_PUBLIC_KEY:
 						"BFh5yJqSEBLDPtwYUindkvfE7r9Hm6c8xTT3EZnAo6EfvJLAWHX-HKbq2h83IbBtOvzzDbYp2DwDyqqO-_Uoq_k",

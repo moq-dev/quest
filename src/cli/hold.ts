@@ -1,13 +1,15 @@
-// `quest iterate`, `ready`, `merge`, and `release`: one session owns a PR at a
-// time. It holds one `quest:<state>` label, and the ID of the timeline event
+// `quest iterate`, `ready`, `merge`, and `release`: one session works on a PR at
+// a time. It holds the `quest:active` label, and the ID of the timeline event
 // that added the label is its hold token, since sessions often share an account.
-import { HOLD_PREFIX, MERGE_LABEL, handedBack, isHoldLabel, latestHold, heldToken, spentMergeHold } from "../core";
+// `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
+import { ACTIVE_LABEL, handedBack, isHoldLabel, latestHold, heldToken, withoutHandBack } from "../core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../github/merge";
 import { repositoryPath } from "./claims";
 import {
 	array,
 	GitHub,
 	type GitHubDependencies,
+	GitHubGraphQLError,
 	object,
 	type ObjectValue,
 	type PullRequest,
@@ -17,24 +19,16 @@ import {
 import { LAND_CHECK, enqueue } from "./land";
 import { Refusal, ago } from "./start";
 
-export type State = "iterate" | "ready" | "merge";
 export type Method = "merge" | "squash" | "rebase";
 
-/** The PR, its `quest:*` labels, and the timeline events that add a label or start a landing. */
+/** The PR, its `quest:*` labels, and the timeline events that add a label. */
 const READ = `query HoldOwnership($owner: String!, $repo: String!, $number: Int!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
-			id url state isDraft body updatedAt baseRefName headRefOid mergeStateStatus isMergeQueueEnabled
-			autoMergeRequest { enabledAt }
-			mergeQueueEntry { state }
+			id url state isDraft body updatedAt baseRefName headRefOid mergeStateStatus isMergeQueueEnabled isInMergeQueue
 			labels(first: 100) { nodes { name } }
-			timelineItems(last: 100, itemTypes: [LABELED_EVENT, AUTO_MERGE_ENABLED_EVENT, ADDED_TO_MERGE_QUEUE_EVENT]) {
-				nodes {
-					__typename
-					... on LabeledEvent { id createdAt label { name } }
-					... on AutoMergeEnabledEvent { id createdAt }
-					... on AddedToMergeQueueEvent { id createdAt }
-				}
+			timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
+				nodes { __typename ... on LabeledEvent { id createdAt label { name } } }
 			}
 		}
 	}
@@ -43,7 +37,7 @@ const READ = `query HoldOwnership($owner: String!, $repo: String!, $number: Int!
 interface Event {
 	id: string;
 	time: number;
-	/** The label it added, or `null` for auto-merge enabled or a merge-queue entry. */
+	/** The label it added; `null` for any other event. */
 	label: string | null;
 }
 
@@ -58,9 +52,9 @@ interface Snapshot {
 	head: string;
 	mergeState: string;
 	queue: boolean;
-	/** Auto-merge is enabled or the PR is in the merge queue. */
-	landing: boolean;
-	/** The `quest:*` labels on the PR. */
+	/** Whether the PR is in its base's merge queue. */
+	queued: boolean;
+	/** The hold labels on the PR. */
 	labels: string[];
 	/** Oldest first. */
 	events: Event[];
@@ -129,24 +123,20 @@ function starterHeld(snapshot: Snapshot): boolean {
 	return snapshot.state === "OPEN" && snapshot.draft && !handedBack(snapshot.body);
 }
 
-/** Take `pr` for `state`, or swap to it from the label `token` holds. Prints nothing; returns the hold. */
-export async function take(
-	pr: PullRequest,
-	state: State,
-	token: string | undefined,
-	deps: GitHubDependencies,
-): Promise<Hold> {
-	const { hold } = await acquire(new Labels(pr, deps), state, token);
+/** Take `pr`, or keep the hold `token` names. Prints nothing; returns the hold. */
+export async function take(pr: PullRequest, token: string | undefined, deps: GitHubDependencies): Promise<Hold> {
+	const { hold } = await acquire(new Labels(pr, deps), token);
 	return hold;
 }
 
 /**
- * Take `pr` for ready, then hand it to reviewers: drop its `## Decisions needed`
- * section and mark a draft ready for review.
+ * While `token` holds `pr`, hand it to reviewers: drop its `## Waiting` section
+ * (or the older `## Decisions needed`) and mark a draft ready for review. The
+ * hold stays.
  */
 export async function finish(pr: PullRequest, token: string, deps: GitHubDependencies): Promise<Hold> {
 	const labels = new Labels(pr, deps);
-	const { hold, snapshot } = await acquire(labels, "ready", token);
+	const { hold, snapshot } = await acquire(labels, token);
 	return holding(hold, async () => {
 		if (handedBack(snapshot.body)) {
 			await labels.github.request(`${repositoryPath(pr)}/pulls/${pr.number}`, {
@@ -163,107 +153,217 @@ export async function finish(pr: PullRequest, token: string, deps: GitHubDepende
 	});
 }
 
+/** The repository setting that allows each merge method. */
+const ALLOWS: Record<Method, string> = {
+	merge: "allow_merge_commit",
+	squash: "allow_squash_merge",
+	rebase: "allow_rebase_merge",
+};
+
+/** Each merge method as GitHub's settings name it. */
+const METHOD_NAMES: Record<Method, string> = {
+	merge: "merge commits",
+	squash: "squash merges",
+	rebase: "rebase merges",
+};
+
 /**
- * Take `pr` for merge, then land `sha`, which must still be its head: enable
- * auto-merge bound to it, which enters the merge queue when the base has one,
- * or merge at once when GitHub would refuse auto-merge because nothing is left to wait for.
+ * The method an ungated landing uses: the one `named`, which the repository must allow, else the
+ * only one it allows, else a merge commit. Settings hidden from the token leave GitHub to refuse.
+ */
+function mergeMethod(repository: ObjectValue, named: Method | undefined, url: string): Method {
+	const methods = Object.keys(ALLOWS) as Method[];
+	if (methods.some((method) => typeof repository[ALLOWS[method]] !== "boolean")) return named ?? "merge";
+	const allowed = methods.filter((method) => repository[ALLOWS[method]] === true);
+	if (named !== undefined) {
+		if (allowed.includes(named)) return named;
+		throw new Refusal(
+			`${url} repository does not allow ${METHOD_NAMES[named]}; it allows ${allowed.map((method) => METHOD_NAMES[method]).join(", ") || "none"}`,
+		);
+	}
+	if (allowed.length === 1) return allowed[0];
+	if (allowed.includes("merge")) return "merge";
+	if (allowed.length === 0) throw new Refusal(`${url} repository allows no merge method`);
+	throw new Refusal(
+		`${url} repository does not allow merge commits; pass --${allowed.join(" or --")}, as its landing instructions in CONTRIBUTING.md or AGENTS.md name`,
+	);
+}
+
+/**
+ * Land `sha`, which must still be the head of `pr`, while no session holds it:
+ * enable auto-merge bound to it, or merge at once when GitHub would refuse auto-merge because
+ * nothing is left to wait for. A base with a merge queue gets {@link pick} instead.
  * A base that requires the `quest land` check queues it for `quest land` instead:
- * squash auto-merge whose commit body pins `sha`.
+ * squash auto-merge whose commit body pins `sha`. It takes no label.
+ * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one.
  */
 export async function land(
 	pr: PullRequest,
-	token: string,
 	sha: string,
-	method: Method,
+	named: Method | undefined,
 	deps: GitHubDependencies,
 	direct = false,
-): Promise<Hold> {
+): Promise<void> {
 	const labels = new Labels(pr, deps);
-	const current = (snapshot: Snapshot) => {
-		if (snapshot.head.toLowerCase() !== sha.toLowerCase()) {
-			throw new Refusal(`${snapshot.url} head moved to ${snapshot.head}; check the new head before landing it`);
+	const current = (snapshot: Snapshot) => headAt(snapshot, sha);
+	const snapshot = await labels.read();
+	open(snapshot);
+	current(snapshot);
+	unheld(snapshot, undefined, deps.now());
+	// The policy below is decided for the base read above; reread before landing, since a retarget decides nothing.
+	const unchanged = async () => {
+		const fresh = await labels.read();
+		open(fresh);
+		current(fresh);
+		unheld(fresh, undefined, deps.now());
+		if (fresh.base !== snapshot.base) {
+			throw new Refusal(`${snapshot.url} was retargeted from ${snapshot.base} to ${fresh.base}; land it again`);
 		}
 	};
-	// Pre-check before any label changes, preserving the caller's token on refusal.
-	let gated = false;
-	let checkedBase = "";
-	const { hold, snapshot } = await acquire(labels, "merge", token, async (snapshot) => {
-		current(snapshot);
-		checkedBase = snapshot.base;
-		gated = (await requirements(labels.github, pr, snapshot.base)).checks.some(
-			(check) => check.name === LAND_CHECK,
-		);
-		// A merge queue is the repository's own gate, so it decides; otherwise auto-merge must be on.
-		if (!gated && !direct && !snapshot.queue) {
-			const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
-			// GitHub shows the merge settings only to writers; fail closed, with a next step.
-			if (typeof repository.allow_auto_merge !== "boolean")
-				throw new Refusal(
-					`${snapshot.url} repository's auto-merge setting is not visible to this token, so a direct merge cannot be ruled out; follow its landing instructions in CONTRIBUTING.md or AGENTS.md`,
-				);
-			if (!repository.allow_auto_merge)
-				throw new Refusal(
-					`${snapshot.url} repository has auto-merge disabled; follow its landing instructions in CONTRIBUTING.md or AGENTS.md (for example, its label queue). Only use --direct if the user explicitly asks`,
-				);
-		}
-	});
-	return holding(hold, async () => {
-		// The policy above was decided for the base read before acquiring; a retarget since then decides nothing.
-		if (snapshot.base !== checkedBase) {
-			throw new Refusal(`${snapshot.url} was retargeted from ${checkedBase} to ${snapshot.base}; land it again`);
-		}
-		current(snapshot);
-		if (gated) {
-			if (method !== "squash") deps.warn(`${snapshot.url} lands through quest land, which squashes`);
-			await enqueue(labels.github, snapshot.id, snapshot.head);
-			return;
-		}
-		// The batch gate tests its own current-base chain. Ungated landings need that base in the PR head.
-		const comparison = object(
-			await (
-				await labels.github.request(
-					`${repositoryPath(pr)}/compare/${encodeURIComponent(snapshot.base)}...${snapshot.head}?per_page=1`,
-				)
-			).json(),
-		);
-		if (comparison.status !== "ahead" && comparison.status !== "identical") {
-			const base = string(object(comparison.base_commit).sha);
-			throw new Refusal(
-				`${snapshot.url} head ${snapshot.head} does not contain ${snapshot.base} at ${base}; merge the base and rerun the repository's checks before landing`,
-			);
-		}
-		if (snapshot.queue && method !== "merge") {
+	const gated = (await requirements(labels.github, pr, snapshot.base)).checks.some(
+		(check) => check.name === LAND_CHECK,
+	);
+	if (gated) {
+		if (named !== undefined && named !== "squash")
+			deps.warn(`${snapshot.url} lands through quest land, which squashes`);
+		await unchanged();
+		await enqueue(labels.github, snapshot.id, snapshot.head);
+		return;
+	}
+	// A merge queue is the repository's own gate: it applies its own method and needs no auto-merge setting.
+	if (snapshot.queue) {
+		if (named !== undefined && named !== "merge")
 			deps.warn(`${snapshot.url} lands through a merge queue, which applies its own merge method`);
-		}
-		const submit = (mutation: "mergePullRequest" | "enablePullRequestAutoMerge") =>
-			labels.github.graphql(
-				`mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!) {
+		await unchanged();
+		await pick(labels, snapshot, named ?? "merge");
+		return;
+	}
+	const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
+	const method = mergeMethod(repository, named, snapshot.url);
+	if (!direct) {
+		// Otherwise auto-merge must be on.
+		// GitHub shows the merge settings only to writers; fail closed, with a next step.
+		if (typeof repository.allow_auto_merge !== "boolean")
+			throw new Refusal(
+				`${snapshot.url} repository's auto-merge setting is not visible to this token, so a direct merge cannot be ruled out; follow its landing instructions in CONTRIBUTING.md or AGENTS.md`,
+			);
+		if (!repository.allow_auto_merge)
+			throw new Refusal(
+				`${snapshot.url} repository has auto-merge disabled; follow its landing instructions in CONTRIBUTING.md or AGENTS.md (for example, its label queue). Only use --direct if the user explicitly asks`,
+			);
+	}
+	// The batch gate and a merge queue test the current base themselves. Here nothing does, so the head must contain it.
+	const comparison = object(
+		await (
+			await labels.github.request(
+				`${repositoryPath(pr)}/compare/${encodeURIComponent(snapshot.base)}...${snapshot.head}?per_page=1`,
+			)
+		).json(),
+	);
+	if (comparison.status !== "ahead" && comparison.status !== "identical") {
+		const base = string(object(comparison.base_commit).sha);
+		throw new Refusal(
+			`${snapshot.url} head ${snapshot.head} does not contain ${snapshot.base} at ${base}; merge the base and rerun the repository's checks before landing`,
+		);
+	}
+	await unchanged();
+	const submit = (mutation: "mergePullRequest" | "enablePullRequestAutoMerge") =>
+		labels.github.graphql(
+			`mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!) {
 				${mutation}(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: $method }) { clientMutationId }
 			}`,
-				{ id: snapshot.id, sha: snapshot.head, method: method.toUpperCase() },
-			);
-		if (immediateMerge(snapshot.mergeState, snapshot.queue)) {
-			await submit("mergePullRequest");
-			return;
-		}
-		try {
-			await submit("enablePullRequestAutoMerge");
-		} catch (error) {
-			if (snapshot.queue || !cleanAutoMergeRefusal(error instanceof Error ? error.message : null)) throw error;
-			// GitHub may finish computing UNKNOWN while it handles auto-merge. Reread once, without polling.
-			const fresh = await labels.read();
-			current(fresh);
-			held(fresh, hold.token);
-			if (
-				fresh.state !== "OPEN" ||
-				fresh.draft ||
-				!immediateMerge(fresh.mergeState, fresh.queue) ||
-				(await requirements(labels.github, pr, fresh.base)).checks.some((check) => check.name === LAND_CHECK)
-			)
-				throw error;
-			await submit("mergePullRequest");
-		}
-	});
+			{ id: snapshot.id, sha: snapshot.head, method: method.toUpperCase() },
+		);
+	if (immediateMerge(snapshot.mergeState, snapshot.queue)) {
+		await submit("mergePullRequest");
+		return;
+	}
+	try {
+		await submit("enablePullRequestAutoMerge");
+	} catch (error) {
+		if (!cleanAutoMergeRefusal(error instanceof Error ? error.message : null)) throw error;
+		// GitHub may finish computing UNKNOWN while it handles auto-merge. Reread once, without polling.
+		const fresh = await labels.read();
+		current(fresh);
+		unheld(fresh, undefined, deps.now());
+		if (
+			fresh.state !== "OPEN" ||
+			fresh.draft ||
+			fresh.base !== snapshot.base ||
+			!immediateMerge(fresh.mergeState, fresh.queue) ||
+			(await requirements(labels.github, pr, fresh.base)).checks.some((check) => check.name === LAND_CHECK)
+		)
+			throw error;
+		await submit("mergePullRequest");
+	}
+}
+
+/** Merge states in which GitHub may still be running required checks, so only auto-merge can wait for them. */
+const PENDING = ["BLOCKED", "UNKNOWN"];
+
+/** GraphQL error types that fault the token or the request, not the PR GitHub would enqueue. */
+export const UNREFUSED = ["FORBIDDEN", "NOT_FOUND", "INSUFFICIENT_SCOPES", "INTERNAL"];
+
+/**
+ * Put `head` in the base's merge queue: enqueue it, or, while GitHub may still be running its
+ * required checks (`mergeState` pending), arm auto-merge bound to it, which enqueues it once they
+ * pass. Either joins the back of the queue. A refusal throws GitHub's error.
+ */
+export async function queueHead(
+	github: GitHub,
+	id: string,
+	head: string,
+	mergeState: string,
+	method: Method = "merge",
+): Promise<void> {
+	const enqueuePull = () =>
+		github.graphql(
+			`mutation($id: ID!, $sha: GitObjectID!) {
+				enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $sha }) { clientMutationId }
+			}`,
+			{ id, sha: head },
+		);
+	if (!PENDING.includes(mergeState)) {
+		await enqueuePull();
+		return;
+	}
+	try {
+		await github.graphql(
+			`mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!) {
+				enablePullRequestAutoMerge(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: $method }) { clientMutationId }
+			}`,
+			{ id, sha: head, method: method.toUpperCase() },
+		);
+	} catch (error) {
+		// An UNKNOWN state GitHub finished computing as ready: nothing is left to wait for.
+		if (!cleanAutoMergeRefusal(error instanceof Error ? error.message : null)) throw error;
+		await enqueuePull();
+	}
+}
+
+/**
+ * Pick `snapshot`'s head to land through the base's merge queue, as {@link land} checked it, with
+ * {@link queueHead}. The queue builds each PR on the current base, so a head behind it is enqueued
+ * as is. GitHub's queue events and auto-merge request record the pick, naming who made it.
+ * A pick GitHub refuses, such as one that conflicts or fails its required checks, fails:
+ * the PR needs a fix before it can land.
+ */
+async function pick(labels: Labels, snapshot: Snapshot, method: Method): Promise<void> {
+	try {
+		await queueHead(labels.github, snapshot.id, snapshot.head, snapshot.mergeState, method);
+	} catch (error) {
+		if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
+			throw error;
+		// A head that moved since is no longer the one being landed; say so rather than ask for a fix.
+		const fresh = await labels.read();
+		open(fresh);
+		headAt(fresh, snapshot.head);
+		// Already queued, as when this repeats an earlier landing: GitHub refused nothing that matters.
+		if (fresh.queued) return;
+		throw new Refusal(
+			`${snapshot.url}: GitHub refused to enqueue ${snapshot.head} (${error.message}); fix the PR, for example with /quest-iterate, and land it again`,
+		);
+	}
 }
 
 /**
@@ -296,33 +396,18 @@ export async function release(pr: PullRequest, token: string, deps: GitHubDepend
 }
 
 /**
- * Take `pr` for `state`, refusing while it is merged or closed, while another
- * session holds a `quest:*` label, or while it is a draft its starter still
- * holds. With `token`, the label it holds is swapped for this state's.
- * `check` refuses before any label changes.
+ * Take `pr` with `quest:active`, refusing while it is merged or closed, while
+ * another session holds a hold label, or while it is a draft its starter still
+ * holds. With `token`, the hold it names is kept, or swapped for `quest:active`
+ * when it names another label, such as one an older quest version added.
  */
-async function acquire(
-	labels: Labels,
-	state: State,
-	token: string | undefined,
-	check?: (snapshot: Snapshot) => void | Promise<void>,
-): Promise<{ hold: Hold; snapshot: Snapshot }> {
-	const label = HOLD_PREFIX + state;
-	let snapshot = await labels.read();
-	if (snapshot.state !== "OPEN") {
-		throw new Refusal(`${snapshot.url} is ${snapshot.state.toLowerCase()}; a push now would bring its branch back`);
-	}
-	await check?.(snapshot);
-	snapshot = await labels.dequeued(snapshot);
+async function acquire(labels: Labels, token: string | undefined): Promise<{ hold: Hold; snapshot: Snapshot }> {
+	const label = ACTIVE_LABEL;
+	const snapshot = await labels.read();
+	open(snapshot);
 	const mine = token === undefined ? undefined : held(snapshot, token);
-	const other = snapshot.labels.find((name) => name !== mine);
-	if (other !== undefined) throw new Refusal(holder(snapshot, other, labels.deps.now()));
+	unheld(snapshot, mine, labels.deps.now());
 	if (mine === label) return { hold: { label, token: token! }, snapshot };
-	if (mine === undefined && starterHeld(snapshot)) {
-		throw new Refusal(
-			`${snapshot.url} is a draft its starter still holds: its body has no ## Decisions needed section, so taking it over is the user's choice`,
-		);
-	}
 
 	await labels.add(label);
 	const after = await labels.read();
@@ -340,6 +425,33 @@ async function acquire(
 	}
 	if (mine !== undefined) await labels.remove(mine);
 	return { hold: { label, token: ours.id }, snapshot: { ...after, labels: [label] } };
+}
+
+/** Refuse once the head is no longer `sha`, the head being landed. */
+function headAt(snapshot: Snapshot, sha: string): void {
+	if (snapshot.head.toLowerCase() !== sha.toLowerCase()) {
+		throw new Refusal(`${snapshot.url} head moved to ${snapshot.head}; check the new head before landing it`);
+	}
+}
+
+function open(snapshot: Snapshot): void {
+	if (snapshot.state !== "OPEN") {
+		throw new Refusal(`${snapshot.url} is ${snapshot.state.toLowerCase()}; a push now would bring its branch back`);
+	}
+}
+
+/**
+ * Refuse while another session holds the PR: a hold label other than `mine`,
+ * or, when this session holds none, a draft its starter still holds.
+ */
+function unheld(snapshot: Snapshot, mine: string | undefined, now: number): void {
+	const other = snapshot.labels.find((name) => name !== mine);
+	if (other !== undefined) throw new Refusal(holder(snapshot, other, now));
+	if (mine === undefined && starterHeld(snapshot)) {
+		throw new Refusal(
+			`${snapshot.url} is a draft its starter still holds: its body has no ## Waiting section, so taking it over is the user's choice`,
+		);
+	}
 }
 
 /** The label `token` holds on the PR, or a refusal when it holds none. */
@@ -368,18 +480,6 @@ function holder(snapshot: Snapshot, label: string, now: number): string {
 	const added = latestHold(snapshot.events, label);
 	const since = added ? `, added ${ago(now, added.time)} as token ${added.id}` : "";
 	return `${snapshot.url} is held by ${label}${since}; if it looks stale, ask the user before releasing it`;
-}
-
-/** `body` without its `## Decisions needed` sections, each running to the next heading of level 1 or 2. */
-export function withoutHandBack(body: string): string {
-	const kept: string[] = [];
-	let skipping = false;
-	for (const line of body.split("\n")) {
-		if (handedBack(line)) skipping = true;
-		else if (/^#{1,2}[ \t]/.test(line)) skipping = false;
-		if (!skipping) kept.push(line);
-	}
-	return kept.join("\n").trimEnd();
 }
 
 /** One PR's labels on GitHub. */
@@ -420,7 +520,7 @@ class Labels {
 			head: string(row.headRefOid),
 			mergeState: string(row.mergeStateStatus),
 			queue: row.isMergeQueueEnabled === true,
-			landing: row.autoMergeRequest !== null || row.mergeQueueEntry !== null,
+			queued: row.isInMergeQueue === true,
 			labels: array(object(row.labels).nodes)
 				.map((label) => string(label.name))
 				.filter(isHoldLabel),
@@ -438,19 +538,6 @@ class Labels {
 			method: "DELETE",
 			allow: [404],
 		});
-	}
-
-	/**
-	 * A landing that ended unmerged ends the merge session's hold, so a
-	 * `quest:merge` label is spent once a landing started after it was added.
-	 */
-	async dequeued(snapshot: Snapshot): Promise<Snapshot> {
-		if (!spentMergeHold(snapshot)) return snapshot;
-		await this.remove(MERGE_LABEL);
-		this.deps.warn(
-			`${snapshot.url} left the merge queue unmerged, so ${MERGE_LABEL} was removed; quest status shows why under landing-stopped`,
-		);
-		return { ...snapshot, labels: snapshot.labels.filter((name) => name !== MERGE_LABEL) };
 	}
 }
 

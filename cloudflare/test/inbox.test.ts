@@ -261,6 +261,15 @@ describe("decision inbox", () => {
 		const moved = await submit(merge, [["head", "b".repeat(40)]]);
 		expect(moved.status).toBe(403);
 		expect(await moved.text()).toContain("head moved since you looked; review it again");
+		// A pick of merge never lands a head without a review that counts on it, and says why.
+		github.approved = ["c".repeat(40)];
+		const unreviewed = await submit(merge, [["head", head]]);
+		expect(unreviewed.status).toBe(403);
+		expect(await unreviewed.text()).toContain(
+			`The approval of ccccccc does not carry to ${head.slice(0, 7)}: what changed since is more than conflict-free merges of trunk. kix lands only a reviewed head.`,
+		);
+		expect(github.merged).toHaveLength(0);
+		github.approved = [head];
 		github.refuse = "At least 1 approving review is required by reviewers with write access.";
 		const refused = await submit(merge, [["head", head]], {
 			Referer: `${origin}/inbox?project=10&item=pulls%2F2`,
@@ -275,7 +284,7 @@ describe("decision inbox", () => {
 		);
 		expect(explained).toContain('<a href="/inbox?project=10&amp;item=pulls%2F2">Return to the item</a>');
 		// Each click is one request bound to its head; a refusal is never retried.
-		expect(github.merged).toHaveLength(2);
+		expect(github.merged).toHaveLength(1);
 		github.refuse = null;
 		github.methods = ["squash"];
 		const merged = await submit(merge, [
@@ -311,14 +320,14 @@ describe("decision inbox", () => {
 			["revision", head],
 		]);
 		expect(picked.status).toBe(303);
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		const [job] = await store.listJobs(db, 10);
 		expect(job).toMatchObject({ workflow: "merge", hold: "LE_1" });
 		expect(thread(await inbox({ project: "10", item: "pulls/2" }))).not.toContain("Merge this PR");
 		await db.prepare("DELETE FROM jobs").run();
 		// A pull request a session holds with a label is its work in progress, until the label goes.
 		await db
-			.prepare("UPDATE github_project_activity SET data=json_set(data,'$.hold','quest:merge') WHERE id='21'")
+			.prepare("UPDATE github_project_activity SET data=json_set(data,'$.hold','quest:kix') WHERE id='21'")
 			.run();
 		expect(await inbox()).toMatch(/<h2>In progress<\/h2>[\s\S]*Fix/);
 		active = thread(await inbox({ project: "10", item: "pulls/2" }));

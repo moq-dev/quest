@@ -3,7 +3,15 @@ import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { GitHub, type GitHubDependencies, type PullRequest, object, remoteRepository, string } from "./github";
+import {
+	GitHub,
+	type GitHubDependencies,
+	type PullRequest,
+	object,
+	remoteRepository,
+	requireRemote,
+	string,
+} from "./github";
 import { contains, git, gitEnvironment, tryGit } from "./land";
 import { Refusal } from "./start";
 
@@ -187,7 +195,7 @@ export async function apply(root: string, pr: PullRequest, deps: GitHubDependenc
 		);
 	if (head.repo == null) throw new Refusal(`${url}'s head repository is gone`);
 
-	const origin = remoteRepository(root, "origin");
+	const origin = remoteRepository(requireRemote(root, "origin"));
 	const same =
 		origin.repository?.owner.toLowerCase() === pr.owner.toLowerCase() &&
 		origin.repository.repo.toLowerCase() === pr.repo.toLowerCase();

@@ -14,9 +14,8 @@ bounded test PR verify the integration before contributors are invited.
   moq-dev/moq, ranked first so kix is usable on moq-dev/moq soonest.
   Decided 2026-10-30 (user): start with moq-dev/moq; the private
   moq-dev/moq.pro follows in [Private repositories](/quest/m0/kix/private.md).
-  Service forks were dropped the same day for
-  [upstream branches](/quest/m0/kix/upstream-branches.md), so there is no
-  fork namespace to set up.
+  Job branches publish on the upstream itself (decided the same day), so
+  there is no fork namespace to set up.
 - Validate real installation-token behavior, which publication's tests only
   mock (Publication in `cloudflare/GITHUB.md`): a job branch pushed to the
   upstream under its branch rules, GitHub's signature on the App's API
@@ -44,4 +43,3 @@ bounded test PR verify the integration before contributors are invited.
 
 - [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the live origin and registered App
 - [Owner allowlist](/quest/m0/kix/owners.md) - only moq-dev can enroll before contributors are invited
-- [Upstream branches](/quest/m0/kix/upstream-branches.md) - jobs publish on the pilot repositories themselves

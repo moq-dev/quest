@@ -13,9 +13,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 /** The baseline tree committed on `main`, then checked out on `branch`. */
 function repo(branch: string): Tree {
-	const tree = Tree.baseline();
-	git(tree, "init", "--quiet", "--initial-branch=main");
-	commit(tree, "baseline");
+	const tree = Tree.committed();
 	git(tree, "switch", "--quiet", "-c", branch);
 	return tree;
 }
@@ -26,20 +24,7 @@ function git(tree: Tree, ...args: string[]): string {
 
 function commit(tree: Tree, message: string) {
 	git(tree, "add", "--all");
-	git(
-		tree,
-		"-c",
-		"user.name=Quest",
-		"-c",
-		"user.email=quest@example.com",
-		"-c",
-		"commit.gpgsign=false",
-		"commit",
-		"--quiet",
-		"--allow-empty",
-		"-m",
-		message,
-	);
+	git(tree, "commit", "--quiet", "--allow-empty", "-m", message);
 }
 
 test("a quest branch that deletes its quest passes", () => {

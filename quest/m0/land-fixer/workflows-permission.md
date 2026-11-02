@@ -3,8 +3,9 @@
 ## Goal
 
 The moq-bot GitHub App (ID 1039466) has the `workflows: write` repository
-permission, and every installation that lands through the host gate has
-accepted it: moq-dev/moq, moq.pro, rust2, rind and quest. GitHub then accepts
+permission, and every installation the land fixer pushes to, through the
+queue watcher or the host gate, has accepted it: moq-dev/moq, moq.pro, rust2,
+rind and quest. GitHub then accepts
 a fixer push that touches `.github/workflows`, including a base merge pushed
 to a fork's branch. This quest waits on the maintainer. To check, open the
 App's settings under Permissions; GitHub lists pending permission requests on

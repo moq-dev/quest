@@ -1,6 +1,6 @@
 // Host orchestration: PR code runs only through the configured sandbox.
 import { authenticatedRead } from "./land-git";
-import { startFixer, startBaseFixer, collectFixers, handbackRepeated } from "./land-fixer";
+import { startFixer, startBaseFixer, collectFixers } from "./land-fixer";
 import { closeFix, fixing, haltNotice, readHalt, resume, saveHalt } from "./land-halt";
 import { batchable } from "./land-park";
 import { spawn } from "node:child_process";
@@ -84,7 +84,8 @@ export async function installationToken(
 }
 
 type Chain = Awaited<ReturnType<typeof build>>;
-function save(path: string, value: unknown): void {
+/** Replace `path` atomically, readable only by the daemon's user. */
+export function save(path: string, value: unknown): void {
 	writeFileSync(`${path}.new`, JSON.stringify(value), { mode: 0o600 });
 	renameSync(`${path}.new`, path);
 }
@@ -256,11 +257,11 @@ async function fail(
 }
 
 /** GitHub refuses comments over 65,536 characters. Escaping grows a character at most 5x (`&amp;`). */
-const EXCERPT = 12_000;
+export const EXCERPT = 12_000;
 
 /** The end of a log, escaped for `<pre>` and bounded so the comment always posts. */
-export function excerpt(tail: string): string {
-	const cut = tail.length > EXCERPT ? `…${tail.slice(-EXCERPT)}` : tail;
+export function excerpt(tail: string, limit = EXCERPT): string {
+	const cut = tail.length > limit ? `…${tail.slice(-limit)}` : tail;
 	return cut.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
 }
 
@@ -342,8 +343,15 @@ type MergeResult =
 	{ sha: string } | { reason: "head_moved" | "merge_conflict" | "merge_refused"; detail: string } | null;
 
 /**
+ * How many times a merge is retried while GitHub catches up on a push, 15.5 s of backoff in all. A
+ * merge still unsettled after them throws, and the next round rebuilds the queue as GitHub then shows it.
+ */
+const SETTLE_RETRIES = 5;
+
+/**
  * Retry only GitHub's pending mergeability or base refresh. Any other refusal, such as squash being
  * disabled or a rule the bot cannot bypass, would refuse every round after a full check, so it ejects.
+ * `previous` is the head before the gate pushed its own base merge as `head`, if it did.
  */
 async function mergePinned(github: GitHub, path: string, head: string, previous = head): Promise<MergeResult> {
 	for (let attempt = 0; ; attempt++) {
@@ -365,14 +373,20 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 		// for it: a 409, or a 405 when the pin conflicts with the base that push merged. Neither is a writer.
 		const current = object(pull.head).sha;
 		if (previous !== head && (current === previous || (response.status === 409 && current === head))) {
-			if (attempt >= 3) throw new Error(`${detail}; prepared head has not propagated`);
+			if (attempt >= SETTLE_RETRIES) throw new Error(`${detail}; prepared head has not propagated`);
 			await github.pause(500 * 2 ** attempt);
 			continue;
 		}
 		if (current !== head) return { reason: "head_moved", detail };
-		if (pull.mergeable === false || pull.mergeable_state === "dirty") return { reason: "merge_conflict", detail };
-		if (pull.mergeable === null || /base branch was modified/i.test(String(result.message))) {
-			if (attempt >= 3) throw new Error(`${detail}; mergeability did not settle`);
+		const conflict = pull.mergeable === false || pull.mergeable_state === "dirty";
+		// Once GitHub shows the gate's own merge, it can still call it conflicting from the pin's stale
+		// mergeability, in its refusal or in the PR (moq-dev/quest#342). That merge already holds the
+		// base it was checked on, so it cannot conflict with it: wait. Only a base that moved since can
+		// conflict, and then the retries run out and the next round rebuilds on that base.
+		const stale = previous !== head && (conflict || /merge conflict/i.test(String(result.message)));
+		if (conflict && !stale) return { reason: "merge_conflict", detail };
+		if (stale || pull.mergeable === null || /base branch was modified/i.test(String(result.message))) {
+			if (attempt >= SETTLE_RETRIES) throw new Error(`${detail}; mergeability did not settle`);
 			await github.pause(500 * 2 ** attempt);
 			continue;
 		}
@@ -520,10 +534,7 @@ export async function serveBatch(
 		if (await eject(github, plan, item)) output.push(`ejected ${item.number} ${item.reason}`);
 		forgetHeads(options.state, item.number);
 	};
-	for (const item of plan.eject) {
-		await report(item);
-		await handbackRepeated(options.state, plan, item, deps);
-	}
+	for (const item of plan.eject) await report(item);
 	output.push(...(await reportStalled(github, plan, options.state, deps.now())));
 	// A halted queue waits for its base to move, then resumes once the new base passes alone, even
 	// with no PR ready to batch, so its issue and any fix it no longer needs are closed at once.
@@ -735,7 +746,7 @@ export async function lockCheckout(path: string): Promise<() => void> {
 	await new Promise<void>((done, reject) => {
 		child.stdout.once("data", () => done());
 		child.once("error", reject);
-		child.once("exit", () => reject(new Error("another quest land serve holds this checkout (or flock failed)")));
+		child.once("exit", () => reject(new Error("another quest land daemon holds this checkout (or flock failed)")));
 	});
 	return () => child.stdin.end();
 }
@@ -745,6 +756,32 @@ export function lockRepository(root: string): Promise<() => void> {
 	return lockCheckout(
 		join(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), "quest-land.lock"),
 	);
+}
+
+/**
+ * Prepare a daemon for `repository`: resolve and create its state directory in `options`, check the
+ * App key, and hold one lock per checkout's repository and one per state directory, whichever two
+ * daemons would share, so `quest land serve` and `quest land watch` never run beside each other.
+ * Returns the unlock.
+ */
+export async function startDaemon(
+	root: string,
+	repository: Repository,
+	options: { state: string },
+): Promise<() => void> {
+	options.state = resolve(root, options.state || defaultState(repository));
+	mkdirSync(options.state, { recursive: true, mode: 0o700 });
+	// These are startup configuration failures; transient network failures in the loop are recoverable.
+	createPrivateKey(readFileSync(keyPath()));
+	const unlockRepository = await lockRepository(root);
+	const unlockState = await lockCheckout(join(options.state, "lock")).catch((error: unknown) => {
+		unlockRepository();
+		throw error;
+	});
+	return () => {
+		unlockState();
+		unlockRepository();
+	};
 }
 
 /** Retry a failed batch independently of the lifetime of the daemon. */
@@ -778,22 +815,12 @@ export async function serve(
 	warn: (text: string) => void,
 ): Promise<void> {
 	if (!options.sandbox) throw new Error("quest land serve requires --sandbox");
-	options.state = resolve(root, options.state || defaultState(repository));
-	mkdirSync(options.state, { recursive: true, mode: 0o700 });
-	// These are startup configuration failures; transient network/batch failures below are recoverable.
-	createPrivateKey(readFileSync(keyPath()));
+	// Both run in a PR's checkout, where a relative path would otherwise name the PR's own file.
+	options.sandbox = resolve(options.sandbox);
+	if (options.fixer) options.fixer = resolve(options.fixer);
 	accessSync(options.sandbox, constants.X_OK);
 	if (options.fixer) accessSync(options.fixer, constants.X_OK);
-	// One daemon per checkout's repository and per state directory, whichever two daemons would share.
-	const unlockRepository = await lockRepository(root);
-	const unlockState = await lockCheckout(join(options.state, "lock")).catch((error: unknown) => {
-		unlockRepository();
-		throw error;
-	});
-	const unlock = () => {
-		unlockState();
-		unlockRepository();
-	};
+	const unlock = await startDaemon(root, repository, options);
 	try {
 		const trusted = privateRepository(options.state);
 

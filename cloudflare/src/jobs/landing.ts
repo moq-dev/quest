@@ -1,7 +1,8 @@
-// A merge job holds its pull request with the `quest:merge` label, as local
-// `quest merge` sessions do: from when the maintainer picks merge until the
-// job ends without landing, or until a landing it started ends unmerged. Then
-// the bot removes the label, and the pull request is an idle decision again.
+// A merge job holds its pull request with its `quest:kix` label (KIX_LABEL),
+// as local sessions hold one with `quest:active`: from when the maintainer
+// picks merge until the job ends without landing, or until a landing it started
+// ends unmerged. Then the bot removes the label, and the pull request is an
+// idle decision again.
 import { GitHubService } from "../github/service";
 import { pullOf } from "./publish";
 import * as store from "./store";

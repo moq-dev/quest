@@ -1,22 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
 import { snapshot } from "../src/cli/tree";
 import { check, formatFinding } from "../src/core";
-import { Tree, tempDir } from "./fixture";
+import { GIT_SETTINGS, Tree, configure, initRepository, template } from "./fixture";
 
 function git(root: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
-}
-
-function init(root: string): void {
-	git(root, "init", "-q", "-b", "main");
-	git(root, "config", "user.name", "Test");
-	git(root, "config", "user.email", "test@example.com");
-	git(root, "config", "commit.gpgsign", "false");
 }
 
 function commit(root: string): string {
@@ -25,19 +18,34 @@ function commit(root: string): string {
 	return git(root, "rev-parse", "HEAD");
 }
 
-function fixture() {
-	const dependency = tempDir();
-	init(dependency);
+/**
+ * A dependency repository, and the baseline tree with it as an initialized
+ * submodule linked from a quest. The submodule's origin is the template's own
+ * dependency, so commits there go to the per-test `dependency` instead.
+ */
+const fixtures = template((dir) => {
+	const dependency = initRepository(join(dir, "dependency"));
 	writeFileSync(join(dependency, "README.md"), "# Dependency\n");
 	const pin = commit(dependency);
-	const tree = Tree.baseline().append(
-		"quest/m0/epic/one.md",
-		"\n## Related\n\n- [Dependency](../../../dependency/README.md) - the committed source\n",
-	);
-	init(tree.path);
-	git(tree.path, "-c", "protocol.file.allow=always", "submodule", "add", "-q", dependency, "dependency");
-	const head = commit(tree.path);
-	return { tree, head, pin, module: join(tree.path, "dependency") };
+	const tree = join(dir, "tree");
+	Tree.baseline()
+		.append(
+			"quest/m0/epic/one.md",
+			"\n## Related\n\n- [Dependency](../../../dependency/README.md) - the committed source\n",
+		)
+		.copy(tree);
+	initRepository(tree);
+	git(tree, "-c", "protocol.file.allow=always", "submodule", "add", "-q", dependency, "dependency");
+	configure(join(tree, ".git", "modules", "dependency"), GIT_SETTINGS);
+	const head = commit(tree);
+	writeFileSync(join(dir, "commits.json"), JSON.stringify({ head, pin }));
+});
+
+function fixture() {
+	const dir = fixtures();
+	const { head, pin } = JSON.parse(readFileSync(join(dir, "commits.json"), "utf8")) as { head: string; pin: string };
+	const tree = new Tree(join(dir, "tree"));
+	return { tree, head, pin, dependency: join(dir, "dependency"), module: join(tree.path, "dependency") };
 }
 
 // Cases run up to ~35 real Git processes. Process creation on the Windows ARM runner
@@ -59,9 +67,6 @@ describe("committed submodule links", { timeout: 20_000 }, () => {
 
 	test("uses the snapshot's pin rather than a different or dirty checkout", () => {
 		const { tree, head, module } = fixture();
-		git(module, "config", "user.name", "Test");
-		git(module, "config", "user.email", "test@example.com");
-		git(module, "config", "commit.gpgsign", "false");
 		rmSync(join(module, "README.md"));
 		writeFileSync(join(module, "later.md"), "# Later\n");
 		commit(module);
@@ -75,15 +80,11 @@ describe("committed submodule links", { timeout: 20_000 }, () => {
 
 	test("resolves nested gitlinks without importing their quests", () => {
 		const { tree, module } = fixture();
-		const nested = tempDir();
-		init(nested);
+		const nested = initRepository();
 		mkdirSync(join(nested, "quest"));
 		writeFileSync(join(nested, "quest", "README.md"), "not a valid quest\n");
 		writeFileSync(join(nested, "README.md"), "# Nested\n");
 		commit(nested);
-		git(module, "config", "user.name", "Test");
-		git(module, "config", "user.email", "test@example.com");
-		git(module, "config", "commit.gpgsign", "false");
 		git(module, "-c", "protocol.file.allow=always", "submodule", "add", "-q", nested, "nested");
 		commit(module);
 		const head = commit(tree.path);
@@ -102,10 +103,9 @@ describe("committed submodule links", { timeout: 20_000 }, () => {
 	});
 
 	test("refuses a pinned commit absent from an initialized submodule", () => {
-		const { tree, module } = fixture();
-		const upstream = git(module, "remote", "get-url", "origin");
-		writeFileSync(join(upstream, "new.md"), "# Not fetched\n");
-		const pin = commit(upstream);
+		const { tree, dependency } = fixture();
+		writeFileSync(join(dependency, "new.md"), "# Not fetched\n");
+		const pin = commit(dependency);
 		git(tree.path, "update-index", "--cacheinfo", `160000,${pin},dependency`);
 		git(tree.path, "commit", "-q", "-m", "pin newer source");
 		const at = snapshot(tree.path, git(tree.path, "rev-parse", "HEAD"));

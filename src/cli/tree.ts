@@ -73,6 +73,24 @@ export function checkout(root: string): Snapshot {
  * every path inside a submodule exists rather than being read from it.
  */
 export function snapshot(root: string, commit: string, submodules = true): Snapshot {
+	const tree = committedSources(root, commit, submodules);
+	return { docs: tree.sources.map((source) => parse(source.path, source.text)), exists: tree.exists };
+}
+
+/** A quest document as committed: its source text and its file mode. */
+export interface CommittedSource extends Source {
+	mode: string;
+}
+
+/**
+ * Every quest document's source at `commit`, a commit or a tree, in tree order, read from git
+ * objects alone, as `snapshot` reads them, and whether a repository-relative path exists there.
+ */
+export function committedSources(
+	root: string,
+	commit: string,
+	submodules = true,
+): { sources: CommittedSource[]; exists(path: string): boolean } {
 	const tree = committed(root, commit, submodules);
 	const quests = tree.entries.filter(
 		({ mode, type, path }) => type === "blob" && mode !== "120000" && path.startsWith("quest/") && isQuest(path),
@@ -82,17 +100,14 @@ export function snapshot(root: string, commit: string, submodules = true): Snaps
 	// One `cat-file --batch` reads every document: `<oid> blob <size>\n<content>\n` each, in input order.
 	const batch = git(root, ["cat-file", "--batch"], `${quests.map((quest) => quest.oid).join("\n")}\n`);
 	let offset = 0;
-	const docs = quests.map(({ path }) => {
+	const sources = quests.map(({ path, mode }) => {
 		const header = batch.indexOf(10, offset);
 		const size = Number(batch.toString("utf8", offset, header).split(" ")[2]);
 		const text = decode(batch.subarray(header + 1, header + 1 + size), path);
 		offset = header + size + 2;
-		return { path, text };
+		return { path, mode, text };
 	});
-	return {
-		docs: docs.sort((a, b) => comparePaths(a.path, b.path)).map((source) => parse(source.path, source.text)),
-		exists: tree.exists,
-	};
+	return { sources: sources.sort((a, b) => comparePaths(a.path, b.path)), exists: tree.exists };
 }
 
 interface Entry {

@@ -26,7 +26,3 @@ follow-ups.
   add the operator step to `cloudflare/GITHUB.md`.
 - Choose which jobs run it, such as iterate and merge jobs after they
   publish.
-
-## Required
-
-- [Land review](/quest/m0/kix/land-review.md) - the gate that counts the App's check

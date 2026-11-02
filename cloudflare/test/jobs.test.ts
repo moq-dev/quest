@@ -1180,7 +1180,7 @@ describe("job routes", () => {
 			await store.dispatch(db, maintainer, new Map([[machine.id, 1]]), Date.now());
 			await store.finish(db, machine, id, 1, { outcome, summary: "Ended", result: undefined }, Date.now());
 			// No event-driven release is called: the schedule is the backstop.
-			expect(github.labels).toEqual(["quest:merge"]);
+			expect(github.labels).toEqual(["quest:kix"]);
 			await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
 			expect(github.labels).toEqual([]);
 			expect(await state(id)).toMatchObject({ hold: null });
@@ -1191,7 +1191,7 @@ describe("job routes", () => {
 		const { id } = (await (await post("", { workflow: "merge", target: "pulls/2" })).json()) as { id: string };
 		await db.prepare("UPDATE jobs SET state=? WHERE id=?").bind(state, id).run();
 		await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		expect(await store.readJob(db, id)).toMatchObject({ hold: "LE_1", state });
 	});
 
@@ -1201,13 +1201,13 @@ describe("job routes", () => {
 		github.landing = true;
 		github.events.push({ id: "AUTO", label: null });
 		await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		expect(await state(id)).toMatchObject({ hold: "LE_1" });
 		github.landing = false;
 		// Another session removed and re-added the label. The old token may be cleared, never its label.
-		github.events.push({ id: "REPLACEMENT", label: "quest:merge" });
+		github.events.push({ id: "REPLACEMENT", label: "quest:kix" });
 		await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		expect(await state(id)).toMatchObject({ hold: null });
 	});
 
@@ -1225,7 +1225,7 @@ describe("job routes", () => {
 				await store.dispatch(db, maintainer, new Map(), now);
 				expect((await store.dispatch(db, maintainer, new Map(), now + 2 * GRACE)).ended).toEqual([id]);
 			} else expect((await store.report(db, machine, [account("main")], [], now)).ended).toEqual([id]);
-			expect(github.labels).toEqual(["quest:merge"]);
+			expect(github.labels).toEqual(["quest:kix"]);
 			await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
 			expect(github.labels).toEqual([]);
 			expect(await state(id)).toMatchObject({ hold: null, state: "cancelled" });
@@ -1250,7 +1250,7 @@ describe("job routes", () => {
 		expect(response.status).toBe(403);
 		const { id } = (await db.prepare("SELECT id FROM jobs WHERE workflow='merge'").first<{ id: string }>())!;
 		expect(await state(id)).toMatchObject({ hold: "LE_1", state: "cancelled" });
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		vi.mocked(globalThis.fetch).mockImplementation(mock);
 		await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
 		expect(github.labels).toEqual([]);
@@ -1283,7 +1283,7 @@ describe("job routes", () => {
 		const created = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(created.status).toBe(201);
 		const { id } = (await created.json()) as { id: string };
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		expect(await state(id)).toMatchObject({
 			workflow: "merge",
 			state: "queued",
@@ -1302,17 +1302,17 @@ describe("job routes", () => {
 		expect(await state(id)).toMatchObject({ state: "cancelled", hold: null });
 
 		// A local session's hold refuses the pick and leaves no job behind.
-		github.labels = ["quest:iterate"];
-		github.events.push({ id: "LOCAL", label: "quest:iterate" });
+		github.labels = ["quest:active"];
+		github.events.push({ id: "LOCAL", label: "quest:active" });
 		const refused = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(refused.status).toBe(403);
 		expect(await refused.json()).toEqual({
-			error: "Another session holds this pull request with quest:iterate; pick it again once it is released",
+			error: "Another session holds this pull request with quest:active; pick it again once it is released",
 		});
-		expect(github.labels).toEqual(["quest:iterate"]);
+		expect(github.labels).toEqual(["quest:active"]);
 		expect(await store.active(db, 10, "pulls/2")).toBe(false);
 
-		// A merge label whose landing ended unmerged is spent, so the pick takes the pull request.
+		// The quest:merge label older quest versions left on queued PRs holds nothing.
 		github.labels = ["quest:merge"];
 		github.events = [
 			{ id: "QUEUED", label: "quest:merge" },
@@ -1322,7 +1322,7 @@ describe("job routes", () => {
 		expect(again.status).toBe(201);
 		const { id: next } = (await again.json()) as { id: string };
 		expect(await state(next)).toMatchObject({ hold: "LE_3" });
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:merge", "quest:kix"]);
 	});
 
 	it("gives a merge job's pull request back once its landing ends unmerged", async () => {
@@ -1338,7 +1338,7 @@ describe("job routes", () => {
 		};
 		// A running job keeps its hold whatever GitHub says.
 		await delivery("pull_request", dequeued, undefined, {}, testEnv);
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		// The job started a landing, which keeps the hold while it is queued.
 		github.landing = true;
 		github.events.push({ id: "AUTO", label: null });
@@ -1351,7 +1351,7 @@ describe("job routes", () => {
 			Date.now(),
 		);
 		await delivery("pull_request", { ...dequeued, action: "auto_merge_enabled" }, undefined, {}, testEnv);
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		expect(await state(id)).toMatchObject({ hold: "LE_1" });
 		// It left the queue unmerged: the bot removes the label.
 		github.landing = false;
@@ -1412,7 +1412,7 @@ describe("job routes", () => {
 		await store.dispatch(db, maintainer, new Map([[machine.id, 1]]), now);
 		await store.report(db, machine, [account("main")], [{ job: lost, attempt: 1 }], now);
 		expect((await post(`/${lost}/cancel`, {})).status).toBe(204);
-		expect(github.labels).toEqual(["quest:merge"]);
+		expect(github.labels).toEqual(["quest:kix"]);
 		await store.dispatch(db, maintainer, new Map(), now);
 		expect((await store.dispatch(db, maintainer, new Map(), now + 2 * GRACE)).ended).toEqual([lost]);
 		await landing.ended(testEnv, lost);

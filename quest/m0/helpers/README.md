@@ -38,8 +38,9 @@ commands from Sep-Oct. Session counts in each child come from that window.
   replaced with a label queue, and PR ownership covers the remaining
   collisions.
 - Decided 2026-10-21 (user): no `quest:start` label; a draft belongs to its
-  starter until its body has a `## Decisions needed` section, which the guide
-  defines as the hand-back marker. Commands read only whether it is present.
+  starter until its body has a `## Waiting` section (formerly
+  `## Decisions needed`, which still counts), which the guide defines as the
+  hand-back marker. Commands read only whether it is present.
   This narrows the 2026-10-19 decision above: `quest status` still does not
   parse the decisions listed in a PR body. It also amends the 2026-10-20
   decision: a PR is owned while it carries a `quest:*` label or is a draft
@@ -70,7 +71,5 @@ commands from Sep-Oct. Session counts in each child come from that window.
 
 ## Required
 
-- [quest merge --land gaps](/quest/m0/helpers/merge-land.md) - squash on squash-only repositories, PR URLs outside a checkout, labels released after direct merges, and a warning when auto-merge outlives its head
 - [Headless agents](/quest/m0/helpers/headless-agents.md) - `/quest-spawn api` launches, resumes, and stops billed agents through one command auto mode allows
-- [Sibling PRs through a server-side merge](/quest/m0/helpers/queue-siblings.md) - children of one epic land back to back through a merge queue without conflicting on its link list
-- [moq-dev/quest lands through quest land](/quest/m0/helpers/land-adopt.md) - this repository's `main` changes only through its own gate
+- [Links into an uninitialized submodule aren't broken](/quest/m0/helpers/submodule-links.md) - `quest check` passes in a fresh checkout without populating submodules

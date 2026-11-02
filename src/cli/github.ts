@@ -33,6 +33,16 @@ export class GitHubDeadline extends Error {
 	}
 }
 
+/** GitHub answered a GraphQL operation with errors; `types` are their types, `undefined` for an untyped one. */
+export class GitHubGraphQLError extends Error {
+	constructor(
+		readonly types: (string | undefined)[],
+		messages: string[],
+	) {
+		super(`GitHub GraphQL error: ${messages.join("; ")}`);
+	}
+}
+
 export type ObjectValue = Record<string, unknown>;
 
 /** Retries of a 5xx or a dropped connection, waiting 1, 2, 4, then 8 seconds unless GitHub says how long. */
@@ -61,8 +71,16 @@ export interface RequestOptions {
 /** Accept a GitHub PR URL, or a number in the origin repository. */
 export function pullRequest(value: string, root: string): PullRequest {
 	if (/^[1-9]\d*$/.test(value)) {
-		const { repository } = remoteRepository(root, "origin");
-		if (!repository) throw new Error("origin must name a github.com repository; pass a GitHub PR URL instead");
+		const outside = `a bare PR number is read from origin in ${root}; pass the full GitHub PR URL, or run inside a checkout or name one with --root`;
+		let origin: Remote | null;
+		try {
+			origin = readRemote(root, "origin");
+		} catch {
+			origin = null;
+		}
+		if (!origin) throw new GitHubInputError(`${root} is not a checkout with an origin remote: ${outside}`);
+		const { repository } = remoteRepository(origin);
+		if (!repository) throw new GitHubInputError(`origin does not name a github.com repository: ${outside}`);
 		return { ...repository, number: Number(value) };
 	}
 	const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d*)\/?(?:[?#].*)?$/.exec(value);
@@ -70,12 +88,82 @@ export function pullRequest(value: string, root: string): PullRequest {
 	return { owner: match[1], repo: match[2], number: Number(match[3]) };
 }
 
-/** The URL a git remote fetches from. */
-export function remoteUrl(root: string, remote: string): string {
-	return execFileSync("git", ["-C", root, "remote", "get-url", remote], {
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "pipe"],
-	}).trim();
+/**
+ * A git remote, read once per command so repeated lookups spawn no more git:
+ * its URLs as configured, and the URLs git uses after `insteadOf` rewrites.
+ */
+export interface Remote {
+	name: string;
+	/** `remote.<name>.url`, and `.pushurl` or `null` when unset, as configured: the last value of each, as `git config --get` prints. */
+	configured: { fetch: string; push: string | null };
+	/** The URLs fetches and pushes use, as `git remote get-url [--push]` prints them. */
+	used(): { fetch: string; push: string };
+}
+
+/**
+ * Read `name` from the repository at `root` with one git process, or `null`
+ * when it has no configured URL. Only when the configuration rewrites URLs do
+ * the rewritten ones cost another, on first use.
+ */
+export function readRemote(root: string, name: string): Remote | null {
+	const key = `remote.${name}.`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	// Every value in order: the last is what `git config --get` prints, the first what git uses.
+	const fetch: string[] = [];
+	const push: string[] = [];
+	let rewrites = false;
+	// `-z` prints `key\nvalue\0` for each value.
+	const listing = git(root, [
+		"config",
+		"-z",
+		"--get-regexp",
+		`^(${key}(url|pushurl)|url\\..*\\.(insteadof|pushinsteadof))$`,
+	]);
+	for (const entry of listing.split("\0")) {
+		const at = entry.indexOf("\n");
+		if (at < 0) continue;
+		const [variable, value] = [entry.slice(0, at), entry.slice(at + 1)];
+		if (variable.startsWith("url.")) rewrites = true;
+		else if (variable.endsWith(".pushurl")) push.push(value);
+		else fetch.push(value);
+	}
+	if (fetch.length === 0) return null;
+	const configured = { fetch: fetch.at(-1)!, push: push.at(-1) ?? null };
+	let used = rewrites ? null : { fetch: fetch[0], push: push[0] ?? fetch[0] };
+	return {
+		name,
+		configured,
+		used: () => (used ??= rewritten(root, name)),
+	};
+}
+
+/** The URLs `git remote get-url [--push]` prints for `name`, from one `git remote -v`. */
+function rewritten(root: string, name: string): { fetch: string; push: string } {
+	const urls: { fetch?: string; push?: string } = {};
+	// `<name>\t<url> (fetch|push)` for each URL of every remote, a partial clone's fetch followed by
+	// ` [<filter>]`; get-url prints the first of each.
+	for (const line of git(root, ["remote", "-v"]).split("\n")) {
+		const match = /^([^\t]+)\t(.*) \((fetch|push)\)(?: \[[^\]]*\])?$/.exec(line);
+		if (match !== null && match[1] === name) urls[match[3] as "fetch" | "push"] ??= match[2];
+	}
+	if (urls.fetch === undefined) throw new Error(`no ${name} remote`);
+	return { fetch: urls.fetch, push: urls.push ?? urls.fetch };
+}
+
+/** Run git in `root` for its output; a lookup that matches nothing, which exits 1, is empty. */
+function git(root: string, args: string[]): string {
+	try {
+		return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	} catch (error) {
+		if (args[0] === "config" && (error as { status?: number }).status === 1) return "";
+		throw error;
+	}
+}
+
+/** Read `name` like `readRemote`, failing when there is no such remote. */
+export function requireRemote(root: string, name: string): Remote {
+	const remote = readRemote(root, name);
+	if (remote === null) throw new Error(`no ${name} remote`);
+	return remote;
 }
 
 /**
@@ -83,28 +171,11 @@ export function remoteUrl(root: string, remote: string): string {
  * repository it names. The configured URL comes first, so a rewrite
  * (`insteadOf`) to another host still names GitHub; otherwise the rewritten one.
  */
-export function remoteRepository(
-	root: string,
-	remote: string,
-	push = false,
-): { url: string; repository: Repository | null } {
-	const git = (args: string[]) => {
-		try {
-			return execFileSync("git", ["-C", root, ...args], {
-				encoding: "utf8",
-				stdio: ["ignore", "pipe", "pipe"],
-			}).trim();
-		} catch {
-			// An unset config key exits 1.
-			return "";
-		}
-	};
-	const configured =
-		(push ? git(["config", "--get", `remote.${remote}.pushurl`]) : "") ||
-		git(["config", "--get", `remote.${remote}.url`]);
+export function remoteRepository(remote: Remote, push = false): { url: string; repository: Repository | null } {
+	const configured = (push ? remote.configured.push : null) ?? remote.configured.fetch;
 	const named = githubRepository(configured);
 	if (named !== null) return { url: configured, repository: named };
-	const url = push ? git(["remote", "get-url", "--push", remote]) : remoteUrl(root, remote);
+	const url = push ? remote.used().push : remote.used().fetch;
 	return { url, repository: githubRepository(url) };
 }
 
@@ -363,7 +434,10 @@ export class GitHub {
 			if (body.errors === undefined) return object(body.data);
 			const errors = array(body.errors);
 			if (!errors.some((error) => error.type === "RATE_LIMITED"))
-				throw new Error(`GitHub GraphQL error: ${errors.map((error) => String(error.message)).join("; ")}`);
+				throw new GitHubGraphQLError(
+					errors.map((error) => (typeof error.type === "string" ? error.type : undefined)),
+					errors.map((error) => String(error.message)),
+				);
 			// GitHub turned the operation away unprocessed, so any operation repeats.
 			await this.waitOut(response.headers, limits, "GitHub GraphQL rate limit persisted");
 		}
@@ -397,6 +471,10 @@ export class GitHub {
  */
 const PULL_MUTATIONS: Record<string, { fields: string; landed(pull: ObjectValue): boolean }> = {
 	mergePullRequest: { fields: "merged", landed: (pull) => pull.merged === true },
+	enqueuePullRequest: {
+		fields: "merged mergeQueueEntry { state }",
+		landed: (pull) => pull.merged === true || pull.mergeQueueEntry != null,
+	},
 	enablePullRequestAutoMerge: {
 		fields: "merged autoMergeRequest { enabledAt } mergeQueueEntry { state }",
 		landed: (pull) => pull.merged === true || pull.autoMergeRequest != null || pull.mergeQueueEntry != null,

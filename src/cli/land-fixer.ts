@@ -16,19 +16,15 @@ import {
 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { basename, join } from "node:path";
-import { MERGE_LABEL } from "../core";
 import { GitHub, type GitHubDependencies, object, string } from "./github";
 import {
 	baseRemote,
 	commandEnvironment,
 	contains,
-	eject,
-	ejection,
 	git,
 	tryGit,
 	enqueue,
 	type Entry,
-	type Ejection,
 	type Plan,
 	type Reason,
 } from "./land";
@@ -36,16 +32,27 @@ import { COMMENT_LIMIT, resolution, resolutionSection, type Resolution } from ".
 import { readFixResult, parseBaseFix, parseFixResult, type BaseFix, type FixResult } from "./land-fix";
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
-import { push, remoteHead } from "./land-head";
+import { isPrepared, push, remoteHead } from "./land-head";
 import { BASE_JOB, type Halt, haltNotice, readHalt, saveHalt } from "./land-halt";
 import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
 
-class FixerRefusal extends Error {}
+/**
+ * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused carries the
+ * validated resolution, for `quest land apply` to rebuild.
+ */
+export class FixerRefusal extends Error {
+	constructor(
+		message: string,
+		readonly resolution?: Resolution,
+	) {
+		super(message);
+	}
+}
 class BaseCheckError extends Error {}
 
 /** The failure log's lines the fixer cited, first to last; the comment bounds them. */
-function cited(log: string, [first, last]: [number, number]): string {
+export function cited(log: string, [first, last]: [number, number]): string {
 	if (!existsSync(log)) return "";
 	return readFileSync(log, "utf8")
 		.split("\n")
@@ -54,25 +61,57 @@ function cited(log: string, [first, last]: [number, number]): string {
 		.trimEnd();
 }
 
-/** Read a bounded tail, retaining the complete per-job log for host diagnosis. */
-function fixerLog(path: string): string {
+/** Read a bounded window of the job's log, or "" when it is missing or not a regular file. */
+function readLog(path: string, window: "head" | "tail"): string {
 	if (!existsSync(`${path}.log`)) return "";
 	const fd = openSync(`${path}.log`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
 		const stat = fstatSync(fd);
 		if (!stat.isFile()) return "";
 		const buffer = Buffer.alloc(Math.min(stat.size, 16_384));
-		const length = readSync(fd, buffer, 0, buffer.length, Math.max(0, stat.size - buffer.length));
-		return buffer.subarray(0, length).toString("utf8").trimEnd().split("\n").slice(-100).join("\n");
+		const length = readSync(fd, buffer, 0, buffer.length, window === "head" ? 0 : stat.size - buffer.length);
+		return buffer.subarray(0, length).toString("utf8");
 	} finally {
 		closeSync(fd);
 	}
 }
 
+/** Read a bounded tail, retaining the complete per-job log for host diagnosis. */
+export function fixerLog(path: string): string {
+	return readLog(path, "tail").trimEnd().split("\n").slice(-100).join("\n");
+}
+
+/**
+ * A wrapper that queues for a shared launcher prints this line, followed by the Unix time in
+ * seconds, once the launcher admits the job. Only the first one counts: the agent's own output
+ * starts after admission, so it cannot forge an earlier one.
+ */
+export const ADMITTED = "quest land fixer: admitted";
+
+/**
+ * The run gets `timeout` minutes from its admission, so a fixer queued for a shared launcher's slot
+ * keeps its whole run. Waiting counts against a total of twice that from the spawn, which also
+ * bounds a launcher that never admits the job and a wrapper that never reports admission.
+ */
+function deadline(path: string, job: Process, now: number, timeout: number): number {
+	if (job.admitted === undefined) {
+		const match = new RegExp(`^${ADMITTED} (\\d{1,15})$`, "m").exec(readLog(path, "head"));
+		if (match) {
+			// Kept within [started, now], so a wrong clock or a forged line cannot move it out of the run.
+			job.admitted = Math.min(Math.max(Number(match[1]) * 1000, job.started), now);
+			save(path, job);
+		}
+	}
+	const total = job.started + 2 * timeout * 60_000;
+	return job.admitted === undefined ? total : Math.min(job.admitted + timeout * 60_000, total);
+}
+
 /** A fixer process the daemon tracks across restarts, and how it ended. */
-interface Process {
+export interface Process {
 	checkout: string;
 	started: number;
+	/** When the wrapper reported the launcher admitted it; unset while queued or for a wrapper that never reports. */
+	admitted?: number;
 	terminating?: number;
 	pid?: number;
 	identity?: string;
@@ -106,37 +145,107 @@ interface Job extends Process {
 	// Persist publication before moving a remote head; retries recognize only this exact head.
 	published: number[];
 }
-/** A maintainer pick's fixer attempt; a fixed head's requeue keeps it as `requeued`. */
-export interface Attempt {
+/**
+ * How a round ended: a fixer commit (`fixed`), a clean base merge with no fixer edit (`merged`), no new
+ * commit for a failure the fixer did not judge flaky (`unchanged`), an unchanged re-enqueue of a failure
+ * it judged flaky (`flaky`), or a handback.
+ */
+export type Outcome = "fixed" | "merged" | "unchanged" | "flaky" | "handback";
+
+/** One failure a pick was blamed for, and what came of it. */
+export interface Round {
+	/** The fixer job that ran it: collecting the same job again replaces its round rather than adding one. */
+	job: string;
+	outcome: Outcome;
+	/** The head that failed. */
+	before: string;
+	/** The head the PR went back to the queue at, which a fix or merge moves; a handback has none. */
+	after?: string;
+	/** The failure's signature: what failed, so a recurrence after a fix can be told from a new failure. */
+	failure: string;
+	/** The stop rule that handed the PR back. */
+	rule?: StopRule;
+}
+
+/**
+ * A maintainer pick's history of fixer rounds; a fixed head's requeue keeps the pick as `requeued`.
+ * A record without `rounds`, written before rounds were kept, starts a fresh history.
+ */
+export interface History {
 	agent?: string;
 	model?: string;
 	pick: string;
 	requeued?: string;
 	head?: string;
-	/**
-	 * The job that blamed this pick, which spends its attempt, or false while it was only collateral of
-	 * other PRs' failures. A record from before blame was tracked has none, and counts as spent.
-	 */
-	blamed?: string | false;
+	rounds: Round[];
 }
 function save(path: string, data: unknown): void {
 	writeFileSync(`${path}.new`, JSON.stringify(data), { mode: 0o600 });
 	renameSync(`${path}.new`, path);
 }
-const attemptPath = (state: string, number: number) => join(state, `fix-attempt-${number}.json`);
-export function attempt(state: string, number: number): Attempt | undefined {
-	const path = attemptPath(state, number);
-	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Attempt) : undefined;
+export const historyPath = (state: string, number: number) => join(state, `fix-attempt-${number}.json`);
+export function history(state: string, number: number): History | undefined {
+	const path = historyPath(state, number);
+	if (!existsSync(path)) return undefined;
+	const record = JSON.parse(readFileSync(path, "utf8")) as Omit<History, "rounds"> & { rounds?: Round[] };
+	return { ...record, rounds: record.rounds ?? [] };
+}
+/** Record `round` in `record`, replacing the same job's earlier one, and save it as PR `number`'s history. */
+export function saveRound(state: string, number: number, record: History, round: Round): History {
+	const next = { ...record, rounds: [...record.rounds.filter((item) => item.job !== round.job), round] };
+	save(historyPath(state, number), next);
+	return next;
 }
 /** Whether `record` belongs to the pick `entry` is queued under: the pick itself, or the fixer's requeue of it. */
-function samePick(record: Attempt | undefined, entry: Pick<Entry, "enabledAt">): record is Attempt {
+function samePick(record: History | undefined, entry: Pick<Entry, "enabledAt">): record is History {
 	return record !== undefined && (record.pick === entry.enabledAt || record.requeued === entry.enabledAt);
 }
-/** Whether the pick already spent its attempt on a job other than `job`: only being blamed spends it. */
-function spent(record: Attempt | undefined, entry: Pick<Entry, "enabledAt">, job?: string): boolean {
-	return samePick(record, entry) && record.blamed !== false && (job === undefined || record.blamed !== job);
+
+/**
+ * Why a pick stops being fixed while each round still changes something: a round with no new commit
+ * for a failure that isn't flaky (`unchanged`), the failure a fix addressed recurring right after it
+ * (`repeated`), or `FLAKY_LIMIT` flaky rounds in a row (`flaky`).
+ */
+export type StopRule = "unchanged" | "repeated" | "flaky";
+/** The flaky rounds in a row that hand a PR back, so a real nondeterministic bug in it reaches a person. */
+export const FLAKY_LIMIT = 3;
+
+/**
+ * The stop rule `round` fires after `rounds`, the pick's earlier rounds, if any. A flaky round resets
+ * neither of the other rules: the failure a fix addressed recurring after flaky rounds is still a
+ * repeat. A fixer's own handback needs no rule.
+ */
+export function stopRule(rounds: Round[], round: Pick<Round, "outcome" | "failure">): StopRule | undefined {
+	if (round.outcome === "handback") return undefined;
+	if (round.outcome === "unchanged") return "unchanged";
+	const last = rounds.filter((item) => item.outcome !== "flaky").at(-1);
+	if ((last?.outcome === "fixed" || last?.outcome === "merged") && last.failure === round.failure) return "repeated";
+	if (round.outcome !== "flaky") return undefined;
+	let streak = 1;
+	for (let index = rounds.length - 1; index >= 0 && rounds[index].outcome === "flaky"; index--) streak++;
+	return streak >= FLAKY_LIMIT ? "flaky" : undefined;
 }
-function identity(pid: number): string | undefined {
+
+/** A handback's reason, naming the stop rule that fired; worded so `fixerText` quotes it unchanged. */
+export function stopReason(rule: StopRule, failure: string): string {
+	switch (rule) {
+		case "unchanged":
+			return "stop rule (no new commit): the fixer's round produced no new commit and the failure isn't flaky";
+		case "repeated":
+			return `stop rule (repeated failure): ${failure} failed again right after the round that addressed it`;
+		case "flaky":
+			return `stop rule (flaky limit): the failure was judged flaky ${FLAKY_LIMIT} times in a row; it may be a real nondeterministic bug`;
+	}
+}
+
+/**
+ * A conflict's signature names the base it conflicts with, so a conflict after the base moved is a new
+ * failure rather than a repeat, and a PR that keeps conflicting with a busy base keeps being fixed.
+ */
+export function conflictFailure(base: string): string {
+	return `merge conflict with ${base}`;
+}
+export function identity(pid: number): string | undefined {
 	try {
 		return `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:${readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].split(" ")[19]}`;
 	} catch {
@@ -144,9 +253,9 @@ function identity(pid: number): string | undefined {
 	}
 }
 /** Post `content` once per pick and kind: a retry finds the bot's own marker and posts nothing. */
-async function post(
+export async function post(
 	github: GitHub,
-	plan: Plan,
+	plan: Pick<Plan, "repository">,
 	entry: Pick<Entry, "number" | "enabledAt">,
 	content: string,
 	suffix: string,
@@ -167,9 +276,9 @@ async function post(
 	const extra = section?.(COMMENT_LIMIT - content.length - tail.length) ?? "";
 	await github.request(path, { body: { body: `${content}${extra}${tail}` } });
 }
-async function comment(
+export async function comment(
 	github: GitHub,
-	plan: Plan,
+	plan: Pick<Plan, "repository">,
 	entry: Pick<Entry, "number" | "enabledAt">,
 	text: string,
 	suffix: string,
@@ -182,32 +291,12 @@ async function comment(
 	await post(github, plan, entry, content, suffix, attribution, reason, section);
 }
 
-/** Queue eligibility can eject a previously requeued PR before building another batch. */
 /** How many one-second pauses to wait for GitHub to show a pushed head. */
 const SYNC_PAUSES = 60;
 
-export async function handbackRepeated(
-	state: string,
-	plan: Plan,
-	entry: Ejection | Entry,
-	deps: GitHubDependencies,
-): Promise<boolean> {
-	const previous = attempt(state, entry.number);
-	if (!spent(previous, entry)) return false;
-	await comment(
-		new GitHub(deps),
-		plan,
-		entry,
-		"This maintainer pick already used its mechanical fix attempt. Run /quest-iterate to diagnose the repeated failure, then pick it again.",
-		"handback",
-		author(previous!),
-	);
-	return true;
-}
-
 /**
- * Park the failure's PRs and start one fixer job on them. A PR the gate already blames, as for a
- * conflict, whose pick spent its attempt is handed back instead. Returns what it did.
+ * Park the failure's PRs and start one fixer job on them; the stop rules are applied as it is
+ * collected, once its outcome and the failure's signature are known. Returns what it did.
  */
 export async function startFixer(
 	root: string,
@@ -217,27 +306,18 @@ export async function startFixer(
 	state: string,
 	deps: GitHubDependencies,
 ): Promise<string[]> {
-	const lines: string[] = [];
 	const entries: Entry[] = [];
 	const held = parked(state);
 	for (const entry of failure.plan.queue.filter((item) => failure.numbers.includes(item.number))) {
 		// failure.json may replay after launching this same job. It is not a second pick.
 		if (isParked(held, entry)) continue;
-		const previous = attempt(state, entry.number);
-		if (failure.blame?.includes(entry.number) && spent(previous, entry)) {
-			const detail =
-				"this maintainer pick already used its mechanical fix attempt. Run /quest-iterate to diagnose the repeated failure, then pick it again";
-			if (await eject(new GitHub(deps), failure.plan, ejection(entry, failure.reason ?? "failed_checks", detail)))
-				lines.push(`handback ${entry.number}`);
-			continue;
-		}
-		if (!samePick(previous, entry))
-			save(attemptPath(state, entry.number), { pick: entry.enabledAt, blamed: false });
+		if (!samePick(history(state, entry.number), entry))
+			save(historyPath(state, entry.number), { pick: entry.enabledAt, rounds: [] } satisfies History);
 		entries.push(entry);
 	}
 	if (!entries.length) {
 		rmSync(checkout, { recursive: true, force: true });
-		return lines;
+		return [];
 	}
 	const packs = prepare(
 		root,
@@ -266,15 +346,14 @@ export async function startFixer(
 		published: [],
 	};
 	await launch(path, job, fixer, failure.log, job.numbers);
-	for (const number of job.numbers) lines.push(`parked ${number}`);
-	return lines;
+	return job.numbers.map((number) => `parked ${number}`);
 }
 
 /**
  * A standalone repository in `checkout` holding `refs` fetched from the daemon's, detached at
  * `start`. Returns the packs the fetch wrote, whose objects the daemon already has.
  */
-function prepare(root: string, checkout: string, refs: string[], start: string): string[] {
+export function prepare(root: string, checkout: string, refs: string[], start: string): string[] {
 	git(checkout, ["init", "--quiet"]);
 	// No background gc or maintenance may rewrite objects while the daemon imports the fixer's result.
 	git(checkout, ["config", "gc.auto", "0"]);
@@ -435,7 +514,14 @@ async function proposeFix(
  * and atomically records the wrapper's exit status. Its state path is never passed to the wrapper
  * or mounted in its container.
  */
-async function launch(path: string, job: Process, fixer: string, log: string, numbers: number[]): Promise<void> {
+export async function launch(
+	path: string,
+	job: Process,
+	fixer: string,
+	log: string,
+	numbers: number[],
+	env: NodeJS.ProcessEnv = {},
+): Promise<void> {
 	save(path, job);
 	const output = openSync(
 		`${path}.log`,
@@ -455,7 +541,12 @@ async function launch(path: string, job: Process, fixer: string, log: string, nu
 				log,
 				...numbers.map(String),
 			],
-			{ cwd: job.checkout, detached: true, env: commandEnvironment(), stdio: ["ignore", output, output] },
+			{
+				cwd: job.checkout,
+				detached: true,
+				env: { ...commandEnvironment(), ...env },
+				stdio: ["ignore", output, output],
+			},
 		);
 	} finally {
 		closeSync(output);
@@ -475,7 +566,13 @@ async function launch(path: string, job: Process, fixer: string, log: string, nu
 }
 
 /** Whether the fixer process ended, recording its error or, on a clean exit, reading its result with `read`. */
-function settle(path: string, job: Process, deps: GitHubDependencies, timeout: number, read: () => void): boolean {
+export function settle(
+	path: string,
+	job: Process,
+	deps: GitHubDependencies,
+	timeout: number,
+	read: () => void,
+): boolean {
 	// A restart stops the daemon's whole unit, fixers included, unless the host keeps them running.
 	const daemon = identity(process.pid);
 	const restarted = job.daemon && daemon && job.daemon !== daemon ? "; the daemon restarted while it ran" : "";
@@ -489,7 +586,7 @@ function settle(path: string, job: Process, deps: GitHubDependencies, timeout: n
 			} catch (error) {
 				job.error = `invalid fixer result: ${String(error)}; run /quest-iterate`;
 			}
-	} else if (deps.now() - job.started > timeout * 60_000) {
+	} else if (deps.now() > deadline(path, job, deps.now(), timeout)) {
 		if (job.terminating === undefined) {
 			job.terminating = deps.now();
 			if (job.pid && job.identity && identity(job.pid) === job.identity) {
@@ -583,7 +680,7 @@ export function fixerText(text: string): string {
 		.replace(/[\r\n\u0000-\u001f\u007f]/g, " ");
 	return `\`${value}\``;
 }
-function author(result?: Pick<FixResult, "agent" | "model">): string {
+export function author(result?: Pick<FixResult, "agent" | "model">): string {
 	const agent = result?.agent ?? "Codex";
 	const model = result?.model;
 	return (
@@ -602,6 +699,94 @@ function review(body: string, head: string, reason: string, attribution: string)
 	if (!section) return `${body}\n\n## Review\n\n${line}`;
 	const start = section.index + section[0].length;
 	return `${body.slice(0, start)}\n\n${line}${body.slice(start)}`;
+}
+
+/**
+ * Check a fixer's `fixed` head before publishing it on `entry`'s PR: a fork must allow maintainer
+ * edits, the head's objects are imported from the fixer's `checkout`, and it must descend from the
+ * pinned head and keep the protected paths, judged against the base the fixer was given rather than
+ * the current one, since other PRs may land protected changes while the result waits.
+ */
+export async function importFix(
+	root: string,
+	state: string,
+	plan: Pick<Plan, "repository" | "base">,
+	entry: Pick<Entry, "number" | "head" | "repository" | "maintainerCanModify">,
+	checkout: string,
+	packs: string[] | undefined,
+	head: string,
+	read: RemoteRead,
+): Promise<void> {
+	if (entry.repository !== plan.repository && !entry.maintainerCanModify)
+		throw new FixerRefusal("fork does not allow maintainer edits");
+	try {
+		importFixer(root, state, checkout, `pr-${entry.number}`, head, packs);
+	} catch (error) {
+		throw new FixerRefusal(String(error));
+	}
+	await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(plan), plan.base.sha]);
+	try {
+		validateFix(root, entry, head, plan.base.sha);
+	} catch (error) {
+		throw new FixerRefusal(String(error));
+	}
+}
+
+/**
+ * Publish `head` on `entry`'s PR in place of `standing`, the head it stands at: lease-push it, unless
+ * the PR is already at it (`current`), wait for GitHub to show it, and record it as a mechanical fix
+ * in the PR body's Review. A refused push throws a `FixerRefusal` carrying the resolution when `head`
+ * merges `plan`'s base on the pinned head, for `quest land apply`.
+ */
+export async function publishHead(
+	github: GitHub,
+	root: string,
+	plan: Pick<Plan, "repository" | "base">,
+	entry: Pick<Entry, "number" | "head" | "repository" | "branch">,
+	standing: string,
+	current: string,
+	head: string,
+	deps: GitHubDependencies,
+	token: (workflows: boolean) => Promise<string>,
+	record: { reason: string; attribution: string },
+): Promise<void> {
+	const pullPath = `/repos/${plan.repository}/pulls/${entry.number}`;
+	if (current !== head) {
+		const pushed = await push(
+			root,
+			`https://github.com/${entry.repository}.git`,
+			entry.head,
+			head,
+			`refs/heads/${entry.branch}`,
+			token,
+			standing,
+		);
+		if (pushed.status !== 0) {
+			// GitHub refuses an App's push of a workflow change it lacks the permission for, and a fork's
+			// branch rules may refuse any. The maintainer's own push may still pass, but `quest land apply`
+			// rebuilds only on the head the fixer worked from.
+			let ready: Resolution | undefined;
+			try {
+				ready = standing === entry.head ? resolution(root, entry.head, plan.base.sha, head) : undefined;
+			} catch (error) {
+				deps.warn(`quest land fixer: cannot hand back #${entry.number}'s resolution: ${String(error)}`);
+			}
+			throw new FixerRefusal(`fixer push refused: ${pushed.stderr.trim()}`, ready);
+		}
+	}
+	// GitHub shows a push a moment later. Wait for our own head; only a third head is a real move.
+	let latest = object(await (await github.request(pullPath)).json());
+	for (let wait = 0; object(latest.head).sha === standing && wait < SYNC_PAUSES; wait++) {
+		await github.pause(1000);
+		latest = object(await (await github.request(pullPath)).json());
+	}
+	if (object(latest.head).sha !== head) throw new FixerRefusal("head moved before Review update");
+	await github.request(pullPath, {
+		method: "PATCH",
+		body: {
+			body: review(typeof latest.body === "string" ? latest.body : "", head, record.reason, record.attribution),
+		},
+	});
 }
 
 export async function collectFixers(
@@ -718,14 +903,27 @@ async function collectJob(
 		let error = job.handbacks?.[number] ?? job.error;
 		const pullPath = `/repos/${job.plan.repository}/pulls/${number}`;
 		const pull = object(await (await github.request(pullPath)).json());
+		// A PR merged while the fixer ran has landed: there is nothing to apply, hand back, or take out
+		// of the queue, and GitHub refuses to disable a merged PR's auto-merge, which it still reports.
+		if (pull.merged === true) {
+			output.push(`merged ${number}`);
+			job.numbers.shift();
+			save(path, job);
+			continue;
+		}
 		const current = string(object(pull.head).sha);
 		const queued = await github.graphql(
 			"query($id: ID!) { node(id: $id) { ... on PullRequest { state autoMergeRequest { enabledAt } } } }",
 			{ id: entry.id },
 		);
 		const auto = object(queued.node).autoMergeRequest;
-		let previous = attempt(state, number)!;
-		const head = result?.action === "fixed" ? result.head : entry.head;
+		let previous = history(state, number)!;
+		// The head the PR stands at: its pinned head, or the gate's own base merge on it for this pick, as
+		// when the gate pushed that merge and then failed to land it (moq-dev/quest#342). The gate's merge is
+		// known only from its private record, never from its forgeable author or message.
+		const standing =
+			current !== entry.head && isPrepared(root, state, { ...entry, head: current }) ? current : entry.head;
+		const head = result?.action === "fixed" ? result.head : standing;
 		const actor = { agent: result?.agent, model: result?.model };
 		const queuedAs = auto == null ? null : string(object(auto).enabledAt);
 		// This collection already enabled auto-merge again on the fixed head, before a restart.
@@ -739,7 +937,7 @@ async function collectJob(
 		if (!samePick(previous, entry))
 			error = "fixer was superseded by a newer maintainer pick; keeping its work untouched";
 		// Never displace a newer maintainer pick, closed PR, or writer's commit.
-		if (pull.state !== "open" || (current !== entry.head && !(job.published.includes(number) && current === head)))
+		if (pull.state !== "open" || (current !== standing && !(job.published.includes(number) && current === head)))
 			error = "PR closed or head moved while fixing; inspect and pick it again";
 		const left = job.left?.includes(number) ?? false;
 		// A parked PR keeps its auto-merge; one an older job's ejection left without it is requeued below.
@@ -747,93 +945,71 @@ async function collectJob(
 			error ??= "PR left the queue while fixing; its result was not applied";
 		else if (queuedAs !== null && queuedAs !== entry.enabledAt && !requeued)
 			error = "PR was picked again while fixing; keeping the newer pick";
-		// Only a blamed PR spends the pick's attempt; collateral of another PR's failure never does.
-		if (blamed && spent(previous, entry, name))
-			error ??=
-				"This maintainer pick already used its mechanical fix attempt. Run /quest-iterate to diagnose the repeated failure, then pick it again";
+		// Only a blamed PR's failure is a round of its pick; collateral of another PR's failure never is. A
+		// conflict names its base; otherwise the fixer names the failure, or the gate's one check step does.
+		let round: Round | undefined;
+		if (blamed && !error) {
+			const failure =
+				job.reason === "merge_conflict"
+					? conflictFailure(job.plan.base.sha)
+					: (result?.failure ?? job.reason ?? "failed_checks");
+			// A PR requeued unchanged is flaky by the fixer's judgment, unless the gate itself blamed it, as for a
+			// conflict that is still there: a blamed PR the fixer named is never requeued.
+			const outcome: Outcome =
+				result?.action === "fixed"
+					? "fixed"
+					: result?.action === "requeue"
+						? job.blame
+							? "unchanged"
+							: "flaky"
+						: "handback";
+			const rule = stopRule(
+				previous.rounds.filter((item) => item.job !== name),
+				{ outcome, failure },
+			);
+			if (rule) error = stopReason(rule, failure);
+			round = rule
+				? { job: name, outcome: "handback", before: standing, failure, rule }
+				: { job: name, outcome, before: standing, failure, ...(outcome === "handback" ? {} : { after: head }) };
+			previous = saveRound(state, number, previous, round);
+		}
 		if (requeued) {
-			save(attemptPath(state, number), { ...previous, requeued: queuedAs });
+			save(historyPath(state, number), { ...previous, requeued: queuedAs });
 		} else if (!error && result?.action !== "handback") {
-			if (blamed && previous.blamed !== name) {
-				previous = { ...previous, blamed: name };
-				save(attemptPath(state, number), previous);
-			}
 			try {
-				if (result?.action === "fixed") {
-					if (entry.repository !== job.plan.repository && !entry.maintainerCanModify)
-						throw new FixerRefusal("fork does not allow maintainer edits");
-					try {
-						importFixer(root, state, job.checkout, `pr-${number}`, head, job.packs);
-					} catch (error) {
-						throw new FixerRefusal(String(error));
-					}
-					// Validate against the base the fixer was given, not the current one: other PRs may
-					// land protected changes while the result waits, and the requeue re-merges anyway.
-					await read(root, ["fetch", "--quiet", "--no-tags", baseRemote(job.plan), job.plan.base.sha]);
-					try {
-						validateFix(root, entry, head, job.plan.base.sha);
-					} catch (error) {
-						throw new FixerRefusal(String(error));
-					}
-				}
+				if (result?.action === "fixed")
+					await importFix(root, state, job.plan, entry, job.checkout, job.packs, head, read);
 				if (!job.published.includes(number)) {
 					job.published.push(number);
 					save(path, job);
 				}
-				if (result?.action === "fixed" && current !== head) {
-					const pushed = await push(
-						root,
-						`https://github.com/${entry.repository}.git`,
-						entry.head,
-						head,
-						`refs/heads/${entry.branch}`,
-						token,
-					);
-					if (pushed.status !== 0) {
-						// GitHub refuses an App's push of a workflow change it lacks the permission for, and a
-						// fork's branch rules may refuse any. The maintainer's own push may still pass.
-						try {
-							const ready = resolution(root, entry.head, job.plan.base.sha, head);
-							if (ready) (job.resolutions ??= {})[number] = ready;
-						} catch (error) {
-							deps.warn(`quest land fixer: cannot hand back #${number}'s resolution: ${String(error)}`);
-						}
-						throw new FixerRefusal(`fixer push refused: ${pushed.stderr.trim()}`);
-					}
-				}
-
 				if (result?.action === "fixed") {
-					// GitHub shows a push a moment later. Wait for our own head; only a third head is a real move.
-					let latest = object(await (await github.request(pullPath)).json());
-					for (let wait = 0; object(latest.head).sha === entry.head && wait < SYNC_PAUSES; wait++) {
-						await github.pause(1000);
-						latest = object(await (await github.request(pullPath)).json());
+					try {
+						// The fix descends from the pin, not from a gate merge the PR stands at: it replaces that
+						// merge, as the gate replaces its own, since building on it would revert the newer base it
+						// merged. The lease still refuses any writer's commit.
+						await publishHead(github, root, job.plan, entry, standing, current, head, deps, token, {
+							reason: result.reason,
+							attribution: author(result),
+						});
+					} catch (failure) {
+						if (failure instanceof FixerRefusal && failure.resolution)
+							(job.resolutions ??= {})[number] = failure.resolution;
+						throw failure;
 					}
-					if (object(latest.head).sha !== head) throw new FixerRefusal("head moved before Review update");
-					await github.request(pullPath, {
-						method: "PATCH",
-						body: {
-							body: review(
-								typeof latest.body === "string" ? latest.body : "",
-								head,
-								result.reason,
-								author(result),
-							),
-						},
-					});
 				}
 
 				// A parked PR requeued unchanged is still queued as it was; anything else is pinned anew.
 				if (queuedAs !== entry.enabledAt || head !== entry.head) {
 					// Save intent before enabling, so a lost response can be reconciled after restart.
-					save(attemptPath(state, number), { ...previous, ...actor, head });
+					save(historyPath(state, number), { ...previous, ...actor, head });
 					await enqueue(github, entry.id, head);
 					const enabled = await github.graphql(
 						"query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }",
 						{ id: entry.id },
 					);
 					const enabledAt = string(object(object(enabled.node).autoMergeRequest).enabledAt);
-					save(attemptPath(state, number), { ...previous, ...actor, head, requeued: enabledAt });
+					save(historyPath(state, number), { ...previous, ...actor, head, requeued: enabledAt });
 				}
 			} catch (failure) {
 				if (!(failure instanceof FixerRefusal)) throw failure;
@@ -850,16 +1026,13 @@ async function collectJob(
 				"note",
 				author(result),
 			);
-		if (!error && result?.action !== "handback") {
-			// A PR that stayed queued needs no comment: its own fix, if any, is recorded in `## Review`.
-			await github.request(`/repos/${job.plan.repository}/issues/${number}/labels`, {
-				body: { labels: [MERGE_LABEL] },
-			});
-		}
 
 		const handback = error !== undefined || result?.action === "handback";
-		if (handback && blamed && !error && previous.blamed !== name)
-			save(attemptPath(state, number), { ...previous, blamed: name });
+		// A refused fix or requeue ends the round in a handback after all.
+		if (handback && round && round.outcome !== "handback") {
+			const { after: _, ...rest } = round;
+			saveRound(state, number, history(state, number)!, { ...rest, outcome: "handback" });
+		}
 		if (error) {
 			// Before leaving the queue, so a restart keeps this reason rather than finding it left.
 			job.handbacks ??= {};
@@ -875,15 +1048,12 @@ async function collectJob(
 				job.left = [...(job.left ?? []), number];
 				save(path, job);
 			}
-			if (ours)
+			// A closed PR is out of the queue already, and GitHub refuses to disable its auto-merge.
+			if (ours && pull.state === "open")
 				await github.graphql(
 					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 					{ id: entry.id },
 				);
-			await github.request(
-				`/repos/${job.plan.repository}/issues/${number}/labels/${encodeURIComponent(MERGE_LABEL)}`,
-				{ method: "DELETE", allow: [404] },
-			);
 		}
 
 		if (handback)

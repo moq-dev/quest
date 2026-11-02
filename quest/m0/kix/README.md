@@ -78,8 +78,7 @@ operator-paid-hosting decisions:
   explicit choice and the repository's checks and protections.
 - **A real GitHub App bot.** The service publishes as its App identity and
   keeps GitHub credentials off runners. It pushes job branches to the
-  enrolled repository itself, with no service forks (decided 2026-10-27,
-  user, in [Upstream branches](/quest/m0/kix/upstream-branches.md)).
+  enrolled repository itself, with no service forks (decided 2026-10-27, user).
 - **Read-only CI, signed trust** (decided 2026-10-28, user, trust audit).
   Enrolled repositories keep pull-request CI read-only instead of kix
   shielding CI behind forks or per-push gates. Host trust comes from
@@ -100,8 +99,8 @@ operator-paid-hosting decisions:
   decision items. There is no plugin or session mirroring.
 - **One owner per quest and PR** (decided 2026-10-20 from a transcript
   audit, see [quest start](https://github.com/moq-dev/quest/blob/d265755/quest/m0/helpers/start.md)). Claims are draft
-  PRs. A PR is owned while it is a draft without a `## Decisions needed`
-  section or carries one `quest:*` state label, shared with local sessions. There is no repository-wide merge agent and no user-facing
+  PRs. A PR is owned while it is a draft without a `## Waiting` (or older
+  `## Decisions needed`) section or carries one `quest:*` state label, shared with local sessions. There is no repository-wide merge agent and no user-facing
   parallelism limit; runner slots and account quota cap it.
 - **Independent core.** Keep provider, GitHub, Cloudflare, and UI behavior
   outside the pure quest core. The standalone CLI and versioned quest
@@ -134,11 +133,10 @@ fixes what it finds:
 ## Required
 
 - [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the operator registers the App and deploys the Worker with GitHub sign-in at quest.moq.dev
-- [Upstream branches](/quest/m0/kix/upstream-branches.md) - jobs publish on the enrolled repository itself, with no service forks
 - [Owner allowlist](/quest/m0/kix/owners.md) - only moq-dev may enroll until the public release
 - [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/moq and moq-dev/quest
 - [Private repositories](/quest/m0/kix/private.md) - moq-dev/moq.pro enrolls, visible only to signed-in users who can read it
 - [Job sandbox](/quest/m0/kix/sandbox/README.md) - head approval for kix-pushed heads, and opencode sandboxed
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs
-- [Land review](/quest/m0/kix/land-review.md) - kix lands only heads with a review that counts on that exact head
+- [Merge queue enqueue](/quest/m0/kix/enqueue.md) - kix enqueues ready PRs into a merge queue instead of only arming auto-merge
 - [Runner review checks](/quest/m0/kix/review-check.md) - runners publish the App's `quest review` check, so their heads land without a human approval

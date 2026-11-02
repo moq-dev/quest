@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { GitHub, GitHubDeadline, type GitHubDependencies } from "../src/cli/github";
+import { GitHub, GitHubDeadline, type GitHubDependencies, GitHubGraphQLError } from "../src/cli/github";
 
 const repo = "/repos/example/project";
 const HEAD = "a".repeat(40);
@@ -324,6 +324,7 @@ describe("GraphQL", () => {
 	test.each([
 		["mergePullRequest", { merged: true }],
 		["enablePullRequestAutoMerge", { merged: false, autoMergeRequest: null, mergeQueueEntry: { state: "QUEUED" } }],
+		["enqueuePullRequest", { merged: false, mergeQueueEntry: { state: "QUEUED" } }],
 		["markPullRequestReadyForReview", { isDraft: false }],
 	])("%s is confirmed from the pull request at its pinned head", async (mutation, node) => {
 		const query = `mutation($id: ID!, $sha: GitObjectID!) { ${mutation}(input: { pullRequestId: $id, expectedHeadOid: $sha }) { clientMutationId } }`;
@@ -377,10 +378,15 @@ describe("GraphQL", () => {
 	});
 
 	test("other GraphQL errors fail without waiting", async () => {
-		const { github, sleeps } = fixture([json({ errors: [{ type: "NOT_FOUND", message: "Not Found" }] })]);
-		await expect(github.graphql("query { viewer { login } }", {})).rejects.toThrow(
-			"GitHub GraphQL error: Not Found",
-		);
+		const { github, sleeps } = fixture([
+			json({ errors: [{ type: "NOT_FOUND", message: "Not Found" }, { message: "Not mergeable" }] }),
+		]);
+		const error = await github.graphql("query { viewer { login } }", {}).catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(GitHubGraphQLError);
+		expect(error).toMatchObject({
+			message: "GitHub GraphQL error: Not Found; Not mergeable",
+			types: ["NOT_FOUND", undefined],
+		});
 		expect(sleeps).toEqual([]);
 	});
 
