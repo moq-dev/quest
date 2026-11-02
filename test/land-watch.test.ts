@@ -156,13 +156,19 @@ function deps(world: World): GitHubDependencies {
 			}
 			const jobs = /^\/repos\/upstream\/project\/actions\/runs\/(\d+)\/jobs$/.exec(path);
 			if (jobs) {
+				// Two jobs a page, so a failing job past the first page is read only by following its link.
 				const run = world.runs.find((item) => item.id === Number(jobs[1]))!;
-				return Response.json({
-					jobs: run.jobs.map(({ log: _, ...job }) => ({
-						...job,
-						html_url: `https://github.com/upstream/project/actions/runs/${run.id}/job/${job.id}`,
-					})),
-				});
+				const page = Number(url.searchParams.get("page") ?? 1);
+				const more = run.jobs.length > page * 2;
+				return Response.json(
+					{
+						jobs: run.jobs.slice((page - 1) * 2, page * 2).map(({ log: _, ...job }) => ({
+							...job,
+							html_url: `https://github.com/upstream/project/actions/runs/${run.id}/job/${job.id}`,
+						})),
+					},
+					more ? { headers: { Link: `<https://api.github.com${path}?page=${page + 1}>; rel="next"` } } : {},
+				);
 			}
 			const logs = /^\/repos\/upstream\/project\/actions\/jobs\/(\d+)\/logs$/.exec(path);
 			if (logs) {
@@ -192,6 +198,8 @@ const failedRun = (number: number, created: string): Run => ({
 	created_at: created,
 	conclusion: "failure",
 	jobs: [
+		{ id: 68, name: "fmt", status: "completed", conclusion: "success", log: "fine" },
+		{ id: 69, name: "build", status: "completed", conclusion: "skipped", log: "fine" },
 		{ id: 70, name: "lint", status: "completed", conclusion: "success", log: "fine" },
 		{
 			id: 71,
@@ -300,6 +308,33 @@ test("a restart neither repeats nor misses a removal", async () => {
 	expect(github.comments[3]).toHaveLength(3);
 });
 
+test("a removal GitHub shows late, after a newer one, is still handled once", async () => {
+	const state = tempDir();
+	const pull: Pull = {
+		number: 11,
+		head: HEAD,
+		enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+		removals: [{ id: "R2", createdAt: at(5), reason: "merge_conflict", actor: "github-merge-queue", before: null }],
+	};
+	const github = world([pull]);
+	github.now = Date.parse(at(6));
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual(["removed 11 merge_conflict fix"]);
+	pull.removals.unshift({ id: "R1", createdAt: at(3), reason: "manual", actor: "maintainer" });
+	github.now = Date.parse(at(7));
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual(["removed 11 manual removed"]);
+	// The record keeps the newer removal.
+	expect(readRemoval(state, 11)).toMatchObject({ event: "R2" });
+	github.now = Date.parse(at(8));
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.comments[11]).toHaveLength(2);
+	// Once a removal is out of every later pass's window, it is forgotten.
+	github.now = Date.parse(at(5)) + SETTLE + 2 * 60_000;
+	await watchPass(REPOSITORY, { state }, deps(github));
+	github.now += 60_000;
+	await watchPass(REPOSITORY, { state }, deps(github));
+	expect(JSON.parse(readFileSync(join(state, "watch.json"), "utf8")).handled).toEqual({});
+});
+
 test("a comment already posted before a crash is not posted again", async () => {
 	const state = tempDir();
 	const github = world([
@@ -363,7 +398,7 @@ test("a push since the removal ends the pick, and merges and the App's own remov
 test("a failed build with no failing job found, or a job with no log, still comments", async () => {
 	const state = tempDir();
 	const run = failedRun(9, at(3));
-	delete run.jobs[1].log;
+	delete run.jobs.find((job) => job.name === "test")!.log;
 	const github = world(
 		[
 			{

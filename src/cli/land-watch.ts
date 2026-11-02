@@ -83,8 +83,11 @@ export interface Removal {
 interface Progress {
 	/** The start of the last complete pass; each pass reads the removals since `SETTLE` before it. */
 	since: string;
-	/** Per open PR: its latest handled removal's time, and every removal handled at that time. */
-	handled: Record<number, { at: string; ids: string[] }>;
+	/**
+	 * Per open PR, each removal handled that a pass may still read, by event ID to its time. GitHub can
+	 * show a removal late, after a newer one, so each is remembered by ID until it falls out of the window.
+	 */
+	handled: Record<number, Record<string, string>>;
 }
 
 /** How far back of the last pass each pass reads again, for an event GitHub shows late. */
@@ -181,6 +184,17 @@ function cleanLog(text: string): string {
 	return redactTokens(text.replace(/^\uFEFF/, "").replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z /gm, ""));
 }
 
+/** Every page of an Actions listing, whose rows are the response's `field`. */
+async function listed(github: GitHub, path: string, field: string): Promise<ObjectValue[]> {
+	const rows: ObjectValue[] = [];
+	for (let next: string | undefined = path; next;) {
+		const response = await github.request(next);
+		rows.push(...array(object(await response.json())[field]));
+		next = link(response, "next");
+	}
+	return rows;
+}
+
 /**
  * The failing jobs of the PR's last `merge_group` build before `at`, and their logs. At build
  * concurrency 1 a merge group holds only this PR on the base, so its failure is the PR's own. The
@@ -196,35 +210,22 @@ async function failedBuild(
 	timedOut: boolean,
 ): Promise<{ jobs: (FailedJob & { log: string })[]; base?: string }> {
 	const prefix = `gh-readonly-queue/${base}/pr-${number}-`;
-	const runs: ObjectValue[] = [];
 	const created = encodeURIComponent(`${from}..${at}`);
-	for (
-		let next: string | undefined =
-			`/repos/${repository}/actions/runs?event=merge_group&created=${created}&per_page=100`;
-		next;
-	) {
-		const response = await github.request(next);
-		runs.push(
-			...array(object(await response.json()).workflow_runs).filter(
-				(run) => string(run.head_branch).startsWith(prefix) && string(run.created_at) <= at,
-			),
-		);
-		next = link(response, "next");
-	}
+	const runs = (
+		await listed(
+			github,
+			`/repos/${repository}/actions/runs?event=merge_group&created=${created}&per_page=100`,
+			"workflow_runs",
+		)
+	).filter((run) => string(run.head_branch).startsWith(prefix) && string(run.created_at) <= at);
 	runs.sort((a, b) => string(a.created_at).localeCompare(string(b.created_at)));
 	const last = runs.at(-1);
 	if (!last) return { jobs: [] };
 	const group = string(last.head_branch);
 	const jobs: (FailedJob & { log: string })[] = [];
 	for (const run of runs.filter((item) => item.head_sha === last.head_sha)) {
-		const listing = object(
-			await (
-				await github.request(
-					`/repos/${repository}/actions/runs/${Number(run.id)}/jobs?filter=latest&per_page=100`,
-				)
-			).json(),
-		);
-		for (const job of array(listing.jobs)) {
+		const path = `/repos/${repository}/actions/runs/${Number(run.id)}/jobs?filter=latest&per_page=100`;
+		for (const job of await listed(github, path, "jobs")) {
 			const conclusion = typeof job.conclusion === "string" ? job.conclusion : null;
 			const running = job.status !== "completed";
 			if (!(conclusion !== null && FAILED.includes(conclusion)) && !(timedOut && running)) continue;
@@ -414,7 +415,8 @@ async function handle(
 				}
 			: {}),
 	};
-	save(join(state, `removal-${number}.json`), removal);
+	// A removal GitHub showed late never replaces the record of a newer one.
+	if ((readRemoval(state, number)?.at ?? "") <= at) save(join(state, `removal-${number}.json`), removal);
 	return `removed ${number} ${reason} ${verdict}`;
 }
 
@@ -489,16 +491,20 @@ export async function watchPass(
 		for (const event of await removalsOf(github, pull, since)) {
 			const at = string(event.createdAt);
 			const id = string(event.id);
-			const handled = progress.handled[number];
-			if (handled && (at < handled.at || (at === handled.at && handled.ids.includes(id)))) continue;
+			const handled = (progress.handled[number] ??= {});
+			if (id in handled) continue;
 			const line = await handle(github, name, { ref, sha: sha! }, options.state, app, pull, event);
 			if (line) output.push(line);
-			progress.handled[number] = handled?.at === at ? { at, ids: [...handled.ids, id] } : { at, ids: [id] };
+			handled[id] = at;
 			save(path, progress);
 		}
 	}
-	for (const number of Object.keys(progress.handled).map(Number))
-		if (!open.has(number)) delete progress.handled[number];
+	// The next pass reads from SETTLE before this one's start; nothing older can come back.
+	const kept = new Date(Date.parse(started) - SETTLE).toISOString();
+	for (const [number, handled] of Object.entries(progress.handled)) {
+		for (const [id, at] of Object.entries(handled)) if (at < kept) delete handled[id];
+		if (!open.has(Number(number)) || Object.keys(handled).length === 0) delete progress.handled[Number(number)];
+	}
 	progress.since = started;
 	save(path, progress);
 	return output;
