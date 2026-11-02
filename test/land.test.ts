@@ -2222,7 +2222,7 @@ mv '${result}.new' '${result}'
 	test("holds one OS lock per checkout and releases it", async () => {
 		const lock = join(tempDir(), "lock");
 		const release = await lockCheckout(lock);
-		await expect(lockCheckout(lock)).rejects.toThrow("another quest land serve");
+		await expect(lockCheckout(lock)).rejects.toThrow("another quest land daemon");
 		release();
 	});
 
@@ -2233,7 +2233,7 @@ mv '${result}.new' '${result}'
 		git(root, "worktree", "add", "--detach", linked, "HEAD");
 		const release = await lockRepository(root);
 		try {
-			await expect(lockRepository(linked)).rejects.toThrow("another quest land serve");
+			await expect(lockRepository(linked)).rejects.toThrow("another quest land daemon");
 		} finally {
 			release();
 		}

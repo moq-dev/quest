@@ -101,7 +101,7 @@ Decision prompts, selected options marked ✅:
   [community#50327](https://github.com/orgs/community/discussions/50327)).
   /quest-merge already refuses heads with failing checks or conflicts, so a
   refusal only happens if the base moves between that check and the enqueue.
-  See [Queue removals](/quest/m0/queue-watcher/removals.md) and
+  See `quest land watch` (`src/cli/land-watch.ts`) and
   [Bad picks](/quest/m0/queue-watcher/bad-picks.md).
 - Milestone:
   - ✅ m0, at the top
@@ -130,7 +130,6 @@ Shared shape, for the children to follow:
 
 ## Required
 
-- [Queue removals](/quest/m0/queue-watcher/removals.md) - the watcher sees each PR the queue drops, why, and the failing build's log
 - [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - the fixer runs on each dropped PR in the background, and the watcher re-enqueues it at the back
 - [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - a pick whose auto-merge is armed on a ready PR GitHub never queued is enqueued at the head it was armed on
 - [Flaky failures](/quest/m0/queue-watcher/flaky.md) - a flaky failure is re-enqueued unchanged, and a test seen flaking twice is disabled in a separate PR with a follow-up quest

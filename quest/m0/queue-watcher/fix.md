@@ -15,6 +15,13 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 [epic](/quest/m0/queue-watcher/README.md)): re-enqueue at the back, and keep
 going while each round makes progress.
 
+- Start from what `quest land watch` (`src/cli/land-watch.ts`) records for
+  each removal in its state directory, `removal-<number>.json` (`readRemoval`):
+  a `fix` verdict carries `failure`, a `Failure` with the PR as its one entry
+  (keyed by the pick's enqueue time), the dropped head, the base the
+  `merge_group` build was built on, and the full log, ready for
+  `startFixer`; `jobs` names each failing job and step. Its comment says
+  nothing yet of the fixer; say there that it runs.
 - Reuse the host gate's fixer: `startFixer`, the detached supervisor, and
   `collectFixers` in `src/cli/land-fixer.ts`, the `qland-fix` container and
   its launcher, `validateFix`, the ready-commit handback for
@@ -43,7 +50,3 @@ going while each round makes progress.
   job and step of the `merge_group` run; a conflict's is `conflictFailure`
   of the base it conflicted with. A rule's handback posts `stopReason`.
   Flaky handling is [Flaky failures](/quest/m0/queue-watcher/flaky.md).
-
-## Required
-
-- [Queue removals](/quest/m0/queue-watcher/removals.md) - the removals and logs this acts on
