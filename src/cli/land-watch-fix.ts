@@ -73,6 +73,8 @@ interface WatchJob extends Process {
 	published?: string;
 	/** The head being put back in the queue, recorded before asking GitHub, so a restart finds its own request. */
 	requeuing?: string;
+	/** How GitHub took the head back, once it did: the round succeeded, and only its comments may remain. */
+	requeued?: Requeue;
 	/** Why the round ended in a handback, recorded before posting it, so a restart keeps the reason. */
 	handback?: string;
 	/** A validated fix whose push GitHub refused, handed back for `quest land apply`. */
@@ -194,6 +196,11 @@ async function collectAll(
 		try {
 			output.push(...(await collect(github, state, path, job, context, deps)));
 		} catch (error) {
+			// A round already back in the queue never becomes a handback: only its comments are retried.
+			if (job.requeued) {
+				deps.warn(`quest land watch: comments pending for ${name}: ${String(error)}`);
+				continue;
+			}
 			// Keep the first reason: a GitHub error while handing back a crash must not replace the crash.
 			job.handback ??= `fixer collection failed: ${String(error)}`;
 			try {
@@ -372,9 +379,6 @@ async function collect(
 	const name = basename(path);
 	const result = job.result;
 	const head = result?.action === "fixed" ? result.head : entry.head;
-	const pull = await readPull(github, entry.id);
-	const current = string(pull.headRefOid);
-	const record = history(state, number);
 	const attribution = author(result);
 	const plan = { repository: job.repository };
 	const marked = { number, enabledAt: entry.enabledAt };
@@ -390,6 +394,26 @@ async function collect(
 				attribution,
 			);
 	};
+	// Say how the round went back to the queue, once GitHub took it.
+	const announce = async (requeued: Requeue, result: FixResult): Promise<string[]> => {
+		await note();
+		const what = job.merged
+			? `with ${job.base.ref} at ${job.base.sha} merged in by the quest merge driver`
+			: result.action === "fixed"
+				? `with the land fixer's fix (${fixerText(attribution)}): ${fixerText(result.reason)}`
+				: `unchanged, since the land fixer judged the failure flaky: ${fixerText(result.failure ?? ("reason" in result ? result.reason : ""))}`;
+		const how =
+			requeued === "armed"
+				? `armed auto-merge on this pull request at ${head}, so it joins the back of the merge queue once its required checks pass`
+				: `re-enqueued this pull request at ${head}, at the back of the merge queue`;
+		await post(github, plan, marked, `quest land watch: ${how}, ${what}.`, `requeued ${name}`, MERGER);
+		finish(path, job);
+		return [`requeued ${number} ${head}`];
+	};
+	if (job.requeued && result) return announce(job.requeued, result);
+	const pull = await readPull(github, entry.id);
+	const current = string(pull.headRefOid);
+	const record = history(state, number);
 
 	if (pull.state !== "OPEN") {
 		finish(path, job);
@@ -430,7 +454,6 @@ async function collect(
 
 	let handback = job.handback ?? job.error;
 	let round: Round | undefined;
-	let requeued: Requeue | undefined;
 	const conflict = job.reason === "merge_conflict";
 	const failure = conflict || !result ? job.failure : (result.failure ?? job.failure);
 	if (!handback && result) {
@@ -476,7 +499,8 @@ async function collect(
 				job.requeuing = head;
 				save(path, job);
 			}
-			requeued = await requeue(github, entry.id, head, job.dropped);
+			job.requeued = await requeue(github, entry.id, head, job.dropped);
+			save(path, job);
 		} catch (failure) {
 			if (!(failure instanceof FixerRefusal)) throw failure;
 			handback = failure.message;
@@ -484,49 +508,37 @@ async function collect(
 		}
 	}
 
+	if (job.requeued && result) return announce(job.requeued, result);
+	// Anything else is a handback.
 	await note();
-	if (handback || !result || result.action === "handback") {
-		// Every handback ends the pick with a round of its own, a crash's or a timeout's too, so the App's
-		// next enqueue of a head this pick put back starts a new pick.
-		if (round?.outcome !== "handback") {
-			const { after: _, ...rest } = round ?? { job: name, before: entry.head, failure };
-			saveRound(state, number, history(state, number)!, { ...rest, outcome: "handback" });
-		}
-		if (handback) {
-			job.handback = handback;
-			save(path, job);
-		}
-		// The marker `quest status` reads for why the PR stopped landing.
-		await comment(
-			github,
-			plan,
-			marked,
-			handback
-				? `${handback.slice(0, 300)}. Recommendation: run /quest-iterate before picking it again.`
-				: result?.action === "handback"
-					? `${result.diagnosis.slice(0, 200)}. Recommendation: ${result.recommendation.slice(0, 200)}`
-					: "missing result; run /quest-iterate",
-			`handback ${name}`,
-			attribution,
-			!handback && result?.action === "handback" && result.log ? cited(job.log, result.log) : fixerLog(path),
-			job.reason,
-			job.resolution ? (room) => resolutionSection(number, job.resolution!, room) : undefined,
-		);
-		finish(path, job);
-		return [`handback ${number}`];
+	// Every handback ends the pick with a round of its own, a crash's or a timeout's too, so the App's
+	// next enqueue of a head this pick put back starts a new pick.
+	if (round?.outcome !== "handback") {
+		const { after: _, ...rest } = round ?? { job: name, before: entry.head, failure };
+		saveRound(state, number, history(state, number)!, { ...rest, outcome: "handback" });
 	}
-	const what = job.merged
-		? `with ${job.base.ref} at ${job.base.sha} merged in by the quest merge driver`
-		: result.action === "fixed"
-			? `with the land fixer's fix (${fixerText(attribution)}): ${fixerText(result.reason)}`
-			: `unchanged, since the land fixer judged the failure flaky: ${fixerText(result.failure ?? result.reason)}`;
-	const how =
-		requeued === "armed"
-			? `armed auto-merge on this pull request at ${head}, so it joins the back of the merge queue once its required checks pass`
-			: `re-enqueued this pull request at ${head}, at the back of the merge queue`;
-	await post(github, plan, marked, `quest land watch: ${how}, ${what}.`, `requeued ${name}`, MERGER);
+	if (handback) {
+		job.handback = handback;
+		save(path, job);
+	}
+	// The marker `quest status` reads for why the PR stopped landing.
+	await comment(
+		github,
+		plan,
+		marked,
+		handback
+			? `${handback.slice(0, 300)}. Recommendation: run /quest-iterate before picking it again.`
+			: result?.action === "handback"
+				? `${result.diagnosis.slice(0, 200)}. Recommendation: ${result.recommendation.slice(0, 200)}`
+				: "missing result; run /quest-iterate",
+		`handback ${name}`,
+		attribution,
+		!handback && result?.action === "handback" && result.log ? cited(job.log, result.log) : fixerLog(path),
+		job.reason,
+		job.resolution ? (room) => resolutionSection(number, job.resolution!, room) : undefined,
+	);
 	finish(path, job);
-	return [`requeued ${number} ${head}`];
+	return [`handback ${number}`];
 }
 
 /** How `head` went back: enqueued, or armed to join the queue once its required checks pass. */

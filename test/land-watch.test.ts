@@ -82,6 +82,8 @@ interface World {
 	now: number;
 	/** The upstream repository that holds each PR's branch, `branch-<number>`. */
 	origin?: string;
+	/** A comment GitHub refuses to post, once. */
+	refuse?: (body: string) => boolean;
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -255,6 +257,10 @@ function deps(world: World): GitHubDependencies {
 				const list = (world.comments[Number(comments[1])] ??= []);
 				if (init?.method === "POST") {
 					const comment = { user: { login: `${APP}[bot]` }, body: JSON.parse(String(init.body)).body };
+					if (world.refuse?.(comment.body)) {
+						world.refuse = undefined;
+						return Response.json({ message: "refused" }, { status: 422 });
+					}
 					list.push(comment);
 					return Response.json(comment, { status: 201 });
 				}
@@ -734,6 +740,10 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(fix.calls()).toEqual([`high ${readRemoval(state, 5)!.log} 5`]);
 
 		github.now = Date.parse(at(10));
+		// GitHub takes the head back, then refuses the outcome comment once: the round stays requeued, and
+		// only its comment is retried.
+		github.refuse = (body) => body.includes("re-enqueued this pull request");
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 		const [line] = await watchPass(REPOSITORY, { state }, deps(github), context);
 		const fixed = git(repo.origin, "rev-parse", "refs/heads/branch-5");
 		expect(line).toBe(`requeued 5 ${fixed}`);
