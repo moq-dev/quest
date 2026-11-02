@@ -4,7 +4,8 @@
 
 The nixos fixer container reaches CLIProxyAPI with the gate's client key, while
 Codex login and Git/GitHub credentials stay outside the container. Verify a real
-mechanical fix and unchanged requeue through the host daemon.
+mechanical fix and unchanged requeue through the
+[queue watcher](/quest/m0/queue-watcher/README.md) or the host daemon.
 
 ## Plan
 
@@ -23,7 +24,8 @@ back for them.
 - ✅ Keep as decided
 
 The quest CLI implements `quest land fix`, durable collection, validation,
-lease-pushes, Review records, and one attempt per maintainer pick. Host work
+lease-pushes, Review records, and the stop rules that end a pick's fixer
+rounds (`stopRule` in `src/cli/land-fixer.ts`). Host work
 remains in kixelated/nixos: the ephemeral fixer container (`qland-fix`) reaches
 CLIProxyAPI and, like the check containers, the public internet without private
 ranges (`modules/ci-egress.nix`), so its builds fetch dependencies;

@@ -2,8 +2,9 @@
 // GitHub credential, and the daemon posts the comments it writes into its result.
 import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import prompt from "../../assets/land-fix.md";
+import { programEnvironment, requireProgram } from "./program";
 
 export class FixerAgentError extends Error {
 	constructor(readonly exitCode: number) {
@@ -24,13 +25,16 @@ export function readFixResult(root: string): string {
 }
 /** The longest Markdown comment a result may ask the daemon to post on its PR. */
 export const COMMENT_LIMIT = 4000;
+/** The longest failure signature a result may name, short enough to quote in a handback. */
+const FAILURE_LIMIT = 200;
 
 /**
  * The fixer's verdict on one PR. `blame` names a PR whose own change caused the failure; a blamed PR
  * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
- * to last, that show the failure, which its comment quotes.
+ * to last, that show the failure, which its comment quotes. `failure` names the failing test or step,
+ * the signature the stop rules compare across a pick's rounds.
  */
-export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string } & (
+export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string; failure?: string } & (
 	| { number: number; action: "requeue"; reason: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
@@ -84,6 +88,16 @@ function validate(item: any, pr: boolean): void {
 		)
 			throw new Error("invalid fixer log lines");
 		metadata.push("log");
+	}
+	if (pr && "failure" in item) {
+		if (
+			typeof item.failure !== "string" ||
+			!item.failure.trim() ||
+			item.failure.length > FAILURE_LIMIT ||
+			/[\u0000-\u001f\u007f]/.test(item.failure)
+		)
+			throw new Error("invalid fixer failure");
+		metadata.push("failure");
 	}
 	// One optional Markdown comment per PR: multiline, but no other control characters.
 	if (pr && "comment" in item) {
@@ -165,9 +179,12 @@ export async function fix(
 		if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error(`fix needs a ${ref} branch`);
 		return `- #${number}: branch ${ref} at ${head}`;
 	});
+	// The agent runs in the PRs' checkout, so neither it nor its commands are found there: a name is
+	// looked up in PATH's absolute directories, and a path is resolved here rather than in the checkout.
+	const program = agent.includes("/") ? resolve(agent) : requireProgram(agent, process.env);
 	rmSync(join(root, FIX_RESULT), { force: true });
 	const env: NodeJS.ProcessEnv = {
-		PATH: process.env.PATH,
+		...programEnvironment({ PATH: process.env.PATH }),
 		HOME: process.env.HOME,
 		LANG: "C.UTF-8",
 		OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
@@ -207,7 +224,7 @@ export async function fix(
 		// Relay the agent's output through pipes of its own rather than letting it inherit ours. Once Bun writes
 		// to a pipe it marks that pipe non-blocking, and an inheriting child shares the flag: Codex then panicked
 		// (exit 101) with EAGAIN as soon as one command's output outran the host's reader.
-		const child = spawn(agent, argv, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(program, argv, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
 		child.stdout.pipe(process.stdout, { end: false });
 		child.stderr.pipe(process.stderr, { end: false });
 		child.once("error", reject);
