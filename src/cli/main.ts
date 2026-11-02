@@ -480,12 +480,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("merge")
 		.summary("Land a PR's reviewed head")
 		.description(
-			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, which enters the " +
-				"base's merge queue when it has one, or merge at once when nothing is left to wait for. It takes no " +
-				"label: the auto-merge it enables is the queue signal. It refuses while a session holds the PR, so " +
-				"release your own hold first, and once the head has moved. It uses the method --squash or " +
-				"--rebase names, refusing one the repository disallows; otherwise the only method the repository " +
-				"allows, or else a merge commit. A merge queue applies its own. On a base " +
+			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, or merge at " +
+				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
+				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
+				"first, and once the head has moved. It uses the method --squash or --rebase names, refusing one " +
+				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
+				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
+				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
+				"is, and a head GitHub refuses to enqueue fails, to be fixed and landed again. On a base " +
 				`that requires the \`${LAND_CHECK}\` check, it queues the PR for \`quest land\` instead: squash ` +
 				"auto-merge whose commit body pins the head. On an ungated base with auto-merge disabled, it refuses " +
 				"unless --direct is passed. Follow the repository landing instructions in CONTRIBUTING.md or " +
@@ -833,7 +835,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Review the checkout's committed branch against its base with the other harness: Codex when run from " +
 				"Claude Code, Claude Code when run from Codex, detected from the variables each sets. --harness names " +
-				"the reviewer instead; there is no other fallback. The reviewer uses its CLI's own login, " +
+				"the reviewer instead; there is no other fallback. The reviewer uses its CLI's own stored login or, " +
+				"without one, the credential it reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or " +
+				"CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY for Codex) unless a stripped ANTHROPIC_BASE_URL or " +
+				"CLAUDE_CODE_USE_BEDROCK, _VERTEX, or _FOUNDRY would send it elsewhere. A logged-out error names the " +
+				"profile it checked, CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset. It runs " +
 				`with ${models}. --model and --effort override them.\n\n` +
 				"The first round runs the reviewer's own review (`codex exec review --base`, or Claude Code's " +
 				"`/code-review <effort> <base>...HEAD`), then resumes that session for one turn that applies the base's " +
@@ -849,7 +855,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Prints the reviewer, model, and effort, session, round, base, head, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), the finding count, then each finding. --json prints " +
 				"the same as one object. Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
-				"or a checkout or CLI that cannot be reviewed, and 1 for other failures.",
+				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, and 1 for other failures.",
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
 		.addOption(new Option("--harness <name>", "Reviewer to run instead of the other harness").choices(HARNESSES))

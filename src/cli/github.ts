@@ -33,6 +33,16 @@ export class GitHubDeadline extends Error {
 	}
 }
 
+/** GitHub answered a GraphQL operation with errors; `types` are their types, `undefined` for an untyped one. */
+export class GitHubGraphQLError extends Error {
+	constructor(
+		readonly types: (string | undefined)[],
+		messages: string[],
+	) {
+		super(`GitHub GraphQL error: ${messages.join("; ")}`);
+	}
+}
+
 export type ObjectValue = Record<string, unknown>;
 
 /** Retries of a 5xx or a dropped connection, waiting 1, 2, 4, then 8 seconds unless GitHub says how long. */
@@ -424,7 +434,10 @@ export class GitHub {
 			if (body.errors === undefined) return object(body.data);
 			const errors = array(body.errors);
 			if (!errors.some((error) => error.type === "RATE_LIMITED"))
-				throw new Error(`GitHub GraphQL error: ${errors.map((error) => String(error.message)).join("; ")}`);
+				throw new GitHubGraphQLError(
+					errors.map((error) => (typeof error.type === "string" ? error.type : undefined)),
+					errors.map((error) => String(error.message)),
+				);
 			// GitHub turned the operation away unprocessed, so any operation repeats.
 			await this.waitOut(response.headers, limits, "GitHub GraphQL rate limit persisted");
 		}
@@ -458,6 +471,10 @@ export class GitHub {
  */
 const PULL_MUTATIONS: Record<string, { fields: string; landed(pull: ObjectValue): boolean }> = {
 	mergePullRequest: { fields: "merged", landed: (pull) => pull.merged === true },
+	enqueuePullRequest: {
+		fields: "merged mergeQueueEntry { state }",
+		landed: (pull) => pull.merged === true || pull.mergeQueueEntry != null,
+	},
 	enablePullRequestAutoMerge: {
 		fields: "merged autoMergeRequest { enabledAt } mergeQueueEntry { state }",
 		landed: (pull) => pull.merged === true || pull.autoMergeRequest != null || pull.mergeQueueEntry != null,

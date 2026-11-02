@@ -135,8 +135,9 @@ Decision prompts, selected options marked ✅:
   this epic keeps only the fixer's own quality work. Moved to the watcher:
   the attempt budget (now the stop rules,
   [moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)),
-  local mergeability and CI-failure parking (now
-  [Bad picks](/quest/m0/queue-watcher/bad-picks.md)), and flaky tests (now
+  local mergeability and CI-failure parking (then
+  [Bad picks](/quest/m0/queue-watcher/bad-picks.md), dropped 2026-11-02: a
+  pick GitHub refuses fails `quest merge` instead), and flaky tests (now
   [Flaky failures](/quest/m0/queue-watcher/flaky.md), without the rerun).
   Deleted: the batch quest check, pre-checks, and throughput tuning, which
   only served batches (the fixer cap and reasoning effort moved to
