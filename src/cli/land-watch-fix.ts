@@ -196,9 +196,10 @@ async function collectAll(
 		try {
 			output.push(...(await collect(github, state, path, job, context, deps)));
 		} catch (error) {
-			// A round already back in the queue never becomes a handback: only its comments are retried.
-			if (job.requeued) {
-				deps.warn(`quest land watch: comments pending for ${name}: ${String(error)}`);
+			// Once a round has asked GitHub to take its head back, it may already be in the queue: it never
+			// becomes a handback on an error, and the next pass retries it, which re-enqueues only if needed.
+			if (job.requeuing !== undefined) {
+				deps.warn(`quest land watch: fixer round ${name} pending: ${String(error)}`);
 				continue;
 			}
 			// Keep the first reason: a GitHub error while handing back a crash must not replace the crash.

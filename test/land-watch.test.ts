@@ -84,6 +84,8 @@ interface World {
 	origin?: string;
 	/** A comment GitHub refuses to post, once. */
 	refuse?: (body: string) => boolean;
+	/** A read of a PR's queue state that fails, once. */
+	unreadable?: (pull: Pull) => boolean;
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -155,6 +157,10 @@ function deps(world: World): GitHubDependencies {
 				}
 				if (query.includes("mergeStateStatus")) {
 					const pull = pullOf();
+					if (world.unreadable?.(pull)) {
+						world.unreadable = undefined;
+						return Response.json({ errors: [{ type: "INTERNAL", message: "unavailable" }] });
+					}
 					return Response.json({
 						data: {
 							node: {
@@ -740,8 +746,11 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(fix.calls()).toEqual([`high ${readRemoval(state, 5)!.log} 5`]);
 
 		github.now = Date.parse(at(10));
-		// GitHub takes the head back, then refuses the outcome comment once: the round stays requeued, and
-		// only its comment is retried.
+		// GitHub takes the head back, then fails the read that follows: the round may be in the queue, so it is
+		// retried rather than handed back, and finds its own enqueue.
+		github.unreadable = (pull) => pull.queued !== undefined;
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
+		// Then GitHub refuses the outcome comment once: the round stays requeued, and only its comment is retried.
 		github.refuse = (body) => body.includes("re-enqueued this pull request");
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 		const [line] = await watchPass(REPOSITORY, { state }, deps(github), context);
