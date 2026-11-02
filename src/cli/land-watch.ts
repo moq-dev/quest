@@ -49,7 +49,7 @@ export interface WatchOptions {
  * until a writer enqueues the PR again: a push since the queue dropped it (`pushed`), a person's
  * removal (`removed`), or a reason the watcher does not know (`unrecognized`).
  */
-export type Verdict = "fix" | "pushed" | "removed" | "unrecognized";
+export type Verdict = "fix" | "pushed" | "removed" | "unrecognized" | "unknown";
 
 /** A `merge_group` job that failed, or was still running when its checks timed out. */
 export interface FailedJob {
@@ -327,7 +327,16 @@ const AFTER: Record<Verdict, (current: string, fixing: boolean) => string> = {
 		"\n\nA person's removal ends the pick: the watcher leaves this pull request alone until a maintainer enqueues it again.",
 	unrecognized: () =>
 		"\n\nThe watcher does not recognize this reason, so it leaves this pull request alone until a maintainer enqueues it again.",
+	unknown: () =>
+		"\n\nThe watcher cannot tell which head entered the queue, since GitHub has not listed the head branch's pushes or the watcher cannot read them, so it leaves this pull request alone until a maintainer enqueues it again.",
 };
+
+/**
+ * How long a removal whose enqueued head the push activity cannot tell yet waits for GitHub to list
+ * it (14 s to 6 min observed) before it ends the pick. It stays within `SETTLE`, so every pass until
+ * then reads the removal again.
+ */
+const UNLISTED = SETTLE - 2 * 60_000;
 
 /**
  * Handle one removal: classify it, fetch a failed build's logs, comment on the PR once (a retry
@@ -344,7 +353,8 @@ async function handle(
 	pull: ObjectValue,
 	event: ObjectValue,
 	note: (text: string) => void,
-): Promise<string | undefined> {
+	now: number,
+): Promise<string | undefined | null> {
 	const reason = string(event.reason).toLowerCase();
 	const actor = login(event.actor);
 	if (reason === "merged" || account(actor) === app) return undefined;
@@ -356,17 +366,21 @@ async function handle(
 	// merge group's own commit, never the PR's head. The enqueue time does not depend on the head.
 	const first = await pickOf(github, string(pull.id), event, current, app, own);
 	const enqueued = first.queued ?? first.pick.at;
-	const head =
-		(await headBefore(github, pull, Date.parse(enqueued), `the head ${number} was enqueued at`, note)) ?? current;
+	const known = await headBefore(github, pull, Date.parse(enqueued), `the head ${number} was enqueued at`, note);
+	// An unknown head never authorizes the fixer: wait for GitHub to list the push, then end the pick.
+	if (known === null && now - Date.parse(at) < UNLISTED) return null;
+	const head = known ?? current;
 	const { pick, queued } = head === current ? first : await pickOf(github, string(pull.id), event, head, app, own);
 	const verdict: Verdict =
-		head !== current
-			? "pushed"
-			: reason === "manual"
-				? "removed"
-				: FIXABLE.includes(reason)
-					? "fix"
-					: "unrecognized";
+		known === null
+			? "unknown"
+			: head !== current
+				? "pushed"
+				: reason === "manual"
+					? "removed"
+					: FIXABLE.includes(reason)
+						? "fix"
+						: "unrecognized";
 	const build =
 		reason === "failed_checks" || reason === "checks_timed_out"
 			? await failedBuild(
@@ -543,7 +557,10 @@ export async function watchPass(
 				pull,
 				event,
 				(text) => output.push(text),
+				deps.now(),
 			);
+			// Not handled yet: a later pass within SETTLE reads it again.
+			if (line === null) continue;
 			if (line) output.push(line);
 			handled[id] = at;
 			save(path, progress);

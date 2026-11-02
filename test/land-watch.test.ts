@@ -90,6 +90,8 @@ interface World {
 	refuse?: (body: string) => boolean;
 	/** A read of a PR's queue state that fails, once. */
 	unreadable?: (pull: Pull) => boolean;
+	/** PRs whose push activity GitHub has not listed yet. */
+	unlisted?: number[];
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -302,7 +304,7 @@ function deps(world: World): GitHubDependencies {
 			const activity = /^\/repos\/upstream\/project\/activity$/.exec(path);
 			if (activity) {
 				const pull = world.pulls.find((item) => `branch-${item.number}` === url.searchParams.get("ref"))!;
-				return Response.json(pushes(world, pull));
+				return Response.json(world.unlisted?.includes(pull.number) ? [] : pushes(world, pull));
 			}
 			throw new Error(`unexpected request: ${path}`);
 		}) as typeof fetch,
@@ -520,6 +522,31 @@ test("a push since the removal ends the pick, and merges and the App's own remov
 	expect(readRemoval(state, 7)).toBeUndefined();
 	expect(github.comments[8][0].body).toContain("because of `queue_cleared`");
 	expect(github.comments[8][0].body).toContain("does not recognize this reason");
+});
+
+test("a removal whose enqueued head GitHub has not listed waits, then ends the pick unfixed", async () => {
+	const state = tempDir();
+	const github = world(
+		[
+			{
+				number: 6,
+				head: HEAD,
+				enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+				removals: [{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue" }],
+			},
+		],
+		[failedRun(6, at(3))],
+	);
+	github.unlisted = [6];
+	github.now = Date.parse(at(6));
+	// Not handled yet: no comment, no record, and the next pass reads it again.
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.comments[6]).toBeUndefined();
+	expect(readRemoval(state, 6)).toBeUndefined();
+	github.now = Date.parse(at(14));
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual(["removed 6 failed_checks unknown"]);
+	expect(github.comments[6][0].body).toContain("cannot tell which head entered the queue");
+	expect(readRemoval(state, 6)!.failure).toBeUndefined();
 });
 
 test("a failed build with no failing job found, or a job with no log, still comments", async () => {
