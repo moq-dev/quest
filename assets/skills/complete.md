@@ -18,7 +18,7 @@ It fixes the PR, reviews it, and marks it ready; ask about the PR again when it 
 A PR with open decisions, such as those its `## Waiting` section lists or a significant issue you would solve differently, goes to the user instead: settle its decisions with the grill skill's rounds, then dispatch `/quest-iterate` with the answers in its brief.
 
 Ask about every other PR synchronously with one question per PR, never grouping PRs into one question (a prompt may hold a few questions), following the guide's Questions section and including your recommendation:
-- `/quest-merge`: Are landable as `/quest-merge` defines it: a review the guide counts on the head, required status checks passed, and every automated review finding on GitHub fixed or refuted.
+- `/quest-merge`: Are landable as `/quest-merge` defines it.
 - skip: Are not ready to be merged yet.
 - `/quest-delete`: Should be deleted.
 
