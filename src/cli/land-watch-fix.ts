@@ -119,6 +119,14 @@ export function requeuedHeads(state: string, number: number): { pick: string; he
 	return { pick: record.pick, heads: record.rounds.flatMap((round) => (round.after ? [round.after] : [])) };
 }
 
+/**
+ * End the pick `pick` of PR `number`, as a writer's push or a person's removal does: its history goes,
+ * so no later App enqueue continues it, and a round still running for it is not applied.
+ */
+export function endPick(state: string, number: number, pick: string): void {
+	if (history(state, number)?.pick === pick) rmSync(historyPath(state, number), { force: true });
+}
+
 /** The failing job and step the watcher found, as a failure's signature when the fixer names none. */
 function jobFailure(removal: Removal): string {
 	const job = removal.jobs[0];
@@ -387,17 +395,22 @@ async function collect(
 		finish(path, job);
 		return [`dropped ${number} closed`];
 	}
-	// The pick ended while the round ran: a writer's push, a writer's new enqueue, or the queue dropping a
-	// newer enqueue of it. Its result is not applied; a head or request this round made is still its own,
-	// and once it asked GitHub to re-enqueue, a later removal is the round's own head dropped again.
-	const ours = job.published !== undefined && current === job.published;
+	// The queue dropped the PR again since. A round that already asked GitHub to re-enqueue its head is
+	// done, as before a restart: that removal is handled on its own, never undone by enqueuing it again.
 	const latest = readRemoval(state, number);
+	const newer = latest !== undefined && latest.at > job.dropped;
+	if (newer && job.requeuing !== undefined) {
+		finish(path, job);
+		return [`requeued ${number} ${job.requeuing}`];
+	}
+	// The pick ended while the round ran: a writer's push, a writer's new enqueue, or the queue dropping a
+	// newer enqueue of it. Its result is not applied; a head or request this round made is still its own.
+	const ours = job.published !== undefined && current === job.published;
 	const ended =
 		current !== entry.head && !ours
 			? `its head moved to ${current} while the fixer ran, and a push by anyone but the land fixer ends the pick`
-			: record?.pick !== entry.enabledAt ||
-				  (job.requeuing === undefined && latest !== undefined && latest.at > job.dropped)
-				? "the pull request was enqueued again, and dropped again, while the fixer ran"
+			: record?.pick !== entry.enabledAt || newer
+				? "the pick it was fixing ended: the pull request was enqueued, or removed, again while the fixer ran"
 				: queued(pull, job.dropped) && !ours && job.requeuing === undefined
 					? "a maintainer enqueued it again while the fixer ran, and that pick stands"
 					: undefined;

@@ -26,7 +26,7 @@ import {
 	save,
 	startDaemon,
 } from "./land-serve";
-import { advanceFixes, type FixContext, readRemoval, requeuedHeads } from "./land-watch-fix";
+import { advanceFixes, endPick, type FixContext, readRemoval, requeuedHeads } from "./land-watch-fix";
 
 export { readRemoval } from "./land-watch-fix";
 
@@ -448,7 +448,11 @@ async function handle(
 			: {}),
 	};
 	// A removal GitHub showed late never replaces the record of a newer one.
-	if ((readRemoval(state, number)?.at ?? "") <= at) save(join(state, `removal-${number}.json`), removal);
+	if ((readRemoval(state, number)?.at ?? "") <= at) {
+		save(join(state, `removal-${number}.json`), removal);
+		// Any other verdict ends the pick: its fixer history goes, so a later enqueue starts afresh.
+		if (verdict !== "fix") endPick(state, number, pick.at);
+	}
 	return `removed ${number} ${reason} ${verdict}`;
 }
 

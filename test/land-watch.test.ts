@@ -1024,7 +1024,7 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(git(repo.origin, "rev-parse", "refs/heads/branch-10")).toBe(again);
 		expect(github.mutations).toEqual([]);
 		expect(github.comments[8].at(-1)!.body).toContain(`its head moved to ${pushed} while the fixer ran`);
-		expect(github.comments[10].at(-1)!.body).toContain("enqueued again, and dropped again, while the fixer ran");
+		expect(github.comments[10].at(-1)!.body).toContain("the pick it was fixing ended");
 		const handback = github.comments[9].at(-1)!.body;
 		expect(handback).toContain(
 			"Codex land fixer: `the test asserts the old behavior. Recommendation: decide which behavior is right`",
@@ -1043,5 +1043,68 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 10 ${again}`]);
 		expect(history(state, 10)!.rounds).toMatchObject([{ outcome: "flaky" }]);
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
+	});
+
+	test("a person's removal ends the pick, even of a round re-enqueued just before a restart", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const head = repo.pull(12, { "Cargo.lock": "bumped\n" });
+		const pull: Pull = {
+			number: 12,
+			head,
+			enqueues: [{ createdAt: at(1), actor: APP }],
+			removals: [
+				{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue", before: head },
+			],
+		};
+		const github = { ...world([pull], [failedRun(12, at(3), base)]), origin: repo.origin };
+		github.now = Date.parse(at(6));
+		fix.round(12, flakyScript);
+		await watchPass(REPOSITORY, { state }, deps(github), context);
+		await exited(state);
+		// The daemon re-enqueued the round's head, then stopped before it finished the job; a maintainer
+		// removed the PR from the queue before it restarted.
+		const [job] = readdirSync(state).filter((name) => /^watch-job-.*\.json$/.test(name));
+		const record = JSON.parse(readFileSync(join(state, job), "utf8"));
+		const result = JSON.parse(readFileSync(join(record.checkout, "quest-land-result.json"), "utf8"))[0];
+		writeFileSync(join(state, job), JSON.stringify({ ...record, result, requeuing: head }));
+		writeFileSync(
+			join(state, "fix-attempt-12.json"),
+			JSON.stringify({
+				pick: at(1),
+				rounds: [{ job, outcome: "flaky", before: head, after: head, failure: "just test: render_timeout" }],
+			}),
+		);
+		pull.enqueues.push({ createdAt: at(7), actor: APP });
+		pull.removals.push({ id: "R2", createdAt: at(8), reason: "manual", actor: "maintainer", before: head });
+		github.now = Date.parse(at(9));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 12 manual removed",
+			`requeued 12 ${head}`,
+		]);
+		// Nothing enqueued it again, and the pick's history is gone with it.
+		expect(github.mutations).toEqual([]);
+		expect(history(state, 12)).toBeUndefined();
+
+		// The workflow's next enqueue of the same head is a new pick, with no flaky rounds behind it.
+		pull.enqueues.push({ createdAt: at(20), actor: APP });
+		pull.removals.push({
+			id: "R3",
+			createdAt: at(25),
+			reason: "failed_checks",
+			actor: "github-merge-queue",
+			before: head,
+		});
+		github.runs.push({ ...failedRun(12, at(23), base), id: 13 });
+		github.now = Date.parse(at(26));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 12 failed_checks fix",
+			"fixing 12",
+		]);
+		expect(readRemoval(state, 12)!.pick).toEqual({ by: `${APP}[bot]`, at: at(20) });
+		expect(history(state, 12)).toEqual({ pick: at(20), rounds: [] });
+		await exited(state);
+		github.now = Date.parse(at(27));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 12 ${head}`]);
 	});
 });
