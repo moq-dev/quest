@@ -44,8 +44,8 @@ jobs:
     name: Queue
     if: github.event_name == 'merge_group'
     runs-on: [self-hosted, quest-queue]
-    # Retain the host check's 60-minute budget, below the queue's 90-minute
-    # response window so a hung job reports before the group expires.
+    # Below the queue's 90-minute response window, so a hung build reports
+    # before the group expires.
     timeout-minutes: 60
     env:
       BASE: ${{ github.event.merge_group.base_sha }}
