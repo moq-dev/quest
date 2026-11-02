@@ -950,11 +950,13 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		await exited(state);
 	});
 
-	test("a pick that ends while the fixer runs is left alone, and the fixer's handback is posted", async () => {
-		const { repo, state, fix, context } = setup();
+	test("a pick that ends while the fixer runs is left alone, and every handback ends the pick", async () => {
+		const { repo, state, fix, context } = setup(4);
 		const base = repo.main();
 		const moved = repo.pull(8, { "feature.txt": "new\n" });
 		const stuck = repo.pull(9, { "other.txt": "new\n" });
+		const again = repo.pull(10, { "again.txt": "new\n" });
+		const crashed = repo.pull(11, { "crash.txt": "new\n" });
 		const removed = (number: number, head: string): Pull => ({
 			number,
 			head,
@@ -969,10 +971,11 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 				},
 			],
 		});
+		const pulls = [removed(8, moved), removed(9, stuck), removed(10, again), removed(11, crashed)];
 		const github = {
 			...world(
-				[removed(8, moved), removed(9, stuck)],
-				[failedRun(8, at(3), base), { ...failedRun(9, at(3), base), id: 9 }],
+				pulls,
+				pulls.map((pull) => ({ ...failedRun(pull.number, at(3), base), id: pull.number })),
 			),
 			origin: repo.origin,
 		};
@@ -982,28 +985,63 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 			9,
 			`printf '[{"number":%s,"action":"handback","diagnosis":"the test asserts the old behavior","recommendation":"decide which behavior is right","log":[1,1]}]' "$2" > quest-land-result.json\n`,
 		);
+		fix.round(10, fixScript("fixed.txt"));
+		fix.round(11, "echo 'agent crashed' >&2\nexit 3\n");
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
 			"removed 8 failed_checks fix",
 			"removed 9 failed_checks fix",
+			"removed 10 failed_checks fix",
+			"removed 11 failed_checks fix",
 			"fixing 8",
 			"fixing 9",
+			"fixing 10",
+			"fixing 11",
 		]);
-		await exited(state, 2);
+		await exited(state, 4);
+		// While the fixers ran, a writer pushed to 8, and a maintainer enqueued 10 again, which the queue
+		// dropped again before the watcher collected the first round.
 		const pushed = repo.push(8, { "feature.txt": "newer\n" });
+		pulls[2].enqueues.push({ createdAt: at(7), actor: "maintainer" });
+		pulls[2].removals.push({
+			id: "R10b",
+			createdAt: at(8),
+			reason: "failed_checks",
+			actor: "github-merge-queue",
+			before: again,
+		});
+		github.runs.push({ ...failedRun(10, at(7), base), id: 100 });
+		github.now = Date.parse(at(9));
+		fix.round(10, flakyScript);
 		expect((await watchPass(REPOSITORY, { state }, deps(github), context)).sort()).toEqual([
+			"dropped 10 ended",
 			"dropped 8 ended",
+			"fixing 10",
+			"handback 11",
 			"handback 9",
+			"removed 10 failed_checks fix",
 		]);
 		expect(git(repo.origin, "rev-parse", "refs/heads/branch-8")).toBe(pushed);
+		expect(git(repo.origin, "rev-parse", "refs/heads/branch-10")).toBe(again);
 		expect(github.mutations).toEqual([]);
 		expect(github.comments[8].at(-1)!.body).toContain(`its head moved to ${pushed} while the fixer ran`);
+		expect(github.comments[10].at(-1)!.body).toContain("enqueued again, and dropped again, while the fixer ran");
 		const handback = github.comments[9].at(-1)!.body;
 		expect(handback).toContain(
 			"Codex land fixer: `the test asserts the old behavior. Recommendation: decide which behavior is right`",
 		);
 		expect(handback).toContain("<pre>The merge queue removed");
 		expect(history(state, 9)!.rounds).toMatchObject([{ outcome: "handback" }]);
-		// Neither PR is taken again.
+		// A crash ends the pick too, with a round of its own.
+		expect(github.comments[11].at(-1)!.body).toContain("fixer crashed (exit 3)");
+		expect(history(state, 11)!.rounds).toMatchObject([
+			{ outcome: "handback", before: crashed, failure: "Check / test: just test" },
+		]);
+		// The newer pick of 10 starts its own history and round; 8, 9 and 11 are not taken again.
+		expect(history(state, 10)).toEqual({ pick: at(7), rounds: [] });
+		await exited(state);
+		github.now = Date.parse(at(10));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 10 ${again}`]);
+		expect(history(state, 10)!.rounds).toMatchObject([{ outcome: "flaky" }]);
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 	});
 });

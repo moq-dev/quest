@@ -387,14 +387,17 @@ async function collect(
 		finish(path, job);
 		return [`dropped ${number} closed`];
 	}
-	// The pick ended while the round ran: a writer's push, a writer's new enqueue, or a newer pick's removal.
-	// Its result is not applied; a head or request this round made is still its own.
+	// The pick ended while the round ran: a writer's push, a writer's new enqueue, or the queue dropping a
+	// newer enqueue of it. Its result is not applied; a head or request this round made is still its own,
+	// and once it asked GitHub to re-enqueue, a later removal is the round's own head dropped again.
 	const ours = job.published !== undefined && current === job.published;
+	const latest = readRemoval(state, number);
 	const ended =
 		current !== entry.head && !ours
 			? `its head moved to ${current} while the fixer ran, and a push by anyone but the land fixer ends the pick`
-			: record?.pick !== entry.enabledAt
-				? "a newer pick of this pull request replaced the one it was fixing"
+			: record?.pick !== entry.enabledAt ||
+				  (job.requeuing === undefined && latest !== undefined && latest.at > job.dropped)
+				? "the pull request was enqueued again, and dropped again, while the fixer ran"
 				: queued(pull, job.dropped) && !ours && job.requeuing === undefined
 					? "a maintainer enqueued it again while the fixer ran, and that pick stands"
 					: undefined;
@@ -415,9 +418,9 @@ async function collect(
 	let handback = job.handback ?? job.error;
 	let round: Round | undefined;
 	let requeued: Requeue | undefined;
+	const conflict = job.reason === "merge_conflict";
+	const failure = conflict || !result ? job.failure : (result.failure ?? job.failure);
 	if (!handback && result) {
-		const conflict = job.reason === "merge_conflict";
-		const failure = conflict ? job.failure : (result.failure ?? job.failure);
 		// Requeued unchanged, a failed build is flaky by the fixer's judgment; a conflict still conflicts.
 		const outcome: Outcome = job.merged
 			? "merged"
@@ -470,8 +473,10 @@ async function collect(
 
 	await note();
 	if (handback || !result || result.action === "handback") {
-		if (round && round.outcome !== "handback") {
-			const { after: _, ...rest } = round;
+		// Every handback ends the pick with a round of its own, a crash's or a timeout's too, so the App's
+		// next enqueue of a head this pick put back starts a new pick.
+		if (round?.outcome !== "handback") {
+			const { after: _, ...rest } = round ?? { job: name, before: entry.head, failure };
 			saveRound(state, number, history(state, number)!, { ...rest, outcome: "handback" });
 		}
 		if (handback) {
