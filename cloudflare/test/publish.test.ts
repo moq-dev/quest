@@ -1096,6 +1096,15 @@ describe("runner publication", () => {
 				(r) => r.path === "/graphql" && String(r.body.query).includes("disablePullRequestAutoMerge("),
 			);
 		project.pulls[0]!.landing = true;
+		// Another open pull request from the same branch, to another base, would land the push too.
+		const sibling = {
+			...project.pulls[0]!,
+			number: 9,
+			base: "release",
+			threads: [],
+			runs: [],
+		};
+		project.pulls.push(sibling);
 		const response = await publish({
 			job: id,
 			attempt: 1,
@@ -1107,12 +1116,13 @@ describe("runner publication", () => {
 		const { head } = (await response.json()) as { head: string };
 		expect(project.branches["contributor/fix"]).toBe(head);
 		expect(project.pulls[0]!.landing).toBe(false);
-		expect(disabled()).toHaveLength(1);
+		expect(sibling.landing).toBe(false);
+		expect(disabled()).toHaveLength(2);
 
 		// With auto-merge already off, it pushes without turning anything off.
 		const next = await publish({ job: id, attempt: 1, head, message: "fix: more", changes: [file("a", "2")] });
 		expect(next.status).toBe(200);
-		expect(disabled()).toHaveLength(1);
+		expect(disabled()).toHaveLength(2);
 
 		// A read that does not show the auto-merge state pushes nothing.
 		const { head: pushed } = (await next.json()) as { head: string };
