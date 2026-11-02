@@ -69,10 +69,12 @@ Decision prompts, selected options marked ✅:
     passed
   - The front
 - Attempts:
-  - ✅ Unlimited while progressing; see
-    [Stop rules](/quest/m0/queue-watcher/stop.md). This replaces batch
-    triage's ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
-    one attempt per pick.
+  - ✅ Unlimited while progressing, handing back on a round with no new
+    commit for a failure that isn't flaky, the failure a fix addressed
+    recurring right after it, or three flaky rounds in a row. This replaces
+    batch triage's ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
+    one attempt per pick; the host gate applies the same rules
+    ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)).
 - Flaky failures:
   - ✅ The fixer re-enqueues them unchanged, and a test seen flaking twice is
     disabled in a separate PR with a follow-up quest; the rerun before blame
@@ -110,7 +112,6 @@ Shared shape, for the children to follow:
 - [Picks enter the merge queue](/quest/m0/queue-watcher/pick.md) - `quest merge --land` enqueues the pinned head into GitHub's merge queue and records the pick where the watcher reads it
 - [Queue removals](/quest/m0/queue-watcher/removals.md) - the watcher sees each PR the queue drops, why, and the failing build's log
 - [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - the fixer runs on each dropped PR in the background, and the watcher re-enqueues it at the back
-- [Stop rules](/quest/m0/queue-watcher/stop.md) - the fixer keeps going while each round changes something, and hands back on a no-op fix, a repeated failure, or three flaky re-enqueues
 - [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - a pick GitHub refuses to enqueue is merged locally with the quest driver or fixed, then pushed and enqueued
 - [Flaky failures](/quest/m0/queue-watcher/flaky.md) - a flaky failure is re-enqueued unchanged, and a test seen flaking twice is disabled in a separate PR with a follow-up quest
 - [Watcher on the host](/quest/m0/queue-watcher/host.md) - kixelated/nixos runs the watcher for moq-dev/moq beside its fixer container

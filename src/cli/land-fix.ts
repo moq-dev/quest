@@ -25,13 +25,16 @@ export function readFixResult(root: string): string {
 }
 /** The longest Markdown comment a result may ask the daemon to post on its PR. */
 export const COMMENT_LIMIT = 4000;
+/** The longest failure signature a result may name, short enough to quote in a handback. */
+const FAILURE_LIMIT = 200;
 
 /**
  * The fixer's verdict on one PR. `blame` names a PR whose own change caused the failure; a blamed PR
  * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
- * to last, that show the failure, which its comment quotes.
+ * to last, that show the failure, which its comment quotes. `failure` names the failing test or step,
+ * the signature the stop rules compare across a pick's rounds.
  */
-export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string } & (
+export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string; failure?: string } & (
 	| { number: number; action: "requeue"; reason: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
@@ -85,6 +88,16 @@ function validate(item: any, pr: boolean): void {
 		)
 			throw new Error("invalid fixer log lines");
 		metadata.push("log");
+	}
+	if (pr && "failure" in item) {
+		if (
+			typeof item.failure !== "string" ||
+			!item.failure.trim() ||
+			item.failure.length > FAILURE_LIMIT ||
+			/[\u0000-\u001f\u007f]/.test(item.failure)
+		)
+			throw new Error("invalid fixer failure");
+		metadata.push("failure");
 	}
 	// One optional Markdown comment per PR: multiline, but no other control characters.
 	if (pr && "comment" in item) {
