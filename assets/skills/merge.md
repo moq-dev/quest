@@ -27,7 +27,7 @@ Before queueing, fetch the PR's base branch and its exact head, check out the he
 A finding means the PR leaves its quest inaccurate: recommend `/quest-iterate`.
 
 Queue the head with `quest merge <pr> --land <full 40-character head SHA>`.
-It makes a merge commit; add `--squash` or `--rebase` when the repository's root instructions name that method for the PR's base.
+It uses the only merge method the repository allows, or else a merge commit; add `--squash` or `--rebase` when the repository's root instructions name that method for the PR's base.
 On a base that requires the `quest land` check, it queues the PR for `quest land`, whose chain merges and tests against the current base.
 On an ungated base with auto-merge disabled, it refuses. Follow the repository’s own landing instructions (for example, its label queue); never retry with `--direct` unless the user explicitly asks.
 On an ungated base, it refuses a head that does not contain the current base: recommend `/quest-iterate` to merge the base.

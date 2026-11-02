@@ -149,17 +149,54 @@ export async function finish(pr: PullRequest, token: string, deps: GitHubDepende
 	});
 }
 
+/** The repository setting that allows each merge method. */
+const ALLOWS: Record<Method, string> = {
+	merge: "allow_merge_commit",
+	squash: "allow_squash_merge",
+	rebase: "allow_rebase_merge",
+};
+
+/** Each merge method as GitHub's settings name it. */
+const METHOD_NAMES: Record<Method, string> = {
+	merge: "merge commits",
+	squash: "squash merges",
+	rebase: "rebase merges",
+};
+
+/**
+ * The method an ungated landing uses: the one `named`, which the repository must allow, else the
+ * only one it allows, else a merge commit. Settings hidden from the token leave GitHub to refuse.
+ */
+function mergeMethod(repository: ObjectValue, named: Method | undefined, url: string): Method {
+	const methods = Object.keys(ALLOWS) as Method[];
+	if (methods.some((method) => typeof repository[ALLOWS[method]] !== "boolean")) return named ?? "merge";
+	const allowed = methods.filter((method) => repository[ALLOWS[method]] === true);
+	if (named !== undefined) {
+		if (allowed.includes(named)) return named;
+		throw new Refusal(
+			`${url} repository does not allow ${METHOD_NAMES[named]}; it allows ${allowed.map((method) => METHOD_NAMES[method]).join(", ") || "none"}`,
+		);
+	}
+	if (allowed.length === 1) return allowed[0];
+	if (allowed.includes("merge")) return "merge";
+	if (allowed.length === 0) throw new Refusal(`${url} repository allows no merge method`);
+	throw new Refusal(
+		`${url} repository does not allow merge commits; pass --${allowed.join(" or --")}, as its landing instructions in CONTRIBUTING.md or AGENTS.md name`,
+	);
+}
+
 /**
  * Land `sha`, which must still be the head of `pr`, while no session holds it:
  * enable auto-merge bound to it, which enters the merge queue when the base has one,
  * or merge at once when GitHub would refuse auto-merge because nothing is left to wait for.
  * A base that requires the `quest land` check queues it for `quest land` instead:
  * squash auto-merge whose commit body pins `sha`. It takes no label.
+ * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one.
  */
 export async function land(
 	pr: PullRequest,
 	sha: string,
-	method: Method,
+	named: Method | undefined,
 	deps: GitHubDependencies,
 	direct = false,
 ): Promise<void> {
@@ -187,23 +224,28 @@ export async function land(
 		(check) => check.name === LAND_CHECK,
 	);
 	if (gated) {
-		if (method !== "squash") deps.warn(`${snapshot.url} lands through quest land, which squashes`);
+		if (named !== undefined && named !== "squash")
+			deps.warn(`${snapshot.url} lands through quest land, which squashes`);
 		await unchanged();
 		await enqueue(labels.github, snapshot.id, snapshot.head);
 		return;
 	}
-	// A merge queue is the repository's own gate, so it decides; otherwise auto-merge must be on.
-	if (!direct && !snapshot.queue) {
+	// A merge queue is the repository's own gate: it applies its own method and needs no auto-merge setting.
+	let method: Method = named ?? "merge";
+	if (!snapshot.queue) {
 		const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
-		// GitHub shows the merge settings only to writers; fail closed, with a next step.
-		if (typeof repository.allow_auto_merge !== "boolean")
-			throw new Refusal(
-				`${snapshot.url} repository's auto-merge setting is not visible to this token, so a direct merge cannot be ruled out; follow its landing instructions in CONTRIBUTING.md or AGENTS.md`,
-			);
-		if (!repository.allow_auto_merge)
-			throw new Refusal(
-				`${snapshot.url} repository has auto-merge disabled; follow its landing instructions in CONTRIBUTING.md or AGENTS.md (for example, its label queue). Only use --direct if the user explicitly asks`,
-			);
+		method = mergeMethod(repository, named, snapshot.url);
+		if (!direct) {
+			// GitHub shows the merge settings only to writers; fail closed, with a next step.
+			if (typeof repository.allow_auto_merge !== "boolean")
+				throw new Refusal(
+					`${snapshot.url} repository's auto-merge setting is not visible to this token, so a direct merge cannot be ruled out; follow its landing instructions in CONTRIBUTING.md or AGENTS.md`,
+				);
+			if (!repository.allow_auto_merge)
+				throw new Refusal(
+					`${snapshot.url} repository has auto-merge disabled; follow its landing instructions in CONTRIBUTING.md or AGENTS.md (for example, its label queue). Only use --direct if the user explicitly asks`,
+				);
+		}
 	}
 	// The batch gate tests its own current-base chain. Ungated landings need that base in the PR head.
 	const comparison = object(
@@ -219,7 +261,7 @@ export async function land(
 			`${snapshot.url} head ${snapshot.head} does not contain ${snapshot.base} at ${base}; merge the base and rerun the repository's checks before landing`,
 		);
 	}
-	if (snapshot.queue && method !== "merge") {
+	if (snapshot.queue && named !== undefined && named !== "merge") {
 		deps.warn(`${snapshot.url} lands through a merge queue, which applies its own merge method`);
 	}
 	await unchanged();

@@ -1,7 +1,11 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { expect, test } from "vitest";
 
 import { main } from "../src/cli/main";
-import { type GitHubDependencies, pullRequest } from "../src/cli/github";
+import { type GitHubDependencies, GitHubInputError, pullRequest } from "../src/cli/github";
 import { waitForActivity, WaitTimeout } from "../src/cli/wait";
 
 const A = "a".repeat(40);
@@ -90,6 +94,7 @@ function checks(
 	head = A,
 	page: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
 	listed = head,
+	extra: Record<string, unknown> = {},
 ) {
 	const node = (entry: CheckFixture) =>
 		entry.status
@@ -120,6 +125,7 @@ function checks(
 				pullRequest: {
 					baseRefName: "main",
 					headRefOid: head,
+					...extra,
 					commits: {
 						nodes: [
 							{
@@ -745,6 +751,59 @@ test("PR URL parsing and timeout usage fail before authentication", () => {
 		const output = { stdout: () => {}, stderr: () => {} };
 		expect(main(["wait", "1", "--timeout", timeout], output)).toBe(2);
 	}
+});
+
+test("a bare PR number outside a checkout says to pass the URL instead", () => {
+	const outside = mkdtempSync(join(tmpdir(), "quest-wait-"));
+	try {
+		expect(() => pullRequest("1", outside)).toThrow(GitHubInputError);
+		expect(() => pullRequest("1", outside)).toThrow("pass the full GitHub PR URL, or run inside a checkout");
+	} finally {
+		rmSync(outside, { recursive: true });
+	}
+});
+
+test("auto-merge left on a moved head wakes the wait once per head, naming the head it was enabled on", async () => {
+	const pinned = (head: string) =>
+		checks([], head, undefined, head, {
+			headRefName: "feature/a",
+			headRepository: { nameWithOwner: "contributor/fork" },
+			autoMergeRequest: {
+				enabledAt: POINT,
+				commitBody: `Quest-Land-Head: ${A}`,
+				enabledBy: { login: "kixelated" },
+			},
+		});
+	const first = setup([pull(undefined, B), response([pushed(B)]), response([committed(A), committed(B)])], [A, B], {
+		checks: [pinned(B)],
+	});
+	const moved = await waitForActivity(pr, {}, first.deps);
+	expect(moved).toHaveLength(1);
+	expect(moved[0]).toMatch(
+		new RegExp(
+			`^2026-10-07T12:10:00.000Z auto-merge:moved kixelated https://github.com/example/project/pull/1/commits/${A} q1\\.`,
+		),
+	);
+	// Resuming reports other activity, not the same moved head again.
+	const next = setup([response([committed(A), committed(B), reviewed(2, LATEST)])], [A, B], { checks: [pinned(B)] });
+	const lines = await waitForActivity(pr, { since: cursor(moved) }, next.deps);
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toMatch(/ reviewed reviewer /);
+});
+
+test("auto-merge on the current head is not activity", async () => {
+	const current = () =>
+		checks([], A, undefined, A, {
+			autoMergeRequest: {
+				enabledAt: POINT,
+				commitBody: `Quest-Land-Head: ${A}`,
+				enabledBy: { login: "kixelated" },
+			},
+		});
+	const fixture = setup([pull(), response([pushed()]), response([committed(A)]), response([committed(A)])], [A], {
+		checks: [current(), current()],
+	});
+	await expect(waitForActivity(pr, { timeout: 60 }, fixture.deps)).rejects.toBeInstanceOf(WaitTimeout);
 });
 
 test("a push racing initial setup is not swallowed by the baseline", async () => {

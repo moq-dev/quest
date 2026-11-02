@@ -28,6 +28,8 @@ class FakePull {
 	mergeState = "BLOCKED";
 	queue = false;
 	allowAutoMerge: boolean | null = true;
+	/** The repository's merge method settings, hidden from the token when null. */
+	methods: Record<string, boolean> | null = null;
 	baseRef = "main";
 	/** Runs after each pull request read, to change it between reads. */
 	afterRead?: () => void;
@@ -78,7 +80,10 @@ class FakePull {
 		const body = init.body ? (JSON.parse(String(init.body)) as ObjectValue) : {};
 		const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status });
 		if (url.pathname === "/repos/example/project")
-			return json(200, this.allowAutoMerge === null ? {} : { allow_auto_merge: this.allowAutoMerge });
+			return json(200, {
+				...(this.allowAutoMerge === null ? {} : { allow_auto_merge: this.allowAutoMerge }),
+				...this.methods,
+			});
 		if (url.pathname === "/graphql")
 			return json(200, this.graphql(String(body.query), body.variables as ObjectValue));
 		if (url.pathname === "/repos/example/project/issues/7/labels" && method === "POST") {
@@ -423,6 +428,68 @@ describe("merge --land", () => {
 			await land(PR, HEAD, method, pull.deps());
 			expect(pull.writes.at(-1)).toBe(`mergePullRequest ${HEAD} ${method.toUpperCase()}`);
 		}
+	});
+
+	describe("picks the repository's merge method", () => {
+		const allowing = (...methods: string[]) => {
+			const pull = new FakePull();
+			pull.methods = {
+				allow_merge_commit: methods.includes("merge"),
+				allow_squash_merge: methods.includes("squash"),
+				allow_rebase_merge: methods.includes("rebase"),
+			};
+			return pull;
+		};
+
+		test("uses the only method allowed without a flag", async () => {
+			for (const method of ["squash", "rebase"]) {
+				const pull = allowing(method);
+				await land(PR, HEAD, undefined, pull.deps());
+				expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} ${method.toUpperCase()}`);
+			}
+		});
+
+		test("keeps a merge commit by default while one is allowed", async () => {
+			const pull = allowing("merge", "squash");
+			await land(PR, HEAD, undefined, pull.deps());
+			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+		});
+
+		test("also applies with --direct", async () => {
+			const pull = allowing("squash");
+			pull.allowAutoMerge = false;
+			pull.mergeState = "CLEAN";
+			await land(PR, HEAD, undefined, pull.deps(), true);
+			expect(pull.writes).toEqual([`mergePullRequest ${HEAD} SQUASH`]);
+		});
+
+		test("refuses a named method the repository disallows, or a choice it leaves open", async () => {
+			const cases: [string[], "merge" | "squash" | "rebase" | undefined, string][] = [
+				[["squash"], "merge", "does not allow merge commits; it allows squash merges"],
+				[["merge", "squash"], "rebase", "does not allow rebase merges; it allows merge commits, squash merges"],
+				[["squash", "rebase"], undefined, "pass --squash or --rebase"],
+				[[], undefined, "allows no merge method"],
+			];
+			for (const [methods, named, refusal] of cases) {
+				const pull = allowing(...methods);
+				expect(await refused(land(PR, HEAD, named, pull.deps()))).toContain(refusal);
+				expect(pull.writes).toEqual([]);
+			}
+		});
+
+		test("leaves a gated base or a merge queue to its own method", async () => {
+			const gated = allowing("merge");
+			gated.required = ["quest land"];
+			await land(PR, HEAD, undefined, gated.deps());
+			expect(gated.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`);
+
+			const queued = allowing("squash");
+			queued.queue = true;
+			const warnings: string[] = [];
+			await land(PR, HEAD, undefined, queued.deps(warnings));
+			expect(queued.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+			expect(warnings).toEqual([]);
+		});
 	});
 
 	test("enters the merge queue through auto-merge even when clean", async () => {
