@@ -18,7 +18,6 @@ const user = "publisher";
 const githubUser = 7171;
 const upstream = { owner: "upstream", name: "project", id: 10 };
 
-const forks = env.GITHUB_FORK_OWNER;
 const at = "2026-10-01T00:00:00Z";
 
 /** An upstream with an issue and a contributor's pull request to read, and nothing published yet. */
@@ -27,8 +26,6 @@ function world(): World {
 	return {
 		app: { id: Number(env.GITHUB_APP_ID), slug: "quest-test" },
 		installation: 5,
-		forkInstallation: 6,
-		forks,
 		users: [{ id: githubUser, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" }],
 		repos: [
 			{
@@ -67,7 +64,6 @@ function world(): World {
 					},
 				],
 				branches: { "contributor/fix": prHead },
-				fork: {},
 				commits: {
 					[revision]: { parents: [], tree, message: "base" },
 					[prHead]: { parents: [revision], tree, message: "pr" },
@@ -95,8 +91,8 @@ const requests = () =>
 		body: init?.body ? JSON.parse(String(init.body)) : undefined,
 		token: new Headers(init?.headers).get("Authorization"),
 	}));
-/** The pull requests publication opened from the service fork. */
-const opened = () => project.pulls.filter((pull) => pull.fork);
+/** The pull requests publication opened as the App. */
+const opened = () => project.pulls.filter((pull) => pull.author === "quest-test[bot]");
 let machine: store.Runner & { token: string };
 
 /** Create and claim a job on the test runner, returning its ID. */
@@ -235,14 +231,14 @@ describe("fake GitHub", () => {
 		const writer = await mint({ metadata: "read", contents: "write" });
 		const reader = await mint({ metadata: "read" });
 		const ref = { ref: "refs/heads/x", sha: revision };
-		expect((await call(`/repos/${forks}/project/git/refs`, "POST", writer, ref)).status).toBe(404);
+		expect((await call("/repos/contributor/project/git/refs", "POST", writer, ref)).status).toBe(404);
 		expect((await call("/repos/upstream/project/git/refs", "POST", reader, ref)).status).toBe(403);
 		expect((await call("/repos/upstream/project/git/refs", "POST", writer, ref)).status).toBe(201);
 	});
 });
 
 describe("runner publication", () => {
-	it("commits to the job's service fork branch and opens one draft pull request as the App", async () => {
+	it("commits to the job's upstream branch and opens one draft pull request as the App", async () => {
 		const id = await running();
 		const first = await publish({
 			job: id,
@@ -259,7 +255,7 @@ describe("runner publication", () => {
 		});
 		expect(first.status).toBe(200);
 		const { head } = (await first.json()) as { head: string };
-		expect(project.fork["quest/first"]).toBe(head);
+		expect(project.branches["quest/first"]).toBe(head);
 		expect(project.commits[head]).toMatchObject({ parents: [revision], message: "feat: first" });
 		// No author or committer: GitHub attributes the commit to the App.
 		const created = requests().find((r) => r.path.endsWith("/git/commits") && r.method === "POST")!;
@@ -273,18 +269,14 @@ describe("runner publication", () => {
 			{ path: "latest", mode: "120000", type: "blob", content: "scripts/run.sh" },
 			{ path: "quest/first.md", mode: "100644", type: "blob", sha: null },
 		]);
-		// Every Git write goes to the fork with one token, which GitHub scopes to the fork alone;
-		// the upstream token is read-only metadata.
+		// Every Git write goes to the enrolled upstream with one repository-scoped token.
 		const writes = gitWrites();
-		expect(writes.every((r) => r.path.startsWith(`/repos/${forks}/project/`))).toBe(true);
+		expect(writes.every((r) => r.path.startsWith(`/repos/upstream/project/`))).toBe(true);
 		expect(new Set(writes.map((r) => r.token)).size).toBe(1);
 		const scopes = requests()
 			.filter((r) => r.path.endsWith("/access_tokens"))
 			.map((r) => r.body);
-		expect(scopes).toEqual([
-			{ repository_ids: [10], permissions: { metadata: "read" } },
-			{ repositories: ["project"], permissions: { metadata: "read", contents: "write" } },
-		]);
+		expect(scopes).toEqual([{ repository_ids: [10], permissions: { metadata: "read", contents: "write" } }]);
 		expect((await job(id)).head).toBe(head);
 
 		// A stale base is refused without writing anything.
@@ -312,11 +304,9 @@ describe("runner publication", () => {
 		]);
 		const create = requests().find((r) => r.path === "/repos/upstream/project/pulls" && r.method === "POST")!;
 		expect(create.body).toMatchObject({
-			head: `${forks}:quest/first`,
-			head_repo: "project",
+			head: "quest/first",
 			base: "main",
 			draft: true,
-			maintainer_can_modify: false,
 		});
 
 		// Delivering again updates the same pull request and marks finished work ready.
@@ -404,10 +394,12 @@ describe("runner publication", () => {
 			changes: [file("quest/one.md", "# [S] One\n")],
 			pull: { title: "Plan", body: "Decisions", draft: false },
 		});
-		expect(await response.json()).toMatchObject({ pull: { draft: true } });
+		const planned = (await response.json()) as { head: string; pull: { draft: boolean } };
+		expect(planned.pull.draft).toBe(true);
+		expect(project.branches["plan/issue-1"]).toBe(planned.head);
 		expect(requests().some((r) => r.path === "/graphql")).toBe(false);
 		await db.prepare("UPDATE jobs SET state='completed' WHERE id=?").bind(plan).run();
-		const bootstrap = await running({ workflow: "bootstrap", target: "devshell", branch: "quest/devshell" });
+		const bootstrap = await running({ workflow: "bootstrap", target: "devshell", branch: "kix/devshell" });
 		const refused = await publish({
 			job: bootstrap,
 			attempt: 1,
@@ -416,6 +408,23 @@ describe("runner publication", () => {
 			changes: [file("justfile", "x")],
 		});
 		expect(refused.status).toBe(202);
+	});
+
+	it("publishes a bootstrap on its upstream branch outside the quest claim namespace", async () => {
+		const id = await running({ workflow: "bootstrap", target: "devshell", branch: "kix/devshell" });
+		const response = await publish({
+			job: id,
+			attempt: 1,
+			head: null,
+			message: "build: add devShell",
+			changes: [file("flake.nix", "{}"), file("flake.lock", "{}")],
+			pull: { title: "Add devShell", body: "Pinned tools" },
+		});
+		expect(response.status).toBe(200);
+		const { head, pull } = (await response.json()) as { head: string; pull: { number: number } };
+		expect(project.branches["kix/devshell"]).toBe(head);
+		expect(project.pulls.find((p) => p.number === pull.number)).toMatchObject({ branch: "kix/devshell" });
+		expect(gitWrites().every((r) => r.path.startsWith("/repos/upstream/project/"))).toBe(true);
 	});
 
 	it("writes a planning pull request's decisions from the recorded answers, replacing the agent's", async () => {
@@ -553,7 +562,7 @@ describe("runner publication", () => {
 		).json()) as { head: string };
 		// GitHub applies the next branch update, but its answer is lost.
 		intercept(
-			(url, method) => method === "PATCH" && url.pathname.startsWith(`/repos/${forks}/project/git/refs/`),
+			(url, method) => method === "PATCH" && url.pathname.startsWith(`/repos/upstream/project/git/refs/`),
 			async (next) => {
 				await next();
 				return Response.json({ message: "Bad Gateway" }, { status: 502 });
@@ -567,7 +576,7 @@ describe("runner publication", () => {
 			changes: [file("a", "2")],
 		});
 		expect(lost.status).toBe(403);
-		const landed = project.fork["quest/first"]!;
+		const landed = project.branches["quest/first"]!;
 		expect(landed).not.toBe(first.head);
 		expect(await job(id)).toMatchObject({ head: first.head, pending: landed });
 		// The next publication finds the pending commit on the branch and adopts it.
@@ -592,7 +601,7 @@ describe("runner publication", () => {
 		const { head } = (await (
 			await publish({ job: id, attempt: 1, head: null, message: "one", changes: [file("a", "1")] })
 		).json()) as { head: string };
-		project.fork["quest/first"] = prHead;
+		project.branches["quest/first"] = prHead;
 		const response = await publish({
 			job: id,
 			attempt: 1,
@@ -606,11 +615,11 @@ describe("runner publication", () => {
 			kind: "publication",
 			prompt: { blocked: "The branch quest/first changed outside this job." },
 		});
-		expect(project.fork["quest/first"]).toBe(prHead);
+		expect(project.branches["quest/first"]).toBe(prHead);
 	});
 
-	it("asks before reusing a branch that earlier work left on the fork", async () => {
-		project.fork["quest/first"] = prHead;
+	it("asks before reusing a branch that earlier work left on the upstream", async () => {
+		project.branches["quest/first"] = prHead;
 		const id = await running();
 		const response = await publish({
 			job: id,
@@ -640,7 +649,7 @@ describe("runner publication", () => {
 				pull: { title: "T", body: "B" },
 			})
 		).json()) as { head: string };
-		project.fork["quest/first"] = prHead;
+		project.branches["quest/first"] = prHead;
 		const blocked = await publish({
 			job: id,
 			attempt: 1,
@@ -654,7 +663,7 @@ describe("runner publication", () => {
 		const question = waiting.questions[0]!.id;
 
 		const created = await restart(testEnv, user, upstream, waiting, question);
-		expect(project.fork["quest/first"]).toBe(revision);
+		expect(project.branches["quest/first"]).toBe(revision);
 		expect((await job(id)).state).toBe("cancelled");
 		expect((await job(id)).questions[0]!.answer).toEqual(store.RESTART);
 		expect(await job(created)).toMatchObject({ state: "queued", head: revision, pull: null, continues: null });
@@ -678,7 +687,7 @@ describe("runner publication", () => {
 	});
 
 	it("lets only the requester start over in place of another maintainer's answer awaiting approval", async () => {
-		project.fork["quest/first"] = prHead;
+		project.branches["quest/first"] = prHead;
 		const id = await running();
 		const blocked = await publish({
 			job: id,
@@ -698,10 +707,10 @@ describe("runner publication", () => {
 		expect(resumed).toBe(false);
 
 		await expect(restart(testEnv, "other", upstream, await job(id), question)).rejects.toThrow("can start over");
-		expect(project.fork["quest/first"]).toBe(prHead);
+		expect(project.branches["quest/first"]).toBe(prHead);
 
 		const created = await restart(testEnv, user, upstream, await job(id), question);
-		expect(project.fork["quest/first"]).toBe(revision);
+		expect(project.branches["quest/first"]).toBe(revision);
 		expect((await job(id)).questions[0]).toMatchObject({ answer: store.RESTART, answeredBy: user });
 		expect((await job(id)).questions[0]!.approvedAt).not.toBeNull();
 		expect(await job(created)).toMatchObject({ state: "queued", head: revision });
@@ -770,7 +779,6 @@ describe("runner publication", () => {
 			title: "Earlier",
 			author: "quest-test[bot]",
 			branch: "quest/first",
-			fork: true,
 			closed: true,
 			createdAt: 0,
 			checks: null,
@@ -793,7 +801,7 @@ describe("runner publication", () => {
 		// Change the job while GitHub creates its branch.
 		const meanwhile = (change: () => Promise<unknown>) =>
 			intercept(
-				(url, method) => method === "POST" && url.pathname === `/repos/${forks}/project/git/refs`,
+				(url, method) => method === "POST" && url.pathname === `/repos/upstream/project/git/refs`,
 				async (next) => {
 					const response = await next();
 					await change();
@@ -819,7 +827,7 @@ describe("runner publication", () => {
 		const { head } = (await (
 			await publish({ job: id, attempt: 1, head: null, message: "one", changes: [file("a", "1")] })
 		).json()) as { head: string };
-		project.fork["quest/first"] = prHead;
+		project.branches["quest/first"] = prHead;
 		const response = await publish({ job: id, attempt: 1, head, session: "s", pull: { title: "T", body: "B" } });
 		expect(response.status).toBe(202);
 		expect((await job(id)).questions[0]).toMatchObject({
@@ -855,7 +863,7 @@ describe("runner publication", () => {
 		expect(response.status).toBe(200);
 		const next = (await response.json()) as { head: string; pull: { number: number } };
 		expect(project.commits[next.head]!.parents).toEqual([head]);
-		expect(project.fork["quest/first"]).toBe(next.head);
+		expect(project.branches["quest/first"]).toBe(next.head);
 		expect(next.pull.number).toBe(5);
 		expect(opened()).toHaveLength(1);
 	});
@@ -954,7 +962,7 @@ describe("runner publication", () => {
 			await publish({ job: failed, attempt: 1, head: null, message: "one", changes: [file("a", "1")] })
 		).json()) as { head: string };
 		await fail(failed);
-		project.fork["quest/first"] = prHead;
+		project.branches["quest/first"] = prHead;
 		const id = await running({}, 1000);
 		const response = await publish({
 			job: id,
@@ -969,7 +977,7 @@ describe("runner publication", () => {
 			kind: "publication",
 			prompt: { blocked: "The branch quest/first changed outside this job." },
 		});
-		expect(project.fork["quest/first"]).toBe(prHead);
+		expect(project.branches["quest/first"]).toBe(prHead);
 	});
 
 	it("keeps publishing a paused project's branch but opens no pull request", async () => {
@@ -985,7 +993,7 @@ describe("runner publication", () => {
 		});
 		expect(response.status).toBe(403);
 		expect(await response.json()).toEqual({ error: "Contributions are paused" });
-		expect(project.fork["quest/first"]).toBeDefined();
+		expect(project.branches["quest/first"]).toBeDefined();
 		expect(opened()).toEqual([]);
 	});
 
@@ -1035,20 +1043,6 @@ describe("runner publication", () => {
 			type: "publication",
 			blocked: expect.stringContaining("contributor's fork"),
 		});
-	});
-
-	it("refuses a service fork that does not fork the upstream", async () => {
-		intercept(
-			(url, method) => method === "GET" && url.pathname === `/repos/${forks}/project`,
-			async (next) => Response.json({ ...((await (await next()).json()) as object), parent: { id: 999 } }),
-		);
-		const id = await running();
-		const response = await publish({ job: id, attempt: 1, head: null, message: "m", changes: [file("a", "1")] });
-		expect(response.status).toBe(403);
-		expect(await response.json()).toEqual({
-			error: "Provision the service fork quest-bot-forks/project of this upstream first",
-		});
-		expect(gitWrites()).toEqual([]);
 	});
 
 	it("validates the request before touching the job", async () => {
@@ -1102,7 +1096,7 @@ describe("merge jobs", () => {
 
 	it("merges its base in, lands exactly the head it published, and keeps its hold while queued", async () => {
 		const id = await merging();
-		expect(pull().labels).toEqual(["quest:merge"]);
+		expect(pull().labels).toEqual(["quest:kix"]);
 		// The base branch moved on; the job merged it into the checkout.
 		const main = "f".repeat(40);
 		project.commits[main] = { parents: [revision], tree: "1".repeat(40), message: "main" };
@@ -1140,7 +1134,7 @@ describe("merge jobs", () => {
 		// Its landing is queued when the job ends, so it keeps holding the pull request.
 		await store.finish(db, machine, id, 1, { outcome: "completed", summary: "Landing", result: undefined }, 0);
 		await landing.ended(testEnv, id);
-		expect(pull().labels).toEqual(["quest:merge"]);
+		expect(pull().labels).toEqual(["quest:kix"]);
 		// Once the landing ends unmerged, the bot gives the pull request back.
 		pull().landing = false;
 		await landing.release(testEnv, 10, "pulls/2");
@@ -1409,7 +1403,7 @@ describe("merge jobs", () => {
 			],
 			[
 				() => (pull().labels = []),
-				"This job's quest:merge label was removed or replaced, so it no longer holds the pull request.",
+				"This job's quest:kix label was removed or replaced, so it no longer holds the pull request.",
 			],
 			[() => refuseLanding(reason), `GitHub refused to land the pull request: ${reason}`],
 		];

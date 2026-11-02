@@ -49,7 +49,7 @@ never waited for. Dependabot PRs that only bump patch versions or a lockfile
 need no review.
 
 PRs land on `main` only through `quest land` (see the README): queue one with
-`quest merge <pr> <token> --land <sha>`, and the host daemon
+`quest merge <pr> --land <sha>`, and the host daemon
 `quest land serve` runs `just check` and `just test` once per batch through its
 configured sandbox. Before each landing, the daemon merges the base into the PR
 head with the quest merge driver and verifies the tested tree, then pushes that

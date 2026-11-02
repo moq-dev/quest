@@ -2,7 +2,6 @@
 import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gitAuthentication } from "./land-git";
-import { MERGE_LABEL } from "../core";
 import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
 import {
 	baseRemote,
@@ -241,12 +240,6 @@ export async function finishFallback(
 		await github.request(`/repos/${plan.repository}/pulls/${entry.number}`, {
 			method: "PATCH",
 			body: { state: "closed" },
-		});
-	}
-	if (pull.state !== "OPEN" || unchanged) {
-		await github.request(`${issue}/labels/${encodeURIComponent(MERGE_LABEL)}`, {
-			method: "DELETE",
-			allow: [404],
 		});
 	}
 	unlinkSync(path);
