@@ -128,6 +128,15 @@ export interface Branch {
 }
 export type ContributionState = "enabled" | "paused";
 export type Enrollment = GitHubRepository & { state: ContributionState };
+/** A repository the App reaches and the user maintains, as the project picker lists it. */
+export type Candidate = GitHubRepository & {
+	/** Its contribution state under its current installation, or null when it is not enrolled there. */
+	state: ContributionState | null;
+	/** Why contributions cannot be enabled yet; empty when enabling may go on to its live checks. */
+	problems: string[];
+	/** Whether its default branch has no Quest files, so setting up Quest comes first. */
+	setup: boolean;
+};
 /** A running job attempt whose project was disconnected, which its runner must stop. */
 export type Stopped = { actor: string; runner: string; job: string; attempt: number };
 export type ProjectPreview = {
@@ -397,6 +406,151 @@ export class GitHubService {
 		if (String(app.id) !== this.#env.GITHUB_APP_ID || !/^[a-zA-Z0-9-]+$/.test(app.slug))
 			throw new GitHubError("GitHub App unavailable");
 		return `https://github.com/apps/${app.slug}/installations/new`;
+	}
+
+	/** Every page of a GitHub list response that wraps its items in `key`. */
+	async #pages<T>(token: string, path: string, key: string): Promise<T[]> {
+		const all: T[] = [];
+		for (let page = 1; ; page++) {
+			const result = await this.#api<Record<string, unknown>>(token, `${path}?per_page=100&page=${page}`);
+			const items = result[key];
+			if (!Array.isArray(items) || typeof result.total_count !== "number")
+				throw new GitHubError("GitHub list unavailable");
+			all.push(...(items as T[]));
+			if (items.length < 100 || all.length >= result.total_count) return all;
+		}
+	}
+
+	/**
+	 * The repositories the user could enable: those the App's installations
+	 * reach and the user maintains, each with why it cannot be enabled yet.
+	 * `userToken` is the user's own GitHub App token, so the list costs a few
+	 * requests however many repositories an installation holds. The list is
+	 * navigation only: enabling one rechecks authority and eligibility live
+	 * through an installation token, as for a repository selected by name.
+	 */
+	async candidates(userToken: string): Promise<Candidate[]> {
+		const installations = await this.#pages<Installation>(userToken, "/user/installations", "installations");
+		type Listed = Repository & { permissions?: { admin?: boolean; maintain?: boolean } };
+		const found: { repo: Listed; installation: number }[] = [];
+		for (const installation of installations) {
+			if (
+				!positiveId(installation.id) ||
+				String(installation.app_id) !== this.#env.GITHUB_APP_ID ||
+				installation.suspended_at
+			)
+				continue;
+			try {
+				await this.#gate(installation.id);
+			} catch (error) {
+				if (error instanceof GitHubError) continue;
+				throw error;
+			}
+			const repos = await this.#pages<Listed>(
+				userToken,
+				`/user/installations/${installation.id}/repositories`,
+				"repositories",
+			);
+			for (const repo of repos)
+				if (
+					(repo.permissions?.admin || repo.permissions?.maintain) &&
+					positiveId(repo.id) &&
+					typeof repo.owner?.login === "string" &&
+					name(repo.owner.login) &&
+					typeof repo.name === "string" &&
+					name(repo.name)
+				)
+					found.push({ repo, installation: installation.id });
+		}
+		if (!found.length) return [];
+
+		const open = found.filter(({ repo }) => !repo.archived && !repo.disabled && repo.private === false);
+		const quests = await this.#questFiles(
+			userToken,
+			open.map(({ repo }) => repo),
+		);
+		const licenses = new Map<string, Promise<string | null>>();
+		const enrolled = new Map(
+			(
+				await this.#env.DB.prepare(
+					"SELECT id,installation,state FROM github_projects WHERE id IN (SELECT value FROM json_each(?))",
+				)
+					.bind(JSON.stringify(found.map(({ repo }) => repo.id)))
+					.all<{ id: number; installation: number; state: ContributionState }>()
+			).results.map((row) => [row.id, row]),
+		);
+		const candidates = await Promise.all(
+			found.map(async ({ repo, installation }): Promise<Candidate> => {
+				const problems: string[] = [];
+				let setup = false;
+				if (repo.archived || repo.disabled) problems.push("Archived or disabled on GitHub.");
+				else if (repo.private !== false || repo.visibility !== "public")
+					problems.push("Private. Contributions need a public repository.");
+				else {
+					const quest = quests.get(repo.id);
+					if (quest === undefined)
+						problems.push("Quest files could not be read. Review the project for details.");
+					else if (!quest) {
+						setup = true;
+						problems.push("No Quest files on the default branch yet.");
+					}
+					const spdx = repo.license?.spdx_id ?? "";
+					if (!licenses.has(spdx)) licenses.set(spdx, this.#license(repo));
+					const license = await licenses.get(spdx)!;
+					if (license) problems.push(license);
+				}
+				const row = enrolled.get(repo.id);
+				return {
+					id: repo.id,
+					owner: repo.owner.login,
+					name: repo.name,
+					state: row?.installation === installation ? row.state : null,
+					problems,
+					setup,
+				};
+			}),
+		);
+		return candidates.sort((a, b) => `${a.owner}/${a.name}`.localeCompare(`${b.owner}/${b.name}`));
+	}
+
+	/**
+	 * Whether each public repository's default branch has Quest files, in one
+	 * GraphQL read per hundred repositories. A repository missing from the
+	 * result is absent from the map. Enabling validates the whole tree.
+	 */
+	async #questFiles(token: string, repos: Repository[]): Promise<Map<number, boolean>> {
+		const found = new Map<number, boolean>();
+		for (let start = 0; start < repos.length; start += 100) {
+			const chunk = repos.slice(start, start + 100);
+			const params = chunk.map((_, i) => `$o${i}: String!, $n${i}: String!`).join(", ");
+			const fields = chunk.map(
+				(_, i) =>
+					`r${i}: repository(owner: $o${i}, name: $n${i}) { databaseId object(expression: "HEAD:quest") { ... on Tree { entries { name type } } } }`,
+			);
+			const variables = Object.fromEntries(
+				chunk.flatMap((repo, i) => [
+					[`o${i}`, repo.owner.login],
+					[`n${i}`, repo.name],
+				]),
+			);
+			const result = await this.#api<{
+				data?: Record<
+					string,
+					{ databaseId: number; object: { entries?: { name: string; type: string }[] } | null } | null
+				> | null;
+			}>(token, "/graphql", "POST", { query: `query(${params}) { ${fields.join("\n")} }`, variables });
+			chunk.forEach((repo, i) => {
+				const read = result.data?.[`r${i}`];
+				if (!read || read.databaseId !== repo.id) return;
+				// A subdirectory may hold quests; enabling reads the whole tree.
+				const entries = read.object?.entries ?? [];
+				found.set(
+					repo.id,
+					entries.some((entry) => entry.type === "tree" || (entry.type === "blob" && isQuest(entry.name))),
+				);
+			});
+		}
+		return found;
 	}
 
 	/** Resolve public metadata through a repository-scoped App token. */

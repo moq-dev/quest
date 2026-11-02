@@ -244,6 +244,102 @@ test("init keeps a reworded reference line", () => {
 	expect(read(dir, "AGENTS.md")).toBe("# Repo\n");
 });
 
+/** The stub an earlier release installed for `/quest-ready`, before `/quest-review` replaced it. */
+const READY_STUB =
+	"---\nname: quest-ready\ndescription: Mark a draft PR ready for review, wait for an automated review, then decide whether to merge.\n---\n\nRun `quest skill ready` and follow its output.\nIf `quest` is not installed, follow https://github.com/kixelated/quest/blob/main/SETUP.md first.\n";
+
+/** A current skill's stub as an earlier release wrote it, with another description and setup link. */
+const OLD_AUDIT_STUB =
+	"---\nname: quest-audit\ndescription: Audit outstanding quests for disagreements, then resolve them with /quest-plan.\n---\n\nRun `quest skill audit` and follow its output.\nIf `quest` is not installed, follow https://github.com/kixelated/quest/blob/main/SETUP.md first.\n";
+
+function write(dir: string, path: string, content: string) {
+	mkdirSync(dirname(join(dir, path)), { recursive: true });
+	writeFileSync(join(dir, path), content);
+}
+
+test("init removes stubs of retired skills and keeps older stubs of current ones", () => {
+	const dir = tempDir();
+	init(dir);
+	for (const skills of [".claude/skills", ".agents/skills"]) {
+		write(
+			dir,
+			`${skills}/quest-ready/SKILL.md`,
+			READY_STUB.replaceAll("\n", skills === ".agents/skills" ? "\r\n" : "\n"),
+		);
+		write(dir, `${skills}/quest-audit/SKILL.md`, OLD_AUDIT_STUB);
+	}
+	expect(init(dir)).toEqual([".claude/skills/quest-ready/SKILL.md", ".agents/skills/quest-ready/SKILL.md"]);
+	for (const skills of [".claude/skills", ".agents/skills"]) {
+		expect(existsSync(join(dir, skills, "quest-ready"))).toBe(false);
+		expect(read(dir, `${skills}/quest-audit/SKILL.md`)).toBe(OLD_AUDIT_STUB);
+	}
+	expect(init(dir)).toEqual([]);
+});
+
+test("init keeps a retired stub's directory when it holds other files", () => {
+	const dir = tempDir();
+	write(dir, ".claude/skills/quest-ready/SKILL.md", READY_STUB);
+	write(dir, ".claude/skills/quest-ready/notes.md", "Mine.\n");
+	expect(init(dir)).toContain(".claude/skills/quest-ready/SKILL.md");
+	expect(readdirSync(join(dir, ".claude/skills/quest-ready"))).toEqual(["notes.md"]);
+});
+
+for (const [name, content] of [
+	[
+		"a user's own quest- skill",
+		"---\nname: quest-ready\ndescription: My release checklist.\n---\n\nCheck the changelog.\n",
+	],
+	["a stub under another directory name", READY_STUB.replace("quest-ready", "quest-mine")],
+	["a stub naming another skill", READY_STUB.replace("`quest skill ready`", "`quest skill mine`")],
+	["a stub with added instructions", `${READY_STUB}Then tell the team.\n`],
+	["a stub with an added frontmatter field", READY_STUB.replace("\n---\n\n", "\nallowed-tools: Bash\n---\n\n")],
+] as const)
+	test(`init and uninstall keep ${name}`, () => {
+		const dir = tempDir();
+		write(dir, ".claude/skills/quest-ready/SKILL.md", content);
+		init(dir);
+		uninstall(dir);
+		expect(read(dir, ".claude/skills/quest-ready/SKILL.md")).toBe(content);
+	});
+
+test("init leaves a user's skill without the quest- prefix", () => {
+	const dir = tempDir();
+	const ready = READY_STUB.replace("name: quest-ready", "name: ready");
+	write(dir, ".claude/skills/ready/SKILL.md", ready);
+	init(dir);
+	expect(read(dir, ".claude/skills/ready/SKILL.md")).toBe(ready);
+});
+
+test.skipIf(process.platform === "win32")("init and uninstall leave linked retired stubs", () => {
+	const dir = tempDir();
+	write(dir, "elsewhere/quest-ready/SKILL.md", READY_STUB);
+	write(dir, "stub.md", READY_STUB);
+	mkdirSync(join(dir, ".claude/skills/quest-other"), { recursive: true });
+	symlinkSync("../../elsewhere/quest-ready", join(dir, ".claude/skills/quest-ready"));
+	symlinkSync("../../../stub.md", join(dir, ".claude/skills/quest-other/SKILL.md"));
+	init(dir);
+	uninstall(dir);
+	expect(read(dir, "elsewhere/quest-ready/SKILL.md")).toBe(READY_STUB);
+	expect(isSymlink(dir, ".claude/skills/quest-ready")).toBe(true);
+	expect(isSymlink(dir, ".claude/skills/quest-other/SKILL.md")).toBe(true);
+});
+
+test("uninstall removes stubs that older versions installed", () => {
+	const dir = tempDir();
+	for (const skills of [".claude/skills", ".agents/skills"]) {
+		write(dir, `${skills}/quest-ready/SKILL.md`, READY_STUB);
+		write(dir, `${skills}/quest-audit/SKILL.md`, OLD_AUDIT_STUB);
+	}
+	expect(uninstall(dir)).toEqual([
+		".claude/skills/quest-audit/SKILL.md",
+		".claude/skills/quest-ready/SKILL.md",
+		".agents/skills/quest-audit/SKILL.md",
+		".agents/skills/quest-ready/SKILL.md",
+	]);
+	expect(existsSync(join(dir, ".claude"))).toBe(false);
+	expect(existsSync(join(dir, ".agents"))).toBe(false);
+});
+
 const QUEST_HOOK = { type: "command", command: HOOK_COMMAND };
 const SESSION_HOOK = { hooks: [{ type: "command", command: "bash .claude/hooks/direnv.sh" }] };
 

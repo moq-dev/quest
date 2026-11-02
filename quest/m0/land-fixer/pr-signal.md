@@ -31,8 +31,9 @@ non-required check failed on the head it is about to pick, without refusing.
 The fixer gets a summary of the PR's checks (check name, conclusion, run URL,
 and a trimmed log of each failure) in its job input, next to the queue's
 failure log. A failing non-required check never stops a PR on its own; a
-failing required check keeps GitHub from enqueuing it, which
-[Bad picks](/quest/m0/queue-watcher/bad-picks.md) handles.
+failing required check keeps GitHub from enqueuing it: `/quest-merge`
+refuses such a head, `quest merge` fails when GitHub refuses it, and either
+way the PR needs `/quest-iterate`.
 
 Retargeted 2026-11-01 to the [queue watcher](/quest/m0/queue-watcher/README.md),
 which replaces the batched host gate.

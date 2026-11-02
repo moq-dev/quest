@@ -49,6 +49,8 @@ class FakePull {
 	/** Runs after each label is added, as when another session adds one a moment later. */
 	afterAdd?: () => void;
 	beforeAutoMerge?: () => string | undefined;
+	/** The error GitHub answers `enqueuePullRequest` with, if any. */
+	beforeEnqueue?: () => { message: string; type?: string } | undefined;
 	reads = 0;
 	private clock = Date.parse("2026-10-21T12:00:00Z");
 
@@ -132,7 +134,7 @@ class FakePull {
 			if (variables.id !== "PR_7") throw new Error("mutation on the wrong PR");
 			const method = variables.method ?? /mergeMethod: (\w+)/.exec(query)?.[1];
 			const body = variables.body ? ` ${String(variables.body)}` : "";
-			this.writes.push(method ? `${name} ${variables.sha} ${method}${body}` : name);
+			this.writes.push([name, variables.sha, method].filter(Boolean).join(" ") + body);
 			if (name === "markPullRequestReadyForReview") this.draft = false;
 			if (name === "mergePullRequest") this.state = "MERGED";
 			if (name === "enablePullRequestAutoMerge") {
@@ -143,6 +145,11 @@ class FakePull {
 				this.event("AutoMergeEnabledEvent");
 			}
 			if (name === "disablePullRequestAutoMerge") this.autoMerge = null;
+			if (name === "enqueuePullRequest") {
+				const error = this.beforeEnqueue?.();
+				if (error) return { errors: [error] };
+				this.queueEntry = { state: "QUEUED" };
+			}
 			return { data: { [name]: { clientMutationId: null } } };
 		}
 		if (query.includes("node(id: $id)")) return { data: { node: { autoMergeRequest: this.autoMerge } } };
@@ -169,6 +176,7 @@ class FakePull {
 						isMergeQueueEnabled: this.queue,
 						autoMergeRequest: this.autoMerge,
 						mergeQueueEntry: this.queueEntry,
+						isInMergeQueue: this.queueEntry !== null,
 						labels: { nodes: this.labels.map((name) => ({ name })) },
 						timelineItems: { nodes: this.events.slice(-100) },
 					},
@@ -369,6 +377,84 @@ describe("merge --land", () => {
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 	});
 
+	test.each(["CLEAN", "HAS_HOOKS", "UNSTABLE", "BEHIND", "DIRTY"])(
+		"enqueues a %s head on a queue base without comparing it to the base",
+		async (state) => {
+			const pull = new FakePull();
+			pull.queue = true;
+			pull.mergeState = state;
+			pull.comparison = "diverged";
+			const warnings: string[] = [];
+			await land(PR, HEAD, "merge", pull.deps(warnings));
+			expect(pull.writes).toEqual([`enqueuePullRequest ${HEAD}`]);
+			expect(pull.queueEntry).not.toBeNull();
+			expect(pull.comparisons).toEqual([]);
+			expect(warnings).toEqual([]);
+		},
+	);
+
+	test("arms auto-merge bound to the head while a queue base's required checks are pending", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.mergeState = "BLOCKED";
+		await land(PR, HEAD, "merge", pull.deps());
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
+	});
+
+	test("enqueues an UNKNOWN head GitHub finds clean when arming auto-merge", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.mergeState = "UNKNOWN";
+		pull.beforeAutoMerge = () => "Pull request is in clean status";
+		await land(PR, HEAD, "squash", pull.deps());
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH`, `enqueuePullRequest ${HEAD}`]);
+	});
+
+	test("fails when GitHub refuses to enqueue the head, saying to fix the PR", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.mergeState = "DIRTY";
+		pull.beforeEnqueue = () => ({ message: "Pull request is not mergeable", type: "UNPROCESSABLE" });
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toBe(
+			`${URL_}: GitHub refused to enqueue ${HEAD} (GitHub GraphQL error: Pull request is not mergeable); fix the PR, for example with /quest-iterate, and land it again`,
+		);
+		expect(pull.queueEntry).toBeNull();
+	});
+
+	test("says nothing when GitHub refuses a head already in the queue", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.mergeState = "CLEAN";
+		pull.beforeEnqueue = () => {
+			pull.queueEntry = { state: "QUEUED" };
+			return { message: "Pull request is already queued" };
+		};
+		const warnings: string[] = [];
+		await land(PR, HEAD, "merge", pull.deps(warnings));
+		expect(warnings).toEqual([]);
+	});
+
+	test("refuses when the head moved before GitHub refused to enqueue it", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.mergeState = "CLEAN";
+		pull.beforeEnqueue = () => {
+			pull.head = "c".repeat(40);
+			return { message: "Head ref has moved" };
+		};
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(`head moved to ${"c".repeat(40)}`);
+	});
+
+	test("passes on an enqueue error that faults the token rather than the PR", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.mergeState = "CLEAN";
+		pull.beforeEnqueue = () => ({ message: "Resource not accessible by integration", type: "FORBIDDEN" });
+		const error = await land(PR, HEAD, "merge", pull.deps()).catch((caught: unknown) => caught);
+		expect(error).not.toBeInstanceOf(Refusal);
+		expect(error).toMatchObject({ message: "GitHub GraphQL error: Resource not accessible by integration" });
+	});
+
 	test("--direct explicitly permits a clean merge with auto-merge off", async () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = false;
@@ -492,13 +578,13 @@ describe("merge --land", () => {
 		});
 	});
 
-	test("enters the merge queue through auto-merge even when clean", async () => {
+	test("warns that a merge queue applies its own method", async () => {
 		const pull = new FakePull();
 		pull.mergeState = "CLEAN";
 		pull.queue = true;
 		const warnings: string[] = [];
 		await land(PR, HEAD, "squash", pull.deps(warnings));
-		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} SQUASH`);
+		expect(pull.writes.at(-1)).toBe(`enqueuePullRequest ${HEAD}`);
 		expect(warnings).toEqual([`${URL_} lands through a merge queue, which applies its own merge method`]);
 	});
 

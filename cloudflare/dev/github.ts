@@ -110,6 +110,8 @@ export type World = {
 };
 
 const sha1 = (text: string) => createHash("sha1").update(text).digest("hex");
+/** The signed-in user's GitHub App token. */
+const USER_TOKEN = "fake-user-token";
 /** The Git object ID of a file's content, which the Worker verifies. */
 export const blob = (content: string | Uint8Array) => {
 	const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : content;
@@ -560,6 +562,68 @@ export function fakeGitHub(world: World) {
 		head: { ref: pull.branch, sha: headOf(repo, pull), repo: headRepo(repo, pull) },
 	});
 
+	const restRepo = (repo: Repo) => ({
+		id: repo.id,
+		name: repo.name,
+		owner: { login: repo.owner },
+		private: false,
+		visibility: "public",
+		default_branch: repo.defaultBranch ?? "main",
+		archived: false,
+		disabled: false,
+		license: { spdx_id: "MIT" },
+		allow_squash_merge: true,
+		allow_auto_merge: true,
+	});
+
+	/**
+	 * What the signed-in user's own token reads: the installation on the
+	 * repositories' owner, its repositories with the user's role, and each
+	 * default branch's `quest` directory, as the project picker asks.
+	 */
+	function userRead(path: string, body: Record<string, any>, me: User): Response | null {
+		if (path === "/user/installations")
+			return json({
+				total_count: 1,
+				installations: [{ id: world.installation, app_id: world.app.id, suspended_at: null, permissions: {} }],
+			});
+		const listed = path.match(/^\/user\/installations\/(\d+)\/repositories$/);
+		if (listed) {
+			const repos = Number(listed[1]) === world.installation ? world.repos : [];
+			return json({
+				total_count: repos.length,
+				repositories: repos.map((repo) => ({
+					...restRepo(repo),
+					permissions: {
+						admin: false,
+						maintain: repo.maintainers.includes(me.login),
+						push: true,
+						pull: true,
+					},
+				})),
+			});
+		}
+		if (path !== "/graphql") return null;
+		const { query, variables } = body as { query: string; variables: Record<string, string> };
+		const data: Record<string, unknown> = {};
+		for (const [, alias, index] of query.matchAll(/(r(\d+)): repository\(/g)) {
+			const repo = world.repos.find(
+				(r) => r.owner === variables[`o${index}`] && r.name === variables[`n${index}`],
+			);
+			if (!repo) continue;
+			const entries = new Map<string, string>();
+			for (const file of repo.files) {
+				const [top, name, ...rest] = file.path.split("/");
+				if (top === "quest" && name) entries.set(name, rest.length ? "tree" : "blob");
+			}
+			data[alias!] = {
+				databaseId: repo.id,
+				object: entries.size ? { entries: [...entries].map(([name, type]) => ({ name, type })) } : null,
+			};
+		}
+		return json({ data });
+	}
+
 	/** The repositories an installation token may name, by `owner/name`. */
 	function grant(installation: number, input: { repository_ids?: number[]; repositories?: string[] }) {
 		if (installation !== world.installation) return null;
@@ -588,7 +652,7 @@ export function fakeGitHub(world: World) {
 		const me = world.users[0]!;
 		if (url.origin === "https://spdx.org") return json({ licenseId: "MIT", isOsiApproved: true });
 		if (url.origin === "https://github.com" && path === "/login/oauth/access_token")
-			return json({ access_token: "fake-user-token", token_type: "bearer", scope: "" });
+			return json({ access_token: USER_TOKEN, token_type: "bearer", scope: "" });
 		if (url.origin !== "https://api.github.com") return missing(method, request.url);
 		const text = await request.text();
 		const body = text ? (JSON.parse(text) as Record<string, any>) : {};
@@ -599,6 +663,7 @@ export function fakeGitHub(world: World) {
 		// The App authenticates as itself with a JWT, and as an installation with a token minted from it.
 		const app = token.split(".").length === 3;
 		const unauthorized = () => json({ message: "Bad credentials" }, 401);
+		if (token === USER_TOKEN) return userRead(path, body, me) ?? unauthorized();
 		if (path === "/app") return app ? json({ id: world.app.id, slug: world.app.slug }) : unauthorized();
 		const mint = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/);
 		if (mint && method === "POST") {
@@ -738,20 +803,7 @@ export function fakeGitHub(world: World) {
 		}
 		if (!repo || !scope.repositories.has(fullName!)) return notFound();
 
-		if (tail === "")
-			return json({
-				id: repo.id,
-				name: repo.name,
-				owner: { login: repo.owner },
-				private: false,
-				visibility: "public",
-				default_branch: repo.defaultBranch ?? "main",
-				archived: false,
-				disabled: false,
-				license: { spdx_id: "MIT" },
-				allow_squash_merge: true,
-				allow_auto_merge: true,
-			});
+		if (tail === "") return json(restRepo(repo));
 		const permission = tail.match(/^\/collaborators\/([^/]+)\/permission$/);
 		if (permission) {
 			const found = world.users.find((u) => u.login === permission[1]);
