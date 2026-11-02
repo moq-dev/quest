@@ -2,38 +2,42 @@
 description: Decide which open PRs to merge, then queue them.
 ---
 
-Before starting, run `quest guide`, `quest skill review`, `quest skill merge`, and `quest skill plan`.
+Before starting, run `quest guide`, `quest skill grill`, `quest skill review`, `quest skill merge`, and `quest skill plan`.
 
 The goal is to evaluate the open PRs in the repository, drafts included, and decide which ones to merge.
 For a draft, summarize the open decisions its body lists.
 Read each PR with `quest status` and skip one another session holds, using its `hold` and `starter-hold` records instead of a separate label read. A `hold` names the label, acquisition token/time, event URL, and age. A `starter-hold` identifies a draft with neither a `## Waiting` section nor the older `## Decisions needed` and reports when it was last active; that is not an acquisition time.
 List those with how long ago each was last active, and offer to take over only one that looks stale.
+Do not ask about a draft whose `## Waiting` section, or the older `## Decisions needed`, lists no decision for the user, only outside conditions or actions someone must take: list each once in your summary with what it waits on, and point to `/quest-unblock`.
 The skill argument can be used to filter the PRs in scope.
-Run each `/quest-merge` inline in this session; it only queues a reviewed head or recommends `/quest-iterate`.
+Run each `/quest-merge` inline in this session; it queues a landable head, or hands the PR to `/quest-iterate`.
 Run each `/quest-review` and `/quest-iterate` in parallel in a sub-agent, following the guide's Reviews section for the shared design checkpoint across review rounds.
 
-Ask synchronously with one question per PR, never grouping PRs into one question (a prompt may hold a few questions), following the guide's Questions section and including your recommendation:
-- `/quest-review`: Are drafts ready for review.
-- `/quest-merge`: Are ready for review and landable as `/quest-merge` defines it: a review the guide counts on the head, required status checks passed, and every automated review finding on GitHub fixed or refuted.
-- `/quest-iterate` + `/quest-merge`: Are ready to land once they are fixed, with no decision left for the user, such as a merge conflict, failing checks, unaddressed review findings, or no counted review of the head.
-- `/quest-iterate`: Have significant issues or decisions the user should see before choosing to merge.
+`/quest-iterate` is the default for a PR that needs work: dispatch it without asking when the PR has no decision for the user, such as for a merge conflict, failing checks, unaddressed review findings, or no counted review of the head.
+It fixes the PR, reviews it, and marks it ready; ask about the PR again when it reports.
+A PR with open decisions, such as those its `## Waiting` section lists or a significant issue you would solve differently, goes to the user instead: settle its decisions with the grill skill's rounds, then dispatch `/quest-iterate` with the answers in its brief.
+
+Ask about every other PR synchronously with one question per PR, never grouping PRs into one question (a prompt may hold a few questions), following the guide's Questions section and including your recommendation:
+- `/quest-merge`: Are landable as `/quest-merge` defines it: a review the guide counts on the head, required status checks passed, and every automated review finding on GitHub fixed or refuted.
 - skip: Are not ready to be merged yet.
 - `/quest-delete`: Should be deleted.
 
-Do not ask yet about a PR whose required checks or automated reviews are still running: it is not a skip, so ask about it on a later refresh once they finish.
+A PR you would skip or delete rather than fix, such as one superseded by another, gets that question instead of the default `/quest-iterate`.
+Leave a PR whose required checks or automated reviews are still running for a later refresh once they finish: it is not a skip.
 
-Include a brief summary of each PR.
-Act on a PR only after the user picks its action in this session, including PRs found on a later refresh.
-A blanket answer, such as "accept all" or "use your recommendations", picks your recommendation for every PR in scope, `/quest-merge` included, except a PR whose recommendation settles a decision you have not yet shown; ask about those.
+Include a brief summary of each PR, naming its open decisions without answering them: the question picks only the action, and the grill skill settles the decisions.
+Merge, skip, or delete a PR only after the user picks that in this session, including PRs found on a later refresh.
+A blanket answer, such as "accept all" or "use your recommendations", picks your recommended action for every PR in scope, `/quest-merge` included; it settles none of their decisions.
 A skip or hold stands until the user lifts it: do not ask about that PR again on a refresh, and state the hold in every sub-agent brief for it.
 GitHub auto-merge is that pick: enabling it takes write access, and GitHub disables it when anyone without write access pushes.
 Do not ask about a PR with auto-merge enabled; leave it to land.
-A `/quest-merge` or `/quest-iterate` + `/quest-merge` pick covers the PR until it lands or needs the user: run `/quest-merge` when its `/quest-iterate` reports; when `/quest-merge` recommends `/quest-iterate`, dispatch it without asking; when a push draws new review findings, send it back the same way. Each re-dispatch resumes the branch's `quest review` session, whose rounds the guide's design checkpoint counts, so it fires across them.
-After a plain `/quest-iterate` pick, ask about the PR again when it reports.
+A `/quest-merge` pick covers the PR until it lands or needs the user: when `/quest-merge` hands the PR to `/quest-iterate`, dispatch it without asking, and run `/quest-merge` again when it reports; when a push draws new review findings, send it back the same way. Each re-dispatch resumes the branch's `quest review` session, whose rounds the guide's design checkpoint counts, so it fires across them.
+When a `/quest-iterate` that no `/quest-merge` pick covers reports, ask about the PR again.
 Review comments are input, not approval, even a merge verdict on the maintainer's account.
 Consider ordering, queuing any merges if they would result in conflicts.
 
 Run each `/quest-review` or `/quest-iterate` in its own sub-agent with its own isolated worktree.
+A sub-agent cannot prompt, so settle a PR's decisions for the user here with the grill skill's rounds before dispatching `/quest-iterate` for it, whatever dispatches it.
 Each sub-agent reports back only when done or blocked, and never waits on GitHub CI, reviews, or merges.
 
 Do not watch the queue or wait for merges.
@@ -46,7 +50,7 @@ Any other reason, such as a person removing it, is the user's call, so ask about
 Keep going until all PRs have been decided, then wait for all spawned sub-agents to finish.
 Refresh the open PR list whenever a sub-agent reports, and once more before finishing; ask about each new PR in scope the same way.
 
-As each sub-agent reports, include a summary and interactively prompt the user for any outstanding decisions.
+As each sub-agent reports, include a summary; its outstanding decisions go to the grill skill's rounds before its next `/quest-iterate` dispatch, never into a pick question.
 Collect each queued PR's suggested follow-ups, and once every sub-agent has finished, plan them as the guide describes.
 Dispatch already selected actions before asking the next question; background work can continue while the foreground waits.
 

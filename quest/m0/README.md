@@ -87,6 +87,11 @@ ownership-manifest design:
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - lockfile merges, protected edits as ready commits, workflow pushes, and the PR's own CI as context
 - [Landing priority](/quest/m0/land-priority.md) - cheap checks wait a bounded time and the land daemon's check runs ahead of agent builds
 - [Current landing status](/quest/m0/status-landing.md) - `quest status` drops a stale `landing-stopped` line and ignores superseded cancelled checks
+- [Agents don't stall](/quest/m0/agent-stalls.md) - long waits block in the same turn, pre-existing failures don't stop review, and reviewer outages become waits
+- [Follow-ups as agents report](/quest/m0/follow-ups-as-reports.md) - coordinators plan follow-ups as reports arrive, fewer of them, with standing milestone rules
+- [Context before decision prompts](/quest/m0/prompt-context.md) - every prompt explains the work first, and maintainer steps say why an agent can't take them
+- [Coordinator control](/quest/m0/coordinator-control.md) - finish up, pause, and status are defined, and dead agents are resumed
+- [Spawn keeps finding work](/quest/m0/spawn-refill.md) - recompute ready quests per report, resume leftover local branches, and check open PRs before claiming
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - condition: Bun fixes concurrent `rmSync` on Windows; report it, then drop the workaround
