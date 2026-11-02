@@ -2,9 +2,9 @@
 // accounts in with their own CLIs, and run jobs in the foreground.
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, constants, realpathSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { hostname } from "node:os";
-import { delimiter, isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -14,6 +14,7 @@ import { Opencode } from "./opencode";
 import { type Account, type Login, RunnerHome, defaultHome } from "./home";
 import type { Job } from "./protocol";
 import { Runner } from "./runner";
+import { which } from "../cli/program";
 
 export const DEFAULT_URL = "https://kix.quest";
 
@@ -33,19 +34,6 @@ export interface RunnerIO {
 function platform(): "linux" | "darwin" {
 	if (process.platform === "linux" || process.platform === "darwin") return process.platform;
 	throw new RunnerInputError("quest runner runs on Linux and macOS only");
-}
-
-/** An executable on PATH, as an absolute path with symlinks resolved. */
-export function which(name: string, env: NodeJS.ProcessEnv): string | undefined {
-	for (const dir of (env.PATH ?? "").split(delimiter)) {
-		if (!dir || !isAbsolute(dir)) continue;
-		try {
-			const path = join(dir, name);
-			accessSync(path, constants.X_OK);
-			return realpathSync(path);
-		} catch {}
-	}
-	return undefined;
 }
 
 const CLIS: Record<AdapterName, { binary: string; variable: string; product: string }> = {
