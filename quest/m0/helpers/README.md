@@ -71,4 +71,3 @@ commands from Sep-Oct. Session counts in each child come from that window.
 ## Required
 
 - [Headless agents](/quest/m0/helpers/headless-agents.md) - `/quest-spawn api` launches, resumes, and stops billed agents through one command auto mode allows
-- [moq-dev/quest lands through quest land](/quest/m0/helpers/land-adopt.md) - this repository's `main` changes only through its own gate

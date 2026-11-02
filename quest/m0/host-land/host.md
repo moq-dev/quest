@@ -106,8 +106,11 @@ What remains:
   quest-land-fixer.socket canceled" when several `*-socket-refresh`
   services restart at once (user, 2026-10-31). Find the race and fix it,
   without retrying the test.
-- Once [moq-dev/quest#324](https://github.com/moq-dev/quest/pull/324) lands
-  (user, 2026-10-31): export `QUEST_GATE_PRIORITY=1` in the generated
-  `quest-land-check-command`, then bump the pinned quest, so a land check's
-  nested `quest gate` waits for memory but not load. Don't use
-  `QUEST_GATE_ADMITTED`, which also skips the memory check.
+
+Amended 2026-11-01 (maintainer, /quest-plan; see the
+[queue watcher](/quest/m0/queue-watcher/README.md)): host-gate work is frozen
+except fixes the switch needs. The `QUEST_GATE_PRIORITY=1` export in the
+generated check command (planned 2026-10-31) is dropped with it. The items
+above stay, since the fixer container and its launcher serve the watcher too,
+and the gate keeps serving the repositories not yet switched. The watcher's
+own unit is [Watcher on the host](/quest/m0/queue-watcher/host.md).
