@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-import { MERGE_LABEL } from "../core";
+import { type Finding, MERGE_LABEL, check, formatFinding, isQuest, remove } from "../core";
 import { repositoryPath } from "./claims";
 import {
 	GitHub,
@@ -16,6 +16,7 @@ import {
 	string,
 } from "./github";
 import { classifyCheck } from "./status";
+import { committedSources, snapshot } from "./tree";
 
 /** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
 export const LAND_CHECK = "quest land";
@@ -66,7 +67,6 @@ function pinned(body: string): string | null {
 export type Reason =
 	| "merge_conflict"
 	| "failed_checks"
-	| "checks_pending"
 	| "review_required"
 	| "changes_requested"
 	| "unresolved_conversations"
@@ -113,6 +113,18 @@ export interface Plan {
 	/** Queued PRs in enqueue order. */
 	queue: Entry[];
 	eject: Ejection[];
+	/** Queued PRs whose required checks have not finished: they stay queued and sit out batches until they pass. */
+	waiting?: Waiting[];
+}
+
+/** A queued PR waiting on required checks that are still running or have not reported. */
+export interface Waiting {
+	number: number;
+	url: string;
+	/** Its pick, from which the wait for its checks is measured. */
+	enabledAt: string;
+	/** The required checks still pending on its head. */
+	pending: string[];
 }
 
 /** A page of a commit's check runs and commit statuses, with the app behind each run. */
@@ -252,7 +264,8 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 /**
  * Read the queue: open PRs to `base` with auto-merge enabled, in the order it
  * was enabled. A PR is queued while its auto-merge commit body pins its current
- * head; the rest of the auto-merging PRs are ejected with a reason.
+ * head; one whose required checks are still running waits, and the rest of the
+ * auto-merging PRs are ejected with a reason.
  */
 export async function resolveQueue(
 	repository: Repository,
@@ -331,7 +344,7 @@ export async function resolveQueue(
 		after = info.hasNextPage === true ? string(info.endCursor) : null;
 	} while (after !== null);
 
-	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [] };
+	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [], waiting: [] };
 	const landing = nodes.filter((node) => node.autoMergeRequest !== null && node.isDraft !== true);
 	const order = (node: ObjectValue) => string(object(node.autoMergeRequest).enabledAt);
 	landing.sort((a, b) => order(a).localeCompare(order(b)) || Number(a.number) - Number(b.number));
@@ -375,10 +388,13 @@ export async function resolveQueue(
 			if (unmet.failing.length > 0) {
 				eject("failed_checks", `required checks failed on its head: ${unmet.failing.join(", ")}`);
 			} else if (unmet.pending.length > 0) {
-				eject(
-					"checks_pending",
-					`required checks had not passed on its head when the gate ran: ${unmet.pending.join(", ")}; land it again once they pass`,
-				);
+				// Still running: it keeps its auto-merge and its place, and joins a batch once they pass.
+				plan.waiting!.push({
+					number: entry.number,
+					url: entry.url,
+					enabledAt: entry.enabledAt,
+					pending: unmet.pending,
+				});
 			} else {
 				plan.queue.push(entry);
 			}
@@ -460,19 +476,55 @@ interface Conflict {
 	files: string[];
 }
 
-/** A bounded batch of squash commits, or a conflict on its base PR. */
-interface Chain {
-	links: Link[];
-	conflict?: Conflict;
+/** A queued PR that fails `quest check` squashed alone onto the base, with the findings the base lacks. */
+export interface Rejection {
+	entry: Entry;
+	/** The squash onto the base that fails, which a fixer starts from. */
+	commit: string;
+	findings: string[];
+}
+
+/** A newly screened PR, and the PRs ahead of it that it conflicts with, each squashed alone onto the base. */
+export interface Overlap {
+	entry: Entry;
+	ahead: Conflict[];
 }
 
 /**
- * Fetch the base and every queued head, then squash each head in turn onto the
- * chain in a scratch worktree inside the git directory, resolving quest files
- * with `quest resolve`. Stop at the batch limit, skipping conflicting additions;
- * a conflicting base stops the batch.
+ * A bounded batch of squash commits, or a conflict on its base PR. Rejected PRs are left out of
+ * it; overlaps only inform.
  */
-export async function build(root: string, plan: Plan, read: RemoteRead = readRemote): Promise<Chain> {
+interface Chain {
+	links: Link[];
+	conflict?: Conflict;
+	rejected: Rejection[];
+	overlaps: Overlap[];
+}
+
+/**
+ * How the next batch is chosen. Batches alternate between the oldest and the newest queued PR as their base, and a
+ * failed batch halves the next one's size, which each landed batch grows back toward 1 + floor(log2 n).
+ */
+export interface BatchPolicy {
+	order: "oldest" | "newest";
+	size: number;
+}
+
+/**
+ * Fetch the base and every queued head, then fill a batch in `policy`'s order in a scratch
+ * worktree inside the git directory, resolving quest files with `quest resolve`. Each candidate
+ * is first squashed alone onto the base: one that fails `quest check` there with findings the
+ * base lacks is rejected, and a fresh one is also squashed onto the PRs landing soonest ahead of
+ * it, to report which ones it conflicts with. Stop at the policy's batch limit, skipping
+ * conflicting additions; a conflicting base stops the batch.
+ */
+export async function build(
+	root: string,
+	plan: Plan,
+	read: RemoteRead = readRemote,
+	fresh: (entry: Entry) => boolean = () => false,
+	policy: BatchPolicy = { order: "oldest", size: Number.POSITIVE_INFINITY },
+): Promise<Chain> {
 	await read(root, [
 		"fetch",
 		"--quiet",
@@ -482,20 +534,28 @@ export async function build(root: string, plan: Plan, read: RemoteRead = readRem
 		...plan.queue.map((entry) => entry.head),
 	]);
 	return mergeWorktree(root, plan.base.sha, (dir, driver) => {
-		const chain: Chain = { links: [] };
-		for (const entry of plan.queue) {
-			if (chain.links.length >= 1 + Math.floor(Math.log2(plan.queue.length))) break;
-			const merged = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--squash", entry.head]);
-			if (merged.status !== 0) {
-				const files = lines(git(dir, ["diff", "--name-only", "--diff-filter=U"]));
-				if (files.length === 0)
-					throw new Error(`git merge --squash ${entry.head} failed: ${merged.stderr.trim()}`);
-				if (chain.links.length === 0) chain.conflict = { entry, files };
-				git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
-				if (chain.links.length === 0) break;
+		const chain: Chain = { links: [], rejected: [], overlaps: [] };
+		const ordered = policy.order === "newest" ? [...plan.queue].reverse() : plan.queue;
+		const limit = Math.max(1, Math.min(policy.size, 1 + Math.floor(Math.log2(plan.queue.length))));
+		const screening = screener(dir, driver, plan);
+		// Screen each head only as the batch reaches it, so a long queue costs this batch's
+		// candidates, not every queued PR on every round.
+		for (const entry of ordered) {
+			if (chain.links.length >= limit) break;
+			const alone = screening.alone(entry);
+			if (alone === null) {
+				if (chain.links.length > 0) continue;
+				git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+				chain.conflict = { entry, files: squash(dir, driver, entry)! };
+				break;
+			}
+			if (alone.findings.length > 0) {
+				chain.rejected.push({ entry, commit: alone.commit, findings: alone.findings.map(formatFinding) });
 				continue;
 			}
-			git(dir, ["commit", "--quiet", "--allow-empty", "-m", `${entry.title} (#${entry.number})`]);
+			if (fresh(entry)) chain.overlaps.push({ entry, ahead: screening.overlaps(entry) });
+			git(dir, ["reset", "--quiet", "--hard", chain.links.at(-1)?.commit ?? plan.base.sha]);
+			if (squash(dir, driver, entry) !== null) continue;
 			chain.links.push({
 				entry,
 				commit: git(dir, ["rev-parse", "HEAD"]),
@@ -504,6 +564,129 @@ export async function build(root: string, plan: Plan, read: RemoteRead = readRem
 		}
 		return chain;
 	});
+}
+
+/** Squash `entry` onto `HEAD` and commit it, or return the conflicting files and leave `HEAD` as it was. */
+function squash(dir: string, driver: string, entry: Entry): string[] | null {
+	const merged = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--squash", entry.head]);
+	if (merged.status !== 0) {
+		const files = lines(git(dir, ["diff", "--name-only", "--diff-filter=U"]));
+		if (files.length === 0) throw new Error(`git merge --squash ${entry.head} failed: ${merged.stderr.trim()}`);
+		git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
+		return files;
+	}
+	prune(dir, entry.head);
+	git(dir, ["commit", "--quiet", "--allow-empty", "-m", `${entry.title} (#${entry.number})`]);
+	return null;
+}
+
+/**
+ * Finish a clean merge of `head` into `HEAD`, staged in the index, by dropping each list entry
+ * that links to a quest `HEAD` finished since `head` branched, as `quest rm` drops links to a
+ * quest it deletes. The PR wrote that link while the quest was open, so the base finishing it
+ * leaves the link dangling through no fault of the PR, and `quest check` would reject it.
+ * Deletion since the merge base tells a finished quest from a mistyped link, and a quest the base
+ * moved is a rename, not a deletion. A link in prose stays, for `quest check` to report. Both the
+ * chain and a prepared head merge through here, so the head lands the tree the chain tested.
+ * Returns the documents it changed.
+ */
+function prune(dir: string, head: string): string[] {
+	const since = git(dir, ["merge-base", "HEAD", head]);
+	const finished = new Set(
+		git(dir, [
+			"diff",
+			"--no-ext-diff",
+			"--find-renames",
+			"--diff-filter=D",
+			"--name-only",
+			"-z",
+			since,
+			"HEAD",
+			"--",
+			"quest",
+		])
+			.split("\0")
+			.filter(isQuest),
+	);
+	if (finished.size === 0) return [];
+	let tree: ReturnType<typeof committedSources>;
+	try {
+		tree = committedSources(dir, git(dir, ["write-tree"]), false);
+	} catch {
+		// A tree `quest check` cannot read is its finding to report, not this edit's.
+		return [];
+	}
+	const modes = new Map(tree.sources.map((source) => [source.path, source.mode]));
+	const texts = remove(tree.sources, (path) => finished.has(path) && !tree.exists(path));
+	for (const [path, text] of texts) {
+		const oid = git(dir, ["hash-object", "-w", "--no-filters", "--stdin"], { input: text });
+		git(dir, ["update-index", "--cacheinfo", `${modes.get(path)},${oid},${path}`]);
+	}
+	return [...texts.keys()];
+}
+
+/** How many queued PRs ahead of a newly queued one its conflict report covers: those landing soonest. */
+const OVERLAP_AHEAD = 4;
+
+/**
+ * Screening for one batch: each head squashed alone onto the base, with `quest check` findings
+ * the base lacks, and a fresh head's conflicts with the PRs landing soonest ahead of it. Results are
+ * memoized, since a head is squashed alone once per batch however often it is needed.
+ */
+function screener(dir: string, driver: string, plan: Plan) {
+	// A base without quests is a repository that does not use them.
+	const known =
+		git(dir, ["ls-tree", "--name-only", plan.base.sha, "quest"]) === "" ? null : questCheck(dir, plan.base.sha);
+	const cache = new Map<Entry, { commit: string; findings: Finding[] } | null>();
+	const alone = (entry: Entry) => {
+		if (cache.has(entry)) return cache.get(entry)!;
+		git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
+		let result: { commit: string; findings: Finding[] } | null = null;
+		if (squash(dir, driver, entry) === null) {
+			const commit = git(dir, ["rev-parse", "HEAD"]);
+			// A finding the base already has is not this PR's, even on a line the PR moved.
+			const findings =
+				known === null
+					? []
+					: questCheck(dir, commit).filter(
+							(finding) =>
+								!known.some((old) => old.path === finding.path && old.message === finding.message),
+						);
+			result = { commit, findings };
+		}
+		cache.set(entry, result);
+		return result;
+	};
+	const overlaps = (entry: Entry) => {
+		const index = plan.queue.indexOf(entry);
+		return plan.queue
+			.slice(0, Math.max(0, index))
+			.slice(0, OVERLAP_AHEAD)
+			.flatMap((earlier) => {
+				const base = alone(earlier);
+				if (base === null || base.findings.length > 0) return [];
+				git(dir, ["reset", "--quiet", "--hard", base.commit]);
+				const files = squash(dir, driver, entry);
+				return files === null ? [] : [{ entry: earlier, files }];
+			});
+	};
+	return { alone, overlaps };
+}
+
+/**
+ * `quest check`'s findings on `commit`, read from git objects by this trusted process, so nothing
+ * from the tree runs. A tree it cannot read, such as one with no quests left, is itself a finding,
+ * as it is for `quest check`.
+ */
+function questCheck(dir: string, commit: string): Finding[] {
+	try {
+		const tree = snapshot(dir, commit, false);
+		return check(tree.docs, tree.exists);
+	} catch (error) {
+		// Its messages name the scratch worktree, a host path the PR comment need not show.
+		const message = (error instanceof Error ? error.message : String(error)).replaceAll(`${dir}/`, "");
+		return [{ path: "quest", line: null, message }];
+	}
 }
 
 /** Trusted merge driver/worktree shared by batch construction and PR-head preparation. */
@@ -543,9 +726,13 @@ export function mergeBase(
 		const result = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--no-ff", "--no-commit", head]);
 		if (result.status !== 0)
 			return { reason: "merge_conflict", detail: `${result.stdout}\n${result.stderr}`.trim() };
+		const pruned = prune(dir, head);
 		const tree = git(dir, ["write-tree"]);
+		const message = pruned.length
+			? `quest land: merge tested base\n\nDrop links to quests the base finished from ${pruned.join(", ")}.\n`
+			: "quest land: merge tested base\n";
 		const commit = git(dir, ["commit-tree", tree, "-p", head, "-p", base], {
-			input: "quest land: merge tested base\n",
+			input: message,
 			env: {
 				GIT_AUTHOR_NAME: "moq-bot",
 				GIT_AUTHOR_EMAIL: "moq-bot@users.noreply.github.com",
@@ -594,7 +781,7 @@ export async function eject(github: GitHub, plan: Plan, ejection: Ejection): Pro
 }
 
 /** The repository from which approved heads and the base are fetched. */
-export function baseRemote(plan: Plan): string {
+export function baseRemote(plan: Pick<Plan, "repository">): string {
 	return `https://github.com/${plan.repository}.git`;
 }
 
@@ -607,6 +794,16 @@ export function commandEnvironment(): NodeJS.ProcessEnv {
 	return { PATH: process.env.PATH, LANG: "C.UTF-8" };
 }
 
+/** Git's environment for trusted work: no system or global configuration, and no prompts. */
+export function gitEnvironment(): NodeJS.ProcessEnv {
+	return {
+		...commandEnvironment(),
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_TERMINAL_PROMPT: "0",
+	};
+}
+
 /** Run git without the repository's hooks, returning its status and output. */
 export function tryGit(
 	cwd: string,
@@ -617,13 +814,7 @@ export function tryGit(
 		cwd,
 		encoding: "utf8",
 		input: options.input,
-		env: {
-			...commandEnvironment(),
-			GIT_CONFIG_NOSYSTEM: "1",
-			GIT_CONFIG_GLOBAL: "/dev/null",
-			GIT_TERMINAL_PROMPT: "0",
-			...options.env,
-		},
+		env: { ...gitEnvironment(), ...options.env },
 		maxBuffer: 1 << 30,
 	});
 	if (result.error) throw result.error;

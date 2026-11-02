@@ -330,6 +330,9 @@ describe.skipIf(process.platform === "win32")("the merge driver", () => {
 		const merged = mergeMain(dir, tools);
 		expect(merged.status).toBe(1);
 		expect(readFileSync(join(dir, "quest/README.md"), "utf8")).toContain("<<<<<<< HEAD\n");
+		expect(merged.stderr).toContain(
+			"quest: no quest resolve on PATH, so link lists in quest/README.md were not auto-resolved\n",
+		);
 	});
 
 	for (const mode of ["quest", "missing", "older"] as const) {
@@ -366,6 +369,10 @@ describe.skipIf(process.platform === "win32")("the merge driver", () => {
 			const result = mergeMain(dir, mode === "quest" ? `${tools}:${process.env.PATH}` : tools, "their'branch");
 			expect(result.status, result.stderr).toBe(1);
 			expect(readFileSync(join(dir, "quest/README.md"), "utf8")).toBe(expected);
+			const reason = { quest: null, missing: "no quest resolve on PATH", older: "quest resolve failed" }[mode];
+			const warning = "so link lists in quest/README.md were not auto-resolved";
+			if (reason === null) expect(result.stderr).not.toContain(warning);
+			else expect(result.stderr).toContain(`quest: ${reason}, ${warning}\n`);
 		});
 	}
 
