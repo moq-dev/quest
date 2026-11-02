@@ -27,9 +27,5 @@ m0.
   can call it, rather than keeping two copies.
 - A refused enqueue (conflict, failing checks) is a job result the runner
   reports, like any other refused landing; kix doesn't fix it.
-- The [land review](/quest/m0/kix/land-review.md) rule still applies first:
+- The [land review](/cloudflare/src/github/review.ts) rule still applies first:
   kix enqueues only a head with a review that counts on it.
-
-## Required
-
-- [Land review](/quest/m0/kix/land-review.md) - rewrites the same `landPullRequest`, in [moq-dev/quest#351](https://github.com/moq-dev/quest/pull/351)
