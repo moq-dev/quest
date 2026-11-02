@@ -7,9 +7,9 @@ Before you begin, run `quest guide` and `quest skill merge`, and read their outp
 Parse the arguments to determine the PR number, otherwise resolve it from the current context/branch.
 If its body lists open decisions or unfinished work, offer `/quest-iterate` first.
 
-Take the PR with `quest ready <pr>`, passing a token you already hold from another state to swap it, and keep the hold token it prints; `quest ready --help` explains holds.
+Take the PR with `quest iterate <pr>`, passing a token you already hold for it to keep that hold, and keep the hold token it prints; `quest iterate --help` explains holds.
 If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
-A draft you started in this session has no `## Decisions needed` section, so it is still yours and the command refuses it: review it without taking it, and take it once you have marked it ready below.
+A draft you started in this session has no `## Decisions needed` section, so it is still yours and the command refuses it: review it without taking it.
 
 Work in a checkout of the PR's head branch, checking out the head first when someone else opened it.
 Commit everything, then run the repository's local checks, unless the guide's Reviews section says to run no code from the head, and fix any failure.
@@ -24,8 +24,8 @@ A finding the reviewer keeps against such a refutation is a decision for the use
 If you judge the change too trivial to review, skip the review instead and record why.
 
 Rewrite the PR body's `## Review` section after each round, or once for a skip.
-Push, then flip the PR to "Ready for Review" with `quest ready <pr> <token> --done`, which also drops its `## Decisions needed` section.
-For your own draft, mark it ready for review yourself, then take it with `quest ready <pr>`.
+Push, then flip the PR to "Ready for Review" with `quest ready <pr> <token>`, which also drops its `## Decisions needed` section.
+For your own draft, mark it ready for review yourself.
 Do not wait for online reviewers.
 
 Summarize the review and CI from `quest status <pr>`, then interactively prompt the user with your recommendation:
@@ -39,5 +39,5 @@ While its required checks or automated reviews are still running, report that in
 
 A background agent that cannot prompt lists these in its report instead.
 
-Hand the PR back with `quest release <pr> <token>` before you ask or report.
-To go straight on to `/quest-iterate` or `/quest-merge` in this session, pass the token to its command instead, which swaps the label.
+Hand the PR back with `quest release <pr> <token>` before you ask, report, or go on to `/quest-merge`.
+To go straight on to `/quest-iterate` in this session, pass the token to its `quest iterate` instead, which keeps the hold.
