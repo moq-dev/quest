@@ -15,7 +15,13 @@ export default defineConfig({
 			},
 		},
 	],
-	test: live
-		? { include: ["test/live/**/*.test.ts"], testTimeout: 30 * 60_000, hookTimeout: 60_000 }
-		: { include: ["test/**/*.test.ts"], exclude: [...configDefaults.exclude, "test/live/**"] },
+	test: {
+		// Git reads none of the caller's own configuration, such as commit signing
+		// with a key or program the fixtures cannot reach; each fixture sets its identity.
+		// Git for Windows maps "/dev/null" to its null device but rejects os.devNull's "\\.\nul".
+		env: { GIT_CONFIG_GLOBAL: "/dev/null" },
+		...(live
+			? { include: ["test/live/**/*.test.ts"], testTimeout: 30 * 60_000, hookTimeout: 60_000 }
+			: { include: ["test/**/*.test.ts"], exclude: [...configDefaults.exclude, "test/live/**"] }),
+	},
 });
