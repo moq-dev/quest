@@ -32,8 +32,8 @@ every user would have to add it.
   invoking it authorizes (starting, resuming, and stopping background agents in
   isolated worktrees, and with `api`, billing them to the user's keys), since
   stub text is part of the user turn the classifier reads. That changes the
-  stub contract ("the stub never changes between versions") once: `init` and
-  `uninstall` accept only a stub that exactly matches the current text, so they
-  must also recognize the known older stub text.
+  stub body once: `init` and `uninstall` recognize a stub of any version by
+  its body (`STUB` in `src/cli/setup.ts`), so it must accept both the old and
+  the new body.
 - The command does no load or CPU admission, and the skill no longer caps
   agents: the guide routes their expensive commands through `quest gate`.
