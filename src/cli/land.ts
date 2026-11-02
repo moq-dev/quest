@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { type Finding, check, formatFinding, isQuest, remove } from "../core";
 import { repositoryPath } from "./claims";
+import { programEnvironment } from "./program";
 import {
 	GitHub,
 	GitHubDeadline,
@@ -788,9 +789,13 @@ function lines(text: string): string[] {
 	return text.split("\n").filter((line) => line !== "");
 }
 
-/** Deliberately exclude HOME, Git configuration, agents, tokens, and systemd credentials. */
+/**
+ * Deliberately exclude HOME, Git configuration, agents, tokens, and systemd
+ * credentials. PATH keeps only its absolute directories: these commands run in
+ * a PR's checkout, which could otherwise supply its own `git` or `sh`.
+ */
 export function commandEnvironment(): NodeJS.ProcessEnv {
-	return { PATH: process.env.PATH, LANG: "C.UTF-8" };
+	return { ...programEnvironment({ PATH: process.env.PATH }), LANG: "C.UTF-8" };
 }
 
 /** Git's environment for trusted work: no system or global configuration, and no prompts. */
