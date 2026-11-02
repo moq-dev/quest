@@ -14,13 +14,17 @@ missing or repeating a removal.
 Decided 2026-11-01 (maintainer, /quest-plan; see the
 [epic](/quest/m0/queue-watcher/README.md)).
 
-- Poll the queue, don't receive webhooks: the host has no public endpoint.
-  One GraphQL query per pass reads the base's `mergeQueue { entries }`, and a
-  PR that left since the last pass is looked up: merged, or the newest
-  `RemovedFromMergeQueueEvent` on its timeline, with `reason`, `actor`, and
-  `enqueuer`. `quest status` already reads that event
-  (`src/cli/status.ts`). The App's installation token has its own rate limit,
-  separate from the maintainers' sessions.
+- Poll, don't receive webhooks: the host has no public endpoint. Reconcile
+  from the picks, not from queue snapshots alone: a PR enqueued and dropped
+  between two polls, or while the watcher was down, never shows in a
+  snapshot. Each pass reads every open PR holding an active pick (the marker
+  [Picks enter the merge queue](/quest/m0/queue-watcher/pick.md) records) with
+  its `mergeQueueEntry` and its `RemovedFromMergeQueueEvent`s newer than the
+  last one handled, with `reason`, `actor`, and `enqueuer`. `quest status`
+  already reads that event (`src/cli/status.ts`). The base's
+  `mergeQueue { entries }` can still serve as a cheap change signal. The App's
+  installation token has its own rate limit, separate from the maintainers'
+  sessions.
 - For a failed build, find the PR's `merge_group` workflow runs (event
   `merge_group`, head branch `gh-readonly-queue/<base>/pr-<n>-<sha>`) and
   fetch the failing jobs' logs through the App's `actions: read`, trimmed the
@@ -29,9 +33,13 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 - Classify the reason: a failure or a conflict goes to the fixer
   ([Fix and re-enqueue](/quest/m0/queue-watcher/fix.md)); a person's removal,
   or a push by anyone but the fixer, ends the pick and is left alone.
-- Keep the last seen queue and handled removals in the daemon's state
+- Keep each pick's last handled removal event ID in the daemon's state
   directory, as the host gate keeps its queue state, so a restart neither
   misses nor repeats one.
 - Start it as `quest land watch` beside `quest land serve`, sharing its App
   credential options, state directory, and comment marker and
   deduplication.
+
+## Required
+
+- [Picks enter the merge queue](/quest/m0/queue-watcher/pick.md) - the durable pick marker the watcher reconciles from
