@@ -15,7 +15,6 @@ maintainers, so they need none of this first.
 
 ## Required
 
-- [Pick repositories](/quest/m1/kix/pick-repos.md) - after installing, the maintainer enables repositories from a list
 - [Setup PR](/quest/m1/kix/setup-pr.md) - enrolling a repository without Quest makes the App open its `quest init` pull request
 - [Read-only CI](/quest/m1/kix/ci-read-only.md) - enrolled repositories keep pull-request CI read-only, checked at enrollment, with every trust boundary written down
 - [Contributor sandboxing](/quest/m1/kix/sandbox/README.md) - contributors' PR heads build in a VM, on stock Ubuntu and verified on macOS
