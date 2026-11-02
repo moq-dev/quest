@@ -50,7 +50,7 @@ export type Pull = Entity & {
 	reviewDecision: string | null;
 	/** GitHub's merge readiness for the App, such as CLEAN, BLOCKED, or DIRTY; absent in older observations. */
 	mergeStateStatus?: string;
-	/** The `quest:*` label a session holds it with, such as a queued merge's; absent in older observations. */
+	/** The hold label a session holds it with, such as a merge job's; absent in older observations. */
 	hold?: string | null;
 	reviews: { totalCount: number };
 	latestReviews: {
@@ -189,7 +189,7 @@ function validate(kind: "issue" | "pull", item: Entity) {
 
 /**
  * What is kept of an observed entity: a PR's body only as whether it hands
- * its draft back, and its labels only as the `quest:*` one a session holds it with.
+ * its draft back, and its labels only as the hold label a session holds it with.
  */
 function observed(kind: "issue" | "pull", item: Entity): Entity {
 	if (kind === "issue") return item;

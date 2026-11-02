@@ -409,13 +409,15 @@ test("never attaches a URL from a different label or event to a hold token", asy
 		checks: null,
 		reviews: page([]),
 		threads: page([]),
-		labels: { nodes: [{ name: "quest:merge" }] },
+		// Older quest versions' quest:merge holds nothing, so it reports no hold.
+		labels: { nodes: [{ name: "quest:merge" }, { name: "quest:active" }] },
 	});
 	const fixture = setup([body], {
-		holdFields: { timelineItems: { nodes: [holdEvent("token", "quest:merge")] } },
+		holdFields: { timelineItems: { nodes: [holdEvent("token", "quest:active")] } },
 		eventPages: [{ rows: [{ node_id: "token", event: "labeled", label: { name: "bug" }, url: "wrong" }] }],
 	});
-	expect((await pullRequestStatus(pr, fixture.deps)).holds[0].eventUrl).toBeNull();
+	const { holds } = await pullRequestStatus(pr, fixture.deps);
+	expect(holds.map((hold) => [hold.label, hold.eventUrl])).toEqual([["quest:active", null]]);
 });
 
 test("reports draft starter ownership as last activity, and does not invent its acquisition time", async () => {

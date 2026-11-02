@@ -16,7 +16,6 @@ import {
 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { basename, join } from "node:path";
-import { MERGE_LABEL } from "../core";
 import { GitHub, type GitHubDependencies, object, string } from "./github";
 import {
 	baseRemote,
@@ -863,12 +862,6 @@ async function collectJob(
 				"note",
 				author(result),
 			);
-		if (!error && result?.action !== "handback") {
-			// A PR that stayed queued needs no comment: its own fix, if any, is recorded in `## Review`.
-			await github.request(`/repos/${job.plan.repository}/issues/${number}/labels`, {
-				body: { labels: [MERGE_LABEL] },
-			});
-		}
 
 		const handback = error !== undefined || result?.action === "handback";
 		if (handback && blamed && !error && previous.blamed !== name)
@@ -893,10 +886,6 @@ async function collectJob(
 					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 					{ id: entry.id },
 				);
-			await github.request(
-				`/repos/${job.plan.repository}/issues/${number}/labels/${encodeURIComponent(MERGE_LABEL)}`,
-				{ method: "DELETE", allow: [404] },
-			);
 		}
 
 		if (handback)

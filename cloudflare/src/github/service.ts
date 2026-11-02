@@ -1,15 +1,5 @@
 import { createHash, createPrivateKey, sign } from "node:crypto";
-import {
-	MERGE_LABEL,
-	isHoldLabel,
-	latestHold,
-	heldToken,
-	spentMergeHold,
-	check,
-	isQuest,
-	parse,
-	ready,
-} from "quest/core";
+import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
 import { positiveId } from "./webhook";
@@ -1559,7 +1549,7 @@ export class GitHubService {
 			.run();
 	}
 
-	/** A pull request's hold labels and the timeline events that add a label or start a landing, as `quest merge` reads them. */
+	/** A pull request's hold labels and the timeline events that add a label or start a landing. */
 	async #holds(token: string, repo: GitHubRepository, pull: number): Promise<Holds> {
 		const result = await this.#api<{
 			data?: { repository: { pullRequest: HoldRow | null } | null };
@@ -1586,12 +1576,12 @@ export class GitHubService {
 		};
 	}
 
-	/** Remove `quest:merge` from a pull request; one already gone is fine. */
+	/** Remove `quest:kix` from a pull request; one already gone is fine. */
 	async #unhold(token: string, repo: GitHubRepository, pull: number) {
 		try {
 			await this.#api(
 				token,
-				`${repositoryPath(repo)}/issues/${number(pull)}/labels/${encodeURIComponent(MERGE_LABEL)}`,
+				`${repositoryPath(repo)}/issues/${number(pull)}/labels/${encodeURIComponent(KIX_LABEL)}`,
 				"DELETE",
 			);
 		} catch (error) {
@@ -1600,10 +1590,9 @@ export class GitHubService {
 	}
 
 	/**
-	 * Hold an open pull request for a merge job with the `quest:merge` label,
-	 * the contract `quest merge --help` states for local sessions too. Refused
-	 * while another session holds a `quest:*` label; a `quest:merge` whose
-	 * landing ended unmerged is spent and removed first. When two sessions
+	 * Hold an open pull request for a merge job with the `quest:kix` label,
+	 * under the contract `quest iterate --help` states for local sessions.
+	 * Refused while another session holds a hold label. When two sessions
 	 * label it at once, the first label added keeps it. Returns the hold's
 	 * token: the timeline event that added the label.
 	 */
@@ -1611,20 +1600,16 @@ export class GitHubService {
 		return this.#authorized(repo, userId, { issues: "write", pull_requests: "read" }, async (token) => {
 			let holds = await this.#holds(token, repo, pull);
 			if (holds.state !== "OPEN") throw new GitHubError("The pull request is no longer open");
-			if (spentMergeHold(holds)) {
-				await this.#unhold(token, repo, pull);
-				holds = { ...holds, labels: holds.labels.filter((name) => name !== MERGE_LABEL) };
-			}
 			const other = holds.labels[0];
 			if (other) throw new GitHubError(heldBy(other));
 			await this.#api(token, `${repositoryPath(repo)}/issues/${number(pull)}/labels`, "POST", {
-				labels: [MERGE_LABEL],
+				labels: [KIX_LABEL],
 			});
 			holds = await this.#holds(token, repo, pull);
-			const ours = latestHold(holds.events, MERGE_LABEL);
-			if (!ours) throw new GitHubError("GitHub does not show the quest:merge label kix added");
+			const ours = latestHold(holds.events, KIX_LABEL);
+			if (!ours) throw new GitHubError(`GitHub does not show the ${KIX_LABEL} label kix added`);
 			const rival = holds.labels.find((name) => {
-				if (name === MERGE_LABEL) return false;
+				if (name === KIX_LABEL) return false;
 				const event = latestHold(holds.events, name);
 				return !event || holds.events.indexOf(event) < holds.events.indexOf(ours);
 			});
@@ -1637,7 +1622,7 @@ export class GitHubService {
 	}
 
 	/**
-	 * Release a merge job's `quest:merge` hold unless its pull request is
+	 * Release a merge job's `quest:kix` hold unless its pull request is
 	 * queued or auto-merging. The App acts on its own label here, with no
 	 * maintainer request behind it. Returns whether the hold is over: released
 	 * now, already removed or replaced, or its pull request no longer open.
@@ -1645,7 +1630,7 @@ export class GitHubService {
 	releasePullRequest(repo: GitHubRepository, pull: number, hold: string) {
 		return this.#withRepository(repo, { issues: "write", pull_requests: "read" }, async (token) => {
 			const holds = await this.#holds(token, repo, pull);
-			if (holds.state !== "OPEN" || heldToken(holds, MERGE_LABEL) !== hold) return true;
+			if (holds.state !== "OPEN" || heldToken(holds, KIX_LABEL) !== hold) return true;
 			if (holds.landing) return false;
 			await this.#unhold(token, repo, pull);
 			return true;
@@ -1684,7 +1669,7 @@ export class GitHubService {
 	 * auto-merge because nothing is left to wait for. `method` is the one the
 	 * repository's instructions name, or else the first the repository allows.
 	 * A base that requires the `quest land` check queues it for that gate
-	 * instead, as `quest merge --land` does: squash auto-merge whose commit body
+	 * instead, as `quest merge` does: squash auto-merge whose commit body
 	 * pins the head.
 	 */
 	landPullRequest(
@@ -1703,9 +1688,9 @@ export class GitHubService {
 					throw new GitHubError("Contributions are paused");
 				const check = (holds: Holds) => {
 					if (holds.state !== "OPEN") throw new PublicationBlocked("The pull request is no longer open.");
-					if (!input.hold || heldToken(holds, MERGE_LABEL) !== input.hold)
+					if (!input.hold || heldToken(holds, KIX_LABEL) !== input.hold)
 						throw new PublicationBlocked(
-							"This job's quest:merge label was removed or replaced, so it no longer holds the pull request.",
+							`This job's ${KIX_LABEL} label was removed or replaced, so it no longer holds the pull request.`,
 						);
 					if (holds.head !== sha(input.head))
 						throw new PublicationBlocked("The pull request's head moved outside this job.");
@@ -1803,6 +1788,14 @@ type Holds = {
 	/** Oldest first; `label` is null for a landing that started. */
 	events: { id: string; label: string | null }[];
 };
+
+/**
+ * The label a merge job holds its pull request with, from the pick until the
+ * job ends without landing or a landing it started ends unmerged. It is kix's
+ * own, apart from local sessions' `quest:active`, since it stays on while the
+ * job's landing is queued; as a `quest:*` label, local sessions respect it.
+ */
+export const KIX_LABEL = `${HOLD_PREFIX}kix`;
 
 function heldBy(label: string) {
 	return `Another session holds this pull request with ${label}; pick it again once it is released`;

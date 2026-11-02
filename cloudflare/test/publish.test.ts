@@ -1096,7 +1096,7 @@ describe("merge jobs", () => {
 
 	it("merges its base in, lands exactly the head it published, and keeps its hold while queued", async () => {
 		const id = await merging();
-		expect(pull().labels).toEqual(["quest:merge"]);
+		expect(pull().labels).toEqual(["quest:kix"]);
 		// The base branch moved on; the job merged it into the checkout.
 		const main = "f".repeat(40);
 		project.commits[main] = { parents: [revision], tree: "1".repeat(40), message: "main" };
@@ -1134,7 +1134,7 @@ describe("merge jobs", () => {
 		// Its landing is queued when the job ends, so it keeps holding the pull request.
 		await store.finish(db, machine, id, 1, { outcome: "completed", summary: "Landing", result: undefined }, 0);
 		await landing.ended(testEnv, id);
-		expect(pull().labels).toEqual(["quest:merge"]);
+		expect(pull().labels).toEqual(["quest:kix"]);
 		// Once the landing ends unmerged, the bot gives the pull request back.
 		pull().landing = false;
 		await landing.release(testEnv, 10, "pulls/2");
@@ -1403,7 +1403,7 @@ describe("merge jobs", () => {
 			],
 			[
 				() => (pull().labels = []),
-				"This job's quest:merge label was removed or replaced, so it no longer holds the pull request.",
+				"This job's quest:kix label was removed or replaced, so it no longer holds the pull request.",
 			],
 			[() => refuseLanding(reason), `GitHub refused to land the pull request: ${reason}`],
 		];

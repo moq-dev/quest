@@ -177,11 +177,12 @@ fixes for conflicts, failing checks, and review findings; a head moved by
 anyone else, a design change, and the merge skill's design checkpoint pause it
 on a decision.
 
-- The job holds the PR with the `quest:merge` label, under the contract
-  `quest merge --help` states for local sessions: the bot adds it when the job
-  is created, and refuses the pick while another `quest:*` label holds the PR.
-  A `quest:merge` whose landing already ended unmerged is spent, and removed
-  first. The job keeps the timeline event that added the label as its `hold`.
+- The job holds the PR with its own `quest:kix` label, under the contract
+  `quest iterate --help` states for local sessions: the bot adds it when the
+  job is created, and refuses the pick while another hold label is on the PR.
+  The job keeps the timeline event that added the label as its `hold`. Like
+  local sessions, kix ignores the `quest:merge` label older quest versions
+  left on queued PRs.
 - The job's agent resolves conflicts by merging the base branch with Git. A
   publication may name that `merge` commit, which kix accepts only when the
   PR's upstream base branch already holds it; kix then publishes a merge
@@ -191,8 +192,8 @@ on a decision.
   merge queue when the base has one, or merges it at once when GitHub would
   refuse auto-merge because nothing is left to wait for. It uses the method the
   job names, else the first the repository allows. A base that requires the
-  `quest land` check queues the PR for that gate instead, as `quest merge
---land` does: squash auto-merge whose commit body pins the head. A refusal
+  `quest land` check queues the PR for that gate instead, as `quest merge`
+  does: squash auto-merge whose commit body pins the head. A refusal
   pauses the job on a decision, in GitHub's words.
 - The label stays while the job runs or waits, and while the PR is queued or
   auto-merging. When the job ends without a landing in progress, or a

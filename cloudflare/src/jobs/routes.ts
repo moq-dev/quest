@@ -363,7 +363,7 @@ jobs.post(base, async (c) => {
 		{ ...job, repository: repo.id, actor: user, pinRunner, pinAccount },
 		Date.now(),
 	);
-	// A new merge job holds its pull request before it runs, as a local `quest merge` would.
+	// A new merge job holds its pull request before it runs, as a local `quest iterate` would.
 	if (created.created && job.workflow === "merge") {
 		const pull = pullOf(job.target);
 		let token: string;

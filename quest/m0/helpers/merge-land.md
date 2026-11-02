@@ -6,7 +6,7 @@
 auto-merge never merges a head nobody landed. On a repository that allows only
 squash it squashes without `--squash`. It works from outside a checkout when
 given a PR URL. With auto-merge disabled, it refuses unless the user explicitly
-requests `--direct`, preserving the repository’s own landing queue. A direct merge releases its `quest:merge` label. When
+requests `--direct`, preserving the repository’s own landing queue. When
 auto-merge is left on for a head other than the one landed, `quest status`
 and `quest wait` say so.
 
@@ -14,7 +14,9 @@ and `quest wait` say so.
 
 Implemented: the 2026-10-28 decision to refuse an ungated landing when repository
 auto-merge is disabled, unless `--direct` was explicitly requested. Follow the
-repository’s own landing instructions on refusal. The remaining gaps follow.
+repository’s own landing instructions on refusal. Since 2026-10-31 (user),
+`quest merge` takes no label, so direct merges have no label to keep. The
+remaining gaps follow.
 
 Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-complete run). Merge agents hit each of these repeatedly:
 
@@ -27,9 +29,6 @@ Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-comp
   `quest` the PR can't modify from outside the head checkout. Resolve the
   repository from a full PR URL. A bare number keeps needing a checkout or
   `--root`, and its error says so.
-- **Direct merges keep their label.** The label is supposed to stay only while
-  the PR is queued or auto-merging, but it stayed after direct merges on
-  #253, #254, #257 and #259. Release it once the merge is confirmed.
 - **Auto-merge carry-over.** #256's agent enabled squash auto-merge on a
   reviewed head, then pushed a base merge, and GitHub merged the new head
   before it was reviewed or landed. GitHub keeps auto-merge across pushes by
