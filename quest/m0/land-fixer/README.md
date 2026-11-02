@@ -36,7 +36,7 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | 16 | fixer disappeared before recording an exit status | fixed on the host; none after 2026-10-31 04:00Z |
 | 7 | fixer repository exceeds its size cap | fixed by #332 |
 | 6 | AGENTS.md "pull the latest origin changes" read as an injection | fixed by [#325](https://github.com/moq-dev/quest/pull/325) and [#328](https://github.com/moq-dev/quest/pull/328); none after 2026-10-31 18:46Z |
-| 98 | "already used its mechanical fix attempt" after a collateral requeue or an earlier conflict fix; each needed a manual re-pick | [Attempt budget](/quest/m0/queue-watcher/stop.md), batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
+| 98 | "already used its mechanical fix attempt" after a collateral requeue or an earlier conflict fix; each needed a manual re-pick | stop rules ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)), batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | ~75 | "requeued unchanged": collateral of a batch another PR broke | batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | 36 | picked again while fixing; the newer pick is kept, so nothing is lost | not planned |
 | 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | blocked by design; fixer-written protected edits become a ready commit ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)) |
@@ -53,7 +53,8 @@ Decision prompts, selected options marked ✅:
   - ✅ Broader: also fold batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
     and [Local mergeability](/quest/m0/queue-watcher/bad-picks.md) into
     this epic
-- How attempts count: see [Attempt budget](/quest/m0/queue-watcher/stop.md).
+- How attempts count: unlimited while progressing, with three stop rules
+  ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)).
 - How the fixer gets dependencies:
   - Host prefetches the job's lockfile dependencies and mounts them read-only
   - ✅ Allow registry network. The host already gave the fixer container
@@ -116,8 +117,8 @@ Decision prompts, selected options marked ✅:
     the daemon's markers, `quest status`) · keep the token
   - Flaky tests: ✅ disable only a rerun-proven flaky test, in a separate PR
     · keep the fixer's judgment and the base PR
-  - New work, all picked: ship the attempt budget (now
-    [Stop rules](/quest/m0/queue-watcher/stop.md)) right after triage; the
+  - New work, all picked: ship the attempt budget (now the stop rules,
+    [moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)) right after triage; the
     batch check ([moq-dev/quest#379](https://github.com/moq-dev/quest/pull/379));
     pre-checks ([#377](https://github.com/moq-dev/quest/pull/377)); and
     tuning ([#376](https://github.com/moq-dev/quest/pull/376)). All three were
@@ -132,7 +133,8 @@ Decision prompts, selected options marked ✅:
   through GitHub's merge queue one PR at a time, and a host watcher runs this
   fixer on each PR the queue drops and re-enqueues it. Batching is gone, so
   this epic keeps only the fixer's own quality work. Moved to the watcher:
-  the attempt budget (now [Stop rules](/quest/m0/queue-watcher/stop.md)),
+  the attempt budget (now the stop rules,
+  [moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)),
   local mergeability and CI-failure parking (now
   [Bad picks](/quest/m0/queue-watcher/bad-picks.md)), and flaky tests (now
   [Flaky failures](/quest/m0/queue-watcher/flaky.md), without the rerun).

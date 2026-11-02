@@ -29,8 +29,11 @@ import {
 	validateFix,
 	fixerMarkdown,
 	fixerText,
-	handbackRepeated,
+	FLAKY_LIMIT,
+	history,
 	redactTokens,
+	type Round,
+	stopRule,
 } from "../src/cli/land-fixer";
 import { importFixer } from "../src/cli/land-fixer-repository";
 import { apply, parseResolution, pushCommand, resolutionSection } from "../src/cli/land-apply";
@@ -2530,7 +2533,7 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		expect(JSON.parse(readFileSync(join(fixture.state.state, "halt.json"), "utf8"))).toEqual(halt);
 		expect(fixture.jobs()).toEqual([]);
 	});
-	test("requeues a parked PR unchanged, and hands back a second failure it is blamed for in the same pick", async () => {
+	test("requeues a PR judged flaky unchanged, and hands it back after three flaky rounds in a row", async () => {
 		const fixture = await fixerFixture(requeueScript);
 		await fixture.finished;
 		expect(await fixture.collect()).toEqual(["requeued 1"]);
@@ -2556,14 +2559,28 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 			).toEqual(["parked 1"]);
 			await finished;
 		};
-		// The fixer blamed no PR and the base passed alone, so the pick spent its attempt.
+		// The fixer blamed no PR and the base passed alone each time: flaky rounds, re-enqueued unchanged.
+		for (let round = 2; round < FLAKY_LIMIT; round++) {
+			await fail();
+			expect(await fixture.collect()).toEqual(["requeued 1"]);
+		}
 		await fail();
 		expect(await fixture.collect()).toEqual(["handback 1"]);
 		expect(fixture.jobs()).toEqual([]);
 		expect(fixture.pull.landing).toBe(false);
-		expect(fixture.forge.comment(1)).toContain("already used its mechanical");
+		expect(fixture.forge.comment(1)).toContain("stop rule (flaky limit)");
 		expect(fixture.forge.comment(1)).toContain("<!-- quest land: failed_checks -->");
-		// A new maintainer pick grants a new attempt.
+		const rounds = history(fixture.state.state, 1)!.rounds;
+		expect(rounds.map(({ outcome, rule }) => [outcome, rule])).toEqual([
+			...Array.from({ length: FLAKY_LIMIT - 1 }, () => ["flaky", undefined]),
+			["handback", "flaky"],
+		]);
+		expect(rounds[0]).toMatchObject({
+			before: fixture.pull.head,
+			after: fixture.pull.head,
+			failure: "failed_checks",
+		});
+		// A new maintainer pick starts a fresh history.
 		fixture.pull.landing = true;
 		fixture.pull.autoMerge = { enabledAt: "2099-01-01T00:00:00Z", commitBody: pin(fixture.pull.head!) };
 		await fail();
@@ -2661,14 +2678,16 @@ printf '{"action":"fixed","head":"%s","reason":"edit the flake"}' "$(git rev-par
 		);
 		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixture.pull.head!));
 	});
-	test("hands back a conflict at once when its pick already spent its attempt on a fix", async () => {
+	test("keeps fixing a PR that conflicts again after the base moved, as a new failure", async () => {
 		const fixture = await fixerFixture(fixedScript(), { conflict: true });
 		await fixture.finished;
 		expect(await fixture.collect(await fixture.forge.deps())).toEqual(["requeued 1"]);
-		// The fixed head conflicts again as the base moves; the gate blames it without asking the fixer.
+		const first = fixture.pull.head!;
+		// The fixed head conflicts again as the base moves: a new failure, so the fixer runs again.
 		fixture.forge.advance({ "code.txt": "one\nthree\n" });
 		const deps = await fixture.forge.deps();
 		const next = await resolveQueue(REPOSITORY, undefined, deps);
+		const finished = eventFile(fixture.state.state, (name) => name.endsWith(".exit"));
 		expect(
 			await serveBatch(
 				fixture.root,
@@ -2677,11 +2696,66 @@ printf '{"action":"fixed","head":"%s","reason":"edit the flake"}' "$(git rev-par
 				deps,
 				async () => deps.token,
 			),
-		).toEqual(["handback 1"]);
-		expect(fixture.jobs()).toEqual([]);
+		).toEqual(["parked 1"]);
+		await finished;
+		expect(await fixture.collect(deps)).toEqual(["requeued 1"]);
+		expect(fixture.pull.landing).toBe(true);
+		expect(git(fixture.root, "show", "-s", "--format=%P", fixture.pull.head!)).toContain(first);
+		const rounds = history(fixture.state.state, 1)!.rounds;
+		expect(rounds.map(({ outcome, before, after }) => [outcome, before, after])).toEqual([
+			["fixed", fixture.plan.queue[0].head, first],
+			["fixed", first, fixture.pull.head],
+		]);
+		expect(rounds.map(({ failure }) => failure)).toEqual([
+			`merge conflict with ${fixture.plan.base.sha}`,
+			`merge conflict with ${next.base.sha}`,
+		]);
+	});
+	test("hands back a conflict the fixer requeued unchanged: a round with no new commit", async () => {
+		const fixture = await fixerFixture(requeueScript, { conflict: true });
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["handback 1"]);
 		expect(fixture.pull.landing).toBe(false);
-		expect(fixture.forge.comment(1)).toContain("already used its mechanical fix attempt");
+		expect(fixture.forge.comment(1)).toContain("stop rule (no new commit)");
 		expect(fixture.forge.comment(1)).toContain("<!-- quest land: merge_conflict -->");
+		expect(history(fixture.state.state, 1)!.rounds).toMatchObject([{ outcome: "handback", rule: "unchanged" }]);
+	});
+	test("hands back a failure the fixer names again right after its fix", async () => {
+		const marker = join(tempDir(), "fixed");
+		const fixture = await fixerFixture(`if [ -e '${marker}' ]; then
+printf '[{"number":1,"action":"requeue","reason":"looks flaky","failure":"cargo test: render"}]' > quest-land-result.json
+else
+touch '${marker}'
+git checkout -q pr-1
+printf 'one\nII fixed\nthree\n' > code.txt
+git commit -qam 'mechanical fix'
+printf '[{"number":1,"action":"fixed","head":"%s","reason":"fix render","failure":"cargo test: render"}]' "$(git rev-parse HEAD)" > quest-land-result.json
+fi`);
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["requeued 1"]);
+		const fixed = fixture.pull.head!;
+		const next = await resolveQueue(REPOSITORY, undefined, fixture.deps);
+		const finished = eventFile(fixture.state.state, (name) => name.endsWith(".exit"));
+		expect(
+			await serveBatch(
+				fixture.root,
+				next,
+				{ ...fixture.state, fixer: fixture.wrapper },
+				fixture.deps,
+				async () => fixture.deps.token,
+			),
+		).toEqual(["parked 1"]);
+		await finished;
+		// The same failure recurs right after its fix: judging it flaky now does not keep it going.
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.pull.head).toBe(fixed);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("stop rule (repeated failure)");
+		expect(fixture.forge.comment(1)).toContain("cargo test: render");
+		expect(history(fixture.state.state, 1)!.rounds).toMatchObject([
+			{ outcome: "fixed", failure: "cargo test: render" },
+			{ outcome: "handback", rule: "repeated", before: fixed },
+		]);
 	});
 	test("accepts a fix whose base gained protected changes before collection", async () => {
 		const fixture = await fixerFixture(fixedScript(), { conflict: true, protectedBase: true });
@@ -2894,10 +2968,8 @@ printf '{"action":"fixed","head":"%s","reason":"edit the flake"}' "$(git rev-par
 		expect(collateral.labels).toBeUndefined();
 		expect(collateral.autoMerge?.commitBody).toBe(pin(collateral.head!));
 		expect(fixture.forge.comment(2)).toBeUndefined();
-		// Collateral never spends an attempt, however often it shares a broken batch.
-		expect(await handbackRepeated(fixture.state.state, fixture.plan, fixture.plan.queue[1], fixture.deps)).toBe(
-			false,
-		);
+		// Collateral is never a round of its pick, however often it shares a broken batch.
+		expect(history(fixture.state.state, 2)!.rounds).toEqual([]);
 	});
 	const editJob = (state: string, change: (job: Record<string, unknown>) => void) => {
 		const path = join(
@@ -3224,17 +3296,11 @@ ${requeueScript}`);
 		await fixture.finished;
 		expect(await fixture.collect({ ...fixture.deps, now: () => 120 * 60_000 })).toEqual(["requeued 1"]);
 	});
-	test("counts an attempt record from before blame was tracked as spent", async () => {
-		const forge = new Forge();
-		forge.pull("One", { "one.txt": "yes" });
-		const deps = await forge.deps();
-		const plan = await resolveQueue(REPOSITORY, undefined, deps);
+	test("starts a fresh history from a record written before rounds were kept", () => {
 		const state = tempDir();
-		const [entry] = plan.queue;
-		writeFileSync(join(state, "fix-attempt-1.json"), JSON.stringify({ pick: entry.enabledAt }));
-		expect(await handbackRepeated(state, plan, entry, deps)).toBe(true);
-		writeFileSync(join(state, "fix-attempt-1.json"), JSON.stringify({ pick: entry.enabledAt, blamed: false }));
-		expect(await handbackRepeated(state, plan, entry, deps)).toBe(false);
+		const pick = "2026-10-26T00:00:01Z";
+		writeFileSync(join(state, "fix-attempt-1.json"), JSON.stringify({ pick, blamed: "fix-job-x.json" }));
+		expect(history(state, 1)).toMatchObject({ pick, rounds: [] });
 	});
 	test("quotes contributor text without markup, mentions, or closing instructions", () => {
 		const text = fixerText(
@@ -3292,10 +3358,14 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		await fixture.finished;
 		const marker = `<!-- quest land fixer: ${fixture.plan.queue[0].enabledAt} handback -->`;
 		(fixture.pull.comments ??= []).push({ author: "outsider", body: marker, at: "2026-10-30T00:00:00Z" });
+		const [name] = fixture.jobs();
+		const job = readFileSync(join(fixture.state.state, name), "utf8");
 		expect(await fixture.collect()).toEqual(["handback 1"]);
 		expect(fixture.pull.comments!.at(-1)?.author).toBe("gate[bot]");
 		const count = fixture.pull.comments!.length;
-		await handbackRepeated(fixture.state.state, fixture.plan, fixture.plan.queue[0], fixture.deps);
+		// A retried handback of the same pick finds the bot's own marker and posts nothing.
+		writeFileSync(join(fixture.state.state, name), JSON.stringify({ ...JSON.parse(job), error: "retried" }));
+		expect(await fixture.collect()).toEqual(["handback 1"]);
 		expect(fixture.pull.comments).toHaveLength(count);
 	});
 	test("rereads the author's body immediately before recording the fix", async () => {
@@ -3434,6 +3504,18 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 				[1, 2],
 			),
 		).toHaveLength(2);
+	});
+	test("accepts a one-line failure signature on any PR result", () => {
+		const accepted = { number: 1, action: "requeue", reason: "fine", failure: "cargo test: interop::render" };
+		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		for (const failure of [7, "", "  ", "x".repeat(201), "a\nb", "tab\t"])
+			expect(() =>
+				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure }]), [1]),
+			).toThrow("invalid fixer failure");
+		// The base fix has no signature: nothing compares its rounds.
+		expect(() =>
+			parseBaseFix(JSON.stringify({ action: "fixed", head: "a".repeat(40), reason: "fine", failure: "x" })),
+		).toThrow();
 	});
 	test("strictly accepts one fixed or handback object for the base alone", () => {
 		const head = "a".repeat(40);
@@ -3697,5 +3779,43 @@ describe.skipIf(process.platform === "win32")("quest land apply", () => {
 		const plain = resolutionSection(1, resolution, 300);
 		expect(parseResolution(plain)).toBeUndefined();
 		expect(plain).toContain("too large for a comment");
+	});
+});
+
+describe("land fixer stop rules", () => {
+	const round = (outcome: Round["outcome"], failure = "test a"): Round => ({
+		job: `job-${outcome}-${failure}`,
+		outcome,
+		before: "h",
+		failure,
+	});
+	test("keeps going while each round changes something", () => {
+		expect(stopRule([], round("fixed"))).toBeUndefined();
+		// A conflict on a moved base is a new failure; so is another test failing after a fix.
+		expect(stopRule([round("merged", "conflict with b1")], round("fixed", "conflict with b2"))).toBeUndefined();
+		expect(stopRule([round("fixed", "test a")], round("fixed", "test b"))).toBeUndefined();
+		// Only right after a fix: a failure fixed two rounds back may recur.
+		expect(
+			stopRule([round("fixed", "test a"), round("fixed", "test b")], round("fixed", "test a")),
+		).toBeUndefined();
+		// A fixer's own handback needs no rule.
+		expect(stopRule([round("fixed")], round("handback"))).toBeUndefined();
+	});
+	test("hands back a round with no new commit for a failure that isn't flaky", () => {
+		expect(stopRule([], round("unchanged"))).toBe("unchanged");
+	});
+	test("hands back the failure a fix addressed recurring right after it, through flaky rounds", () => {
+		expect(stopRule([round("fixed")], round("fixed"))).toBe("repeated");
+		expect(stopRule([round("merged", "conflict with b1")], round("fixed", "conflict with b1"))).toBe("repeated");
+		expect(stopRule([round("fixed"), round("flaky", "test b")], round("fixed"))).toBe("repeated");
+		expect(stopRule([round("fixed")], round("flaky"))).toBe("repeated");
+	});
+	test("hands back the third flaky round in a row, which a fix in between resets", () => {
+		const flaky = (count: number) => Array.from({ length: count }, (_, index) => round("flaky", `test ${index}`));
+		expect(stopRule(flaky(FLAKY_LIMIT - 2), round("flaky", "test x"))).toBeUndefined();
+		expect(stopRule(flaky(FLAKY_LIMIT - 1), round("flaky", "test x"))).toBe("flaky");
+		expect(
+			stopRule([...flaky(FLAKY_LIMIT - 1), round("fixed", "test y")], round("flaky", "test x")),
+		).toBeUndefined();
 	});
 });
