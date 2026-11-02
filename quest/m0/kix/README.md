@@ -139,4 +139,5 @@ fixes what it finds:
 - [Job sandbox](/quest/m0/kix/sandbox/README.md) - head approval for kix-pushed heads, and opencode sandboxed
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs
 - [Land review](/quest/m0/kix/land-review.md) - kix lands only heads with a review that counts on that exact head
+- [Merge queue enqueue](/quest/m0/kix/enqueue.md) - kix enqueues ready PRs into a merge queue instead of only arming auto-merge
 - [Runner review checks](/quest/m0/kix/review-check.md) - runners publish the App's `quest review` check, so their heads land without a human approval
