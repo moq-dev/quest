@@ -24,6 +24,8 @@ const BASE = "b".repeat(40);
 /** The base the merge group was built on, which its branch names. */
 const BUILT = "c".repeat(40);
 const HEAD = "a".repeat(40);
+/** A merge group commit, which a removal names as its `beforeCommit`. */
+const GROUP = "9".repeat(40);
 const PUSHED = "d".repeat(40);
 const APP = "moq-bot";
 
@@ -88,6 +90,8 @@ interface World {
 	refuse?: (body: string) => boolean;
 	/** A read of a PR's queue state that fails, once. */
 	unreadable?: (pull: Pull) => boolean;
+	/** PRs whose push activity GitHub has not listed yet. */
+	unlisted?: number[];
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -112,8 +116,30 @@ function removalNode(event: Removed) {
 		reason: event.reason,
 		actor: { login: event.actor },
 		enqueuer: event.enqueuer === undefined ? { login: "maintainer" } : { login: event.enqueuer },
-		beforeCommit: event.before === null ? null : { oid: event.before ?? HEAD },
+		// GitHub's `beforeCommit` is the merge group's commit on the base, never the PR's head.
+		beforeCommit: event.before === null ? null : { oid: GROUP },
 	};
+}
+
+/**
+ * The head branch's push activity, newest first, as GitHub's `/activity` lists it. Each removal's
+ * dropped head (`before`) was pushed a second before the enqueue that preceded the removal; a current
+ * head that is none of them was pushed after the last removal, as a push that ends the pick is.
+ */
+function pushes(world: World, pull: Pull) {
+	const rows: { activity_type: string; after: string; timestamp: string }[] = [];
+	const stamp = (time: number) => new Date(time).toISOString().replace(".000", "");
+	for (const event of pull.removals) {
+		const enqueued = pull.enqueues.filter((added) => added.createdAt <= event.createdAt).at(-1)?.createdAt;
+		const time = Date.parse(enqueued ?? event.createdAt) - 1000;
+		rows.push({ activity_type: "push", after: event.before ?? HEAD, timestamp: stamp(time) });
+	}
+	const current = headOf(world, pull);
+	if (!rows.some((row) => row.after === current)) {
+		const last = Math.max(Date.parse(at(-100)), ...pull.removals.map((event) => Date.parse(event.createdAt)));
+		rows.push({ activity_type: "push", after: current, timestamp: stamp(last + 1000) });
+	}
+	return rows.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 }
 
 /** Removals since `since`, paged two at a time so a PR's further pages are read by node. */
@@ -274,6 +300,11 @@ function deps(world: World): GitHubDependencies {
 					return Response.json(comment, { status: 201 });
 				}
 				return Response.json(list);
+			}
+			const activity = /^\/repos\/upstream\/project\/activity$/.exec(path);
+			if (activity) {
+				const pull = world.pulls.find((item) => `branch-${item.number}` === url.searchParams.get("ref"))!;
+				return Response.json(world.unlisted?.includes(pull.number) ? [] : pushes(world, pull));
 			}
 			throw new Error(`unexpected request: ${path}`);
 		}) as typeof fetch,
@@ -491,6 +522,31 @@ test("a push since the removal ends the pick, and merges and the App's own remov
 	expect(readRemoval(state, 7)).toBeUndefined();
 	expect(github.comments[8][0].body).toContain("because of `queue_cleared`");
 	expect(github.comments[8][0].body).toContain("does not recognize this reason");
+});
+
+test("a removal whose enqueued head GitHub has not listed waits, then ends the pick unfixed", async () => {
+	const state = tempDir();
+	const github = world(
+		[
+			{
+				number: 6,
+				head: HEAD,
+				enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+				removals: [{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue" }],
+			},
+		],
+		[failedRun(6, at(3))],
+	);
+	github.unlisted = [6];
+	github.now = Date.parse(at(6));
+	// Not handled yet: no comment, no record, and the next pass reads it again.
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.comments[6]).toBeUndefined();
+	expect(readRemoval(state, 6)).toBeUndefined();
+	github.now = Date.parse(at(14));
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual(["removed 6 failed_checks unknown"]);
+	expect(github.comments[6][0].body).toContain("cannot tell which head entered the queue");
+	expect(readRemoval(state, 6)!.failure).toBeUndefined();
 });
 
 test("a failed build with no failing job found, or a job with no log, still comments", async () => {
