@@ -245,6 +245,12 @@ to read, so kix keeps its own check there.
 When no review counts, a direct merge is refused and a merge job pauses on a
 decision. Both say which commit needs a review and how to give one.
 
+GitHub keeps auto-merge enabled across a writer's push, the App's included, so
+a job pushing to a pull request that is auto-merging would land its new head
+with no review of it. Before a job moves a pull request's head, kix turns its
+auto-merge off; if GitHub refuses, the job pushes nothing and pauses on a
+decision. The new head lands only through a new landing.
+
 kix pull requests come from upstream branches, and GitHub gives workflows on
 same-repository branches the repository's secrets, unlike fork pull requests.
 So enrolled repositories must keep pull-request CI read-only: a read-only
@@ -258,8 +264,9 @@ grants runners no GitHub credentials.
 Installation grants are broader than any one publication: `contents: write`
 and `pull_requests: write` cover every installed repository. Each token names
 one repository ID and only the permissions that step needs. Branch writes get
-`contents: write` on the upstream alone, and pull request delivery gets
-`pull_requests: write` there. That token could write any unprotected upstream
+`contents: write` on the upstream alone, plus `pull_requests: write` to turn
+off auto-merge when the branch is a pull request's head, and pull request
+delivery gets `pull_requests: write` there. That token could write any unprotected upstream
 branch; the service restricts it to the job's branch or the pull request's head
 and refuses the default branch. Repositories should still protect their default
 branch.

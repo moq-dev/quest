@@ -1260,7 +1260,8 @@ export class GitHubService {
 
 	/**
 	 * Hand `action` the one upstream branch a job may write: its own branch,
-	 * or an iterated pull request's head on the enrolled repository.
+	 * or an iterated pull request's head on the enrolled repository, whose
+	 * auto-merge it turns off before moving that head.
 	 * Rechecks the requester's current authority and the project's enrollment.
 	 */
 	contribute<T>(
@@ -1303,14 +1304,56 @@ export class GitHubService {
 				const head = pull.head.repo;
 				const base = based(pull.base.ref);
 				if (head?.id === upstream.id)
-					return this.#withRepository(upstream, { contents: "write" }, async (writeToken, latest) =>
-						action(this.#branch(writeToken, latest, job.branch, base)),
+					return this.#withRepository(
+						upstream,
+						{ contents: "write", pull_requests: "write" },
+						async (writeToken, latest) => {
+							const branch = this.#branch(writeToken, latest, job.branch, base);
+							const disarm = () => this.#disarm(writeToken, pull.node_id);
+							return action({
+								...branch,
+								move: async (from, to) => {
+									await disarm();
+									return branch.move(from, to);
+								},
+								reset: async (to) => {
+									await disarm();
+									await branch.reset(to);
+								},
+							});
+						},
 					);
 				throw new PublicationBlocked(
 					"The pull request's head is in a contributor's fork, which the bot cannot update. Ask its author to apply the changes, or close it and start new work.",
 				);
 			},
 		);
+	}
+
+	/**
+	 * Turn off auto-merge on a pull request before kix moves its head. GitHub
+	 * keeps auto-merge across a writer's push, the App's included, so it would
+	 * land the new head with no review that counts on it.
+	 */
+	async #disarm(token: string, pull: string) {
+		const read = await this.#api<{ data?: { node: { autoMergeRequest: unknown } | null } }>(
+			token,
+			"/graphql",
+			"POST",
+			{
+				query: `query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }`,
+				variables: { id: pull },
+			},
+		);
+		if (!read.data?.node?.autoMergeRequest) return;
+		const result = await this.#api<{ errors?: unknown[] }>(token, "/graphql", "POST", {
+			query: `mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }`,
+			variables: { id: pull },
+		});
+		if (result.errors?.length)
+			throw new PublicationBlocked(
+				"GitHub refused to turn off the pull request's auto-merge, which would land this push unreviewed, so nothing was pushed.",
+			);
 	}
 
 	#branch(token: string, repo: Repository, branch: string, based: Branch["based"]): Branch {

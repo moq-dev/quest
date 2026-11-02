@@ -1025,7 +1025,7 @@ describe("runner publication", () => {
 				.map((r) => r.body.permissions),
 		).toEqual([
 			{ metadata: "read", contents: "read", pull_requests: "read" },
-			{ metadata: "read", contents: "write" },
+			{ metadata: "read", contents: "write", pull_requests: "write" },
 		]);
 		expect((await publish({ job: id, attempt: 1, head, pull: { title: "T", body: "B" } })).status).toBe(409);
 
@@ -1043,6 +1043,38 @@ describe("runner publication", () => {
 			type: "publication",
 			blocked: expect.stringContaining("contributor's fork"),
 		});
+	});
+
+	it("turns off an iterated pull request's auto-merge before pushing, so the new head never lands unreviewed", async () => {
+		const id = await running({
+			workflow: "iterate",
+			target: "pulls/2",
+			revision: prHead,
+			branch: "contributor/fix",
+			trusted: false,
+		});
+		const disabled = () =>
+			requests().filter(
+				(r) => r.path === "/graphql" && String(r.body.query).includes("disablePullRequestAutoMerge("),
+			);
+		project.pulls[0]!.landing = true;
+		const response = await publish({
+			job: id,
+			attempt: 1,
+			head: prHead,
+			message: "fix: review",
+			changes: [file("a", "1")],
+		});
+		expect(response.status).toBe(200);
+		const { head } = (await response.json()) as { head: string };
+		expect(project.branches["contributor/fix"]).toBe(head);
+		expect(project.pulls[0]!.landing).toBe(false);
+		expect(disabled()).toHaveLength(1);
+
+		// With auto-merge already off, it pushes without turning anything off.
+		const next = await publish({ job: id, attempt: 1, head, message: "fix: more", changes: [file("a", "2")] });
+		expect(next.status).toBe(200);
+		expect(disabled()).toHaveLength(1);
 	});
 
 	it("validates the request before touching the job", async () => {
