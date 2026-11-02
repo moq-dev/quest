@@ -5,7 +5,6 @@ import { describe, expect, test, vi } from "vitest";
 import type { GitHubDependencies, ObjectValue } from "../src/cli/github";
 import { finish, land, release, take, withoutHandBack } from "../src/cli/hold";
 import { type Output, main } from "../src/cli/main";
-import { pickComment, pickedHead } from "../src/cli/pick";
 import { Refusal } from "../src/cli/start";
 
 const PR = { owner: "example", repo: "project", number: 7 };
@@ -29,6 +28,8 @@ class FakePull {
 	mergeState = "BLOCKED";
 	queue = false;
 	allowAutoMerge: boolean | null = true;
+	/** The repository's merge method settings, hidden from the token when null. */
+	methods: Record<string, boolean> | null = null;
 	baseRef = "main";
 	/** Runs after each pull request read, to change it between reads. */
 	afterRead?: () => void;
@@ -50,8 +51,6 @@ class FakePull {
 	beforeAutoMerge?: () => string | undefined;
 	/** The error GitHub answers `enqueuePullRequest` with, if any. */
 	beforeEnqueue?: () => { message: string; type?: string } | undefined;
-	/** Comment bodies on the PR, oldest first. */
-	readonly comments: string[] = [];
 	reads = 0;
 	private clock = Date.parse("2026-10-21T12:00:00Z");
 
@@ -83,7 +82,10 @@ class FakePull {
 		const body = init.body ? (JSON.parse(String(init.body)) as ObjectValue) : {};
 		const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status });
 		if (url.pathname === "/repos/example/project")
-			return json(200, this.allowAutoMerge === null ? {} : { allow_auto_merge: this.allowAutoMerge });
+			return json(200, {
+				...(this.allowAutoMerge === null ? {} : { allow_auto_merge: this.allowAutoMerge }),
+				...this.methods,
+			});
 		if (url.pathname === "/graphql")
 			return json(200, this.graphql(String(body.query), body.variables as ObjectValue));
 		if (url.pathname === "/repos/example/project/issues/7/labels" && method === "POST") {
@@ -103,16 +105,6 @@ class FakePull {
 			if (!this.labels.includes(name)) return json(404, { message: "Label does not exist" });
 			this.labels = this.labels.filter((label) => label !== name);
 			return json(200, []);
-		}
-		if (url.pathname === "/repos/example/project/issues/7/comments") {
-			if (method === "GET")
-				return json(
-					200,
-					this.comments.map((body, id) => ({ id, body })),
-				);
-			this.comments.push(String(body.body));
-			this.writes.push(`comment ${String(body.body)}`);
-			return json(201, { id: this.comments.length - 1, body: body.body });
 		}
 		if (url.pathname === "/repos/example/project/branches/main") return json(200, { protection: {} });
 		if (url.pathname === `/repos/example/project/compare/main...${this.head}`) {
@@ -386,7 +378,7 @@ describe("merge --land", () => {
 	});
 
 	test.each(["CLEAN", "HAS_HOOKS", "UNSTABLE", "BEHIND", "DIRTY"])(
-		"records the pick, then enqueues a %s head on a queue base without comparing it to the base",
+		"enqueues a %s head on a queue base without comparing it to the base",
 		async (state) => {
 			const pull = new FakePull();
 			pull.queue = true;
@@ -394,7 +386,7 @@ describe("merge --land", () => {
 			pull.comparison = "diverged";
 			const warnings: string[] = [];
 			await land(PR, HEAD, "merge", pull.deps(warnings));
-			expect(pull.writes).toEqual([`comment ${pickComment(HEAD)}`, `enqueuePullRequest ${HEAD}`]);
+			expect(pull.writes).toEqual([`enqueuePullRequest ${HEAD}`]);
 			expect(pull.queueEntry).not.toBeNull();
 			expect(pull.comparisons).toEqual([]);
 			expect(warnings).toEqual([]);
@@ -406,7 +398,7 @@ describe("merge --land", () => {
 		pull.queue = true;
 		pull.mergeState = "BLOCKED";
 		await land(PR, HEAD, "merge", pull.deps());
-		expect(pull.writes).toEqual([`comment ${pickComment(HEAD)}`, `enablePullRequestAutoMerge ${HEAD} MERGE`]);
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
 	});
 
 	test("enqueues an UNKNOWN head GitHub finds clean when arming auto-merge", async () => {
@@ -415,26 +407,21 @@ describe("merge --land", () => {
 		pull.mergeState = "UNKNOWN";
 		pull.beforeAutoMerge = () => "Pull request is in clean status";
 		await land(PR, HEAD, "squash", pull.deps());
-		expect(pull.writes.slice(1)).toEqual([
-			`enablePullRequestAutoMerge ${HEAD} SQUASH`,
-			`enqueuePullRequest ${HEAD}`,
-		]);
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH`, `enqueuePullRequest ${HEAD}`]);
 	});
 
-	test("keeps a pick GitHub refuses to enqueue, and says the watcher fixes it", async () => {
+	test("fails when GitHub refuses to enqueue the head, saying to fix the PR", async () => {
 		const pull = new FakePull();
 		pull.queue = true;
 		pull.mergeState = "DIRTY";
 		pull.beforeEnqueue = () => ({ message: "Pull request is not mergeable", type: "UNPROCESSABLE" });
-		const warnings: string[] = [];
-		await land(PR, HEAD, "merge", pull.deps(warnings));
-		expect(pull.comments).toEqual([pickComment(HEAD)]);
-		expect(warnings).toEqual([
-			`${URL_}: GitHub refused to enqueue ${HEAD} (GitHub GraphQL error: Pull request is not mergeable). The pick is recorded, so the queue watcher fixes it and enqueues it; where none runs, fix it and land it again`,
-		]);
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toBe(
+			`${URL_}: GitHub refused to enqueue ${HEAD} (GitHub GraphQL error: Pull request is not mergeable); fix the PR, for example with /quest-iterate, and land it again`,
+		);
+		expect(pull.queueEntry).toBeNull();
 	});
 
-	test("says nothing when GitHub refuses a pick already in the queue", async () => {
+	test("says nothing when GitHub refuses a head already in the queue", async () => {
 		const pull = new FakePull();
 		pull.queue = true;
 		pull.mergeState = "CLEAN";
@@ -447,7 +434,7 @@ describe("merge --land", () => {
 		expect(warnings).toEqual([]);
 	});
 
-	test("refuses when the head moved before GitHub refused the pick", async () => {
+	test("refuses when the head moved before GitHub refused to enqueue it", async () => {
 		const pull = new FakePull();
 		pull.queue = true;
 		pull.mergeState = "CLEAN";
@@ -458,19 +445,14 @@ describe("merge --land", () => {
 		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(`head moved to ${"c".repeat(40)}`);
 	});
 
-	test("fails on a refusal that faults the token rather than the pick", async () => {
+	test("passes on an enqueue error that faults the token rather than the PR", async () => {
 		const pull = new FakePull();
 		pull.queue = true;
 		pull.mergeState = "CLEAN";
 		pull.beforeEnqueue = () => ({ message: "Resource not accessible by integration", type: "FORBIDDEN" });
-		await expect(land(PR, HEAD, "merge", pull.deps())).rejects.toThrow("Resource not accessible by integration");
-		expect(pull.comments).toEqual([pickComment(HEAD)]);
-	});
-
-	test("names the picked head in a marker only a pick comment carries", () => {
-		expect(pickedHead(pickComment(HEAD.toUpperCase()))).toBe(HEAD);
-		expect(pickedHead(`quoted: \`<!-- quest pick: ${HEAD} -->\``)).toBeNull();
-		expect(pickedHead("Summary.")).toBeNull();
+		const error = await land(PR, HEAD, "merge", pull.deps()).catch((caught: unknown) => caught);
+		expect(error).not.toBeInstanceOf(Refusal);
+		expect(error).toMatchObject({ message: "GitHub GraphQL error: Resource not accessible by integration" });
 	});
 
 	test("--direct explicitly permits a clean merge with auto-merge off", async () => {
@@ -532,6 +514,68 @@ describe("merge --land", () => {
 			await land(PR, HEAD, method, pull.deps());
 			expect(pull.writes.at(-1)).toBe(`mergePullRequest ${HEAD} ${method.toUpperCase()}`);
 		}
+	});
+
+	describe("picks the repository's merge method", () => {
+		const allowing = (...methods: string[]) => {
+			const pull = new FakePull();
+			pull.methods = {
+				allow_merge_commit: methods.includes("merge"),
+				allow_squash_merge: methods.includes("squash"),
+				allow_rebase_merge: methods.includes("rebase"),
+			};
+			return pull;
+		};
+
+		test("uses the only method allowed without a flag", async () => {
+			for (const method of ["squash", "rebase"]) {
+				const pull = allowing(method);
+				await land(PR, HEAD, undefined, pull.deps());
+				expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} ${method.toUpperCase()}`);
+			}
+		});
+
+		test("keeps a merge commit by default while one is allowed", async () => {
+			const pull = allowing("merge", "squash");
+			await land(PR, HEAD, undefined, pull.deps());
+			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+		});
+
+		test("also applies with --direct", async () => {
+			const pull = allowing("squash");
+			pull.allowAutoMerge = false;
+			pull.mergeState = "CLEAN";
+			await land(PR, HEAD, undefined, pull.deps(), true);
+			expect(pull.writes).toEqual([`mergePullRequest ${HEAD} SQUASH`]);
+		});
+
+		test("refuses a named method the repository disallows, or a choice it leaves open", async () => {
+			const cases: [string[], "merge" | "squash" | "rebase" | undefined, string][] = [
+				[["squash"], "merge", "does not allow merge commits; it allows squash merges"],
+				[["merge", "squash"], "rebase", "does not allow rebase merges; it allows merge commits, squash merges"],
+				[["squash", "rebase"], undefined, "pass --squash or --rebase"],
+				[[], undefined, "allows no merge method"],
+			];
+			for (const [methods, named, refusal] of cases) {
+				const pull = allowing(...methods);
+				expect(await refused(land(PR, HEAD, named, pull.deps()))).toContain(refusal);
+				expect(pull.writes).toEqual([]);
+			}
+		});
+
+		test("leaves a gated base or a merge queue to its own method", async () => {
+			const gated = allowing("merge");
+			gated.required = ["quest land"];
+			await land(PR, HEAD, undefined, gated.deps());
+			expect(gated.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`);
+
+			const queued = allowing("squash");
+			queued.queue = true;
+			const warnings: string[] = [];
+			await land(PR, HEAD, undefined, queued.deps(warnings));
+			expect(queued.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
+			expect(warnings).toEqual([]);
+		});
 	});
 
 	test("warns that a merge queue applies its own method", async () => {

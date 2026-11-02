@@ -69,17 +69,40 @@ Decision prompts, selected options marked ✅:
     passed
   - The front
 - Attempts:
-  - ✅ Unlimited while progressing; see
-    [Stop rules](/quest/m0/queue-watcher/stop.md). This replaces batch
-    triage's ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
-    one attempt per pick.
+  - ✅ Unlimited while progressing, handing back on a round with no new
+    commit for a failure that isn't flaky, the failure a fix addressed
+    recurring right after it, or three flaky rounds in a row. This replaces
+    batch triage's ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
+    one attempt per pick; the host gate applies the same rules
+    ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)).
 - Flaky failures:
   - ✅ The fixer re-enqueues them unchanged, and a test seen flaking twice is
     disabled in a separate PR with a follow-up quest; the rerun before blame
     (#375) is dropped. See [Flaky failures](/quest/m0/queue-watcher/flaky.md).
-- Picks GitHub refuses to enqueue:
-  - ✅ The watcher fixes them, then enqueues; see
-    [Bad picks](/quest/m0/queue-watcher/bad-picks.md)
+- Pick record (decided 2026-11-02, replacing "Picks GitHub refuses to
+  enqueue: ✅ The watcher fixes them"):
+  - ✅ GitHub's records only. Drop the comment and `pick.ts`. The watcher
+    reads queue events and auto-merge state. A pick GitHub refuses fails the
+    command, and /quest-merge recommends /quest-iterate as it does today.
+    `bad-picks.md` shrinks to enqueueing PRs with auto-merge armed that
+    GitHub never queued
+    ([community#209348](https://github.com/orgs/community/discussions/209348)).
+  - Comment only on refusal
+  - Keep the comment on every pick
+
+  Reasons: for queued picks, GitHub already keeps a durable,
+  writer-authenticated record. `AddedToMergeQueueEvent` and
+  `RemovedFromMergeQueueEvent` give the enqueuer (who must have write
+  access), the head before removal, and the reason, and `autoMergeRequest`
+  gives `enabledBy`/`enabledAt` for picks waiting on checks. Auto-merge can't
+  reliably be armed on a conflicting PR, and on merge-queue bases enabling it
+  returns HTTP 422 unless every requirement is met
+  ([community#190610](https://github.com/orgs/community/discussions/190610),
+  [community#50327](https://github.com/orgs/community/discussions/50327)).
+  /quest-merge already refuses heads with failing checks or conflicts, so a
+  refusal only happens if the base moves between that check and the enqueue.
+  See [Queue removals](/quest/m0/queue-watcher/removals.md) and
+  [Bad picks](/quest/m0/queue-watcher/bad-picks.md).
 - Milestone:
   - ✅ m0, at the top
 
@@ -109,8 +132,7 @@ Shared shape, for the children to follow:
 
 - [Queue removals](/quest/m0/queue-watcher/removals.md) - the watcher sees each PR the queue drops, why, and the failing build's log
 - [Fix and re-enqueue](/quest/m0/queue-watcher/fix.md) - the fixer runs on each dropped PR in the background, and the watcher re-enqueues it at the back
-- [Stop rules](/quest/m0/queue-watcher/stop.md) - the fixer keeps going while each round changes something, and hands back on a no-op fix, a repeated failure, or three flaky re-enqueues
-- [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - a pick GitHub refuses to enqueue is merged locally with the quest driver or fixed, then pushed and enqueued
+- [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - a pick whose auto-merge is armed on a ready PR GitHub never queued is enqueued at the head it was armed on
 - [Flaky failures](/quest/m0/queue-watcher/flaky.md) - a flaky failure is re-enqueued unchanged, and a test seen flaking twice is disabled in a separate PR with a follow-up quest
 - [Watcher on the host](/quest/m0/queue-watcher/host.md) - kixelated/nixos runs the watcher for moq-dev/moq beside its fixer container
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - condition: moq's queue is proven; then moq-dev/quest switches and the others plan theirs

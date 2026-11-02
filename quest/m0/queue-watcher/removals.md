@@ -15,21 +15,28 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 [epic](/quest/m0/queue-watcher/README.md)).
 
 - Poll, don't receive webhooks: the host has no public endpoint. Reconcile
-  from the picks, not from queue snapshots alone: a PR enqueued and dropped
-  between two polls, or while the watcher was down, never shows in a
-  snapshot. Each pass reads every open PR holding an active pick with
-  its `mergeQueueEntry` and its `RemovedFromMergeQueueEvent`s newer than the
-  last one handled, with `reason`, `actor`, and `enqueuer`. `quest status`
-  already reads that event (`src/cli/status.ts`). The base's
-  `mergeQueue { entries }` can still serve as a cheap change signal. The App's
-  installation token has its own rate limit, separate from the maintainers'
-  sessions.
-- A pick is the PR comment `quest merge --land` posts on a merge-queue base,
-  ending in `<!-- quest pick: <sha> -->`; `pickedHead` in `src/cli/pick.ts`
-  reads it. Anyone can comment, so honor a pick only from an author who can
-  write to the repository. A pick covers the head it names and the heads the
-  fixer pushes from it, and stays active until a handback, a push by anyone
-  else, or a person's removal; a newer pick comment starts a new one.
+  from GitHub's records of each pick, not from queue snapshots alone: a PR
+  enqueued and dropped between two polls, or while the watcher was down,
+  never shows in a snapshot. Each pass reads the base's open PRs, many per
+  GraphQL query, with their `mergeQueueEntry`, their
+  `autoMergeRequest { enabledBy enabledAt }`, and their
+  `AddedToMergeQueueEvent`s and `RemovedFromMergeQueueEvent`s newer than the
+  last one handled (`timelineItems(since:)`): `enqueuer`, `actor`, `reason`,
+  and the removal's `beforeCommit`. `quest status` already reads the removal
+  event (`src/cli/status.ts`). The base's `mergeQueue { entries }` can still
+  serve as a cheap change signal. The App's installation token has its own
+  rate limit, separate from the maintainers' sessions.
+- A pick is GitHub's own record, with no marker of quest's
+  (decided 2026-11-02; see the [epic](/quest/m0/queue-watcher/README.md)):
+  the PR was enqueued, or had auto-merge armed while its required checks were
+  pending, as `quest merge --land` does on a merge-queue base. GitHub lets
+  only a writer enqueue a PR or enable auto-merge, so the `enqueuer` or
+  `enabledBy` is the trust signal; nothing reads comments or checks a
+  commenter's permission. The removal's `beforeCommit` is the head the queue
+  dropped. A pick covers that head and the heads the fixer pushes from it,
+  which the watcher's App then enqueues itself, and stays active until a
+  handback, a push by anyone else, or a person's removal; a writer enqueuing
+  the PR again starts a new one.
 - For a failed build, find the PR's `merge_group` workflow runs (event
   `merge_group`, head branch `gh-readonly-queue/<base>/pr-<n>-<sha>`) and
   fetch the failing jobs' logs through the App's `actions: read`, trimmed the

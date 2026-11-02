@@ -3,13 +3,15 @@ import {
 	actor,
 	array,
 	GitHub,
+	GitHubDeadline,
 	type GitHubDependencies,
+	link,
 	object,
 	type ObjectValue,
 	type PullRequest,
 	string,
 } from "./github";
-import { EJECTED } from "./land";
+import { EJECTED, pinned } from "./land";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
 
 /**
@@ -21,8 +23,9 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 	$moreChecks: Boolean!, $moreReviews: Boolean!, $moreThreads: Boolean!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
-			url state isDraft headRefOid mergeable mergeStateStatus reviewDecision
-			autoMergeRequest { enabledAt mergeMethod enabledBy { login } }
+			url state isDraft headRefOid headRefName mergeable mergeStateStatus reviewDecision
+			headRepository { nameWithOwner }
+			autoMergeRequest { enabledAt mergeMethod commitBody enabledBy { login } }
 			mergeQueueEntry { state position enqueuedAt }
 			timelineItems(last: 100, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT, AUTO_MERGE_DISABLED_EVENT, ISSUE_COMMENT]) { nodes {
 				__typename
@@ -106,7 +109,8 @@ export interface Status {
 	mergeable: string;
 	mergeState: string;
 	reviewDecision: string | null;
-	autoMerge: { method: string; enabledBy: string; enabledAt: string } | null;
+	/** `head` is the head it was enabled on, or null when that cannot be told; see {@link enabledHead}. */
+	autoMerge: { method: string; enabledBy: string; enabledAt: string; head: string | null } | null;
 	mergeQueue: { state: string; position: number; enqueuedAt: string } | null;
 	/** The latest exit from the merge queue, auto-merge, or `quest land`'s queue, and the reason for it. */
 	landingStopped: { reason: string; actor: string; at: string } | null;
@@ -175,11 +179,60 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 	const ownership = await readHoldStatus(pr, deps);
 	if (ownership.head !== first!.headRefOid)
 		throw new Error("the PR head changed while reading its holds; rerun quest status");
-	return {
-		...summarize(first!, rollup, contexts, reviewNodes, threadNodes),
-		holds: ownership.holds,
-		starterHold: ownership.starter,
-	};
+	const status = summarize(first!, rollup, contexts, reviewNodes, threadNodes);
+	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
+	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
+}
+
+/** Repository activity types that move a branch to a new head, including merges into it. */
+const BRANCH_UPDATES = ["push", "force_push", "branch_creation", "pr_merge", "merge_queue_merge"];
+
+/**
+ * The head a PR node's auto-merge request was enabled on, or null when that cannot be told. GitHub
+ * keeps auto-merge across a writer's push but does not say which head it was enabled on. A
+ * `quest land` pin names it; otherwise it is the last push or merge to the head branch before auto-merge
+ * was enabled, read from the head repository's activity once that lists the current head's push.
+ * A push in the same second as enabling is ambiguous. An activity listing the token cannot read
+ * leaves it unknown, with a warning, rather than failing the caller. The node needs `headRefOid`,
+ * `headRefName`, `headRepository { nameWithOwner }`, and `autoMergeRequest { enabledAt commitBody }`.
+ */
+export async function enabledHead(
+	github: GitHub,
+	pull: ObjectValue,
+	warn: (message: string) => void,
+): Promise<string | null> {
+	if (pull.autoMergeRequest == null) return null;
+	const request = object(pull.autoMergeRequest);
+	const pin = pinned(typeof request.commitBody === "string" ? request.commitBody : "");
+	if (pin !== null || pull.headRepository == null) return pin;
+	const enabled = Date.parse(string(request.enabledAt));
+	const head = string(pull.headRefOid);
+	const pushes: { sha: string; time: number }[] = [];
+	const repository = string(object(pull.headRepository).nameWithOwner);
+	let path: string | undefined =
+		`/repos/${repository}/activity?ref=${encodeURIComponent(string(pull.headRefName))}&per_page=100`;
+	// Newest first: read until a push before enabling, which is the head auto-merge was enabled on.
+	while (path && !pushes.some((push) => push.time < enabled)) {
+		let response: Response;
+		try {
+			response = await github.request(path, { allow: [404] });
+		} catch (error) {
+			// A deadline is the caller's to handle; a forbidden listing, as for a token without contents access, is not.
+			if (error instanceof GitHubDeadline || !(error instanceof Error)) throw error;
+			warn(
+				`cannot read ${repository}'s push activity, so the head auto-merge was enabled on is unknown: ${error.message}`,
+			);
+			return null;
+		}
+		if (response.status === 404) return null;
+		for (const row of array(await response.json()))
+			if (BRANCH_UPDATES.includes(string(row.activity_type)))
+				pushes.push({ sha: string(row.after), time: Date.parse(string(row.timestamp)) });
+		path = link(response, "next");
+	}
+	// GitHub lists a push seconds to minutes late; until the current head's is listed, an earlier one may be missing.
+	if (!pushes.some((push) => push.sha === head) || pushes.some((push) => push.time === enabled)) return null;
+	return pushes.find((push) => push.time < enabled)?.sha ?? null;
 }
 
 function summarize(
@@ -267,6 +320,7 @@ function summarize(
 						method: lower(autoMerge.mergeMethod),
 						enabledBy: actor(autoMerge.enabledBy),
 						enabledAt: string(autoMerge.enabledAt),
+						head: null,
 					},
 		mergeQueue:
 			queue === null
@@ -339,7 +393,7 @@ export function statusLines(status: Status): string[] {
 		`review-decision ${dash(status.reviewDecision)}`,
 		status.autoMerge === null
 			? "auto-merge -"
-			: `auto-merge ${status.autoMerge.method} ${status.autoMerge.enabledBy} ${status.autoMerge.enabledAt}`,
+			: `auto-merge ${status.autoMerge.method} ${status.autoMerge.enabledBy} ${status.autoMerge.enabledAt} ${dash(status.autoMerge.head)}`,
 		status.mergeQueue === null
 			? "merge-queue -"
 			: `merge-queue ${status.mergeQueue.state} ${status.mergeQueue.position} ${status.mergeQueue.enqueuedAt}`,

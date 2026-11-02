@@ -361,7 +361,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Wait for pull request activity on GitHub")
 		.description(
 			"Wait for a review, comment or comment edit, review-thread reply, reaction to the PR or a review, push, merge, close, " +
-				"merge-queue removal, disabled auto-merge, label change, or CI result. Polls every 5 minutes, and once more 30 seconds before the timeout; rate limits and longer GitHub poll intervals delay requests. No timeout by default.\n\n" +
+				"merge-queue removal, disabled auto-merge or auto-merge left on a moved head, label change, or CI result. Polls every 5 minutes, and once more 30 seconds before the timeout; rate limits and longer GitHub poll intervals delay requests. No timeout by default.\n\n" +
 				"Prints one plain line per event: timestamp (or commit SHA), type, actor, URL; the last line adds a resume cursor. " +
 				"Reactions print as reacted:<content>, such as reacted:thumbs_up, and label changes as labeled:<name> or unlabeled:<name>. " +
 				"The head's first failing required check prints as checks:failed, and every required check passing as checks:passed, " +
@@ -369,6 +369,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Results count as quest status counts them, so neutral and skipped results pass. " +
 				"checks:passed waits until no check is pending, no GitHub Actions run is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
 				"Optional failures print separately as check:failed; a base branch requiring no checks requires them all. " +
+				"When auto-merge stays enabled on a head other than the current one, which GitHub allows across a writer's push, " +
+				"auto-merge:moved prints once per head, with the account that enabled it as the actor and a URL naming the head it " +
+				"was enabled on, which it reads as quest status does. " +
 				"Pass the final field of the last line to --since to resume without replaying events. " +
 				"On timeout, the only line is a resume point for --since (a cursor, or the given --since or head SHA if setup did not finish), so a retry with it still reports activity from the first wait.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Label changes, replies, and reactions by that account are ignored. " +
@@ -401,7 +404,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
 				"url, state, draft, head, mergeable, merge-state, review-decision, auto-merge, merge-queue, " +
-				"landing-stopped, and checks; landing-stopped is the latest exit from the merge queue, auto-merge, or " +
+				"landing-stopped, and checks; auto-merge gives its method, who enabled it and when, and the head it was " +
+				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
+				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
+				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
 				"quest land's queue, with the reason (such as merge_conflict, failed_checks, manual, or manually_disabled), " +
 				"actor, and time. Then " +
 				"a check line per failing or pending check, marked required or optional; a review line per " +
@@ -475,17 +481,19 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Land a PR's reviewed head")
 		.description(
 			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, or merge at " +
-				"once when nothing is left to wait for. It takes no label: the auto-merge it enables is the queue " +
-				"signal. It refuses while a session holds the PR, so release your own hold first, and once the head " +
-				"has moved. It makes a merge commit unless --squash or --rebase picks another method. On a base with " +
-				"a merge queue, which applies its own method, it comments the pick for the queue watcher, then " +
-				"enqueues the head, or arms auto-merge bound to it while required checks may be pending; a head " +
-				"behind the base is enqueued as is, and a pick GitHub refuses to enqueue warns that the watcher fixes " +
-				"it instead of failing. On a base " +
+				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
+				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
+				"first, and once the head has moved. It uses the method --squash or --rebase names, refusing one " +
+				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
+				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
+				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
+				"is, and a head GitHub refuses to enqueue fails, to be fixed and landed again. On a base " +
 				`that requires the \`${LAND_CHECK}\` check, it queues the PR for \`quest land\` instead: squash ` +
 				"auto-merge whose commit body pins the head. On an ungated base with auto-merge disabled, it refuses " +
 				"unless --direct is passed. Follow the repository landing instructions in CONTRIBUTING.md or " +
-				"AGENTS.md; never retry with --direct unless the user asks.\n\n" +
+				"AGENTS.md; never retry with --direct unless the user asks. GitHub keeps auto-merge across a " +
+				"writer's push, so disable it before pushing to the PR; quest status and quest wait report a head " +
+				"that moved since auto-merge was enabled.\n\n" +
 				OWNERSHIP,
 		)
 		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
@@ -496,7 +504,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.action((value: string, options: { land: string; squash?: boolean; rebase?: boolean; direct?: boolean }) => {
 			const pr = pullRequest(value, root());
 			if (!/^[\da-f]{40}$/i.test(options.land)) throw new UsageError("--land needs a full 40-character SHA");
-			const method = options.squash ? "squash" : options.rebase ? "rebase" : "merge";
+			const method = options.squash ? "squash" : options.rebase ? "rebase" : undefined;
 			settle(land(pr, options.land, method, gitHubDependencies(warn), options.direct), () => undefined);
 		});
 
@@ -557,7 +565,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"--sandbox <command>",
 			"Sandbox executable called with <checkout> <base-sha> and QUEST_LAND_BASE",
 		)
-		.option("--fixer <command>", "Credential-free fixer wrapper executable (60-minute deadline)")
+		.option(
+			"--fixer <command>",
+			"Credential-free fixer wrapper executable (60 minutes from its admission line, 120 in total)",
+		)
 		.requiredOption("--app-id <id>", "GitHub App id")
 		.option("--timeout <minutes>", "Fail a check that runs longer than this", positiveInteger("timeout"), 60)
 		.action((options: ServeOptions) => {

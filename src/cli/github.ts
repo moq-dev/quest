@@ -71,9 +71,16 @@ export interface RequestOptions {
 /** Accept a GitHub PR URL, or a number in the origin repository. */
 export function pullRequest(value: string, root: string): PullRequest {
 	if (/^[1-9]\d*$/.test(value)) {
-		const origin = readRemote(root, "origin");
-		const repository = origin && remoteRepository(origin).repository;
-		if (!repository) throw new Error("origin must name a github.com repository; pass a GitHub PR URL instead");
+		const outside = `a bare PR number is read from origin in ${root}; pass the full GitHub PR URL, or run inside a checkout or name one with --root`;
+		let origin: Remote | null;
+		try {
+			origin = readRemote(root, "origin");
+		} catch {
+			origin = null;
+		}
+		if (!origin) throw new GitHubInputError(`${root} is not a checkout with an origin remote: ${outside}`);
+		const { repository } = remoteRepository(origin);
+		if (!repository) throw new GitHubInputError(`origin does not name a github.com repository: ${outside}`);
 		return { ...repository, number: Number(value) };
 	}
 	const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d*)\/?(?:[?#].*)?$/.exec(value);

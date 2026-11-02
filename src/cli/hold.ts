@@ -1,7 +1,7 @@
 // `quest iterate`, `ready`, `merge`, and `release`: one session works on a PR at
 // a time. It holds the `quest:active` label, and the ID of the timeline event
 // that added the label is its hold token, since sessions often share an account.
-// `quest merge` takes no label: the pinned auto-merge it enables is the queue signal.
+// `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
 import { ACTIVE_LABEL, handedBack, isHoldLabel, latestHold, heldToken } from "../core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../github/merge";
 import { repositoryPath } from "./claims";
@@ -17,7 +17,6 @@ import {
 	string,
 } from "./github";
 import { LAND_CHECK, enqueue } from "./land";
-import { recordPick } from "./pick";
 import { Refusal, ago } from "./start";
 
 export type Method = "merge" | "squash" | "rebase";
@@ -153,17 +152,54 @@ export async function finish(pr: PullRequest, token: string, deps: GitHubDepende
 	});
 }
 
+/** The repository setting that allows each merge method. */
+const ALLOWS: Record<Method, string> = {
+	merge: "allow_merge_commit",
+	squash: "allow_squash_merge",
+	rebase: "allow_rebase_merge",
+};
+
+/** Each merge method as GitHub's settings name it. */
+const METHOD_NAMES: Record<Method, string> = {
+	merge: "merge commits",
+	squash: "squash merges",
+	rebase: "rebase merges",
+};
+
+/**
+ * The method an ungated landing uses: the one `named`, which the repository must allow, else the
+ * only one it allows, else a merge commit. Settings hidden from the token leave GitHub to refuse.
+ */
+function mergeMethod(repository: ObjectValue, named: Method | undefined, url: string): Method {
+	const methods = Object.keys(ALLOWS) as Method[];
+	if (methods.some((method) => typeof repository[ALLOWS[method]] !== "boolean")) return named ?? "merge";
+	const allowed = methods.filter((method) => repository[ALLOWS[method]] === true);
+	if (named !== undefined) {
+		if (allowed.includes(named)) return named;
+		throw new Refusal(
+			`${url} repository does not allow ${METHOD_NAMES[named]}; it allows ${allowed.map((method) => METHOD_NAMES[method]).join(", ") || "none"}`,
+		);
+	}
+	if (allowed.length === 1) return allowed[0];
+	if (allowed.includes("merge")) return "merge";
+	if (allowed.length === 0) throw new Refusal(`${url} repository allows no merge method`);
+	throw new Refusal(
+		`${url} repository does not allow merge commits; pass --${allowed.join(" or --")}, as its landing instructions in CONTRIBUTING.md or AGENTS.md name`,
+	);
+}
+
 /**
  * Land `sha`, which must still be the head of `pr`, while no session holds it:
  * enable auto-merge bound to it, or merge at once when GitHub would refuse auto-merge because
  * nothing is left to wait for. A base with a merge queue gets {@link pick} instead.
  * A base that requires the `quest land` check queues it for `quest land` instead:
  * squash auto-merge whose commit body pins `sha`. It takes no label.
+ * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one.
  */
 export async function land(
 	pr: PullRequest,
 	sha: string,
-	method: Method,
+	named: Method | undefined,
 	deps: GitHubDependencies,
 	direct = false,
 ): Promise<void> {
@@ -187,22 +223,24 @@ export async function land(
 		(check) => check.name === LAND_CHECK,
 	);
 	if (gated) {
-		if (method !== "squash") deps.warn(`${snapshot.url} lands through quest land, which squashes`);
+		if (named !== undefined && named !== "squash")
+			deps.warn(`${snapshot.url} lands through quest land, which squashes`);
 		await unchanged();
 		await enqueue(labels.github, snapshot.id, snapshot.head);
 		return;
 	}
-	// A merge queue is the repository's own gate, so it decides.
+	// A merge queue is the repository's own gate: it applies its own method and needs no auto-merge setting.
 	if (snapshot.queue) {
-		if (method !== "merge")
+		if (named !== undefined && named !== "merge")
 			deps.warn(`${snapshot.url} lands through a merge queue, which applies its own merge method`);
 		await unchanged();
-		await pick(labels, pr, snapshot, method, deps);
+		await pick(labels, snapshot, named ?? "merge");
 		return;
 	}
-	// Otherwise auto-merge must be on.
+	const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
+	const method = mergeMethod(repository, named, snapshot.url);
 	if (!direct) {
-		const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
+		// Otherwise auto-merge must be on.
 		// GitHub shows the merge settings only to writers; fail closed, with a next step.
 		if (typeof repository.allow_auto_merge !== "boolean")
 			throw new Refusal(
@@ -213,7 +251,7 @@ export async function land(
 				`${snapshot.url} repository has auto-merge disabled; follow its landing instructions in CONTRIBUTING.md or AGENTS.md (for example, its label queue). Only use --direct if the user explicitly asks`,
 			);
 	}
-	// The batch gate tests its own current-base chain. Ungated landings need that base in the PR head.
+	// The batch gate and a merge queue test the current base themselves. Here nothing does, so the head must contain it.
 	const comparison = object(
 		await (
 			await labels.github.request(
@@ -267,19 +305,13 @@ const UNREFUSED = ["FORBIDDEN", "NOT_FOUND", "INSUFFICIENT_SCOPES", "INTERNAL"];
 
 /**
  * Pick `snapshot`'s head to land through the base's merge queue, as {@link land} checked it:
- * record the pick for the queue watcher, then enqueue that head, or arm auto-merge bound to it
- * while its required checks may be pending. The queue builds each PR on the current base, so a
- * head behind it is enqueued as is. A pick GitHub refuses, such as one that conflicts or fails
- * its required checks, stays recorded: the watcher fixes it, so this warns instead of failing.
+ * enqueue that head, or arm auto-merge bound to it while its required checks may be pending.
+ * The queue builds each PR on the current base, so a head behind it is enqueued as is.
+ * GitHub's queue events and auto-merge request record the pick, naming who made it.
+ * A pick GitHub refuses, such as one that conflicts or fails its required checks, fails:
+ * the PR needs a fix before it can land.
  */
-async function pick(
-	labels: Labels,
-	pr: PullRequest,
-	snapshot: Snapshot,
-	method: Method,
-	deps: GitHubDependencies,
-): Promise<void> {
-	await recordPick(labels.github, pr, snapshot.head);
+async function pick(labels: Labels, snapshot: Snapshot, method: Method): Promise<void> {
 	const enqueuePull = () =>
 		labels.github.graphql(
 			`mutation($id: ID!, $sha: GitObjectID!) {
@@ -307,14 +339,14 @@ async function pick(
 	} catch (error) {
 		if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 			throw error;
-		// A head that moved since is no longer the pick; say so rather than promise a fix.
+		// A head that moved since is no longer the one being landed; say so rather than ask for a fix.
 		const fresh = await labels.read();
 		open(fresh);
 		headAt(fresh, snapshot.head);
-		// Already queued, as when this pick repeats an earlier one: GitHub refused nothing that matters.
+		// Already queued, as when this repeats an earlier landing: GitHub refused nothing that matters.
 		if (fresh.queued) return;
-		deps.warn(
-			`${snapshot.url}: GitHub refused to enqueue ${snapshot.head} (${error.message}). The pick is recorded, so the queue watcher fixes it and enqueues it; where none runs, fix it and land it again`,
+		throw new Refusal(
+			`${snapshot.url}: GitHub refused to enqueue ${snapshot.head} (${error.message}); fix the PR, for example with /quest-iterate, and land it again`,
 		);
 	}
 }
