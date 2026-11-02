@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
+import { unreviewed } from "./review";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -128,6 +129,15 @@ export interface Branch {
 }
 export type ContributionState = "enabled" | "paused";
 export type Enrollment = GitHubRepository & { state: ContributionState };
+/** A repository the App reaches and the user maintains, as the project picker lists it. */
+export type Candidate = GitHubRepository & {
+	/** Its contribution state under its current installation, or null when it is not enrolled there. */
+	state: ContributionState | null;
+	/** Why contributions cannot be enabled yet; empty when enabling may go on to its live checks. */
+	problems: string[];
+	/** Whether its default branch has no Quest files, so setting up Quest comes first. */
+	setup: boolean;
+};
 /** A running job attempt whose project was disconnected, which its runner must stop. */
 export type Stopped = { actor: string; runner: string; job: string; attempt: number };
 export type ProjectPreview = {
@@ -397,6 +407,151 @@ export class GitHubService {
 		if (String(app.id) !== this.#env.GITHUB_APP_ID || !/^[a-zA-Z0-9-]+$/.test(app.slug))
 			throw new GitHubError("GitHub App unavailable");
 		return `https://github.com/apps/${app.slug}/installations/new`;
+	}
+
+	/** Every page of a GitHub list response that wraps its items in `key`. */
+	async #pages<T>(token: string, path: string, key: string): Promise<T[]> {
+		const all: T[] = [];
+		for (let page = 1; ; page++) {
+			const result = await this.#api<Record<string, unknown>>(token, `${path}?per_page=100&page=${page}`);
+			const items = result[key];
+			if (!Array.isArray(items) || typeof result.total_count !== "number")
+				throw new GitHubError("GitHub list unavailable");
+			all.push(...(items as T[]));
+			if (items.length < 100 || all.length >= result.total_count) return all;
+		}
+	}
+
+	/**
+	 * The repositories the user could enable: those the App's installations
+	 * reach and the user maintains, each with why it cannot be enabled yet.
+	 * `userToken` is the user's own GitHub App token, so the list costs a few
+	 * requests however many repositories an installation holds. The list is
+	 * navigation only: enabling one rechecks authority and eligibility live
+	 * through an installation token, as for a repository selected by name.
+	 */
+	async candidates(userToken: string): Promise<Candidate[]> {
+		const installations = await this.#pages<Installation>(userToken, "/user/installations", "installations");
+		type Listed = Repository & { permissions?: { admin?: boolean; maintain?: boolean } };
+		const found: { repo: Listed; installation: number }[] = [];
+		for (const installation of installations) {
+			if (
+				!positiveId(installation.id) ||
+				String(installation.app_id) !== this.#env.GITHUB_APP_ID ||
+				installation.suspended_at
+			)
+				continue;
+			try {
+				await this.#gate(installation.id);
+			} catch (error) {
+				if (error instanceof GitHubError) continue;
+				throw error;
+			}
+			const repos = await this.#pages<Listed>(
+				userToken,
+				`/user/installations/${installation.id}/repositories`,
+				"repositories",
+			);
+			for (const repo of repos)
+				if (
+					(repo.permissions?.admin || repo.permissions?.maintain) &&
+					positiveId(repo.id) &&
+					typeof repo.owner?.login === "string" &&
+					name(repo.owner.login) &&
+					typeof repo.name === "string" &&
+					name(repo.name)
+				)
+					found.push({ repo, installation: installation.id });
+		}
+		if (!found.length) return [];
+
+		const open = found.filter(({ repo }) => !repo.archived && !repo.disabled && repo.private === false);
+		const quests = await this.#questFiles(
+			userToken,
+			open.map(({ repo }) => repo),
+		);
+		const licenses = new Map<string, Promise<string | null>>();
+		const enrolled = new Map(
+			(
+				await this.#env.DB.prepare(
+					"SELECT id,installation,state FROM github_projects WHERE id IN (SELECT value FROM json_each(?))",
+				)
+					.bind(JSON.stringify(found.map(({ repo }) => repo.id)))
+					.all<{ id: number; installation: number; state: ContributionState }>()
+			).results.map((row) => [row.id, row]),
+		);
+		const candidates = await Promise.all(
+			found.map(async ({ repo, installation }): Promise<Candidate> => {
+				const problems: string[] = [];
+				let setup = false;
+				if (repo.archived || repo.disabled) problems.push("Archived or disabled on GitHub.");
+				else if (repo.private !== false || repo.visibility !== "public")
+					problems.push("Private. Contributions need a public repository.");
+				else {
+					const quest = quests.get(repo.id);
+					if (quest === undefined)
+						problems.push("Quest files could not be read. Review the project for details.");
+					else if (!quest) {
+						setup = true;
+						problems.push("No Quest files on the default branch yet.");
+					}
+					const spdx = repo.license?.spdx_id ?? "";
+					if (!licenses.has(spdx)) licenses.set(spdx, this.#license(repo));
+					const license = await licenses.get(spdx)!;
+					if (license) problems.push(license);
+				}
+				const row = enrolled.get(repo.id);
+				return {
+					id: repo.id,
+					owner: repo.owner.login,
+					name: repo.name,
+					state: row?.installation === installation ? row.state : null,
+					problems,
+					setup,
+				};
+			}),
+		);
+		return candidates.sort((a, b) => `${a.owner}/${a.name}`.localeCompare(`${b.owner}/${b.name}`));
+	}
+
+	/**
+	 * Whether each public repository's default branch has Quest files, in one
+	 * GraphQL read per hundred repositories. A repository missing from the
+	 * result is absent from the map. Enabling validates the whole tree.
+	 */
+	async #questFiles(token: string, repos: Repository[]): Promise<Map<number, boolean>> {
+		const found = new Map<number, boolean>();
+		for (let start = 0; start < repos.length; start += 100) {
+			const chunk = repos.slice(start, start + 100);
+			const params = chunk.map((_, i) => `$o${i}: String!, $n${i}: String!`).join(", ");
+			const fields = chunk.map(
+				(_, i) =>
+					`r${i}: repository(owner: $o${i}, name: $n${i}) { databaseId object(expression: "HEAD:quest") { ... on Tree { entries { name type } } } }`,
+			);
+			const variables = Object.fromEntries(
+				chunk.flatMap((repo, i) => [
+					[`o${i}`, repo.owner.login],
+					[`n${i}`, repo.name],
+				]),
+			);
+			const result = await this.#api<{
+				data?: Record<
+					string,
+					{ databaseId: number; object: { entries?: { name: string; type: string }[] } | null } | null
+				> | null;
+			}>(token, "/graphql", "POST", { query: `query(${params}) { ${fields.join("\n")} }`, variables });
+			chunk.forEach((repo, i) => {
+				const read = result.data?.[`r${i}`];
+				if (!read || read.databaseId !== repo.id) return;
+				// A subdirectory may hold quests; enabling reads the whole tree.
+				const entries = read.object?.entries ?? [];
+				found.set(
+					repo.id,
+					entries.some((entry) => entry.type === "tree" || (entry.type === "blob" && isQuest(entry.name))),
+				);
+			});
+		}
+		return found;
 	}
 
 	/** Resolve public metadata through a repository-scoped App token. */
@@ -1259,7 +1414,9 @@ export class GitHubService {
 
 	/**
 	 * Hand `action` the one upstream branch a job may write: its own branch,
-	 * or an iterated pull request's head on the enrolled repository.
+	 * or an iterated pull request's head on the enrolled repository. Before
+	 * moving either, it turns off the auto-merge of any open pull request the
+	 * branch heads.
 	 * Rechecks the requester's current authority and the project's enrollment.
 	 */
 	contribute<T>(
@@ -1272,7 +1429,7 @@ export class GitHubService {
 		return this.#authorized(
 			upstream,
 			userId,
-			pulled ? { contents: "read", pull_requests: "read" } : { contents: "write" },
+			pulled ? { contents: "read", pull_requests: "read" } : { contents: "write", pull_requests: "write" },
 			async (token, current, installation) => {
 				this.#public(current);
 				if ((await this.#state(upstream, installation)) === null)
@@ -1292,7 +1449,16 @@ export class GitHubService {
 					}
 				};
 				// A job's own branch starts from the default branch's current commit, so it merges nothing in.
-				if (!pulled) return action(this.#branch(token, current, job.branch, async () => false));
+				// A delivered job, or one started over, may publish again onto its open pull request.
+				if (!pulled)
+					return action(
+						this.#disarming(
+							token,
+							current,
+							job.branch,
+							this.#branch(token, current, job.branch, async () => false),
+						),
+					);
 				const pull = await this.#api<PullHead>(
 					token,
 					`${repositoryPath(upstream)}/pulls/${pullNumber(job.target)}`,
@@ -1302,14 +1468,84 @@ export class GitHubService {
 				const head = pull.head.repo;
 				const base = based(pull.base.ref);
 				if (head?.id === upstream.id)
-					return this.#withRepository(upstream, { contents: "write" }, async (writeToken, latest) =>
-						action(this.#branch(writeToken, latest, job.branch, base)),
+					return this.#withRepository(
+						upstream,
+						{ contents: "write", pull_requests: "write" },
+						async (writeToken, latest) =>
+							action(
+								this.#disarming(
+									writeToken,
+									latest,
+									job.branch,
+									this.#branch(writeToken, latest, job.branch, base),
+								),
+							),
 					);
 				throw new PublicationBlocked(
 					"The pull request's head is in a contributor's fork, which the bot cannot update. Ask its author to apply the changes, or close it and start new work.",
 				);
 			},
 		);
+	}
+
+	/**
+	 * Wrap `branch`, named `name` on `repo`, so that moving it, or resetting it,
+	 * first turns off auto-merge on every open pull request it heads, whatever
+	 * their bases. Creating the branch needs nothing, since no pull request can
+	 * come from it yet.
+	 */
+	#disarming(token: string, repo: Repository, name: string, branch: Branch): Branch {
+		const label = `${repo.owner.login}:${name}`;
+		const disarm = async () => {
+			const open = await this.#api<PullHead[]>(
+				token,
+				`/repos/${repo.owner.login}/${repo.name}/pulls?state=open&per_page=100&head=${encodeURIComponent(label)}`,
+			);
+			for (const pull of open) await this.#disarm(token, pull.node_id);
+		};
+		return {
+			...branch,
+			move: async (from, to) => {
+				if (from !== null) await disarm();
+				return branch.move(from, to);
+			},
+			reset: async (to) => {
+				await disarm();
+				await branch.reset(to);
+			},
+		};
+	}
+
+	/**
+	 * Turn off auto-merge on a pull request before kix moves its head. GitHub
+	 * keeps auto-merge across a writer's push, the App's included, so it would
+	 * land the new head with no review that counts on it.
+	 */
+	async #disarm(token: string, pull: string) {
+		const read = await this.#api<{ data?: { node: { autoMergeRequest?: unknown } | null }; errors?: unknown[] }>(
+			token,
+			"/graphql",
+			"POST",
+			{
+				query: `query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }`,
+				variables: { id: pull },
+			},
+		);
+		// Only a read that shows no auto-merge lets the push go ahead without turning it off.
+		const node = read.data?.node;
+		if (read.errors?.length || !node || node.autoMergeRequest === undefined)
+			throw new PublicationBlocked(
+				"GitHub did not say whether the pull request is auto-merging, which would land this push unreviewed, so nothing was pushed.",
+			);
+		if (node.autoMergeRequest === null) return;
+		const result = await this.#api<{ errors?: unknown[] }>(token, "/graphql", "POST", {
+			query: `mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }`,
+			variables: { id: pull },
+		});
+		if (result.errors?.length)
+			throw new PublicationBlocked(
+				"GitHub refused to turn off the pull request's auto-merge, which would land this push unreviewed, so nothing was pushed.",
+			);
 	}
 
 	#branch(token: string, repo: Repository, branch: string, based: Branch["based"]): Branch {
@@ -1510,14 +1746,37 @@ export class GitHubService {
 		});
 	}
 
+	/** Why kix may not land `head` yet, or null when a review counts on it; see `unreviewed`. */
+	#unreviewed(token: string, repo: GitHubRepository, current: Repository, pull: number, head: string) {
+		const path = repositoryPath(repo);
+		return unreviewed(
+			{
+				get: (tail) => this.#api(token, `${path}${tail}`),
+				graphql: (query, variables) => this.#api(token, "/graphql", "POST", { query, variables }),
+			},
+			{
+				owner: repo.owner,
+				name: repo.name,
+				pull: number(pull),
+				head: sha(head),
+				branch: current.default_branch,
+				app: Number(this.#env.GITHUB_APP_ID),
+			},
+		);
+	}
+
 	/**
 	 * Merge exactly `expectedHead` with the first method the repository
-	 * allows: squash, then a merge commit, then rebase. GitHub enforces branch
-	 * rules, reviews, and checks; a refusal says why and is never retried.
+	 * allows: squash, then a merge commit, then rebase, once a review counts on
+	 * it. GitHub enforces branch rules, reviews, and checks; a refusal says why
+	 * and is never retried.
 	 */
 	mergePullRequest(repo: GitHubRepository, userId: string, pull: number, expectedHead: string) {
-		return this.#authorized(repo, userId, { contents: "write", pull_requests: "write" }, async (token, current) => {
+		const permissions: Permissions = { contents: "write", pull_requests: "write", checks: "read" };
+		return this.#authorized(repo, userId, permissions, async (token, current) => {
 			const method = mergeMethod(current);
+			const waiting = await this.#unreviewed(token, repo, current, pull, expectedHead);
+			if (waiting) throw new GitHubError(waiting);
 			let merged: { sha: string };
 			try {
 				merged = await this.#api<{ sha: string }>(
@@ -1670,7 +1929,7 @@ export class GitHubService {
 	 * repository's instructions name, or else the first the repository allows.
 	 * A base that requires the `quest land` check queues it for that gate
 	 * instead, as `quest merge` does: squash auto-merge whose commit body
-	 * pins the head.
+	 * pins the head. Either way, only once a review counts on the head.
 	 */
 	landPullRequest(
 		repo: GitHubRepository,
@@ -1681,7 +1940,7 @@ export class GitHubService {
 		return this.#authorized(
 			repo,
 			userId,
-			{ contents: "write", pull_requests: "write" },
+			{ contents: "write", pull_requests: "write", checks: "read" },
 			async (token, current, installation) => {
 				// Landing is a contribution like opening a pull request, so a paused project lands nothing.
 				if ((await this.#state(repo, installation)) !== "enabled")
@@ -1697,6 +1956,9 @@ export class GitHubService {
 				};
 				const holds = await this.#holds(token, repo, pull);
 				check(holds);
+				// The maintainer's pick of merge never stands in for a review of what the job published since.
+				const waiting = await this.#unreviewed(token, repo, current, pull, input.head);
+				if (waiting) throw new PublicationBlocked(waiting);
 				const gated = await this.#gated(token, repo, holds.base);
 				let mutation: "mergePullRequest" | "enablePullRequestAutoMerge" =
 					!gated && immediateMerge(holds.mergeState, holds.queue)

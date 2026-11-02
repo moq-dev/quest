@@ -33,3 +33,6 @@ updates:
     groups:
       nix:
         patterns: ["*"]
+    ignore:
+      # Pinned to the last nixpkgs with opencode 1.x until /quest/m0/opencode-sdk.md removes it.
+      - dependency-name: nixpkgs-opencode

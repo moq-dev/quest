@@ -1,5 +1,5 @@
 import type { Activity, ProjectState, Pull } from "./github/state";
-import type { Enrollment, ProjectPreview } from "./github/service";
+import type { Candidate, Enrollment, ProjectPreview } from "./github/service";
 import { Difficulty, Marker } from "./layout";
 import { title } from "./board/model";
 
@@ -29,7 +29,53 @@ export function ProjectStopControls({ project }: { project: Enrollment }) {
 	);
 }
 
-export function ProjectsPage(props: { projects: Enrollment[]; installation: string | null; error?: string }) {
+/** One repository the App reaches and the user maintains, with its state or why it cannot be enabled. */
+function CandidateRow({ candidate }: { candidate: Candidate }) {
+	const href = projectURL(candidate.owner, candidate.name);
+	const eligible = !candidate.state && !candidate.problems.length;
+	return (
+		<li class="entry">
+			<Marker status={candidate.state ? "accepted" : eligible ? "available" : "blocked"} />
+			<a class="entry-title" href={href}>
+				{candidate.owner}/{candidate.name}
+			</a>
+			<div class="entry-meta">
+				{candidate.state ? (
+					<span>
+						{candidate.state === "enabled" ? "Contributions enabled" : "Contributions paused"}.{" "}
+						<a href={href}>Manage</a>
+					</span>
+				) : eligible ? (
+					<form method="post" action={href}>
+						<input type="hidden" name="id" value={candidate.id} />
+						<input type="hidden" name="state" value="enabled" />
+						<button class="button primary">Enable contributions</button>
+					</form>
+				) : (
+					<span>
+						{candidate.problems.join(" ")}
+						{candidate.setup && (
+							<>
+								{" "}
+								<a href="/setup">Set up Quest</a>, then return here.
+							</>
+						)}
+					</span>
+				)}
+			</div>
+		</li>
+	);
+}
+
+export function ProjectsPage(props: {
+	projects: Enrollment[];
+	/** The repositories to pick from, or null when the user's GitHub token cannot list them. */
+	candidates: Candidate[] | null;
+	/** Whether the user has a linked GitHub account, without which nothing can be listed. */
+	linked: boolean;
+	installation: string | null;
+	error?: string;
+}) {
 	return (
 		<section class="wrap docs projects">
 			<h1>Project setup</h1>
@@ -39,10 +85,28 @@ export function ProjectsPage(props: { projects: Enrollment[]; installation: stri
 			</p>
 			{props.error && <p role="alert">{props.error}</p>}
 			<section class="ql-panel panel">
-				<h2>Install the GitHub App</h2>
+				<h2>Your repositories</h2>
 				<p>
-					Give the App access to the repository you select. Installation alone does not enable contributions.
+					Repositories the GitHub App can reach that you maintain or administer. Enabling one verifies your
+					authority again and reads Quest files on its default branch.
 				</p>
+				{!props.linked ? (
+					<p role="alert">
+						<a href="/account">Link your GitHub account</a> to list the repositories you maintain.
+					</p>
+				) : props.candidates === null ? (
+					<p role="alert">
+						Your GitHub repositories could not be listed. Sign out, then sign in with GitHub again.
+					</p>
+				) : props.candidates.length ? (
+					<ul class="log">
+						{props.candidates.map((candidate) => (
+							<CandidateRow candidate={candidate} />
+						))}
+					</ul>
+				) : (
+					<p>The App is not installed on any repository you maintain yet.</p>
+				)}
 				{props.installation ? (
 					<p>
 						<a class="button quiet" href={props.installation}>
@@ -52,30 +116,22 @@ export function ProjectsPage(props: { projects: Enrollment[]; installation: stri
 				) : (
 					<p class="muted">The operator has not configured the GitHub App yet.</p>
 				)}
+				<p class="note-small">
+					Installing the App on a repository does not enable contributions; GitHub returns you here to choose.
+					Funding a quest does not grant maintainer permissions.
+				</p>
 			</section>
 			<section class="ql-panel panel">
-				<h2>Select a repository</h2>
+				<h2>Find an enrolled project</h2>
 				<p>
-					We verify your linked GitHub account has current maintain or admin authority, then read Quest files
-					on the default branch.
+					Select an enrolled project by name to pause or disconnect it, even if its eligibility has changed or
+					the App no longer reaches it.
 				</p>
 				<form method="get" action="/projects/select" class="project-select">
 					<label for="repository">GitHub owner/repository</label>
 					<input id="repository" name="repository" placeholder="your-org/your-project" required />
-					<button class="button primary">Review project</button>
+					<button class="button quiet">Find project</button>
 				</form>
-				<p class="note-small">
-					Already enrolled? Select the project here to pause or disconnect, even if its eligibility has
-					changed.
-				</p>
-				<p class="note-small">
-					No Quest files yet? <a href="/setup">Follow the existing setup guide</a>, then return here. Setup is
-					a separate choice and never changes your repository automatically.
-				</p>
-				<p class="note-small">
-					Using Google or a passkey? <a href="/account">Link your GitHub account</a> first. Funding a quest
-					does not grant maintainer permissions.
-				</p>
 			</section>
 			{props.projects.length > 0 && (
 				<section>
