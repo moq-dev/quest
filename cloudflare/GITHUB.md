@@ -266,10 +266,10 @@ and `pull_requests: write` cover every installed repository. Each token names
 one repository ID and only the permissions that step needs. Branch writes get
 `contents: write` on the upstream alone, plus `pull_requests: write` to turn
 off auto-merge when the branch is a pull request's head, and pull request
-delivery gets `pull_requests: write` there. That token could write any unprotected upstream
-branch; the service restricts it to the job's branch or the pull request's head
-and refuses the default branch. Repositories should still protect their default
-branch.
+delivery gets `pull_requests: write` there. That token could write any
+unprotected upstream branch; the service restricts it to the job's branch or
+the pull request's head and refuses the default branch. Repositories should
+still protect their default branch.
 
 Mocked tests cover this path. These GitHub behaviors still need a live check
 against real installations ([operator setup](../quest/m0/kix/operator-setup.md)):
