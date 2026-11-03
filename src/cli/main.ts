@@ -347,7 +347,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Claim a ready quest: push an empty claim commit, built on the upstream default branch, to the quest's " +
 				"branch (its path without .md), then open a draft PR from it right away. Switches the " +
 				"checkout to the claim on a new local branch, or fast-forwards that branch when it is checked out, " +
-				"and prints the PR URL, or the branch off GitHub.\n\n" +
+				"and prints the PR URL, or the branch off GitHub. A local branch left from an earlier attempt is not " +
+				"moved: the claim still succeeds, with a warning to switch to it and merge the claim commit.\n\n" +
 				"Readiness comes from the fetched upstream default branch's tree, not the checkout. Fails on a tree " +
 				"quest check rejects, which can hide a blocker. Refuses a blocked quest, one missing from the " +
 				"upstream default branch, and one already held: a branch upstream or an open PR from that branch in " +
