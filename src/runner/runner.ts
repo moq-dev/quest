@@ -1,11 +1,13 @@
 // `quest runner`: one machine's live presence on kix. It reports its accounts,
 // running attempts, and free slots in a `status` whenever they change, takes
 // `assign` and `cancel` pushes, and runs each attempt until it reports.
+import type { Round } from "../cli/review";
 import type { Adapter } from "./adapter";
 import { Connection, type Dial, dialWebSocket } from "./connection";
 import type { Account, Login, RunnerHome } from "./home";
 import { Attempt, type Context } from "./job";
 import type { Action, Job, Message, Push } from "./protocol";
+import { type ReviewRequest, reviewHead } from "./review";
 
 /** When the provider does not say when a limit resets, the account sits out this long. */
 export const LIMIT_FALLBACK_MS = 60 * 60_000;
@@ -18,6 +20,8 @@ export interface RunnerOptions {
 	adapter(account: Account): Adapter;
 	devShell(job: Job, repository: string, signal: AbortSignal): Promise<string | null>;
 	remote(job: Job): string;
+	/** Review a published head; `quest review` on its own checkout by default. */
+	review?(request: ReviewRequest): Promise<Round>;
 	env?: NodeJS.ProcessEnv;
 	dial?: Dial;
 	fetch?: typeof fetch;
@@ -196,16 +200,19 @@ export class Runner {
 			remote: options.remote,
 			env: options.env ?? process.env,
 			request: (message) => this.#send(message),
-			publish: (body) => this.#publish(body),
+			publish: (body) => this.#post("publish", body),
+			review: options.review ?? reviewHead,
+			reviewed: (body) => this.#post("review", body),
 			context: (job, attempt) => this.#target(job, attempt),
 			limited: (account, until) => this.#limited(account, until),
 			log: options.log,
 		};
 	}
 
-	async #publish(body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+	/** `POST /api/runner/<path>`, returning its status and JSON body. */
+	async #post(path: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
 		const fetcher = this.options.fetch ?? fetch;
-		const response = await fetcher(`${this.options.login.url.replace(/\/$/, "")}/api/runner/publish`, {
+		const response = await fetcher(`${this.options.login.url.replace(/\/$/, "")}/api/runner/${path}`, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${this.options.login.token}`, "Content-Type": "application/json" },
 			body: JSON.stringify(body),

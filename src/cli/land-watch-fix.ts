@@ -91,7 +91,7 @@ const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
 	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 } } }`;
 
-async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
+export async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
 	return object((await github.graphql(PULL, { id })).node);
 }
 
@@ -499,7 +499,18 @@ async function collect(
 						if (entry.repository !== job.repository && !entry.maintainerCanModify)
 							throw new FixerRefusal("fork does not allow maintainer edits");
 					} else
-						await importFix(context.root, state, job, entry, job.checkout, job.packs, head, context.read);
+						await importFix(
+							context.root,
+							state,
+							job,
+							entry,
+							job.checkout,
+							job.packs,
+							head,
+							context.read,
+							entry.head,
+							deps.warn,
+						);
 					job.published = head;
 					save(path, job);
 				}
