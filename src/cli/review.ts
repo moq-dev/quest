@@ -24,8 +24,8 @@ export const SEVERITIES = ["high", "medium", "low"] as const;
 
 /** Each reviewer's pinned model and effort; `--model` and `--effort` override them. */
 export const MODELS = {
-	claude: { model: "claude-opus-5-5", effort: "medium" },
-	codex: { model: "gpt-6.1-sol", effort: "medium" },
+	claude: { model: "claude-opus-5-5", effort: "high" },
+	codex: { model: "gpt-6.1-sol", effort: "xhigh" },
 } as const satisfies Record<HarnessName, { model: string; effort: string }>;
 
 export interface Finding {

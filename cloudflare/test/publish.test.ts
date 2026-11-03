@@ -1783,7 +1783,7 @@ describe("merge jobs", () => {
 					attempt: 1,
 					reviewer: "codex",
 					model: "gpt-6.1-sol",
-					effort: "medium",
+					effort: "xhigh",
 					round: 1,
 					findings: [],
 					...body,
@@ -1836,7 +1836,7 @@ describe("merge jobs", () => {
 						output: {
 							title: "1 finding",
 							summary:
-								"A kix runner reviewed this commit with `quest review`: codex, gpt-6.1-sol at medium effort, round 1.",
+								"A kix runner reviewed this commit with `quest review`: codex, gpt-6.1-sol at xhigh effort, round 1.",
 							text: "````text\nhigh a:1 Breaks on null\n\nEnds a fence: ``` and mentions @maintainer\n````",
 						},
 					},
@@ -1863,7 +1863,7 @@ describe("merge jobs", () => {
 				expect(project.checkRuns!.at(-1)!.output).toEqual({
 					title: "No findings",
 					summary:
-						"A kix runner reviewed this commit with `quest review`: codex, gpt-6.1-sol at medium effort, round 2.",
+						"A kix runner reviewed this commit with `quest review`: codex, gpt-6.1-sol at xhigh effort, round 2.",
 				});
 				expect(await land(id, head)).toBeNull();
 				expect(lands().map((l) => l.variables.sha)).toEqual([head]);

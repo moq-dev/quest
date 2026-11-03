@@ -12,8 +12,9 @@ Recurring, decided 2026-10-28 (user, /quest-plan of the follow-ups from
 was [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426).
 
 - Compare `MODELS` in `src/cli/review.ts` with each vendor's current models:
-  the newest general model, at medium effort. Bump any that are stale, and
-  check that both CLIs accept the new ids. `--deep` and its strongest-model
+  the newest general model, Codex at `xhigh` effort and Claude at `high`
+  (maintainer, 2026-11-03). Bump any that are stale, and check that both CLIs
+  accept the new ids and efforts. `--deep` and its strongest-model
   tier were dropped in
   [moq-dev/quest#361](https://github.com/moq-dev/quest/pull/361).
   - m0 found, with Claude Code 2.1.316 and codex-cli 0.166.0:

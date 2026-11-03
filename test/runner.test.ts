@@ -2393,7 +2393,7 @@ describe("runner reviews", () => {
 		return async (request: ReviewRequest): Promise<Round> => ({
 			reviewer: request.reviewer.harness,
 			model: "gpt-6.1-sol",
-			effort: "medium",
+			effort: "xhigh",
 			session: "s",
 			round: ++round,
 			base: { ref: "origin/main", sha: "b".repeat(40) },
@@ -2431,7 +2431,7 @@ describe("runner reviews", () => {
 					head: "1".padStart(40, "0"),
 					reviewer: "codex",
 					model: "gpt-6.1-sol",
-					effort: "medium",
+					effort: "xhigh",
 					round: 1,
 					findings: [finding],
 				},
