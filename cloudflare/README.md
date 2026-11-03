@@ -104,8 +104,11 @@ creation and again at assignment. Other heads, including unsigned ones and
 those kix pushed to, route only to Linux runners whose owner declared VM
 builds when registering them, a statement kix does not verify
 ([trust by stage](GITHUB.md#trust-by-stage)). `quest runner` cannot build in a
-VM yet: it never declares one and refuses an untrusted job, so such jobs wait
-for a runner that does. A `merge` job runs the merge
+VM yet: `quest runner login` registers it without declaring VM builds, so such
+jobs wait for a runner that declares them. kix trusts that declaration, so a
+runner declared through `POST /api/runners` with `vm: true` that cannot build
+in a VM is still sent the job; `quest runner` fails it rather than run it. A
+`merge` job runs the merge
 skill's loop on an open, non-draft pull request and lands it; it holds the PR
 with its own `quest:kix` label, which local sessions respect as they do each
 other's `quest:active` (`src/jobs/landing.ts`), as described in

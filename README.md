@@ -1159,7 +1159,7 @@ pauses for you to pick another account; the runner never switches on its own.
 On SIGINT or SIGTERM, running work is published and its jobs move to another
 runner. `quest runner` takes only trusted revisions until it can build
 untrusted heads' devShells in a VM: it registers without declaring VM builds,
-so kix routes it no other job, and it refuses one if sent. A pull request's head is trusted only when every
+so kix routes it no other job, and it fails one if sent. A pull request's head is trusted only when every
 commit beyond the default branch has a valid signature from a current
 maintainer, so sign your commits (for example with
 [SSH signing](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#ssh-commit-signature-verification))
