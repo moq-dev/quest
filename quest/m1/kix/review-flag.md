@@ -18,7 +18,3 @@ follow-ups.
   such as the PR's `latestReviews` and the App's `quest review` check, and
   keep the click's live check as the authority.
 - Keep the extra GitHub reads within the Worker's subrequest budget.
-
-## Required
-
-- [Land review](/quest/m0/kix/land-review.md) - the gate whose reason the inbox shows

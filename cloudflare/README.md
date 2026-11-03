@@ -97,8 +97,9 @@ collaborator. The check runs at creation and again at assignment. Other
 heads, including unsigned ones and those kix pushed to, route only to Linux
 runners that declare VM builds. A `merge` job runs the merge
 skill's loop on an open, non-draft pull request and lands it; it holds the PR
-with the `quest:merge` label that local `quest merge` sessions share
-(`src/jobs/landing.ts`), as described in [GITHUB.md](GITHUB.md#merge-jobs). A five-minute scheduled sweep retries ended jobs’ hold releases even when a lifecycle callback or GitHub read was missed; a live job, a replacement hold, or an active landing keeps its label. Without a `flake.nix`, the route
+with its own `quest:kix` label, which local sessions respect as they do each
+other's `quest:active` (`src/jobs/landing.ts`), as described in
+[GITHUB.md](GITHUB.md#merge-jobs). A five-minute scheduled sweep retries ended jobs’ hold releases even when a lifecycle callback or GitHub read was missed; a live job, a replacement hold, or an active landing keeps its label. Without a `flake.nix`, the route
 offers a `bootstrap` job instead. A paused project gets no new jobs and none are
 claimed; resuming it dispatches the jobs that waited. Disconnecting a project
 deletes its jobs and their output and tells their runners to stop. Duplicate
@@ -228,7 +229,7 @@ untrusted, and folds the runner and account behind an automatic default. A
 plan's thread keeps what it started from and links its draft proposal once
 delivered; a running job names its runner and account. A `publication` decision lists the refused
 paths or why the branch is blocked, and takes the maintainer's reply as text.
-A service fork branch that changed outside its job also offers Start over,
+A job's own upstream branch that changed outside its job also offers Start over,
 which resets the branch to the job's revision and queues a new job there.
 Another maintainer's answer shows the job's requester the answer with an
 approve button above the usual form, and shows everyone else the job waiting.
@@ -369,8 +370,8 @@ tool permission, or an account limit.
 
 `dev/github.ts` fakes GitHub for every outbound request, so nothing leaves
 localhost and no real credential is used. It models what publication needs:
-commits and trees, fast-forward branch updates on the upstream and its service
-fork, and pull request creation, so a runner's job publishes end to end. Like
+commits and trees, fast-forward branch updates on the upstream, and pull
+request creation, so a runner's job publishes end to end. Like
 GitHub, it scopes each installation token to the repositories and permissions
 it was minted for. Notifications are off, since a push
 would reach a real push service. Sign in with GitHub completes as the

@@ -60,6 +60,8 @@ try {
 			"user.name=Quest lifecycle",
 			"-c",
 			"user.email=lifecycle@example.invalid",
+			"-c",
+			"commit.gpgsign=false",
 			"commit",
 			"--quiet",
 			"-m",

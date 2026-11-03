@@ -25,7 +25,7 @@ PR's.
 You start on `base`, the batch's base. The repository also has `batch`, the
 failed merge, and one `pr-<number>` branch per supplied PR at its pinned head.
 For each PR, requeue it unchanged if healthy (if the failure was flaky, name the
-flaky test in the reason so it can be followed up), commit a
+flaky test in its `failure` so it can be followed up), commit a
 mechanical fix on its own branch, or hand it back with diagnosis and recommendation.
 Allowed fixes: preserve both sides' intent in conflicts, format/lint, regenerate
 lockfiles/generated files, or follow a base rename. Merge base where practical.
@@ -53,6 +53,13 @@ one entry per supplied PR, no extra fields. Use one of:
 {"number":123,"action":"requeue","reason":"healthy; flaky test"}
 {"number":123,"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason"}
 {"number":123,"action":"handback","diagnosis":"one line","recommendation":"one line"}
+
+On each entry, add `"failure"`: the test or step the failure log shows
+failing, on one line of at most 200 characters, such as
+`"failure":"cargo test -p moq-relay: interop::render_timeout"`. Name it the
+same way each time the same test or step fails, from the log rather than from
+your fix: quest land keeps fixing a PR while each round makes progress, and
+hands it back when the failure a fix addressed recurs right after it.
 
 You have no GitHub credential and must not seek one. To tell a PR's maintainer
 something, such as what a fix changed and why, a flaky test, or the decision a

@@ -25,21 +25,21 @@ export {
 	resolve,
 	rooted,
 } from "./doc";
-export { type ClosedPull, handedBack, landed } from "./claim";
+export { type ClosedPull, handedBack, landed, withoutHandBack } from "./claim";
 export { type Missed, type Moved, type Source, move, relocate, remove } from "./edit";
 export { comparePaths, normalize } from "./path";
 export { type Blocker, blockers, label, lookup, ready, renderBlocker } from "./ready";
 export { type Finding, ROOT, check, formatFinding } from "./rules";
-export { type RankedQuest, unblocked } from "./unblocked";
+export { type RankedQuest, type Ranking, type WaitingQuest, ranking, unblocked, waiting } from "./unblocked";
+export { MAINTAINER, WAITING, type Wait, onMaintainer, parseWait, waits } from "./waiting";
 export { type Chunk, type Clean, type Conflict, LABELS, chunks, render, resolveLists } from "./merge";
 
 export {
 	HOLD_PREFIX,
-	MERGE_LABEL,
+	ACTIVE_LABEL,
 	type HoldEvent,
 	type HoldSnapshot,
 	isHoldLabel,
 	latestHold,
 	heldToken,
-	spentMergeHold,
 } from "./hold";

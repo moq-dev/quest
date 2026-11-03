@@ -12,17 +12,11 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
-import {
-	AgentInputError,
-	launchEnvironment,
-	boundedLines,
-	redactedLines,
-	refuseUnsupported,
-	spawnDirectory,
-} from "../src/cli/agent";
+import { launchEnvironment, boundedLines, redactedLines, spawnDirectory } from "../src/cli/agent";
+import { batchArgument, programCommand, programEnvironment, signalProcess, which } from "../src/cli/program";
 import { type Output, main } from "../src/cli/main";
 import { tempDir } from "./fixture";
 import { systemdScopes } from "../src/cli/supervise";
@@ -33,8 +27,15 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-/** The fake agent CLIs are shebang scripts found on a POSIX PATH, which Windows cannot run. */
-const fakes = test.skipIf(process.platform === "win32");
+const windows = process.platform === "win32";
+/**
+ * Codex runs only under Linux supervision, and Windows lacks POSIX modes and
+ * unprivileged symlinks, so tests of those run on POSIX alone.
+ */
+const posix = test.skipIf(windows);
+
+/** The variables a fake agent CLI logs, so a test can compare the environment it was launched with. */
+const LOGGED = /^(CLAUDE|ANTHROPIC|QUEST|OP_|CODEX)/;
 
 /**
  * Fake agent CLIs and secret manager. Each logs its argv, stdin, and the
@@ -45,7 +46,7 @@ const FAKES: Record<string, string> = {
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|ANTHROPIC|QUEST|OP_|CODEX)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ${LOGGED}.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 const at = (flag) => argv[argv.indexOf(flag) + 1];
 const session = argv.includes("--resume") ? at("--resume") : at("--session-id");
@@ -82,7 +83,7 @@ if (process.env.FAKE_MODE === "quota-reply") {
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|ANTHROPIC|QUEST|OP_|CODEX)/.test(k)));
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ${LOGGED}.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 const event = (value) => console.log(JSON.stringify(value));
 const resume = argv[1] === "resume";
@@ -117,6 +118,21 @@ process.stdout.write(template.replace(/\\{\\{ op:\\/\\/[^/]+\\/[^/]+\\/([^ ]+) \
 `,
 };
 
+/**
+ * A script on PATH: a shebang script on POSIX, and on Windows a `.cmd` shim
+ * running it, as npm installs the agent CLIs there.
+ */
+function fake(dir: string, name: string, body: string): void {
+	if (windows) {
+		writeFileSync(join(dir, `${name}.js`), body);
+		writeFileSync(join(dir, `${name}.cmd`), `@"${process.execPath}" "%~dp0${name}.js" %*\r\n`);
+		return;
+	}
+	const path = join(dir, name);
+	writeFileSync(path, `#!${process.execPath}\n${body}`);
+	chmodSync(path, 0o755);
+}
+
 interface Setup {
 	worktree: string;
 	runtime: string;
@@ -130,11 +146,7 @@ function setup(keys = "sk-literal op://vault/item/second"): Setup {
 	const dir = tempDir();
 	const bin = join(dir, "bin");
 	mkdirSync(bin);
-	for (const [name, body] of Object.entries(FAKES)) {
-		const path = join(bin, name);
-		writeFileSync(path, `#!${process.execPath}\n${body}`);
-		chmodSync(path, 0o755);
-	}
+	for (const [name, body] of Object.entries(FAKES)) fake(bin, name, body);
 	const worktree = join(dir, "repo");
 	mkdirSync(worktree);
 	execFileSync("git", ["-C", worktree, "init", "-q"]);
@@ -142,7 +154,9 @@ function setup(keys = "sk-literal op://vault/item/second"): Setup {
 	mkdirSync(runtime, { mode: 0o700 });
 	const log = join(dir, "agent.log");
 	const opLog = join(dir, "op.log");
-	vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+	// Only what the test sets: the caller may itself run in an agent session.
+	for (const name of Object.keys(process.env)) if (LOGGED.test(name)) vi.stubEnv(name, undefined);
+	vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH}`);
 	vi.stubEnv("XDG_RUNTIME_DIR", runtime);
 	vi.stubEnv("QUEST_API_KEYS", keys);
 	vi.stubEnv("FAKE_LOG", log);
@@ -268,7 +282,33 @@ test("the agent environment holds only its own key", () => {
 	});
 });
 
-fakes("start runs claude with every launch setting, one resolved key, and no key in its output", async () => {
+test("on Windows, the agent environment drops credentials whatever their case", () => {
+	const env = launchEnvironment(
+		{
+			Path: "C:\\bin",
+			op_service_account_token: "t",
+			Anthropic_Auth_Token: "a",
+			Claude_Config_Dir: "C:\\claude",
+			Codex_Home: "C:\\codex",
+		},
+		"ANTHROPIC_API_KEY",
+		"sk-agent",
+		"win32",
+	);
+	expect(env).toEqual({
+		Path: "C:\\bin",
+		Claude_Config_Dir: "C:\\claude",
+		Codex_Home: "C:\\codex",
+		ANTHROPIC_API_KEY: "sk-agent",
+	});
+	// POSIX names are case-sensitive, so only the exact names are credentials there.
+	expect(launchEnvironment({ op_token: "t" }, "ANTHROPIC_API_KEY", "sk-agent", "linux")).toEqual({
+		op_token: "t",
+		ANTHROPIC_API_KEY: "sk-agent",
+	});
+});
+
+test("start runs claude with every launch setting, one resolved key, and no key in its output", async () => {
 	const s = setup();
 	const result = await quest("agent", "start", ...launch("claude", "2"), s.worktree, "/quest-start quest/m0/a.md");
 	expect(result.code).toBe(0);
@@ -289,8 +329,11 @@ fakes("start runs claude with every launch setting, one resolved key, and no key
 		session,
 	]);
 	expect(call.stdin).toBe("/quest-start quest/m0/a.md");
-	expect(call.cwd).toBe(
-		execFileSync("git", ["-C", s.worktree, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim(),
+	// Windows may spell the same directory with a short (8.3) name or either slash.
+	expect(realpathSync.native(call.cwd as string)).toBe(
+		realpathSync.native(
+			execFileSync("git", ["-C", s.worktree, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim(),
+		),
 	);
 	// Only its own key: no session credentials, harness markers, other keys, or secret-manager token.
 	expect(call.env).toEqual({
@@ -304,7 +347,7 @@ fakes("start runs claude with every launch setting, one resolved key, and no key
 	expect(readFileSync(s.opLog, "utf8")).toBe("{{ op://vault/item/second }}\n--\n");
 });
 
-fakes("keys resolve once per spawn into a user-only store, and stop --all deletes them", async () => {
+test("keys resolve once per spawn into a user-only store, and stop --all deletes them", async () => {
 	const s = setup();
 	expect((await quest("agent", "start", ...launch("claude", "1"), s.worktree, "one")).code).toBe(0);
 	expect((await quest("agent", "start", ...launch("claude", "2"), s.worktree, "two")).code).toBe(0);
@@ -315,8 +358,10 @@ fakes("keys resolve once per spawn into a user-only store, and stop --all delete
 	]);
 	const dir = spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree);
 	const keys = join(dir, "keys.json");
-	expect(statSync(keys).mode & 0o777).toBe(0o600);
-	expect(statSync(dir).mode & 0o077).toBe(0);
+	if (!windows) {
+		expect(statSync(keys).mode & 0o777).toBe(0o600);
+		expect(statSync(dir).mode & 0o077).toBe(0);
+	}
 
 	// A different QUEST_API_KEYS resolves again rather than reusing stale keys.
 	vi.stubEnv("QUEST_API_KEYS", "op://vault/item/third");
@@ -328,7 +373,7 @@ fakes("keys resolve once per spawn into a user-only store, and stop --all delete
 	expect(existsSync(dir)).toBe(false);
 });
 
-fakes("a launch that died leaves no lock or record that blocks the next launch", async () => {
+test("a launch that died leaves no lock or record that blocks the next launch", async () => {
 	const s = setup();
 	const dir = spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree);
 	mkdirSync(join(dir, "agents"), { recursive: true });
@@ -347,7 +392,7 @@ fakes("a launch that died leaves no lock or record that blocks the next launch",
 	expect(readdirSync(records)).toEqual([]);
 });
 
-fakes("a key with no credit exits 3 so the spawn resumes on the next key", async () => {
+test("a key with no credit exits 3 so the spawn resumes on the next key", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "exhausted");
 	const started = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
@@ -366,7 +411,7 @@ fakes("a key with no credit exits 3 so the spawn resumes on the next key", async
 	expect((call.env as Record<string, string>).ANTHROPIC_API_KEY).toBe("resolved-second");
 });
 
-fakes("codex runs with its key variable and reports its thread and last message", async () => {
+posix("codex runs with its key variable and reports its thread and last message", async () => {
 	const s = managed();
 	const started = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
 	expect(started).toEqual({ code: 0, stdout: "session thread-1\noutcome finished\n\nfinal reply\n", stderr: "" });
@@ -403,7 +448,7 @@ fakes("codex runs with its key variable and reports its thread and last message"
 	});
 });
 
-fakes("stop ends a live agent, which reports it as stopped", async () => {
+test("stop ends a live agent, which reports it as stopped", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "sleep");
 	const running = quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
@@ -424,13 +469,14 @@ fakes("stop ends a live agent, which reports it as stopped", async () => {
 	const started = await running;
 	expect(started.code).toBe(1);
 	expect(started.stdout).toMatch(/^session \S+\noutcome stopped\n$/);
-	expect(s.calls()[1]).toEqual({ terminated: true });
+	// Windows has no SIGTERM: there the agent's process tree is terminated at once.
+	expect(s.calls().slice(1)).toEqual(windows ? [] : [{ terminated: true }]);
 	expect(readdirSync(records)).toEqual([]);
 
 	expect((await quest("agent", "stop", s.worktree)).stdout).toBe("no agent running\n");
 });
 
-fakes("stderr is redacted even when a key spans two writes", async () => {
+test("stderr is redacted even when a key spans two writes", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "leak");
 	const result = await quest("agent", "start", ...launch("claude", "2"), s.worktree, "go");
@@ -438,7 +484,7 @@ fakes("stderr is redacted even when a key spans two writes", async () => {
 	expect(result.stderr).toBe("using <key 2>\nunterminated <key 2>");
 });
 
-fakes("concurrent launches in one worktree run only one agent", async () => {
+test("concurrent launches in one worktree run only one agent", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "sleep");
 	const first = quest("agent", "start", ...launch("claude", "1"), s.worktree, "one");
@@ -454,7 +500,7 @@ fakes("concurrent launches in one worktree run only one agent", async () => {
 	expect(s.calls().filter((call) => "argv" in call)).toHaveLength(1);
 });
 
-fakes("a finished turn whose reply mentions credit is not an exhausted key", async () => {
+test("a finished turn whose reply mentions credit is not an exhausted key", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "quota-reply");
 	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
@@ -462,14 +508,14 @@ fakes("a finished turn whose reply mentions credit is not an exhausted key", asy
 	expect(result.stdout).toContain("outcome finished\n");
 });
 
-fakes("a retried codex stream error does not fail a completed turn", async () => {
+posix("a retried codex stream error does not fail a completed turn", async () => {
 	const s = managed();
 	vi.stubEnv("FAKE_MODE", "reconnect");
 	const result = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
 	expect(result).toEqual({ code: 0, stdout: "session thread-1\noutcome finished\n\nfinal reply\n", stderr: "" });
 });
 
-fakes("the no-result diagnostic never shows part of a key", async () => {
+test("the no-result diagnostic never shows part of a key", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "noisy");
 	const result = await quest("agent", "start", ...launch("claude", "2"), s.worktree, "go");
@@ -481,14 +527,14 @@ fakes("the no-result diagnostic never shows part of a key", async () => {
 	}
 });
 
-fakes("a prompt starting with a dash is the prompt, not an option", async () => {
+test("a prompt starting with a dash is the prompt, not an option", async () => {
 	const s = setup();
 	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "- A: yes");
 	expect(result.code).toBe(0);
 	expect(s.calls()[0].stdin).toBe("- A: yes");
 });
 
-fakes("a launch refuses while stop --all is ending the spawn", async () => {
+test("a launch refuses while stop --all is ending the spawn", async () => {
 	const s = setup();
 	const dir = spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree);
 	// A live `stop --all` marks the spawn before listing its records.
@@ -504,7 +550,7 @@ fakes("a launch refuses while stop --all is ending the spawn", async () => {
 	expect((await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go")).code).toBe(0);
 });
 
-fakes("an agent whose record is lost is killed rather than left running untracked", async () => {
+posix("an agent whose record is lost is killed rather than left running untracked", async () => {
 	const s = managed();
 	vi.stubEnv("FAKE_MODE", "late-thread");
 	const running = quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
@@ -531,7 +577,7 @@ test("a long line without a newline is forwarded early, still redacted", () => {
 	expect(written.join("")).toBe(`${"a".repeat(70_000)}<key 1>${"b".repeat(10)}`);
 });
 
-fakes("every command refuses a state directory that is a symlink", async () => {
+posix("every command refuses a state directory that is a symlink", async () => {
 	const s = setup();
 	const elsewhere = join(s.runtime, "elsewhere");
 	mkdirSync(elsewhere, { mode: 0o700 });
@@ -560,21 +606,108 @@ test("lines longer than the limit are dropped, not held", () => {
 	expect(read).toEqual(["short", "after", "last"]);
 });
 
-test("native Windows is refused until the agent CLI is resolved outside the worktree", () => {
-	expect(() => refuseUnsupported("win32")).toThrow(AgentInputError);
-	expect(() => refuseUnsupported("linux")).not.toThrow();
-	expect(() => refuseUnsupported("darwin")).not.toThrow();
+test("the agent CLI is found on PATH, never in the worktree it runs in", async () => {
+	const s = setup();
+	// The worktree supplies its own CLI, and PATH names the worktree relatively.
+	const planted = join(s.worktree, "planted.log");
+	fake(s.worktree, "claude", `require("node:fs").writeFileSync(${JSON.stringify(planted)}, "ran");`);
+	vi.stubEnv("PATH", `.${delimiter}${process.env.PATH}`);
+	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	expect(result.code).toBe(0);
+	expect(existsSync(planted)).toBe(false);
+	expect(s.calls()).toHaveLength(1);
 });
 
-test.runIf(process.platform === "win32")("quest agent start is a usage error on native Windows", async () => {
-	const result = await quest("agent", "start", ...launch("claude", "1"), ".", "go");
-	expect(result).toMatchObject({
-		code: 2,
-		stderr: "error: quest agent does not support native Windows yet; use WSL\n",
+test("a missing agent CLI fails before any key is resolved", async () => {
+	const s = setup("op://vault/item/secret");
+	vi.stubEnv("PATH", join(s.runtime, "empty"));
+	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	expect(result.code).toBe(1);
+	expect(result.stderr).toContain("claude is not installed");
+	expect(existsSync(s.opLog)).toBe(false);
+});
+
+test("launch settings reach the agent unchanged, whatever characters they hold", async () => {
+	const s = setup();
+	// Through a Windows batch shim, each of these is special to cmd.exe or the C runtime.
+	const model = 'a&b|c<d>e^f "g" (h) !i! \\"j\\ k,l;m=n [o]';
+	const args = launch("claude", "1");
+	args[args.indexOf("--model") + 1] = model;
+	const result = await quest("agent", "start", ...args, s.worktree, "go");
+	expect(result.code).toBe(0);
+	const argv = s.calls()[0].argv as string[];
+	expect(argv[argv.indexOf("--model") + 1]).toBe(model);
+});
+
+test.runIf(windows)("a batch shim's own program search never reaches the worktree", async () => {
+	const s = setup();
+	const bin = join(s.worktree, "..", "bin");
+	const shim = join(s.runtime, "shim");
+	mkdirSync(shim);
+	// As npm's shim does without a node.exe beside it, this one runs its interpreter by name.
+	writeFileSync(join(shim, "claude.cmd"), `@interpreter "${join(bin, "claude.js")}" %*\r\n`);
+	writeFileSync(join(shim, "interpreter.cmd"), `@"${process.execPath}" %*\r\n`);
+	const planted = join(s.runtime, "planted.log");
+	writeFileSync(join(s.worktree, "interpreter.cmd"), `@echo ran> "${planted}"\r\n`);
+	// PATH names the worktree relatively, too.
+	vi.stubEnv("PATH", `.${delimiter}${shim}${delimiter}${process.env.PATH}`);
+	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	expect(result.code).toBe(0);
+	expect(existsSync(planted)).toBe(false);
+	expect(s.calls()).toHaveLength(1);
+});
+
+test("PATH lookup skips relative entries and, on Windows, tries PATHEXT", () => {
+	const bin = join(tempDir(), "bin");
+	mkdirSync(bin);
+	if (windows) {
+		for (const name of ["tool.CMD", "tool.ps1", "tool"]) writeFileSync(join(bin, name), "");
+		const env = { Path: `.;relative;"${bin}"`, PATHEXT: ".PS1;.COM;.EXE;.BAT;.CMD" };
+		// A PowerShell script is not launchable, and an extensionless file is never tried.
+		expect(which("tool", env)).toBe(realpathSync(join(bin, "tool.CMD")));
+		expect(which("missing", env)).toBeUndefined();
+		return;
+	}
+	writeFileSync(join(bin, "tool"), "");
+	chmodSync(join(bin, "tool"), 0o755);
+	writeFileSync(join(bin, "plain"), "");
+	expect(which("tool", { PATH: `.:relative::${bin}` })).toBe(realpathSync(join(bin, "tool")));
+	expect(which("plain", { PATH: bin })).toBeUndefined();
+	expect(which("tool", { PATH: "." })).toBeUndefined();
+});
+
+test("a Windows batch file runs through System32's cmd.exe with each argument escaped", () => {
+	const env = { SystemRoot: "C:\\Windows" };
+	expect(programCommand("C:\\npm\\claude.cmd", ["-p", "a b&c"], env, "win32")).toEqual({
+		file: "C:\\Windows\\System32\\cmd.exe",
+		args: ["/d", "/v:off", "/s", "/c", '""C:\\npm\\claude.cmd" ^^^"-p^^^" ^^^"a^^^ b^^^&c^^^""'],
+		windowsVerbatimArguments: true,
 	});
+	expect(programCommand("C:\\bin\\claude.exe", ["-p"], env, "win32")).toEqual({
+		file: "C:\\bin\\claude.exe",
+		args: ["-p"],
+		windowsVerbatimArguments: false,
+	});
+	expect(programCommand("/bin/claude.cmd", ["-p"], env, "linux").windowsVerbatimArguments).toBe(false);
+	// Quotes and trailing backslashes follow the C runtime's rules before cmd.exe's escapes.
+	expect(batchArgument('a\\"b\\')).toBe('^^^"a\\\\\\^^^"b\\\\^^^"');
+	expect(() => batchArgument("%PATH%")).toThrow("cannot pass");
+	expect(() => batchArgument("a\nb")).toThrow("cannot pass");
+	// A launched program keeps only PATH's absolute directories and, on Windows, skips its working directory.
+	expect(programEnvironment({ Path: '.;C:\\bin;relative;;"C:\\x y"', HOME: "h" }, "win32")).toEqual({
+		Path: 'C:\\bin;"C:\\x y"',
+		HOME: "h",
+		NoDefaultCurrentDirectoryInExePath: "1",
+	});
+	expect(programEnvironment({ PATH: ".:/bin::relative", HOME: "h" }, "linux")).toEqual({ PATH: "/bin", HOME: "h" });
 });
 
-fakes("missing keys, positions past the list, and unknown references are usage errors", async () => {
+test("signalling a process that already exited is not an error", () => {
+	// Past Linux's and macOS's pid limits, and not a multiple of 4 as Windows pids are.
+	expect(() => signalProcess(0x3ffffffe, "SIGTERM")).not.toThrow();
+});
+
+test("missing keys, positions past the list, and unknown references are usage errors", async () => {
 	const s = setup("sk-one vault://x");
 	const unknown = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
 	expect(unknown).toMatchObject({
@@ -593,7 +726,7 @@ fakes("missing keys, positions past the list, and unknown references are usage e
 });
 
 for (const mode of ["finished", "decision", "crash"]) {
-	fakes(`Codex ${mode} releases scratch and resume restores the registered checkout`, async () => {
+	posix(`Codex ${mode} releases scratch and resume restores the registered checkout`, async () => {
 		const s = managed();
 		vi.stubEnv("FAKE_MODE", mode);
 		mkdirSync(join(s.worktree, "cache"));
@@ -621,7 +754,7 @@ for (const mode of ["finished", "decision", "crash"]) {
 	});
 }
 
-fakes("Codex refuses an unmanaged checkout before resolving credentials or writing key state", async () => {
+posix("Codex refuses an unmanaged checkout before resolving credentials or writing key state", async () => {
 	const s = setup("op://vault/item/secret");
 	vi.stubEnv("QUEST_WORKTREE_HOME", join(s.runtime, "worktrees"));
 	vi.spyOn(systemdScopes, "check").mockImplementation(() => {});
@@ -633,7 +766,7 @@ fakes("Codex refuses an unmanaged checkout before resolving credentials or writi
 	expect(existsSync(join(s.runtime, "quest", "agent"))).toBe(false);
 });
 
-fakes("Codex refuses unsupported supervision before resolving credentials", async () => {
+posix("Codex refuses unsupported supervision before resolving credentials", async () => {
 	const s = managed();
 	vi.mocked(systemdScopes.check).mockImplementation(() => {
 		throw new Error("unsupported host");
@@ -646,7 +779,7 @@ fakes("Codex refuses unsupported supervision before resolving credentials", asyn
 	expect(s.calls()).toEqual([]);
 });
 
-fakes("Codex rejects a registered path whose Git ownership was replaced before credentials", async () => {
+posix("Codex rejects a registered path whose Git ownership was replaced before credentials", async () => {
 	const s = managed();
 	rmSync(join(s.worktree, ".git"));
 	execFileSync("git", ["-C", s.worktree, "init", "-q"]);
@@ -657,7 +790,7 @@ fakes("Codex rejects a registered path whose Git ownership was replaced before c
 	expect(s.calls()).toEqual([]);
 });
 
-fakes("a Codex release failure is reported instead of a finished outcome", async () => {
+posix("a Codex release failure is reported instead of a finished outcome", async () => {
 	const s = managed();
 	mkdirSync(join(s.worktree, "cache"));
 	writeFileSync(join(s.worktree, "cache", "tracked"), "keep");

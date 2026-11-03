@@ -1,0 +1,173 @@
+// Launch a program that receives credentials by absolute path, never from the
+// directory it runs in, on POSIX and native Windows alike.
+import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { posix, win32 } from "node:path";
+import { spawnSync } from "node:child_process";
+
+/** Arguments ready for `spawn` or `execFileSync`. */
+export interface Command {
+	file: string;
+	args: string[];
+	/** Set when `args` are already quoted for cmd.exe, which Node must then pass unchanged. */
+	windowsVerbatimArguments: boolean;
+}
+
+/** A variable, matched case-insensitively on Windows as Windows itself matches `Path`. */
+function variable(env: NodeJS.ProcessEnv, name: string, platform: NodeJS.Platform): string | undefined {
+	if (platform !== "win32") return env[name];
+	return Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
+}
+
+/** A PATH entry's directory: Windows accepts an entry in quotes, such as one holding spaces. */
+const directory = (entry: string, platform: NodeJS.Platform) =>
+	platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry;
+
+/** PATH's entries naming absolute directories, as written. */
+function absoluteEntries(value: string, platform: NodeJS.Platform): string[] {
+	const path = platform === "win32" ? win32 : posix;
+	return value.split(path.delimiter).filter((entry) => path.isAbsolute(directory(entry, platform)));
+}
+
+/** Extensions Windows can start: programs, and batch files such as npm's `.cmd` shims. */
+const LAUNCHABLE = /^\.(com|exe|bat|cmd)$/i;
+const BATCH = /\.(bat|cmd)$/i;
+
+function launchable(path: string, platform: NodeJS.Platform): boolean {
+	try {
+		if (!statSync(path).isFile()) return false;
+		if (platform !== "win32") accessSync(path, constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * An executable on PATH, as an absolute path with symlinks resolved, trying
+ * PATHEXT's launchable extensions on Windows. Relative PATH entries are
+ * skipped, and so is the current directory, which Windows searches before
+ * PATH: a checkout could otherwise supply its own `claude` and receive a key.
+ */
+export function which(name: string, env: NodeJS.ProcessEnv): string | undefined {
+	const platform = process.platform;
+	const path = platform === "win32" ? win32 : posix;
+	const extensions =
+		platform === "win32"
+			? (variable(env, "PATHEXT", platform) ?? ".COM;.EXE;.BAT;.CMD")
+					.split(";")
+					.filter((ext) => LAUNCHABLE.test(ext))
+			: [""];
+	for (const entry of absoluteEntries(variable(env, "PATH", platform) ?? "", platform)) {
+		for (const ext of extensions) {
+			const candidate = path.join(directory(entry, platform), name + ext);
+			if (launchable(candidate, platform)) return realpathSync(candidate);
+		}
+	}
+	return undefined;
+}
+
+/** `which`, or an error naming the missing program. */
+export function requireProgram(name: string, env: NodeJS.ProcessEnv): string {
+	const found = which(name, env);
+	if (found === undefined) throw new Error(`${name} is not installed: no ${name} on PATH`);
+	return found;
+}
+
+/** A file in Windows' System32, found from SystemRoot rather than searched for. */
+function system32(env: NodeJS.ProcessEnv, file: string): string {
+	const root = variable(env, "SYSTEMROOT", "win32") ?? "C:\\Windows";
+	if (!win32.isAbsolute(root)) throw new Error(`SystemRoot is not an absolute path: ${root}`);
+	return win32.join(root, "System32", file);
+}
+
+/** Characters cmd.exe treats specially outside quotes, each escaped with `^`. */
+const META = /([()\][%!^"`<>&|;, *?])/g;
+
+/**
+ * Quote `arg` for a batch file's `%*`: the C runtime's quoting, then `^`
+ * before every metacharacter twice, since cmd.exe parses the line once for
+ * `/c` and again where the batch file expands `%*`. The approach follows
+ * cross-spawn. A line break ends the command and `%` expands a variable
+ * before any escape applies, so neither is accepted.
+ */
+export function batchArgument(arg: string): string {
+	if (/[\r\n\0%]/.test(arg)) throw new Error(`cannot pass a line break or % to a Windows batch file: ${arg}`);
+	const quoted = `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1")}"`;
+	return quoted.replace(META, "^$1").replace(META, "^$1");
+}
+
+/**
+ * How to run `program` with `args`. On Windows a batch file, such as the
+ * `.cmd` shim npm installs, runs through System32's cmd.exe, since Windows
+ * starts only programs and Node refuses to start a batch file without a shell.
+ */
+export function programCommand(
+	program: string,
+	args: string[],
+	env: NodeJS.ProcessEnv,
+	platform: NodeJS.Platform = process.platform,
+): Command {
+	if (platform !== "win32" || !BATCH.test(program)) return { file: program, args, windowsVerbatimArguments: false };
+	if (/[\r\n\0%"]/.test(program)) throw new Error(`cannot run a Windows batch file from this path: ${program}`);
+	const line = [`"${program}"`, ...args.map(batchArgument)].join(" ");
+	// /d skips AutoRun commands, /v:off keeps `!` literal, and /s takes the quoted line as is.
+	return {
+		file: system32(env, "cmd.exe"),
+		args: ["/d", "/v:off", "/s", "/c", `"${line}"`],
+		windowsVerbatimArguments: true,
+	};
+}
+
+/**
+ * The environment to run a program with: PATH keeps only its absolute
+ * directories, and on Windows NoDefaultCurrentDirectoryInExePath stops the
+ * implicit search of the working directory. Neither cmd.exe nor the program
+ * then finds a program it starts by name in its working directory: npm's
+ * shim runs `node` that way when no node.exe sits beside it, and a worktree
+ * could otherwise supply its own.
+ */
+export function programEnvironment(
+	env: NodeJS.ProcessEnv,
+	platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+	const path = platform === "win32" ? win32 : posix;
+	const result = Object.fromEntries(
+		Object.entries(env).map(([name, value]) =>
+			value !== undefined && (platform === "win32" ? name.toUpperCase() : name) === "PATH"
+				? [name, absoluteEntries(value, platform).join(path.delimiter)]
+				: [name, value],
+		),
+	);
+	return platform === "win32" ? { ...result, NoDefaultCurrentDirectoryInExePath: "1" } : result;
+}
+
+/** Whether process `pid` exists, including one this user may not signal. */
+export function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/**
+ * Signal `pid`, ignoring a process that has already exited. Windows has no
+ * signals: there the process and its descendants, such as the agent a batch
+ * shim started, are terminated at once. A failure to end a process that is
+ * still running throws on both.
+ */
+export function signalProcess(pid: number, signal: NodeJS.Signals, env: NodeJS.ProcessEnv = process.env): void {
+	if (process.platform === "win32") {
+		const result = spawnSync(system32(env, "taskkill.exe"), ["/pid", String(pid), "/t", "/f"], { stdio: "ignore" });
+		if (result.status === 0 || !alive(pid)) return;
+		throw new Error(
+			`taskkill could not end process ${pid}: ${result.error?.message ?? `exit code ${result.status ?? result.signal}`}`,
+		);
+	}
+	try {
+		process.kill(pid, signal);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+	}
+}

@@ -17,6 +17,8 @@ import {
 	questBranch,
 	renderBlocker,
 	unblocked,
+	onMaintainer,
+	waiting,
 } from "../core";
 import {
 	AgentInputError,
@@ -38,14 +40,15 @@ import {
 	runRunner,
 } from "../runner/cli";
 import type { AdapterName } from "../runner/adapter";
-import { held, reach, target, upstream, upstreamHead } from "./claims";
+import { held, reach, target, upstream, upstreamRefs } from "./claims";
 import { gate } from "./gate";
-import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, remoteRepository, remoteUrl } from "./github";
-import { type Hold, type State, finish, land, release, take } from "./hold";
+import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, readRemote, remoteRepository } from "./github";
+import { type Hold, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
 import { apply, pushCommand } from "./land-apply";
-import { fix, FixerAgentError } from "./land-fix";
+import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
+import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
@@ -272,11 +275,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				settle(
 					(async () => {
 						const up = await reach(root(), options.remote, deps);
-						const tree = up === null ? checkout(root()) : snapshot(root(), upstreamHead(root(), up.git));
+						const refs = up === null ? null : upstreamRefs(root(), up.git);
+						const tree = refs === null ? checkout(root()) : snapshot(root(), refs.base);
 						if (!valid(tree)) return null;
 						const ranked = unblocked(tree.docs);
 						const branches = ranked.map((quest) => questBranch(quest.path));
-						return { ranked, holdings: up === null ? [] : (await held(root(), up, branches)).claims };
+						const holdings = up === null ? [] : (await held(root(), up, branches, refs?.branches)).claims;
+						return { ranked, holdings };
 					})(),
 					(result) => {
 						if (result === null) return 1;
@@ -292,6 +297,44 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				);
 			},
 		);
+
+	program
+		.command("waiting")
+		.summary("List quests waiting on the maintainer or an outside party")
+		.description(
+			"List every quest with a ## Waiting section: those waiting on the maintainer first, then milestone " +
+				"priority, distinct transitive dependents as quest unblocked counts them, ready before blocked, then " +
+				"tree order. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
+				"followed by the condition and how to check or advance it.\n\n" +
+				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the path, " +
+				"and the item. --json prints an ordered array of {path, dependents, ready, waits: [{line, party, text}]} " +
+				"objects. --maintainer keeps only the items the maintainer settles. Invalid trees fail before printing. " +
+				"Outside conditions are never checked. Draft PRs hand back with the same heading; this reads only the " +
+				"quest tree.",
+		)
+		.option("--json", "Print a deterministic JSON array")
+		.option("--maintainer", "Only items waiting on the maintainer")
+		.option("--limit <count>", "Maximum number of quests to print", positiveInteger("limit"))
+		.action((options: { json?: boolean; maintainer?: boolean; limit?: number }) => {
+			const tree = checkout(root());
+			if (!valid(tree)) return;
+			const quests = waiting(tree.docs)
+				.map((quest) => (options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest))
+				.filter((quest) => quest.waits.length > 0)
+				.slice(0, options.limit);
+			if (options.json) {
+				print(JSON.stringify(quests));
+				return;
+			}
+			if (theme) print("Quests waiting, the maintainer's first, by milestone and downstream impact:");
+			for (const quest of quests) {
+				for (const wait of quest.waits) {
+					print(
+						`${quest.dependents}\t${quest.ready ? "ready" : "blocked"}\t${quest.path}\t${wait.party}: ${wait.text}`,
+					);
+				}
+			}
+		});
 
 	program
 		.command("start")
@@ -360,7 +403,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Wait for pull request activity on GitHub")
 		.description(
 			"Wait for a review, comment or comment edit, review-thread reply, reaction to the PR or a review, push, merge, close, " +
-				"merge-queue removal, disabled auto-merge, label change, or CI result. Polls every 5 minutes, and once more 30 seconds before the timeout; rate limits and longer GitHub poll intervals delay requests. No timeout by default.\n\n" +
+				"merge-queue removal, disabled auto-merge or auto-merge left on a moved head, label change, or CI result. Polls every 5 minutes, and once more 30 seconds before the timeout; rate limits and longer GitHub poll intervals delay requests. No timeout by default.\n\n" +
 				"Prints one plain line per event: timestamp (or commit SHA), type, actor, URL; the last line adds a resume cursor. " +
 				"Reactions print as reacted:<content>, such as reacted:thumbs_up, and label changes as labeled:<name> or unlabeled:<name>. " +
 				"The head's first failing required check prints as checks:failed, and every required check passing as checks:passed, " +
@@ -368,6 +411,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Results count as quest status counts them, so neutral and skipped results pass. " +
 				"checks:passed waits until no check is pending, no GitHub Actions run is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
 				"Optional failures print separately as check:failed; a base branch requiring no checks requires them all. " +
+				"When auto-merge stays enabled on a head other than the current one, which GitHub allows across a writer's push, " +
+				"auto-merge:moved prints once per head, with the account that enabled it as the actor and a URL naming the head it " +
+				"was enabled on, which it reads as quest status does. " +
 				"Pass the final field of the last line to --since to resume without replaying events. " +
 				"On timeout, the only line is a resume point for --since (a cursor, or the given --since or head SHA if setup did not finish), so a retry with it still reports activity from the first wait.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Label changes, replies, and reactions by that account are ignored. " +
@@ -400,7 +446,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
 				"url, state, draft, head, mergeable, merge-state, review-decision, auto-merge, merge-queue, " +
-				"landing-stopped, and checks; landing-stopped is the latest exit from the merge queue, auto-merge, or " +
+				"landing-stopped, and checks; auto-merge gives its method, who enabled it and when, and the head it was " +
+				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
+				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
+				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
 				"quest land's queue, with the reason (such as merge_conflict, failed_checks, manual, or manually_disabled), " +
 				"actor, and time. Then " +
 				"a check line per failing or pending check, marked required or optional; a review line per " +
@@ -428,81 +477,78 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		});
 
 	const OWNERSHIP =
-		"Before a session pushes to an existing PR, it takes the PR with iterate, ready, or merge, and hands it " +
-		"back with release. A taken PR carries one quest:<state> label; the command prints a hold token, the ID " +
-		"of the timeline event that added it, since sessions often share an account. A command refuses while a " +
-		"quest:* label it holds no token for is on the PR, including its own state's, and while the PR is merged, " +
-		"closed, or a draft its starter still holds (one whose body has no Decisions needed heading). A refusal " +
-		"names the holder's label, age, and token; releasing a stale hold with that token is the user's choice. " +
-		"Given a token, a command refuses unless the token is still the latest add of the PR's label, then swaps " +
-		"that label for its own; if a later step then fails, the error names the new token. When two sessions add different labels at once, the first label added keeps the " +
-		"PR; GitHub records no event when a label already on the PR is added again, so two takes of one state " +
-		"within the same moment are not told apart. A quest:merge label is removed once the PR leaves the merge " +
-		"queue unmerged.\n\n" +
+		"Before a session pushes to an existing PR, it takes the PR with iterate, and hands it back with " +
+		"release. A taken PR carries the quest:active label; iterate prints a hold token, the ID of the timeline " +
+		"event that added it, since sessions often share an account. A command refuses while a quest:* label " +
+		"it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
+		"holds (one whose body has no Waiting heading). A refusal names the holder's label, age, and " +
+		"token; releasing a stale hold with that token is the user's choice. Given a token, a command refuses " +
+		"unless the token is still the latest add of its label. When two sessions add the label at once, the " +
+		"first added keeps the PR; GitHub records no event when a label already on the PR is added again, so two " +
+		"takes within the same moment are not told apart. Older quest versions' quest:iterate and quest:ready " +
+		"labels hold a PR like any quest:* label, and taking it with their token swaps them for quest:active; " +
+		"their quest:merge label holds nothing.\n\n" +
 		"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 3 when refused, 2 for invalid " +
 		"arguments, and 1 for other failures.";
-	/** A PR state command: take the PR or swap to `state`, then do its step. Prints the hold token. */
-	const ownership = (state: State, summary: string, step: string) =>
-		program
-			.command(state)
-			.summary(summary)
-			.description(`${summary}.${step ? ` ${step}` : ""}\n\n${OWNERSHIP}`)
-			.argument("<pr>", "GitHub PR URL, or a PR number in origin")
-			.argument("[token]", "Hold token of the label this session holds, to swap it or act on it");
 	const printToken = (work: Promise<Hold>) => settle(work, (hold) => print(hold.token));
 
-	ownership("iterate", "Take a PR to settle its decisions, fix CI and review findings, and push", "").action(
-		(value: string, token: string | undefined) => {
-			printToken(take(pullRequest(value, root()), "iterate", token, gitHubDependencies(warn)));
-		},
-	);
-
-	ownership(
-		"ready",
-		"Take a handed-back draft or a PR in review to hand it to reviewers",
-		"--done removes the body's Decisions needed section and marks a draft ready for review.",
-	)
-		.option("--done", "Mark it ready for review; needs the token")
-		.action((value: string, token: string | undefined, options: { done?: boolean }) => {
-			const pr = pullRequest(value, root());
-			if (!options.done) return printToken(take(pr, "ready", token, gitHubDependencies(warn)));
-			if (token === undefined) throw new UsageError("--done needs the hold token");
-			printToken(finish(pr, token, gitHubDependencies(warn)));
+	program
+		.command("iterate")
+		.summary("Take a PR to work on it, such as to settle its decisions, fix CI and review findings, and push")
+		.description(
+			"Take a PR to work on it, such as to settle its decisions, fix CI and review findings, and push. " +
+				`Given the token of a hold this session already has, it keeps that hold.\n\n${OWNERSHIP}`,
+		)
+		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
+		.argument("[token]", "Hold token this session already has")
+		.action((value: string, token: string | undefined) => {
+			printToken(take(pullRequest(value, root()), token, gitHubDependencies(warn)));
 		});
 
-	ownership(
-		"merge",
-		"Take a PR to fix it until it lands",
-		"--land enables auto-merge bound to that full head SHA, which enters the base's merge queue when it has " +
-			"one, or merges at once when nothing is left to wait for. It refuses once the head has moved. It makes a " +
-			"merge commit unless --squash or --rebase picks another method; a merge queue applies its own. On a base " +
-			`that requires the \`${LAND_CHECK}\` check, it queues the PR for \`quest land\` instead: squash ` +
-			"auto-merge whose commit body pins the head. The label stays on while the PR is queued or auto-merging, " +
-			"until it merges. On an ungated base with auto-merge disabled, it refuses unless --direct is passed. " +
-			"Follow the repository landing instructions in CONTRIBUTING.md or AGENTS.md; never retry with --direct unless the user asks.",
-	)
-		.option("--land <sha>", "Land this full 40-character head SHA; needs the token")
+	program
+		.command("ready")
+		.summary("Hand a PR this session holds to reviewers")
+		.description(
+			"Hand a PR this session holds to reviewers: remove the body's Waiting section (or the older Decisions needed) and mark a " +
+				`draft ready for review. The hold stays; it prints the token again.\n\n${OWNERSHIP}`,
+		)
+		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
+		.argument("<token>", "Hold token printed by iterate")
+		.action((value: string, token: string) => {
+			printToken(finish(pullRequest(value, root()), token, gitHubDependencies(warn)));
+		});
+
+	program
+		.command("merge")
+		.summary("Land a PR's reviewed head")
+		.description(
+			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, or merge at " +
+				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
+				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
+				"first, and once the head has moved. It uses the method --squash or --rebase names, refusing one " +
+				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
+				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
+				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
+				"is, and a head GitHub refuses to enqueue fails, to be fixed and landed again. On a base " +
+				`that requires the \`${LAND_CHECK}\` check, it queues the PR for \`quest land\` instead: squash ` +
+				"auto-merge whose commit body pins the head. On an ungated base with auto-merge disabled, it refuses " +
+				"unless --direct is passed. Follow the repository landing instructions in CONTRIBUTING.md or " +
+				"AGENTS.md; never retry with --direct unless the user asks. GitHub keeps auto-merge across a " +
+				"writer's push, so disable it before pushing to the PR; quest status and quest wait report a head " +
+				"that moved since auto-merge was enabled.\n\n" +
+				OWNERSHIP,
+		)
+		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
+		.requiredOption("--land <sha>", "Land this full 40-character head SHA")
 		.addOption(new Option("--squash", "Squash and merge").conflicts("rebase"))
 		.option("--rebase", "Rebase and merge")
-		.option("--direct", "Allow landing when repository auto-merge is disabled; needs --land")
-		.action(
-			(
-				value: string,
-				token: string | undefined,
-				options: { land?: string; squash?: boolean; rebase?: boolean; direct?: boolean },
-			) => {
-				const pr = pullRequest(value, root());
-				if (options.land === undefined) {
-					if (options.direct) throw new UsageError("--direct needs --land");
-					if (options.squash || options.rebase) throw new UsageError("--squash and --rebase need --land");
-					return printToken(take(pr, "merge", token, gitHubDependencies(warn)));
-				}
-				if (token === undefined) throw new UsageError("--land needs the hold token");
-				if (!/^[\da-f]{40}$/i.test(options.land)) throw new UsageError("--land needs a full 40-character SHA");
-				const method = options.squash ? "squash" : options.rebase ? "rebase" : "merge";
-				printToken(land(pr, token, options.land, method, gitHubDependencies(warn), options.direct));
-			},
-		);
+		.option("--direct", "Allow landing when repository auto-merge is disabled")
+		.action((value: string, options: { land: string; squash?: boolean; rebase?: boolean; direct?: boolean }) => {
+			const pr = pullRequest(value, root());
+			if (!/^[\da-f]{40}$/i.test(options.land)) throw new UsageError("--land needs a full 40-character SHA");
+			const method = options.squash ? "squash" : options.rebase ? "rebase" : undefined;
+			settle(land(pr, options.land, method, gitHubDependencies(warn), options.direct), () => undefined);
+		});
 
 	const landCommand = program.command("land").summary("Land queued PRs through a host daemon");
 	landCommand
@@ -520,19 +566,32 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			(value: string, previous: string[]) => [...previous, value],
 			[] as string[],
 		)
-		.action((log: string, prs: string[], options: { agent: string; agentArg: string[]; model?: string }) => {
-			settle(
-				fix(
-					root(),
-					log,
-					prs.map(Number),
-					options.agent,
-					options.agentArg.length ? options.agentArg : undefined,
-					options.model,
-				),
-				() => print("fixer result written"),
-			);
-		});
+		.addOption(
+			new Option(
+				"--effort <level>",
+				`Default Codex's model_reasoning_effort (default: $${EFFORT_VARIABLE}, or medium)`,
+			).choices(EFFORTS),
+		)
+		.action(
+			(
+				log: string,
+				prs: string[],
+				options: { agent: string; agentArg: string[]; model?: string; effort?: string },
+			) => {
+				settle(
+					fix(
+						root(),
+						log,
+						prs.map(Number),
+						options.agent,
+						options.agentArg.length ? options.agentArg : undefined,
+						options.model,
+						options.effort ?? (process.env[EFFORT_VARIABLE] || "medium"),
+					),
+					() => print("fixer result written"),
+				);
+			},
+		);
 	landCommand
 		.command("apply")
 		.description(
@@ -553,7 +612,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	landCommand
 		.command("serve")
 		.description(
-			"Run one daemon per repository. As a batch is filled, park alone for the fixer (eject alone, without one) each PR it reaches whose squash onto the base fails quest check with findings the base lacks, and comment once on each newly queued PR that conflicts with the four PRs landing soonest ahead of it. Check a base PR plus up to floor(log2 n) cleanly merging PRs once through the sandbox, alternating the oldest and the newest queued PR as the base. A failed batch is never bisected: its PRs are parked for the fixer, which blames the ones at fault, or ejected together without a fixer. It halves the next batch's size down to one PR; each landed batch grows it back by one. When the fixer blames none and the base fails its check alone, the queue halts until a moved base passes, and the fixer proposes a fix of the base as a PR. Requires quest on PATH and flock. Sandbox and fixer wrappers MUST run code as a different user from the App key owner (for example in nspawn containers); environment filtering alone cannot isolate /proc or host files. The sandbox receives <checkout> <base-sha>, with the base also in QUEST_LAND_BASE and present in the standalone shallow clone; the optional tracked background fixer receives the log path followed by PR numbers, or none for a base that fails alone. Neither receives credentials. State retains logs, fixer jobs, and one mechanical attempt per maintainer pick across restarts. Fixer results are validated, lease-pushed, recorded in Review, and pinned for requeue, and the comment a result carries for its PR is posted there; invalid results, crashes, and timeouts are handed back. A validated fix whose push GitHub refuses is handed back with its resolution for `quest land apply`. After revalidating the queue, merge the base into each behind-base PR head with quest resolve, verify the tested tree, and lease-push that head before the pinned GitHub squash API merge. A permissions-refused branch push falls back to a leased fast-forward of the tested squash to the base, closing the PR with a linked-commit comment and removing quest:merge. A recorded daemon merge atop the original pin is recognized after restart; other moved heads require maintainer requeueing. Pending mergeability, and GitHub still showing the pin after the daemon's own push, are retried briefly; a confirmed conflict parks only that PR for the fixer and a moved head ejects only that PR, and the rest of the batch stays queued. A refusal that would repeat, such as squash being disabled, ejects as merge_refused without the fixer. An unexpected squash parent rebuilds the queue without ejecting; a tree mismatch logs CRITICAL, ejects only a PR whose prepared tree differs as tree_mismatch (an already squashed PR stays merged), and leaves the rest of the batch queued to be rebuilt on the new base. Merged PRs drop out of the queue after restart.",
+			"Run one daemon per repository. Every squash, and every base merged into a PR head, drops each list entry linking to a quest the base deleted since the PR branched, as quest rm would. As a batch is filled, park alone for the fixer (eject alone, without one) each PR it reaches whose squash onto the base fails quest check with findings the base lacks, and comment once on each newly queued PR that conflicts with the four PRs landing soonest ahead of it. Check a base PR plus up to floor(log2 n) cleanly merging PRs once through the sandbox, alternating the oldest and the newest queued PR as the base. A failed batch is never bisected: its PRs are parked for the fixer, which blames the ones at fault, or ejected together without a fixer. It halves the next batch's size down to one PR; each landed batch grows it back by one. When the fixer blames none and the base fails its check alone, the queue halts until a moved base passes, and the fixer proposes a fix of the base as a PR. Requires quest on PATH and flock. Sandbox and fixer wrappers MUST run code as a different user from the App key owner (for example in nspawn containers); environment filtering alone cannot isolate /proc or host files. The sandbox receives <checkout> <base-sha>, with the base also in QUEST_LAND_BASE and present in the standalone shallow clone; the optional tracked background fixer receives the log path followed by PR numbers, or none for a base that fails alone. Neither receives credentials. State retains logs, fixer jobs, and one mechanical attempt per maintainer pick across restarts. Fixer results are validated, lease-pushed, recorded in Review, and pinned for requeue, and the comment a result carries for its PR is posted there; invalid results, crashes, and timeouts are handed back. A validated fix whose push GitHub refuses is handed back with its resolution for `quest land apply`. After revalidating the queue, merge the base into each behind-base PR head with quest resolve, verify the tested tree, and lease-push that head before the pinned GitHub squash API merge. A permissions-refused branch push falls back to a leased fast-forward of the tested squash to the base, closing the PR with a linked-commit comment. A recorded daemon merge atop the original pin is recognized after restart; other moved heads require maintainer requeueing. Pending mergeability, and GitHub still showing the pin after the daemon's own push, are retried briefly; a confirmed conflict parks only that PR for the fixer and a moved head ejects only that PR, and the rest of the batch stays queued. A refusal that would repeat, such as squash being disabled, ejects as merge_refused without the fixer. An unexpected squash parent rebuilds the queue without ejecting; a tree mismatch logs CRITICAL, ejects only a PR whose prepared tree differs as tree_mismatch (an already squashed PR stays merged), and leaves the rest of the batch queued to be rebuilt on the new base. Merged PRs drop out of the queue after restart.",
 		)
 		.option("--base <branch>", "Base branch (default: repository default)")
 		.option("--state <path>", "Private daemon state directory (default: $STATE_DIRECTORY or the XDG state home)")
@@ -561,13 +620,51 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"--sandbox <command>",
 			"Sandbox executable called with <checkout> <base-sha> and QUEST_LAND_BASE",
 		)
-		.option("--fixer <command>", "Credential-free fixer wrapper executable (60-minute deadline)")
+		.option(
+			"--fixer <command>",
+			"Credential-free fixer wrapper executable (60 minutes from its admission line, 120 in total)",
+		)
 		.requiredOption("--app-id <id>", "GitHub App id")
 		.option("--timeout <minutes>", "Fail a check that runs longer than this", positiveInteger("timeout"), 60)
 		.action((options: ServeOptions) => {
-			const { repository } = remoteRepository(root(), "origin");
+			const origin = readRemote(root(), "origin");
+			const repository = origin && remoteRepository(origin).repository;
 			if (!repository) throw new Error("origin must name a github.com repository");
 			pending = serve(root(), repository, options, warn).then(
+				() => 0,
+				(error: unknown) => {
+					warn(error instanceof Error ? error.message : String(error));
+					return 1;
+				},
+			);
+		});
+
+	landCommand
+		.command("watch")
+		.description(
+			"Watch the base's GitHub merge queue as a daemon, one per repository: once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A pick is the latest enqueue by anyone, the App included (as for Dependabot's PRs), except the App's enqueues of heads the watcher itself put back in the queue for the pick. With --fixer, a conflict is first merged with the base by the quest merge driver; otherwise the fixer runs in the background on the failure, at most --fixer-jobs at once, oldest removal first. A fixed or merged head is lease-pushed and recorded in Review, and each fixed, merged, or flaky head is re-enqueued at the back of the queue (or armed with auto-merge while its checks run). The pick keeps going while each round makes progress: a round with no new commit for a failure that isn't flaky, the failure a fix addressed recurring right after it, or three flaky rounds in a row hand it back, as does the fixer, with a comment. State keeps each removal handled, so a restart neither misses nor repeats one, each removal's full log, the fixer's jobs, and each pick's rounds. It shares `quest land serve`'s App key, state directory, private repository, and locks, so the two never run beside each other. The App needs `actions: read` for the logs, and with a fixer `merge_queues: write` to re-enqueue, `contents: write`, and `workflows: write` to push fixes that touch workflows.",
+		)
+		.option("--base <branch>", "Base branch (default: repository default)")
+		.option("--state <path>", "Private daemon state directory (default: $STATE_DIRECTORY or the XDG state home)")
+		.requiredOption("--app-id <id>", "GitHub App id")
+		.option(
+			"--fixer <command>",
+			"Credential-free fixer wrapper executable, called with the failure log and the PR number (60 minutes from its admission line, 120 in total)",
+		)
+		.option("--fixer-jobs <count>", "Most fixer jobs to run at once", positiveInteger("fixer-jobs"), 2)
+		.addOption(
+			new Option(
+				"--fixer-effort <level>",
+				`The fixer's model_reasoning_effort, passed to the wrapper in $${EFFORT_VARIABLE}`,
+			)
+				.choices(EFFORTS)
+				.default("medium"),
+		)
+		.action((options: WatchOptions) => {
+			const origin = readRemote(root(), "origin");
+			const repository = origin && remoteRepository(origin).repository;
+			if (!repository) throw new Error("origin must name a github.com repository");
+			pending = watch(root(), repository, options, warn).then(
 				() => 0,
 				(error: unknown) => {
 					warn(error instanceof Error ? error.message : String(error));
@@ -675,12 +772,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	};
 	// Only a commit no local ref reaches asks the forge, so other removals need no token.
 	const merged = async (repository: string, commit: string) => {
-		try {
-			remoteUrl(repository, "origin");
-		} catch {
-			return false; // No forge to ask.
-		}
-		const up = await upstream(repository, "origin", { github: () => gitHubDependencies(warn), warn });
+		const origin = readRemote(repository, "origin");
+		if (origin === null) return false; // No forge to ask.
+		const up = await upstream(repository, origin, { github: () => gitHubDependencies(warn), warn });
 		return up.github !== null && mergedHead(up.github.client, up.github.repository, commit);
 	};
 	worktree
@@ -749,6 +843,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"entry may be a 1Password op:// reference: the first launch resolves every reference in one " +
 				"`op inject` and keeps the keys in a user-only store under $XDG_RUNTIME_DIR (or the temporary " +
 				"directory) shared by the repository's worktrees, until `quest agent stop --all`.\n\n" +
+				"The agent CLI and op run from their absolute paths on PATH, never from the worktree; on native Windows " +
+				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
 				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_API_KEYS, and QUEST_GATE_ADMITTED variable, plus " +
 				"its one key as " +
@@ -828,7 +924,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Review the checkout's committed branch against its base with the other harness: Codex when run from " +
 				"Claude Code, Claude Code when run from Codex, detected from the variables each sets. --harness names " +
-				"the reviewer instead; there is no other fallback. The reviewer uses its CLI's own login, " +
+				"the reviewer instead; there is no other fallback. The reviewer uses its CLI's own stored login or, " +
+				"without one, the credential it reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or " +
+				"CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY for Codex) unless a stripped ANTHROPIC_BASE_URL or " +
+				"CLAUDE_CODE_USE_BEDROCK, _VERTEX, or _FOUNDRY would send it elsewhere. A logged-out error names the " +
+				"profile it checked, CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset. It runs " +
 				`with ${models}. --model and --effort override them.\n\n` +
 				"The first round runs the reviewer's own review (`codex exec review --base`, or Claude Code's " +
 				"`/code-review <effort> <base>...HEAD`), then resumes that session for one turn that applies the base's " +
@@ -844,7 +944,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Prints the reviewer, model, and effort, session, round, base, head, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), the finding count, then each finding. --json prints " +
 				"the same as one object. Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
-				"or a checkout or CLI that cannot be reviewed, and 1 for other failures.",
+				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, and 1 for other failures.",
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
 		.addOption(new Option("--harness <name>", "Reviewer to run instead of the other harness").choices(HARNESSES))

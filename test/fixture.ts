@@ -1,13 +1,22 @@
 // A minimal but complete quest tree on disk: root epic -> milestone ->
 // epic -> two quests, one blocking the other.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	cpSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { afterEach, expect } from "vitest";
+import { afterAll, afterEach, expect } from "vitest";
 
 import { blockers, check, formatFinding, lookup, ready, renderBlocker } from "../src/core";
 import { type Output, main } from "../src/cli/main";
@@ -78,8 +87,94 @@ export function tempDir(): string {
 	return dir;
 }
 
+const templates: string[] = [];
+afterAll(() => {
+	for (const dir of templates.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/**
+ * A repository, or any directory, that `build` makes once per test file in an
+ * empty directory, then copied for each use into `dir` or a fresh temporary
+ * directory. Every git process is slow to start on Windows, so tests copy
+ * repositories rather than spawn git to make each one.
+ */
+export function template(build: (dir: string) => void): (dir?: string) => string {
+	let built: string | undefined;
+	return (dir = tempDir()) => {
+		if (built === undefined) {
+			const fresh = mkdtempSync(join(tmpdir(), "quest-template-"));
+			templates.push(fresh);
+			build(fresh);
+			built = fresh;
+		}
+		cpSync(built, dir, { recursive: true });
+		return dir;
+	};
+}
+
+/**
+ * Settings for every fixture repository: an identity, no signing, and no
+ * automatic maintenance, which would spawn another git after each commit, fetch, or merge.
+ */
+export const GIT_SETTINGS: Record<string, string> = {
+	"user.name": "Test",
+	"user.email": "test@example.com",
+	"commit.gpgsign": "false",
+	"maintenance.auto": "false",
+};
+
+/**
+ * Add `settings`, by `section[.subsection].name`, to the config of the
+ * repository at `dir`, bare or not, without spawning git. Each adds a value,
+ * so set only keys the config lacks.
+ */
+export function configure(dir: string, settings: Record<string, string>): void {
+	// Subsections and quoted values escape `"` and `\`, as in a Windows path.
+	const quote = (text: string) => `"${text.replace(/["\\]/g, "\\$&")}"`;
+	const sections = Object.entries(settings).map(([key, value]) => {
+		const first = key.indexOf(".");
+		const last = key.lastIndexOf(".");
+		const subsection = first === last ? "" : ` ${quote(key.slice(first + 1, last))}`;
+		return `[${key.slice(0, first)}${subsection}]\n\t${key.slice(last + 1)} = ${quote(value)}\n`;
+	});
+	const git = join(dir, ".git");
+	appendFileSync(existsSync(git) ? join(git, "config") : join(dir, "config"), sections.join(""));
+}
+
+/** Empty repositories on main, with `GIT_SETTINGS`. */
+const repositories = {
+	work: template((dir) => {
+		execFileSync("git", ["init", "-q", "-b", "main", dir], { stdio: "ignore" });
+		configure(dir, GIT_SETTINGS);
+	}),
+	bare: template((dir) => {
+		execFileSync("git", ["init", "-q", "--bare", "-b", "main", dir], { stdio: "ignore" });
+		configure(dir, GIT_SETTINGS);
+	}),
+};
+
+/**
+ * Make `dir`, or a fresh temporary directory, a new repository on main with
+ * `GIT_SETTINGS`, keeping any files already in it. Returns its path.
+ */
+export function initRepository(dir?: string, { bare = false } = {}): string {
+	return bare ? repositories.bare(dir) : repositories.work(dir);
+}
+
+/** The baseline tree, committed on main. */
+const committedBaseline = template((dir) => {
+	Tree.baseline().copy(dir);
+	initRepository(dir);
+	execFileSync("git", ["-C", dir, "add", "-A"], { stdio: "ignore" });
+	execFileSync("git", ["-C", dir, "commit", "-q", "-m", "baseline"], { stdio: "ignore" });
+});
+
 export class Tree {
-	readonly path = tempDir();
+	readonly path: string;
+
+	constructor(path = tempDir()) {
+		this.path = path;
+	}
 
 	/** The baseline tree, which passes. */
 	static baseline(): Tree {
@@ -89,6 +184,16 @@ export class Tree {
 			.write("quest/m0/epic/README.md", EPIC_README)
 			.write("quest/m0/epic/one.md", ONE)
 			.write("quest/m0/epic/two.md", TWO);
+	}
+
+	/** The baseline tree as a repository with everything committed on main, with `GIT_SETTINGS`, at `path`. */
+	static committed(path?: string): Tree {
+		return new Tree(committedBaseline(path));
+	}
+
+	/** Copy this tree's files into `dir`. */
+	copy(dir: string): void {
+		cpSync(this.path, dir, { recursive: true });
 	}
 
 	write(rel: string, body: string): this {

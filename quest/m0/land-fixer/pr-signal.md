@@ -28,13 +28,14 @@ this because it's free, closed source do not)". moq-dev/moq plans its side in
 
 `quest status` already lists a PR's checks. `/quest-merge` should say when a
 non-required check failed on the head it is about to pick, without refusing.
-The fixer gets a summary per PR (check name, conclusion, run URL, and a
-trimmed log of each failure) in its job input, next to the batch log. A
-failing non-required check never parks or ejects a PR on its own; the parked
-case is only for required checks, in
-CI failures park (`quest/m0/land-fixer/ci-park.md`), which
-[moq-dev/quest#363](https://github.com/moq-dev/quest/pull/363) plans.
+The fixer gets a summary of the PR's checks (check name, conclusion, run URL,
+and a trimmed log of each failure) in its job input, next to the queue's
+failure log. A failing non-required check never stops a PR on its own; a
+failing required check keeps GitHub from enqueuing it: `/quest-merge`
+refuses such a head, `quest merge` fails when GitHub refuses it, and either
+way the PR needs `/quest-iterate`.
 
-## Related
-
-- Batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) - where the fixer uses the signal
+Retargeted 2026-11-01 to the [queue watcher](/quest/m0/queue-watcher/README.md),
+which replaces the batched host gate. The watcher starts the fixer on each PR
+the queue drops in `take` (`src/cli/land-watch-fix.ts`), with the removal's
+`merge_group` log; the PR's own checks go beside it.
