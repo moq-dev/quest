@@ -110,16 +110,19 @@ export async function claudeHook(
 	switch (hook.hook_event_name) {
 		case "WorktreeCreate": {
 			const name = field(hook, "name");
-			let cwd = toplevel(hook.cwd)!;
+			let cwd = toplevel(hook.cwd);
+			if (!cwd) throw new Error(`hook cwd is not in a Git checkout: ${hook.cwd}`);
 			// The hook's project anchors ownership when cwd is inside a submodule, without
 			// changing which repository a session opened directly in a vendored project owns.
-			if (project) {
+			if (project && toplevel(project)) {
 				const main = mainCheckout(project);
-				while (mainCheckout(cwd) !== main) {
-					const parent = git(cwd, "rev-parse", "--show-superproject-working-tree");
-					if (!parent) throw new Error(`hook cwd is outside its project repository: ${hook.cwd}`);
-					cwd = parent;
+				let enclosing = cwd;
+				while (mainCheckout(enclosing) !== main) {
+					const parent = git(enclosing, "rev-parse", "--show-superproject-working-tree");
+					if (!parent) break;
+					enclosing = parent;
 				}
+				if (mainCheckout(enclosing) === main) cwd = enclosing;
 			}
 			const main = mainCheckout(cwd);
 			const existing = await waiting(() => worktrees.registered(join(main, ".worktrees", name)));

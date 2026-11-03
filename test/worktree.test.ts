@@ -351,6 +351,15 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(existsSync(join(nested, "cache"))).toBe(false);
 		expect(readFileSync(join(nested, "file"), "utf8")).toBe("local work");
 	});
+	it("protects a live creation without giving interrupted-checkout removal advice", async () => {
+		const { repo, worktrees } = fixture();
+		const creation = worktrees.create(repo, "live", 10_000_000);
+		const [record] = worktrees.status().records;
+		expect(record.phase).toBe("creating");
+		expect(() => worktrees.release(record.id)).toThrow("creation is still running");
+		await creation;
+		expect(worktrees.status().records[0].creator).toBeUndefined();
+	});
 	it("records remotely fetched module pins and tags outside the branch-prune namespace", async () => {
 		const { root, repo, worktrees } = fixture();
 		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
@@ -826,6 +835,14 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
 		const fresh = (await claudeHook({ ...created, name: "agent-2" }, worktrees, noForge))!.trim();
 		expect(git(fresh, "rev-parse", "HEAD")).toBe(initial);
+		for (const project of [root, repository(join(root, "unrelated"))]) {
+			const name = project === root ? "nonrepo" : "unrelated";
+			const path = (await claudeHook({ ...created, name }, worktrees, noForge, project))!.trim();
+			expect(path).toBe(join(canonical(repo), ".worktrees", name));
+		}
+		await expect(claudeHook({ ...created, cwd: root }, worktrees, noForge)).rejects.toThrow(
+			"not in a Git checkout",
+		);
 	});
 	it("releases a stopped subagent's own checkout and restores it on resume", async () => {
 		const { repo, worktrees } = fixture();

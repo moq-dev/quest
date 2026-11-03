@@ -41,6 +41,7 @@ export interface WorktreeRecord {
 	scratch: string[];
 	runs: Run[];
 	phase: "creating" | "active" | "released";
+	creator?: Owner;
 	failure?: string;
 }
 interface Registry {
@@ -167,9 +168,13 @@ function lockReason(path: string): string | undefined {
 }
 
 function interrupted(record: WorktreeRecord): void {
+	if (record.phase === "creating" && record.creator && alive(record.creator))
+		throw new Error(
+			`creation is still running in process ${record.creator.pid}; wait for it to finish: ${record.path}`,
+		);
 	if (record.phase === "creating")
 		throw new Error(
-			`creation was interrupted; inspect and preserve the partial checkout, including submodule work; use git worktree unlock then git worktree remove (with --force for submodules), then release again: ${record.path}`,
+			`creation was interrupted; confirm its Git processes have stopped, then inspect and preserve the partial checkout, including submodule work; use git worktree unlock then git worktree remove (with --force for submodules), then release again: ${record.path}`,
 		);
 }
 
@@ -561,6 +566,7 @@ export class Worktrees {
 				scratch: declared,
 				runs: [],
 				phase: "creating",
+				creator: currentOwner(),
 			};
 			registry.records.push(record);
 			save(join(this.home, "registry.json"), registry); // Reservation survives a crash in git.
@@ -579,6 +585,7 @@ export class Worktrees {
 				return record;
 			} catch (error) {
 				record.failure = String(error);
+				delete record.creator;
 				throw error;
 			}
 		});
@@ -588,38 +595,44 @@ export class Worktrees {
 				maxBuffer: 64 * 1024 * 1024,
 			});
 			for (const module of submodules(record.path)) {
-				const tips = new Set([
-					git(module, "rev-parse", "HEAD").trim(),
-					...git(module, "for-each-ref", "--format=%(objectname)").split("\n").filter(Boolean),
-				]);
-				for (const tip of tips) {
-					if (!git(module, "rev-list", "-n1", tip, "--not", "--remotes").trim()) continue;
-					// SHA fetches and cloned tags need a durable record of remote preservation.
-					// Keep it outside origin's branch-prune refspec; later local tips still fail removal.
-					await promisify(execFile)(
+				const untracked = (ref: string) => git(module, "rev-list", "-n1", ref, "--not", "--remotes").trim();
+				const fetch = (refs: string[]) =>
+					promisify(execFile)(
 						"git",
-						[
-							"-C",
-							module,
-							"fetch",
-							"--no-tags",
-							"--no-write-fetch-head",
-							"origin",
-							`${tip}:refs/remotes/quest-pins/${tip}`,
-						],
+						["-C", module, "fetch", "--no-tags", "--no-write-fetch-head", "origin", ...refs],
 						{ maxBuffer: 64 * 1024 * 1024 },
 					);
-				}
+				// Named tag refs work even when the server refuses unadvertised SHA wants.
+				// Keep preservation refs outside origin's branch-prune namespace.
+				const tags = git(module, "for-each-ref", "--format=%(refname)", "refs/tags")
+					.split("\n")
+					.filter(Boolean)
+					.filter(untracked);
+				if (tags.length)
+					await fetch(
+						tags.map((tag) => `${tag}:refs/remotes/quest-pins/tags/${tag.slice("refs/tags/".length)}`),
+					);
+				const tips = [
+					...new Set([
+						git(module, "rev-parse", "HEAD").trim(),
+						...git(module, "for-each-ref", "--format=%(objectname)").split("\n").filter(Boolean),
+					]),
+				].filter(untracked);
+				// A pin update may have fetched only a SHA, without an advertised branch or tag.
+				if (tips.length) await fetch(tips.map((tip) => `${tip}:refs/remotes/quest-pins/commits/${tip}`));
 			}
 			return await this.lockedWait((registry) => {
 				const current = this.find(registry, record.id);
 				if (!this.owned(current)) throw new Error(`checkout disappeared during creation: ${record.path}`);
 				current.phase = "active";
+				delete current.creator;
 				return current;
 			});
 		} catch (error) {
 			await this.lockedWait((registry) => {
-				this.find(registry, record.id).failure = String(error);
+				const current = this.find(registry, record.id);
+				current.failure = String(error);
+				delete current.creator;
 			});
 			throw error;
 		}
@@ -663,7 +676,7 @@ export class Worktrees {
 			for (const path of paths) {
 				const absolute = join(root, path);
 				const owner = modules.find((module) => absolute.startsWith(module + sep)) ?? root;
-				const local = relative(owner, absolute);
+				const local = relative(owner, absolute).split(sep).join("/");
 				// icase covers filesystem aliases of tracked paths on case-insensitive hosts.
 				const tracked = git(owner, "ls-files", "-z", "--", `:(literal,icase)${local}`)
 					.split("\0")
