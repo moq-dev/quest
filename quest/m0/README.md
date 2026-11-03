@@ -70,7 +70,7 @@ ownership-manifest design:
   2026-10-26 (user), replacing "Nothing is vendored", so `quest init` can
   install the agent lifecycle hooks. Amended 2026-11-01 (user, /quest-plan):
   `quest init` also rewrites a Quest-written stub nobody edited when its
-  text is out of date; see [Skill stub cleanup](/quest/m0/skill-stubs.md).)
+  text is out of date.)
 - The repository's own tool manager pins the version: mise (release binaries)
   or a nix flake input (any rev, built from source). Quest ships no launcher
   and no pin file; an install outside either is simply unpinned.
@@ -98,7 +98,6 @@ ownership-manifest design:
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
 - [Review the branch's own change](/quest/m0/review-merge-base.md) - `quest review` diffs against the merge base and accepts a detached `HEAD`
-- [Skill stub cleanup](/quest/m0/skill-stubs.md) - stray skill copies deleted, and `quest init` refreshes unedited outdated stubs
 - [Merge driver upkeep](/quest/m0/merge-driver-upkeep.md) - local merges drop links to finished quests, old drivers upgrade, and `quest-pinned` stays current
 - [Worktree hooks here](/quest/m0/worktree-hooks.md) - `quest` reaches Claude Code's hooks and the merge driver in this repository, then `quest init` installs the hooks
 - [Other worktree routes](/quest/m0/worktree-routes.md) - live-check PR worktrees, agent view, remote-control, and workflow agents against the hooks
