@@ -851,6 +851,22 @@ posted with its reason and a recommendation, and the PR leaves the watcher's
 care until a maintainer enqueues it again. A round whose pick ended while it
 ran, by a writer's push or enqueue, is not applied, and its comment says so.
 
+The watcher also keeps the repository's flaky tests in `flaky.json` in its
+state directory: each flaky verdict, across every PR, by the failure signature
+the fixer named, with the `merge_group` jobs that showed it. Each failed
+build's round is told the tests that flaked before and are not yet disabled, in
+`.git/quest-land-flaky.json` in its checkout, which `quest land fix` passes to
+the agent. One verdict alone only re-enqueues the PR, since one judgment could
+hide a real bug. When a listed test flakes again, the fixer also commits its
+disabling on a `disable` branch from the base: the skip in the test
+framework's own form, naming the follow-up quest it adds to the repository's
+m0 `flaky` epic, `quest/m0/flaky/<name>.md`, to fix or delete the test. The
+watcher validates that commit as it does a base fix, requiring exactly one new
+follow-up quest, pushes it to `quest-land/flaky-<sha>`, opens it as a pull
+request with its Review recorded, and enqueues it like any other, with no
+maintainer's pick. A refused disable waits for the test's next flake, and a
+pull request GitHub refuses to enqueue says so and waits for a maintainer.
+
 It shares `quest land serve`'s App key, state directory, private repository,
 and locks, so the two never run for the same repository at once. Without a
 fixer its token asks for `contents: read`, `pull_requests: write`,
