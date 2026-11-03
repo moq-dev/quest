@@ -133,7 +133,7 @@ Shared shape, for the children to follow:
 - [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - a pick whose auto-merge is armed on a ready PR GitHub never queued is enqueued at the head it was armed on
 - [Flaky failures](/quest/m0/queue-watcher/flaky.md) - a flaky failure is re-enqueued unchanged, and a test seen flaking twice is disabled in a separate PR with a follow-up quest
 - [Watcher on the host](/quest/m0/queue-watcher/host.md) - kixelated/nixos runs the watcher for moq-dev/moq beside its fixer container
-- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - condition: moq's queue is proven; then moq-dev/quest switches and the others plan theirs
+- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - condition: quest, rind and rust2 are cut over; rind and rust2 each land a PR, and a fork PR lands
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 
