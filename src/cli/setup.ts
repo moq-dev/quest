@@ -35,7 +35,7 @@ import {
 	renderSettings,
 } from "../core";
 import { gitOutput } from "./claims";
-import { DRIVER } from "./resolve";
+import { DRIVER, OLD_DRIVERS } from "./resolve";
 import { SKILLS } from "./skills";
 
 export { ATTRIBUTES_LINE, HOOK_COMMAND, REFERENCE_LINE } from "../core";
@@ -93,13 +93,15 @@ export function heal(root: string): void {
 }
 
 /**
- * Set `merge.quest.driver` in the clone's config when no config sets it, and
- * only inside a git work tree: git ignores a driver named only in
- * `.gitattributes`. A failed write is ignored, leaving git's own merge.
+ * Set `merge.quest.driver` in the clone's config when no config sets it, or
+ * the one in effect is a driver an older quest registered, and only inside a
+ * git work tree: git ignores a driver named only in `.gitattributes`. A custom
+ * driver stays. A failed write is ignored, leaving the driver as it was.
  */
 function register(root: string): void {
 	try {
-		if (gitOutput(root, ["config", "--get", "merge.quest.driver"]) !== "") return;
+		const current = gitOutput(root, ["config", "--get", "merge.quest.driver"]);
+		if (current !== "" && !OLD_DRIVERS.includes(current)) return;
 		if (gitOutput(root, ["rev-parse", "--is-inside-work-tree"]) !== "true") return;
 		gitOutput(root, ["config", "--local", "merge.quest.driver", DRIVER]);
 	} catch {
