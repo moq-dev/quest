@@ -51,7 +51,7 @@ Keep going until all PRs have been decided, then wait for all spawned sub-agents
 Refresh the open PR list whenever a sub-agent reports, and once more before finishing; ask about each new PR in scope the same way.
 
 As each sub-agent reports, include a summary; its outstanding decisions go to the grill skill's rounds before its next `/quest-iterate` dispatch, never into a pick question.
-Collect each queued PR's suggested follow-ups, and once every sub-agent has finished, plan them as the guide describes.
+Plan each queued PR's suggested follow-ups as the guide describes, without waiting for the other sub-agents to finish.
 Dispatch already selected actions before asking the next question; background work can continue while the foreground waits.
 
 Once every sub-agent has finished, remove local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
