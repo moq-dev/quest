@@ -2,11 +2,9 @@
 
 ## Goal
 
-Condition: moq-dev/rind and moq-dev/rust2 have each landed a PR through
-their merge queue, and a fork PR has landed through any of the three. Check
-each with `gh pr list -R moq-dev/<repo> --state merged` and the
-`merge_group` runs on its `<repo>-queue` runner. Fix whatever a first merge
-group exposes, as moq-dev/quest's did. Then delete this quest.
+moq-dev/quest's, moq-dev/rind's and moq-dev/rust2's merge queues are shown
+to land every kind of PR, including one from a fork. Fix whatever a first
+merge group exposes, as moq-dev/quest's did. Then delete this quest.
 
 ## Plan
 
@@ -45,3 +43,15 @@ The cutover was done on 2026-11-03 (user, /quest-complete):
 
 rind's and rust2's first merge groups may hit similar runner gaps, since
 GitHub's Ubuntu runners preinstall tools their dev shells may not declare.
+By 2026-11-03 both had landed PRs through their queues
+([moq-dev/rind#276](https://github.com/moq-dev/rind/pull/276) and later,
+[moq-dev/rust2#467](https://github.com/moq-dev/rust2/pull/467) and later), so
+only the fork case remains.
+
+## Waiting
+
+- Fork contributor: a PR from a fork lands through any of the three merge
+  queues. Check with
+  `gh pr list -R moq-dev/<repo> --state merged --json number,isCrossRepository`
+  and the `merge_group` runs on its `<repo>-queue` runner. A maintainer can
+  advance it by landing a PR of their own from a fork.

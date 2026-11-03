@@ -59,6 +59,8 @@ export type Pull = Issue & {
 	timeline?: { id: string; label: string | null }[];
 	/** Auto-merge is enabled, so it lands once its requirements pass. */
 	landing?: boolean;
+	/** It is in its base's merge queue; only a base with `queue` takes it. */
+	queued?: boolean;
 	/** The enabled auto-merge's time and commit body; `quest land` reads its queue from them. */
 	autoMerge?: { enabledAt: string; commitBody: string };
 	/** A fork's head branch accepts pushes from the upstream's maintainers. */
@@ -105,10 +107,14 @@ export type Repo = {
 	trees: Record<string, Tree>;
 	/** Check names the default branch's rulesets require. */
 	required?: string[];
+	/** The default branch has a merge queue, which takes a pull request only through `enqueuePullRequest` or auto-merge. */
+	queue?: boolean;
 	/** The default branch's other ruleset rules, as `GET /rules/branches/main` lists them. */
 	rules?: Record<string, unknown>[];
 	/** The default branch's classic protection, as `GET /branches/main/protection` returns it; none when absent. */
 	protection?: Record<string, any>;
+	/** Check runs the App wrote through `POST /check-runs`, oldest first. */
+	checkRuns?: { name: string; head_sha: string; conclusion: string; app: number; output: Record<string, unknown> }[];
 	/** Rulesets by ID, as `GET /rulesets/<id>` shows them to the App. */
 	rulesets?: Record<number, { current_user_can_bypass: "always" | "pull_requests_only" | "never" }>;
 };
@@ -326,9 +332,9 @@ function holdsTarget(repo: Repo, pull: Pull) {
 		baseRefName: "main",
 		headRefOid: headOf(repo, pull),
 		mergeStateStatus: mergeState(pull),
-		isMergeQueueEnabled: false,
+		isMergeQueueEnabled: repo.queue === true,
 		autoMergeRequest: pull.landing ? { enabledAt: updatedAt } : null,
-		mergeQueueEntry: null,
+		mergeQueueEntry: pull.queued ? { state: "QUEUED" } : null,
 		labels: { nodes: (pull.labels ?? []).map((name) => ({ name })) },
 		timelineItems: {
 			nodes: (pull.timeline ?? []).map((event) =>
@@ -849,7 +855,7 @@ export function fakeGitHub(world: World) {
 						}
 				return json({ errors: [{ type: "NOT_FOUND" }] });
 			}
-			const landing = query.match(/\b(enablePullRequestAutoMerge|mergePullRequest)\(/)?.[1];
+			const landing = query.match(/\b(enablePullRequestAutoMerge|mergePullRequest|enqueuePullRequest)\(/)?.[1];
 			if (landing) {
 				for (const repo of world.repos)
 					for (const pull of repo.pulls)
@@ -863,11 +869,25 @@ export function fakeGitHub(world: World) {
 							if (pull.closed) return json({ errors: [{ message: "Pull request is closed" }] });
 							if (variables.sha !== headOf(repo, pull))
 								return json({ errors: [{ message: "Head sha didn't match expected head" }] });
-							if (landing === "mergePullRequest") {
-								if (!["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(mergeState(pull)))
-									return json({ errors: [{ message: "Pull Request is not mergeable" }] });
+							const ready = ["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(mergeState(pull));
+							if (landing === "enqueuePullRequest") {
+								if (!repo.queue)
+									return json({
+										errors: [{ message: "Merge queue is not enabled for this branch" }],
+									});
+								if (pull.queued)
+									return json({
+										errors: [{ message: "Pull request is already in the merge queue" }],
+									});
+								if (!ready) return json({ errors: [{ message: "Pull request is not mergeable" }] });
+								pull.queued = true;
+							} else if (landing === "mergePullRequest") {
+								if (!ready) return json({ errors: [{ message: "Pull Request is not mergeable" }] });
 								pull.closed = pull.merged = true;
 							} else {
+								// A merge queue takes a ready pull request only through enqueueing it.
+								if (repo.queue && ready)
+									return json({ errors: [{ message: "Pull request is in clean status" }] });
 								pull.landing = true;
 								pull.autoMerge = {
 									enabledAt: new Date().toISOString(),
@@ -938,6 +958,19 @@ export function fakeGitHub(world: World) {
 			const found = repo.rulesets?.[Number(ruleset[1])];
 			return found ? json({ id: Number(ruleset[1]), ...found }) : notFound();
 		}
+		if (tail === "/check-runs" && method === "POST") {
+			if (!writes("checks")) return forbidden();
+			if (body.status !== "completed" || typeof body.head_sha !== "string" || !repo.commits[body.head_sha])
+				return json({ message: "Validation Failed" }, 422);
+			(repo.checkRuns ??= []).push({
+				name: body.name,
+				head_sha: body.head_sha,
+				conclusion: body.conclusion,
+				app: world.app.id,
+				output: body.output,
+			});
+			return json({ id: repo.checkRuns.length, name: body.name, head_sha: body.head_sha }, 201);
+		}
 		const runs = tail.match(/^\/commits\/([0-9a-f]{40})\/check-runs$/);
 		if (runs && method === "GET") {
 			if (!scope.permissions.checks) return forbidden();
@@ -954,7 +987,13 @@ export function fakeGitHub(world: World) {
 						app: { id: run.app ?? ACTIONS_APP },
 					})),
 			);
-			const check_runs = found.filter(
+			// The App's own runs, newest first as `filter=latest` keeps one per name.
+			const written = (repo.checkRuns ?? [])
+				.filter((run) => run.head_sha === runs[1])
+				.reverse()
+				.filter((run, i, all) => all.findIndex((other) => other.name === run.name) === i)
+				.map((run) => ({ ...run, status: "completed", app: { id: run.app } }));
+			const check_runs = [...written, ...found].filter(
 				(run) => (!name || run.name === name) && (!app || String(run.app.id) === app),
 			);
 			return json({ total_count: check_runs.length, check_runs });
@@ -1046,7 +1085,7 @@ export function fakeGitHub(world: World) {
 				if (typeof body.body === "string") pull.body = body.body;
 				if (body.state === "closed") {
 					pull.closed = true;
-					pull.landing = false;
+					pull.landing = pull.queued = false;
 					pull.autoMerge = undefined;
 				}
 			}
@@ -1064,7 +1103,7 @@ export function fakeGitHub(world: World) {
 			if (pull.merge !== "CLEAN") return json({ message: "Pull Request is not mergeable" }, 405);
 			pull.closed = true;
 			pull.merged = true;
-			pull.landing = false;
+			pull.landing = pull.queued = false;
 			pull.autoMerge = undefined;
 			if (pull.squash) repo.branches[pull.base ?? repo.defaultBranch ?? "main"] = pull.squash;
 			pull.mergeCommit = pull.squash ?? commitOf(repo);

@@ -1,4 +1,4 @@
-// A fixer resolution GitHub refused to publish travels in the handback comment, and a maintainer's checkout rebuilds it.
+// A fixer resolution the daemon cannot publish travels in the handback comment, and a maintainer's checkout rebuilds it.
 import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
@@ -20,13 +20,19 @@ export const COMMENT_LIMIT = 65_536;
 
 /**
  * A validated fix as data: the PR head and base it merges, the tree it must produce, and the fixer's edits as a
- * gzipped, base64 patch against the merge's conflicted result, so it stays as small as the resolution itself.
+ * gzipped, base64 patch against the merge's conflicted result, so it stays as small as the resolution itself. A fix
+ * that merges no base names the head as its base, so its patch applies to the head's own tree.
  */
 export interface Resolution {
 	head: string;
 	base: string;
 	tree: string;
 	patch: string;
+	/**
+	 * Why the daemon handed it back rather than pushing it: GitHub refused the push, or the fix edits protected
+	 * paths, which only a maintainer's push lands. The comment says it in prose; its data carries no cause.
+	 */
+	cause?: "protected";
 }
 
 const SHA = "[0-9a-f]{40}(?:[0-9a-f]{24})?";
@@ -83,9 +89,24 @@ function bytes(root: string, args: string[], input?: Buffer, env: Record<string,
 	return result.stdout;
 }
 
-/** The fixed head as a resolution of `base` merged into `head`, or nothing when it does not contain that base. */
-export function resolution(root: string, head: string, base: string, fixed: string): Resolution | undefined {
-	if (!contains(root, base, fixed)) return undefined;
+/**
+ * The fixed head as a resolution of `base` merged into `head`, or of `head` alone when the fix merges no base. Nothing
+ * when it merges part of the base: a rebuild from either side would not reach its tree.
+ */
+export function resolution(
+	root: string,
+	head: string,
+	base: string,
+	fixed: string,
+	cause?: Resolution["cause"],
+): Resolution | undefined {
+	// A head that already has the base merges nothing either.
+	if (contains(root, base, head)) base = head;
+	else if (!contains(root, base, fixed)) {
+		const count = (...not: string[]) => git(root, ["rev-list", "--count", fixed, ...not.map((ref) => `^${ref}`)]);
+		if (count(head) !== count(head, base)) return undefined;
+		base = head;
+	}
 	const patch = bytes(root, [
 		"diff",
 		"--binary",
@@ -100,16 +121,28 @@ export function resolution(root: string, head: string, base: string, fixed: stri
 		conflicted(root, head, base),
 		fixed,
 	]);
-	return { head, base, tree: git(root, ["rev-parse", `${fixed}^{tree}`]), patch: gzipSync(patch).toString("base64") };
+	return {
+		head,
+		base,
+		tree: git(root, ["rev-parse", `${fixed}^{tree}`]),
+		patch: gzipSync(patch).toString("base64"),
+		...(cause ? { cause } : {}),
+	};
 }
 
 /** The handback's section carrying `resolution`, or a plain handback when it would not fit in `room` characters. */
 export function resolutionSection(number: number, resolution: Resolution, room: number): string {
-	const { head, base, tree, patch } = resolution;
+	const { head, base, tree, patch, cause } = resolution;
+	const why =
+		cause === "protected"
+			? "The fixer's resolution edits protected paths beyond what the base merge carries, and only a maintainer's push lands those"
+			: "GitHub refused the fixer's push";
+	const merge = base === head ? "no base merge" : `base \`${base}\``;
+	const review = cause === "protected" ? "reviews its protected edits" : "reviews it";
 	const text =
-		`\n\nGitHub refused the fixer's push, so its validated resolution travels in this comment: PR head \`${head}\`, ` +
-		`base \`${base}\`, resolved tree \`${tree}\`. A maintainer session rebuilds the commit with ` +
-		`\`quest land apply ${number}\`, reviews it, pushes it to the PR branch, and picks the PR again.` +
+		`\n\n${why}, so its validated resolution travels in this comment: PR head \`${head}\`, ` +
+		`${merge}, resolved tree \`${tree}\`. A maintainer session rebuilds the commit with ` +
+		`\`quest land apply ${number}\`, ${review}, pushes it to the PR branch, and picks the PR again.` +
 		`\n\n<!-- quest land apply v1 head=${head} base=${base} tree=${tree} patch=${patch} -->`;
 	if (text.length <= room) return text;
 	return `\n\nThe fixer's resolution is too large for a comment (${patch.length} characters encoded), so redo the merge by hand.`;
@@ -167,7 +200,7 @@ export interface Applied {
 }
 
 /**
- * Rebuild the commit a quest land fixer handed back because GitHub refused its push: the latest resolution an App
+ * Rebuild the commit a quest land fixer handed back because GitHub refused its push or it edits protected paths: the latest resolution an App
  * posted on the PR, while the PR's head is still the one it resolved. The commit is left unpushed.
  */
 export async function apply(root: string, pr: PullRequest, deps: GitHubDependencies): Promise<Applied> {
@@ -212,10 +245,14 @@ export async function apply(root: string, pr: PullRequest, deps: GitHubDependenc
 	const tree = rebuild(root, found);
 	const parents = contains(root, found.base, found.head) ? [found.head] : [found.head, found.base];
 	const branch = string(head.ref);
+	const subject =
+		found.base === found.head
+			? `Apply the quest land fixer's fix to ${branch}`
+			: `Merge ${found.base} into ${branch}`;
 	const commit = userGit(
 		root,
 		["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent])],
-		`Merge ${found.base} into ${branch}\n\nThe quest land fixer's resolution, rebuilt by \`quest land apply\` after GitHub refused the fixer's push.\n`,
+		`${subject}\n\nThe quest land fixer's resolution, rebuilt by \`quest land apply\` after the daemon handed it back unpushed.\n`,
 	);
 	const holder = object(head.repo);
 	return {
