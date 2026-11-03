@@ -20,6 +20,14 @@ those workflows land:
 
 - Keep the existing picks and their head SHAs; do not pick previously
   unqueued PRs or a head that moved after approval.
+- Remove the leftover `quest:merge` labels from the old gate first, such as
+  those on [moq-dev/quest#324](https://github.com/moq-dev/quest/pull/324) and
+  [moq-dev/rust2#446](https://github.com/moq-dev/rust2/pull/446),
+  [#442](https://github.com/moq-dev/rust2/pull/442) and
+  [#437](https://github.com/moq-dev/rust2/pull/437), none of which has
+  auto-merge armed. An older pinned `quest` still reads them as holds
+  (decided 2026-11-02, user, /quest-plan; the pin itself is
+  [Merge driver upkeep](/quest/m0/merge-driver-upkeep.md)'s).
 - Require `Queue` and a serialized squash merge queue in each `main`
   ruleset, replacing `quest land` and the old PR-side checks. Keep the
   administrator emergency bypass; remove the fixer's direct-merge bypass.

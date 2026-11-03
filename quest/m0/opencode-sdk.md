@@ -57,3 +57,7 @@ What the change does:
 - Run the runner's live opencode checks that the
   [Kix decision UI](/quest/m0/kix/README.md) rehearsal lists, if a runner is
   available.
+
+## Required
+
+- [Boundary test in CI](/quest/m0/kix/sandbox/live-test.md) - the boundary test this quest reruns on 2.x is checked in and runs in CI

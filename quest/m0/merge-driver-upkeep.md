@@ -32,3 +32,11 @@ Decided 2026-11-01 (user, /quest-plan of the follow-ups from the
   added the `quest-pinned` input, which only a manual `nix flake update
   quest-pinned` bumps. Pick how it stays current, such as Dependabot's nix
   updates, a step in the release checklist, or a recurring quest, and do it.
+- Bump `quest-pinned` now (decided 2026-11-02, user, /quest-plan of the
+  follow-ups from that day's `/quest-complete` session): the dev shell's
+  `quest` still reads a leftover `quest:merge` label as a hold, which current
+  `quest` no longer does. In that session it reported 25-hour-old holds on
+  [moq-dev/quest#342](https://github.com/moq-dev/quest/pull/342),
+  [#338](https://github.com/moq-dev/quest/pull/338) and
+  [#324](https://github.com/moq-dev/quest/pull/324) that the checkout's
+  `quest iterate` ignored.
