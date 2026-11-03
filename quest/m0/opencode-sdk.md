@@ -52,12 +52,11 @@ What the change does:
 - Recheck each of the sandbox's rules on 2.x: the `shell` wrapper through
   srt, the commands' environment allowlist (`keptEnvironment`),
   `OPENCODE_DISABLE_PROJECT_CONFIG`, `external_directory` and `webfetch`
-  denies, the plugin's realpath check, and `lsp`/`formatter` off. Rerun the
-  sandbox's hostile-repository boundary test against 2.x.
+  denies, the plugin's realpath check, and `lsp`/`formatter` off. The
+  sandbox's boundary test, `test/live/runner-sandbox.test.ts`, runs the
+  pinned opencode only in `just runner-sandbox` and nightly CI, so run it
+  on the 2.x pin before landing; extend it to any rule 2.x changes, such as
+  its tool names or plugin hooks.
 - Run the runner's live opencode checks that the
   [Kix decision UI](/quest/m0/kix/README.md) rehearsal lists, if a runner is
   available.
-
-## Required
-
-- [Boundary test in CI](/quest/m0/kix/sandbox/live-test.md) - the boundary test this quest reruns on 2.x is checked in and runs in CI

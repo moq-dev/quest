@@ -105,6 +105,13 @@
               # `flock` (the land daemon's repository lock) and `script` (the tests' terminal), which
               # self-hosted NixOS runners don't otherwise provide.
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux ];
+            # The runner package's opencode and sandbox-runtime, for the sandbox boundary test
+            # (test/live/runner-sandbox.test.ts), which runs where srt does. Named as the runner
+            # finds them rather than put on PATH, where they would shadow the user's own opencode.
+            env = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              QUEST_RUNNER_OPENCODE = pkgs.lib.getExe opencode;
+              QUEST_RUNNER_SRT = pkgs.lib.getExe pkgs.sandbox-runtime;
+            };
           };
           formatter = pkgs.nixfmt;
           checks = {

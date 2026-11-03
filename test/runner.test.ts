@@ -1105,6 +1105,7 @@ describe("account add", () => {
 				...process.env,
 				PATH: `${bin}:${process.env.PATH}`,
 				QUEST_RUNNER_HOME: join(dir, "home"),
+				QUEST_RUNNER_OPENCODE: join(bin, "opencode"),
 				QUEST_RUNNER_SRT: join(bin, "srt"),
 			},
 		};
@@ -1939,6 +1940,8 @@ describe("quest runner", () => {
 		expect(srt.env).not.toContain("OPENCODE_CONFIG_CONTENT");
 		expect(srt.env).not.toContain("AWS_SECRET_ACCESS_KEY");
 		expect(srt.env).not.toContain("XDG_DATA_HOME");
+		// srt hands commands this as their TMPDIR.
+		expect(srt.env).toContain("CLAUDE_CODE_TMPDIR");
 		expect(shell.shell).toBe(`1|${tmp}/home|none|none|${tmp}`);
 		expect(first.stdin).toContain("kix adds for this job: Extra rule.");
 		expect(first.system).toContain("checkpoint");

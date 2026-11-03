@@ -67,6 +67,14 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
   opencode 1.19 still imports the plugins a checkout's own `opencode.json`
   or `.opencode/` names, even with project config disabled, so the runner
   keeps the agent from creating them and refuses a checkout that holds them.
+  `test/live/runner-sandbox.test.ts` checks that boundary with the pinned
+  opencode and srt and a scripted model. It runs in `just runner-sandbox`
+  and a nightly GitHub-hosted workflow (`.github/workflows/sandbox.yml`),
+  not in `just test` or the merge queue, whose container can't mount
+  `/proc` for bwrap, so a bump that weakens the boundary fails the next
+  nightly run. Decided 2026-11-03 (user, /quest-complete), after the merge
+  queue dropped [moq-dev/quest#404](https://github.com/moq-dev/quest/pull/404):
+  its own CI, nightly, so landing never blocks on it.
 - Decided 2026-10-24 (user) in `/quest-plan`: split the remaining work into
   the children below, ranked so the earliest unblock the most. Dropped
   (user): read-only registry access, which Claude Code's sandbox cannot
@@ -78,6 +86,5 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 ## Required
 
 - [No Unix sockets in opencode jobs](/quest/m0/kix/sandbox/seccomp.md) - srt's seccomp helper is packaged, so commands can't reach the Nix daemon, and the runner refuses to start without it
-- [Boundary test in CI](/quest/m0/kix/sandbox/live-test.md) - the opencode sandbox's hostile-repository test runs on Linux CI with a scripted model
 - [Trust rechecked on queue](/quest/m0/kix/sandbox/trust-on-queue.md) - a job's head trust is reread whenever it queues, so the approval decision shows without a free runner
 - [Claude Code boundary test](/quest/m0/kix/sandbox/claude-boundary.md) - the same hostile-repository test for Claude Code jobs, with a fake model set in the account's settings
