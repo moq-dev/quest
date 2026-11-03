@@ -18,10 +18,13 @@ export type CIPermission = keyof typeof CI_PERMISSIONS;
 export type CIReads = { get<T>(path: string): Promise<T> };
 
 /**
- * Environments examined per check. Each costs up to two reads, which keeps a
- * setup page within Workers Free's 50 subrequests alongside its other reads.
+ * The reads one check may make, which keeps a setup page within Workers
+ * Free's 50 subrequests alongside its other reads. A check that runs out
+ * says so rather than reporting the rest as fine.
  */
-export const ENVIRONMENTS = 12;
+export const READS = 30;
+/** Thrown once the check has spent its reads. */
+const SPENT = Symbol("spent");
 
 type Secrets = { total_count: number; secrets: { name: string }[] };
 type Environment = {
@@ -55,12 +58,24 @@ function count(n: number, noun: string) {
  */
 export async function ciProblems(reads: CIReads, granted: ReadonlySet<CIPermission>): Promise<string[]> {
 	const problems: string[] = [];
+	let left = READS;
+	let stopped = false;
+	const get = <T>(path: string) => {
+		if (left <= 0) {
+			stopped = true;
+			throw SPENT;
+		}
+		left--;
+		return reads.get<T>(path);
+	};
 	// A failed or malformed read is a warning, never a failed page.
 	const read = async <T>(path: string, what: string, valid: (value: T) => boolean): Promise<T | null> => {
 		try {
-			const value = await reads.get<T>(path);
+			const value = await get<T>(path);
 			if (value && valid(value)) return value;
-		} catch {}
+		} catch (error) {
+			if (error === SPENT) return null;
+		}
 		problems.push(`kix could not read ${what}; review this project again later.`);
 		return null;
 	};
@@ -137,11 +152,12 @@ export async function ciProblems(reads: CIReads, granted: ReadonlySet<CIPermissi
 					name,
 					(lookup = (async () => {
 						try {
-							const branch = await reads.get<{ protected?: unknown }>(
+							const branch = await get<{ protected?: unknown }>(
 								`/branches/${name.split("/").map(encodeURIComponent).join("/")}`,
 							);
 							if (typeof branch?.protected === "boolean") return branch.protected;
 						} catch (error) {
+							if (error === SPENT) return null;
 							// A branch that does not exist is not protected.
 							if ((error as { status?: unknown }).status === 404) return false;
 						}
@@ -151,7 +167,11 @@ export async function ciProblems(reads: CIReads, granted: ReadonlySet<CIPermissi
 				);
 			return lookup;
 		};
-		for (const environment of listed?.environments.slice(0, ENVIRONMENTS) ?? []) {
+		for (const environment of listed?.environments ?? []) {
+			if (left <= 0) {
+				stopped = true;
+				break;
+			}
 			const path = `/environments/${encodeURIComponent(environment.name)}`;
 			const policy = environment.deployment_branch_policy;
 			let reason: string | null = null;
@@ -177,7 +197,7 @@ export async function ciProblems(reads: CIReads, granted: ReadonlySet<CIPermissi
 					if ((pattern.type ?? "branch") !== "branch") continue;
 					const branch = pattern.name.match(QUEUE)?.[1] ?? pattern.name;
 					const safe = WILDCARD.test(branch) ? false : await isProtected(branch);
-					// The failed read is already a warning.
+					// A failed read is already a warning, and running out of reads one below.
 					if (safe === null) unknown = true;
 					else if (!safe) open.push(pattern.name);
 				}
@@ -198,9 +218,9 @@ export async function ciProblems(reads: CIReads, granted: ReadonlySet<CIPermissi
 					`Environment ${environment.name} has ${count(secrets.total_count, "secret")} and ${reason}. Limit its deployment branches to protected branches.`,
 				);
 		}
-		if (listed && listed.total_count > ENVIRONMENTS)
+		if (listed && (stopped || listed.total_count > listed.environments.length))
 			problems.push(
-				`kix checked only the first ${ENVIRONMENTS} of ${listed.total_count} environments. Limit the rest to protected branches too.`,
+				`kix stopped after ${READS} reads of this repository's settings, before checking every environment. Limit each environment with secrets to protected branches.`,
 			);
 	}
 	return problems;

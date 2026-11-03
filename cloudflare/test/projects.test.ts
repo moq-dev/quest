@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
 import { readBoard } from "../src/board/model";
 import { type ActivityPage, associatedQuest, RETENTION, readActivity } from "../src/github/state";
-import { CI_PERMISSIONS, ENVIRONMENTS } from "../src/github/ci";
+import { CI_PERMISSIONS, READS } from "../src/github/ci";
 import { GitHubService } from "../src/github/service";
 import { privateKey } from "./github-key";
 import { identity, oauth, origin } from "./login-fixtures";
@@ -463,20 +463,48 @@ describe("project enrollment", () => {
 			"kix could not read environments; review this project again later.",
 		]);
 	});
-	it("checks a bounded number of environments within Workers Free's 50 external subrequests", async () => {
-		const environments = Array.from({ length: ENVIRONMENTS + 3 }, (_, i) => ({
+	it.each([
+		{
+			name: "many environments",
+			ci: {
+				environments: Array.from({ length: 20 }, (_, i) => ({
+					name: `env-${i}`,
+					policy: ["feature/*"],
+					secrets: 1,
+				})),
+			},
+		},
+		{
+			name: "branch lookups past a full page of protected branches",
+			ci: {
+				protected: Array.from({ length: 100 }, (_, i) => `keep/${i}`),
+				environments: [
+					{ name: "wide", policy: Array.from({ length: 60 }, (_, i) => `other/${i}`), secrets: 1 },
+					{ name: "open", policy: null, secrets: 1 },
+				],
+			},
+		},
+	])("stops a CI check with $name within Workers Free's 50 external subrequests", async ({ ci }) => {
+		const { service, calls } = github({ ci, subrequestLimit: 50 });
+		await service.resolveRepository(repo.owner, repo.name);
+		const preview = await service.previewProject(repo, "enrollment-test");
+		expect(preview.ci.at(-1)).toBe(
+			`kix stopped after ${READS} reads of this repository's settings, before checking every environment. Limit each environment with secrets to protected branches.`,
+		);
+		expect(preview.ci.filter((problem) => problem.startsWith("kix could not"))).toEqual([]);
+		expect(calls.length).toBeLessThanOrEqual(50);
+	});
+	it("does not report a check that spent its last read on its last environment as stopped", async () => {
+		// Four reads before environments, then one for each one's secrets.
+		const environments = Array.from({ length: READS - 4 }, (_, i) => ({
 			name: `env-${i}`,
-			policy: ["feature/*"],
+			policy: null,
 			secrets: 1,
 		}));
-		const { service, calls } = github({ ci: { environments }, subrequestLimit: 50 });
-		await service.resolveRepository(repo.owner, repo.name);
+		const { service } = github({ ci: { environments } });
 		const { ci } = await service.previewProject(repo, "enrollment-test");
-		expect(ci).toHaveLength(ENVIRONMENTS + 1);
-		expect(ci.at(-1)).toBe(
-			`kix checked only the first ${ENVIRONMENTS} of ${ENVIRONMENTS + 3} environments. Limit the rest to protected branches too.`,
-		);
-		expect(calls.length).toBeLessThanOrEqual(50);
+		expect(ci).toHaveLength(READS - 4);
+		expect(ci.filter((problem) => problem.startsWith("kix stopped"))).toEqual([]);
 	});
 	it("shows the CI check on the project's setup page", async () => {
 		const who = identity("github");

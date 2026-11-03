@@ -322,8 +322,9 @@ never writes tags. Required reviewers on an environment do not count: a
 reviewer approves a deployment, not the code a job branch carries.
 
 The check only warns: enabling still works, and jobs still run. A failed read
-becomes a warning of its own. It checks the first 12 environments, so the page
-stays within a Worker's subrequest budget, and says when there are more. It
+becomes a warning of its own. It makes at most 30 reads, so the page stays
+within a Worker's subrequest budget, and says when it stopped before checking
+every environment. It
 does not read workflow files, so the page reminds the maintainer of the rest
 of the rule. An installation that has not accepted the check's permissions
 gets a warning naming them instead of the checks they cover.
