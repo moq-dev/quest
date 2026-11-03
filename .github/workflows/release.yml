@@ -84,6 +84,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps: &check-steps
+      # Spotlight's first full index of the fresh VM holds the load at several
+      # times the CPUs for the whole job; nothing here searches it.
+      - name: Turn off Spotlight indexing
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -123,8 +128,7 @@ jobs:
       - name: Check the binary's lifecycle
         shell: bash
         run: bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest"
-      # The binary gates real commands. A fresh macOS runner's Spotlight index
-      # holds its load above its CPUs, which must not keep a lone command waiting.
+      # The binary gates real commands, which a loaded host must not keep waiting.
       # Ubuntu 22.04's systemd 249 is too old for Quest's scopes, so it checks the
       # process-group fallback.
       - name: Check that the gate admits and owns its command's descendants

@@ -36,7 +36,7 @@ expect_stopped() {
     fi
 }
 
-# The load this ran under, which a fresh hosted macOS runner holds above its CPUs.
+# The load this ran under.
 uptime
 
 status=0
