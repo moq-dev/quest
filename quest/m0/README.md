@@ -85,7 +85,6 @@ ownership-manifest design:
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - lockfile merges, protected edits as ready commits, workflow pushes, and the PR's own CI as context
-- [Landing priority](/quest/m0/land-priority.md) - cheap checks wait a bounded time and the land daemon's check runs ahead of agent builds
 - [Current landing status](/quest/m0/status-landing.md) - `quest status` drops a stale `landing-stopped` line and ignores superseded cancelled checks
 - [Agents don't stall](/quest/m0/agent-stalls.md) - long waits block in the same turn, pre-existing failures don't stop review, and reviewer outages become waits
 - [Follow-ups as agents report](/quest/m0/follow-ups-as-reports.md) - coordinators plan follow-ups as reports arrive, fewer of them, with standing milestone rules

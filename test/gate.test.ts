@@ -31,6 +31,7 @@ import {
 	linuxMemory,
 	type Owner,
 	owner,
+	QUICK_MS,
 	RECENT_MS,
 	SETTLE_MS,
 	scope,
@@ -183,6 +184,70 @@ test("a running admission keeps its slot past the minute, and a finished one exp
 	// A malformed process ID reads as a version cut short.
 	writeFileSync(join(directory, "100"), JSON.stringify([{ id: "a", at: 0, pid: -1 }]));
 	expect(host.ledger()).toEqual({ version: 100, admissions: [] });
+});
+
+test("a priority caller waits for memory, never for load, even while a gated command runs", async () => {
+	const directory = tempDir();
+	const state = { now: 0, load: 99, memory: 0 };
+	const limits = { load: 4, memory: GiB };
+	const events: string[] = [];
+	const host = testHost(directory, state, events);
+	// A build admitted long ago still runs, so an ordinary caller would wait out the load.
+	const build = { id: "build", at: -10 * RECENT_MS, pid: process.pid };
+	expect(host.publish(host.ledger(), [build])).toBe(true);
+	const sleep = host.sleep;
+	host.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		state.memory = 8 * GiB;
+	};
+	await admit(limits, host, signal, (reason) => events.push(reason), { priority: true });
+	expect(events).toEqual(["memory", `sleep ${SETTLE_MS}`]);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: SETTLE_MS, pid: process.pid }]);
+	// Its admission takes headroom from an ordinary caller once the load falls.
+	state.load = 3;
+	const ordinary: string[] = [];
+	await admit(limits, testHost(directory, state, ordinary), signal, (reason) => ordinary.push(reason));
+	expect(ordinary).toEqual([`sleep ${SETTLE_MS}`]);
+});
+
+test("a quick caller starts after at most QUICK_MS, and its admission is recorded", async () => {
+	const directory = tempDir();
+	const state = { now: 0, load: 99, memory: 0 };
+	const events: string[] = [];
+	const host = testHost(directory, state, events);
+	// A build admitted long ago still runs: the load is the gate's own, and its slot survives.
+	const build = { id: "build", at: -10 * RECENT_MS, pid: process.pid };
+	expect(host.publish(host.ledger(), [build])).toBe(true);
+	await admit({ load: 4, memory: GiB }, host, signal, undefined, { quick: true });
+	const sleeps = Array.from({ length: QUICK_MS / SETTLE_MS }, () => `sleep ${SETTLE_MS}`);
+	expect(events).toEqual(sleeps);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: QUICK_MS, pid: process.pid }]);
+	// A sleep that overran shortens the last one, which ends at the deadline.
+	const late = { now: 0, load: 99, memory: 0 };
+	const overran: string[] = [];
+	const slow = testHost(tempDir(), late, overran);
+	const sleep = slow.sleep;
+	slow.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		if (overran.length === 1) late.now += 3000;
+	};
+	await admit({ load: 4, memory: GiB }, slow, signal, undefined, { quick: true });
+	expect(overran.at(-1)).toBe(`sleep ${SETTLE_MS - 3000}`);
+	expect(slow.ledger().admissions).toEqual([{ id: expect.any(String), at: QUICK_MS, pid: process.pid }]);
+});
+
+test("a lone quick or priority caller starts at once on load from outside the gate", async () => {
+	// No gated command runs, so the load is work the gate cannot wait out, whatever the precedence.
+	const state = { now: 0, load: 12, memory: Infinity };
+	const limits = { load: 3, memory: GiB };
+	for (const precedence of [{ quick: true }, { priority: true }]) {
+		const host = { ...testHost(tempDir(), state), running: () => false };
+		host.sleep = async () => {
+			throw new Error("a lone command waited for load it cannot wait out");
+		};
+		await admit(limits, host, signal, undefined, precedence);
+		expect(host.ledger().admissions).toEqual([{ id: expect.any(String), at: 0, pid: process.pid }]);
+	}
 });
 
 test("a burst that all read the ledger before any records admits only what the rule allows", async () => {
@@ -687,6 +752,23 @@ test("the gated command keeps its own flags, even ones Quest also parses", () =>
 	expect(gateBoundary(["gate", "--root", "r", "ls"])).toEqual(["gate", "--root", "r", "--", "ls"]);
 	expect(gateBoundary(["gate", "--root=r", "ls"])).toEqual(["gate", "--root=r", "--", "ls"]);
 	expect(gateBoundary(["gate", "--version"])).toEqual(["gate", "--version"]);
+	// Gate's own option stays Quest's; the same flag after the executable is the command's.
+	expect(gateBoundary(["gate", "--quick", "ls", "--quick"])).toEqual(["gate", "--quick", "--", "ls", "--quick"]);
+	expect(gateBoundary(["gate", "--root", "r", "--quick", "ls"])).toEqual([
+		"gate",
+		"--root",
+		"r",
+		"--quick",
+		"--",
+		"ls",
+	]);
+	expect(gateBoundary(["--quick", "gate", "ls"])).toEqual(["--quick", "gate", "ls"]);
+});
+
+test("gate parses --quick before its command", async () => {
+	vi.stubEnv("QUEST_GATE_ADMITTED", "1");
+	const out = { stdout: () => {}, stderr: () => {} };
+	expect(await main(["gate", "--quick", process.execPath, "-e", "process.exit(4)"], out)).toBe(4);
 });
 
 test("global options after gate keep working", async () => {

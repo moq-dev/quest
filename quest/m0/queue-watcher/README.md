@@ -123,10 +123,10 @@ Shared shape, for the children to follow:
   mechanical fix lands without a new review (maintainer, 2026-10-30). A push
   by anyone else ends the pick, as does a person removing the PR from the
   queue.
-- moq's `merge_group` builds may call `quest gate`; the
-  [landing priority](/quest/m0/land-priority.md) class
-  (`QUEST_GATE_PRIORITY`) lets them admit ahead of agent load, set from moq's
-  workflow or the runner's environment.
+- moq's `merge_group` builds may call `quest gate`; the landing priority
+  class (`QUEST_GATE_PRIORITY=1`, which waits for memory but never for load)
+  lets them admit ahead of agent load, set from moq's workflow or the
+  runner's environment.
 
 ## Required
 
