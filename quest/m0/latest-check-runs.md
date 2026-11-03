@@ -3,7 +3,8 @@
 ## Goal
 
 `quest status`, `quest wait`, and the `quest land` gate judge each check on
-a PR's head by its latest run, as GitHub's required-check rollup does. An
+a PR's head by its latest run, matching the merge state GitHub reported on
+[moq-dev/moq#7325](https://github.com/moq-dev/moq/pull/7325). An
 older run that a newer run of the same check replaced no longer prints,
 counts, wakes a wait, or fails the gate, whether it was cancelled, failed,
 or passed. `quest status`'s `checks` state follows those latest runs, not the
@@ -76,7 +77,13 @@ Decisions made while planning, for review in the PR:
   counts once, so the list would disagree with mergeability.
 - The latest check run is the one created last, the highest `databaseId`.
   A newer run that is still queued has no `startedAt`, but it already makes
-  the check pending. The latest status is the one created last.
+  the check pending. The latest status is the one with the newest
+  `createdAt`; on a tie, the one listed later in the rollup.
+- Every producer fetches the fields the helper needs, since none has them
+  all today: `CheckRun.databaseId` and `checkSuite { app { databaseId } }`
+  on check runs, and `createdAt` on statuses. `status.ts` has none of them,
+  `wait.ts` lacks the check run's id and app, `land.ts` has only the app,
+  and the Worker's `readTarget` query has none.
 - The `checks` state is derived from the latest contexts: `failure` if any
   fails, else `pending` if any is pending, else `success`. With no rollup it
   stays `-`. Keep the line's format; update the README's `checks` row, which
@@ -98,4 +105,4 @@ Tests:
 
 ## Related
 
-- [Current landing status](/quest/m0/status-landing.md) - the other half of the old quest: `quest status` drops a stale `landing-stopped` line
+- [Current landing status](/quest/m0/status-landing.md) - the other half of the old quest: `quest status` clears a stale `landing-stopped` reason

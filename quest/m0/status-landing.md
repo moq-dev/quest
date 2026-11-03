@@ -2,8 +2,9 @@
 
 ## Goal
 
-`quest status` stops printing a `landing-stopped` line once the PR has been
-queued again, including through `quest merge --land`.
+`quest status` prints `landing-stopped -` once the PR has been queued again,
+including through `quest merge --land`, instead of the reason the earlier
+entry ended.
 
 ## Plan
 
@@ -12,7 +13,8 @@ Decided 2026-10-31 (user, /quest-plan of the follow-ups from a moq-dev/moq
 
 - `summarize` in `src/cli/status.ts` takes the last removal, auto-merge
   disable, or ejection comment from the timeline, even if auto-merge was
-  turned on again later. Drop the line when auto-merge's `enabledAt`, or a
+  turned on again later. Report no reason (`landing-stopped -`, as
+  `statusLines` already prints for none) when auto-merge's `enabledAt`, or a
   merge-queue entry, is newer than that event.
 
 Moved from m2 to m0 on 2026-11-01 (user, /quest-plan of the follow-ups from
