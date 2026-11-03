@@ -25,6 +25,7 @@ import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/de
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import {
 	ADMITTED,
+	COLLECTION_ATTEMPTS,
 	collectFixers,
 	validateFix,
 	fixerMarkdown,
@@ -2996,6 +2997,50 @@ fi`);
 		expect(fixture.forge.comment(1)).toContain("head moved while fixing");
 		expect(fixture.jobs()).toEqual([]);
 	});
+	const blameFirst = `printf '[{"number":1,"action":"handback","diagnosis":"breaks the check","recommendation":"run quest-iterate","blame":true},{"number":2,"action":"requeue","reason":"collateral: shared the batch with 1"}]' > quest-land-result.json`;
+	/** `deps` with GitHub failing `fails` reads of PR 1, every one when unset. */
+	const failingPull = (deps: GitHubDependencies, fails = Number.POSITIVE_INFINITY): GitHubDependencies => {
+		const original = deps.fetch;
+		return {
+			...deps,
+			fetch: (async (input, init) => {
+				if (String(input).endsWith("/pulls/1") && (init?.method ?? "GET") === "GET" && fails-- > 0)
+					return Response.json({ message: "Not Found" }, { status: 404 });
+				return original(input, init);
+			}) as typeof fetch,
+		};
+	};
+	test("hands back only the PR whose collection GitHub failed, and keeps the rest of its job's results", async () => {
+		const fixture = await fixerFixture(blameFirst, { collateral: true });
+		await fixture.finished;
+		expect(await fixture.collect(failingPull(fixture.deps, 1))).toEqual(["handback 1", "requeued 2"]);
+		expect(fixture.jobs()).toEqual([]);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("fixer collection failed");
+		const collateral = fixture.collateral!;
+		expect(collateral.landing).toBe(true);
+		expect(fixture.forge.comment(2)).toBeUndefined();
+	});
+	test("sets aside a PR whose collection keeps failing, so the rest of its job goes on", async () => {
+		const fixture = await fixerFixture(blameFirst, { collateral: true });
+		await fixture.finished;
+		const deps = failingPull(fixture.deps);
+		// Each pass retries it once; neither the retry nor the PR behind it counts as another failure.
+		for (let pass = 1; pass < COLLECTION_ATTEMPTS; pass++) {
+			expect(await fixture.collect(deps)).toEqual([]);
+			expect([...parked(fixture.state.state).keys()]).toEqual([1, 2]);
+		}
+		expect(await fixture.collect(deps)).toEqual(["set aside 1", "requeued 2"]);
+		expect(fixture.jobs()).toEqual([]);
+		// It was never handed back: it stays queued as GitHub has it, and rejoins batches.
+		expect(parked(fixture.state.state).size).toBe(0);
+		expect(fixture.pull.landing).toBe(true);
+		expect(fixture.forge.comment(1)).toBeUndefined();
+		const collateral = fixture.collateral!;
+		expect(collateral.landing).toBe(true);
+		expect(collateral.autoMerge?.commitBody).toBe(pin(collateral.head!));
+		expect(fixture.forge.comment(2)).toBeUndefined();
+	});
 	const editJob = (state: string, change: (job: Record<string, unknown>) => void) => {
 		const path = join(
 			state,
@@ -3275,6 +3320,29 @@ ${requeueScript}`);
 			"quoting the command and the output",
 		])
 			expect(fixerPrompt).toContain(text);
+	});
+	test("rebuilds a conflicted lockfile from the base's copy", () => {
+		const prompt = fixerPrompt.replace(/\s+/g, " ");
+		expect(prompt).not.toContain("regenerate lockfiles");
+		for (const text of [
+			"rebuild lockfiles as [Lockfiles](#lockfiles) says",
+			"## Lockfiles",
+			"rebuild it from the base's copy, never from the PR's side",
+			"`git checkout base -- <lockfile>`",
+			"minimal resolve against the merged manifests",
+			"Never run `cargo generate-lockfile`",
+			"`cargo update -p <name> --precise <version>`",
+			"keep the base's version if it is at or past the PR's",
+			"must trace to a dependency or import change in the PR",
+			"Name the lockfiles you rebuilt in the reason.",
+			"Hand back instead of taking either side's copy",
+			"the package manager cannot rebuild the lockfile",
+			"a change does not trace to the PR",
+			"below the base's security bump",
+			"`flake.lock` is a protected path",
+			"rebuild it the same way from the base's copy, with `nix flake lock` as the minimal resolve",
+		])
+			expect(prompt).toContain(text);
 	});
 	test("has the fixer put its comments in the result instead of posting them", () => {
 		for (const text of [
