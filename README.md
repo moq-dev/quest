@@ -793,6 +793,19 @@ handled, so a restart neither misses nor repeats one; a crash between
 commenting and recording finds its own comment's marker and posts nothing. The
 first pass reads the ten minutes before it.
 
+GitHub often leaves a PR whose auto-merge is armed out of the queue once it is
+ready ([community#209348](https://github.com/orgs/community/discussions/209348)),
+as for a pick `quest merge --land` armed while required checks ran. Each pass,
+the watcher enqueues every such PR: open, armed, ready (its merge state is
+`CLEAN`, `HAS_HOOKS`, or `UNSTABLE`: its required checks passed and it does not
+conflict), not in the queue, and not added to it since it was armed. It
+enqueues only the head auto-merge was armed on, with `expectedHeadOid` bound to
+it: GitHub keeps auto-merge across a push, but a push by anyone but the land
+fixer ends the pick, and a head it cannot tell yet waits for the next pass. An
+armed PR whose required checks fail, or that conflicts, is left alone for
+`/quest-iterate` and a new pick. The watcher's own re-enqueues are among these
+picks. A refusal is logged once per pick and retried each pass.
+
 With `--fixer`, the watcher takes each recorded removal, oldest first, while
 its PR still waits as the queue dropped it:
 
@@ -831,9 +844,9 @@ ran, by a writer's push or enqueue, is not applied, and its comment says so.
 
 It shares `quest land serve`'s App key, state directory, private repository,
 and locks, so the two never run for the same repository at once. Without a
-fixer its token asks for `contents: read`, `pull_requests: write`, and
-`actions: read`, which the App needs for the logs. With one it also asks for
-`merge_queues: write`, which `enqueuePullRequest` needs, and `contents: write`,
+fixer its token asks for `contents: read`, `pull_requests: write`,
+`actions: read`, which the App needs for the logs, and `merge_queues: write`,
+which `enqueuePullRequest` needs. With one it also asks for `contents: write`,
 for arming auto-merge and pushing fixes; a push that carries a workflow change
 asks for `workflows: write`.
 
