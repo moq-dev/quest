@@ -72,15 +72,18 @@ export function treeCheckout(entries: TreeEntry[], files: Map<string, string>): 
 /**
  * The maintainer's answer to what the project is working toward, as
  * `quest/README.md`'s Goal: trimmed, with Unix newlines, and with any line that
- * would open a heading escaped, so it stays inside the Goal section.
+ * would make a heading escaped, so it stays inside the Goal section.
  */
 export function setupGoal(text: string): string {
-	return text
-		.replaceAll("\r\n", "\n")
-		.trim()
-		.split("\n")
-		.map((line) => line.replace(/^(\s{0,3})#/, "$1\\#"))
-		.join("\n");
+	return (
+		text
+			.replaceAll("\r\n", "\n")
+			.trim()
+			.split("\n")
+			// An ATX heading opens with `#`; a line of only `=` or `-` underlines the one above as a setext heading.
+			.map((line) => line.replace(/^(\s{0,3})(#|(?:=+|-+)\s*$)/, "$1\\$2"))
+			.join("\n")
+	);
 }
 
 /** What each planned change is for, in the pull request body. */

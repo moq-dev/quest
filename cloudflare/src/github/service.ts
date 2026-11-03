@@ -1308,15 +1308,19 @@ export class GitHubService {
 					throw new PublicationBlocked(
 						`The ${SETUP_BRANCH} branch already exists with commits the App did not write. Delete or rename it on GitHub, then try again.`,
 					);
-				const commit = await branch.commit(
-					base.sha,
-					changes.map((change) => ({
-						path: change.path,
-						content: change.content === null ? null : new TextEncoder().encode(change.content),
-						mode: "100644" as const,
-					})),
-					"chore: set up Quest\n\nWrites what `quest init` installs: skill stubs, quest/README.md, the agent\ninstructions' Quests line, the merge driver's .gitattributes line, and\nClaude Code's worktree hooks.\n",
-				);
+				const files = changes.map((change) => ({
+					path: change.path,
+					content: change.content === null ? null : new TextEncoder().encode(change.content),
+					mode: "100644" as const,
+				}));
+				const message =
+					"chore: set up Quest\n\nWrites what `quest init` installs: skill stubs, quest/README.md, the agent\ninstructions' Quests line, the merge driver's .gitattributes line, and\nClaude Code's worktree hooks.\n";
+				// A retry builds on the default branch's files, but keeps kix's earlier commit as a parent,
+				// so the branch only fast-forwards: a push since the check above makes it fail rather than vanish.
+				const commit =
+					existing === null
+						? await branch.commit(base.sha, files, message)
+						: await branch.commit(existing, files, message, base.sha);
 				const db = this.#env.DB;
 				await db
 					.prepare(
@@ -1326,12 +1330,10 @@ export class GitHubService {
 					)
 					.bind(repo.id, repo.owner, repo.name, installation, commit, userId, Date.now())
 					.run();
-				if (existing === null) {
-					if (!(await branch.move(null, commit)))
-						throw new PublicationBlocked(
-							`The ${SETUP_BRANCH} branch appeared while the setup was being written; try again.`,
-						);
-				} else await branch.reset(commit);
+				if (!(await branch.move(existing, commit)))
+					throw new PublicationBlocked(
+						`The ${SETUP_BRANCH} branch changed while the setup was being written; try again.`,
+					);
 				await db
 					.prepare("UPDATE github_project_setups SET head=?,pending=NULL,updatedAt=? WHERE id=?")
 					.bind(commit, Date.now(), repo.id)

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HOOK_COMMAND, REFERENCE_LINE } from "quest/core";
 import { app } from "../src/index";
 import { STUBS, setupGoal, treeCheckout } from "../src/github/setup";
-import { type Pull, type Repo, type World, fakeGitHub } from "../dev/github";
+import { type Pull, type Repo, type World, fakeGitHub, intercept } from "../dev/github";
 import { privateKey } from "./github-key";
 import { delivery } from "./project-fixtures";
 import { identity, oauth, origin } from "./login-fixtures";
@@ -18,6 +18,7 @@ let session: string;
 let user: string;
 let project: Repo;
 let world: World;
+let github: typeof fetch;
 
 beforeEach(async () => {
 	const who = identity("github");
@@ -47,7 +48,8 @@ beforeEach(async () => {
 		],
 	};
 	project = world.repos[0]!;
-	vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(world));
+	github = fakeGitHub(world);
+	vi.spyOn(globalThis, "fetch").mockImplementation(github);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -181,6 +183,32 @@ describe("the setup pull request", () => {
 		expect(second.closed).toBeFalsy();
 	});
 
+	it("refuses a retry when someone pushes to the branch while it is written", async () => {
+		await post("/setup", { id: "10" });
+		const [first] = opened();
+		first!.closed = true;
+		const earlier = project.branches["kix/setup"]!;
+		// A maintainer's push lands after the ownership check, while the new commit is created.
+		const theirs = "f".repeat(40);
+		project.commits[theirs] = { parents: [earlier], tree: project.commits[earlier]!.tree, message: "mine" };
+		vi.mocked(globalThis.fetch).mockImplementation(
+			intercept(
+				github,
+				(url, method) => method === "POST" && url.pathname.endsWith("/git/commits"),
+				async (next) => {
+					const response = await next();
+					project.branches["kix/setup"] = theirs;
+					return response;
+				},
+			),
+		);
+		const response = await post("/setup", { id: "10" });
+		expect(response.status).toBe(403);
+		expect(await response.text()).toContain("changed while the setup was being written");
+		expect(project.branches["kix/setup"]).toBe(theirs);
+		expect(opened().filter((pull) => !pull.closed)).toEqual([]);
+	});
+
 	it("enables from the page when the merge webhook was missed", async () => {
 		await post("/setup", { id: "10" });
 		const [pull] = opened();
@@ -209,5 +237,7 @@ describe("the setup plan on GitHub", () => {
 
 	it("keeps a goal inside the Goal section", () => {
 		expect(setupGoal("  One\r\n## Required\n   ### Deep\n")).toBe("One\n\\## Required\n   \\### Deep");
+		expect(setupGoal("Ship a parser\n---\nThen more\n===  ")).toBe("Ship a parser\n\\---\nThen more\n\\===");
+		expect(setupGoal("- a list item\n-- not a rule")).toBe("- a list item\n-- not a rule");
 	});
 });
