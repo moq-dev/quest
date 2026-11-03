@@ -10,7 +10,7 @@ import { move, remove } from "../src/core";
 import { openPullRequests } from "../src/cli/claims";
 import { GitHub, type GitHubDependencies } from "../src/cli/github";
 import { main } from "../src/cli/main";
-import { EPIC_README, ROOT_README, Tree, initRepository } from "./fixture";
+import { EPIC_README, ROOT_README, Tree, initRepository, tempDir } from "./fixture";
 
 // Each test spawns git up to a dozen times, which a busy Windows runner can stretch past 5 s.
 vi.setConfig({ testTimeout: 30_000 });
@@ -414,6 +414,20 @@ describe("quest check --fix", () => {
 		for (const target of ["two.md", "nope.md", "one.md"]) {
 			expect(out.stderr).toContain(`link does not resolve: /quest/m0/epic/${target}`);
 		}
+	});
+
+	test("reads deletions relative to a tree nested in its repository", async () => {
+		const repo = tempDir();
+		const tree = new Tree(join(repo, "nested"));
+		Tree.baseline().copy(tree.path);
+		committed(new Tree(repo));
+		git(repo, "rm", "-q", "nested/quest/m0/epic/one.md");
+		git(repo, "commit", "-q", "-m", "finish one");
+		expect(await quest(tree, "check", "--fix")).toEqual({
+			code: 0,
+			stdout: "M quest/m0/epic/README.md\nM quest/m0/epic/two.md\nquest: 4 documents ok\n",
+			stderr: "",
+		});
 	});
 
 	test("refuses while a quest file has unresolved conflicts", async () => {

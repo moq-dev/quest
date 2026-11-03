@@ -132,7 +132,20 @@ export function fixLinks(root: string): string[] {
 	const heads = ["HEAD", "MERGE_HEAD"].filter((ref) => verified(root, ref));
 	if (heads.length === 0) return [];
 	const deleted = new Set(
-		git(root, "log", "--diff-filter=D", "--find-renames", "--name-only", "--format=", "-z", ...heads, "--", "quest")
+		// `--relative` names paths from `root`, as the tree's links do, when the tree is nested in its repository.
+		git(
+			root,
+			"log",
+			"--relative",
+			"--diff-filter=D",
+			"--find-renames",
+			"--name-only",
+			"--format=",
+			"-z",
+			...heads,
+			"--",
+			"quest",
+		)
 			.split("\0")
 			.filter(isQuest),
 	);
