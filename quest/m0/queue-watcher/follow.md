@@ -1,39 +1,44 @@
-# [M] The public host-gate repositories follow moq to the merge queue
+# [S] Verify the public repositories' merge queues land PRs
 
 ## Goal
 
-Deploy GitHub's merge queue and the async fixer for moq-dev/quest, rind and
-rust2. Each repository's `Queue` workflow checks one merge group at a time,
-and its host daemon runs `quest land watch` with the existing fixer.
-Verify a fork PR lands through the queue.
+Condition: moq-dev/rind and moq-dev/rust2 have each landed a PR through
+their merge queue, and a fork PR has landed through any of the three. Check
+each with `gh pr list -R moq-dev/<repo> --state merged` and the
+`merge_group` runs on its `<repo>-queue` runner. Fix whatever a first merge
+group exposes, as moq-dev/quest's did. Then delete this quest.
 
 ## Plan
 
-Decided 2026-11-02 (maintainer): moq's live queue and fixer are proven;
-convert the three other public host-gate repositories now. The scope is
-quest, rind and rust2. The private repository stays on its host gate.
+Decided 2026-11-02 (maintainer): moq's live queue and fixer are proven, so
+quest, rind and rust2 convert now. The private repository stays on its host
+gate.
 
-The migration introduces `.github/workflows/queue.yml` in each repository,
-updates its landing documentation, and adds isolated runners and watcher
-configuration in kixelated/nixos. Complete the operational cutover after
-those workflows land:
+The cutover was done on 2026-11-03 (user, /quest-complete):
 
-- Keep the existing picks and their head SHAs; do not pick previously
-  unqueued PRs or a head that moved after approval.
-- Remove the leftover `quest:merge` labels from the old gate first, such as
-  those on [moq-dev/quest#324](https://github.com/moq-dev/quest/pull/324) and
-  [moq-dev/rust2#446](https://github.com/moq-dev/rust2/pull/446),
-  [#442](https://github.com/moq-dev/rust2/pull/442) and
-  [#437](https://github.com/moq-dev/rust2/pull/437), none of which has
-  auto-merge armed. An older pinned `quest` still reads them as holds
-  (decided 2026-11-02, user, /quest-plan; the pin itself is
-  [Merge driver upkeep](/quest/m0/merge-driver-upkeep.md)'s).
-- Require `Queue` and a serialized squash merge queue in each `main`
-  ruleset, replacing `quest land` and the old PR-side checks. Keep the
-  administrator emergency bypass; remove the fixer's direct-merge bypass.
-- Activate the host's watcher configuration in place of each batching
-  daemon, keeping its user, state directory and fixer launcher.
-- Report the skipped `Queue` context on existing picked heads whose PR
-  workflows predate it, then enqueue those exact heads.
-- Verify each queue runs its merge-group checks and lands a PR. Verify a
-  fork PR too, since GitHub now owns the fork landing path.
+- Workflows: [moq-dev/quest#397](https://github.com/moq-dev/quest/pull/397),
+  [moq-dev/rind#266](https://github.com/moq-dev/rind/pull/266) and
+  [moq-dev/rust2#457](https://github.com/moq-dev/rust2/pull/457).
+- Host: [kixelated/nixos#19](https://github.com/kixelated/nixos/pull/19)
+  was deployed through the host's `deploy/quest-land` branch, adding the
+  `nixos-{quest,rind,rust2}-ci` runners in their own org runner groups and
+  switching each daemon to `quest land watch`. The first merge group showed
+  the runner's read-only cgroupfs refusing `quest gate`'s `cgroup.kill`,
+  fixed in #19.
+- Rulesets: each `main` requires only `Queue`, with a squash merge queue
+  that builds and merges one entry at a time (`ALLGREEN`, 90-minute
+  timeout). The moq-bot bypass is gone; role bypasses stay.
+- No repository had an armed pick to carry over. rust2's `quest:merge`
+  labels belonged to picks its gate was still landing; each leaves the
+  label when its PR merges or leaves the queue.
+- moq-dev/quest landed
+  [moq-dev/quest#400](https://github.com/moq-dev/quest/pull/400), which adds
+  util-linux (`flock`, `script`) to the dev shell, since the NixOS runner has
+  neither and its first merge groups failed the tests.
+- The watcher handled its first drops as designed: the queue dropped
+  [moq-dev/quest#324](https://github.com/moq-dev/quest/pull/324) for both
+  runner gaps, the fixer traced each to the environment and re-enqueued it
+  unchanged, and it landed on the third merge group.
+
+rind's and rust2's first merge groups may hit similar runner gaps, since
+GitHub's Ubuntu runners preinstall tools their dev shells may not declare.
