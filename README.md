@@ -379,7 +379,8 @@ present (except `quest land`'s, which no head carries), and every required
 check passed; it names the last required check that passed and is dated when
 the head went idle. Each prints once per head, with the check's name
 (spaces as `_`) in the actor field and its details URL. Results count as
-`quest status` counts them, so neutral and skipped results pass. Each job of a
+`quest status` counts them, so neutral and skipped results pass and a rerun
+supersedes an earlier run of the same check. Each job of a
 workflow a ruleset requires is required.
 Requiredness comes from the base branch's protection and rulesets, readable
 with read access. A failed optional check prints separately as `check:failed`,
@@ -455,8 +456,8 @@ comes last, and a missing value prints as `-`:
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
-| `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when. |
-| `checks` | The head's rollup state and `passed=`, `failing=`, `pending=` counts. |
+| `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
+| `checks` | `failure` if any check fails, else `pending` if any is pending, else `success`, and `passed=`, `failing=`, `pending=` counts, all from each check's latest run; `-` when the head has no checks. |
 | `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
@@ -465,7 +466,11 @@ comes last, and a missing value prints as `-`:
 | `starter-hold` | A draft its starter owns: last activity time, PR URL, and `last active` age. Last activity is not when ownership began. |
 
 The node ID is what GraphQL's `addPullRequestReviewThreadReply` and
-`resolveReviewThread` take. Neutral and skipped checks pass. A required check
+`resolveReviewThread` take. Neutral and skipped checks pass. Only each check's
+latest run counts, as for GitHub's mergeability: a rerun, or the same workflow
+run again on the head, supersedes an earlier run of that name from the same
+app, and a newer commit status supersedes an older one of its context. GitHub's
+own rollup state counts the superseded runs too. A required check
 is one branch protection or a ruleset requires for this PR. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
@@ -676,7 +681,8 @@ quest links with `quest resolve`. A failed batch halves the next batch's size,
 down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
 additions stay queued. A PR whose required checks are still running stays queued
-and sits out batches until they pass. If any are still pending two hours after
+and sits out batches until they pass; only each check's latest run counts, as in
+`quest status`. If any are still pending two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
 bisection: success lands one squash commit per PR. A failure, or a base that

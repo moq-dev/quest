@@ -85,8 +85,6 @@ ownership-manifest design:
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
-- [Checks are judged by their latest run](/quest/m0/latest-check-runs.md) - `quest status`, `quest wait`, and the gate count each check's latest run on the head, as GitHub does, so a superseded cancelled or failed run stops failing them or refusing release-plz PRs GitHub would merge
-- [Current landing status](/quest/m0/status-landing.md) - `quest status` clears a stale `landing-stopped` reason once the PR is queued again
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - report concurrent `rmSync` `EFAULT` on Windows, and drop the workaround once Bun fixes it
