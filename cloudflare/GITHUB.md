@@ -377,7 +377,8 @@ and decision inbox. It links the registered App's installation URL and lists
 the repositories to pick from: those the App's installations reach and the
 user administers or maintains, each with its contribution state, an Enable
 button, or why it cannot be enabled yet (archived, private, no Quest files,
-or no OSI-approved license). A repository without Quest files links `/setup`.
+or no OSI-approved license). A repository without Quest files enables through
+its [setup pull request](#setup-pull-request).
 
 The picker is navigation, built from the user's own GitHub App token so its
 cost does not grow with an installation's size: one read of the user's
@@ -412,8 +413,9 @@ external request per file. Blob IDs come from the pinned Git tree; missing,
 binary, truncated, partial, or hash-mismatched content fails closed. This keeps
 enrollment's external request count independent of the number of quest files.
 It rejects private,
-unavailable, incomplete, invalid, and symlinked quest snapshots. Repositories
-without Quest files follow `/setup`; no repository writes occur during setup.
+unavailable, incomplete, invalid, and symlinked quest snapshots. A repository
+without Quest files gets the App's [setup pull request](#setup-pull-request)
+instead; nothing else in enrollment writes to the repository.
 
 The D1 enrollment records a project-wide enabled/paused state, distinct from
 installation permissions. Every opt-in/resume, pause, and disconnect rechecks
@@ -462,6 +464,48 @@ See the official [GitHub license API](https://docs.github.com/en/rest/licenses/l
 [Git trees API](https://docs.github.com/en/rest/git/trees#get-a-tree),
 [GraphQL blobs](https://docs.github.com/en/graphql/reference/git#blob), and
 [App metadata API](https://docs.github.com/en/rest/apps/apps#get-the-authenticated-app).
+
+### Setup pull request
+
+On a repository whose default branch has no Quest files, **Enable** opens a
+short form holding one optional question: what the project is working toward.
+Submitting it opens the App's setup pull request, with no runner involved
+(`src/github/setup.ts`). The core's `planInit`, the same file plan
+`quest init` applies to a checkout, plans it from the default branch's tree:
+the skill stubs this deployment's `quest` ships (rendered into
+`build/stubs.json` at build time), `quest/README.md` with the answer as its
+Goal, the `Quests: ` line in the root agent instructions, the `.gitattributes`
+line, and Claude Code's hook entries in `.claude/settings.json`. The answer is
+escaped so it cannot open a heading. A path init would refuse, such as a skill
+directory that is not a Quest stub or invalid settings JSON, is named on the
+page and nothing is written; kix never deletes or renames a repository's
+files. The plan does not follow symlinks, since a Git tree stores their targets
+as data: one on a planned path is refused the same way, pointing at running
+`quest init` in a clone.
+
+The App publishes the plan as for job branches: blobs, a tree, and a commit
+through the Git Data API on `kix/setup`, outside the quest claim namespace,
+then a ready pull request against the default branch. Its body lists each
+change and what it leaves out, because those steps need judgement about the
+repository: pinning `quest` in its tool manager and adapting existing
+instructions. kix's jobs need neither, since runners bring their own `quest`.
+Without a `flake.nix`, the body says the `bootstrap` job adds one after the
+merge.
+
+Until the pull request merges the project is enrolled, setting up
+(`github_project_setups`), which the project page and picker show with the pull
+request's link. Every open, retry, and enable rechecks the maintainer's
+authority, the repository's visibility, and its license live. A `pull_request`
+webhook that closes or reopens it only asks the service to look: it rereads the
+pull request and, once merged, enables contributions through the same live
+checks as **Enable**, including `quest check` on the merged tree, with the
+enroller's authority, so no second visit is needed. The project page reconciles
+the same way when a webhook was missed, and keeps the reason when enabling
+fails. A pull request closed without merging leaves the project setting up,
+offering to open it again from the current default branch or to disconnect.
+Opening again replaces `kix/setup` only while it is still at a commit the App
+recorded writing there; a branch with anyone else's commits is refused, naming
+it. Disconnecting leaves the pull request and its branch on GitHub.
 
 The setup preview does not reserve or launch ready quests.
 The jobs/funding quests own live eligibility checks and contribution execution.
