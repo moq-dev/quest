@@ -5,6 +5,7 @@ import { env } from "cloudflare:workers";
 import { vi } from "vitest";
 import { app } from "../src/index";
 import { identity, oauth } from "./login-fixtures";
+import { owner } from "./owners";
 
 const db = env.DB;
 export const commit = "a".repeat(40);
@@ -222,7 +223,7 @@ export async function maintainerOf() {
 			return Response.json({
 				id: 10,
 				name: "project",
-				owner: { login: "upstream" },
+				owner: { login: "upstream", id: owner },
 				private: false,
 				visibility: "public",
 				default_branch: "trunk",
@@ -271,7 +272,11 @@ export async function maintainerOf() {
 	return { user, cookie, github, mock };
 }
 
-/** Deliver a signed GitHub webhook, and finish the background read it asks for. */
+/**
+ * Deliver a signed GitHub webhook, and finish the background read it asks for.
+ * A payload's repository and installation come from the admitted test owner
+ * unless they name one, as `owner.id` and `account.id`.
+ */
 export async function delivery(
 	event: string,
 	payload: unknown,
@@ -279,7 +284,7 @@ export async function delivery(
 	changes: Record<string, string> = {},
 	bindings: Env = env,
 ) {
-	const body = typeof payload === "string" ? payload : JSON.stringify(payload);
+	const body = typeof payload === "string" ? payload : JSON.stringify(admit(payload));
 	const key = await crypto.subtle.importKey(
 		"raw",
 		new TextEncoder().encode(env.GITHUB_WEBHOOK_SECRET),
@@ -303,4 +308,12 @@ export async function delivery(
 	);
 	await waitOnExecutionContext(ctx);
 	return response;
+}
+
+function admit(payload: unknown) {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+	const { repository, installation } = payload as Record<string, unknown>;
+	const from = (value: unknown, key: string) =>
+		value && typeof value === "object" && !(key in value) ? { ...value, [key]: { id: owner } } : value;
+	return { ...payload, repository: from(repository, "owner"), installation: from(installation, "account") };
 }

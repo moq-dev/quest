@@ -14,8 +14,8 @@ import {
 	mainCheckout,
 } from "./worktree";
 
-/** The Claude Code events `quest worktree hook` handles, in the order `quest init` installs them. */
-export const HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"] as const;
+// The events this handles are the core's HOOK_EVENTS, which `quest init` installs.
+export { HOOK_EVENTS } from "../core";
 
 /** The fields of a Claude Code hook's JSON input that these events read. */
 interface HookInput {
@@ -80,19 +80,67 @@ function base(cwd: string): string {
 }
 
 /**
+ * The head of the pull or merge request a checkout named `pr-<number>` is for, or undefined when origin
+ * has none. Claude names the worktree for `--worktree '#<number>'` or a request's URL `pr-<number>` and
+ * passes the hook only that name, so a literal `pr-<number>` gets the request's head too. Like Claude,
+ * it reads origin's `refs/pull/<number>/head` (GitHub) and `refs/merge-requests/<number>/head` (GitLab),
+ * refusing the request when origin has both at different commits. The head is fetched into
+ * `origin/pr/<number>` or `origin/mr/<number>`, so removing the checkout counts its commits as preserved.
+ */
+function pullRequest(cwd: string, name: string): string | undefined {
+	const number = /^pr-([1-9][0-9]*)$/.exec(name)?.[1];
+	if (number === undefined) return undefined;
+	try {
+		git(cwd, "remote", "get-url", "origin");
+	} catch {
+		return undefined;
+	}
+	const tracking = new Map([
+		[`refs/pull/${number}/head`, `refs/remotes/origin/pr/${number}`],
+		[`refs/merge-requests/${number}/head`, `refs/remotes/origin/mr/${number}`],
+	]);
+	const heads = new Map<string, string>();
+	for (const line of git(cwd, "ls-remote", "origin", ...tracking.keys()).split("\n")) {
+		const [sha, ref] = line.split("\t");
+		if (sha && ref && tracking.has(ref)) heads.set(ref, sha);
+	}
+	if (new Set(heads.values()).size > 1)
+		throw new Error(
+			`origin has both ${[...tracking.keys()].join(" and ")} at different commits, so it is unclear which is #${number}; ` +
+				"delete the one your forge does not create",
+		);
+	const [ref] = heads.keys();
+	if (ref === undefined) return undefined;
+	const local = tracking.get(ref)!;
+	git(cwd, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", `+${ref}:${local}`);
+	return git(cwd, "rev-parse", "--verify", "--quiet", `${local}^{commit}`);
+}
+
+/** Claude's name for a workflow agent's worktree, `<run ID>-<agent number>`, which carries no agent ID. */
+const WORKFLOW_CHECKOUT = /^wf_[0-9a-f]{8}-[0-9a-f]{3}-[0-9]+$/;
+
+/**
  * The checkout Claude created for this subagent. Claude names a subagent's worktree `agent-<agent_id>`,
- * so a subagent that runs without isolation in another agent's checkout never matches it.
+ * so a subagent that runs without isolation in another agent's checkout never matches it. A workflow
+ * agent's worktree is named for its run instead, so it is bound to the first subagent that starts in
+ * it, which is the workflow agent itself; one that later runs there without isolation never matches.
  */
 async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise<WorktreeRecord | undefined> {
 	const path = toplevel(input.cwd);
 	const record = path === undefined ? undefined : await waiting(() => worktrees.registered(path));
-	return record?.name === `agent-${field(input, "agent_id")}` ? record : undefined;
+	const agent = field(input, "agent_id");
+	if (record?.name === `agent-${agent}`) return record;
+	if (record === undefined || !WORKFLOW_CHECKOUT.test(record.name)) return undefined;
+	const bound =
+		input.hook_event_name === "SubagentStart" ? await waiting(() => worktrees.bind(record.id, agent)) : record;
+	return bound.agent === agent ? bound : undefined;
 }
 
 /**
  * Handle one hook event and return what it prints on stdout, if anything. WorktreeCreate checks
- * out Claude's default base under the main checkout's `.worktrees/`, with derived defaults, and
- * prints its path; an existing checkout of that name in the repository is restored instead.
+ * out Claude's default base, or a pull request's head for `pr-<number>`, under the main checkout's
+ * `.worktrees/`, with derived defaults, and prints its path; an existing checkout of that name in the
+ * repository is restored instead.
  * WorktreeRemove removes the checkout, never forcing. SubagentStop releases the subagent's own
  * checkout, and SubagentStart restores it, telling the subagent when its scratch was deleted.
  */
@@ -103,9 +151,13 @@ export async function claudeHook(input: unknown, worktrees: Worktrees, merged: M
 			const name = field(hook, "name");
 			const main = mainCheckout(hook.cwd);
 			const existing = await waiting(() => worktrees.registered(join(main, ".worktrees", name)));
-			if (existing?.name === name) return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;
+			if (existing?.name === name) {
+				// Claude reuses a name, such as a resumed workflow run's, for an agent that binds afresh.
+				await waiting(() => worktrees.bind(existing.id));
+				return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;
+			}
 			const { reserve, scratch } = derivedDefaults(main);
-			const ref = base(hook.cwd);
+			const ref = pullRequest(hook.cwd, name) ?? base(hook.cwd);
 			return `${(await waiting(() => worktrees.create(main, name, reserve, ref, scratch))).path}\n`;
 		}
 		case "WorktreeRemove": {

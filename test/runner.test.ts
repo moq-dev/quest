@@ -38,7 +38,15 @@ import type { Job } from "../src/runner/protocol";
 import type { Round } from "../src/cli/review";
 import { type ReviewRequest, reviewerFor, Unreviewable } from "../src/runner/review";
 import { Runner } from "../src/runner/runner";
-import { REGISTRIES, type Sandbox, closeSandbox, openSandbox } from "../src/runner/sandbox";
+import {
+	REGISTRIES,
+	type Sandbox,
+	bwrapProfile,
+	closeSandbox,
+	openSandbox,
+	refusalReason,
+	sandboxRefusal,
+} from "../src/runner/sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "../src/runner/wait";
 import { Workspace } from "../src/runner/workspace";
 import { initRepository, template, tempDir } from "./fixture";
@@ -1142,6 +1150,46 @@ describe("runner adapters", () => {
 		expect(() => adapter("opencode")).toThrow(/srt is not installed/);
 		install("srt");
 		expect(adapter("opencode")).toBeInstanceOf(Opencode);
+	});
+
+	test.skipIf(process.platform !== "linux")("refuse to start when bubblewrap cannot make the sandbox", () => {
+		const bin = join(tempDir(), "bin");
+		mkdirSync(bin);
+		for (const [name, script] of [
+			["claude", ""],
+			["socat", ""],
+			// What the Nix-pinned bwrap says under Ubuntu's restriction on unprivileged user namespaces.
+			["bwrap", "echo 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' >&2\nexit 1\n"],
+		] as const) {
+			writeFileSync(join(bin, name), `#!/bin/sh\n${script}`);
+			chmodSync(join(bin, name), 0o755);
+		}
+		const bwrap = join(realpathSync(bin), "bwrap");
+		expect(() => runnerAdapters({ PATH: bin })("claude")).toThrow(
+			`${bwrap} cannot make the sandbox's namespaces (bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted)`,
+		);
+		expect(sandboxRefusal(join(bin, "claude"))).toBeNull();
+		// Under AppArmor's restriction, the refusal carries the profile for the runner package's exact bwrap.
+		const said = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
+		const pinned = "/nix/store/mvj6y8k3xs35cj7kq937xi44q4hl3r93-bubblewrap-0.12.0/bin/bwrap";
+		const restricted = refusalReason(pinned, said, true);
+		expect(restricted).toContain(
+			`sudo tee /etc/apparmor.d/quest-bwrap >/dev/null <<'EOF'\n${bwrapProfile(pinned)}EOF\n`,
+		);
+		expect(restricted).toMatch(/\nsudo apparmor_parser -r \/etc\/apparmor.d\/quest-bwrap$/);
+		expect(bwrapProfile(pinned)).toContain(`profile quest-bwrap ${pinned} flags=(unconfined) {\n  userns,\n}`);
+		// A system bwrap may have the distribution's profile, which a second one would disable.
+		const system = refusalReason("/usr/bin/bwrap", said, true);
+		expect(system).toContain("nix run github:moq-dev/quest#runner -- runner");
+		expect(system).not.toContain("apparmor_parser");
+		const unrestricted = refusalReason(pinned, said, false);
+		expect(unrestricted).toContain("needs unprivileged user namespaces");
+		expect(unrestricted).not.toContain("AppArmor");
+	});
+
+	test("document the AppArmor profile the runner prints", () => {
+		const readme = readFileSync(resolve(import.meta.dirname, "../README.md"), "utf8");
+		expect(readme).toContain(bwrapProfile("/nix/store/HASH-bubblewrap-VERSION/bin/bwrap"));
 	});
 });
 

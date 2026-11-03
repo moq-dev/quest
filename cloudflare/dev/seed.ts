@@ -218,6 +218,7 @@ export function world(): World {
 	return {
 		app: { id: 123, slug: "quest-dev" },
 		installation: 9201,
+		owner: 9301,
 		users: [{ id: 9001, login: "dev-maintainer", name: "Dev Maintainer", email: "maintainer@example.test" }],
 		repos: [rocket, archive],
 	};
@@ -303,7 +304,7 @@ export async function seed(options: { fetch: Fetch; db: D1Database; world: World
 	const body = JSON.stringify({
 		action: "opened",
 		installation: { id: world.installation },
-		repository: { id: rocket.id },
+		repository: { id: rocket.id, owner: { id: world.owner } },
 		issue: { id: Number(databaseId(rocket, pointer.number)), number: pointer.number },
 	});
 	await expect(

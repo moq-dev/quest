@@ -26,7 +26,8 @@ async function seeded(edit: (world: World) => void = () => {}) {
 	// Webhooks read and notify in the background, so each request finishes its `waitUntil` work.
 	const request = async (path: string, init?: RequestInit) => {
 		const ctx = createExecutionContext();
-		const response = await app.request(`${origin}${path}`, init, testEnv, ctx);
+		// The seed's owner, rather than the deployed allowlist, as the local server admits.
+		const response = await app.request(`${origin}${path}`, init, { ...testEnv, ENROLL_OWNERS: [data.owner] }, ctx);
 		await waitOnExecutionContext(ctx);
 		return response;
 	};
