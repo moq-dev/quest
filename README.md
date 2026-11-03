@@ -191,7 +191,9 @@ It pushes an empty claim commit, built on the upstream default branch, to the
 quest's branch (its path without `.md`), then opens a draft PR
 from it right away and prints the PR's URL. It switches your checkout to the
 claim on a new local branch, or fast-forwards that branch if it is already
-checked out. A fork pushes to itself and opens the PR on its upstream, found
+checked out. A local branch left from an earlier attempt is not moved: the
+claim still succeeds, with a warning to switch to it and merge the claim
+commit. A fork pushes to itself and opens the PR on its upstream, found
 as for `unblocked --unclaimed`, so a fork with its own quests claims on
 itself. It reads
 readiness from the upstream default branch it builds on, not your checkout. It
