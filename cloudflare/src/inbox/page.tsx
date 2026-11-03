@@ -32,6 +32,7 @@ export type InboxProps = {
 const recorded: Record<Done, string> = {
 	answer: "Answer recorded.",
 	approve: "Answer approved.",
+	trust: "Head approved.",
 	start: "Job requested.",
 	stop: "Stop requested.",
 	skip: "Skipped until it changes.",
@@ -47,6 +48,7 @@ function needLabel(item: Item) {
 	}
 	if (item.need === "account") return "Account limited";
 	if (item.need === "approve") return "Answer to approve";
+	if (item.need === "trust") return "Head to approve";
 	if (item.need === "retry") return "Failed";
 	if (item.need === "start") {
 		if (item.skipped && item.job) return `${kinds[item.kind]} · job ${item.job.state}`;
@@ -64,6 +66,8 @@ function progress(item: Item, runners: Runners, user: string) {
 		return "Its starter holds this draft. It waits on you once they mark it ready or hand back decisions.";
 	if (!job || item.need === "start") return null;
 	const whose = job.actor === user ? "your" : "the requester's";
+	if (item.need === "trust")
+		return "Not every commit of this head carries a current maintainer's signature, such as commits kix pushed, so no runner takes it yet.";
 	if (job.state === "queued")
 		return runners.some((r) => r.online)
 			? "Queued for the next free runner."
@@ -172,6 +176,33 @@ function Approval(props: { item: Item }) {
 			<form method="post" action={`${jobsURL(item)}/${item.job!.id}/approve`} class="decision-form">
 				<input type="hidden" name="question" value={item.question!.id} />
 				<button class="button primary">Approve and resume</button>
+			</form>
+		</section>
+	);
+}
+
+/** Approve the exact head on screen, after reviewing its commits beyond the default branch. */
+function HeadApproval(props: { item: Item }) {
+	const { item } = props;
+	const head = item.head!;
+	return (
+		<section class="summary">
+			<h3>Approve this head?</h3>
+			<p>
+				Review <a href={head.compare}>its commits beyond the default branch</a>, ending at{" "}
+				<code>{head.sha.slice(0, 12)}</code>.
+			</p>
+			<p class="note-small muted">
+				Runners build and run an approved head on their own machine, outside a VM. The approval covers only this
+				commit: it lapses when the head moves, and counts only while you keep a maintain or admin role.
+			</p>
+			<form
+				method="post"
+				action={`${projectURL(item.project.owner, item.project.name)}/${item.target}/approve`}
+				class="decision-form"
+			>
+				<input type="hidden" name="head" value={head.sha} />
+				<button class="button primary">Approve this head</button>
 			</form>
 		</section>
 	);
@@ -540,6 +571,7 @@ function Thread(props: {
 			)}
 			<History item={item} />
 			{item.need === "approve" && <Approval item={item} />}
+			{item.need === "trust" && <HeadApproval item={item} />}
 			{(item.need === "answer" || item.need === "account" || item.need === "approve") &&
 				(item.question?.kind === "account" ? (
 					<AccountForm item={item} runners={runners} />
