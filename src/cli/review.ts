@@ -8,7 +8,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { dirname, join, posix } from "node:path";
 
 import { type HarnessName, LINE_LIMIT, boundedLines, strippedEnvironment } from "./agent";
 import { gitOutput } from "./claims";
@@ -17,6 +17,8 @@ import { save } from "./worktree";
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
 export class ReviewInputError extends Error {}
+/** `--responses` is missing after a round with findings, or given with no round to answer. */
+export class ResponsesError extends ReviewInputError {}
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
 
@@ -696,6 +698,11 @@ function defaultBranch(root: string, remote: string): string {
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
 
+/** Where a branch's review session is kept, under the clone's common Git directory `common`. */
+export function sessionFile(common: string, branch: string): string {
+	return join(common, "quest", "review", `${digest(branch)}.json`);
+}
+
 function load(path: string): State | undefined {
 	try {
 		return JSON.parse(readFileSync(path, "utf8")) as State;
@@ -726,17 +733,17 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		);
 	}
 
-	const dir = join(gitOutput(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), "quest", "review");
+	const statePath = sessionFile(gitOutput(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
+	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
-	const statePath = join(dir, `${digest(branch)}.json`);
 	const stored = load(statePath);
 	const state = options.fresh || stored?.reviewer !== harness ? undefined : stored;
 	const previous = state?.rounds.at(-1);
 	if (previous === undefined && options.responses !== undefined) {
-		throw new ReviewInputError("--responses answers a previous round, and this branch has none to resume");
+		throw new ResponsesError("--responses answers a previous round, and this branch has none to resume");
 	}
 	if (previous !== undefined && previous.findings > 0 && options.responses === undefined) {
-		throw new ReviewInputError(
+		throw new ResponsesError(
 			`the last round reported ${previous.findings} finding(s); pass --responses with a fix or refutation for each`,
 		);
 	}

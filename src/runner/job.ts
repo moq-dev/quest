@@ -5,6 +5,8 @@
 // attempt reports nothing, since the job is no longer this attempt's.
 import { randomUUID } from "node:crypto";
 
+import { type Round, ResponsesError } from "../cli/review";
+
 import type { Adapter, Exit, Running } from "./adapter";
 import { Refused } from "./connection";
 import type { Account } from "./home";
@@ -13,6 +15,7 @@ import { serveTools } from "./mcp";
 import { OutputUploader } from "./output";
 import { resumePrompt, startPrompt, systemPrompt } from "./prompt";
 import { type Job, type Message, type Outcome, clip } from "./protocol";
+import { formatFindings, type ReviewRequest, reviewerFor, Unreviewable } from "./review";
 import { type Sandbox, closeSandbox, openSandbox } from "./sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "./wait";
 import { Workspace } from "./workspace";
@@ -37,6 +40,10 @@ export interface Context {
 	request(message: Message): Promise<Record<string, unknown>>;
 	/** `POST /api/runner/publish`, returning its status and JSON body. */
 	publish(body: unknown): Promise<{ status: number; body: Record<string, unknown> }>;
+	/** Review a head the job published with the other vendor's model, as `quest review` does. */
+	review(request: ReviewRequest): Promise<Round>;
+	/** `POST /api/runner/review`: kix records a review round as the App's `quest review` check run. */
+	reviewed(body: unknown): Promise<{ status: number; body: Record<string, unknown> }>;
 	/** `GET /api/runner/context`: the job's issue or pull request as kix reads it from GitHub. */
 	context(job: string, attempt: number): Promise<unknown>;
 	/** Record that the provider refused `account` until `until`, or for an unknown time. */
@@ -67,8 +74,13 @@ function followupsOf(value: unknown): string[] {
 }
 
 type Pull = { title: string; body: string; draft: boolean };
+/** How the runner's review of a delivered head went: passed, found something, or did not count. */
+type Reviewed = { passed: boolean | null; note: string };
 type Land = { method?: "merge" | "squash" | "rebase" };
 
+/** How a delivery is reviewed, as the deliver tool describes it. */
+const REVIEWS =
+	"the runner reviews the head kix committed with the other vendor's model, as `quest review` does, and returns its findings";
 const PAUSED = "kix paused this job on a decision for the maintainer. End your turn now without further work.";
 const STOPPED = "This job is no longer this session's. End your turn now without further work.";
 
@@ -93,6 +105,9 @@ export class Attempt {
 
 	#session: string;
 	#workspace: Workspace | undefined;
+	#account: Account | undefined;
+	/** Heads this attempt's reviews passed, which a delivery of the same head does not review again. */
+	#passed = new Set<string>();
 	#agent: Running | undefined;
 	/** Aborts the devShell build, which runs before there is an agent to stop. */
 	#preparing = new AbortController();
@@ -187,6 +202,7 @@ export class Attempt {
 				return await this.#finish("failed", `The account ${job.account} is no longer on this runner.`);
 			// Before any checkout: an account added while the runner runs may lack its CLI or sandbox.
 			const adapter = ctx.adapter(account);
+			this.#account = account;
 			this.#workspace = await Workspace.prepare(ctx.root, job, ctx.remote(job));
 			if (this.#workspace.preserved)
 				ctx.log(
@@ -397,6 +413,76 @@ export class Attempt {
 		return next;
 	}
 
+	/**
+	 * Review a head a delivery published, unless the job did not publish it,
+	 * its pull request stays a draft, or this attempt already passed it. The
+	 * runner, not the agent, runs the review and reports it to kix, which
+	 * records it as the App's `quest review` check run on the head.
+	 */
+	async #review(
+		published: { head: string | null; pull?: Delivery["pull"] },
+		responses: string | undefined,
+	): Promise<Reviewed> {
+		const { job, ctx } = this;
+		const head = published.head;
+		// A head the job started from is someone else's to review, and a draft is not ready for one.
+		if (!head || head === job.revision || published.pull?.draft) return { passed: null, note: "" };
+		if (this.#passed.has(head)) return { passed: true, note: "" };
+		const short = head.slice(0, 7);
+		const unreviewed = (why: string) => {
+			ctx.log(`${job.id}: ${short} unreviewed: ${why}`);
+			return {
+				passed: null,
+				note: `The runner did not review ${short}: ${why}. Landing it needs a maintainer's approval on GitHub instead.`,
+			};
+		};
+		let round: Round;
+		try {
+			const reviewer = reviewerFor(this.#account!, ctx.accounts(), (a) => ctx.home(a), ctx.env);
+			round = await ctx.review({ workspace: this.#workspace!, head, reviewer, responses });
+		} catch (error) {
+			if (error instanceof ResponsesError)
+				throw new Error(
+					responses === undefined
+						? "The last review round reported findings: deliver again with `responses`, saying how you fixed or refuted each one."
+						: "There is no earlier review round to answer: deliver again without `responses`.",
+				);
+			return unreviewed(
+				error instanceof Unreviewable ? error.message : `its review failed: ${(error as Error).message}`,
+			);
+		}
+		if (round.head !== head) return unreviewed(`its review checked out ${round.head} instead`);
+		const by = `${round.reviewer} (${round.model}, ${round.effort} effort, round ${round.round})`;
+		let recorded = "";
+		try {
+			const { status, body } = await ctx.reviewed({
+				job: job.id,
+				attempt: job.attempt,
+				head,
+				reviewer: round.reviewer,
+				model: round.model,
+				effort: round.effort,
+				round: round.round,
+				findings: round.findings,
+			});
+			if (status !== 200) throw new Error(typeof body.error === "string" ? body.error : `kix answered ${status}`);
+		} catch (error) {
+			ctx.log(`${job.id}: kix did not record the review of ${short}: ${(error as Error).message}`);
+			recorded = ` kix did not record it as the \`quest review\` check (${(error as Error).message}), so landing it needs a maintainer's approval on GitHub.`;
+		}
+		if (!round.findings.length) {
+			if (!recorded) this.#passed.add(head);
+			return {
+				passed: recorded ? null : true,
+				note: `The runner's review of ${short} by ${by} found nothing.${recorded || " kix recorded it as the passing `quest review` check."}`,
+			};
+		}
+		return {
+			passed: false,
+			note: `The runner's review of ${short} by ${by} found ${round.findings.length} finding${round.findings.length === 1 ? "" : "s"}.${recorded || " kix recorded it as a failing `quest review` check."} Fix each one or refute it with evidence the reviewer cannot rebut (a path:line, a command's output, or a recorded maintainer decision), then call \`deliver\` again with \`responses\` saying what you did for each. Follow the guide's review rules, including its design checkpoint every fourth round.\n\n${formatFindings(round.findings)}`,
+		};
+	}
+
 	/** Publish work in progress; true when kix paused the job instead. */
 	async #save(message: string): Promise<boolean> {
 		if (!this.#workspace) return false;
@@ -585,10 +671,10 @@ export class Attempt {
 				name: "deliver",
 				description:
 					job.workflow === "merge"
-						? "Land the pull request once its decisions are settled: kix publishes the working tree to its head, then lands exactly that head through GitHub, enabling auto-merge bound to it or merging at once. End your turn after."
+						? `Land the pull request once its decisions are settled: kix publishes the working tree to its head, then ${REVIEWS}, and kix lands exactly that head through GitHub unless the review found something, enabling auto-merge bound to it or merging at once. End your turn after, unless the review found something.`
 						: job.workflow === "iterate"
-							? "Deliver the finished work: kix publishes the working tree to the pull request's head. End your turn after."
-							: "Deliver the finished work: kix publishes the working tree and opens or updates the job's pull request. End your turn after.",
+							? `Deliver the finished work: kix publishes the working tree to the pull request's head, then ${REVIEWS}. End your turn after, unless the review found something.`
+							: `Deliver the finished work: kix publishes the working tree and opens or updates the job's pull request, then, unless it stays a draft, ${REVIEWS}. End your turn after, unless the review found something.`,
 				inputSchema: {
 					type: "object",
 					properties: {
@@ -610,6 +696,11 @@ export class Attempt {
 								description: "Keep the pull request a draft while decisions or unfinished work remain",
 							},
 						}),
+						responses: {
+							type: "string",
+							description:
+								"Your fixes and refutations of the last review round's findings, one per finding; required after a round that found any",
+						},
 						followups: {
 							type: "array",
 							maxItems: FOLLOWUPS.count,
@@ -636,21 +727,35 @@ export class Attempt {
 						throw new Error("method is one of merge, squash, or rebase");
 					const land: Land | undefined = job.workflow === "merge" ? (method ? { method } : {}) : undefined;
 					const followups = followupsOf(args.followups);
-					const published = await this.#publish(
-						typeof args.message === "string" && args.message.trim() ? args.message : subject(text),
-						{ pull, land },
-					);
+					const responses =
+						args.responses === undefined ? undefined : string(args.responses, "responses", 60_000);
+					const commit =
+						typeof args.message === "string" && args.message.trim() ? args.message : subject(text);
+					// The work is published first, so the runner reviews the head kix committed before anything lands.
+					const published = await this.#publish(commit, { pull });
 					if (!published) return PAUSED;
-					this.#delivered = {
+					const delivery = (landed?: Delivery["landed"]): Delivery => ({
 						summary: text,
 						head: published.head,
 						...(published.pull && { pull: published.pull }),
-						...(published.landed && { landed: published.landed }),
+						...(landed && { landed }),
 						...(followups.length && { followups }),
-					};
-					if (published.landed)
-						return `${published.landed.merged ? "Merged" : "Landing: auto-merge is enabled, or the pull request is queued"}. End your turn now.`;
-					return `Delivered${published.pull ? `: ${published.pull.url}` : ""}. End your turn now.`;
+					});
+					const reviewed = await this.#review(published, responses);
+					const note = reviewed.note ? `\n\n${reviewed.note}` : "";
+					if (reviewed.passed === false) {
+						// The work is on its pull request, but not landed or finished until the review passes.
+						if (!land) this.#delivered = delivery();
+						return `${land ? "Not landed" : `Delivered${published.pull ? `: ${published.pull.url}` : ""}`}, but the review needs your fixes or refutations before you end your turn.${note}`;
+					}
+					if (land) {
+						const landing = await this.#publish(commit, { land });
+						if (!landing) return PAUSED;
+						this.#delivered = delivery(landing.landed);
+						return `${landing.landed?.merged ? "Merged" : "Landing: auto-merge is enabled, or the pull request is queued"}. End your turn now.${note}`;
+					}
+					this.#delivered = delivery();
+					return `Delivered${published.pull ? `: ${published.pull.url}` : ""}. End your turn now.${note}`;
 				},
 			},
 		];

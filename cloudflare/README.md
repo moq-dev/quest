@@ -171,7 +171,11 @@ decision. The current attempt of a job on an issue or pull request reads it at
 current authority: an issue's text and comments, or a pull request's text,
 comments, reviews, unresolved review threads, and checks at its head. A new
 plan's attempt reads its `idea` and `context` there instead. [GITHUB.md](GITHUB.md#publication) describes the request, its
-validation, and how interrupted publications are reconciled.
+validation, and how interrupted publications are reconciled. After a delivery,
+the runner reviews the head the job published with the other vendor's model
+and reports the round at `POST /api/runner/review`, which kix records as the
+App's `quest review` check run on that commit
+([GITHUB.md](GITHUB.md#runner-reviews)).
 
 ### Raw output
 

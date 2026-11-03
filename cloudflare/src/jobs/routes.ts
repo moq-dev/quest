@@ -10,6 +10,7 @@ import * as output from "./output";
 import { formAnswer, parseAnswer, parsePrompt } from "./prompt";
 import { data, id, text } from "./protocol";
 import { HeadMoved, LIMITS, parsePublication, publish, pullOf, restart, validateContinuation } from "./publish";
+import { parseReview, recordReview } from "./review";
 import * as store from "./store";
 import { JobError } from "./store";
 
@@ -135,6 +136,17 @@ jobs.post("/api/runner/publish", async (c) => {
 	if (result.asked && !result.cancel) c.executionCtx.waitUntil(push.job(c.env, input.job, "publication"));
 	const { decision, cancel } = result;
 	return c.json({ decision, cancel }, 202);
+});
+
+// The runner reports its own review of a head the job published, which kix
+// records as the App's `quest review` check run on that commit.
+jobs.post("/api/runner/review", async (c) => {
+	const runner = await machine(c);
+	if (!runner) return c.json({ error: "Runner token required" }, 401);
+	const length = Number(c.req.header("Content-Length"));
+	if (!Number.isSafeInteger(length) || length > 2 * 1024 * 1024)
+		return c.json({ error: "A Content-Length of at most 2 MiB is required" }, 413);
+	return c.json(await recordReview(c.env, runner, parseReview(await json(c))));
 });
 
 // The current attempt of a job on an issue or pull request reads its target
