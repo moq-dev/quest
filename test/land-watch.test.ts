@@ -94,6 +94,8 @@ interface World {
 	unreadable?: (pull: Pull) => boolean;
 	/** PRs whose push activity GitHub has not listed yet. */
 	unlisted?: number[];
+	/** Called on each read of a PR's push activity, as a change GitHub makes while the watcher reads it. */
+	onActivity?: (pull: Pull) => void;
 	/** GitHub's refusal of an enqueue of `pull`, if it refuses one. */
 	refuseEnqueue?: (pull: Pull) => string | undefined;
 }
@@ -315,6 +317,7 @@ function deps(world: World): GitHubDependencies {
 			const activity = /^\/repos\/upstream\/project\/activity$/.exec(path);
 			if (activity) {
 				const pull = world.pulls.find((item) => `branch-${item.number}` === url.searchParams.get("ref"))!;
+				world.onActivity?.(pull);
 				return Response.json(world.unlisted?.includes(pull.number) ? [] : pushes(world, pull));
 			}
 			throw new Error(`unexpected request: ${path}`);
@@ -696,6 +699,24 @@ test("a refused enqueue of an armed pick is reported once and retried, and says 
 	refusing = false;
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([`enqueued 30 ${HEAD}`]);
 	expect(JSON.parse(readFileSync(join(state, "watch.json"), "utf8")).refused).toEqual({});
+});
+
+test("an armed pick withdrawn or retargeted while the pass reads it is not enqueued", async () => {
+	const state = tempDir();
+	const github = world([
+		{ number: 32, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		{ number: 33, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		{ number: 34, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+	]);
+	github.now = Date.parse(at(4));
+	github.onActivity = (pull) => {
+		if (pull.number === 32) pull.armed = undefined;
+		if (pull.number === 33) pull.base = "release";
+		// Disabled and armed again: a new pick, which the next pass weighs on its own.
+		if (pull.number === 34) pull.armed = at(3);
+	};
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toEqual([]);
 });
 
 test("the watcher's tokens ask for writes only with a fixer, and pushes for workflows only when they carry one", () => {

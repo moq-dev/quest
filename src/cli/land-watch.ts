@@ -221,12 +221,15 @@ async function pickOf(
  * auto-merge was armed, by a writer or by the watcher's own re-enqueue, that is now ready but was
  * neither in the queue nor added to it since. Only the head auto-merge was armed on is enqueued, with
  * `expectedHeadOid` bound to it: GitHub keeps auto-merge across a writer's push, but that push ends the
- * pick, and a head `enabledHead` cannot tell yet waits for the next pass. An armed pick whose required
+ * pick, and a head `enabledHead` cannot tell yet waits for the next pass. The PR is read again just
+ * before the enqueue, so a request disabled or a PR retargeted since the pass read it is not enqueued,
+ * which `expectedHeadOid` alone would not catch. An armed pick whose required
  * checks fail, or that conflicts, is not ready and is left alone. A refusal is reported once per pick
  * and retried each pass; one because GitHub queued the PR first says nothing.
  */
 async function enqueueArmed(
 	github: GitHub,
+	base: string,
 	pulls: ObjectValue[],
 	progress: Progress,
 	note: (text: string) => void,
@@ -245,6 +248,17 @@ async function enqueueArmed(
 		);
 		if (enqueues.some((node) => typeof node.createdAt === "string" && node.createdAt >= armed)) continue;
 		if ((await enabledHead(github, pull, note)) !== head) continue;
+		const now = await readPull(github, string(pull.id));
+		const request = now.autoMergeRequest == null ? null : object(now.autoMergeRequest);
+		if (
+			now.state !== "OPEN" ||
+			string(now.baseRefName) !== base ||
+			string(now.headRefOid) !== head ||
+			now.mergeQueueEntry != null ||
+			request === null ||
+			string(request.enabledAt) !== armed
+		)
+			continue;
 		try {
 			await github.graphql(
 				`mutation($id: ID!, $sha: GitObjectID!) {
@@ -625,7 +639,7 @@ export async function watchPass(
 			save(path, progress);
 		}
 	}
-	output.push(...(await enqueueArmed(github, pulls, progress, (text) => output.push(text))));
+	output.push(...(await enqueueArmed(github, ref, pulls, progress, (text) => output.push(text))));
 	// The next pass reads from SETTLE before this one's start; nothing older can come back.
 	const kept = new Date(Date.parse(started) - SETTLE).toISOString();
 	for (const [number, handled] of Object.entries(progress.handled)) {
