@@ -648,8 +648,7 @@ type Permissions = Record<string, "read" | "write">;
  * queue, which `enqueuePullRequest` needs `merge_queues: write` for; with a fixer it also re-enqueues,
  * which needs `contents: write` for arming auto-merge, edits the PR body's Review, and reads the PR's
  * own checks for the fixer (`checks: read` and `statuses: read`). `push` lease-pushes a fix or merge,
- * and `pushWorkflows` one that carries
- * a workflow change, as `quest land serve` does; `read` fetches.
+ * and `pushWorkflows` one that carries a workflow change, as `quest land serve` does; `read` fetches.
  */
 export function watchPermissions(fixing: boolean): {
 	api: Permissions;
