@@ -2,8 +2,8 @@
 paths:
   - "**/AGENTS.md"
   - "CONTRIBUTING.md"
-  - "PROMPTING.md"
+  - "assets/**"
   - ".claude/skills/**"
 ---
 
-Before editing these instructions, read `PROMPTING.md` at the repository root.
+Before editing these instructions, follow Prompting in `quest context`.

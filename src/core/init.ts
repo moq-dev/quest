@@ -18,7 +18,7 @@ export const PREFIX = "quest-";
 export const REFERENCE_MARKER = "Quests: ";
 
 /** Appended to the root agent instructions when Quest is installed. */
-export const REFERENCE_LINE = "Quests: before starting work, run `quest guide` and follow it.";
+export const REFERENCE_LINE = "Quests: before starting work, run `quest context` and `quest guide`, and follow both.";
 
 /** The skill directories Claude Code and Codex read; new installs use real directories. */
 export const SKILL_DIRS = [".claude/skills", ".agents/skills"] as const;

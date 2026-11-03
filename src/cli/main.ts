@@ -55,7 +55,7 @@ import { type ResolveOptions, resolveFile } from "./resolve";
 import { MODELS, ReviewInputError, processDependencies as reviewDependencies, review, roundLines } from "./review";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
-import { GUIDE, SKILLS, skill } from "./skills";
+import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
 import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
 import { pullRequestStatus, statusLines } from "./status";
@@ -1181,6 +1181,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("guide")
 		.description("Print the quest guide: the format, workflow, and rules agents follow")
 		.action(() => out.stdout(GUIDE));
+
+	program
+		.command("context")
+		.description("Print the engineering rules agents follow in every task, before the repository's own")
+		.action(() => out.stdout(CONTEXT));
 
 	program
 		.command("skill")

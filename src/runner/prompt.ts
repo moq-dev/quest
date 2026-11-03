@@ -1,4 +1,4 @@
-// What a job's agent is told. The workflow comes from the quest guide and
+// What a job's agent is told. The workflow comes from the engineering context, quest guide, and
 // skills this binary ships, given in full rather than as a slash command the
 // CLI might not know and would then read as plain text. The repository's own
 // instructions are loaded explicitly, since the sandboxed CLI loads none.
@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { GUIDE, skill } from "../cli/skills";
+import { CONTEXT, GUIDE, skill } from "../cli/skills";
 import type { Job, Prompt, Question } from "./protocol";
 
 /**
@@ -106,7 +106,7 @@ function task(job: Job): string {
 /** The workflow's own instructions, from the skills this binary ships. */
 function workflow(job: Job): string {
 	const name = { start: "start", iterate: "iterate", merge: "merge", plan: "plan", bootstrap: null }[job.workflow];
-	const parts = [`# Quest guide\n\n${GUIDE.trim()}`];
+	const parts = [`# Engineering context\n\n${CONTEXT.trim()}`, `# Quest guide\n\n${GUIDE.trim()}`];
 	if (name) parts.push(`# The ${name} workflow\n\n${skill(name)!.body.trim()}`);
 	if (job.workflow === "plan" || job.workflow === "iterate")
 		parts.push(`# The grill workflow\n\n${skill("grill")!.body.trim()}`);
@@ -131,7 +131,7 @@ export function startPrompt(job: Job, instructions: string | null, dir: string):
 	const answered = job.questions.filter((q) => q.kind === "agent" && q.answer !== null);
 	if (answered.length) parts.push(`The maintainer already decided:\n\n${answered.map(formatAnswer).join("\n\n")}`);
 	parts.push(
-		"The quest guide and the workflow's skill are below in full, so you do not need the `quest` CLI to read them.",
+		"The engineering context, the quest guide, and the workflow's skill are below in full, so you do not need the `quest` CLI to read them.",
 	);
 	const repo = repositoryInstructions(dir);
 	if (repo) parts.push(`# Repository instructions\n\n${repo}`);
