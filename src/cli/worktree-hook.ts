@@ -11,6 +11,7 @@ import {
 	Worktrees,
 	canonical,
 	derivedDefaults,
+	discoveryEnv,
 	mainCheckout,
 } from "./worktree";
 
@@ -55,7 +56,11 @@ async function waiting<T>(action: () => T | Promise<T>): Promise<T> {
 }
 
 function git(path: string, ...args: string[]): string {
-	return execFileSync("git", ["-C", path, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	return execFileSync("git", ["-C", path, ...args], {
+		encoding: "utf8",
+		env: discoveryEnv(),
+		stdio: ["ignore", "pipe", "pipe"],
+	}).trim();
 }
 
 /** The top of the checkout holding `cwd`, or undefined outside any. */

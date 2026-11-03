@@ -53,12 +53,31 @@ interface Registry {
 /** Another live process holds the registry lock. */
 export class Busy extends Error {}
 
+let located: string[] | undefined;
+/**
+ * The environment for Git run on an explicit `-C` path. The repository-local variables a Git hook or
+ * `git submodule foreach` exports, such as GIT_DIR and GIT_WORK_TREE, override discovery from that
+ * path, so they are dropped as Git drops them when it runs in another repository, keeping `-c` config.
+ */
+export function discoveryEnv(): NodeJS.ProcessEnv {
+	located ??= execFileSync("git", ["rev-parse", "--local-env-vars"], { encoding: "utf8" })
+		.split("\n")
+		.filter((name) => name && name !== "GIT_CONFIG_PARAMETERS" && name !== "GIT_CONFIG_COUNT");
+	const env = { ...process.env };
+	for (const name of located) delete env[name];
+	return env;
+}
 function git(root: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", root, ...args], {
 		encoding: "utf8",
+		env: discoveryEnv(),
 		maxBuffer: 64 * 1024 * 1024,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
+}
+/** Git that may wait on the network, run without blocking concurrent hooks and commands. */
+function gitAsync(root: string, ...args: string[]): Promise<unknown> {
+	return promisify(execFile)("git", ["-C", root, ...args], { env: discoveryEnv(), maxBuffer: 64 * 1024 * 1024 });
 }
 /** Write `value` as JSON, user-only, replacing `path` atomically. */
 export function save(path: string, value: unknown): void {
@@ -132,6 +151,7 @@ function ignored(root: string, paths: string[]): Set<string> {
 	try {
 		const output = execFileSync("git", ["-C", root, "check-ignore", "-z", "--stdin"], {
 			encoding: "utf8",
+			env: discoveryEnv(),
 			input: `${paths.join("\0")}\0`,
 			stdio: ["pipe", "pipe", "pipe"],
 		});
@@ -591,17 +611,11 @@ export class Worktrees {
 		});
 		try {
 			// Cloning can need the network; the reservation stays charged without holding the shared lock.
-			await promisify(execFile)("git", ["-C", record.path, "submodule", "update", "--init", "--recursive"], {
-				maxBuffer: 64 * 1024 * 1024,
-			});
+			await gitAsync(record.path, "submodule", "update", "--init", "--recursive");
 			for (const module of submodules(record.path)) {
 				const untracked = (ref: string) => git(module, "rev-list", "-n1", ref, "--not", "--remotes").trim();
 				const fetch = (refs: string[]) =>
-					promisify(execFile)(
-						"git",
-						["-C", module, "fetch", "--no-tags", "--no-write-fetch-head", "origin", ...refs],
-						{ maxBuffer: 64 * 1024 * 1024 },
-					);
+					gitAsync(module, "fetch", "--no-tags", "--no-write-fetch-head", "origin", ...refs);
 				// Named tag refs work even when the server refuses unadvertised SHA wants.
 				// Keep preservation refs outside origin's branch-prune namespace.
 				const tags = git(module, "for-each-ref", "--format=%(refname)", "refs/tags")

@@ -351,6 +351,33 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(existsSync(join(nested, "cache"))).toBe(false);
 		expect(readFileSync(join(nested, "file"), "utf8")).toBe("local work");
 	});
+	it("ignores inherited Git location variables that select a submodule", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const sub = repository(join(root, "sub"));
+		git(repo, "submodule", "add", "--quiet", sub, "sub");
+		git(repo, "commit", "-am", "submodule");
+		const module = join(repo, "sub");
+		// A Git hook or `git submodule foreach` running the session exports these for the submodule.
+		const store = git(module, "rev-parse", "--absolute-git-dir");
+		vi.stubEnv("GIT_DIR", store);
+		vi.stubEnv("GIT_WORK_TREE", module);
+		vi.stubEnv("GIT_INDEX_FILE", join(store, "index"));
+		const path = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: module, name: "agent-located" },
+			worktrees,
+			async () => false,
+			repo,
+		))!.trim();
+		expect(path).toBe(join(canonical(repo), ".worktrees", "agent-located"));
+		expect(readFileSync(join(path, "sub", "file"), "utf8")).toBe("original\n");
+		const [record] = worktrees.status().records;
+		expect(record.repository).toBe(canonical(repo));
+		// Removal inspects the checkout itself, not the submodule the variables name.
+		writeFileSync(join(path, "file"), "local work");
+		await expect(worktrees.remove(record.id)).rejects.toThrow("checkout has modified or untracked files:  M file");
+		expect(readFileSync(join(path, "file"), "utf8")).toBe("local work");
+	});
 	it("protects a live creation without giving interrupted-checkout removal advice", async () => {
 		const { repo, worktrees } = fixture();
 		const creation = worktrees.create(repo, "live", 10_000_000);
