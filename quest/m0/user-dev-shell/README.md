@@ -48,8 +48,19 @@ install `quest` on Claude's `PATH`):
   clone matches its own default branch. A fork PR head can change another
   file the dev shell runs, such as moq.pro's `dev/mbx-shim.sh`. Both were
   auto-allowed in a reproduction against the merged hook.
-  [The allow rule](/quest/m0/user-dev-shell/allow-rule.md) narrows it to
-  trusted repositories and reviewed code.
+  Decided 2026-11-03 (maintainer, /quest-complete), after weighing the
+  risk as narrow: a session rooted at an outside contributor's fork head,
+  which the guide already says never to run, since agents check untrusted
+  heads out under `.tmp/` rather than as a session root, and an agent
+  session in any checkout runs its code anyway. ✅ One cheap guard: the
+  hook also requires `HEAD` to be on some `origin` branch
+  (`git for-each-ref --contains HEAD refs/remotes/origin/`), so a fork PR
+  head is never auto-allowed (rejected: an owner allowlist, a clean tree,
+  and a tracked `.envrc` on top; matching the whole tree to the merge base;
+  an owner allowlist alone; leaving it as is). Shipped in
+  [kixelated/dotfiles#35](https://github.com/kixelated/dotfiles/pull/35)
+  and live on `desktop` and `nixos2`, where a fresh worktree of moq-dev/moq
+  still loads and one on an unpushed commit is refused.
 - AGENTS.md instructions to run tools through `nix develop`? ✅ Remove them in
   all five repositories once the user-level hooks are on every host the
   maintainer runs agents on (rejected: this repository only; keeping them as
@@ -62,6 +73,5 @@ moq-dev/moq's `.codex/hooks/direnv.sh`.
 
 ## Required
 
-- [The dev-shell hook allows only trusted, reviewed checkouts](/quest/m0/user-dev-shell/allow-rule.md) - the user-level hook's automatic `direnv allow` skips other repositories' clones and fork PR heads
 - [quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md) - `quest init` stops writing hook entries and removes the ones it or a wrapper wrote; the docs describe the hooks as user-level opt-in
 - [Repositories drop dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - quest, moq, moq.pro, rind, and rust2 drop their dev-shell hooks, Quest worktree hooks, and `nix develop` instructions
