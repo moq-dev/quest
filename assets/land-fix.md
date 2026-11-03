@@ -30,11 +30,16 @@ mechanical fix on its own branch, or hand it back with diagnosis and recommendat
 Allowed fixes: preserve both sides' intent in conflicts, format/lint, regenerate
 generated files, rebuild lockfiles as [Lockfiles](#lockfiles) says, or follow a
 base rename. Merge base where practical.
-Never edit flake.nix, flake.lock, shell.nix, default.nix, nix/, .envrc, .github/,
-.gitmodules, or gitlinks (submodule entries) anywhere. Merging the base may carry
-the base's own changes to those paths: that is allowed when they come out exactly as
-a plain `git merge` of the base leaves them, with no conflict there for you to edit. Never push or contact
-GitHub. Anything needing behavior changes or review must be handed back.
+flake.nix, flake.lock, shell.nix, default.nix, nix/, .envrc, .github/, .gitmodules,
+and gitlinks (submodule entries) anywhere are protected. Merging the base may carry
+the base's own changes to those paths: that is no edit of yours when they come out
+exactly as a plain `git merge` of the base leaves them, with no conflict there for you
+to edit. Prefer a fix that leaves them alone. When the mechanical fix itself must
+edit one, such as a conflict there that a resolution preserving both sides settles,
+make it and report it `fixed`, naming the protected paths it edits in the reason:
+quest land never pushes it, but hands the PR back with your commit ready for a
+maintainer to review and apply. Never push or contact GitHub. Anything needing
+behavior changes or review must be handed back.
 
 Build tools may fetch the dependencies the repository's manifests and lockfiles
 name: from their package registries, such as crates.io, npm, PyPI, and the Go
@@ -112,7 +117,40 @@ when:
   below the base's security bump, or the base moved a package below the PR's
   version: keeping either version is a behavior decision, not a mechanical fix.
 
-`flake.lock` is a protected path: this section does not let you edit it.
+`flake.lock` is a protected path. When the fix must edit it, as the protected-path
+rule above allows, rebuild it the same way from the base's copy, with
+`nix flake lock` as the minimal resolve.
+
+## Flaky tests
+
+A failure is flaky when it comes and goes with no cause in the PR or the base,
+such as a timeout under load: requeue the PR unchanged and name the test in its
+`failure`. The input may list the repository's known flaky tests, each by the
+`failure` an earlier round named and the `merge_group` jobs that showed it.
+When the test you judge flaky is one of them, name it exactly as listed, and
+disable it in a commit of its own: create a `disable` branch from `base`, and
+commit on it only
+
+- the skip, in the test framework's own form, whose reason names the follow-up
+  quest, such as `#[ignore = "flaky: /quest/m0/flaky/<name>.md"]` in Rust,
+  `test.skip` with that path in a comment in JavaScript, or
+  `pytest.mark.skip(reason="flaky: /quest/m0/flaky/<name>.md")` in Python;
+- that follow-up quest, `quest/m0/flaky/<name>.md`, with `<name>` the test's
+  name in lowercase kebab-case, whose Goal says to fix the test or delete it
+  and links each listed job and this failure's, which the failure log names;
+- its link in the `Required` list of `quest/m0/flaky/README.md`, the epic
+  holding one quest per disabled test, created with a link in
+  `quest/m0/README.md`'s `Required` if it is missing.
+
+Follow the repository's quest format, and run `quest check` when the
+repository has it. A disabled test that is another quest's acceptance test
+leaves that quest as it is: the test still counts as its work. Build the
+package the skip is in, and add the branch's full SHA to the PR's entry:
+{"number":123,"action":"requeue","reason":"healthy; flaky test","failure":"cargo test -p moq-relay: interop::render_timeout","disable":"full 40-character SHA"}
+quest land opens the commit as a pull request of its own and enqueues it. Never
+disable a test that is not listed. When the repository keeps no `quest/m0/`, or
+the skip needs a protected path or more than a mechanical edit, requeue
+without `disable`.
 
 ## Blame
 

@@ -32,6 +32,30 @@ export { type Blocker, blockers, label, lookup, ready, renderBlocker } from "./r
 export { type Finding, ROOT, check, formatFinding } from "./rules";
 export { type RankedQuest, type Ranking, type WaitingQuest, ranking, unblocked, waiting } from "./unblocked";
 export { MAINTAINER, WAITING, type Wait, onMaintainer, parseWait, waits } from "./waiting";
+export {
+	ATTRIBUTES_LINE,
+	CLAUDE_SETTINGS,
+	type Checkout,
+	HOOK_COMMAND,
+	HOOK_EVENTS,
+	type InitChange,
+	InitRefused,
+	type Kind,
+	PREFIX,
+	REFERENCE_LINE,
+	REFERENCE_MARKER,
+	SKILL_DIRS,
+	type Settings,
+	type Stub,
+	installedStubs,
+	isQuestHook,
+	lines,
+	newline,
+	parseSettings,
+	planInit,
+	questReadme,
+	renderSettings,
+} from "./init";
 export { type Chunk, type Clean, type Conflict, LABELS, chunks, render, resolveLists } from "./merge";
 
 export {
