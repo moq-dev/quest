@@ -416,6 +416,10 @@ function run(
 	signal?: AbortSignal,
 ) {
 	return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason);
+			return;
+		}
 		let program: string;
 		try {
 			program = requireProgram(argv[0], env);
@@ -427,14 +431,21 @@ function run(
 			cwd,
 			env: programEnvironment(env),
 			stdio: ["pipe", "pipe", "pipe"],
-			// An abort kills the CLI, and the turn fails with Node's AbortError.
-			signal,
 		});
 		const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 		const handlers = signals.map((name) => [name, () => child.kill(name)] as const);
 		for (const [name, handler] of handlers) process.on(name, handler);
+		// An abort stops the CLI, killing it after a grace period, and the turn fails once it has exited.
+		let killing: ReturnType<typeof setTimeout> | undefined;
+		const abort = () => {
+			child.kill("SIGTERM");
+			killing = setTimeout(() => child.kill("SIGKILL"), ABORT_GRACE_MS);
+		};
+		signal?.addEventListener("abort", abort, { once: true });
 		const done = () => {
 			for (const [name, handler] of handlers) process.off(name, handler);
+			signal?.removeEventListener("abort", abort);
+			clearTimeout(killing);
 		};
 		let stderr = "";
 		const lines = boundedLines(LINE_LIMIT, (line) => reader?.line(line));
@@ -451,10 +462,14 @@ function run(
 		});
 		child.once("close", (code) => {
 			done();
-			resolve({ code: code ?? 1, stderr });
+			if (signal?.aborted) reject(signal.reason);
+			else resolve({ code: code ?? 1, stderr });
 		});
 	});
 }
+
+/** How long an aborted reviewer CLI has to exit before it is killed. */
+const ABORT_GRACE_MS = 10_000;
 
 /** The reviewer CLI with the environment it runs in and the error for a login the API rejects. */
 interface Cli {

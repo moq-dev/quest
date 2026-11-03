@@ -79,6 +79,8 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CL
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT ? 1 : 0);
 if (process.env.FAKE_HANG) {
+	// It takes a while to exit when asked to, as a CLI saving its session does.
+	process.on("SIGTERM", () => setTimeout(() => process.exit(143), 300));
 	fs.writeFileSync(process.env.FAKE_HANG, String(process.pid));
 	setInterval(() => {}, 1000);
 	return;
@@ -343,16 +345,8 @@ fakes("an abort stops the reviewer's turn and records no round", async () => {
 	while (!existsSync(pid)) await new Promise((resolve) => setTimeout(resolve, 20));
 	controller.abort();
 	await expect(round).rejects.toThrow(/abort/i);
-	const alive = () => {
-		try {
-			process.kill(Number(readFileSync(pid, "utf8")), 0);
-			return true;
-		} catch {
-			return false;
-		}
-	};
-	for (let i = 0; alive() && i < 100; i++) await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(alive()).toBe(false);
+	// The round fails only once the CLI exited, so nothing outlives it in the checkout.
+	expect(() => process.kill(Number(readFileSync(pid, "utf8")), 0)).toThrow();
 	expect(existsSync(sessionFile(join(s.repo, ".git"), "feature"))).toBe(false);
 });
 
