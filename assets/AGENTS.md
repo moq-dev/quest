@@ -127,6 +127,8 @@ Unlike a blocked quest it stays ready, so it resurfaces every time ready work is
 Start only ready quests.
 First question whether the quest is still needed: its problem may no longer be real, or a later change may have made its plan the wrong solution.
 If so, stop and propose rewriting or deleting it.
+Before claiming, also check that no open PR already does its work: search open PRs whose title, body, or changed files name the quest's path or the files its Plan names, or read the matches a coordinator's brief lists.
+Stop and report a PR that makes the same change; one that only touches the same files is no overlap.
 `quest unblocked` ranks the ready quests, and `quest unblocked <path>` prints what blocks one.
 With `--unclaimed`, it skips quests someone holds and lists them on stderr.
 
@@ -155,6 +157,8 @@ For example, `quest/m1/foo/bar.md` is branch `quest/m1/foo/bar`.
 Only claims use that namespace: no other branch is named `quest` or starts with `quest/`, since git cannot hold a branch named after another's directory.
 Branches for `/quest-plan`, `/quest-audit`, and other skill PRs use a prefix of their own, such as `quest-plan/<slug>`.
 If `quest start` names a branch in the way, stop and report it; never delete or rename it yourself.
+Its warning that the quest's local branch already exists is not that refusal: the claim succeeded, and the branch holds an earlier attempt.
+Switch to it, merge the claim commit the warning names, and resume that attempt; stop and report only if another worktree has the branch checked out.
 
 Push updates with an explicit refspec: `git push <remote> refs/heads/<quest-branch>:refs/heads/<quest-branch>`.
 A bare branch name can push to the base branch instead, for example under `push.default=upstream` when the quest branch tracks it.
