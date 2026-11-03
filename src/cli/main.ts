@@ -50,7 +50,7 @@ import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
-import { type Report, moveQuest, removeQuest } from "./move";
+import { type Report, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { MODELS, ReviewInputError, processDependencies as reviewDependencies, review, roundLines } from "./review";
 import { heal, init, uninstall } from "./setup";
@@ -148,14 +148,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"is a quest's path without .md (an epic's is quest/<path>/README) and that quest exists at the merge " +
 				"base with <ref>, the working tree must delete or edit it; a PR that finishes the quest deletes it, and " +
 				"one that leaves work rewrites it to what remains. Any other branch adds no finding. Fetch <ref> " +
-				"first: a stale base can predate the quest and skip it.",
+				"first: a stale base can predate the quest and skip it.\n\n" +
+				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
+				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
+				"does, such as the quests a merged base finished, with any heading left empty. It prints M for each " +
+				"edited document and leaves the edits unstaged. A quest moved rather than deleted, a link that never " +
+				"named a quest, and a link in prose stay for the check to report. Refuses outside a git work tree " +
+				"and while a quest file has unresolved conflicts.",
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
-		.action((options: { base?: string; branch?: string }) => {
+		.option("--fix", "First drop list links to quests the history deleted")
+		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
 			}
+			if (options.fix) for (const line of fixLinks(root())) print(line);
 			const tree = checkout(root(), warn);
 			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
@@ -351,7 +359,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Claim a ready quest: push an empty claim commit, built on the upstream default branch, to the quest's " +
 				"branch (its path without .md), then open a draft PR from it right away. Switches the " +
 				"checkout to the claim on a new local branch, or fast-forwards that branch when it is checked out, " +
-				"and prints the PR URL, or the branch off GitHub.\n\n" +
+				"and prints the PR URL, or the branch off GitHub. A local branch left from an earlier attempt is not " +
+				"moved: the claim still succeeds, with a warning to switch to it and merge the claim commit.\n\n" +
 				"Readiness comes from the fetched upstream default branch's tree, not the checkout. Fails on a tree " +
 				"quest check rejects, which can hide a blocker. Refuses a blocked quest, one missing from the " +
 				"upstream default branch, and one already held: a branch upstream or an open PR from that branch in " +
@@ -429,7 +438,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Issue-comment edits print as edited, including updates to older bot status comments. The account's own edits are ignored.",
 		)
 		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
-		.option("--since <point>", "ISO timestamp, pushed-tip SHA, or resume cursor (default: current head push time)")
+		.option("--since <point>", "ISO timestamp, branch-tip SHA, or resume cursor (default: current head push time)")
 		.option("--timeout <seconds>", "Maximum wait in seconds", positiveSeconds)
 		.action((value: string, options: { since?: string; timeout?: number }) => {
 			const pr = pullRequest(value, root());
@@ -817,11 +826,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				".\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
-				"and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
+				"and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
+				"pull request's URL, checks out that request's head from origin instead, when origin has one. Its scratch is the main checkout's top-level ignored entries, except " +
 				".worktrees/, .claude/, and entries holding a nested repository; its reserve is the main checkout's disk " +
 				"usage without .git and those checkouts. An existing checkout of that name in the repository is " +
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
 				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
+				"or a workflow agent's, named for its run and bound to the first subagent that starts in it, " +
 				"when it finishes or stops to wait, and SubagentStart restores it. Other checkouts are left alone. " +
 				"Exits 1 on failure, never 2, which would keep a subagent running.",
 		)
@@ -939,13 +950,17 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"CLAUDE_CODE_USE_BEDROCK, _VERTEX, or _FOUNDRY would send it elsewhere. A logged-out error names the " +
 				"profile it checked, CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset. It runs " +
 				`with ${models}. --model and --effort override them.\n\n` +
-				"The first round runs the reviewer's own review (`codex exec review --base`, or Claude Code's " +
-				"`/code-review <effort> <base>...HEAD`), then resumes that session for one turn that applies the base's " +
+				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
+				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
+				"reviewer's own review (`codex exec review --base <merge-base>`, or Claude Code's " +
+				"`/code-review <effort> <merge-base>...HEAD`), then resumes that session for one turn that applies the base's " +
 				"REVIEW.md, if any, and reports the findings in one JSON schema. Later rounds on the branch resume the " +
 				"same session with the new head and --responses, the author's fixes and refutations of the last " +
 				"round's findings, required while that round reported any. A resumed session keeps the instructions it " +
 				"started with, so when the applicable AGENTS.md or CLAUDE.md files change, the round starts a new " +
-				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it.\n\n" +
+				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
+				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules or user config, Claude Code with " +
 				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
@@ -961,10 +976,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
+		.option("--branch <name>", "Branch whose review session to continue, instead of the checked-out one")
 		.option("--json", "Print one JSON object")
 		.action(
 			(options: {
 				base?: string;
+				branch?: string;
 				harness?: HarnessName;
 				model?: string;
 				effort?: string;
@@ -1131,7 +1148,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reordered list, keeps standard conflict markers, showing the base when merge.conflictStyle is diff3 " +
 				"or zdiff3. Exits 1 when a conflict remains.\n\n" +
 				"quest init registers it for quest/** as the merge.quest driver. Any other command registers the driver " +
-				"in the clone's config when .gitattributes names merge=quest and no config sets it. Without quest on " +
+				"in the clone's config when .gitattributes names merge=quest and no config sets it, or the one set is a " +
+				"driver an older quest registered; a custom driver stays. Without quest on " +
 				"the merge's PATH, the driver falls back to git merge-file, and when conflicts remain it prints to stderr " +
 				"that the file's link lists were not auto-resolved. GitHub's merges ignore merge drivers.",
 		)
