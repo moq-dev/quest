@@ -22,9 +22,10 @@ leave it in m2. The moq-dev land gate and the agents picking merges read
 PRs that are already queued.
 
 Its other half, counting only the newest run of each check, moved to
-[Checks are judged by their latest run](/quest/m1/latest-check-runs.md) on
-2026-11-02, when the maintainer picked m1 for its fuller plan.
+[Checks are judged by their latest run](/quest/m0/latest-check-runs.md) on
+2026-11-02 for its fuller plan, which also covers `quest wait`, the gate, and
+the Worker. It stays in m0 beside this quest.
 
 ## Related
 
-- [Checks are judged by their latest run](/quest/m1/latest-check-runs.md) - superseded runs stop failing `quest status`, `quest wait`, and the gate
+- [Checks are judged by their latest run](/quest/m0/latest-check-runs.md) - superseded runs stop failing `quest status`, `quest wait`, and the gate

@@ -12,7 +12,11 @@ PR reports checks the same way.
 
 ## Plan
 
-Decided 2026-11-02 (maintainer): plan it in m1. Raised by
+Decided 2026-11-02 (maintainer): plan it in m1, then, the same day, move
+it to m0. Since [moq-dev/quest#229](https://github.com/moq-dev/quest/pull/229)
+the `quest land` gate fails a check name if any run with that name failed, so
+it can wrongly refuse release-plz PRs that GitHub would merge. That is land
+work, which m0 ranks first. Raised by
 [moq-dev/moq#7325](https://github.com/moq-dev/moq/pull/7325), release-plz's
 release PR. Each refresh pushes and edits the description at once, starting
 two `Release gate` runs, and concurrency cancels one. The cancelled run's
@@ -20,8 +24,7 @@ gate fails on purpose; the other run on the same head passes, and GitHub's
 merge state counted the pass (CLEAN). `quest status` still printed
 `check failing required failure … Release gate`, which misleads merge
 decisions. Split from [Current landing status](/quest/m0/status-landing.md),
-which owned a one-line version of this in m0. The maintainer's newer m1 pick
-for the fuller outcome moved it here.
+which owned a one-line version of this; the two halves complete separately.
 
 Evidence on #7325's head `a15652d`, read 2026-11-02:
 
