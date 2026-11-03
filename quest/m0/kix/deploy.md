@@ -27,6 +27,10 @@ this quest.
   deployment is a manual `bun run deploy` from `cloudflare/`.
 - Keep the Worker name, D1 database ID, and `AUTH_SECRET`; do not create a
   new production database.
+- ✅ Decided 2026-11-03 (user, /quest-complete): if the `moq.dev` zone is
+  not in the Worker's Cloudflare account, add the zone to that account,
+  which keeps the Worker and its D1 database. Moving the Worker to the
+  zone's account was rejected, since it needs a new production database.
 - The deploy deletes the legacy `RepositoryCoordinator` Durable Object and
   any storage it held, approved 2026-10-14 since nothing is stored.
   Afterwards remove its `exports` tombstone from `cloudflare/wrangler.jsonc`
@@ -36,11 +40,10 @@ this quest.
 
 - Maintainer: confirm the `moq.dev` zone, which already hosts `token.moq.dev`,
   sits in the same Cloudflare account as the `quest-cloudflare` Worker, since
-  a Workers custom domain requires it. If it does not, say which account in
-  `cloudflare/README.md` and decide whether to move the zone or the Worker
-  (moving the Worker means a new D1 database, against the Plan); recommended:
-  keep the Worker and its database, and add the zone to its account. Agents
-  hold no Cloudflare credentials.
+  a Workers custom domain requires it; if it does not, add the zone to the
+  Worker's account, as the Plan decides. Check it in the Cloudflare
+  dashboard, where `moq.dev` is listed under the Worker's account. Agents hold
+  no Cloudflare credentials.
 - Maintainer: register the production GitHub App from
   `cloudflare/github-app-manifest.json` (homepage `https://quest.moq.dev`,
   callback `https://quest.moq.dev/api/auth/callback/github`, webhook
