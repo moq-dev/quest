@@ -183,7 +183,7 @@ app.get("/projects/github/:owner/:repository", async (c) => {
 			return page(
 				c,
 				{ title: `${repository.owner}/${repository.name} setup`, description: "Set up Quest." },
-				<QuestSetupPage repository={repository} />,
+				<QuestSetupPage repository={repository} ci={error.ci} />,
 			);
 		}
 		return page(

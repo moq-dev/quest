@@ -305,7 +305,8 @@ credentials. This rule, rather than a service fork or a review gate on every
 push, is kix's answer to agent-written code reaching CI.
 
 The project's setup page, where a maintainer enables contributions and later
-pauses them, checks the repository's settings with the installation's token
+pauses them, or opens the [setup pull request](#setup-pull-request) whose merge
+enables them, checks the repository's settings with the installation's token
 (`src/github/ci.ts`) and lists each problem it finds:
 
 - the default workflow token can write;

@@ -112,7 +112,8 @@ export class NotOpen extends GitHubError {
 
 /** The default branch has no Quest files, so the project sets up Quest before enabling. */
 export class NoQuestFiles extends GitHubError {
-	constructor() {
+	/** `ci` is the setup page's pull-request CI check (`./ci.ts`), when it ran. */
+	constructor(readonly ci: string[] = []) {
 		super("Quest files are required. Open the setup pull request first.");
 	}
 }
@@ -1248,19 +1249,31 @@ export class GitHubService {
 		return commits.size === count && (count === 0 || commits.has(revision));
 	}
 
-	/** The setup page's preview, with the pull-request CI check (`./ci.ts`) on the same token. */
+	/**
+	 * The setup page's preview, with the pull-request CI check (`./ci.ts`) on
+	 * the same token. A repository without Quest files throws `NoQuestFiles`
+	 * carrying the check, since merging its setup pull request enables it.
+	 */
 	previewProject(repo: GitHubRepository, userId: string): Promise<ProjectPreview> {
 		return this.#authorized(
 			repo,
 			userId,
 			{ contents: "read" },
-			async (token, current, installation, scope) => ({
-				...(await this.#preview(token, repo, current, installation)),
-				ci: await ciProblems(
-					{ get: (path) => this.#api(token, `${repositoryPath(repo)}${path}`) },
-					new Set((Object.keys(CI_PERMISSIONS) as CIPermission[]).filter((p) => scope[p])),
-				),
-			}),
+			async (token, current, installation, scope) => {
+				const ci = () =>
+					ciProblems(
+						{ get: (path) => this.#api(token, `${repositoryPath(repo)}${path}`) },
+						new Set((Object.keys(CI_PERMISSIONS) as CIPermission[]).filter((p) => scope[p])),
+					);
+				let preview;
+				try {
+					preview = await this.#preview(token, repo, current, installation);
+				} catch (error) {
+					if (error instanceof NoQuestFiles) throw new NoQuestFiles(await ci());
+					throw error;
+				}
+				return { ...preview, ci: await ci() };
+			},
 			false,
 			CI_PERMISSIONS,
 		);

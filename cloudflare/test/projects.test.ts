@@ -522,6 +522,18 @@ describe("project enrollment", () => {
 		// Warnings never block enabling contributions.
 		expect(html).not.toContain("disabled");
 	});
+	it("shows the CI check beside the setup pull request's form, since merging it enables contributions", async () => {
+		const who = identity("github");
+		const { session } = await oauth(who);
+		const { request } = github({ account: Number(who.id), noQuests: true, ci: { repository: ["NPM_TOKEN"] } });
+		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		const html = await (
+			await app.request(`${origin}/projects/github/upstream/project`, { headers: { Cookie: session! } }, testEnv)
+		).text();
+		expect(html).toContain("Open the setup pull request");
+		expect(html).toContain("Pull-request CI");
+		expect(html).toContain("receives 1 repository secret: NPM_TOKEN");
+	});
 	it.each(["AGENTS.md", "CLAUDE.md"])("ignores root and nested %s instructions like the CLI", async (filename) => {
 		const { service, calls } = github({
 			documents: [
