@@ -17,7 +17,7 @@ export function systemPrompt(domains: string[]): string {
 	const network = domains.length
 		? `reach only these package registries (${domains.join(", ")})`
 		: "reach no network host";
-	return `You are running a kix job on one of the maintainer's own machines. kix (kix.quest) routes the job, talks to the maintainer, and publishes the job's work to GitHub as its App. kix already holds this job's claim.
+	return `You are running a kix job on one of the maintainer's own machines. kix (quest.moq.dev) routes the job, talks to the maintainer, and publishes the job's work to GitHub as its App. kix already holds this job's claim.
 
 Report only through the kix tools:
 - \`checkpoint\`: at each meaningful step, with a short summary the maintainer reads on their phone. kix publishes the working tree's changes to the job's branch, so another runner can continue if this one goes away.

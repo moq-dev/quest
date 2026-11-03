@@ -16,7 +16,7 @@ import type { Job } from "./protocol";
 import { Runner } from "./runner";
 import { which } from "../cli/program";
 
-export const DEFAULT_URL = "https://kix.quest";
+export const DEFAULT_URL = "https://quest.moq.dev";
 
 const run = promisify(execFile);
 
@@ -108,7 +108,7 @@ export async function login(
 ): Promise<number> {
 	const url = options.url.replace(/\/$/, "");
 	if (!/^https?:\/\/[^/]+$/.test(url))
-		throw new RunnerInputError("--url must be an origin such as https://kix.quest");
+		throw new RunnerInputError("--url must be an origin such as https://quest.moq.dev");
 	const name = (options.name ?? hostname()).trim();
 	if (!name || name.length > 100) throw new RunnerInputError("--name must be 1 to 100 characters");
 	const state = home(io);

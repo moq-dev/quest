@@ -1,7 +1,7 @@
 # Quest Worker
 
-A deployable foundation for Quest on Cloudflare, and the site at
-`https://kix.quest`: the quest log for your repo and your agents, on the web.
+A deployable foundation for Quest on Cloudflare, and the kix site at
+`https://quest.moq.dev`: the quest log for your repo and your agents, on the web.
 Hono serves HTML directly, so there is no client bundle; only passkeys
 (`src/passkey.js`) and the installed app (`src/app.js` and `src/sw.js`) need
 small scripts. Every page renders
@@ -268,7 +268,7 @@ stopped job sets its item aside the same way.
 
 ### Installed app and notifications
 
-kix.quest installs as a progressive web app (`src/manifest.webmanifest`,
+kix installs as a progressive web app (`src/manifest.webmanifest`,
 starting at `/inbox`) on Android, desktop browsers, and iOS/iPadOS 16.4+ once
 added to the Home Screen. Signed-in pages load `src/app.js`, which registers
 the service worker `src/sw.js`, sets the installed app's icon badge to the
@@ -343,7 +343,7 @@ just worker-dev
 This applies local D1 migrations and starts Wrangler. Open
 `http://localhost:8787`, sign in, and sign out. `/health` reports process health;
 it does not probe storage. `/setup` redirects to `SETUP.md` on GitHub, so the
-one-line setup paste can use `https://kix.quest/setup`. D1 persists locally
+one-line setup paste can use `https://quest.moq.dev/setup`. D1 persists locally
 under `cloudflare/.wrangler/`. There are no remote-only bindings: local
 development and tests need no Cloudflare login. Wrangler reruns the build when
 `src/`, `scripts/`, or `docs/` change.
@@ -446,8 +446,8 @@ check it on an existing bucket with
 `bun run wrangler r2 bucket lifecycle list quest-output`. Keep it at the
 30 days the Worker's cron uses (`RETENTION` in `src/jobs/output.ts`).
 
-The checked-in config deploys to `https://kix.quest` as a Workers custom
-domain, which requires the `kix.quest` zone in the same Cloudflare account;
+The checked-in config deploys to `https://quest.moq.dev` as a Workers custom
+domain, which requires the `moq.dev` zone in the same Cloudflare account;
 `workers.dev` is disabled so sign-in has one origin. `AUTH_URL` is the only
 authentication origin and supplies generated absolute links.
 
@@ -458,12 +458,12 @@ for a fresh deployment only. For another environment, change `routes`,
 together.
 
 Register the production GitHub App from [the manifest](github-app-manifest.json),
-which includes callback `https://kix.quest/api/auth/callback/github` and requests
+which includes callback `https://quest.moq.dev/api/auth/callback/github` and requests
 user authorization during installation. Use that App's client ID and client
 secret as `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; no separate GitHub OAuth
 app is needed. For Google sign-in, also register
 a production Google OAuth web client with redirect URI
-`https://kix.quest/api/auth/callback/google`, set its public client ID as
+`https://quest.moq.dev/api/auth/callback/google`, set its public client ID as
 `GOOGLE_CLIENT_ID` in `wrangler.jsonc`, and set the secret with
 `bun run wrangler secret put GOOGLE_CLIENT_SECRET`; without both, Google is
 not offered. The secret is optional, so it is not listed under `secrets.required`.
