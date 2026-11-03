@@ -227,5 +227,28 @@ githubWebhooks.post("/webhooks/github", async (c) => {
 	// A landing that ended unmerged, such as a merge queue removal, gives a merge job's pull request back.
 	const landed = event === "pull_request" && positiveId(payload.pull_request?.number);
 	if (landed) c.executionCtx.waitUntil(landing.release(c.env, repository, `pulls/${payload.pull_request.number}`));
+	// A setup pull request that merged enables its project; one closed or reopened changes what its page offers.
+	if (landed && (action === "closed" || action === "reopened"))
+		c.executionCtx.waitUntil(setupChanged(c.env, repository, installation, payload.pull_request.number));
 	return c.json({ status: "accepted" }, 202);
 });
+
+/**
+ * Reconcile the setup whose pull request a delivery names. The delivery only
+ * says to look: the service rereads the pull request and rechecks the
+ * enroller's authority, so a forged or delayed event cannot enable a project.
+ */
+async function setupChanged(env: Env, repository: number, installation: number, pull: number) {
+	const setup = await env.DB.prepare(
+		"SELECT owner,name FROM github_project_setups WHERE id=? AND installation=? AND pull=?",
+	)
+		.bind(repository, installation, pull)
+		.first<{ owner: string; name: string }>();
+	if (!setup) return;
+	try {
+		await new GitHubService(env).settleSetup({ id: repository, ...setup });
+	} catch (error) {
+		// The setup page reconciles again whenever a maintainer opens it.
+		console.error({ event: "setup_reconcile_failed", repository, message: String(error) });
+	}
+}

@@ -917,6 +917,65 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		// Subagents outside any quest checkout are left alone.
 		expect(await claudeHook(subagent("SubagentStop", repo, "abc"), worktrees, noForge)).toBeUndefined();
 	});
+	it("checks out a pull request's head from origin for Claude's pr-<number> names", async () => {
+		const { root, repo, worktrees } = fixture();
+		const create = (name: string) =>
+			claudeHook({ hook_event_name: "WorktreeCreate", cwd: repo, name }, worktrees, noForge);
+		// Without an origin, a pr- name is only a name.
+		const plain = (await create("pr-1"))!.trim();
+		expect(git(plain, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "HEAD"));
+		const origin = join(root, "origin.git");
+		git(root, "clone", "--quiet", "--bare", repo, origin);
+		git(repo, "remote", "add", "origin", origin);
+		// A request's head exists only on origin until it is fetched.
+		const identity = ["-c", "user.name=Quest", "-c", "user.email=quest@example.com"];
+		const head = git(origin, ...identity, "commit-tree", "-p", "HEAD", "-m", "feature", "HEAD^{tree}");
+		git(origin, "update-ref", "refs/pull/7/head", head);
+		git(origin, "update-ref", "refs/merge-requests/9/head", head);
+		// The head is fetched, as Claude does for --worktree '#7', not the remote's default branch.
+		for (const name of ["pr-7", "pr-9"]) {
+			const path = (await create(name))!.trim();
+			expect(git(path, "rev-parse", "HEAD")).toBe(head);
+		}
+		expect(git(repo, "rev-parse", "origin/pr/7", "origin/mr/9")).toBe(`${head}\n${head}`);
+		// Its remote-tracking ref preserves the request's commits, so the checkout can be removed.
+		await worktrees.remove("pr-7");
+		// A number origin has no request for starts from the usual base.
+		const missing = (await create("pr-8"))!.trim();
+		expect(git(missing, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "HEAD"));
+		// Both forges' refs at different commits are ambiguous, as Claude reports them.
+		git(origin, "update-ref", "refs/pull/10/head", head);
+		git(origin, "update-ref", "refs/merge-requests/10/head", git(repo, "rev-parse", "HEAD"));
+		await expect(create("pr-10")).rejects.toThrow("at different commits");
+	});
+	it("releases a workflow agent's checkout, bound to the first subagent that starts in it", async () => {
+		const { repo, worktrees } = fixture();
+		mkdirSync(join(repo, "cache"));
+		const name = "wf_04c8d372-2e7-1";
+		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name };
+		const path = (await claudeHook(create, worktrees, noForge))!.trim();
+		mkdirSync(join(path, "cache"));
+		await claudeHook(subagent("SubagentStart", path, "a79f"), worktrees, noForge);
+		// A subagent the workflow agent runs without isolation shares the checkout but never owns it.
+		await claudeHook(subagent("SubagentStart", path, "b123"), worktrees, noForge);
+		await claudeHook(subagent("SubagentStop", path, "b123"), worktrees, noForge);
+		expect(existsSync(join(path, "cache"))).toBe(true);
+		await claudeHook(subagent("SubagentStop", path, "a79f"), worktrees, noForge);
+		expect(existsSync(join(path, "cache"))).toBe(false);
+		expect(worktrees.status().records[0]).toMatchObject({ phase: "released", agent: "a79f" });
+		// A resumed run reuses the name for a new agent, which binds afresh.
+		expect((await claudeHook(create, worktrees, noForge))!.trim()).toBe(path);
+		await claudeHook(subagent("SubagentStart", path, "c456"), worktrees, noForge);
+		mkdirSync(join(path, "cache"));
+		await claudeHook(subagent("SubagentStop", path, "c456"), worktrees, noForge);
+		expect(worktrees.status().records[0]).toMatchObject({ phase: "released", agent: "c456" });
+		// Other checkouts never bind a subagent.
+		const session = (await claudeHook({ ...create, name: "session" }, worktrees, noForge))!.trim();
+		await claudeHook(subagent("SubagentStart", session, "d789"), worktrees, noForge);
+		await claudeHook(subagent("SubagentStop", session, "d789"), worktrees, noForge);
+		expect(worktrees.status().records[1]).toMatchObject({ name: "session", phase: "active" });
+		expect(worktrees.status().records[1].agent).toBeUndefined();
+	});
 	it("removes a finished checkout, never forcing, and refuses one it does not own", async () => {
 		const { root, repo, worktrees } = fixture();
 		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name: "session" };

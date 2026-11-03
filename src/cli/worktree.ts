@@ -43,6 +43,8 @@ export interface WorktreeRecord {
 	phase: "creating" | "active" | "released";
 	creator?: Owner;
 	failure?: string;
+	/** The Claude Code subagent bound to this checkout by `quest worktree hook`, when Claude's name for it carries none. */
+	agent?: string;
 }
 interface Registry {
 	version: 1;
@@ -846,6 +848,18 @@ export class Worktrees {
 			const record = this.find(registry, id);
 			if (!this.owned(record)) throw new Error(`checkout is missing; release drops its record: ${record.path}`);
 			this.activate(registry, record);
+			return record;
+		});
+	}
+	/**
+	 * Binds the checkout to `agent` unless another is already bound, or clears the binding without one,
+	 * and returns the record with the agent it now holds.
+	 */
+	bind(id: string, agent?: string): WorktreeRecord {
+		return this.locked((registry) => {
+			const record = this.find(registry, id);
+			if (agent === undefined) delete record.agent;
+			else record.agent ??= agent;
 			return record;
 		});
 	}

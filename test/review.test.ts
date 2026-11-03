@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { type Output, main } from "../src/cli/main";
-import { baseInstructions, findings, runningHarness } from "../src/cli/review";
+import { baseInstructions, findings, review, runningHarness, sessionFile } from "../src/cli/review";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -78,6 +78,13 @@ const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST|PATH$)/.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT ? 1 : 0);
+if (process.env.FAKE_HANG) {
+	// It takes a while to exit when asked to, as a CLI saving its session does.
+	process.on("SIGTERM", () => setTimeout(() => process.exit(143), 300));
+	fs.writeFileSync(process.env.FAKE_HANG, String(process.pid));
+	setInterval(() => {}, 1000);
+	return;
+}
 const event = (value) => console.log(JSON.stringify(value));
 const loggedIn = !process.env.FAKE_LOGGED_OUT || process.env.CODEX_API_KEY;
 const rejected = process.env.FAKE_REJECTED ?? (loggedIn ? undefined : "turn");
@@ -172,7 +179,7 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	vi.stubEnv("FAKE_LOG", log);
 	// The session's own profile would change the logged-out errors.
 	const unset = [...HOST_CREDENTIALS, "CLAUDECODE", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
-	for (const name of [...unset, "FAKE_LOGGED_OUT", "FAKE_REJECTED"]) {
+	for (const name of [...unset, "FAKE_LOGGED_OUT", "FAKE_REJECTED", "FAKE_HANG"]) {
 		vi.stubEnv(name, undefined);
 	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
@@ -329,6 +336,20 @@ fakes("a reviewer with no stored login reviews with the credential its CLI reads
 	}
 });
 
+fakes("an abort stops the reviewer's turn and records no round", async () => {
+	const s = setup();
+	const pid = join(s.bin, "..", "codex.pid");
+	vi.stubEnv("FAKE_HANG", pid);
+	const controller = new AbortController();
+	const round = review({ root: s.repo, signal: controller.signal }, { env: process.env });
+	while (!existsSync(pid)) await new Promise((resolve) => setTimeout(resolve, 20));
+	controller.abort();
+	await expect(round).rejects.toThrow(/abort/i);
+	// The round fails only once the CLI exited, so nothing outlives it in the checkout.
+	expect(() => process.kill(Number(readFileSync(pid, "utf8")), 0)).toThrow();
+	expect(existsSync(sessionFile(join(s.repo, ".git"), "feature"))).toBe(false);
+});
+
 fakes("a stored login wins over an environment credential, so a shell's key never changes the billing", async () => {
 	const s = setup("CODEX_THREAD_ID");
 	vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-key");
@@ -408,15 +429,65 @@ fakes("the reviewer CLI is found on PATH, never in the checkout it reviews", asy
 	}
 });
 
-fakes("only a clean, attached checkout is reviewed", async () => {
+fakes("only a clean checkout is reviewed, and a detached one only for a named branch", async () => {
 	const s = setup();
 	write(s.repo, "src/lib.ts", "export const x = 3;\n");
 	expect((await quest("--root", s.repo, "review")).stderr).toContain("uncommitted changes");
 	git(s.repo, "checkout", "-q", "--", ".");
 	git(s.repo, "checkout", "-q", "--detach");
-	expect((await quest("--root", s.repo, "review")).stderr).toContain("detached");
+	const detached = await quest("--root", s.repo, "review");
+	expect(detached.code).toBe(2);
+	expect(detached.stderr).toContain("HEAD is detached; pass --branch");
+	const invalid = await quest("--root", s.repo, "review", "--branch", "a..b");
+	expect(invalid.code).toBe(2);
+	expect(invalid.stderr).toContain("--branch is not a valid branch name: a..b");
 	expect(s.calls()).toEqual([]);
 });
+
+fakes("a detached checkout continues the session of the branch --branch names", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).stdout).toContain("round 1\n");
+	// Another worktree holds the branch, so its fix is reviewed from a detached checkout of its head.
+	git(s.repo, "checkout", "-q", "--detach");
+	write(s.repo, "src/lib.ts", "export const x = 4;\n");
+	git(s.repo, "commit", "-qam", "fix");
+	write(s.repo, ".tmp/responses.md", "Fixed at src/lib.ts:1.\n");
+	const responses = join(s.repo, ".tmp", "responses.md");
+	const round = await quest("--root", s.repo, "review", "--branch", "feature", "--responses", responses);
+	expect(round.stderr).toBe("");
+	expect(round.stdout).toContain("session thread-1\nround 2\n");
+	expect(s.calls().filter((c) => c.argv[1] === "review")).toHaveLength(1);
+
+	// A differently named branch continues it the same way, and without --branch starts its own.
+	git(s.repo, "checkout", "-qb", "merge-fix");
+	const named = await quest("--root", s.repo, "review", "--branch", "feature", "--responses", responses);
+	expect(named.stdout).toContain("round 3\n");
+	expect((await quest("--root", s.repo, "review")).stdout).toContain("round 1\n");
+});
+
+fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
+	"a branch behind its base is reviewed from its merge base (host %s)",
+	async (host) => {
+		const s = setup(host);
+		const mergeBase = git(s.repo, "rev-parse", "origin/main");
+		// The base gains a docs change the branch lacks, which a diff against its tip shows as reverted.
+		const tip = moveBase(s.repo, (dir) => write(dir, "docs/guide.md", "new\n"));
+		const head = git(s.repo, "rev-parse", "HEAD");
+		const result = await quest("--root", s.repo, "review");
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain(`base ${tip} origin/main\n`);
+
+		const [, first, second] = s.calls();
+		if (host === "CLAUDECODE") {
+			expect(first.argv.slice(0, 5)).toEqual(["exec", "review", "--base", mergeBase, "--json"]);
+		} else {
+			expect(first.stdin).toBe(`/code-review medium ${mergeBase}...HEAD`);
+		}
+		expect(second.stdin).toContain(`\`git diff ${mergeBase}..${head}\``);
+		// Only the change's own directories bring their instructions.
+		for (const call of [first, second]) expect(JSON.stringify(call.argv)).not.toContain("BASE-DOCS rule");
+	},
+);
 
 fakes("codex reviews read-only with the base's instructions, then reports in the schema", async () => {
 	const s = setup();
@@ -442,7 +513,8 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	);
 
 	const [, first, second] = s.calls();
-	expect(first.argv.slice(0, 5)).toEqual(["exec", "review", "--base", "origin/main", "--json"]);
+	// The base has not moved, so its tip is the merge base.
+	expect(first.argv.slice(0, 5)).toEqual(["exec", "review", "--base", base, "--json"]);
 	expect(second.argv.slice(0, 3)).toEqual(["exec", "resume", "--json"]);
 	expect(second.argv.slice(-2)).toEqual(["thread-1", "-"]);
 	for (const call of [first, second]) {
@@ -483,7 +555,7 @@ fakes("--base reviews against another branch, fetched first, with that branch's 
 	expect(result.code).toBe(0);
 	expect(result.stdout).toContain(`base ${base} origin/release\n`);
 	const [, first] = s.calls();
-	expect(first.argv.slice(0, 4)).toEqual(["exec", "review", "--base", "origin/release"]);
+	expect(first.argv.slice(0, 4)).toEqual(["exec", "review", "--base", base]);
 	const instructions = first.argv.find((arg) => arg.startsWith("developer_instructions="))!;
 	expect(instructions).toContain("RELEASE-ROOT rule");
 	expect(instructions).not.toContain("BASE-ROOT rule");
@@ -509,7 +581,7 @@ fakes("claude reviews read-only with the base's instructions, then reports in th
 
 	const [status, first, second] = s.calls();
 	expect(status.argv).toEqual(["auth", "status"]);
-	expect(first.stdin).toBe("/code-review low origin/main...HEAD");
+	expect(first.stdin).toBe(`/code-review low ${git(s.repo, "rev-parse", "origin/main")}...HEAD`);
 	expect(second.argv).toContain("--json-schema");
 	expect(second.argv[second.argv.indexOf("--resume") + 1]).toBe(first.argv[first.argv.indexOf("--session-id") + 1]);
 	for (const call of [first, second]) {
@@ -551,7 +623,8 @@ fakes("a later round resumes the session with the new head and the author's resp
 	expect(resumed.stdin).toContain("Fixed at src/lib.ts:1.");
 	expect(resumed.stdin).toContain("BASE-REVIEW rule");
 	expect(resumed.stdin).not.toContain("differ from those you were given");
-	expect(resumed.stdin).toContain(git(s.repo, "rev-parse", "HEAD"));
+	const head = git(s.repo, "rev-parse", "HEAD");
+	expect(resumed.stdin).toContain(`\`git diff ${git(s.repo, "rev-parse", "origin/main")}..${head}\``);
 	expect(calls.filter((c) => c.argv[1] === "review")).toHaveLength(1);
 
 	// --new starts over, and a first round takes no responses.
