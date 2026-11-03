@@ -404,6 +404,73 @@ test("reports quest land's ejection after the auto-merge it disabled, ignoring o
 	expect(status.landingStopped).toEqual({ reason: "merge_conflict", actor: "gate", at: "2026-10-07T12:02:00Z" });
 });
 
+test("drops the landing exit once the PR enters the merge queue or auto-merge again", async () => {
+	const disabled = {
+		__typename: "AutoMergeDisabledEvent",
+		createdAt: "2026-10-07T12:01:00Z",
+		reasonCode: "manually_disabled",
+		actor: { login: "kixelated" },
+	};
+	const removed = {
+		__typename: "RemovedFromMergeQueueEvent",
+		createdAt: "2026-10-07T12:01:00Z",
+		reason: "MERGE_CONFLICT",
+		actor: { login: "github-merge-queue" },
+	};
+	const ejected = {
+		__typename: "IssueComment",
+		createdAt: "2026-10-07T12:01:00Z",
+		body: "quest land removed this pull request from the queue: it conflicts.\n\n<!-- quest land: merge_conflict -->",
+		authorAssociation: "NONE",
+		author: { __typename: "Bot", login: "gate" },
+	};
+	const autoMerge = (enabledAt: string) => ({ enabledAt, mergeMethod: "SQUASH", enabledBy: { login: "kixelated" } });
+	const queue = (enqueuedAt: string) => ({ state: "QUEUED", position: 1, enqueuedAt });
+	const stopped = async (node: Node, fields: Node) => {
+		const body = pull({
+			checks: null,
+			reviews: page([]),
+			threads: page([]),
+			timelineItems: { nodes: [node] },
+			...fields,
+		});
+		return (await pullRequestStatus(pr, setup([body]).deps)).landingStopped?.reason ?? null;
+	};
+	// `quest merge --land` disables auto-merge and enables it again, often within the same second.
+	expect(await stopped(disabled, { autoMergeRequest: autoMerge("2026-10-07T12:01:00Z") })).toBeNull();
+	expect(await stopped(ejected, { autoMergeRequest: autoMerge("2026-10-07T12:05:00Z") })).toBeNull();
+	expect(await stopped(removed, { mergeQueueEntry: queue("2026-10-07T12:05:00Z") })).toBeNull();
+	// An entry that began before the exit is not a new one.
+	expect(await stopped(removed, { autoMergeRequest: autoMerge("2026-10-07T12:00:00Z") })).toBe("merge_conflict");
+	expect(await stopped(ejected, { mergeQueueEntry: queue("2026-10-07T12:00:59Z") })).toBe("merge_conflict");
+});
+
+test("counts only each check's newest run from its app", async () => {
+	const rerun = (name: string, conclusion: string, databaseId: number, app = 15368) => ({
+		...run(name, "COMPLETED", conclusion, true),
+		databaseId,
+		checkSuite: { app: { databaseId: app } },
+	});
+	const fixture = setup([
+		pull({
+			checks: page([
+				rerun("build", "SUCCESS", 7),
+				rerun("build", "CANCELLED", 3),
+				rerun("test", "SUCCESS", 4),
+				rerun("test", "FAILURE", 8),
+				rerun("lint", "SUCCESS", 5),
+				rerun("lint", "FAILURE", 2, 99),
+			]),
+			reviews: page([]),
+			threads: page([]),
+		}),
+	]);
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks.passed).toBe(2);
+	expect(status.checks.failing.map((check) => check.name)).toEqual(["test", "lint"]);
+	expect(status.checks.pending).toEqual([]);
+});
+
 test("long lists page only the connections that have more, keeping the first page's PR fields", async () => {
 	const fixture = setup([
 		pull({

@@ -112,7 +112,10 @@ export interface Status {
 	/** `head` is the head it was enabled on, or null when that cannot be told; see {@link enabledHead}. */
 	autoMerge: { method: string; enabledBy: string; enabledAt: string; head: string | null } | null;
 	mergeQueue: { state: string; position: number; enqueuedAt: string } | null;
-	/** The latest exit from the merge queue, auto-merge, or `quest land`'s queue, and the reason for it. */
+	/**
+	 * The latest exit from the merge queue, auto-merge, or `quest land`'s queue, and the reason for it;
+	 * null once the PR is queued again.
+	 */
 	landingStopped: { reason: string; actor: string; at: string } | null;
 	checks: { state: string | null; passed: number; failing: Check[]; pending: Check[] };
 	/** Each reviewer's latest submitted review, oldest first. */
@@ -265,7 +268,7 @@ function summarize(
 		failing: [],
 		pending: [],
 	} as Status["checks"];
-	for (const context of contexts) {
+	for (const context of newestChecks(contexts)) {
 		const { check, outcome } = classifyCheck(context);
 		if (outcome === "passed") checks.passed++;
 		else checks[outcome].push(check);
@@ -317,9 +320,16 @@ function summarize(
 
 	const autoMerge = pull.autoMergeRequest === null ? null : object(pull.autoMergeRequest);
 	const queue = pull.mergeQueueEntry === null ? null : object(pull.mergeQueueEntry);
-	const stopped = array(object(pull.timelineItems).nodes)
+	const last = array(object(pull.timelineItems).nodes)
 		.filter((node) => node.__typename !== "IssueComment" || ejection(node) !== null)
 		.at(-1);
+	// Entering the merge queue or auto-merge at or after the latest exit supersedes it. `quest land`'s
+	// enqueue disables auto-merge just before enabling it again, often within the same second.
+	const entered = [autoMerge?.enabledAt, queue?.enqueuedAt].flatMap((at) =>
+		at == null ? [] : [Date.parse(string(at))],
+	);
+	const stopped =
+		last !== undefined && !entered.some((at) => at >= Date.parse(string(last.createdAt))) ? last : undefined;
 	return {
 		url,
 		state: lower(pull.state) as Status["state"],
@@ -368,6 +378,33 @@ function ejection(node: ObjectValue): string | null {
 	const trusted =
 		author?.__typename === "Bot" || ["OWNER", "MEMBER", "COLLABORATOR"].includes(String(node.authorAssociation));
 	return trusted && typeof node.body === "string" ? (EJECTED.exec(node.body)?.[1] ?? null) : null;
+}
+
+/**
+ * Each check's newest report, in rollup order. A rerun, or a workflow run again on the same head,
+ * reports a check run again under the same name from the same app, and only the newest counts, as it
+ * does for GitHub's required checks; check run IDs increase as runs are created. A commit status is
+ * already its context's newest. Check runs need `databaseId` and `checkSuite { app { databaseId } }`.
+ */
+export function newestChecks(contexts: ObjectValue[]): ObjectValue[] {
+	const newest = new Map<string, ObjectValue>();
+	for (const context of contexts) {
+		if (context.__typename !== "CheckRun") continue;
+		const key = JSON.stringify([appOf(context), context.name]);
+		const seen = newest.get(key);
+		if (seen === undefined || Number(context.databaseId) > Number(seen.databaseId)) newest.set(key, context);
+	}
+	return contexts.filter(
+		(context) =>
+			context.__typename !== "CheckRun" || newest.get(JSON.stringify([appOf(context), context.name])) === context,
+	);
+}
+
+/** The GitHub App behind a check run; a commit status has none. */
+export function appOf(context: ObjectValue): number | null {
+	if (context.__typename !== "CheckRun" || context.checkSuite == null) return null;
+	const app = object(context.checkSuite).app;
+	return app == null ? null : Number(object(app).databaseId);
 }
 
 /**

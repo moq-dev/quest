@@ -86,6 +86,8 @@ interface CheckFixture {
 	/** The workflow file a job runs in, and whether its run is still going, so it may yet create jobs. */
 	workflow?: string;
 	running?: boolean;
+	/** A check run's ID, which grows with each run; its place in the page by default. */
+	id?: number;
 }
 
 /** The head's checks; `null` means the head has no checks at all. */
@@ -96,7 +98,7 @@ function checks(
 	listed = head,
 	extra: Record<string, unknown> = {},
 ) {
-	const node = (entry: CheckFixture) =>
+	const node = (entry: CheckFixture, index: number) =>
 		entry.status
 			? {
 					__typename: "StatusContext",
@@ -108,6 +110,7 @@ function checks(
 				}
 			: {
 					__typename: "CheckRun",
+					databaseId: entry.id ?? index + 1,
 					name: entry.name,
 					status: entry.result ? "COMPLETED" : "IN_PROGRESS",
 					conclusion: entry.result ?? null,
@@ -1005,6 +1008,26 @@ test("a gated base's quest land check, which no head carries, never holds back c
 	const lines = await waitForActivity(pr, {}, fixture.deps);
 	expect(lines).toHaveLength(1);
 	expect(lines[0]).toMatch(/^2026-10-07T12:05:00Z checks:passed check /);
+});
+
+test("a rerun supersedes a cancelled run of a required check, which never wakes the wait as failed", async () => {
+	const fixture = setup([pull(), response([pushed()]), response([committed(A)]), response([committed(A)])], [A], {
+		checks: [
+			checks([
+				{ name: "check", required: true, result: "CANCELLED", time: LATER },
+				{ name: "check", required: true },
+			]),
+			checks([
+				{ name: "check", required: true, result: "SUCCESS", time: LATEST, id: 2 },
+				{ name: "check", required: true, result: "CANCELLED", time: LATER, id: 1 },
+			]),
+		],
+		protected: ["check"],
+	});
+	const lines = await waitForActivity(pr, {}, fixture.deps);
+	expect(fixture.sleeps).toEqual([300_000]);
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toMatch(/^2026-10-07T12:08:00Z checks:passed check /);
 });
 
 test("optional checks never stand in for required checks that have not started", async () => {

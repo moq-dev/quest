@@ -455,8 +455,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
 				"quest land's queue, with the reason (such as merge_conflict, failed_checks, manual, or manually_disabled), " +
-				"actor, and time. Then " +
-				"a check line per failing or pending check, marked required or optional; a review line per " +
+				"actor, and time, until the PR enters the merge queue or auto-merge again. Then " +
+				"a check line per failing or pending check, marked required or optional, counting only each check's newest run; a review line per " +
 				"reviewer's latest review, marked current or stale against the head; a reacted:<content> line per " +
 				"reaction on the PR or a review; and a thread line per unresolved review thread, led by its node ID. " +
 				"A missing value prints as -. --json prints the same facts as one deterministic object.\n\n" +

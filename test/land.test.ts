@@ -1031,6 +1031,20 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.waiting?.map(({ number }) => number)).toEqual([2, 3]);
 	});
 
+	test("counts only a required check's newest run from its app", async () => {
+		const forge = new Forge();
+		const test = (conclusion: string, app?: number) => ({ name: "test", conclusion, url: "u", app });
+		forge.pull("Rerun passed", { "1.txt": "1\n" }, { pull: { runs: [test("CANCELLED"), test("SUCCESS")] } });
+		forge.pull("Rerun failed", { "2.txt": "2\n" }, { pull: { runs: [test("SUCCESS"), test("CANCELLED")] } });
+		forge.pull("Other app failed", { "3.txt": "3\n" }, { pull: { runs: [test("FAILURE", 99), test("SUCCESS")] } });
+		const plan = await resolveQueue(REPOSITORY, "main", await forge.deps());
+		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
+		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([
+			[2, "failed_checks"],
+			[3, "failed_checks"],
+		]);
+	});
+
 	test("refuses ruleset rules it does not uphold before reading the queue", async () => {
 		const forge = new Forge();
 		forge.pull("Ready", { "1.txt": "1\n" });

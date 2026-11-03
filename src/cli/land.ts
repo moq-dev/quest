@@ -16,7 +16,7 @@ import {
 	requirements,
 	string,
 } from "./github";
-import { classifyCheck } from "./status";
+import { appOf, classifyCheck, newestChecks } from "./status";
 import { committedSources, snapshot } from "./tree";
 
 /** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
@@ -132,7 +132,7 @@ export interface Waiting {
 const CONTEXTS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		__typename
-		... on CheckRun { name status conclusion detailsUrl checkSuite { app { databaseId } } }
+		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { app { databaseId } } }
 		... on StatusContext { context state targetUrl }
 	}`;
 
@@ -436,17 +436,21 @@ async function contexts(github: GitHub, repository: Repository, node: ObjectValu
 	}
 }
 
-/** The required checks a head failed, and those pending or not yet reported, each from its app. */
+/**
+ * The required checks a head failed, and those pending or not yet reported, each from its app. Only
+ * each check's newest run counts, so a rerun supersedes a cancelled or failed run.
+ */
 function checks(contexts: ObjectValue[], required: RequiredCheck[]): { failing: string[]; pending: string[] } {
 	const failing: string[] = [];
 	const pending: string[] = [];
+	const newest = newestChecks(contexts);
 	for (const need of required) {
 		let result: "passed" | "failing" | "pending" = "pending";
 		let reported = false;
-		for (const context of contexts) {
+		for (const context of newest) {
 			const { check, outcome } = classifyCheck(context);
 			if (check.name !== need.name || (need.app !== null && appOf(context) !== need.app)) continue;
-			// A name reported twice, as by a rerun, counts only once every report passes.
+			// A name reported by more than one app, or as both a run and a status, counts only once every report passes.
 			if (!reported || result === "passed") result = outcome;
 			reported = true;
 		}
@@ -455,13 +459,6 @@ function checks(contexts: ObjectValue[], required: RequiredCheck[]): { failing: 
 		else if (result === "pending") pending.push(name);
 	}
 	return { failing: failing.sort(), pending: pending.sort() };
-}
-
-/** The GitHub App behind a check run; a commit status has none the gate can verify. */
-function appOf(context: ObjectValue): number | null {
-	if (context.__typename !== "CheckRun" || context.checkSuite == null) return null;
-	const app = object(context.checkSuite).app;
-	return app == null ? null : Number(object(app).databaseId);
 }
 
 /** A queued PR's squash commit on the chain. */

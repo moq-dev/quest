@@ -15,7 +15,7 @@ import {
 	string,
 } from "./github";
 import { LAND_CHECK } from "./land";
-import { classifyCheck, enabledHead } from "./status";
+import { classifyCheck, enabledHead, newestChecks } from "./status";
 
 const POLL = 5 * 60_000;
 /**
@@ -60,8 +60,8 @@ const CHECKS = `query($owner: String!, $repo: String!, $number: Int!, $after: St
 					nodes {
 						__typename
 						... on CheckRun {
-							name status conclusion completedAt detailsUrl isRequired(pullRequestNumber: $number)
-							checkSuite { status workflowRun { file { path } } }
+							databaseId name status conclusion completedAt detailsUrl isRequired(pullRequestNumber: $number)
+							checkSuite { status app { databaseId } workflowRun { file { path } } }
 						}
 						... on StatusContext { context state createdAt targetUrl isRequired(pullRequestNumber: $number) }
 					}
@@ -345,7 +345,7 @@ async function watch(
 	const checks = async (): Promise<
 		{ head: string; base: string; checks: Check[]; pull: ObjectValue } | undefined
 	> => {
-		const result: Check[] = [];
+		const rows: ObjectValue[] = [];
 		let head: string | undefined;
 		let after: string | null = null;
 		let pull: ObjectValue;
@@ -358,11 +358,11 @@ async function watch(
 			if (!fullSha(head)) throw new Error("invalid GitHub head SHA");
 			if (commit.statusCheckRollup === null) break;
 			const contexts = object(object(commit.statusCheckRollup).contexts);
-			result.push(...array(contexts.nodes).map(check));
+			rows.push(...array(contexts.nodes));
 			const page = object(contexts.pageInfo);
 			after = page.hasNextPage === true ? string(page.endCursor) : null;
 		} while (after !== null);
-		return { head: head!, base: string(pull.baseRefName), checks: result, pull };
+		return { head: head!, base: string(pull.baseRefName), checks: newestChecks(rows).map(check), pull };
 	};
 	/**
 	 * What the base branch requires, read once per wait. Only a requirement says whether a missing
