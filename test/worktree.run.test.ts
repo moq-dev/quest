@@ -167,7 +167,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 	}
 
 	it("still forwards a signal to its own scope from inside a gate's, once", async () => {
-		const { dir, home } = fixture();
+		const { dir, home } = await fixture();
 		const leaf = signalled(dir, ["SIGTERM"], 200);
 		const { stop, result } = gated(dir, home, leaf.script);
 		await created(leaf.ready);
@@ -179,7 +179,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 	});
 
 	it("is killed with the gate's scope it runs in", async () => {
-		const { dir, home, worktrees, record } = fixture();
+		const { dir, home, worktrees, record } = await fixture();
 		const leaf = signalled(dir, ["SIGTERM"]);
 		const { stop, kill, result } = gated(dir, home, leaf.script);
 		await created(leaf.ready);
