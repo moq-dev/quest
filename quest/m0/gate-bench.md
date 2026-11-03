@@ -17,9 +17,15 @@ The earlier baseline, from
 [moq-dev/quest#177](https://github.com/moq-dev/quest/pull/177), was 104 s
 gated against 19 s ungated for a burst of 8.
 
-- Run on a host with no other agents or builds; record the 1-minute load
-  before each run alongside the results.
+- Record the 1-minute load before each run alongside the results.
 - Delete this quest in the PR that records the results.
 - Dropped (user): asking Bun upstream to make `os.userInfo().homedir` ignore
   `$HOME` (the child-process lookup costs about 10 ms), and handling a macOS
   hostname that changes with the network, until it is seen in practice.
+
+## Waiting
+
+- Maintainer: leave the host idle, with no other agents, builds or land
+  daemons running, for a few minutes of runs; an agent can't pause the
+  others' work. Check that `uptime`'s 1-minute load is near zero before each
+  run.

@@ -16,4 +16,4 @@ additional login providers. This milestone does not gate the public release.
 - [ChatGPT hosted runs](/quest/m2/chatgpt-hosted.md) - conditional on provider approval and current terms
 - [ChatGPT approval](/quest/m2/chatgpt-waitlist.md) - resolve hosted-use approval before implementation
 - [Worker dev setup](/quest/m2/worker-dev.md) - per-server cookies, seeded raw output, static assets, one fake GitHub, each test run alone
-- [Delete the legacy hold labels](/quest/m2/legacy-labels.md) - condition: every gated repository pins quest past #326; then only `quest:active` and `quest:kix` are holds
+- [Delete the legacy hold labels](/quest/m2/legacy-labels.md) - once every gated repository pins quest past #326, only `quest:active` and `quest:kix` are holds
