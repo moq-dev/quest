@@ -1,4 +1,4 @@
-# [M] Run the gate on the maintainer's host
+# [S] Run the gate on the maintainer's host
 
 ## Goal
 
@@ -91,26 +91,42 @@ check output written to a file instead of a shared non-blocking pipe,
 initialized before the fixer's dev shell, and `KillMode=process` on the
 daemons so a restart keeps detached fixers.
 
-What remains:
+Done in [moq-dev/quest#443](https://github.com/moq-dev/quest/pull/443),
+2026-11-02, leaving only the merges under Waiting:
 
-- Merge #16 once
-  [kixelated/nixos#13](https://github.com/kixelated/nixos/pull/13) lands.
-- The fixer's container access to CLIProxyAPI and the Codex login, which the
-  [fixer](/quest/m0/host-land/fixer.md) needs.
-- VM tests for three more symlink attacks (an escaping chain, a link to a
-  directory, a write through a symlinked directory), which the extraction
-  already rejects.
-- moq-bot's `organization_self_hosted_runners` write permission served only
-  the retired runner; the maintainer may drop it.
-- The VM test's switch steps fail on about a third of runs with "Job for
-  quest-land-fixer.socket canceled" when several `*-socket-refresh`
-  services restart at once (user, 2026-10-31). Find the race and fix it,
-  without retrying the test.
+- VM tests for three more symlink attacks:
+  [kixelated/nixos#22](https://github.com/kixelated/nixos/pull/22), stacked
+  on [kixelated/nixos#19](https://github.com/kixelated/nixos/pull/19).
+  tarfile's data filter refuses a link to an outside directory, and rewrites
+  the links of an escaping chain and of a write through a symlinked directory
+  so they stay inside; the tests assert that nothing lands outside the
+  destination.
+- The switch race ("Job for quest-land-fixer.socket canceled" when several
+  `*-socket-refresh` services restart at once) is fixed in
+  kixelated/nixos#19 (`21a1bde`): the refresh services close their listeners
+  in activation's stop phase and reopen them in its start phase.
+- Kept: moq-bot's `organization_self_hosted_runners` write permission, once
+  thought to serve only the retired runner, now mints the quest, rind and
+  rust2 queue runners' registration tokens (kixelated/nixos#19's
+  `scripts/ci-runner-token.sh`).
 
 Amended 2026-11-01 (maintainer, /quest-plan; see the
 [queue watcher](/quest/m0/queue-watcher/README.md)): host-gate work is frozen
 except fixes the switch needs. The `QUEST_GATE_PRIORITY=1` export in the
 generated check command (planned 2026-10-31) is dropped with it. The items
 above stay, since the fixer container and its launcher serve the watcher too,
-and the gate keeps serving the repositories not yet switched. The watcher's
-own unit is [Watcher on the host](/quest/m0/queue-watcher/host.md).
+and the gate keeps serving the repositories not yet switched. The watcher
+runs from the same module as each repository's daemon in watch mode
+(`services.quest-land.repositories.<name>.watch`), live for moq-dev/moq
+since 2026-11-02.
+
+## Waiting
+
+- Maintainer: merge the kixelated/nixos stack once
+  [kixelated/nixos#13](https://github.com/kixelated/nixos/pull/13) lands:
+  [#16](https://github.com/kixelated/nixos/pull/16), then
+  [#18](https://github.com/kixelated/nixos/pull/18),
+  [#19](https://github.com/kixelated/nixos/pull/19), and the PRs stacked on
+  it, including [#22](https://github.com/kixelated/nixos/pull/22). Only the
+  maintainer merges into the host's configuration. Check that
+  `git log origin/main` in kixelated/nixos contains each PR's head.
