@@ -14,6 +14,7 @@ import { Opencode } from "./opencode";
 import { type Account, type Login, RunnerHome, defaultHome } from "./home";
 import type { Job } from "./protocol";
 import { Runner } from "./runner";
+import { sandboxRefusal } from "./sandbox";
 import { which } from "../cli/program";
 
 export const DEFAULT_URL = "https://kix.quest";
@@ -69,19 +70,27 @@ export function adapterFor(name: AdapterName, env: NodeJS.ProcessEnv): Adapter {
 /**
  * The adapters a running runner launches jobs with, each resolved once, the
  * first time an account needs it. On Linux the sandbox needs bubblewrap and
- * socat, so they are checked then; macOS has Seatbelt built in. Claude Code
- * runs them itself, and sandbox-runtime for opencode.
+ * socat, and bubblewrap must be able to make its namespaces, so they are
+ * checked then; macOS has Seatbelt built in. Claude Code runs them itself, and
+ * sandbox-runtime for opencode.
  */
 export function runnerAdapters(env: NodeJS.ProcessEnv): (name: AdapterName) => Adapter {
 	const adapters = new Map<AdapterName, Adapter>();
+	let sandboxed = process.platform !== "linux";
 	return (name) => {
 		let adapter = adapters.get(name);
 		if (adapter) return adapter;
-		const missing = process.platform === "linux" ? ["bwrap", "socat"].filter((tool) => !which(tool, env)) : [];
-		if (missing.length)
-			throw new RunnerInputError(
-				`${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not installed; jobs run their commands in an OS sandbox (install bubblewrap and socat, or use the flake's runner package)`,
-			);
+		if (!sandboxed) {
+			const [bwrap, socat] = [which("bwrap", env), which("socat", env)];
+			const missing = [bwrap ? null : "bwrap", socat ? null : "socat"].filter((tool) => tool !== null);
+			if (missing.length)
+				throw new RunnerInputError(
+					`${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not installed; jobs run their commands in an OS sandbox (install bubblewrap and socat, or use the flake's runner package)`,
+				);
+			const refusal = sandboxRefusal(bwrap!);
+			if (refusal) throw new RunnerInputError(refusal);
+			sandboxed = true;
+		}
 		adapters.set(name, (adapter = adapterFor(name, env)));
 		return adapter;
 	};

@@ -7,7 +7,8 @@
 // reach no network host. The project's devShell is evaluated by the runner from the
 // job's revision, never the checkout an agent edited, and its environment,
 // shellHook included, is sourced inside the sandbox before each command.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -112,6 +113,92 @@ export function runtimeSettings(sandbox: Sandbox, denyWrite: string[] = []): Rec
 		},
 		enableWeakerNestedSandbox: false,
 	};
+}
+
+/**
+ * An AppArmor profile that lets `bwrap` make the sandbox's namespaces on a
+ * system restricting unprivileged user namespaces, as Ubuntu 23.10 and later
+ * do. It copies Ubuntu's own `bwrap-userns-restrict`, which covers only
+ * `/usr/bin/bwrap`: bubblewrap gets user namespaces and capabilities inside
+ * them, and the commands it runs keep no capabilities, so they cannot use it
+ * to get around the restriction. It attaches to one exact path rather than a
+ * glob, since anyone who can build with Nix can put a matching name in the store.
+ */
+export function bwrapProfile(bwrap: string): string {
+	const rules = [
+		"allow file rwlkm /{**,},",
+		"allow network,",
+		"allow unix,",
+		"allow ptrace,",
+		"allow signal,",
+		"allow mqueue,",
+		"allow io_uring,",
+		"allow userns,",
+		"allow mount,",
+		"allow umount,",
+		"allow pivot_root,",
+		"allow dbus,",
+	];
+	const body = (lines: string[]) => lines.map((line) => `  ${line}\n`).join("");
+	return (
+		"abi <abi/4.0>,\n" +
+		"include <tunables/global>\n\n" +
+		`profile quest-bwrap ${bwrap} flags=(attach_disconnected,mediate_deleted) {\n` +
+		body(["allow capability,", ...rules, "allow pix /** -> &quest-bwrap//&quest-bwrap-child,"]) +
+		"}\n\n" +
+		"profile quest-bwrap-child flags=(attach_disconnected,mediate_deleted) {\n" +
+		body([...rules, "allow pix /** -> &quest-bwrap-child,", "audit deny capability,"]) +
+		"}\n"
+	);
+}
+
+/** Whether AppArmor keeps unprivileged user namespaces to programs whose profile allows them. */
+function restrictsUserNamespaces(): boolean {
+	try {
+		return readFileSync("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "utf8").trim() === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Why `bwrap` cannot make a sandbox here, or null when it can: it runs a
+ * trivial command in the namespaces Claude Code's sandbox and sandbox-runtime
+ * use, so a runner refuses to start rather than fail every job. Where AppArmor
+ * restricts user namespaces, the reason carries the profile to install.
+ */
+export function sandboxRefusal(bwrap: string, restricted: boolean = restrictsUserNamespaces()): string | null {
+	const probe = spawnSync(
+		bwrap,
+		[
+			"--new-session",
+			"--die-with-parent",
+			"--unshare-user",
+			"--unshare-pid",
+			"--unshare-net",
+			"--ro-bind",
+			"/",
+			"/",
+			"--dev",
+			"/dev",
+			"--proc",
+			"/proc",
+			"true",
+		],
+		{ stdio: ["ignore", "ignore", "pipe"], encoding: "utf8", timeout: 10_000 },
+	);
+	if (!probe.error && probe.status === 0) return null;
+	const said =
+		probe.error?.message ?? (probe.stderr.trim().split("\n").at(-1) || `exit ${probe.status ?? probe.signal}`);
+	const reason = `${bwrap} cannot make the sandbox's namespaces (${said})`;
+	if (!restricted)
+		return `${reason}; jobs run their commands in a bubblewrap sandbox, which needs unprivileged user namespaces`;
+	return (
+		`${reason}. AppArmor allows unprivileged user namespaces only to programs whose profile grants them; ` +
+		`install this profile for the runner's bubblewrap, then start the runner again:\n\n` +
+		`sudo tee /etc/apparmor.d/quest-bwrap >/dev/null <<'EOF'\n${bwrapProfile(bwrap)}EOF\n` +
+		"sudo apparmor_parser -r /etc/apparmor.d/quest-bwrap"
+	);
 }
 
 export function closeSandbox(sandbox: Sandbox): void {
