@@ -46,11 +46,31 @@ records whether its own TERM handler ran:
 - `quest worktree run` uses the same `systemdScopes.run`. Decide whether it
   changes the same way. Recommended: yes, so that one supervisor has one set
   of signal semantics.
-- Avoid delivering the same signal twice. A gate nested in an owner that
-  signals the whole group, or inside a Quest scope, must not forward the
-  signal again (extend the `GROUP` rule in `forwards`, `src/cli/interrupt.ts`).
-  A nested Quest process that gets the signal twice treats the second as a
-  kill.
+- Avoid delivering the same signal twice. A nested Quest process that gets
+  the signal twice treats the second as a kill. Today `forwards`
+  (`src/cli/interrupt.ts`) holds back only SIGINT, and only under the group
+  owner's `GROUP` marker or a foreground terminal. Nothing marks a scope:
+  `systemdScopes.run` passes the environment through, and a gate nested in a
+  scope runs `direct` (`owner` in `src/cli/gate.ts`), which forwards TERM and
+  HUP every time. Hold back SIGINT, SIGTERM, and SIGHUP whenever the owner
+  that signals everything it holds also holds the child:
+  - Group owner: extend the `GROUP` rule to TERM and HUP. A gated command
+    stays in the group, so the marker stays accurate: a nested gate runs
+    `direct`, and `systemdScopes.run` changes the cgroup but not the
+    process group.
+  - Scope owner: hold back in `direct` while `scoped()` reports a Quest scope.
+    The child shares that cgroup, so the scope-wide signal already reached
+    it. Do not use an inherited env marker for this. A `quest worktree run`
+    nested in a gate scope calls `systemdScopes.run`, whose command moves to
+    a new sibling scope outside the enclosing scope. That command needs the
+    forwarded signal, so `systemdScopes.run` keeps forwarding unless `GROUP`
+    applies.
+  - `scoped()` matches every `quest-*.scope`, `quest worktree run`'s
+    included. So this rule needs every Quest scope owner to signal the whole
+    scope, which is one more reason to change `quest worktree run` too.
+  - Trade-off, as for SIGINT today: TERM or HUP sent with `kill` to a nested
+    Quest alone is not forwarded, so its command stops only at the second
+    signal. Document this beside `forwards`.
 - Ordering: once the command exits, the gate SIGKILLs the rest at once. If
   `time` and Bash exit before the leaf finishes its own cleanup, that cleanup
   is cut short. This matters most for a leaf that stops children it detached
@@ -63,7 +83,11 @@ records whether its own TERM handler ran:
 - Tests: real `just` → Bash with traps → GNU `time` → leaf fixtures,
   synchronized on events, for both owners (`test/gate.test.ts` already runs
   each owner directly). Cover TERM, HUP, and the second-signal
-  kill. Add GNU `time` to the devshell if the fixture needs it. Update the
+  kill. For each owner, add nested-gate tests for TERM and HUP that check the
+  leaf gets each signal exactly once and that the command is not killed. This
+  extends the SIGINT case "delivers SIGINT once to a command under a nested
+  gate". Also test that a `quest worktree run` nested in a gate scope still
+  forwards to its own scope. Add GNU `time` to the devshell if the fixture needs it. Update the
   gate's section of the README.
 - Adoption in moq.pro bumps its `quest` flake input past this fix. That
   belongs to #3137, not to this quest.
