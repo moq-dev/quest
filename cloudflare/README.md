@@ -93,9 +93,15 @@ rereads it from GitHub, refusing one that closed or whose head moved since
 observations read it. `iterate` and `merge` jobs trust a head only when
 every commit beyond the repository's default branch, independently of the
 PR's chosen base, has a valid signature from a current maintain or admin
-collaborator. The check runs at creation and again at assignment. Other
-heads, including unsigned ones and those kix pushed to, route only to Linux
-runners that declare VM builds. A `merge` job runs the merge
+collaborator, or a maintainer approved that exact head. The inbox shows a
+queued job's other head as a decision linking GitHub's compare view of its
+commits beyond the default branch; `POST
+/projects/github/:owner/:repository/pulls/:number/approve` with the `head`
+on screen records the approver, the SHA, and the time in `head_approvals`,
+one per pull request. An approval lapses when the head moves and counts only
+while its approver keeps a maintain or admin role. The check runs at
+creation and again at assignment. Other heads, including unsigned ones and
+those kix pushed to, route only to Linux runners that declare VM builds. A `merge` job runs the merge
 skill's loop on an open, non-draft pull request and lands it; it holds the PR
 with its own `quest:kix` label, which local sessions respect as they do each
 other's `quest:active` (`src/jobs/landing.ts`), as described in

@@ -57,7 +57,7 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-async function queued() {
+async function queued(revision = head) {
 	return (
 		await store.createJob(
 			db,
@@ -66,9 +66,9 @@ async function queued() {
 				actor: "owner",
 				workflow: "iterate",
 				target: "pulls/2",
-				revision: head,
+				revision,
 				branch: "fix",
-				trusted: await trusted(),
+				trusted: await trusted(revision),
 			},
 			0,
 		)
@@ -292,5 +292,84 @@ describe("authenticated PR provenance", () => {
 		const slots = new Map([mac, vm].map((r) => [r.id, 1]));
 		const pass = await store.dispatch(db, "owner", slots, store.GRACE + 4, verify(testEnv));
 		expect(pass.assign).toMatchObject([{ runner: vm.id, job: { id, trusted: 0, attempt: 2 } }]);
+	});
+});
+
+describe("head approval", () => {
+	// kix's own commits are signed for the App, never a maintainer.
+	const pushed = "d".repeat(40);
+	const approve = (user = "owner", sha = pushed) => service().approveHead(repository, user, 2, sha);
+
+	beforeEach(async () => {
+		repo.commits[pushed] = { ...commit([head]), signature: { isValid: true, signer: null } };
+		repo.branches.fix = pushed;
+		await db.batch([
+			db.prepare(
+				"INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES('outsider','Contributor','contributor@example.test',1,0,0)",
+			),
+			db.prepare(
+				"INSERT INTO account(id,accountId,providerId,userId,createdAt,updatedAt) VALUES('outsider-github','8','github','outsider',0,0)",
+			),
+		]);
+	});
+
+	it("runs a kix-pushed head a maintainer approved on an ordinary runner", async () => {
+		const id = await queued(pushed);
+		const mac = await runner("mac", "darwin");
+		expect((await dispatch([mac])).assign).toEqual([]);
+		await approve();
+		expect(
+			await db
+				.prepare("SELECT pull,head,approver,approvedAt FROM head_approvals WHERE repository=?")
+				.bind(10)
+				.first(),
+		).toMatchObject({ pull: 2, head: pushed, approver: "owner", approvedAt: expect.any(Number) });
+		expect((await dispatch([mac])).assign).toMatchObject([{ runner: mac.id, job: { id, trusted: 1 } }]);
+	});
+
+	it("lapses when the head moves after the approval", async () => {
+		await approve();
+		expect(await trusted(pushed)).toBe(true);
+		const next = "e".repeat(40);
+		repo.commits[next] = { ...commit([pushed]), signature: { isValid: true, signer: null } };
+		repo.branches.fix = next;
+		expect(await trusted(next)).toBe(false);
+		expect(await trusted(pushed)).toBe(false);
+		// The approval names the head the maintainer saw, never a later one.
+		await expect(approve()).rejects.toThrow("moved since you looked");
+		repo.branches.fix = pushed;
+		expect(await trusted(pushed)).toBe(true);
+	});
+
+	it("counts only while the approver keeps a maintain or admin role", async () => {
+		await approve();
+		repo.maintainers = [];
+		expect(await trusted(pushed)).toBe(false);
+		repo.maintainers = ["maintainer"];
+		expect(await trusted(pushed)).toBe(true);
+	});
+
+	it("refuses an approval from someone who is not a maintainer, and never counts one", async () => {
+		await expect(approve("outsider")).rejects.toThrow("maintainer authority required");
+		expect(await db.prepare("SELECT 1 FROM head_approvals").first()).toBeNull();
+		await db
+			.prepare("INSERT INTO head_approvals(repository,pull,head,approver,approvedAt) VALUES(10,2,?,'outsider',0)")
+			.bind(pushed)
+			.run();
+		expect(await trusted(pushed)).toBe(false);
+	});
+
+	it("covers only its own pull request", async () => {
+		repo.pulls.push({
+			number: 3,
+			title: "Other",
+			author: "maintainer",
+			branch: "other",
+			checks: null,
+			review: null,
+		});
+		repo.branches.other = pushed;
+		await approve();
+		expect(await service().jobTrust(repository, "pulls/3", pushed)).toBe(false);
 	});
 });

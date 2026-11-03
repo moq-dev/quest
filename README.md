@@ -1120,8 +1120,10 @@ heads' devShells in a VM. A pull request's head is trusted only when every
 commit beyond the default branch has a valid signature from a current
 maintainer, so sign your commits (for example with
 [SSH signing](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#ssh-commit-signature-verification))
-for its iterate and merge jobs to run; a head kix has pushed to stays
-untrusted. A job resumes with another maintainer's answer
+for its iterate and merge jobs to run. Any other head, such as one kix
+pushed to, waits in the inbox for a maintainer to review its commits and
+approve that exact head; the approval lapses when the head moves, and counts
+only while its approver is still a maintainer. A job resumes with another maintainer's answer
 only once you approve it in the inbox. opencode runs as `opencode serve` on
 localhost behind a password made for each turn.
 

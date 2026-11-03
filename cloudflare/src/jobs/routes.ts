@@ -12,6 +12,7 @@ import { data, id, text } from "./protocol";
 import { HeadMoved, LIMITS, parsePublication, publish, pullOf, restart, validateContinuation } from "./publish";
 import * as store from "./store";
 import { JobError } from "./store";
+import { verify } from "./trust";
 
 type Bindings = { Bindings: Env };
 export const jobs = new Hono<Bindings>();
@@ -45,7 +46,7 @@ export function inboxURL(repository: number, target: string) {
 	return `/inbox?${new URLSearchParams({ project: String(repository), item: target })}`;
 }
 /** What an inbox form just recorded, which the next decision's page notes. */
-export type Done = "answer" | "approve" | "start" | "stop" | "skip" | "merge";
+export type Done = "answer" | "approve" | "trust" | "start" | "stop" | "skip" | "merge";
 /**
  * The inbox's next active decision, or its empty state, after a form recorded
  * one. The item acted on stays reachable from its list, with its earlier answers.
@@ -440,6 +441,25 @@ jobs.post(`${base}/:job/approve`, async (c) => {
 	await store.approve(c.env.DB, job.id, question, user, Date.now());
 	await hub(c.env, job.actor).dispatch(job.actor);
 	return reply(c, form, "approve", null);
+});
+
+// A maintainer approves the exact pull request head they reviewed, such as one
+// kix pushed, so its iterate and merge jobs run on host runners although not
+// every commit carries a maintainer's signature.
+jobs.post("/projects/github/:owner/:repository/pulls/:number/approve", async (c) => {
+	const { user, repo, github } = await maintained(c);
+	const { body, form } = await input(c);
+	const number = c.req.param("number");
+	if (!/^[1-9]\d{0,14}$/.test(number) || typeof body.head !== "string")
+		throw new JobError("Pull request and head required");
+	await github.approveHead(repo, user, Number(number), body.head);
+	// Reclassify a waiting job now, rather than when its requester's runner next has a free slot.
+	const queued = await store.queuedOn(c.env.DB, repo.id, `pulls/${number}`);
+	if (queued && store.onPull(queued.workflow)) {
+		await store.classify(c.env.DB, queued, verify(c.env));
+		await hub(c.env, queued.actor).dispatch(queued.actor);
+	}
+	return reply(c, form, "trust", null);
 });
 
 /** The longest reply to a publication decision, in characters as the inbox form counts them. */
