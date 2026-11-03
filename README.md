@@ -379,7 +379,8 @@ present (except `quest land`'s, which no head carries), and every required
 check passed; it names the last required check that passed and is dated when
 the head went idle. Each prints once per head, with the check's name
 (spaces as `_`) in the actor field and its details URL. Results count as
-`quest status` counts them, so neutral and skipped results pass. Each job of a
+`quest status` counts them, so neutral and skipped results pass and a rerun
+supersedes an earlier run of the same check. Each job of a
 workflow a ruleset requires is required.
 Requiredness comes from the base branch's protection and rulesets, readable
 with read access. A failed optional check prints separately as `check:failed`,
@@ -455,8 +456,8 @@ comes last, and a missing value prints as `-`:
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
-| `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when. |
-| `checks` | The head's rollup state and `passed=`, `failing=`, `pending=` counts. |
+| `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
+| `checks` | `failure` if any check fails, else `pending` if any is pending, else `success`, and `passed=`, `failing=`, `pending=` counts, all from each check's latest run; `-` when the head has no checks. |
 | `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
@@ -465,7 +466,11 @@ comes last, and a missing value prints as `-`:
 | `starter-hold` | A draft its starter owns: last activity time, PR URL, and `last active` age. Last activity is not when ownership began. |
 
 The node ID is what GraphQL's `addPullRequestReviewThreadReply` and
-`resolveReviewThread` take. Neutral and skipped checks pass. A required check
+`resolveReviewThread` take. Neutral and skipped checks pass. Only each check's
+latest run counts, as for GitHub's mergeability: a rerun, or the same workflow
+run again on the head, supersedes an earlier run of that name from the same
+app, and a newer commit status supersedes an older one of its context. GitHub's
+own rollup state counts the superseded runs too. A required check
 is one branch protection or a ruleset requires for this PR. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
@@ -676,7 +681,8 @@ quest links with `quest resolve`. A failed batch halves the next batch's size,
 down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
 additions stay queued. A PR whose required checks are still running stays queued
-and sits out batches until they pass. If any are still pending two hours after
+and sits out batches until they pass; only each check's latest run counts, as in
+`quest status`. If any are still pending two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
 bisection: success lands one squash commit per PR. A failure, or a base that
@@ -1254,11 +1260,12 @@ checkouts are Quest's own once `quest init` installs its hooks (see
 [Claude Code checkouts](#claude-code-checkouts)).
 
 Set a shared capacity and an explicit reservation in bytes, covering the
-checkout and its expected build output. Measure representative jobs before
+checkout, the module stores its submodules clone, and its expected build output. Measure representative jobs before
 choosing the budget. Until a capacity is set, only free disk space limits new
 reservations. Reservations serialize creators and account for concurrent
 expected growth. They do not enforce filesystem quotas against arbitrary
-writers, and Git objects stored in the shared repository are not charged.
+writers, and Git objects stored in the shared repository are not charged; each
+checkout's own submodule stores are.
 
 ```sh
 quest worktree capacity 20000000000
@@ -1316,7 +1323,7 @@ Once a checkout is finished, remove it and its record:
 quest worktree remove example
 ```
 
-`remove` never forces. It refuses while supervised runs are live, and refuses
+`remove` checks files and commits recursively before deleting a checkout. It refuses while supervised runs are live, and refuses
 modified or untracked files and any commit, at `HEAD` or under the checkout's
 own refs such as `refs/bisect/`, that no branch or remote-tracking ref
 reaches. A squash-merged change leaves its commits unreached, so they count as
@@ -1325,7 +1332,20 @@ PR whose head is exactly that commit; other commits need no forge or token.
 It then prunes the scratch and refuses ignored files that remain, leaving the
 checkout released, before `git worktree remove` deletes it. A checkout already
 removed with `git worktree remove` only drops its record, as with `release`.
-A failed creation stays charged until `release` drops it. Records live in
+New checkouts initialize their submodules recursively before returning. Restoring
+one preserves its existing submodule pins and local work. Creation verifies any
+new module tips not reached by remote-tracking branches (such as SHA-fetched
+pins or cloned tags) against origin and records them under
+`refs/remotes/quest-pins/`, outside origin's branch-prune namespace. Removal also checks
+submodules' files outside declared scratch and every module store, including deinitialized ones;
+commits at their HEAD or refs must be reachable from a remote-tracking ref,
+since module stores and their local branches are deleted with the checkout, and
+a module store must have no linked worktrees of its own.
+Scratch paths inside submodules use that submodule's ignore rules. Only after
+those checks does removal use the force Git requires for submodules.
+A failed creation stays charged until its partial checkout is inspected and
+removed, then `release` drops its record. Unlock it before removing it; Git
+requires `--force` for submodules, so preserve their files and commits first. Records live in
 `$QUEST_WORKTREE_HOME`, or `$XDG_STATE_HOME/quest/worktrees` (default
 `~/.local/state/quest/worktrees`). The registry lock of a process that exited on
 this host is reclaimed; a live lock, or one held from another host, is never
@@ -1355,7 +1375,8 @@ number origin has no request for starts from the default base instead of
 failing. With only a name to go on,
 it declares the main checkout's top-level ignored entries as scratch, except
 `.worktrees/`, `.claude/`, and entries holding a nested repository, and
-reserves the main checkout's disk usage without `.git` and those checkouts.
+reserves the main checkout's disk usage without `.git` and those checkouts, plus
+its submodule stores, which the new checkout clones again.
 
 A subagent's checkout is released when the subagent finishes or stops to wait
 for an answer, and restored when it resumes, with a note telling it to

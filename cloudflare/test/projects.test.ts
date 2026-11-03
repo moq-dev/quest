@@ -316,6 +316,12 @@ function github(
 	return { calls, request, service: new GitHubService(testEnv, request as typeof fetch) };
 }
 
+/** A project read's activity query: not its quest blobs, nor its batch of open pull requests' bodies. */
+const activityRead = (call: ReturnType<typeof github>["calls"][number]) =>
+	call.path === "/graphql" &&
+	!call.body.query.includes("object(oid:") &&
+	!call.body.query.includes("b0:pullRequest(");
+
 async function state() {
 	return env.DB.prepare("SELECT * FROM github_projects WHERE id=10").first<{ state: string }>();
 }
@@ -1448,7 +1454,7 @@ describe("enrolled project observations", () => {
 		const result = await second.service.projectState(repo, "enrollment-test", true);
 		expect(result!.complete).toBe(true);
 		expect(result!.activity).toHaveLength(4);
-		const query = second.calls.filter((c) => c.path === "/graphql").at(-1)!;
+		const query = second.calls.filter(activityRead).at(-1)!;
 		expect(query.body.variables.issues).toBe("issue-cursor");
 		expect(query.body.query).not.toContain("pullRequests(first:50");
 		const closed = activity();
@@ -1487,7 +1493,7 @@ describe("enrolled project observations", () => {
 			onActivity: async () => void (await delivery("status", event)),
 		});
 		const result = await second.service.projectState(repo, "enrollment-test", true);
-		const query = second.calls.filter((c) => c.path === "/graphql").at(-1)!;
+		const query = second.calls.filter(activityRead).at(-1)!;
 		expect(query.body.variables.issues).toBe("issue-cursor");
 		expect(result!.complete).toBe(true);
 		expect(result!.project.available).toEqual(["quest/first.md"]);
@@ -1513,7 +1519,7 @@ describe("enrolled project observations", () => {
 			},
 		});
 		const result = await second.service.projectState(repo, "enrollment-test", true);
-		expect(second.calls.filter((c) => c.path === "/graphql").at(-1)!.body.variables.issues).toBe("issue-cursor");
+		expect(second.calls.filter(activityRead).at(-1)!.body.variables.issues).toBe("issue-cursor");
 		expect(result!.project.available).toEqual([]);
 		expect(result!.project.changes).toMatchObject([{ quest: "quest/first.md" }]);
 	});
@@ -1713,7 +1719,7 @@ describe("enrolled project observations", () => {
 		expect((await readActivity(env.DB, 10)).items.some((item) => item.id === "200")).toBe(false);
 	});
 
-	it("reads bodies once per open draft and never in metadata/history pages", async () => {
+	it("reads open pull requests' bodies in one batch and never in metadata/history pages", async () => {
 		await enrolled();
 		const page = activity();
 		Object.assign(page.pullRequests!.nodes[0]!, { isDraft: true, body: "## Decisions needed\n\nChoose." });
@@ -1725,10 +1731,49 @@ describe("enrolled project observations", () => {
 		expect(queries).toHaveLength(2);
 		expect(queries[0]!.body.query).not.toMatch(/\bbody\b/);
 		expect(queries[1]!.body.query).toContain("b0:pullRequest(number:2)");
-		expect(queries[1]!.body.query).not.toContain("number:3");
+		// An open pull request that is not a draft is read too, for the reviews on its head.
+		expect(queries[1]!.body.query).toContain("b1:pullRequest(number:3)");
+		expect(queries[1]!.body.variables.app).toBe(Number(testEnv.GITHUB_APP_ID));
 		expect(queries[1]!.body.query).not.toContain("number:5");
 		expect((result!.activity.find((item) => item.id === "200")!.data as { handedBack: boolean }).handedBack).toBe(
 			true,
+		);
+	});
+
+	it("records why the land gate would refuse each open pull request's head, without keeping what it read", async () => {
+		await enrolled();
+		const page = activity();
+		const human = page.open!.nodes[1]!;
+		const read = {
+			...human,
+			body: `## Review\n\nClean on ${commit}.`,
+			authorAssociation: "CONTRIBUTOR",
+			author: { __typename: "User", login: "human" },
+			userContentEdits: { nodes: [] },
+			latestOpinionatedReviews: { nodes: [] },
+			tip: { nodes: [{ commit: { oid: commit, parents: { totalCount: 1 }, checkSuites: { nodes: [] } } }] },
+		};
+		const result = await github({ activity: page, entities: { 3: read } }).service.projectState(
+			repo,
+			"enrollment-test",
+			true,
+		);
+		const data = (id: string) => result!.activity.find((item) => item.id === id)!.data as Record<string, unknown>;
+		// A contributor's own record does not count, so the gate would refuse the head.
+		expect(data("201").unreviewed).toBe(
+			`No review counts on ${commit.slice(0, 7)} yet. kix lands only a reviewed head. Approve ${commit.slice(0, 7)} on GitHub as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`,
+		);
+		expect(data("201")).not.toHaveProperty("body");
+		expect(data("201")).not.toHaveProperty("tip");
+		// A read without the reviews flags nothing.
+		expect(data("200").unreviewed).toBeNull();
+		// The same read with a member's record counts it.
+		const member = await github({
+			activity: page,
+			entities: { 3: { ...read, authorAssociation: "MEMBER" } },
+		}).service.projectState(repo, "enrollment-test", true);
+		expect((member!.activity.find((item) => item.id === "201")!.data as { unreviewed: unknown }).unreviewed).toBe(
+			null,
 		);
 	});
 
@@ -1824,8 +1869,7 @@ describe("webhook reconciliation", () => {
 		vi.spyOn(globalThis, "fetch").mockImplementation(mock.request as typeof fetch);
 		return mock;
 	}
-	const reads = (calls: ReturnType<typeof github>["calls"]) =>
-		calls.filter((call) => call.path === "/graphql" && !call.body.query.includes("object(oid:"));
+	const reads = (calls: ReturnType<typeof github>["calls"]) => calls.filter(activityRead);
 	const opened = (id: number, number: number, id_ = crypto.randomUUID()) =>
 		delivery("issues", { ...event, action: "opened", issue: { id, number } }, id_, {}, testEnv);
 	async function row(id: string) {
@@ -1978,6 +2022,30 @@ describe("webhook reconciliation", () => {
 		expect(read).toMatchObject({ stale: 0 });
 		expect(JSON.parse(read!.data!).comments).toEqual({ totalCount: 3 });
 		expect(await row("999")).toBeNull();
+	});
+
+	it("rereads the pull requests the App's own review check names, and no other check's", async () => {
+		await enrolled();
+		const { calls } = mocked({ entities: { 2: { ...pull(), comments: { totalCount: 3 } } } });
+		const run = (name: string, app: number, number = 2) => ({
+			...event,
+			action: "completed",
+			check_run: { name, app: { id: app }, pull_requests: [{ id: 200, number, base: { repo: { id: 10 } } }] },
+		});
+		const app = Number(testEnv.GITHUB_APP_ID);
+		// CI's checks, another App's \`quest review\`, and a pull request of another repository cost no read.
+		for (const other of [run("test", app), run("quest review", app + 1)])
+			expect((await delivery("check_run", other, undefined, {}, testEnv)).status).toBe(202);
+		const foreign = run("quest review", app);
+		foreign.check_run.pull_requests[0]!.base.repo.id = 11;
+		await delivery("check_run", foreign, undefined, {}, testEnv);
+		expect(reads(calls)).toHaveLength(0);
+		await delivery("check_run", run("quest review", app), undefined, {}, testEnv);
+		expect(reads(calls)).toHaveLength(1);
+		expect(reads(calls)[0]!.body.query).toContain("s0:pullRequest(number:2)");
+		const read = await row("200");
+		expect(read).toMatchObject({ stale: 0 });
+		expect(JSON.parse(read!.data!).comments).toEqual({ totalCount: 3 });
 	});
 
 	it("records a failed read without retrying, and a later webhook reads again", async () => {
