@@ -14,7 +14,8 @@ import { FLAKY_LIMIT, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
 import type { FixContext } from "../src/cli/land-watch-fix";
-import { readFlaky } from "../src/cli/land-watch-flaky";
+import { type FlakyTest, RECENT, readFlaky, saveFlaky, writeKnownFlaky } from "../src/cli/land-watch-flaky";
+import { FLAKY_INPUT, type KnownFlaky } from "../src/cli/land-fix";
 import { configure, GIT_SETTINGS, initRepository, tempDir } from "./fixture";
 
 // The fixer tests merge with the quest driver and run fixer wrappers, which take longer than vitest's default.
@@ -655,6 +656,36 @@ test("failing jobs that do not fit the comment are counted instead", () => {
 	expect(cut.length).toBeLessThanOrEqual(800);
 });
 
+test("a round is told the most recently seen flaky tests not yet disabled, within what the fixer reads", () => {
+	const state = tempDir();
+	const checkout = tempDir();
+	mkdirSync(join(checkout, ".git"));
+	// Long-lived flakes that never got a valid disable keep collecting verdicts.
+	const tests: FlakyTest[] = Array.from({ length: 200 }, (_, index) => ({
+		failure: `just test: flaky_${index}`,
+		verdicts: Array.from({ length: 30 }, (_, round) => ({
+			job: `watch-job-${index}-${round}.json`,
+			number: round + 1,
+			at: at(index),
+			jobs: [`https://github.com/upstream/project/actions/runs/${index}/job/${round}`],
+		})),
+	}));
+	tests[0].disable = {
+		head: HEAD,
+		base: { ref: "main", sha: BASE },
+		quest: "quest/m0/flaky/x.md",
+		attribution: "Codex",
+	};
+	saveFlaky(state, tests);
+	writeKnownFlaky(state, checkout);
+	const text = readFileSync(join(checkout, ".git", FLAKY_INPUT), "utf8");
+	expect(text.length).toBeLessThan(100_000);
+	const known = JSON.parse(text) as KnownFlaky[];
+	expect(known[0].failure).toBe("just test: flaky_199");
+	expect(known.every((item) => item.jobs.length === RECENT)).toBe(true);
+	expect(known.some((item) => item.failure === "just test: flaky_0")).toBe(false);
+});
+
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
 const PATH = process.env.PATH;
@@ -1128,7 +1159,9 @@ git commit -qm 'disable render_timeout'`;
 		]);
 		const opened = github.pulls.find((pull) => pull.number === 8)!;
 		expect(opened.title).toBe("quest land: disable the flaky test render-timeout");
-		expect(opened.body).toContain("The land fixer judged `just test: render_timeout` flaky 3 times");
+		expect(opened.body).toContain(
+			"The land fixer judged `just test: render_timeout` flaky 3 times, most recently in",
+		);
 		expect(opened.body).toContain(
 			"#5 ([job 1](https://github.com/upstream/project/actions/runs/50/job/71)), #6 ([job 1](https://github.com/upstream/project/actions/runs/60/job/71))",
 		);

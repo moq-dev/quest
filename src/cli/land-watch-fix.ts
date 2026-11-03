@@ -42,6 +42,7 @@ import {
 	type FlakyTest,
 	questName,
 	readFlaky,
+	RECENT,
 	recordFlaky,
 	saveFlaky,
 	writeKnownFlaky,
@@ -670,15 +671,15 @@ async function openDisable(
 		// A retry after a restart finds its own push already there.
 		if ((await remoteHead(context.root, remote, ref, context.read)) !== disable.head) {
 			const pushed = await push(context.root, remote, disable.base.sha, disable.head, ref, context.token, "");
-			if (pushed.status !== 0) {
-				disable.done = `push refused: ${pushed.stderr.trim()}`;
-				record();
-				return `disable refused ${name}: ${disable.done}`;
-			}
+			// Retried on the next pass: a push fails as often for an outage as for a rule.
+			if (pushed.status !== 0) throw new Error(`push failed: ${pushed.stderr.trim()}`);
 		}
 		const head = `${repository.split("/")[0]}:${branch}`;
 		const [open] = await github.all(`/repos/${repository}/pulls?head=${encodeURIComponent(head)}&state=open`);
-		const seen = test.verdicts.map((verdict) => `#${verdict.number} (${jobLinks(verdict.jobs)})`).join(", ");
+		const seen = test.verdicts
+			.slice(-RECENT)
+			.map((verdict) => `#${verdict.number} (${jobLinks(verdict.jobs)})`)
+			.join(", ");
 		const reason = `skip the flaky ${test.failure}, and add ${disable.quest} to fix or delete it`;
 		const pull =
 			open ??
@@ -689,7 +690,7 @@ async function openDisable(
 							title: `quest land: disable the flaky test ${name}`,
 							head,
 							base: disable.base.ref,
-							body: `The land fixer judged ${fixerText(test.failure)} flaky ${test.verdicts.length} times, in the \`merge_group\` builds of ${seen}. This pull request skips it and adds its follow-up quest, \`${disable.quest}\`, to fix or delete it. quest land watch enqueues it like any other pull request, and fixes it if the queue drops it.${review("", disable.head, reason, disable.attribution)}\n\n(written by ${disable.attribution})`,
+							body: `The land fixer judged ${fixerText(test.failure)} flaky ${test.verdicts.length} times, most recently in the \`merge_group\` builds of ${seen}. This pull request skips it and adds its follow-up quest, \`${disable.quest}\`, to fix or delete it. quest land watch enqueues it like any other pull request, and fixes it if the queue drops it.${review("", disable.head, reason, disable.attribution)}\n\n(written by ${disable.attribution})`,
 						},
 					})
 				).json(),

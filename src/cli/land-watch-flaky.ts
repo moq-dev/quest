@@ -44,8 +44,13 @@ export interface FlakyTest {
 
 /** The flaky verdicts that disable a test: one alone only re-enqueues, since it might hide a real bug. */
 export const FLAKY_VERDICTS = 2;
-/** The most known flaky tests a round is told about, most recently seen first. */
-const KNOWN = 50;
+/** The most recent verdicts of a test that a round's input or a disable's PR lists. */
+export const RECENT = 10;
+/**
+ * The bytes of known flaky tests a round is told about, most recently seen first, well within the
+ * 100 KB `quest land fix` reads.
+ */
+const KNOWN_BYTES = 50_000;
 /** The follow-up quest a disable adds, one per test, in the repository's m0 `flaky` epic. */
 const QUEST = /^quest\/m0\/flaky\/([a-z0-9][a-z0-9._-]*)\.md$/;
 
@@ -67,11 +72,16 @@ export function saveFlaky(state: string, tests: FlakyTest[]): void {
  */
 export function writeKnownFlaky(state: string, checkout: string): void {
 	const latest = (test: FlakyTest) => test.verdicts.reduce((at, verdict) => (verdict.at > at ? verdict.at : at), "");
-	const known: KnownFlaky[] = readFlaky(state)
+	const known: KnownFlaky[] = [];
+	let bytes = 2;
+	for (const test of readFlaky(state)
 		.filter((test) => test.disable === undefined && test.verdicts.length > 0)
-		.sort((a, b) => latest(b).localeCompare(latest(a)))
-		.slice(0, KNOWN)
-		.map((test) => ({ failure: test.failure, jobs: test.verdicts.flatMap((verdict) => verdict.jobs) }));
+		.sort((a, b) => latest(b).localeCompare(latest(a)))) {
+		const item = { failure: test.failure, jobs: test.verdicts.slice(-RECENT).flatMap((verdict) => verdict.jobs) };
+		bytes += Buffer.byteLength(JSON.stringify(item)) + 1;
+		if (bytes > KNOWN_BYTES) break;
+		known.push(item);
+	}
 	if (known.length) writeFileSync(join(checkout, ".git", FLAKY_INPUT), JSON.stringify(known), { mode: 0o600 });
 }
 
