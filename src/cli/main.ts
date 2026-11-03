@@ -438,7 +438,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Issue-comment edits print as edited, including updates to older bot status comments. The account's own edits are ignored.",
 		)
 		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
-		.option("--since <point>", "ISO timestamp, pushed-tip SHA, or resume cursor (default: current head push time)")
+		.option("--since <point>", "ISO timestamp, branch-tip SHA, or resume cursor (default: current head push time)")
 		.option("--timeout <seconds>", "Maximum wait in seconds", positiveSeconds)
 		.action((value: string, options: { since?: string; timeout?: number }) => {
 			const pr = pullRequest(value, root());

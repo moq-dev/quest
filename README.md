@@ -343,7 +343,8 @@ Authentication comes from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`.
 Without `--since`, the point is the current head's push time, so an existing
 review on that head is included. GitHub lists a push seconds to minutes after
 it lands, so for the current head the wait rereads the listing every 15 seconds
-until the push appears, warning once. Any other SHA must be a listed pushed tip;
+until the push appears, warning once. Any other SHA must be a tip the listing
+shows a push, or a merge into the branch such as **Update branch**, moving it to;
 otherwise pass an ISO timestamp instead. Forks use the head
 repository's activity. Deleted head repositories require a timestamp.
 The initial PR commit listing must match the resolved head; a racing push or
@@ -354,7 +355,8 @@ commit), type, actor, and URL. The last line adds a resume cursor. Pass its
 **last field** as `--since` on the next call. Cursors preserve commit membership
 and events sharing a timestamp; treat them as opaque, and use them only for the
 same PR. Explicit timestamps include events at that instant. Historical plain
-pushes come from repository activity; pushes observed while waiting come from new
+pushes come from repository activity, and a historical merge into the branch
+prints as its new commit; pushes observed while waiting come from new
 commit SHAs, regardless of git author dates. Force pushes come from the PR
 timeline, excluding the one that created the starting head. A merge through
 the queue prints `removed_from_merge_queue` about a second before `merged`, so a
