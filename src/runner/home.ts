@@ -13,7 +13,7 @@ import type { AdapterName } from "./adapter";
 
 /** The runner's kix sign-in, from `quest runner login`. */
 export interface Login {
-	/** The kix origin, such as https://kix.quest. */
+	/** The kix origin, such as https://quest.moq.dev. */
 	url: string;
 	/** The bearer token this machine made; kix stores only its hash. */
 	token: string;

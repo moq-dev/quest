@@ -301,6 +301,16 @@ export function route(job: Job, offers: Offer[]): Offer | null {
 /** Whether a queued PR job's current head is still trusted. */
 export type Verify = (job: Pick<Job, "repository" | "target" | "revision" | "head" | "trusted">) => Promise<boolean>;
 
+/** Verify a queued PR job's current head and record the answer while the job is unchanged. */
+export async function classify(db: D1Database, job: Job, verify: Verify) {
+	const trusted = (await verify(job)) ? 1 : 0;
+	await db
+		.prepare("UPDATE jobs SET trusted=? WHERE id=? AND state='queued' AND attempt=? AND head IS ?")
+		.bind(trusted, job.id, job.attempt, job.head)
+		.run();
+	return trusted;
+}
+
 export type Claimed = NonNullable<Awaited<ReturnType<typeof readJob>>> & { owner: string; name: string };
 
 /**
@@ -380,13 +390,7 @@ export async function dispatch(
 	// Every queued job is considered, so unroutable older ones cannot starve newer ones.
 	for (const job of candidates!.results as Job[]) {
 		if (![...free.values()].some((n) => n > 0)) break;
-		if (onPull(job.workflow)) {
-			job.trusted = (await verify(job)) ? 1 : 0;
-			await db
-				.prepare("UPDATE jobs SET trusted=? WHERE id=? AND state='queued' AND attempt=? AND head IS ?")
-				.bind(job.trusted, job.id, job.attempt, job.head)
-				.run();
-		}
+		if (onPull(job.workflow)) job.trusted = await classify(db, job, verify);
 		const chosen = route(
 			job,
 			accounts.map((o) => ({ ...o, free: (free.get(o.runner) ?? 0) > 0, limited: !!o.limited })),
@@ -851,6 +855,14 @@ export async function active(db: D1Database, repository: number, target: string)
 		)
 		.bind(repository, target)
 		.first());
+}
+
+/** The queued job on a target, if any. */
+export function queuedOn(db: D1Database, repository: number, target: string) {
+	return db
+		.prepare("SELECT * FROM jobs WHERE repository=? AND target=? AND state='queued'")
+		.bind(repository, target)
+		.first<Job>();
 }
 
 /**

@@ -19,11 +19,12 @@ export type Read = { repository: number; item: string; seen: string | null; skip
 
 /**
  * What the item asks of the maintainer: answer an agent, pick an account for
- * a limited job, approve another maintainer's answer to their own job, retry
- * a failure, or start work on an issue, PR, or ready quest. `null` is work in
- * progress, which only informs.
+ * a limited job, approve another maintainer's answer to their own job, trust
+ * a pull request head no runner may run yet, retry a failure, or start work
+ * on an issue, PR, or ready quest. `null` is work in progress, which only
+ * informs.
  */
-export type Need = "answer" | "account" | "approve" | "retry" | "start";
+export type Need = "answer" | "account" | "approve" | "trust" | "retry" | "start";
 export type Kind = "issue" | "pull" | "quest" | "plan" | "devshell";
 
 export type Item = {
@@ -41,6 +42,8 @@ export type Item = {
 	/** The job's open question, or its answer awaiting approval, and its prompt when an agent asked it. */
 	question: QuestionView | null;
 	prompt: Prompt | null;
+	/** A "trust" decision's exact head, and GitHub's view of its commits beyond the default branch. */
+	head: { sha: string; compare: string } | null;
 	need: Need | null;
 	/** What the item currently shows; a newer version is unread again and undoes a skip. */
 	version: string;
@@ -191,8 +194,17 @@ export function decisions(
 		let need: Need | null = null;
 		let version = entity?.version ?? "";
 		let question: QuestionView | null = null;
+		let head: Item["head"] = null;
 		let ended = false;
-		if (job && (job.state === "queued" || job.state === "running")) version = `job:${job.id}`;
+		if (job?.state === "queued" && store.onPull(job.workflow) && !job.trusted) {
+			// Its head has commits no current maintainer signed, so no runner takes it until one approves the head.
+			const sha = job.head ?? job.revision;
+			const base = view.state?.project.commit;
+			const web = `https://github.com/${project.owner}/${project.name}`;
+			head = { sha, compare: `${web}/compare/${base ? `${base}...` : ""}${sha}` };
+			need = "trust";
+			version = `trust:${job.id}:${sha}`;
+		} else if (job && (job.state === "queued" || job.state === "running")) version = `job:${job.id}`;
 		else if (job?.state === "waiting") {
 			question = job.questions.find((q) => q.attempt === job.attempt && q.approvedAt === null) ?? null;
 			// Another maintainer's answer waits on the requester alone; others see it as in progress.
@@ -226,11 +238,14 @@ export function decisions(
 			job,
 			question,
 			prompt,
+			head,
 			need,
 			version,
 			unread: need !== null && read?.seen !== version,
 			skipped: need !== null && (ended || read?.skipped === version),
-			at: question?.askedAt ?? (need === "retry" ? job!.updatedAt : (entity?.at ?? job?.updatedAt ?? 0)),
+			at:
+				question?.askedAt ??
+				(need === "retry" || need === "trust" ? job!.updatedAt : (entity?.at ?? job?.updatedAt ?? 0)),
 		});
 	}
 	return items;
@@ -239,7 +254,7 @@ export function decisions(
 // Agents blocked on an answer come first, then failures, then new PRs,
 // issues, and ready quests: the loop of reviewing, planning, and spawning.
 const order = (item: Item) =>
-	item.need === "answer" || item.need === "account" || item.need === "approve"
+	item.need === "answer" || item.need === "account" || item.need === "approve" || item.need === "trust"
 		? 0
 		: item.need === "retry"
 			? 1

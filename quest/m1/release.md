@@ -27,10 +27,10 @@ Work:
 - First, before any release: `SETUP.md` does not yet say v0.1.0 lacks the
   hook, so add that the release routes lack it and point at the flake
   route until a release has it.
-- Once the open worktree-hook work
-  ([moq-dev/quest#423](https://github.com/moq-dev/quest/pull/423),
-  [#425](https://github.com/moq-dev/quest/pull/425)) has landed or been
-  dropped, bump `package.json`'s `version` in a PR to `main`, then tag that
+- Once the remaining worktree-hook work
+  ([moq-dev/quest#423](https://github.com/moq-dev/quest/pull/423); its
+  sibling [#425](https://github.com/moq-dev/quest/pull/425) landed on
+  2026-11-03) has landed or been dropped, bump `package.json`'s `version` in a PR to `main`, then tag that
   version from `main`; `.github/workflows/release.yml` publishes on the tag
   push and fails when the tag and `package.json` differ. Check that the
   release has the Windows archives SETUP.md expects, then drop the
