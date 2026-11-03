@@ -39,7 +39,10 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 					pageInfo { hasNextPage endCursor }
 					nodes {
 						__typename
-						... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: $number) }
+						... on CheckRun {
+							databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
+							checkSuite { app { databaseId } }
+						}
 						... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
 					}
 				}

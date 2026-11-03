@@ -1028,6 +1028,9 @@ test("a rerun supersedes a cancelled run of a required check, which never wakes 
 	expect(fixture.sleeps).toEqual([300_000]);
 	expect(lines).toHaveLength(1);
 	expect(lines[0]).toMatch(/^2026-10-07T12:08:00Z checks:passed check /);
+	const query = (fixture.checkCalls[0].body as { query: string }).query.replace(/\s+/g, " ");
+	expect(query).toContain("... on CheckRun { databaseId name");
+	expect(query).toContain("checkSuite { status app { databaseId }");
 });
 
 test("optional checks never stand in for required checks that have not started", async () => {
@@ -1145,6 +1148,9 @@ test("checks:passed is dated when the head goes idle, after required checks fini
 	expect(fixture.sleeps).toEqual([300_000]);
 	expect(lines).toHaveLength(1);
 	expect(lines[0]).toMatch(/^2026-10-07T12:08:00Z checks:passed check /);
+	const query = (fixture.checkCalls[0].body as { query: string }).query.replace(/\s+/g, " ");
+	expect(query).toContain("... on CheckRun { databaseId name");
+	expect(query).toContain("checkSuite { status app { databaseId }");
 });
 
 test("with no required checks, an unfinished workflow run holds back checks:passed", async () => {

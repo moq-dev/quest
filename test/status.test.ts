@@ -115,6 +115,7 @@ function setup(
 	} = {},
 ) {
 	const queries: Record<string, unknown>[] = [];
+	const texts: string[] = [];
 	const holdQueries: Record<string, unknown>[] = [];
 	const eventRequests: string[] = [];
 	let last: ReturnType<typeof pull> | undefined;
@@ -162,13 +163,14 @@ function setup(
 				});
 			}
 			queries.push(request.variables);
+			texts.push(request.query);
 			const body = bodies.shift();
 			if (body === undefined) throw new Error("unexpected request");
 			last = body as ReturnType<typeof pull>;
 			return Response.json(body);
 		},
 	};
-	return { deps, queries, holdQueries, eventRequests, activityRequests };
+	return { deps, queries, texts, holdQueries, eventRequests, activityRequests };
 }
 
 test("reports checks by requiredness, each reviewer's latest review against the head, and open threads", async () => {
@@ -466,6 +468,10 @@ test("counts only each check's newest run from its app", async () => {
 		}),
 	]);
 	const status = await pullRequestStatus(pr, fixture.deps);
+	// The fixture answers whatever is asked, so the query must ask for what tells runs apart.
+	expect(fixture.texts[0].replace(/\s+/g, " ")).toContain(
+		"... on CheckRun { databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number) checkSuite { app { databaseId } } }",
+	);
 	expect(status.checks.passed).toBe(2);
 	expect(status.checks.failing.map((check) => check.name)).toEqual(["test", "lint"]);
 	expect(status.checks.pending).toEqual([]);
