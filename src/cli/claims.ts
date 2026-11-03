@@ -318,7 +318,7 @@ export interface Target extends UpstreamRefs {
 export async function target(root: string, remote: string, deps: ClaimDependencies): Promise<Target> {
 	const up = await upstream(root, requireRemote(root, remote), deps);
 	const refs = upstreamRefs(root, up.git);
-	return { remote, up, ...refs, tree: snapshot(root, refs.base) };
+	return { remote, up, ...refs, tree: snapshot(root, refs.base, deps.warn) };
 }
 
 /** What the upstream holds, read with one `ls-remote`. */
