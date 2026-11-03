@@ -9,6 +9,7 @@ import * as store from "../src/jobs/store";
 import { type Repo, type World, blob, commitOf, fakeGitHub, intercept as around } from "../dev/github";
 import { privateKey } from "./github-key";
 import { origin } from "./login-fixtures";
+import { owner } from "./owners";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
 const db = env.DB;
@@ -26,6 +27,7 @@ function world(): World {
 	return {
 		app: { id: Number(env.GITHUB_APP_ID), slug: "quest-test" },
 		installation: 5,
+		owner,
 		users: [{ id: githubUser, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" }],
 		repos: [
 			{
