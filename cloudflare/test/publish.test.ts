@@ -1171,7 +1171,8 @@ describe("merge jobs", () => {
 	const lands = () =>
 		requests().flatMap((r) => {
 			const mutation =
-				r.path === "/graphql" && r.body.query.match(/(enablePullRequestAutoMerge|mergePullRequest)\(/)?.[1];
+				r.path === "/graphql" &&
+				r.body.query.match(/(enablePullRequestAutoMerge|mergePullRequest|enqueuePullRequest)\(/)?.[1];
 			return mutation ? [{ mutation, variables: r.body.variables }] : [];
 		});
 	/** Answer every landing mutation with GitHub's refusal. */
@@ -1309,6 +1310,100 @@ describe("merge jobs", () => {
 		const response = await publish({ job: id, attempt: 1, head: prHead, land: { method: "squash" } });
 		expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
 		expect(lands().map((l) => l.mutation)).toEqual(["enablePullRequestAutoMerge"]);
+	});
+
+	describe("on a base with a merge queue", () => {
+		beforeEach(() => {
+			project.queue = true;
+		});
+
+		it("enqueues a ready head pinned to it, and keeps its hold while queued", async () => {
+			const id = await merging();
+			pull().merge = "CLEAN";
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: { method: "squash" } });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands()).toEqual([{ mutation: "enqueuePullRequest", variables: { id: "PR_10002", sha: prHead } }]);
+			expect(pull().queued).toBe(true);
+			expect(pull().merged).not.toBe(true);
+			await store.finish(db, machine, id, 1, { outcome: "completed", summary: "Landing", result: undefined }, 0);
+			await landing.ended(testEnv, id);
+			expect(pull().labels).toEqual(["quest:kix"]);
+		});
+
+		it("arms auto-merge bound to the head while its required checks may be pending", async () => {
+			const id = await merging();
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: { method: "squash" } });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands()).toEqual([
+				{
+					mutation: "enablePullRequestAutoMerge",
+					variables: { id: "PR_10002", sha: prHead, method: "SQUASH" },
+				},
+			]);
+			expect(pull().landing).toBe(true);
+			expect(pull().queued).not.toBe(true);
+		});
+
+		it("enqueues an UNKNOWN head after GitHub refuses auto-merge as clean", async () => {
+			const id = await merging();
+			pull().merge = "UNKNOWN";
+			vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+				if (String(init?.body ?? "").includes("enablePullRequestAutoMerge(")) pull().merge = "CLEAN";
+				return github(input, init);
+			});
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands().map((l) => [l.mutation, l.variables.sha])).toEqual([
+				["enablePullRequestAutoMerge", prHead],
+				["enqueuePullRequest", prHead],
+			]);
+			expect(pull().queued).toBe(true);
+		});
+
+		it("reports a refused enqueue as the job's blocked landing", async () => {
+			const id = await merging();
+			pull().merge = "DIRTY";
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(response.status).toBe(202);
+			expect((await job(id)).questions.at(-1)!.prompt).toEqual({
+				type: "publication",
+				blocked: "GitHub refused to land the pull request: Pull request is not mergeable",
+			});
+			expect(lands().map((l) => l.mutation)).toEqual(["enqueuePullRequest"]);
+			expect(pull().queued).toBeUndefined();
+		});
+
+		it("accepts a head already queued, as a repeated landing finds it", async () => {
+			const id = await merging();
+			pull().merge = "CLEAN";
+			pull().queued = true;
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands().map((l) => l.mutation)).toEqual(["enqueuePullRequest"]);
+		});
+
+		it("still queues for quest land on a base that requires its check", async () => {
+			const id = await merging();
+			pull().merge = "BLOCKED";
+			project.required = ["quest land"];
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands()).toEqual([
+				{
+					mutation: "enablePullRequestAutoMerge",
+					variables: { id: "PR_10002", sha: prHead, method: "SQUASH", body: `Quest-Land-Head: ${prHead}` },
+				},
+			]);
+		});
+
+		it("enqueues nothing before a review counts on the head", async () => {
+			const id = await merging(false);
+			pull().merge = "CLEAN";
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(response.status).toBe(202);
+			expect(lands()).toEqual([]);
+			expect(pull().queued).toBeUndefined();
+		});
 	});
 
 	it.each(["Pull request is in clean status", "Auto merge is not allowed for this repository"])(
