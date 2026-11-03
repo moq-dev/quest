@@ -9,7 +9,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
-import { enclosingScope, systemdScopes } from "./supervise";
+import { stubbed } from "./job";
+import { delegated, nest, questScope, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
@@ -492,6 +493,24 @@ export const scope: Owner = (command, env, cancel) =>
 	systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, { env, cancel, within: null });
 
 /**
+ * Inside a delegated Quest scope, run the command in a new child of `parent`, this process's cgroup,
+ * which holds every descendant like a scope of its own and stays within the enclosing scope's reach.
+ * That scope's owner signals every process in it, so this leaves a received signal and the kill at
+ * its second one to that owner, as `inside` does, and lets the child's processes finish their own
+ * cleanup before it kills what is left.
+ */
+export const nested =
+	(parent: string): Owner =>
+	(command, env, cancel) =>
+		nest(parent, `quest-gate-${randomUUID()}`, process.cwd(), command, { env, cancel });
+
+/**
+ * On Windows, run the command under a stub in a kill-on-close Job Object that forbids breakaway
+ * (see job.ts), so every descendant stops once the command exits or the gate stops the stub.
+ */
+export const job: Owner = (command, env, cancel) => direct(...stubbed(command, env), cancel);
+
+/**
  * Run the command as the leader of a new session, whose process group holds every descendant that
  * does not move to another group or session. Once the command exits, the rest of its group is
  * killed. The session has no controlling terminal: the command keeps its inherited streams, but a
@@ -559,23 +578,20 @@ export const group: Owner = (command, env, cancel) =>
 /** The descriptor on which the group owner hands its command the token (see `group`). */
 const TOKEN = 3;
 
-/** Whether this process already runs in a Quest scope, which then holds whatever it starts. */
-export function scoped(self = "/proc/self/cgroup"): boolean {
-	return enclosingScope(self) !== undefined;
-}
-
 /**
- * The strongest owner this host offers. A nested call runs inside its admitted command, and a call
- * inside a Quest scope inside that scope: moving into an owner of its own would take its command out
- * of reach of the enclosing one, which also signals it when it is Quest's (see `inside`). Linux
- * owns descendants through a systemd scope, and settles for a process group, like macOS, without a
- * systemd user manager. Windows owns only the command.
+ * The strongest owner this host offers. A nested call runs inside its admitted command, which an
+ * enclosing Quest owner also signals when it is Quest's group or a Quest scope (see `inside`). A
+ * call inside a Quest scope owns a child cgroup of its own there once the scope is delegated, and
+ * otherwise runs inside the scope: a scope of its own would take its command out of reach of the
+ * enclosing one. Linux owns descendants through a systemd scope, and settles for a process group,
+ * like macOS, without a systemd user manager. Windows owns them through a Job Object.
  */
 export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
-	if (process.platform === "win32") return direct;
-	// A Quest scope around this process holds the command too, since it shares the cgroup.
-	const enclosed = process.platform === "linux" && scoped(cgroup);
-	if (env[ADMITTED] === "1" || enclosed) return env[GROUP] === "1" || enclosed ? inside : direct;
+	// A Quest scope around this process holds the command too, since it shares the cgroup or an ancestor.
+	const enclosing = process.platform === "linux" ? questScope(cgroup) : undefined;
+	if (env[ADMITTED] === "1") return env[GROUP] === "1" || enclosing ? inside : direct;
+	if (process.platform === "win32") return job;
+	if (enclosing) return delegated(enclosing.unit) ? nested(enclosing.group) : inside;
 	if (process.platform !== "linux") return group;
 	try {
 		systemdScopes.check();

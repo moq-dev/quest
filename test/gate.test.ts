@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
 	chmodSync,
@@ -35,11 +36,12 @@ import {
 	QUICK_MS,
 	RECENT_MS,
 	SETTLE_MS,
+	job,
 	scope,
-	scoped,
 } from "../src/cli/gate";
 import { forwards, foregroundStat } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
+import { questScope } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
 
 const GiB = 2 ** 30;
@@ -578,24 +580,34 @@ test.skipIf(process.platform === "win32")("cancellation forwards the received si
 
 test("a nested call, or one inside a Quest scope, leaves its command to the enclosing owner", () => {
 	const dir = tempDir();
-	const slice = "0::/user.slice/user-1000.slice/user@1000.service/app.slice";
-	const cgroup = (unit: string) => {
-		const file = join(dir, unit);
-		writeFileSync(file, `${slice}/${unit}\n`);
+	const slice = "/user.slice/user-1000.slice/user@1000.service/app.slice";
+	const cgroup = (path: string) => {
+		const file = join(dir, path.replaceAll("/", "_"));
+		writeFileSync(file, `0::${slice}/${path}\n`);
 		return file;
 	};
+	const unit = "quest-worktree-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope";
 	const terminal = cgroup("app-terminal-42.scope");
-	const worktree = cgroup("quest-worktree-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope");
+	const worktree = cgroup(unit);
 	const gated = cgroup("quest-gate-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope");
-	expect(scoped(worktree)).toBe(true);
-	expect(scoped(gated)).toBe(true);
-	expect(scoped(terminal)).toBe(false);
+	// A gate's child cgroup, and one a gate inside it made, stay in the scope.
+	const child = cgroup(`${unit}/quest-gate-1a2b/quest-gate-3c4d`);
+	expect(questScope(worktree)).toEqual({ unit, group: `/sys/fs/cgroup${slice}/${unit}` });
+	expect(questScope(gated)?.unit).toBe("quest-gate-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope");
+	expect(questScope(child)).toEqual({
+		unit,
+		group: `/sys/fs/cgroup${slice}/${unit}/quest-gate-1a2b/quest-gate-3c4d`,
+	});
+	expect(questScope(terminal)).toBeUndefined();
+	expect(questScope(cgroup(`${unit}-not`))).toBeUndefined();
 	if (process.platform === "win32") return expect(owner({ QUEST_GATE_ADMITTED: "1" })).toBe(direct);
 	// The enclosing owner signals the command too unless it was not one of Quest's.
 	expect(owner({ QUEST_GATE_ADMITTED: "1" }, terminal)).toBe(direct);
 	expect(owner({ QUEST_GATE_ADMITTED: "1", QUEST_GATE_GROUP: "1" }, terminal)).toBe(inside);
 	if (process.platform !== "linux") return;
 	expect(owner({ QUEST_GATE_ADMITTED: "1" }, gated)).toBe(inside);
+	expect(owner({ QUEST_GATE_ADMITTED: "1" }, child)).toBe(inside);
+	// No such scope runs, so it is not delegated.
 	expect(owner({}, worktree)).toBe(inside);
 });
 
@@ -761,6 +773,217 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 		const { command, pid } = descendant(tempDir(), "exit 3", { leave: true });
 		expect(await scope(command, process.env, cancellation().cancel)).toBe(3);
 		await until(() => stopped(pid()), "the daemon to stop");
+	});
+});
+
+/**
+ * Run a Bun script that picks the gate's owner in a scope started by `launch`, outside any admitted
+ * command, and reports which one it picked; with `run`, it also runs a command through that owner
+ * that leaves a descendant behind and reports what became of it.
+ */
+async function insideScope(launch: (command: string[], env: NodeJS.ProcessEnv) => Promise<number>, run: boolean) {
+	const dir = tempDir();
+	const script = join(dir, "inside.ts");
+	const result = join(dir, "result.json");
+	const gate = fileURLToPath(new URL("../src/cli/gate.ts", import.meta.url));
+	writeFileSync(
+		script,
+		`import { spawnSync } from "node:child_process";
+		import { existsSync, readFileSync, writeFileSync } from "node:fs";
+		import { direct, group, inside, job, owner, scope } from ${JSON.stringify(gate)};
+		const dir = ${JSON.stringify(dir)};
+		const own = owner(process.env);
+		const kind = new Map([[direct, "direct"], [group, "group"], [inside, "inside"], [job, "job"], [scope, "scope"]]).get(own) ?? "nested";
+		let report = { kind };
+		if (${run}) {
+			const never = new AbortController().signal;
+			const command = "cat /proc/self/cgroup > " + dir + "/cgroup; sleep 1000 & echo $! > " + dir + "/pid; exit 7";
+			const status = await own(["/bin/sh", "-c", command], process.env, { signal: never, kill: never });
+			const path = readFileSync(dir + "/cgroup", "utf8").trim().slice(3);
+			const pid = readFileSync(dir + "/pid", "utf8").trim();
+			const ps = spawnSync("ps", ["-o", "stat=", "-p", pid], { encoding: "utf8" });
+			const stopped = ps.status !== 0 || ps.stdout.trim().startsWith("Z");
+			report = { kind, status, path, stopped, removed: !existsSync("/sys/fs/cgroup" + path) };
+		}
+		writeFileSync(${JSON.stringify(result)}, JSON.stringify(report));`,
+	);
+	const env = { ...process.env };
+	delete env.QUEST_GATE_ADMITTED;
+	expect(await launch([process.execPath, script], env)).toBe(0);
+	return JSON.parse(readFileSync(result, "utf8"));
+}
+
+describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () => {
+	test("owns a child cgroup of a delegated scope and removes it", { timeout: 30_000 }, async () => {
+		const report = await insideScope((command, env) => scope(command, env, cancellation().cancel), true);
+		expect(report).toMatchObject({ kind: "nested", status: 7, stopped: true, removed: true });
+		// The child sits inside the enclosing scope, so that scope's cgroup.kill still reaches it.
+		expect(report.path).toMatch(/\/quest-gate-[0-9a-f-]+\.scope\/quest-gate-[0-9a-f-]+$/);
+	});
+
+	test("leaves its command to a scope that is not delegated", { timeout: 30_000 }, async () => {
+		// A scope started as a Quest before delegation would have.
+		const unit = `quest-worktree-${randomUUID()}.scope`;
+		const launch = (command: string[], env: NodeJS.ProcessEnv) =>
+			new Promise<number>((resolve, reject) => {
+				const child = spawn(
+					"systemd-run",
+					["--user", "--scope", "--quiet", "--collect", `--unit=${unit}`, "--", ...command],
+					{ env, stdio: "inherit" },
+				);
+				child.once("error", reject);
+				child.once("exit", (code) => resolve(code ?? 1));
+			});
+		expect(await insideScope(launch, false)).toEqual({ kind: "inside" });
+	});
+
+	/**
+	 * A Bun script that runs `command` through the owner a gate picks, outside any admitted command,
+	 * and exits with its status. It follows its own signals as the gate does, unless `abort` names a
+	 * file whose creation makes it cancel the run itself, without a signal.
+	 */
+	function nestedGate(dir: string, command: string[], abort?: string): string[] {
+		const script = join(dir, "nested.ts");
+		const gate = fileURLToPath(new URL("../src/cli/gate.ts", import.meta.url));
+		const interrupt = fileURLToPath(new URL("../src/cli/interrupt.ts", import.meta.url));
+		writeFileSync(
+			script,
+			`import { existsSync } from "node:fs";
+			import { direct, inside, owner } from ${JSON.stringify(gate)};
+			import { cancelled, interrupts } from ${JSON.stringify(interrupt)};
+			const own = owner(process.env);
+			if (own === direct || own === inside) process.exit(90);
+			const signals = interrupts();
+			const stop = new AbortController();
+			const abort = ${JSON.stringify(abort ?? null)};
+			const cancel = abort ? { signal: stop.signal, kill: new AbortController().signal } : signals;
+			if (abort) {
+				const poll = setInterval(() => {
+					if (!existsSync(abort)) return;
+					clearInterval(poll);
+					stop.abort(new Error("cancelled by its caller"));
+				}, 25);
+			}
+			const status = await own(${JSON.stringify(command)}, process.env, cancel);
+			signals.close();
+			process.exit(cancel.signal.aborted ? cancelled(cancel.signal) : status);`,
+		);
+		return [process.execPath, script];
+	}
+
+	const outside = () => {
+		const env = { ...process.env };
+		delete env.QUEST_GATE_ADMITTED;
+		return env;
+	};
+
+	test("lets a phase finish its cleanup once the enclosing scope signals it", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const leaf = signalled(dir, ["SIGTERM"], 200);
+		const { stop, cancel } = cancellation();
+		const result = scope(nestedGate(dir, phase(dir, leaf.script)), outside(), cancel);
+		await created(leaf.ready);
+		stop.abort("SIGTERM");
+		expect(await result).toBe(128 + constants.signals.SIGTERM);
+		// Delivered once, by the enclosing scope, and the nested gate did not kill the leaf once Just exited.
+		expect(leaf.log()).toEqual(["SIGTERM"]);
+		expect(existsSync(leaf.done)).toBe(true);
+	});
+
+	test("cancelled by its caller, signals every process in its child cgroup", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const leaf = signalled(dir, ["SIGTERM"], 200);
+		const abort = join(dir, "abort");
+		// The shell waits on the leaf in the background, so only a signal to the whole cgroup reaches it.
+		const command = ["/bin/sh", "-c", `${quote(process.execPath)} ${quote(leaf.script)} & wait`];
+		const result = scope(nestedGate(dir, command, abort), outside(), cancellation().cancel);
+		await created(leaf.ready);
+		writeFileSync(abort, "");
+		expect(await result).toBe(128 + constants.signals.SIGTERM);
+		expect(leaf.log()).toEqual(["SIGTERM"]);
+		expect(existsSync(leaf.done)).toBe(true);
+	});
+});
+
+/** Whether a process is still running, on any platform. */
+function running(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** A Bun command that starts a detached descendant, records its PID, then runs `rest`. */
+function detached(dir: string, rest: string) {
+	const pid = join(dir, "descendant");
+	const start =
+		"const c = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], " +
+		"{ detached: true, stdio: 'ignore' }); c.unref(); " +
+		`require('node:fs').writeFileSync(${JSON.stringify(pid)}, String(c.pid)); `;
+	return {
+		command: [process.execPath, "-e", start + rest],
+		pid: () => Number(readFileSync(pid, "utf8")),
+	};
+}
+
+describe("the Windows job stub", () => {
+	test("passes the exact exit status and restores the caller's environment", async () => {
+		const script =
+			"process.exit(process.env.BUN_BE_BUN === process.env.EXPECTED && !('QUEST_GATE_JOB' in process.env) ? 7 : 1)";
+		const env: NodeJS.ProcessEnv = { ...process.env, EXPECTED: "keep" };
+		delete env.BUN_BE_BUN;
+		const command = [process.execPath, "-e", script];
+		expect(await job(command, { ...env, BUN_BE_BUN: "keep" }, cancellation().cancel)).toBe(7);
+		const unset = "process.exit(process.env.BUN_BE_BUN === undefined ? 7 : 1)";
+		expect(await job([process.execPath, "-e", unset], env, cancellation().cancel)).toBe(7);
+	});
+
+	test("passes the command's arguments as running it directly would", async () => {
+		// Compared with `direct`, since Bun's process.argv for a script passed with -e differs on Windows.
+		const dir = tempDir();
+		const args = ["a b", 'say "hi"', "back\\slash\\", ""];
+		const script = "require('node:fs').writeFileSync(process.env.OUT, JSON.stringify(process.argv.slice(1)))";
+		const argv = async (owner: Owner, out: string) => {
+			const env = { ...process.env, OUT: join(dir, out) };
+			expect(await owner([process.execPath, "-e", script, ...args], env, cancellation().cancel)).toBe(0);
+			return JSON.parse(readFileSync(env.OUT, "utf8"));
+		};
+		const expected = await argv(direct, "direct");
+		if (process.platform !== "win32") expect(expected).toEqual(args);
+		expect(await argv(job, "job")).toEqual(expected);
+	});
+
+	test("reports a command that cannot start as a shell would", async () => {
+		expect(await job([join(tempDir(), "missing")], process.env, cancellation().cancel)).toBe(127);
+	});
+});
+
+describe.runIf(process.platform === "win32")("a job object", () => {
+	test("is the gate's owner outside an admitted command", () => {
+		expect(owner({})).toBe(job);
+	});
+
+	test("keeps the exact exit status and stops a detached descendant", { timeout: 30_000 }, async () => {
+		const { command, pid } = detached(tempDir(), "process.exit(7);");
+		expect(await job(command, process.env, cancellation().cancel)).toBe(7);
+		await until(() => !running(pid()), "the detached descendant to stop");
+	});
+
+	test("killing stops the command and a detached descendant", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const ready = join(dir, "ready");
+		const { command, pid } = detached(
+			dir,
+			`require('node:fs').writeFileSync(${JSON.stringify(ready)}, ''); setInterval(() => {}, 1000);`,
+		);
+		const { kill, cancel } = cancellation();
+		const result = job(command, process.env, cancel);
+		await until(() => existsSync(ready), "the command to start");
+		kill.abort();
+		expect(await result).not.toBe(0);
+		await until(() => !running(pid()), "the detached descendant to stop");
 	});
 });
 

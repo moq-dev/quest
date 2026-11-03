@@ -104,7 +104,14 @@ on screen records the approver, the SHA, and the time in `head_approvals`,
 one per pull request. An approval lapses when the head moves and counts only
 while its approver keeps a maintain or admin role. The check runs at
 creation and again at assignment. Other heads, including unsigned ones and
-those kix pushed to, route only to Linux runners that declare VM builds. A `merge` job runs the merge
+those kix pushed to, route only to Linux runners whose owner declared VM
+builds when registering them, a statement kix does not verify
+([trust by stage](GITHUB.md#trust-by-stage)). `quest runner` cannot build in a
+VM yet: `quest runner login` registers it without declaring VM builds, so such
+jobs wait for a runner that declares them. kix trusts that declaration, so a
+runner declared through `POST /api/runners` with `vm: true` that cannot build
+in a VM is still sent the job; `quest runner` fails it rather than run it. A
+`merge` job runs the merge
 skill's loop on an open, non-draft pull request and lands it; it holds the PR
 with its own `quest:kix` label, which local sessions respect as they do each
 other's `quest:active` (`src/jobs/landing.ts`), as described in
@@ -119,7 +126,8 @@ on the machine and prints a link to `/runners?name=…&platform=…&key=…`, wh
 `key` is the token's SHA-256; the signed-in user approves it there
 (`POST /runners/connect`), and the runner polls `GET /api/runner` with its token
 until it is accepted. A script can instead register at `POST /api/runners` and
-get a token back. Either way kix stores only the hash. With that token a
+get a token back, declaring `vm: true` if it builds untrusted heads in a VM.
+Either way kix stores only the hash. With that token a
 runner opens a WebSocket at `/api/runner/connect`. `/runners`, linked from the
 decision inbox, lists the user's runners with their presence and accounts, and
 moves an account earlier or later in the preference order

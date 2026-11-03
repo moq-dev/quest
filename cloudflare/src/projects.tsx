@@ -205,8 +205,45 @@ function GoalField() {
 	);
 }
 
+/** The pull-request CI check's warnings (`./github/ci.ts`), which never block enabling. */
+function CIPanel(props: { problems: string[] }) {
+	return (
+		<section class="ql-panel panel">
+			<h2>Pull-request CI</h2>
+			<p>
+				kix publishes job branches on this repository, where GitHub gives their workflows the repository's
+				secrets and default token. Keep that CI read-only, so code no maintainer has reviewed meets only a
+				read-only <code>GITHUB_TOKEN</code> and no write credentials.
+			</p>
+			{props.problems.length ? (
+				<ul role="alert">
+					{props.problems.map((problem) => (
+						<li>{problem}</li>
+					))}
+				</ul>
+			) : (
+				<p class="muted">
+					The default token is read-only, no repository or organization secrets reach workflows, and
+					environment secrets deploy only from protected branches.
+				</p>
+			)}
+			<p class="note-small">
+				Jobs still run either way. kix does not read workflow files, so also keep write{" "}
+				<code>permissions:</code> and secrets out of jobs that pull requests and pushes to unprotected branches
+				trigger, including <code>pull_request_target</code> and <code>workflow_run</code> jobs that check out a
+				pull request's head.
+			</p>
+		</section>
+	);
+}
+
 /** Enrolling a repository with no Quest files: the setup pull request's one question. */
-export function QuestSetupPage(props: { repository: { id: number; owner: string; name: string }; error?: string }) {
+export function QuestSetupPage(props: {
+	repository: { id: number; owner: string; name: string };
+	/** The pull-request CI check's warnings, when it ran. */
+	ci?: string[];
+	error?: string;
+}) {
 	const repo = props.repository;
 	return (
 		<section class="wrap docs projects">
@@ -233,6 +270,7 @@ export function QuestSetupPage(props: { repository: { id: number; owner: string;
 					</p>
 				</form>
 			</section>
+			{props.ci && <CIPanel problems={props.ci} />}
 		</section>
 	);
 }
@@ -366,6 +404,7 @@ export function ProjectSetupPage(props: { preview: ProjectPreview; enrollment: E
 					</>
 				)}
 			</section>
+			<CIPanel problems={preview.ci} />
 			<section>
 				<h2>Ready quests</h2>
 				{props.enrollment && (

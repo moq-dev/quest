@@ -85,6 +85,9 @@ ownership-manifest design:
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
+- [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` exits distinctly on a reviewer's quota and prints the reset time
+- [Drafts in quest waiting](/quest/m0/waiting-drafts.md) - `quest waiting` lists open draft PRs' `## Waiting` items beside the tree's
+- [Rejected options in decision records](/quest/m0/decision-records.md) - grill and plan label rejected options so no one reads them as qualifiers
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - report concurrent `rmSync` `EFAULT` on Windows, and drop the workaround once Bun fixes it
@@ -93,5 +96,6 @@ ownership-manifest design:
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
 - [Worktree hooks here](/quest/m0/worktree-hooks.md) - `quest` reaches Claude Code's hooks and the merge driver in this repository, then `quest init` installs the hooks
 - [Remote control worktrees](/quest/m0/worktree-routes.md) - live-check `claude remote-control --spawn worktree` against the hooks, from a session spawned on claude.ai
-- [Review through a gateway](/quest/m0/review-gateway.md) - `quest review` keeps gateway, cloud-provider, and Codex connection variables
+- [Session checkouts released](/quest/m0/session-checkouts.md) - a Claude session's own checkout is released when the session ends and reclaimed on resume
+- [claude rm upstream report](/quest/m0/claude-rm-upstream.md) - waiting on approval: ask Claude Code to run `WorktreeRemove` instead of advising an unlock
 - [opencode 2.x](/quest/m0/opencode-sdk.md) - the runner drives the opencode 2.x binary through `@opencode/client`, removing the interim 1.19.0 pin

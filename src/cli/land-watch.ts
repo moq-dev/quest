@@ -15,7 +15,8 @@ import {
 } from "./github";
 import type { Entry } from "./land";
 import { authenticatedRead } from "./land-git";
-import { fixerText, post, redactTokens } from "./land-fixer";
+import { jobLog } from "./land-checks";
+import { fixerText, post } from "./land-fixer";
 import {
 	apiDependencies,
 	daemonLoop,
@@ -281,11 +282,6 @@ async function enqueueArmed(
 	return output;
 }
 
-/** A job log as GitHub serves it, without its byte-order mark or per-line timestamps, and with no token. */
-function cleanLog(text: string): string {
-	return redactTokens(text.replace(/^\uFEFF/, "").replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z /gm, ""));
-}
-
 /** Every page of an Actions listing, whose rows are the response's `field`. */
 async function listed(github: GitHub, path: string, field: string): Promise<ObjectValue[]> {
 	const rows: ObjectValue[] = [];
@@ -334,15 +330,7 @@ async function failedBuild(
 			const step = array(job.steps ?? []).find(
 				(item) => typeof item.conclusion === "string" && FAILED.includes(item.conclusion),
 			);
-			let log = "";
-			if (!running) {
-				const response = await github.request(`/repos/${repository}/actions/jobs/${Number(job.id)}/logs`, {
-					allow: [404, 410],
-				});
-				log = response.ok
-					? cleanLog(await response.text())
-					: `(GitHub has no log for this job: HTTP ${response.status})`;
-			}
+			const log = running ? "" : await jobLog(github, repository, Number(job.id));
 			jobs.push({
 				workflow: string(run.name),
 				name: string(job.name),
@@ -658,8 +646,9 @@ type Permissions = Record<string, "read" | "write">;
  * The installation token permissions the watcher asks for. `api` reads the queue's events, comments,
  * and the `merge_group` logs (`actions: read`), and enqueues the armed picks GitHub left out of the
  * queue, which `enqueuePullRequest` needs `merge_queues: write` for; with a fixer it also re-enqueues,
- * which needs `contents: write` for arming auto-merge, and it edits the PR body's Review. `push` lease-pushes a fix or merge, and `pushWorkflows` one that carries
- * a workflow change, as `quest land serve` does; `read` fetches.
+ * which needs `contents: write` for arming auto-merge, edits the PR body's Review, and reads the PR's
+ * own checks for the fixer (`checks: read` and `statuses: read`). `push` lease-pushes a fix or merge,
+ * and `pushWorkflows` one that carries a workflow change, as `quest land serve` does; `read` fetches.
  */
 export function watchPermissions(fixing: boolean): {
 	api: Permissions;
@@ -670,7 +659,14 @@ export function watchPermissions(fixing: boolean): {
 	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" } };
 	const push: Permissions = { contents: "write", pull_requests: "write" };
 	return {
-		api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" },
+		api: {
+			contents: "write",
+			pull_requests: "write",
+			actions: "read",
+			merge_queues: "write",
+			checks: "read",
+			statuses: "read",
+		},
 		push,
 		pushWorkflows: { ...push, workflows: "write" },
 		read: { contents: "read" },

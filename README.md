@@ -848,7 +848,9 @@ its PR still waits as the queue dropped it:
   credential-free wrapper, given the failure log and the PR's number, with the
   dropped head on `pr-<n>`, starting from the base the `merge_group` build
   was built on, or from the current base for a conflict, with the merge's
-  conflicts as its log. At most `--fixer-jobs` (2) run at once; the rest wait
+  conflicts as its log. The log ends with the PR's own checks on the dropped
+  head: each check's result, whether it is required, and its URL, then the
+  last 20,000 characters of each failing GitHub Actions job's log. At most `--fixer-jobs` (2) run at once; the rest wait
   for a slot. `--fixer-effort` (medium) sets the fixer's
   `model_reasoning_effort`, passed to the wrapper in `QUEST_LAND_FIXER_EFFORT`,
   which `quest land fix --effort` reads by default.
@@ -875,6 +877,13 @@ ran, by a writer's push or enqueue, is not applied, and its comment says so.
 A round whose collection fails three passes in a row, as when GitHub refuses its
 handback comment, is set aside with a logged warning, freeing its fixer slot.
 
+A PR's own CI is a signal, never a gate of its own: only the base's required
+checks keep GitHub from enqueuing a head. `/quest-merge` reports the failing
+optional checks on the head it picks, and the land fixer reads every check as
+context. A public repository may run its checks on pull requests too, since
+GitHub's hosted runners are free there; a private one can skip them and rely
+on the merge queue's build on the host alone.
+
 The watcher also keeps the repository's flaky tests in `flaky.json` in its
 state directory: each flaky verdict, across every PR, by the failure signature
 the fixer named, with the `merge_group` jobs that showed it. Each failed
@@ -896,7 +905,8 @@ and locks, so the two never run for the same repository at once. Without a
 fixer its token asks for `contents: read`, `pull_requests: write`,
 `actions: read`, which the App needs for the logs, and `merge_queues: write`,
 which `enqueuePullRequest` needs. With one it also asks for `contents: write`,
-for arming auto-merge and pushing fixes; a push that carries a workflow change
+for arming auto-merge and pushing fixes, and `checks: read` and `statuses: read`,
+for the PR's own checks the fixer reads; a push that carries a workflow change
 asks for `workflows: write`.
 
 ## Gate expensive commands
@@ -982,13 +992,22 @@ on the host:
   unless it or a parent closes it, as Bun and Node do for the processes they
   start. A cancelled gate waits until every process holding it has exited,
   including one outside the group that the signal never reached.
-- Windows owns only the command itself.
+- Windows runs the command under a small Bun stub in a Job Object that kills
+  every process left in it once the stub exits, and lets none break away. It
+  owns every descendant, including detached ones, and stops them once the
+  command exits or the gate is killed. Windows has no signals to forward:
+  Ctrl-C reaches every process on the console, and killing the gate
+  terminates the job.
 
-A nested invocation runs immediately inside the admitted command, and a gate
-inside another Quest scope, such as `quest worktree run`, leaves ownership to
-that scope: an owner of its own would take the command out of the enclosing
-one's reach. Internal compiler or test worker parallelism remains the command's
-responsibility.
+A nested invocation runs immediately inside the admitted command. A gate inside
+another Quest scope, such as `quest worktree run`, runs its command in a child
+cgroup of its own within that scope, which systemd delegates to the scope's
+processes, so the gate owns its own subtree and the enclosing scope still
+reaches it; a cancelled gate there waits until that child cgroup is empty.
+A scope started by an older Quest, without delegation, keeps
+ownership instead: a scope of the gate's own would take the command out of
+the enclosing one's reach. Internal compiler or test worker parallelism remains
+the command's responsibility.
 
 This repository's `just check`, `just test`, `just worker-check`, and
 `just worker-test` run through the gate.
@@ -1010,13 +1029,20 @@ branch before it is pushed for review: Codex when run from Claude Code, and
 Claude Code when run from Codex. `--harness` names the reviewer instead; an
 unknown harness, or a missing or logged-out CLI, is an error rather than a
 same-model review, as is a login the API rejects mid-round, such as an expired
-or revoked token. The reviewer uses its CLI's own stored login; a CLI with
-none keeps the credential it reads from the environment (`ANTHROPIC_API_KEY`,
-`ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code,
-`CODEX_API_KEY` for Codex), unless a stripped `ANTHROPIC_BASE_URL` or
-`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, or `_FOUNDRY` would send it elsewhere.
+or revoked token. The reviewer reaches its model as the user's own CLI does:
+Claude Code keeps `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, and its
+cloud providers' `CLAUDE_CODE_USE_*` switches and settings, so a gateway such
+as CLIProxyAPI, Bedrock, Vertex, or Foundry works, and Codex keeps
+`CODEX_CA_CERTIFICATE`. It uses the CLI's own stored login; the credential the
+CLI reads from the environment (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or
+`CLAUDE_CODE_OAUTH_TOKEN` for Claude Code, `CODEX_API_KEY` or
+`CODEX_ACCESS_TOKEN` for Codex) passes only when the CLI has no stored login or
+a gateway or provider is set. A provider's own keys (`ANTHROPIC_AWS_API_KEY`,
+`ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`) pass only while a
+gateway or provider is set. Variables that would change the reviewer's plugins,
+permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
-`CODEX_HOME`, or the default when unset.
+`CODEX_HOME`, or the default when unset, and any gateway or provider.
 Every review runs with a pinned model and effort that `quest review --help`
 lists; `--model` and `--effort` override them.
 
@@ -1229,8 +1255,9 @@ pull request reads it through `context`, since the runner holds no GitHub
 token; a new plan reads your idea and pasted context there. kix publishes as its GitHub App, so the runner never pushes. A job that hits an account's limit
 pauses for you to pick another account; the runner never switches on its own.
 On SIGINT or SIGTERM, running work is published and its jobs move to another
-runner. Runners take only trusted revisions until they can build untrusted
-heads' devShells in a VM. A pull request's head is trusted only when every
+runner. `quest runner` takes only trusted revisions until it can build
+untrusted heads' devShells in a VM: it registers without declaring VM builds,
+so kix routes it no other job, and it fails one if sent. A pull request's head is trusted only when every
 commit beyond the default branch has a valid signature from a current
 maintainer, so sign your commits (for example with
 [SSH signing](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#ssh-commit-signature-verification))
@@ -1290,6 +1317,8 @@ is empty, and a second signal kills everything at once. A run inside another
 Quest scope, such as a gate's, binds its own scope to that one, so the
 enclosing owner's kill stops it too, and leaves a repeated signal's kill to
 that owner: it may be the copy of SIGTERM that Just forwards.
+The scope is delegated, so a `quest gate` inside it owns its command through a
+child cgroup of the scope.
 Work handed to another service manager, such as `systemd-run` or a container
 daemon, escapes the scope. If the supervisor itself is killed, its command keeps
 running and its scratch is kept; the next `quest worktree` command drops the run

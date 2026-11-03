@@ -630,7 +630,17 @@ function filesOf(repo: Repo, sha: string): Record<string, string> {
 	return files;
 }
 
-type Permission = "metadata" | "contents" | "issues" | "pull_requests" | "checks" | "statuses" | "administration";
+type Permission =
+	| "metadata"
+	| "contents"
+	| "issues"
+	| "pull_requests"
+	| "checks"
+	| "statuses"
+	| "administration"
+	| "secrets"
+	| "actions"
+	| "environments";
 /** What an installation token may do: the repositories (`owner/name`) and permissions it was minted for. */
 type Grant = { repositories: Set<string>; permissions: Partial<Record<Permission, string>> };
 
@@ -804,9 +814,12 @@ export function fakeGitHub(world: World) {
 		if (match && tail === "/installation") {
 			if (!app) return unauthorized();
 			if (!repo) return notFound();
-			const permissions = Object.fromEntries(
-				["metadata", "contents", "issues", "pull_requests", "checks", "statuses"].map((p) => [p, "write"]),
-			);
+			const permissions = {
+				...Object.fromEntries(
+					["metadata", "contents", "issues", "pull_requests", "checks", "statuses"].map((p) => [p, "write"]),
+				),
+				...Object.fromEntries(["administration", "secrets", "actions", "environments"].map((p) => [p, "read"])),
+			};
 			return json({ id: world.installation, app_id: world.app.id, suspended_at: null, permissions });
 		}
 		if (!scope) return unauthorized();
@@ -982,6 +995,16 @@ export function fakeGitHub(world: World) {
 			if (!scope.permissions.administration) return forbidden();
 			return repo.protection ? json(repo.protection) : json({ message: "Branch not protected" }, 404);
 		}
+		// The setup page's CI check finds read-only pull-request CI: a read-only
+		// default token, no secrets, and no environments.
+		if (tail === "/actions/permissions/workflow" && method === "GET")
+			return scope.permissions.administration
+				? json({ default_workflow_permissions: "read", can_approve_pull_request_reviews: false })
+				: forbidden();
+		if ((tail === "/actions/secrets" || tail === "/actions/organization-secrets") && method === "GET")
+			return scope.permissions.secrets ? json({ total_count: 0, secrets: [] }) : forbidden();
+		if (tail === "/environments" && method === "GET")
+			return scope.permissions.actions ? json({ total_count: 0, environments: [] }) : forbidden();
 		const ruleset = tail.match(/^\/rulesets\/(\d+)$/);
 		if (ruleset && method === "GET") {
 			const found = repo.rulesets?.[Number(ruleset[1])];
