@@ -36,12 +36,25 @@ Report each sub-agent's final status, staying silent on interim notifications, b
 As each agent reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
 Stop at the PRs, beyond the `/quest-review` each started agent runs itself: never offer or run `/quest-review`, `/quest-iterate`, or `/quest-merge` on them. Deciding them is `/quest-complete`'s job, run as its own session.
 
-Once every sub-agent has finished, plan the follow-ups the agents suggested, as the guide describes, in the foreground.
+Plan the follow-ups each agent suggests in the foreground, as the guide describes, without waiting for the other agents to finish.
 Include quest context, as many quests are concurrently in flight.
 
 Once every sub-agent has finished, remove each agent checkout `quest worktree status` lists with `quest worktree remove`, since Claude never removes a subagent's checkout; it refuses one holding unpreserved work.
 Remove other local worktrees, and branches, whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
 Leave the worktree you are running in and any holding uncommitted work or refused removal; list those in your summary.
+
+## Control
+
+Answer these requests at any point, without stopping running agents:
+
+- "finish up": start nothing new, plan the follow-ups agents have suggested so far and each later one as its agent reports, let running agents report, then clean up and write the final summary.
+- "pause": start nothing new until the user says to resume; running agents continue, and their reports are handled as usual.
+- "status": a compact list of each agent with its quest, PR, state, and how long ago it started or last reported.
+
+A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result.
+Resume that agent by messaging it, or with `quest agent resume` under `api`, so it keeps its context and checkout.
+If it cannot be resumed, start a new agent with the same brief plus its claim PR, its checkout, and the token of any hold it took on the PR, which `quest status <pr>` shows, so the new one continues that work and keeps that hold rather than claiming again.
+While the error persists, such as a rate limit before its reset, resume and start nothing until it clears, and report it once rather than per agent.
 
 ## API keys
 

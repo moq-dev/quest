@@ -108,6 +108,8 @@ export type Repo = {
 	rules?: Record<string, unknown>[];
 	/** The default branch's classic protection, as `GET /branches/main/protection` returns it; none when absent. */
 	protection?: Record<string, any>;
+	/** Check runs the App wrote through `POST /check-runs`, oldest first. */
+	checkRuns?: { name: string; head_sha: string; conclusion: string; app: number; output: Record<string, unknown> }[];
 	/** Rulesets by ID, as `GET /rulesets/<id>` shows them to the App. */
 	rulesets?: Record<number, { current_user_can_bypass: "always" | "pull_requests_only" | "never" }>;
 };
@@ -902,6 +904,19 @@ export function fakeGitHub(world: World) {
 			const found = repo.rulesets?.[Number(ruleset[1])];
 			return found ? json({ id: Number(ruleset[1]), ...found }) : notFound();
 		}
+		if (tail === "/check-runs" && method === "POST") {
+			if (!writes("checks")) return forbidden();
+			if (body.status !== "completed" || typeof body.head_sha !== "string" || !repo.commits[body.head_sha])
+				return json({ message: "Validation Failed" }, 422);
+			(repo.checkRuns ??= []).push({
+				name: body.name,
+				head_sha: body.head_sha,
+				conclusion: body.conclusion,
+				app: world.app.id,
+				output: body.output,
+			});
+			return json({ id: repo.checkRuns.length, name: body.name, head_sha: body.head_sha }, 201);
+		}
 		const runs = tail.match(/^\/commits\/([0-9a-f]{40})\/check-runs$/);
 		if (runs && method === "GET") {
 			if (!scope.permissions.checks) return forbidden();
@@ -918,7 +933,13 @@ export function fakeGitHub(world: World) {
 						app: { id: run.app ?? ACTIONS_APP },
 					})),
 			);
-			const check_runs = found.filter(
+			// The App's own runs, newest first as `filter=latest` keeps one per name.
+			const written = (repo.checkRuns ?? [])
+				.filter((run) => run.head_sha === runs[1])
+				.reverse()
+				.filter((run, i, all) => all.findIndex((other) => other.name === run.name) === i)
+				.map((run) => ({ ...run, status: "completed", app: { id: run.app } }));
+			const check_runs = [...written, ...found].filter(
 				(run) => (!name || run.name === name) && (!app || String(run.app.id) === app),
 			);
 			return json({ total_count: check_runs.length, check_runs });

@@ -28,14 +28,26 @@ import {
 	prepare,
 	type Process,
 	publishHead,
+	review,
 	type Round,
 	saveRound,
 	settle,
 	stopReason,
 	stopRule,
 } from "./land-fixer";
+import { push, remoteHead } from "./land-head";
 import { save } from "./land-serve";
 import type { Removal } from "./land-watch";
+import {
+	type Disable,
+	type FlakyTest,
+	questName,
+	readFlaky,
+	RECENT,
+	recordFlaky,
+	saveFlaky,
+	writeKnownFlaky,
+} from "./land-watch-flaky";
 
 /** What the watcher needs to run the fixer on the PRs the queue drops. */
 export interface FixContext {
@@ -67,6 +79,8 @@ interface WatchJob extends Process {
 	log: string;
 	/** The failure's signature when the fixer names none: the failing job and step, or the conflict's base. */
 	failure: string;
+	/** A failed build's failing `merge_group` jobs, by URL, which a flaky verdict records. */
+	runs?: string[];
 	/** A clean merge of the base with the quest merge driver, which needs no fixer; `result` holds its head. */
 	merged?: boolean;
 	result?: FixResult;
@@ -93,7 +107,7 @@ const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
 	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 } } }`;
 
-async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
+export async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
 	return object((await github.graphql(PULL, { id })).node);
 }
 
@@ -178,6 +192,7 @@ export async function advanceFixes(
 		if (line) output.push(line);
 	}
 	output.push(...(await collectAll(github, state, context, deps, true)));
+	output.push(...(await advanceDisables(github, repository, state, context, deps)));
 	return output;
 }
 
@@ -345,6 +360,7 @@ async function take(
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
 			base.sha,
 		);
+		if (!conflict) writeKnownFlaky(state, checkout);
 		const job: WatchJob = {
 			checkout,
 			started: deps.now(),
@@ -357,6 +373,7 @@ async function take(
 			reason: conflict ? "merge_conflict" : "failed_checks",
 			log,
 			failure: conflict ? conflictFailure(base.sha) : jobFailure(removal),
+			...(conflict ? {} : { runs: removal.jobs.map((item) => item.url) }),
 		};
 		const name = `job-${basename(checkout)}`;
 		await launch(join(state, `watch-${name}.json`), job, context.fixer, log, [number], {
@@ -481,6 +498,7 @@ async function collect(
 
 	let handback = job.handback ?? job.error;
 	let round: Round | undefined;
+	const said: string[] = [];
 	const conflict = job.reason === "merge_conflict";
 	const failure = conflict || !result ? job.failure : (result.failure ?? job.failure);
 	if (!handback && result) {
@@ -494,6 +512,22 @@ async function collect(
 						? "unchanged"
 						: "flaky"
 					: "handback";
+		// A flaky verdict counts for its test across every PR, whatever becomes of this pick.
+		if (outcome === "flaky" && result.action === "requeue")
+			said.push(
+				...recordFlaky(context.root, state, {
+					job: name,
+					number,
+					dropped: job.dropped,
+					jobs: job.runs ?? [],
+					base: job.base,
+					checkout: job.checkout,
+					packs: job.packs,
+					failure,
+					result,
+					attribution,
+				}),
+			);
 		const rule = stopRule(
 			record!.rounds.filter((item) => item.job !== name),
 			{ outcome, failure },
@@ -513,7 +547,18 @@ async function collect(
 						if (entry.repository !== job.repository && !entry.maintainerCanModify)
 							throw new FixerRefusal("fork does not allow maintainer edits");
 					} else
-						await importFix(context.root, state, job, entry, job.checkout, job.packs, head, context.read);
+						await importFix(
+							context.root,
+							state,
+							job,
+							entry,
+							job.checkout,
+							job.packs,
+							head,
+							context.read,
+							entry.head,
+							deps.warn,
+						);
 					job.published = head;
 					save(path, job);
 				}
@@ -535,7 +580,7 @@ async function collect(
 		}
 	}
 
-	if (job.requeued && result) return announce(job.requeued, result);
+	if (job.requeued && result) return [...said, ...(await announce(job.requeued, result))];
 	// Anything else is a handback.
 	await note();
 	// Every handback ends the pick with a round of its own, a crash's or a timeout's too, so the App's
@@ -565,7 +610,7 @@ async function collect(
 		job.resolution ? (room) => resolutionSection(number, job.resolution!, room) : undefined,
 	);
 	finish(path, job);
-	return [`handback ${number}`];
+	return [...said, `handback ${number}`];
 }
 
 /** How `head` went back: enqueued, or armed to join the queue once its required checks pass. */
@@ -595,4 +640,107 @@ async function requeue(github: GitHub, id: string, head: string, base: string, d
 		pull = await readPull(github, id);
 	}
 	return how(pull);
+}
+
+/**
+ * Open each validated disable as a PR of its own and enqueue it like any other, with no maintainer's
+ * pick: its Review records the fixer's change. A disable that fails to advance is retried on the next
+ * pass; one GitHub refuses is left for a maintainer.
+ */
+async function advanceDisables(
+	github: GitHub,
+	repository: string,
+	state: string,
+	context: FixContext,
+	deps: GitHubDependencies,
+): Promise<string[]> {
+	const output: string[] = [];
+	const tests = readFlaky(state);
+	for (const test of tests) {
+		if (!test.disable || test.disable.done !== undefined) continue;
+		try {
+			output.push(
+				await openDisable(github, repository, context, test, test.disable, () => saveFlaky(state, tests)),
+			);
+		} catch (error) {
+			deps.warn(`quest land watch: disable of ${test.disable.quest} pending: ${String(error)}`);
+		}
+	}
+	return output;
+}
+
+/** A failing job's link, for a disable's PR body; only GitHub's own URLs. */
+const jobLinks = (jobs: string[]) =>
+	jobs
+		.filter((url) => /^https:\/\/github\.com\/[\w./-]+$/.test(url))
+		.map((url, index) => `[job ${index + 1}](${url})`)
+		.join(", ") || "no failing job found";
+
+/**
+ * Push `disable` to its own `quest-land/flaky-<sha>` branch, open it on the base it was committed on,
+ * and put it in the merge queue, recording each step with `record`, so a restart repeats none.
+ * Returns what it did.
+ */
+async function openDisable(
+	github: GitHub,
+	repository: string,
+	context: FixContext,
+	test: FlakyTest,
+	disable: Disable,
+	record: () => void,
+): Promise<string> {
+	const name = questName(disable.quest);
+	if (disable.id === undefined) {
+		const branch = `quest-land/flaky-${disable.head.slice(0, 12)}`;
+		const ref = `refs/heads/${branch}`;
+		const remote = `https://github.com/${repository}.git`;
+		// A retry after a restart finds its own push already there.
+		if ((await remoteHead(context.root, remote, ref, context.read)) !== disable.head) {
+			const pushed = await push(context.root, remote, disable.base.sha, disable.head, ref, context.token, "");
+			// Retried on the next pass: a push fails as often for an outage as for a rule.
+			if (pushed.status !== 0) throw new Error(`push failed: ${pushed.stderr.trim()}`);
+		}
+		const head = `${repository.split("/")[0]}:${branch}`;
+		const [open] = await github.all(`/repos/${repository}/pulls?head=${encodeURIComponent(head)}&state=open`);
+		const seen = test.verdicts
+			.slice(-RECENT)
+			.map((verdict) => `#${verdict.number} (${jobLinks(verdict.jobs)})`)
+			.join(", ");
+		const reason = `skip the flaky ${test.failure}, and add ${disable.quest} to fix or delete it`;
+		const pull =
+			open ??
+			object(
+				await (
+					await github.request(`/repos/${repository}/pulls`, {
+						body: {
+							title: `quest land: disable the flaky test ${name}`,
+							head,
+							base: disable.base.ref,
+							body: `The land fixer judged ${fixerText(test.failure)} flaky ${test.verdicts.length} times, most recently in the \`merge_group\` builds of ${seen}. This pull request skips it and adds its follow-up quest, \`${disable.quest}\`, to fix or delete it. quest land watch enqueues it like any other pull request, and fixes it if the queue drops it.${review("", disable.head, reason, disable.attribution)}\n\n(written by ${disable.attribution})`,
+						},
+					})
+				).json(),
+			);
+		disable.number = Number(pull.number);
+		disable.id = string(pull.node_id);
+		record();
+	}
+	try {
+		disable.done = await requeue(github, disable.id, disable.head, disable.base.ref, "");
+	} catch (error) {
+		if (!(error instanceof FixerRefusal)) throw error;
+		await post(
+			github,
+			{ repository },
+			{ number: disable.number!, enabledAt: disable.head },
+			`quest land watch: ${fixerText(error.message)}, so this pull request waits for a maintainer to enqueue it.`,
+			"refused",
+			MERGER,
+		);
+		disable.done = error.message;
+		record();
+		return `disable refused ${name}: ${error.message}`;
+	}
+	record();
+	return `disabled ${name} ${disable.number}`;
 }
