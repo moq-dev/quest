@@ -68,8 +68,13 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
   or `.opencode/` names, even with project config disabled, so the runner
   keeps the agent from creating them and refuses a checkout that holds them.
   `test/live/runner-sandbox.test.ts` checks that boundary with the pinned
-  opencode and srt and a scripted model on every Linux `just test`, so CI
-  catches a bump that weakens it.
+  opencode and srt and a scripted model. It runs in `just runner-sandbox`
+  and a nightly GitHub-hosted workflow (`.github/workflows/sandbox.yml`),
+  not in `just test` or the merge queue, whose container can't mount
+  `/proc` for bwrap, so a bump that weakens the boundary fails the next
+  nightly run. Decided 2026-11-03 (user, /quest-complete), after the merge
+  queue dropped [moq-dev/quest#404](https://github.com/moq-dev/quest/pull/404):
+  its own CI, nightly, so landing never blocks on it.
 - Decided 2026-10-24 (user) in `/quest-plan`: split the remaining work into
   the children below, ranked so the earliest unblock the most. Dropped
   (user): read-only registry access, which Claude Code's sandbox cannot

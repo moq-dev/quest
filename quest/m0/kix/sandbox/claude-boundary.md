@@ -1,4 +1,4 @@
-# [M] The Claude Code sandbox's boundary test runs in CI
+# [M] The Claude Code sandbox's boundary test runs nightly in CI
 
 ## Goal
 
@@ -6,9 +6,9 @@ Claude Code jobs get the same checked-in hostile-repository boundary test
 that opencode jobs got in
 [moq-dev/quest#404](https://github.com/moq-dev/quest/pull/404): a scripted
 fake model, set as the account's endpoint in its home, drives the pinned
-Claude Code through the runner's launch path on Linux CI, and every escape
-attempt is refused.
-A Claude Code bump that weakens the boundary fails CI before it lands.
+Claude Code through the runner's launch path in the nightly sandbox workflow
+on Linux, and every escape attempt is refused.
+A Claude Code bump that weakens the boundary fails the next nightly run.
 
 ## Plan
 
@@ -50,6 +50,13 @@ Work:
 - Like opencode's test, each shell attempt first succeeds outside the
   sandbox, and the test fails rather than skips on Linux when the sandbox
   can't start.
+- Run it where opencode's test runs: name it
+  `test/live/runner-sandbox-claude.test.ts` (or extend
+  `runner-sandbox.test.ts`), so `just runner-sandbox` and the nightly
+  `.github/workflows/sandbox.yml` pick it up, and keep it out of
+  `just test` and the merge queue. Decided 2026-11-03 (user,
+  /quest-complete) for opencode's test: its own CI, nightly, so landing
+  never blocks on it.
 
 ## Required
 

@@ -5,8 +5,10 @@
 // `test/runner.test.ts` checks only the settings the runner hands opencode and
 // srt; whether they confine anything is those programs' behavior, which can
 // change in any release. The scripted model needs no login and spends no
-// usage, so this runs in `just test` and CI. srt runs on Linux here; its macOS
-// Seatbelt run waits on /quest/m1/kix/sandbox/README.md.
+// usage, so `just runner-sandbox` runs it, and CI does nightly; a host that
+// can't run bwrap, such as the merge queue's container, keeps it out of
+// `just test`. srt runs on Linux here; its macOS Seatbelt run waits on
+// /quest/m1/kix/sandbox/README.md.
 //
 // Each attempt first runs unconfined with the same paths, so an attempt that
 // would no longer escape anyway fails as a broken control instead of passing

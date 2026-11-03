@@ -54,8 +54,9 @@ What the change does:
   `OPENCODE_DISABLE_PROJECT_CONFIG`, `external_directory` and `webfetch`
   denies, the plugin's realpath check, and `lsp`/`formatter` off. The
   sandbox's boundary test, `test/live/runner-sandbox.test.ts`, runs the
-  pinned opencode in `just test`, so it reruns on 2.x with the pin; extend
-  it to any rule 2.x changes, such as its tool names or plugin hooks.
+  pinned opencode only in `just runner-sandbox` and nightly CI, so run it
+  on the 2.x pin before landing; extend it to any rule 2.x changes, such as
+  its tool names or plugin hooks.
 - Run the runner's live opencode checks that the
   [Kix decision UI](/quest/m0/kix/README.md) rehearsal lists, if a runner is
   available.
