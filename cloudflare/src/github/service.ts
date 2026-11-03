@@ -3,7 +3,7 @@ import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse,
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
 import { CI_PERMISSIONS, type CIPermission, ciProblems } from "./ci";
-import { unreviewed } from "./review";
+import { REVIEW_CHECK, unreviewed } from "./review";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -1010,7 +1010,7 @@ export class GitHubService {
 		});
 	}
 
-	/** Recheck a queued PR head against current signatures and repository roles. */
+	/** Recheck a queued PR head against current signatures, head approvals, and repository roles. */
 	jobTrust(repo: GitHubRepository, target: string, revision: string) {
 		return this.#withRepository(repo, { contents: "read", pull_requests: "read" }, async (token, current) => {
 			this.#public(current);
@@ -1018,7 +1018,62 @@ export class GitHubService {
 		});
 	}
 
+	/**
+	 * Whether host runners may run a pull request's exact head: every commit
+	 * beyond the default branch is signed by a current maintainer, or a current
+	 * maintainer approved this head.
+	 */
 	async #pullTrust(token: string, repo: GitHubRepository, pull: number, revision: string) {
+		return (await this.#signed(token, repo, pull, revision)) || (await this.#approved(token, repo, pull, revision));
+	}
+
+	/**
+	 * Approve one exact open pull request head for host runners, as the
+	 * maintainer `userId` saw it. The approval lapses when the head moves, and
+	 * counts only while its approver keeps a maintain or admin role.
+	 */
+	approveHead(repo: GitHubRepository, userId: string, pull: number, head: string) {
+		const permissions = { pull_requests: "read" } as const;
+		return this.#authorized(repo, userId, permissions, async (token, current) => {
+			this.#public(current);
+			const live = await this.#api<{ state: string; head: { sha: string } }>(
+				token,
+				`${repositoryPath(repo)}/pulls/${number(pull)}`,
+			);
+			if (live.state !== "open" || live.head.sha !== sha(head))
+				throw new GitHubError("The pull request's head moved since you looked; review it again", 409);
+			await this.#env.DB.prepare(
+				"INSERT INTO head_approvals(repository,pull,head,approver,approvedAt) VALUES(?,?,?,?,?) ON CONFLICT(repository,pull) DO UPDATE SET head=excluded.head,approver=excluded.approver,approvedAt=excluded.approvedAt",
+			)
+				.bind(repo.id, pull, head, userId, Date.now())
+				.run();
+		});
+	}
+
+	/** Whether a current maintainer approved this exact head while it is still the open pull request's head. */
+	async #approved(token: string, repo: GitHubRepository, pull: number, revision: string) {
+		const approval = await this.#env.DB.prepare(
+			"SELECT approver FROM head_approvals WHERE repository=? AND pull=? AND head=?",
+		)
+			.bind(repo.id, pull, revision)
+			.first<{ approver: string }>();
+		if (!approval) return false;
+		const live = await this.#api<{ state: string; head: { sha: string } }>(
+			token,
+			`${repositoryPath(repo)}/pulls/${number(pull)}`,
+		);
+		if (live.state !== "open" || live.head.sha !== revision) return false;
+		try {
+			await this.#authority(token, repo, approval.approver);
+		} catch (error) {
+			if (error instanceof NotMaintainer) return false;
+			throw error;
+		}
+		return true;
+	}
+
+	/** Whether every commit of the exact head beyond the default branch is signed by a current maintainer. */
+	async #signed(token: string, repo: GitHubRepository, pull: number, revision: string) {
 		type Signer = { databaseId: number; login: string };
 		type Commit = { oid: string; signature: { isValid: boolean; signer: Signer | null } | null };
 		type Comparison = {
@@ -1792,6 +1847,40 @@ export class GitHubService {
 				app: Number(this.#env.GITHUB_APP_ID),
 			},
 		);
+	}
+
+	/**
+	 * Write the App's `quest review` check run on `head`, a commit a job
+	 * published and GitHub attributes to a bot, from a runner's review of it, on behalf of the job's
+	 * requester. GitHub binds the run to the commit, and `unreviewed` counts
+	 * only this App's, so a passing one lets kix land exactly that head.
+	 */
+	writeReviewCheck(
+		repo: GitHubRepository,
+		userId: string,
+		input: {
+			head: string;
+			conclusion: "success" | "failure";
+			output: { title: string; summary: string; text?: string };
+		},
+	) {
+		return this.#authorized(repo, userId, { contents: "read", checks: "write" }, async (token) => {
+			// The job's head is someone else's commit after a merge job continues onto it; that one is not a runner's to pass.
+			const { committer } = await this.#api<{ committer: { type: string } | null }>(
+				token,
+				`${repositoryPath(repo)}/commits/${sha(input.head)}`,
+			);
+			if (committer?.type !== "Bot")
+				throw new GitHubError("kix records a runner's review only of a commit it published");
+			await this.#api(token, `${repositoryPath(repo)}/check-runs`, "POST", {
+				name: REVIEW_CHECK,
+				head_sha: sha(input.head),
+				status: "completed",
+				conclusion: input.conclusion,
+				completed_at: new Date().toISOString(),
+				output: input.output,
+			});
+		});
 	}
 
 	/**

@@ -12,7 +12,7 @@
 		"contents": "write",
 		"issues": "write",
 		"pull_requests": "write",
-		"checks": "read",
+		"checks": "write",
 		"statuses": "read",
 		"administration": "read",
 		"secrets": "read",
