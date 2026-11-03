@@ -85,7 +85,8 @@ ownership-manifest design:
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - protected edits as ready commits, workflow pushes, and the PR's own CI as context
-- [Current landing status](/quest/m0/status-landing.md) - `quest status` drops a stale `landing-stopped` line and ignores superseded cancelled checks
+- [Checks are judged by their latest run](/quest/m0/latest-check-runs.md) - `quest status`, `quest wait`, and the gate count each check's latest run on the head, as GitHub does, so a superseded cancelled or failed run stops failing them or refusing release-plz PRs GitHub would merge
+- [Current landing status](/quest/m0/status-landing.md) - `quest status` clears a stale `landing-stopped` reason once the PR is queued again
 - [Agents don't stall](/quest/m0/agent-stalls.md) - long waits block in the same turn, pre-existing failures don't stop review, and reviewer outages become waits
 - [Follow-ups as agents report](/quest/m0/follow-ups-as-reports.md) - coordinators plan follow-ups as reports arrive, fewer of them, with standing milestone rules
 - [Context before decision prompts](/quest/m0/prompt-context.md) - every prompt explains the work first, and maintainer steps say why an agent can't take them
