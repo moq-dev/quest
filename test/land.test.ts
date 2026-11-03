@@ -3259,6 +3259,28 @@ ${requeueScript}`);
 		])
 			expect(fixerPrompt).toContain(text);
 	});
+	test("rebuilds a conflicted lockfile from the base's copy", () => {
+		const prompt = fixerPrompt.replace(/\s+/g, " ");
+		expect(prompt).not.toContain("regenerate lockfiles");
+		for (const text of [
+			"rebuild lockfiles as [Lockfiles](#lockfiles) says",
+			"## Lockfiles",
+			"rebuild it from the base's copy, never from the PR's side",
+			"`git checkout base -- <lockfile>`",
+			"minimal resolve against the merged manifests",
+			"Never run `cargo generate-lockfile`",
+			"`cargo update -p <name> --precise <version>`",
+			"keep the base's version if it is at or past the PR's",
+			"must trace to a dependency or import change in the PR",
+			"Name the lockfiles you rebuilt in the reason.",
+			"Hand back instead of taking either side's copy",
+			"the package manager cannot rebuild the lockfile",
+			"a change does not trace to the PR",
+			"below the base's security bump",
+			"`flake.lock` is a protected path",
+		])
+			expect(prompt).toContain(text);
+	});
 	test("has the fixer put its comments in the result instead of posting them", () => {
 		for (const text of [
 			"You have no GitHub credential and must not seek one.",
