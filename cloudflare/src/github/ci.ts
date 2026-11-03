@@ -113,41 +113,79 @@ export async function ciProblems(reads: CIReads, granted: ReadonlySet<CIPermissi
 			"environments",
 			(value) => typeof value.total_count === "number" && Array.isArray(value.environments),
 		);
-		// Read once, only when a policy names protected branches.
-		let protectedBranches: Promise<Set<string> | null> | undefined;
-		const branches = () =>
-			(protectedBranches ??= read<{ name: string }[]>(
+		// GitHub's first page of protected branches, read once and only when a
+		// policy names protected branches. A full page may leave some out, so a
+		// branch missing from it is looked up by name.
+		let page: Promise<{ names: Set<string>; complete: boolean } | null> | undefined;
+		const protectedPage = () =>
+			(page ??= read<{ name: string }[]>(
 				"/branches?protected=true&per_page=100",
 				"protected branches",
 				Array.isArray,
-			).then((list) => list && new Set(list.map((branch) => branch.name))));
+			).then(
+				(list) => list && { names: new Set(list.map((branch) => branch.name)), complete: list.length < 100 },
+			));
+		const lookups = new Map<string, Promise<boolean | null>>();
+		/** Whether GitHub reports the branch protected, or null when kix could not tell. */
+		const isProtected = async (name: string): Promise<boolean | null> => {
+			const known = await protectedPage();
+			if (!known) return null;
+			if (known.names.has(name) || known.complete) return known.names.has(name);
+			let lookup = lookups.get(name);
+			if (!lookup)
+				lookups.set(
+					name,
+					(lookup = (async () => {
+						try {
+							const branch = await reads.get<{ protected?: unknown }>(
+								`/branches/${name.split("/").map(encodeURIComponent).join("/")}`,
+							);
+							if (typeof branch?.protected === "boolean") return branch.protected;
+						} catch (error) {
+							// A branch that does not exist is not protected.
+							if ((error as { status?: unknown }).status === 404) return false;
+						}
+						problems.push(`kix could not read branch ${name}; review this project again later.`);
+						return null;
+					})()),
+				);
+			return lookup;
+		};
 		for (const environment of listed?.environments.slice(0, ENVIRONMENTS) ?? []) {
 			const path = `/environments/${encodeURIComponent(environment.name)}`;
 			const policy = environment.deployment_branch_policy;
 			let reason: string | null = null;
 			if (!policy) reason = "lets any branch deploy";
 			else if (policy.protected_branches) {
-				const known = await branches();
-				if (known && known.size === 0)
+				const known = await protectedPage();
+				if (known && known.names.size === 0)
 					reason =
 						"allows only protected branches, but no branch is protected, so GitHub lets any branch deploy";
 			} else if (policy.custom_branch_policies) {
-				const policies = await read<{ branch_policies: Policy[] }>(
+				const policies = await read<{ total_count: number; branch_policies: Policy[] }>(
 					`${path}/deployment-branch-policies?per_page=100`,
 					`environment ${environment.name}'s deployment branches`,
-					(value) => Array.isArray(value.branch_policies),
+					(value) => typeof value.total_count === "number" && Array.isArray(value.branch_policies),
 				);
 				if (!policies) continue;
 				// Tags are written by people with write access, never by kix. A branch
 				// counts only when GitHub reports it protected, or it is the merge
 				// queue's own branch for one; a wildcard may match a branch kix writes.
-				const patterns = policies.branch_policies.filter((p) => (p.type ?? "branch") === "branch");
-				const fixed = patterns.map((p) => p.name.match(QUEUE)?.[1] ?? p.name);
-				const known = fixed.some((name) => !WILDCARD.test(name)) ? await branches() : new Set<string>();
-				if (!known) continue;
-				const open = patterns.filter((_, i) => WILDCARD.test(fixed[i]!) || !known.has(fixed[i]!));
-				if (open.length)
-					reason = `lets ${open.map((p) => p.name).join(", ")} deploy, which kix cannot confirm ${open.length === 1 ? "is a protected branch" : "are protected branches"}`;
+				const open: string[] = [];
+				let unknown = false;
+				for (const pattern of policies.branch_policies) {
+					if ((pattern.type ?? "branch") !== "branch") continue;
+					const branch = pattern.name.match(QUEUE)?.[1] ?? pattern.name;
+					const safe = WILDCARD.test(branch) ? false : await isProtected(branch);
+					// The failed read is already a warning.
+					if (safe === null) unknown = true;
+					else if (!safe) open.push(pattern.name);
+				}
+				if (unknown) continue;
+				if (policies.total_count > policies.branch_policies.length)
+					reason = `lists ${policies.total_count} deployment branch and tag patterns, more than kix reads`;
+				else if (open.length)
+					reason = `lets ${open.join(", ")} deploy, which kix cannot confirm ${open.length === 1 ? "is a protected branch" : "are protected branches"}`;
 			}
 			if (!reason) continue;
 			const secrets = await read<Secrets>(

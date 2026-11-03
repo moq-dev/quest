@@ -16,8 +16,10 @@ type CISettings = {
 	token?: "read" | "write";
 	repository?: string[];
 	organization?: string[];
-	/** Branches GitHub reports protected; `trunk` by default. */
+	/** Branches GitHub reports protected, listing the first hundred; `trunk` by default. */
 	protected?: string[];
+	/** Other branches that exist. */
+	branches?: string[];
 	/** `policy` is null for any branch, "protected", or branch patterns, with `tag:` marking a tag pattern. */
 	environments?: { name: string; policy: null | "protected" | string[]; secrets: number }[];
 	/** Paths below the repository that GitHub refuses. */
@@ -180,9 +182,19 @@ function github(
 			if (rest === "/actions/secrets") return failed ?? Response.json(secrets(ci.repository ?? []));
 			if (rest === "/actions/organization-secrets")
 				return failed ?? Response.json(secrets(ci.organization ?? []));
+			const protectedBranches = ci.protected ?? ["trunk"];
 			if (rest === "/branches") {
 				expect(url.searchParams.get("protected")).toBe("true");
-				return failed ?? Response.json((ci.protected ?? ["trunk"]).map((name) => ({ name, protected: true })));
+				return (
+					failed ?? Response.json(protectedBranches.slice(0, 100).map((name) => ({ name, protected: true })))
+				);
+			}
+			const branch = rest.match(/^\/branches\/(.+)$/)?.[1];
+			if (branch !== undefined) {
+				const name = branch.split("/").map(decodeURIComponent).join("/");
+				if (!protectedBranches.includes(name) && !ci.branches?.includes(name))
+					return Response.json({ message: "Branch not found" }, { status: 404 });
+				return failed ?? Response.json({ name, protected: protectedBranches.includes(name) });
 			}
 			const environments = ci.environments ?? [];
 			if (rest === "/environments")
@@ -211,9 +223,13 @@ function github(
 					failed ??
 					Response.json({
 						total_count: found.policy.length,
-						branch_policies: found.policy.map((name) =>
-							name.startsWith("tag:") ? { name: name.slice(4), type: "tag" } : { name, type: "branch" },
-						),
+						branch_policies: found.policy
+							.slice(0, 100)
+							.map((name) =>
+								name.startsWith("tag:")
+									? { name: name.slice(4), type: "tag" }
+									: { name, type: "branch" },
+							),
 					})
 				);
 		}
@@ -394,6 +410,37 @@ describe("project enrollment", () => {
 			"Environment wild has 2 secrets and lets release/* deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
 			"Environment loose has 1 secret and lets staging deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
 			"Environment queue has 1 secret and lets gh-readonly-queue/staging/* deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
+		]);
+	});
+	it("looks up a named branch that a full page of protected branches leaves out", async () => {
+		const many = Array.from({ length: 100 }, (_, i) => `keep/${i}`);
+		const { service, calls } = github({
+			ci: {
+				protected: [...many, "release/v1"],
+				branches: ["staging"],
+				environments: [
+					{ name: "ship", policy: ["release/v1", "keep/0"], secrets: 1 },
+					{ name: "stage", policy: ["staging", "missing"], secrets: 1 },
+					{ name: "again", policy: ["release/v1"], secrets: 1 },
+				],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Environment stage has 1 secret and lets staging, missing deploy, which kix cannot confirm are protected branches. Limit its deployment branches to protected branches.",
+		]);
+		// Each branch the page left out is looked up once.
+		expect(
+			calls.filter((call) => /\/branches\/./.test(call.path)).map((call) => call.path.split("/branches/")[1]),
+		).toEqual(["release/v1", "staging", "missing"]);
+	});
+	it("does not confirm a deployment policy with more patterns than one page holds", async () => {
+		const { service } = github({
+			ci: {
+				environments: [{ name: "big", policy: Array.from({ length: 101 }, () => "trunk"), secrets: 1 }],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Environment big has 1 secret and lists 101 deployment branch and tag patterns, more than kix reads. Limit its deployment branches to protected branches.",
 		]);
 	});
 	it("warns that a protected-branches policy admits every branch while none is protected", async () => {
