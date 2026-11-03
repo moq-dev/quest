@@ -298,9 +298,16 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 	});
 });
 
-/** One turn of a job on the account, with the kix tools at a port nothing listens on. */
-function run(adapter: Opencode, sandbox: Sandbox, output: (line: string) => void) {
-	return adapter.launch({
+/** How long the job may run before it is stopped, within the test's timeout and the stop's grace. */
+const RUN_BOUND = 4 * 60_000;
+
+/**
+ * One turn of a job on the account, with the kix tools at a port nothing
+ * listens on. A turn that runs past `RUN_BOUND` is stopped and awaited, so a
+ * hung opencode or srt never outlives the test.
+ */
+async function run(adapter: Opencode, sandbox: Sandbox, output: (line: string) => void) {
+	const running = adapter.launch({
 		cwd: paths.checkout,
 		home: paths.account,
 		session: "boundary",
@@ -311,7 +318,15 @@ function run(adapter: Opencode, sandbox: Sandbox, output: (line: string) => void
 		sandbox,
 		env: process.env,
 		output,
-	}).done;
+	});
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		running.stop();
+	}, RUN_BOUND);
+	const exit = await running.done.finally(() => clearTimeout(timer));
+	if (timedOut) throw new Error(`the job ran past ${RUN_BOUND / 60_000} minutes, so it was stopped`);
+	return exit;
 }
 
 /**
