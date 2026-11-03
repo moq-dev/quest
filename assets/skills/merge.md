@@ -16,7 +16,7 @@ Read the PR's head, checks, merge state, reviews by head, unresolved threads, an
 If a `hold` record shows another session holds the PR, stop and report it; taking over a stale hold is the user's choice.
 The head is landable when:
 
-- a `## Review` record the guide counts names it, or the guide's review exemptions cover the changes since the one it names;
+- a `## Review` record `quest context` counts names it, or its review exemptions cover the changes since the one it names;
 - every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, and no decision is open;
 - its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base.
 
