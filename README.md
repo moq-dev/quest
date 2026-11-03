@@ -1259,11 +1259,12 @@ checkouts are Quest's own once `quest init` installs its hooks (see
 [Claude Code checkouts](#claude-code-checkouts)).
 
 Set a shared capacity and an explicit reservation in bytes, covering the
-checkout and its expected build output. Measure representative jobs before
+checkout, the module stores its submodules clone, and its expected build output. Measure representative jobs before
 choosing the budget. Until a capacity is set, only free disk space limits new
 reservations. Reservations serialize creators and account for concurrent
 expected growth. They do not enforce filesystem quotas against arbitrary
-writers, and Git objects stored in the shared repository are not charged.
+writers, and Git objects stored in the shared repository are not charged; each
+checkout's own submodule stores are.
 
 ```sh
 quest worktree capacity 20000000000
@@ -1321,7 +1322,7 @@ Once a checkout is finished, remove it and its record:
 quest worktree remove example
 ```
 
-`remove` never forces. It refuses while supervised runs are live, and refuses
+`remove` checks files and commits recursively before deleting a checkout. It refuses while supervised runs are live, and refuses
 modified or untracked files and any commit, at `HEAD` or under the checkout's
 own refs such as `refs/bisect/`, that no branch or remote-tracking ref
 reaches. A squash-merged change leaves its commits unreached, so they count as
@@ -1330,7 +1331,20 @@ PR whose head is exactly that commit; other commits need no forge or token.
 It then prunes the scratch and refuses ignored files that remain, leaving the
 checkout released, before `git worktree remove` deletes it. A checkout already
 removed with `git worktree remove` only drops its record, as with `release`.
-A failed creation stays charged until `release` drops it. Records live in
+New checkouts initialize their submodules recursively before returning. Restoring
+one preserves its existing submodule pins and local work. Creation verifies any
+new module tips not reached by remote-tracking branches (such as SHA-fetched
+pins or cloned tags) against origin and records them under
+`refs/remotes/quest-pins/`, outside origin's branch-prune namespace. Removal also checks
+submodules' files outside declared scratch and every module store, including deinitialized ones;
+commits at their HEAD or refs must be reachable from a remote-tracking ref,
+since module stores and their local branches are deleted with the checkout, and
+a module store must have no linked worktrees of its own.
+Scratch paths inside submodules use that submodule's ignore rules. Only after
+those checks does removal use the force Git requires for submodules.
+A failed creation stays charged until its partial checkout is inspected and
+removed, then `release` drops its record. Unlock it before removing it; Git
+requires `--force` for submodules, so preserve their files and commits first. Records live in
 `$QUEST_WORKTREE_HOME`, or `$XDG_STATE_HOME/quest/worktrees` (default
 `~/.local/state/quest/worktrees`). The registry lock of a process that exited on
 this host is reclaimed; a live lock, or one held from another host, is never
@@ -1360,7 +1374,8 @@ number origin has no request for starts from the default base instead of
 failing. With only a name to go on,
 it declares the main checkout's top-level ignored entries as scratch, except
 `.worktrees/`, `.claude/`, and entries holding a nested repository, and
-reserves the main checkout's disk usage without `.git` and those checkouts.
+reserves the main checkout's disk usage without `.git` and those checkouts, plus
+its submodule stores, which the new checkout clones again.
 
 A subagent's checkout is released when the subagent finishes or stops to wait
 for an answer, and restored when it resumes, with a note telling it to

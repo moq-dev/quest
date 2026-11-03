@@ -715,6 +715,18 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		);
 	const state = () => new Worktrees();
 	const record = (value: unknown) => print(JSON.stringify(value));
+	const settled = (result: Promise<unknown>) => {
+		pending = result.then(
+			(value) => {
+				record(value);
+				return 0;
+			},
+			(error: unknown) => {
+				warn(error instanceof Error ? error.message : String(error));
+				return 1;
+			},
+		);
+	};
 	worktree
 		.command("capacity <bytes>")
 		.description("Set this user's shared disk budget in bytes; until set, only free disk space limits checkouts")
@@ -736,7 +748,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			[],
 		)
 		.action((name: string, options: { reserve: number; ref: string; scratch: string[] }) =>
-			record(state().create(root(), name, options.reserve, options.ref, options.scratch)),
+			settled(state().create(root(), name, options.reserve, options.ref, options.scratch)),
 		);
 	worktree
 		.command("run")
@@ -776,18 +788,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"and drops the record of a removed checkout",
 		)
 		.action((id: string) => record(state().release(id)));
-	const settled = (result: Promise<unknown>) => {
-		pending = result.then(
-			(value) => {
-				record(value);
-				return 0;
-			},
-			(error: unknown) => {
-				warn(error instanceof Error ? error.message : String(error));
-				return 1;
-			},
-		);
-	};
+
 	// Only a commit no local ref reaches asks the forge, so other removals need no token.
 	const merged = async (repository: string, commit: string) => {
 		const origin = readRemote(repository, "origin");
@@ -798,10 +799,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	worktree
 		.command("remove <id>")
 		.description(
-			"Delete a finished checkout and drop its record, never forcing. Refuses while supervised runs are live, " +
+			"Delete a finished checkout and drop its record after recursive safety checks. Refuses while supervised runs are live, " +
 				"and refuses modified, untracked, or ignored files beyond the declared scratch, and commits no branch " +
 				"or remote-tracking ref reaches, unless the GitHub upstream that holds origin's claims merged a PR whose head is exactly " +
-				"that commit. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
+				"that commit. Submodules must have no changed or ignored files and no commits their remote refs do not reach, including in deinitialized module stores, and module stores must have no linked worktrees of their own. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
 		)
 		.action((id: string) => settled(state().remove(id, merged)));
 	worktree
@@ -826,10 +827,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				".\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
-				"and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
+				"initializes its submodules recursively, and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
 				"pull request's URL, checks out that request's head from origin instead, when origin has one. Its scratch is the main checkout's top-level ignored entries, except " +
 				".worktrees/, .claude/, and entries holding a nested repository; its reserve is the main checkout's disk " +
-				"usage without .git and those checkouts. An existing checkout of that name in the repository is " +
+				"usage without .git and those checkouts, plus its submodule stores. An existing checkout of that name in the repository is " +
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
 				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
 				"or a workflow agent's, named for its run and bound to the first subagent that starts in it, " +
@@ -837,7 +838,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Exits 1 on failure, never 2, which would keep a subagent running.",
 		)
 		.action(() => {
-			pending = (async () => claudeHook(JSON.parse(readFileSync(0, "utf8")), state(), merged))().then(
+			pending = (async () =>
+				claudeHook(
+					JSON.parse(readFileSync(0, "utf8")),
+					state(),
+					merged,
+					program.getOptionValueSource("root") === "cli" ? root() : process.env.CLAUDE_PROJECT_DIR,
+				))().then(
 				(output) => {
 					if (output) out.stdout(output);
 					return 0;
