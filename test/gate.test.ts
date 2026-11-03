@@ -39,7 +39,7 @@ import {
 	job,
 	scope,
 } from "../src/cli/gate";
-import { forwards, foregroundStat } from "../src/cli/interrupt";
+import { forwards, foregroundStat, statProcess } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
 import { questScope } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
@@ -768,6 +768,118 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 	});
 });
 
+/**
+ * Just, as a recipe like `[script("quest", "gate", "--", "bash")]` has it, runs an outermost gate
+ * that owns `command` through a process group, as on macOS or Linux without a systemd user
+ * manager: a Bun script that follows its own signals as `quest gate` does, short of admission, and
+ * creates `handled-<n>` once it has handled its nth signal. Just leads a process group of its own,
+ * as under a terminal or a CI runner.
+ */
+function outermostUnderJust(dir: string, command: string[]) {
+	const script = join(dir, "outermost.ts");
+	const pid = join(dir, "gate");
+	const gate = fileURLToPath(new URL("../src/cli/gate.ts", import.meta.url));
+	const interrupt = fileURLToPath(new URL("../src/cli/interrupt.ts", import.meta.url));
+	writeFileSync(
+		script,
+		`import { writeFileSync } from "node:fs";
+		import { group } from ${JSON.stringify(gate)};
+		import { cancelled, interrupts } from ${JSON.stringify(interrupt)};
+		const cancel = interrupts();
+		let handled = 0;
+		for (const name of ["SIGINT", "SIGTERM", "SIGHUP"])
+			process.on(name, () => writeFileSync(${JSON.stringify(dir)} + "/handled-" + ++handled, ""));
+		writeFileSync(${JSON.stringify(pid)}, String(process.pid));
+		const status = await group(${JSON.stringify(command)}, process.env, cancel);
+		cancel.close();
+		process.exit(cancel.signal.aborted ? cancelled(cancel.signal) : status);`,
+	);
+	const env = { ...process.env };
+	delete env.QUEST_GATE_ADMITTED;
+	delete env.QUEST_GATE_GROUP;
+	const [file, ...args] = just(dir, [process.execPath, config, script].map(quote).join(" "));
+	const child = spawn(file, args, { env, stdio: "inherit", detached: true });
+	return {
+		/** Signal Just alone, which forwards SIGTERM to the gate. */
+		just: (name: NodeJS.Signals) => process.kill(child.pid!, name),
+		/** Signal the gate alone. */
+		gate: (name: NodeJS.Signals) => process.kill(Number(readFileSync(pid, "utf8")), name),
+		/** Signal Just's whole process group, which holds the gate too. */
+		group: (name: NodeJS.Signals) => process.kill(-child.pid!, name),
+		/** Resolves once the gate has handled its nth signal. */
+		handled: (n: number) => created(join(dir, `handled-${n}`)),
+		exited: once(child, "exit"),
+	};
+}
+
+describe.skipIf(process.platform === "win32")("an outermost gate owning a process group under Just", () => {
+	test(
+		"takes Just's copy of a SIGTERM it already handled as the same cancellation",
+		{ timeout: 30_000 },
+		async () => {
+			const dir = tempDir();
+			const leaf = signalled(dir, ["SIGTERM"], 200);
+			const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
+			await created(leaf.ready);
+			// A SIGTERM to Just's process group reaches the gate directly and again through Just, whose
+			// copy may come only after the gate handled the first.
+			run.gate("SIGTERM");
+			await run.handled(1);
+			run.just("SIGTERM");
+			await run.handled(2);
+			await run.exited;
+			expect(leaf.log()).toEqual(["SIGTERM"]);
+			// The leaf finished its own cleanup: the gate did not take Just's copy as a second signal.
+			expect(existsSync(leaf.done)).toBe(true);
+		},
+	);
+
+	test(
+		"lets the command finish its cleanup after a SIGTERM to Just's process group",
+		{ timeout: 30_000 },
+		async () => {
+			const dir = tempDir();
+			const leaf = signalled(dir, ["SIGTERM"], 200);
+			const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
+			await created(leaf.ready);
+			run.group("SIGTERM");
+			await run.exited;
+			expect(leaf.log()).toEqual(["SIGTERM"]);
+			expect(existsSync(leaf.done)).toBe(true);
+		},
+	);
+
+	test("a SIGTERM beyond Just's copy kills a command still cleaning up", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const leaf = signalled(dir, ["SIGTERM"]);
+		const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
+		await created(leaf.ready);
+		run.gate("SIGTERM");
+		await run.handled(1);
+		run.just("SIGTERM");
+		await run.handled(2);
+		run.gate("SIGTERM");
+		await run.exited;
+		await until(() => stopped(leaf.pid()), "the leaf to stop");
+	});
+
+	test(
+		"a repeated SIGINT, which Just does not forward, kills a command still cleaning up",
+		{ timeout: 30_000 },
+		async () => {
+			const dir = tempDir();
+			const leaf = signalled(dir, ["SIGINT"]);
+			const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
+			await created(leaf.ready);
+			run.group("SIGINT");
+			await run.handled(1);
+			run.group("SIGINT");
+			await run.exited;
+			await until(() => stopped(leaf.pid()), "the leaf to stop");
+		},
+	);
+});
+
 describe.runIf(process.platform === "linux")("a systemd scope", () => {
 	test("also stops a descendant that left its process group", { timeout: 30_000 }, async () => {
 		const { command, pid } = descendant(tempDir(), "exit 3", { leave: true });
@@ -1039,6 +1151,7 @@ test.skipIf(process.platform === "win32")("a signal is left to reach the child w
 	expect(foregroundStat("42 (a ) b) S 1 42 42 34816 77 4194560")).toBe(false);
 	// No controlling terminal.
 	expect(foregroundStat("42 (quest) S 1 42 42 0 -1 4194560")).toBe(false);
+	expect(statProcess("42 (a ) b) S 1 7 42 34816 42 4194560")).toEqual({ name: "a ) b", group: "7" });
 });
 
 test.runIf(process.platform === "linux")("a terminal Ctrl-C reaches the gated command once", async () => {
