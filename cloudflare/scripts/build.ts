@@ -1,6 +1,7 @@
 // Build-time inputs for the Worker, written to build/ (ignored by Git):
 // - build/docs.json: the repository's docs/*.md rendered to HTML.
 // - build/board.json: this repository's quest tree and finished quests, for the board.
+// - build/stubs.json: the skill stubs `quest init` installs, for the setup pull request.
 // - build/public/: static assets: the theme from design/theme/, src/site.css, the
 //   scripts src/passkey.js, src/app.js, and the service worker src/sw.js, and the
 //   web app manifest.
@@ -10,6 +11,7 @@ import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } f
 import { join, posix } from "node:path";
 import { Lexer, Marked, type Token, type Tokens } from "marked";
 import type { Snapshot } from "../src/board/project";
+import { SKILLS } from "../../src/cli/skills.ts";
 import { LOG, finished, isQuest } from "./history.ts";
 
 const repo = "https://github.com/moq-dev/quest";
@@ -113,6 +115,7 @@ rmSync(build, { recursive: true, force: true });
 mkdirSync(join(build, "public"), { recursive: true });
 writeFileSync(join(build, "docs.json"), JSON.stringify(rendered));
 writeFileSync(join(build, "board.json"), JSON.stringify(snapshot));
+writeFileSync(join(build, "stubs.json"), JSON.stringify(SKILLS.map(({ installed, stub }) => ({ installed, stub }))));
 cpSync(join(design, "theme"), join(build, "public", "theme"), { recursive: true });
 cpSync(join(worker, "src", "site.css"), join(build, "public", "site.css"));
 for (const file of ["passkey.js", "app.js", "sw.js", "manifest.webmanifest"])

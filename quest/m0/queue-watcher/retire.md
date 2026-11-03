@@ -2,10 +2,8 @@
 
 ## Goal
 
-Condition: no repository lands through `quest land serve` any more (moq,
-moq-dev/quest, moq.pro, rust2 and rind have all switched to the merge queue).
-
-Then the batching gate is gone: `quest land serve`'s batching, parking,
+Once no repository lands through `quest land serve` any more, the batching
+gate is gone: `quest land serve`'s batching, parking,
 halting, and squash-push code, its tests, and its README and `CONTRIBUTING.md`
 sections are deleted, keeping only what the watcher and `quest land apply`
 use. The host's `quest-land` daemon instances and check containers are
@@ -20,6 +18,23 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 batched gate, and gate work is frozen until then. Once nothing uses it, the
 code goes rather than staying as an unmaintained option. Check each
 repository's ruleset for a `quest land` requirement before deleting.
+
+moq, moq-dev/quest, rind and rust2 land through the merge queue (2026-11-03).
+moq.pro is the last: on 2026-11-02 the maintainer kept it on its host gate,
+and its `main` ruleset still requires `quest land`. moq.pro is private and
+moq-dev is on GitHub Team, where GitHub has offered merge queues on private
+repositories only under Enterprise Cloud.
+
+## Waiting
+
+- Maintainer: decide how moq.pro leaves the host gate, since only the
+  maintainer can change moq-dev's plan or repository settings. Options:
+  enable a merge queue in moq.pro's `main` ruleset if GitHub now offers one
+  there (recommended; check the ruleset editor first); move moq-dev to
+  Enterprise Cloud for it; or keep moq.pro on the gate and delete this
+  quest. Check with
+  `gh api repos/moq-dev/moq.pro/rulesets/16788924 --jq '[.rules[].type]'`,
+  which lists `merge_queue` once it is enabled.
 
 ## Required
 

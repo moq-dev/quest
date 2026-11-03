@@ -25,6 +25,7 @@ import {
 	fileHost,
 	gate,
 	group,
+	inside,
 	type Admission,
 	type Host,
 	hostLimits,
@@ -39,7 +40,7 @@ import {
 } from "../src/cli/gate";
 import { forwards, foregroundStat } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
-import { onTerminal, run, tempDir } from "./fixture";
+import { created, onTerminal, run, signalled, tempDir } from "./fixture";
 
 const GiB = 2 ** 30;
 
@@ -576,15 +577,26 @@ test.skipIf(process.platform === "win32")("cancellation forwards the received si
 });
 
 test("a nested call, or one inside a Quest scope, leaves its command to the enclosing owner", () => {
-	expect(owner({ QUEST_GATE_ADMITTED: "1" })).toBe(direct);
-	const cgroup = join(tempDir(), "cgroup");
+	const dir = tempDir();
 	const slice = "0::/user.slice/user-1000.slice/user@1000.service/app.slice";
-	writeFileSync(cgroup, `${slice}/quest-worktree-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope\n`);
-	expect(scoped(cgroup)).toBe(true);
-	writeFileSync(cgroup, `${slice}/quest-gate-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope\n`);
-	expect(scoped(cgroup)).toBe(true);
-	writeFileSync(cgroup, `${slice}/app-terminal-42.scope\n`);
-	expect(scoped(cgroup)).toBe(false);
+	const cgroup = (unit: string) => {
+		const file = join(dir, unit);
+		writeFileSync(file, `${slice}/${unit}\n`);
+		return file;
+	};
+	const terminal = cgroup("app-terminal-42.scope");
+	const worktree = cgroup("quest-worktree-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope");
+	const gated = cgroup("quest-gate-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope");
+	expect(scoped(worktree)).toBe(true);
+	expect(scoped(gated)).toBe(true);
+	expect(scoped(terminal)).toBe(false);
+	if (process.platform === "win32") return expect(owner({ QUEST_GATE_ADMITTED: "1" })).toBe(direct);
+	// The enclosing owner signals the command too unless it was not one of Quest's.
+	expect(owner({ QUEST_GATE_ADMITTED: "1" }, terminal)).toBe(direct);
+	expect(owner({ QUEST_GATE_ADMITTED: "1", QUEST_GATE_GROUP: "1" }, terminal)).toBe(inside);
+	if (process.platform !== "linux") return;
+	expect(owner({ QUEST_GATE_ADMITTED: "1" }, gated)).toBe(inside);
+	expect(owner({}, worktree)).toBe(inside);
 });
 
 /** Gone, or a zombie its new parent has not reaped yet: either way it runs no code. */
@@ -623,6 +635,32 @@ const owners: [string, Owner][] =
 			? []
 			: [["a process group", group]];
 
+const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
+// Bun reads the checkout's config only from its working directory, which Just changes.
+const config = `--config=${fileURLToPath(new URL("../bunfig.toml", import.meta.url))}`;
+const quote = (word: string) => JSON.stringify(word);
+
+/** Just runs `recipe` in `dir`, from a justfile holding only that recipe. */
+function just(dir: string, recipe: string): string[] {
+	const justfile = join(dir, "justfile");
+	writeFileSync(justfile, `phase:\n    ${recipe}\n`);
+	return ["just", "--justfile", justfile, "--working-directory", dir, "phase"];
+}
+
+/**
+ * A check's phase: Just runs a Bash script that traps SIGTERM and SIGHUP, which runs `leaf` under
+ * GNU time. Bash runs a trap only once its foreground command ends, and GNU time dies on either
+ * signal without forwarding it, so only a signal delivered to every layer reaches the leaf.
+ */
+function phase(dir: string, leaf: string): string[] {
+	const script = join(dir, "phase.sh");
+	writeFileSync(
+		script,
+		`trap 'exit 143' TERM\ntrap 'exit 129' HUP\ncommand time -o /dev/null ${quote(process.execPath)} ${quote(leaf)}\n`,
+	);
+	return just(dir, `bash ${quote(script)}`);
+}
+
 describe.each(owners)("an owner using %s", (_name, run) => {
 	test("keeps the exact exit status and stops descendants left behind", { timeout: 30_000 }, async () => {
 		const { command, pid } = descendant(tempDir(), "exit 7");
@@ -641,6 +679,68 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 		expect(await result).toBe(128 + constants.signals.SIGTERM);
 		await until(() => stopped(pid()), "the grandchild to stop");
 	});
+
+	for (const name of ["SIGTERM", "SIGHUP"] as const)
+		test(`${name} reaches a phase under Just, a trapping Bash, and GNU time`, { timeout: 30_000 }, async () => {
+			const dir = tempDir();
+			const leaf = signalled(dir, ["SIGTERM", "SIGHUP"], 200);
+			const { stop, cancel } = cancellation();
+			const result = run(phase(dir, leaf.script), process.env, cancel);
+			await created(leaf.ready);
+			stop.abort(name);
+			// The leaf runs until signalled, so a gate that left it running never returns.
+			expect(await result).toBe(128 + constants.signals[name]);
+			expect(leaf.log()).toEqual([name]);
+			await until(() => stopped(leaf.pid()), "the leaf to stop");
+		});
+
+	test("lets a cancelled phase finish its cleanup after its wrappers exit", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const leaf = signalled(dir, ["SIGTERM"], 200);
+		const { stop, cancel } = cancellation();
+		const result = run(phase(dir, leaf.script), process.env, cancel);
+		await created(leaf.ready);
+		stop.abort("SIGTERM");
+		expect(await result).toBe(128 + constants.signals.SIGTERM);
+		expect(existsSync(leaf.done)).toBe(true);
+	});
+
+	test("a second signal kills a phase still cleaning up", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const leaf = signalled(dir, ["SIGTERM"]);
+		const { stop, kill, cancel } = cancellation();
+		const result = run(phase(dir, leaf.script), process.env, cancel);
+		await created(leaf.ready);
+		stop.abort("SIGTERM");
+		await created(leaf.received);
+		kill.abort();
+		// Signalled, whether Just exited on the first signal or the second killed it.
+		expect(await result).toBeGreaterThan(128);
+		await until(() => stopped(leaf.pid()), "the leaf to stop");
+	});
+
+	for (const name of ["SIGTERM", "SIGHUP"] as const)
+		test(
+			`delivers ${name} once to a command under a nested gate, without killing it`,
+			{ timeout: 30_000 },
+			async () => {
+				const dir = tempDir();
+				const leaf = signalled(dir, [name], 200);
+				const { stop, cancel } = cancellation();
+				const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
+				// Just also forwards SIGTERM to its own child, the nested gate, on top of the owner's.
+				const nested = [process.execPath, config, bin, "gate", process.execPath, leaf.script]
+					.map(quote)
+					.join(" ");
+				const result = run(just(dir, nested), env, cancel);
+				await created(leaf.ready);
+				stop.abort(name);
+				expect(await result).toBe(128 + constants.signals[name]);
+				expect(leaf.log()).toEqual([name]);
+				// The leaf finished its own cleanup: neither gate killed it.
+				expect(existsSync(leaf.done)).toBe(true);
+			},
+		);
 
 	test("killing stops a command that ignores the request", { timeout: 30_000 }, async () => {
 		const dir = tempDir();
@@ -678,7 +778,6 @@ describe.skipIf(process.platform === "win32")("a process group", () => {
 			writeFileSync(${JSON.stringify(ready)}, "");
 			setTimeout(() => writeFileSync(${JSON.stringify(count)}, String(interrupts)), 1000);`,
 		);
-		const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 		const { stop, cancel } = cancellation();
 		const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
 		const result = group([process.execPath, bin, "gate", process.execPath, child], env, cancel);
@@ -701,16 +800,17 @@ describe.skipIf(process.platform === "win32")("a process group", () => {
 
 test("a cancellation without a signal's name always passes, even on Windows", () => {
 	expect(forwards(AbortSignal.abort())).toBe(true);
-	expect(forwards(AbortSignal.abort(), { QUEST_GATE_GROUP: "1" })).toBe(true);
+	expect(forwards(AbortSignal.abort(), true)).toBe(true);
 });
 
-test.skipIf(process.platform === "win32")("only a terminal's own SIGINT is left to reach the child", () => {
-	// Signals that may be sent to Quest alone always pass.
-	expect(forwards(AbortSignal.abort("SIGHUP"))).toBe(true);
-	expect(forwards(AbortSignal.abort("SIGTERM"))).toBe(true);
-	// The group owner already delivers a Ctrl-C to everything in its group.
-	expect(forwards(AbortSignal.abort("SIGINT"), { QUEST_GATE_GROUP: "1" })).toBe(false);
-	expect(forwards(AbortSignal.abort("SIGTERM"), { QUEST_GATE_GROUP: "1" })).toBe(true);
+test.skipIf(process.platform === "win32")("a signal is left to reach the child wherever it already did", () => {
+	// Signals that may be sent to Quest alone pass.
+	expect(forwards(AbortSignal.abort("SIGHUP"), false)).toBe(true);
+	expect(forwards(AbortSignal.abort("SIGTERM"), false)).toBe(true);
+	// The group owner, and a Quest scope's owner, deliver each to everything they hold.
+	for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) expect(forwards(AbortSignal.abort(name), true)).toBe(false);
+	vi.stubEnv("QUEST_GATE_GROUP", "1");
+	expect(forwards(AbortSignal.abort("SIGTERM"))).toBe(false);
 	// pid (comm with spaces) state ppid pgrp session tty_nr tpgid ...
 	expect(foregroundStat("42 (a ) b) S 1 42 42 34816 42 4194560")).toBe(true);
 	expect(foregroundStat("42 (a ) b) S 1 42 42 34816 77 4194560")).toBe(false);
@@ -727,7 +827,6 @@ test.runIf(process.platform === "linux")("a terminal Ctrl-C reaches the gated co
 		console.log("ready");
 		setTimeout(() => console.log("interrupts=" + interrupts), 1000);`,
 	);
-	const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 	const result = await onTerminal([process.execPath, bin, "gate", process.execPath, child], "\x03", {
 		...process.env,
 		QUEST_GATE_ADMITTED: "1",

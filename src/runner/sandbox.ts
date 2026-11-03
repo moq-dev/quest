@@ -7,7 +7,8 @@
 // reach no network host. The project's devShell is evaluated by the runner from the
 // job's revision, never the checkout an agent edited, and its environment,
 // shellHook included, is sourced inside the sandbox before each command.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -112,6 +113,89 @@ export function runtimeSettings(sandbox: Sandbox, denyWrite: string[] = []): Rec
 		},
 		enableWeakerNestedSandbox: false,
 	};
+}
+
+/**
+ * An AppArmor profile that lets `bwrap` and the commands it runs make user
+ * namespaces on a system restricting unprivileged ones, as Ubuntu 23.10 and
+ * later do: the form Ubuntu gives other programs that sandbox themselves.
+ * Ubuntu's own `bwrap-userns-restrict` takes capabilities from the commands
+ * bwrap runs, which breaks the seccomp helper Claude Code runs inside it, since
+ * that makes a nested user namespace for its capabilities. The job's commands
+ * still get none of their own: the helper's filter refuses them one, and
+ * bubblewrap does where sandbox-runtime runs no helper. It attaches to one exact
+ * path rather than a glob, since anyone who can build with Nix can put a
+ * matching name in the store.
+ */
+export function bwrapProfile(bwrap: string): string {
+	return `abi <abi/4.0>,\ninclude <tunables/global>\n\nprofile quest-bwrap ${bwrap} flags=(unconfined) {\n  userns,\n}\n`;
+}
+
+/** Whether AppArmor keeps unprivileged user namespaces to programs whose profile allows them. */
+function restrictsUserNamespaces(): boolean {
+	try {
+		return readFileSync("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "utf8").trim() === "1";
+	} catch {
+		return false;
+	}
+}
+
+/** Namespaces as Claude Code's sandbox and sandbox-runtime make them, around `command`. */
+function namespaces(command: string[]): string[] {
+	return [
+		"--new-session",
+		"--die-with-parent",
+		"--unshare-user",
+		"--unshare-pid",
+		"--unshare-net",
+		"--ro-bind",
+		"/",
+		"/",
+		"--dev",
+		"/dev",
+		"--proc",
+		"/proc",
+		...command,
+	];
+}
+
+/**
+ * Why `bwrap` cannot make a sandbox here, or null when it can, so a runner
+ * refuses to start rather than fail every job. It runs a trivial command in
+ * the sandbox's namespaces, nested in a second bwrap, since Claude Code's
+ * seccomp helper makes a nested user namespace inside the sandbox.
+ */
+export function sandboxRefusal(bwrap: string, restricted: boolean = restrictsUserNamespaces()): string | null {
+	const probe = spawnSync(bwrap, namespaces([bwrap, ...namespaces(["true"])]), {
+		stdio: ["ignore", "ignore", "pipe"],
+		encoding: "utf8",
+		timeout: 10_000,
+	});
+	if (!probe.error && probe.status === 0) return null;
+	const said =
+		probe.error?.message ?? (probe.stderr.trim().split("\n").at(-1) || `exit ${probe.status ?? probe.signal}`);
+	return refusalReason(bwrap, said, restricted);
+}
+
+/**
+ * The refusal for a `bwrap` that failed the probe saying `said`. Where AppArmor
+ * restricts user namespaces, it carries the profile to install for a bwrap in
+ * the Nix store, such as the runner package's. A system bwrap gets none, since
+ * AppArmor attaches neither of two profiles for one path, and the distribution
+ * may already ship one for it, as Ubuntu does for `/usr/bin/bwrap`.
+ */
+export function refusalReason(bwrap: string, said: string, restricted: boolean): string {
+	const reason = `${bwrap} cannot make the sandbox's namespaces (${said})`;
+	if (!restricted)
+		return `${reason}; jobs run their commands in a bubblewrap sandbox, which needs unprivileged user namespaces`;
+	const apparmor = `${reason}. AppArmor allows unprivileged user namespaces only to programs whose profile grants them`;
+	if (!bwrap.startsWith("/nix/store/"))
+		return `${apparmor}; run the flake's runner package (\`nix run github:moq-dev/quest#runner -- runner\`), which prints the profile for its own bubblewrap`;
+	return (
+		`${apparmor}; install this profile for the runner's bubblewrap, then start the runner again:\n\n` +
+		`sudo tee /etc/apparmor.d/quest-bwrap >/dev/null <<'EOF'\n${bwrapProfile(bwrap)}EOF\n` +
+		"sudo apparmor_parser -r /etc/apparmor.d/quest-bwrap"
+	);
 }
 
 export function closeSandbox(sandbox: Sandbox): void {

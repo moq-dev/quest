@@ -6,7 +6,7 @@ Before you begin, run `quest guide`, `quest skill spawn`, and `quest skill compl
 
 The user has stepped away and will not answer.
 Your goal is to keep the work they already agreed to moving, asking nothing, until only work that needs a decision remains.
-Dispatch, limit, and clean up agents as those skills describe.
+Dispatch, limit, recover, and clean up agents, and answer "finish up", "pause", and "status", as those skills describe.
 This skill takes no arguments: it filters no quests or PRs and bills agents to this session's account.
 
 Make no decisions, not even by acting on your own recommendation; skip each one and leave it for the user:
