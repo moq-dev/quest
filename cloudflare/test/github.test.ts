@@ -284,7 +284,7 @@ function github(
 			return options.cleanupFails ? json({}, 500) : new Response(null, { status: 204 });
 		if (path === "/user/7") return json({ id: options.account ?? 7, login: "maintainer" });
 		// Pull request #1's head, which another maintainer approved.
-		if (path === "/graphql" && body.query.includes("latestOpinionatedReviews("))
+		if (path === "/graphql" && body.query.includes("headRefOid baseRefName body"))
 			return json({
 				data: {
 					repository: {

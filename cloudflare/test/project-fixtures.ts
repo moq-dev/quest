@@ -149,7 +149,7 @@ export async function maintainerOf() {
 				},
 			});
 
-		if (path === "/graphql" && String(init?.body).includes("latestOpinionatedReviews(")) {
+		if (path === "/graphql" && String(init?.body).includes("headRefOid baseRefName body")) {
 			const reviewer = { __typename: "User", login: "reviewer" };
 			return Response.json({
 				data: {
