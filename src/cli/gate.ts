@@ -9,7 +9,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
-import { systemdScopes } from "./supervise";
+import { enclosingScope, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
@@ -484,9 +484,12 @@ export const direct: Owner = plain(false);
 /** Run the command as a plain child of an enclosing owner that signals everything it holds. */
 export const inside: Owner = plain(true);
 
-/** Run the command in its own systemd scope, whose cgroup holds every descendant (see supervise.ts). */
+/**
+ * Run the command in its own systemd scope, whose cgroup holds every descendant (see supervise.ts).
+ * `owner` never picks it inside another Quest scope.
+ */
 export const scope: Owner = (command, env, cancel) =>
-	systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, { env, cancel });
+	systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, { env, cancel, within: null });
 
 /**
  * Run the command as the leader of a new session, whose process group holds every descendant that
@@ -558,10 +561,7 @@ const TOKEN = 3;
 
 /** Whether this process already runs in a Quest scope, which then holds whatever it starts. */
 export function scoped(self = "/proc/self/cgroup"): boolean {
-	const unified = readFileSync(self, "utf8")
-		.split("\n")
-		.find((line) => line.startsWith("0::"));
-	return unified !== undefined && /\/quest-[a-z]+-[0-9a-f-]+\.scope$/.test(unified);
+	return enclosingScope(self) !== undefined;
 }
 
 /**

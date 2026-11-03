@@ -146,22 +146,52 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 		expect(result.code).toBe(130);
 	});
 
-	it("still forwards a signal to its own scope from inside a gate's", async () => {
+	/**
+	 * Runs `quest worktree run work -- <leaf>` through Just inside a gate's scope. The run itself stays
+	 * in the gate's scope, which signals it, and so does Just, which forwards SIGTERM to the run on
+	 * top; the run's command moves to a scope of its own, which only the run can signal.
+	 */
+	function gated(dir: string, home: string, leaf: string) {
+		const justfile = join(dir, "justfile");
+		const run = [process.execPath, `--config=${join(root, "bunfig.toml")}`, join(root, "src/cli/bin.ts")];
+		const recipe = [...run, "worktree", "run", "work", "--", process.execPath, leaf];
+		writeFileSync(justfile, `run:\n    ${recipe.map((word) => JSON.stringify(word)).join(" ")}\n`);
+		const stop = new AbortController();
+		const kill = new AbortController();
+		const result = scope(
+			["just", "--justfile", justfile, "--working-directory", dir, "run"],
+			{ ...process.env, QUEST_WORKTREE_HOME: home, QUEST_GATE_ADMITTED: "1" },
+			{ signal: stop.signal, kill: kill.signal },
+		);
+		return { stop, kill, result };
+	}
+
+	it("still forwards a signal to its own scope from inside a gate's, once", async () => {
 		const { dir, home } = fixture();
 		const leaf = signalled(dir, ["SIGTERM"], 200);
-		const stop = new AbortController();
-		const command = ["bun", `--config=${join(root, "bunfig.toml")}`, join(root, "src/cli/bin.ts")];
-		// The run itself stays in the gate's scope, which signals it, but its command moves to a scope
-		// of its own, which only the run can signal.
-		const result = scope(
-			[...command, "worktree", "run", "work", "--", process.execPath, leaf.script],
-			{ ...process.env, QUEST_WORKTREE_HOME: home, QUEST_GATE_ADMITTED: "1" },
-			{ signal: stop.signal, kill: new AbortController().signal },
-		);
+		const { stop, result } = gated(dir, home, leaf.script);
 		await created(leaf.ready);
 		stop.abort("SIGTERM");
 		expect(await result).toBe(143);
 		expect(leaf.log()).toEqual(["SIGTERM"]);
+		// Just's copy of the signal did not kill the run's scope before the leaf's cleanup finished.
 		expect(existsSync(leaf.done)).toBe(true);
+	});
+
+	it("is killed with the gate's scope it runs in", async () => {
+		const { dir, home, worktrees, record } = fixture();
+		const leaf = signalled(dir, ["SIGTERM"]);
+		const { stop, kill, result } = gated(dir, home, leaf.script);
+		await created(leaf.ready);
+		stop.abort("SIGTERM");
+		await created(leaf.received);
+		kill.abort();
+		expect(await result).toBe(143);
+		// The gate killed the supervisor with everything else in its scope, and systemd the run's own.
+		for (let tries = 0; !stopped(leaf.pid()); tries++) {
+			if (tries === 200) throw new Error("the run's scope outlived the gate's");
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		expect(await worktrees.stop(record.id)).toMatchObject({ phase: "released", runs: [] });
 	});
 });

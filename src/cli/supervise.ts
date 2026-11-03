@@ -7,7 +7,7 @@ import { closeSync, existsSync, constants as fs, openSync, readFileSync, watch, 
 import { constants, hostname } from "node:os";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { type Cancellation, cancelled, follow, forwards, interrupts, requested } from "./interrupt";
+import { type Cancellation, cancelled, follow, forwards, interrupts, received, requested } from "./interrupt";
 
 /** A process, identified so that a reused PID never looks like its predecessor. */
 export interface Owner {
@@ -60,6 +60,13 @@ export interface RunOptions {
 	cancel?: Cancellation;
 	/** Pipes the command's streams to a protocol consumer instead of inheriting them. */
 	spawned?(child: ChildProcessWithoutNullStreams): void;
+	/**
+	 * The Quest scope the supervisor runs in, which the run's own scope moves the command out of:
+	 * the one around this process when omitted, and none when null. The run binds its scope to it,
+	 * so the enclosing owner's kill stops this scope too, and leaves a repeated signal's kill to that
+	 * owner, since it may be a copy of the one that owner delivered, as Just forwards SIGTERM.
+	 */
+	within?: string | null;
 }
 
 export interface Scopes {
@@ -171,6 +178,14 @@ export function kill(group: string): void {
 	}
 }
 
+/** The Quest scope, a gate's or a supervised run's, that this process runs in, if any. */
+export function enclosingScope(self = "/proc/self/cgroup"): string | undefined {
+	const unified = readFileSync(self, "utf8")
+		.split("\n")
+		.find((line) => line.startsWith("0::"));
+	return unified?.match(/\/(quest-[a-z]+-[0-9a-f-]+\.scope)$/)?.[1];
+}
+
 /** Whether the cgroup still holds a process, or `otherwise` when that cannot be read. */
 function populatedOr(group: string, otherwise: boolean): boolean {
 	try {
@@ -240,6 +255,9 @@ export const systemdScopes: Scopes = {
 			const own = options.cancel ? undefined : interrupts();
 			const cancel = options.cancel ?? own!;
 			const pipe = options.spawned ? "pipe" : "inherit";
+			// Once the enclosing owner kills everything it holds, systemd kills this scope too.
+			const enclosing = options.within === undefined ? enclosingScope() : options.within;
+			const bound = enclosing ? [`--property=BindsTo=${enclosing}`, "--property=KillSignal=SIGKILL"] : [];
 			const child = spawn(
 				"systemd-run",
 				[
@@ -248,6 +266,7 @@ export const systemdScopes: Scopes = {
 					"--quiet",
 					"--collect",
 					`--unit=${unit}`,
+					...bound,
 					"--expand-environment=no",
 					"--",
 					"/bin/sh",
@@ -290,6 +309,8 @@ export const systemdScopes: Scopes = {
 			};
 			const terminate = () => {
 				stop();
+				// The enclosing owner kills this scope at its own second signal (see `within`).
+				if (enclosing && received(cancel.signal)) return;
 				drain.abort();
 				if (group) kill(group);
 			};

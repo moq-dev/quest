@@ -1186,7 +1186,10 @@ one run, since the next run starts without scratch.
 5.14+ with a systemd 254+ user manager and unified cgroup v2; it fails on other
 hosts. It handles signals as the gate does on such a host: SIGINT, SIGTERM, or
 SIGHUP reaches every process in the run's scope, the run waits until the scope
-is empty, and a second signal kills everything at once.
+is empty, and a second signal kills everything at once. A run inside another
+Quest scope, such as a gate's, binds its own scope to that one, so the
+enclosing owner's kill stops it too, and leaves a repeated signal's kill to
+that owner: it may be the copy of SIGTERM that Just forwards.
 Work handed to another service manager, such as `systemd-run` or a container
 daemon, escapes the scope. If the supervisor itself is killed, its command keeps
 running and its scratch is kept; the next `quest worktree` command drops the run
