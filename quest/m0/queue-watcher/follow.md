@@ -28,9 +28,12 @@ The cutover was done on 2026-11-03 (user, /quest-complete):
 - Rulesets: each `main` requires only `Queue`, with a squash merge queue
   that builds and merges one entry at a time (`ALLGREEN`, 90-minute
   timeout). The moq-bot bypass is gone; role bypasses stay.
-- No repository had an armed pick to carry over. rust2's `quest:merge`
-  labels belonged to picks its gate was still landing; each leaves the
-  label when its PR merges or leaves the queue.
+- No repository had an armed pick to carry over. rust2's gate landed
+  [moq-dev/rust2#446](https://github.com/moq-dev/rust2/pull/446) and
+  [#442](https://github.com/moq-dev/rust2/pull/442) before the switch.
+  [#437](https://github.com/moq-dev/rust2/pull/437) conflicts and keeps a
+  stale `quest:merge` label; it needs `/quest-iterate` and a new pick in
+  rust2.
 - moq-dev/quest landed
   [moq-dev/quest#400](https://github.com/moq-dev/quest/pull/400), which adds
   util-linux (`flock`, `script`) to the dev shell, since the NixOS runner has
