@@ -3,7 +3,7 @@
 // that added the label is its hold token, since sessions often share an account.
 // `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
 import { ACTIVE_LABEL, handedBack, isHoldLabel, latestHold, heldToken, withoutHandBack } from "../core";
-import { cleanAutoMergeRefusal, immediateMerge } from "../github/merge";
+import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../github/merge";
 import { repositoryPath } from "./claims";
 import {
 	array,
@@ -298,59 +298,25 @@ export async function land(
 	}
 }
 
-/** Merge states in which GitHub may still be running required checks, so only auto-merge can wait for them. */
-const PENDING = ["BLOCKED", "UNKNOWN"];
-
 /** GraphQL error types that fault the token or the request, not the PR GitHub would enqueue. */
 export const UNREFUSED = ["FORBIDDEN", "NOT_FOUND", "INSUFFICIENT_SCOPES", "INTERNAL"];
 
 /**
- * Put `head` in the base's merge queue: enqueue it, or, while GitHub may still be running its
- * required checks (`mergeState` pending), arm auto-merge bound to it, which enqueues it once they
- * pass. Either joins the back of the queue. A refusal throws GitHub's error.
- */
-export async function queueHead(
-	github: GitHub,
-	id: string,
-	head: string,
-	mergeState: string,
-	method: Method = "merge",
-): Promise<void> {
-	const enqueuePull = () =>
-		github.graphql(
-			`mutation($id: ID!, $sha: GitObjectID!) {
-				enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $sha }) { clientMutationId }
-			}`,
-			{ id, sha: head },
-		);
-	if (!PENDING.includes(mergeState)) {
-		await enqueuePull();
-		return;
-	}
-	try {
-		await github.graphql(
-			`mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!) {
-				enablePullRequestAutoMerge(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: $method }) { clientMutationId }
-			}`,
-			{ id, sha: head, method: method.toUpperCase() },
-		);
-	} catch (error) {
-		// An UNKNOWN state GitHub finished computing as ready: nothing is left to wait for.
-		if (!cleanAutoMergeRefusal(error instanceof Error ? error.message : null)) throw error;
-		await enqueuePull();
-	}
-}
-
-/**
  * Pick `snapshot`'s head to land through the base's merge queue, as {@link land} checked it, with
- * {@link queueHead}. The queue builds each PR on the current base, so a head behind it is enqueued
+ * `queueHead`. The queue builds each PR on the current base, so a head behind it is enqueued
  * as is. GitHub's queue events and auto-merge request record the pick, naming who made it.
  * A pick GitHub refuses, such as one that conflicts or fails its required checks, fails:
  * the PR needs a fix before it can land.
  */
 async function pick(labels: Labels, snapshot: Snapshot, method: Method): Promise<void> {
 	try {
-		await queueHead(labels.github, snapshot.id, snapshot.head, snapshot.mergeState, method);
+		await queueHead(
+			(query, variables) => labels.github.graphql(query, variables),
+			snapshot.id,
+			snapshot.head,
+			snapshot.mergeState,
+			method,
+		);
 	} catch (error) {
 		if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 			throw error;

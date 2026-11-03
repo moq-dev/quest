@@ -77,5 +77,4 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 
 ## Required
 
-- [Head approval](/quest/m0/kix/sandbox/head-approval.md) - a maintainer approves an exact head, such as one kix pushed, for host runners
 - [Boundary test in CI](/quest/m0/kix/sandbox/live-test.md) - the opencode sandbox's hostile-repository test runs on Linux CI with a scripted model
