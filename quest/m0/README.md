@@ -89,7 +89,6 @@ ownership-manifest design:
 - [Current landing status](/quest/m0/status-landing.md) - `quest status` clears a stale `landing-stopped` reason once the PR is queued again
 - [Agents don't stall](/quest/m0/agent-stalls.md) - long waits block in the same turn, pre-existing failures don't stop review, and reviewer outages become waits
 - [Context before decision prompts](/quest/m0/prompt-context.md) - every prompt explains the work first, and maintainer steps say why an agent can't take them
-- [Coordinator control](/quest/m0/coordinator-control.md) - finish up, pause, and status are defined, and dead agents are resumed
 - [Spawn keeps finding work](/quest/m0/spawn-refill.md) - recompute ready quests per report, resume leftover local branches, and check open PRs before claiming
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
