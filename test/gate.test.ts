@@ -771,11 +771,19 @@ describe("the Windows job stub", () => {
 		expect(await job([process.execPath, "-e", unset], env, cancellation().cancel)).toBe(7);
 	});
 
-	test("passes the command's arguments unchanged", async () => {
-		// The tail of argv, since Bun may put more before the arguments of a script passed with -e.
+	test("passes the command's arguments as running it directly would", async () => {
+		// Compared with `direct`, since Bun's process.argv for a script passed with -e differs on Windows.
+		const dir = tempDir();
 		const args = ["a b", 'say "hi"', "back\\slash\\", ""];
-		const script = `process.exit(JSON.stringify(process.argv.slice(-${args.length})) === ${JSON.stringify(JSON.stringify(args))} ? 7 : 1)`;
-		expect(await job([process.execPath, "-e", script, ...args], process.env, cancellation().cancel)).toBe(7);
+		const script = "require('node:fs').writeFileSync(process.env.OUT, JSON.stringify(process.argv.slice(1)))";
+		const argv = async (owner: Owner, out: string) => {
+			const env = { ...process.env, OUT: join(dir, out) };
+			expect(await owner([process.execPath, "-e", script, ...args], env, cancellation().cancel)).toBe(0);
+			return JSON.parse(readFileSync(env.OUT, "utf8"));
+		};
+		const expected = await argv(direct, "direct");
+		if (process.platform !== "win32") expect(expected).toEqual(args);
+		expect(await argv(job, "job")).toEqual(expected);
 	});
 
 	test("reports a command that cannot start as a shell would", async () => {
