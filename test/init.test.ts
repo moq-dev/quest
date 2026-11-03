@@ -257,23 +257,41 @@ function write(dir: string, path: string, content: string) {
 	writeFileSync(join(dir, path), content);
 }
 
-test("init removes stubs of retired skills and keeps older stubs of current ones", () => {
+test("init removes stubs of retired skills and refreshes older stubs of current ones", () => {
 	const dir = tempDir();
 	init(dir);
+	const audit = SKILLS.find((skill) => skill.name === "audit")!;
 	for (const skills of [".claude/skills", ".agents/skills"]) {
-		write(
-			dir,
-			`${skills}/quest-ready/SKILL.md`,
-			READY_STUB.replaceAll("\n", skills === ".agents/skills" ? "\r\n" : "\n"),
-		);
-		write(dir, `${skills}/quest-audit/SKILL.md`, OLD_AUDIT_STUB);
+		const eol = skills === ".agents/skills" ? "\r\n" : "\n";
+		write(dir, `${skills}/quest-ready/SKILL.md`, READY_STUB.replaceAll("\n", eol));
+		write(dir, `${skills}/quest-audit/SKILL.md`, OLD_AUDIT_STUB.replaceAll("\n", eol));
 	}
-	expect(init(dir)).toEqual([".claude/skills/quest-ready/SKILL.md", ".agents/skills/quest-ready/SKILL.md"]);
-	for (const skills of [".claude/skills", ".agents/skills"]) {
-		expect(existsSync(join(dir, skills, "quest-ready"))).toBe(false);
-		expect(read(dir, `${skills}/quest-audit/SKILL.md`)).toBe(OLD_AUDIT_STUB);
-	}
+	expect(init(dir)).toEqual([
+		".claude/skills/quest-audit/SKILL.md",
+		".agents/skills/quest-audit/SKILL.md",
+		".claude/skills/quest-ready/SKILL.md",
+		".agents/skills/quest-ready/SKILL.md",
+	]);
+	expect(existsSync(join(dir, ".claude/skills/quest-ready"))).toBe(false);
+	expect(existsSync(join(dir, ".agents/skills/quest-ready"))).toBe(false);
+	expect(read(dir, ".claude/skills/quest-audit/SKILL.md")).toBe(audit.stub);
+	expect(read(dir, ".agents/skills/quest-audit/SKILL.md")).toBe(audit.stub.replaceAll("\n", "\r\n"));
 	expect(init(dir)).toEqual([]);
+});
+
+test.skipIf(process.platform === "win32")("init leaves a linked older stub of a current skill", () => {
+	const dir = tempDir();
+	write(dir, "stub.md", OLD_AUDIT_STUB);
+	write(dir, "elsewhere/quest-audit/SKILL.md", OLD_AUDIT_STUB);
+	mkdirSync(join(dir, ".claude/skills/quest-audit"), { recursive: true });
+	symlinkSync("../../../stub.md", join(dir, ".claude/skills/quest-audit/SKILL.md"));
+	mkdirSync(join(dir, ".agents/skills"), { recursive: true });
+	symlinkSync("../../elsewhere/quest-audit", join(dir, ".agents/skills/quest-audit"));
+	const changed = init(dir);
+	expect(changed).not.toContain(".claude/skills/quest-audit/SKILL.md");
+	expect(changed).not.toContain(".agents/skills/quest-audit/SKILL.md");
+	expect(read(dir, "stub.md")).toBe(OLD_AUDIT_STUB);
+	expect(read(dir, "elsewhere/quest-audit/SKILL.md")).toBe(OLD_AUDIT_STUB);
 });
 
 test("init keeps a retired stub's directory when it holds other files", () => {
@@ -300,6 +318,17 @@ for (const [name, content] of [
 		init(dir);
 		uninstall(dir);
 		expect(read(dir, ".claude/skills/quest-ready/SKILL.md")).toBe(content);
+	});
+
+for (const [name, content] of [
+	["a stub with added instructions", `${OLD_AUDIT_STUB}Then tell the team.\n`],
+	["a stub with an added frontmatter field", OLD_AUDIT_STUB.replace("\n---\n\n", "\nallowed-tools: Bash\n---\n\n")],
+] as const)
+	test(`init keeps ${name} of a current skill`, () => {
+		const dir = tempDir();
+		write(dir, ".claude/skills/quest-audit/SKILL.md", content);
+		expect(() => init(dir)).toThrow(".claude/skills/quest-audit/SKILL.md is not a Quest stub");
+		expect(read(dir, ".claude/skills/quest-audit/SKILL.md")).toBe(content);
 	});
 
 test("init leaves a user's skill without the quest- prefix", () => {

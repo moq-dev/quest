@@ -7,7 +7,7 @@ import { join, posix, relative, resolve, sep } from "node:path";
 
 import { check, formatFinding, isQuest, move, normalize, permanent, questBranch, relocate, remove } from "../core";
 import { type ClaimDependencies, claims } from "./claims";
-import { exists, load, sources, under } from "./tree";
+import { checkout, exists, sources, under } from "./tree";
 
 /** What a command changed, and what it left for the caller to look at. */
 export interface Report {
@@ -240,5 +240,7 @@ function mentions(root: string, path: string): string[] {
 }
 
 function findings(root: string): string[] {
-	return check(load(root), (path) => exists(root, path)).map(formatFinding);
+	// A move or removal changes no submodule, so a skip `quest check` would note is not news here.
+	const tree = checkout(root, () => {});
+	return check(tree.docs, tree.exists).map(formatFinding);
 }
