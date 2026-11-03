@@ -1,6 +1,6 @@
 // `quest mv` and `quest rm`: the core edits, and the CLI's git and claim handling.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -10,7 +10,7 @@ import { move, remove } from "../src/core";
 import { openPullRequests } from "../src/cli/claims";
 import { GitHub, type GitHubDependencies } from "../src/cli/github";
 import { main } from "../src/cli/main";
-import { ROOT_README, Tree, initRepository } from "./fixture";
+import { EPIC_README, ROOT_README, Tree, initRepository, tempDir } from "./fixture";
 
 // Each test spawns git up to a dozen times, which a busy Windows runner can stretch past 5 s.
 vi.setConfig({ testTimeout: 30_000 });
@@ -341,6 +341,116 @@ describe("quest rm", () => {
 			"quest: quest/m0/epic/two.md:9: mentions quest/m0/epic/one.md; update it by hand\n",
 		);
 		expect(out.stderr).toContain("quest: quest/m0/epic/two.md:9: link does not resolve: /quest/m0/epic/one.md\n");
+	});
+});
+
+describe("quest check --fix", () => {
+	const THREE =
+		"# [S] Three\n\n## Goal\n\nMore.\n\n## Required\n\n- [One](/quest/m0/epic/one.md)\n\n" +
+		"## Related\n\n- [Two](/quest/m0/epic/two.md) - similar\n- [One](/quest/m0/epic/one.md) - similar\n";
+
+	/**
+	 * A feature branch that adds quest three linking one and two, while main makes `change`;
+	 * returns the tree checked out on the feature branch, before any merge.
+	 */
+	async function diverged(change: (tree: Tree) => Promise<void> | void): Promise<Tree> {
+		const tree = Tree.committed();
+		git(tree.path, "checkout", "-q", "-b", "feature");
+		tree.append("quest/m0/epic/README.md", "- [Three](/quest/m0/epic/three.md)\n").write(
+			"quest/m0/epic/three.md",
+			THREE,
+		);
+		git(tree.path, "add", "-A");
+		git(tree.path, "commit", "-q", "-m", "three");
+		git(tree.path, "checkout", "-q", "main");
+		await change(tree);
+		git(tree.path, "commit", "-q", "-am", "main");
+		git(tree.path, "checkout", "-q", "feature");
+		return tree;
+	}
+
+	for (const commit of [true, false]) {
+		test(`drops list links to a quest the merged base finished${commit ? "" : ", during the merge"}`, async () => {
+			const tree = await diverged(async (tree) => {
+				expect((await quest(tree, "rm", "quest/m0/epic/one.md")).code).toBe(0);
+			});
+			git(tree.path, "merge", "-q", "--no-ff", ...(commit ? ["-m", "merge"] : ["--no-commit"]), "main");
+			expect((await quest(tree, "check")).code).toBe(1);
+
+			const out = await quest(tree, "check", "--fix");
+			expect(out).toEqual({ code: 0, stdout: "M quest/m0/epic/three.md\nquest: 5 documents ok\n", stderr: "" });
+			expect(tree.read("quest/m0/epic/three.md")).toBe(
+				"# [S] Three\n\n## Goal\n\nMore.\n\n## Related\n\n- [Two](/quest/m0/epic/two.md) - similar\n",
+			);
+			// The edit is left for the merge's author to stage.
+			expect(git(tree.path, "diff", "--name-only")).toBe("quest/m0/epic/three.md\n");
+			expect(await quest(tree, "check", "--fix")).toEqual({
+				code: 0,
+				stdout: "quest: 5 documents ok\n",
+				stderr: "",
+			});
+		});
+	}
+
+	test("leaves a link to a moved quest, a mistyped link, and a prose link for the check", async () => {
+		const tree = await diverged((tree) => {
+			git(tree.path, "rm", "-q", "quest/m0/epic/one.md");
+			git(tree.path, "mv", "quest/m0/epic/two.md", "quest/m0/epic/second.md");
+		});
+		tree.append(
+			"quest/m0/epic/three.md",
+			"- [Nope](/quest/m0/epic/nope.md)\n\n## Plan\n\nAfter [one](/quest/m0/epic/one.md).\n",
+		);
+		git(tree.path, "commit", "-q", "-am", "more links");
+		git(tree.path, "merge", "-q", "--no-ff", "-m", "merge", "main");
+
+		const out = await quest(tree, "check", "--fix");
+		expect(out.code).toBe(1);
+		expect(out.stdout).toBe("M quest/m0/epic/README.md\nM quest/m0/epic/second.md\nM quest/m0/epic/three.md\n");
+		expect(tree.read("quest/m0/epic/three.md")).toBe(
+			"# [S] Three\n\n## Goal\n\nMore.\n\n## Related\n\n- [Two](/quest/m0/epic/two.md) - similar\n" +
+				"- [Nope](/quest/m0/epic/nope.md)\n\n## Plan\n\nAfter [one](/quest/m0/epic/one.md).\n",
+		);
+		for (const target of ["two.md", "nope.md", "one.md"]) {
+			expect(out.stderr).toContain(`link does not resolve: /quest/m0/epic/${target}`);
+		}
+	});
+
+	test("reads deletions relative to a tree nested in its repository", async () => {
+		const repo = tempDir();
+		const tree = new Tree(join(repo, "nested"));
+		Tree.baseline().copy(tree.path);
+		committed(new Tree(repo));
+		git(repo, "rm", "-q", "nested/quest/m0/epic/one.md");
+		git(repo, "commit", "-q", "-m", "finish one");
+		expect(await quest(tree, "check", "--fix")).toEqual({
+			code: 0,
+			stdout: "M quest/m0/epic/README.md\nM quest/m0/epic/two.md\nquest: 4 documents ok\n",
+			stderr: "",
+		});
+	});
+
+	test("refuses while a quest file has unresolved conflicts", async () => {
+		const tree = await diverged((tree) => {
+			tree.write("quest/m0/epic/README.md", `${EPIC_README}- [Four](/quest/m0/epic/four.md)\n`);
+		});
+		expect(spawnSync("git", ["-C", tree.path, "merge", "-q", "main"]).status).not.toBe(0);
+		const before = tree.read("quest/m0/epic/README.md");
+		const out = await quest(tree, "check", "--fix");
+		expect(out).toEqual({
+			code: 1,
+			stdout: "",
+			stderr: "quest: resolve the merge conflicts in quest/m0/epic/README.md before quest check --fix\n",
+		});
+		expect(tree.read("quest/m0/epic/README.md")).toBe(before);
+	});
+
+	test("fails outside a git work tree", async () => {
+		const out = await quest(Tree.baseline(), "check", "--fix");
+		expect(out.code).toBe(1);
+		expect(out.stderr).toContain(
+			"is not in a git work tree; quest check --fix reads the deleted quests from git history",
+		);
 	});
 });
 

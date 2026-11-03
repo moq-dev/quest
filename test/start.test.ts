@@ -288,7 +288,8 @@ describe("start on GitHub", () => {
 		const warnings: string[] = [];
 		const started = await start(work, new FakeGitHub(), warnings);
 		expect(warnings).toEqual([
-			`local branch ${BRANCH} already exists; merge the claim commit ${started.sha} into it before pushing`,
+			`claimed, but local branch ${BRANCH} already exists from an earlier attempt; ` +
+				`switch to it, merge the claim commit ${started.sha} into it, and resume that work before pushing`,
 		]);
 		expect(git(work, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 	});

@@ -10,11 +10,14 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { GitHubDependencies } from "../src/cli/github";
 import { readRemote } from "../src/cli/land";
+import { parseResolution } from "../src/cli/land-apply";
 import { CHECK_LOG } from "../src/cli/land-checks";
 import { FLAKY_LIMIT, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
 import type { FixContext } from "../src/cli/land-watch-fix";
+import { type FlakyTest, RECENT, readFlaky, saveFlaky, writeKnownFlaky } from "../src/cli/land-watch-flaky";
+import { FLAKY_INPUT, type KnownFlaky } from "../src/cli/land-fix";
 import { configure, GIT_SETTINGS, initRepository, tempDir } from "./fixture";
 
 // The fixer tests merge with the quest driver and run fixer wrappers, which take longer than vitest's default.
@@ -58,6 +61,9 @@ interface Pull {
 	/** When auto-merge was armed, while it is. */
 	armed?: string;
 	body?: string;
+	title?: string;
+	/** Its head branch, `branch-<number>` by default. */
+	branch?: string;
 	/** Its head branch's pushes, oldest first, in place of those its removals imply. */
 	pushes?: { sha: string; at: string }[];
 }
@@ -112,8 +118,10 @@ function world(pulls: Pull[], runs: Run[] = []): World {
 
 /** A PR's head: its branch in the upstream repository, when the world has one. */
 function headOf(world: World, pull: Pull): string {
-	return world.origin ? git(world.origin, "rev-parse", `refs/heads/branch-${pull.number}`) : pull.head;
+	return world.origin ? git(world.origin, "rev-parse", `refs/heads/${branchOf(pull)}`) : pull.head;
 }
+
+const branchOf = (pull: Pull) => pull.branch ?? `branch-${pull.number}`;
 
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -267,7 +275,7 @@ function deps(world: World): GitHubDependencies {
 										url: `https://github.com/upstream/project/pull/${pull.number}`,
 										title: `PR ${pull.number}`,
 										headRefOid: headOf(world, pull),
-										headRefName: `branch-${pull.number}`,
+										headRefName: branchOf(pull),
 										maintainerCanModify: false,
 										headRepository: { nameWithOwner: "upstream/project" },
 										mergeStateStatus: pull.mergeState ?? "CLEAN",
@@ -314,6 +322,30 @@ function deps(world: World): GitHubDependencies {
 				const log = job?.log ?? world.checkLogs?.[Number(logs[1])];
 				return log === undefined ? new Response("missing", { status: 404 }) : new Response(log);
 			}
+			if (path === "/repos/upstream/project/pulls") {
+				if (init?.method === "POST") {
+					const { title, head, base, body } = JSON.parse(String(init.body));
+					expect(base).toBe("main");
+					const number = Math.max(...world.pulls.map((item) => item.number)) + 1;
+					const branch = head.replace(/^upstream:/, "");
+					world.pulls.push({
+						number,
+						head: headOf(world, { number, branch } as Pull),
+						branch,
+						title,
+						body,
+						removals: [],
+						enqueues: [],
+					});
+					return Response.json({ number, node_id: `PR_${number}` }, { status: 201 });
+				}
+				const head = url.searchParams.get("head");
+				return Response.json(
+					world.pulls
+						.filter((item) => `upstream:${branchOf(item)}` === head && (item.state ?? "OPEN") === "OPEN")
+						.map((item) => ({ number: item.number, node_id: `PR_${item.number}` })),
+				);
+			}
 			const pullPath = /^\/repos\/upstream\/project\/pulls\/(\d+)$/.exec(path);
 			if (pullPath) {
 				const pull = world.pulls.find((item) => item.number === Number(pullPath[1]))!;
@@ -340,7 +372,7 @@ function deps(world: World): GitHubDependencies {
 			}
 			const activity = /^\/repos\/upstream\/project\/activity$/.exec(path);
 			if (activity) {
-				const pull = world.pulls.find((item) => `branch-${item.number}` === url.searchParams.get("ref"))!;
+				const pull = world.pulls.find((item) => branchOf(item) === url.searchParams.get("ref"))!;
 				world.onActivity?.(pull);
 				return Response.json(world.unlisted?.includes(pull.number) ? [] : pushes(world, pull));
 			}
@@ -769,6 +801,36 @@ test("failing jobs that do not fit the comment are counted instead", () => {
 	expect(cut.length).toBeLessThanOrEqual(800);
 });
 
+test("a round is told the most recently seen flaky tests not yet disabled, within what the fixer reads", () => {
+	const state = tempDir();
+	const checkout = tempDir();
+	mkdirSync(join(checkout, ".git"));
+	// Long-lived flakes that never got a valid disable keep collecting verdicts.
+	const tests: FlakyTest[] = Array.from({ length: 200 }, (_, index) => ({
+		failure: `just test: flaky_${index}`,
+		verdicts: Array.from({ length: 30 }, (_, round) => ({
+			job: `watch-job-${index}-${round}.json`,
+			number: round + 1,
+			at: at(index),
+			jobs: [`https://github.com/upstream/project/actions/runs/${index}/job/${round}`],
+		})),
+	}));
+	tests[0].disable = {
+		head: HEAD,
+		base: { ref: "main", sha: BASE },
+		quest: "quest/m0/flaky/x.md",
+		attribution: "Codex",
+	};
+	saveFlaky(state, tests);
+	writeKnownFlaky(state, checkout);
+	const text = readFileSync(join(checkout, ".git", FLAKY_INPUT), "utf8");
+	expect(text.length).toBeLessThan(100_000);
+	const known = JSON.parse(text) as KnownFlaky[];
+	expect(known[0].failure).toBe("just test: flaky_199");
+	expect(known.every((item) => item.jobs.length === RECENT)).toBe(true);
+	expect(known.some((item) => item.failure === "just test: flaky_0")).toBe(false);
+});
+
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
 const PATH = process.env.PATH;
@@ -1075,6 +1137,36 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(history(state, 5)!.rounds[1].rule).toBe("repeated");
 	});
 
+	test("a fix that edits a protected path is handed back unpushed, as a ready commit", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const head = repo.pull(5, { "feature.txt": "new\n" });
+		const pull: Pull = {
+			number: 5,
+			head,
+			enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+			removals: [
+				{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue", before: head },
+			],
+		};
+		const github = { ...world([pull], [failedRun(5, at(3), base)]), origin: repo.origin };
+		github.now = Date.parse(at(6));
+		fix.round(5, fixScript("flake.nix"));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 5 failed_checks fix",
+			"fixing 5",
+		]);
+		await exited(state);
+		github.now = Date.parse(at(10));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["handback 5"]);
+		expect(git(repo.origin, "rev-parse", "refs/heads/branch-5")).toBe(head);
+		expect(github.mutations).toEqual([]);
+		const handback = github.comments[5].at(-1)!.body;
+		expect(handback).toContain("off-limits fixer edit");
+		expect(handback).toContain("`quest land apply 5`");
+		expect(parseResolution(handback)).toMatchObject({ head, base: head });
+	});
+
 	test("a quest-file conflict is merged with the quest driver, and a code conflict goes to the fixer", async () => {
 		const { repo, state, fix, context } = setup(1);
 		const quests = repo.pull(3, {
@@ -1256,6 +1348,98 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(readRemoval(state, 7)!.pick).toEqual({ by: `${APP}[bot]`, at: at(50) });
 		expect(history(state, 7)).toEqual({ pick: at(50), rounds: [] });
 		await exited(state);
+	});
+
+	test("a test seen flaking twice is disabled in its own pull request, which the watcher enqueues", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const heads = [5, 6, 7].map((number) => repo.pull(number, { [`feature-${number}.txt`]: "new\n" }));
+		const github = { ...world([], []), origin: repo.origin };
+		/** A flaky requeue naming render_timeout, disabling it at the checkout's HEAD after `script`. */
+		const flaky = (script: string) => `${script}
+printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","failure":"just test: render_timeout","disable":"%s"}]' "$2" "$(git rev-parse HEAD)" > quest-land-result.json
+`;
+		/** A disabling commit on base that skips the test, adds its follow-up quest, and writes `extra`. */
+		const disabling = (extra: string) => `grep -q 'just test: render_timeout' .git/quest-land-flaky.json
+git checkout -q -b disable base
+mkdir -p quest/m0/flaky
+printf '# [S] Fix or delete render_timeout\\n\\n## Goal\\n\\nFix the flaky test or delete it.\\n' > quest/m0/flaky/render-timeout.md
+printf '# Flaky tests\\n\\n## Goal\\n\\nFix or delete each disabled test.\\n\\n## Required\\n\\n- [Render timeout](/quest/m0/flaky/render-timeout.md)\\n' > quest/m0/flaky/README.md
+printf 'skip render_timeout\\n' > skip.txt
+${extra}
+git add quest skip.txt ${extra ? "flake.nix" : ""}
+git commit -qm 'disable render_timeout'`;
+		// The first verdict's disable is ignored: one judgment alone never disables a test. The second's edits a
+		// protected path and is refused, and the third's is opened as its own pull request.
+		fix.round(5, flaky("[ ! -e .git/quest-land-flaky.json ]"));
+		fix.round(6, flaky(disabling("printf 'changed\\n' > flake.nix")));
+		fix.round(7, flaky(disabling("")));
+		const said: string[][] = [];
+		for (const [index, number] of [5, 6, 7].entries()) {
+			const minute = (index + 1) * 10;
+			github.pulls.push({
+				number,
+				head: heads[index],
+				enqueues: [{ createdAt: at(minute - 5), actor: "maintainer" }],
+				removals: [
+					{
+						id: `R${number}`,
+						createdAt: at(minute),
+						reason: "failed_checks",
+						actor: "github-merge-queue",
+						before: heads[index],
+					},
+				],
+			});
+			github.runs.push({ ...failedRun(number, at(minute - 2), base), id: number * 10 });
+			github.now = Date.parse(at(minute + 1));
+			expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+				`removed ${number} failed_checks fix`,
+				`fixing ${number}`,
+			]);
+			await exited(state);
+			github.now = Date.parse(at(minute + 2));
+			said.push(await watchPass(REPOSITORY, { state }, deps(github), context));
+		}
+		const branch = github.pulls.find((pull) => pull.number === 8)?.branch;
+		expect(branch).toMatch(/^quest-land\/flaky-[0-9a-f]{12}$/);
+		const head = git(repo.origin, "rev-parse", `refs/heads/${branch}`);
+		expect(said).toEqual([
+			["disable ignored 5: first flaky verdict", `requeued 5 ${heads[0]}`],
+			[expect.stringMatching(/^disable refused 6: Error: off-limits fixer edit/), `requeued 6 ${heads[1]}`],
+			[`disable 7 ${head}`, `requeued 7 ${heads[2]}`, "disabled render-timeout 8"],
+		]);
+		// The disable is the fixer's commit on the base, enqueued like any other pull request with no pick.
+		expect(git(repo.origin, "rev-parse", `${head}^`)).toBe(base);
+		expect(git(repo.origin, "show", `${head}:quest/m0/flaky/render-timeout.md`)).toContain("Fix the flaky test");
+		expect(github.mutations).toEqual([
+			`enqueuePullRequest 5 ${heads[0]}`,
+			`enqueuePullRequest 6 ${heads[1]}`,
+			`enqueuePullRequest 7 ${heads[2]}`,
+			`enqueuePullRequest 8 ${head}`,
+		]);
+		const opened = github.pulls.find((pull) => pull.number === 8)!;
+		expect(opened.title).toBe("quest land: disable the flaky test render-timeout");
+		expect(opened.body).toContain(
+			"The land fixer judged `just test: render_timeout` flaky 3 times, most recently in",
+		);
+		expect(opened.body).toContain(
+			"#5 ([job 1](https://github.com/upstream/project/actions/runs/50/job/71)), #6 ([job 1](https://github.com/upstream/project/actions/runs/60/job/71))",
+		);
+		expect(opened.body).toContain("adds its follow-up quest, `quest/m0/flaky/render-timeout.md`");
+		expect(opened.body).toContain(`## Review\n\nmechanical fix by Codex: \``);
+		expect(opened.body).toContain(`(head ${head})`);
+		expect(readFlaky(state)).toMatchObject([
+			{
+				failure: "just test: render_timeout",
+				verdicts: [{ number: 5 }, { number: 6 }, { number: 7 }],
+				disable: { head, quest: "quest/m0/flaky/render-timeout.md", number: 8, done: "enqueued" },
+			},
+		]);
+
+		// A restart neither opens nor enqueues it again, and the disabled test is no longer offered as known.
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
+		expect(github.mutations).toHaveLength(4);
 	});
 
 	test("a pick that ends while the fixer runs is left alone, and every handback ends the pick", async () => {

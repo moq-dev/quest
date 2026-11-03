@@ -21,6 +21,12 @@ bounded test PR verify the integration before contributors are invited.
   upstream under its branch rules, GitHub's signature on the App's API
   commits, a same-repository pull request opened by the App, and an
   iteration pushing an upstream pull request head under branch rules.
+- Check a runner's review against the real checks API, which
+  [moq-dev/quest#417](https://github.com/moq-dev/quest/pull/417) tests only
+  against the fake: a merge job's delivered head gets the App's
+  `quest review` check run, a failing round followed by a passing one leaves
+  the passing run as the latest, and kix lands the head with no human
+  approval. The installation needs **Checks: write** for it.
 - Install the PWA and receive a push notification on real Android, iOS, and
   desktop devices (from
   [moq-dev/quest#165](https://github.com/moq-dev/quest/pull/165), whose
@@ -42,4 +48,3 @@ bounded test PR verify the integration before contributors are invited.
 ## Required
 
 - [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the live origin and registered App
-- [Owner allowlist](/quest/m0/kix/owners.md) - only moq-dev can enroll before contributors are invited

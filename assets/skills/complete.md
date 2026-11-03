@@ -51,8 +51,21 @@ Keep going until all PRs have been decided, then wait for all spawned sub-agents
 Refresh the open PR list whenever a sub-agent reports, and once more before finishing; ask about each new PR in scope the same way.
 
 As each sub-agent reports, include a summary; its outstanding decisions go to the grill skill's rounds before its next `/quest-iterate` dispatch, never into a pick question.
-Collect each queued PR's suggested follow-ups, and once every sub-agent has finished, plan them as the guide describes.
+Plan each queued PR's suggested follow-ups as the guide describes, without waiting for the other sub-agents to finish.
 Dispatch already selected actions before asking the next question; background work can continue while the foreground waits.
 
 Once every sub-agent has finished, remove local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
 Leave the worktree you are running in and any holding uncommitted work; list those in your summary.
+
+## Control
+
+Answer these requests at any point, without stopping running sub-agents:
+
+- "finish up": ask about no new PR and dispatch nothing new, plan the follow-ups collected so far and each later one as its sub-agent reports, let running sub-agents report, then clean up and write the final summary. When a picked PR's sub-agent reports, still run `/quest-merge` on it, but dispatch nothing it hands back; list each pick left standing in the summary.
+- "pause": dispatch nothing new until the user says to resume; running sub-agents continue, and their reports are handled as usual.
+- "status": a compact list of each sub-agent and PR in flight with its pick, state, and how long ago it was dispatched or last reported.
+
+A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result, and the PR's pick still stands.
+Resume that sub-agent by messaging it, so it keeps its context and checkout.
+If it cannot be resumed, dispatch a new sub-agent with the same brief plus the token of the hold it took on the PR, which `quest status <pr>` shows, so the new one keeps that hold rather than releasing it.
+While the error persists, such as a rate limit before its reset, resume and dispatch nothing until it clears, and report it once rather than per sub-agent.
