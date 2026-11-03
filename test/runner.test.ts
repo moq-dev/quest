@@ -42,6 +42,7 @@ import {
 	bwrapProfile,
 	closeSandbox,
 	openSandbox,
+	refusalReason,
 	sandboxRefusal,
 } from "../src/runner/sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "../src/runner/wait";
@@ -1165,17 +1166,23 @@ describe("runner adapters", () => {
 		expect(() => runnerAdapters({ PATH: bin })("claude")).toThrow(
 			`${bwrap} cannot make the sandbox's namespaces (bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted)`,
 		);
-		// Under AppArmor's restriction, the refusal carries the profile for that exact bwrap.
-		const restricted = sandboxRefusal(bwrap, true)!;
+		expect(sandboxRefusal(join(bin, "claude"))).toBeNull();
+		// Under AppArmor's restriction, the refusal carries the profile for the runner package's exact bwrap.
+		const said = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
+		const pinned = "/nix/store/mvj6y8k3xs35cj7kq937xi44q4hl3r93-bubblewrap-0.12.0/bin/bwrap";
+		const restricted = refusalReason(pinned, said, true);
 		expect(restricted).toContain(
-			`sudo tee /etc/apparmor.d/quest-bwrap >/dev/null <<'EOF'\n${bwrapProfile(bwrap)}EOF\n`,
+			`sudo tee /etc/apparmor.d/quest-bwrap >/dev/null <<'EOF'\n${bwrapProfile(pinned)}EOF\n`,
 		);
-		expect(restricted).toContain("sudo apparmor_parser -r /etc/apparmor.d/quest-bwrap");
-		expect(bwrapProfile(bwrap)).toContain(`profile quest-bwrap ${bwrap} flags=`);
-		const unrestricted = sandboxRefusal(bwrap, false)!;
+		expect(restricted).toMatch(/\nsudo apparmor_parser -r \/etc\/apparmor.d\/quest-bwrap$/);
+		expect(bwrapProfile(pinned)).toContain(`profile quest-bwrap ${pinned} flags=(unconfined) {\n  userns,\n}`);
+		// A system bwrap may have the distribution's profile, which a second one would disable.
+		const system = refusalReason("/usr/bin/bwrap", said, true);
+		expect(system).toContain("nix run github:moq-dev/quest#runner -- runner");
+		expect(system).not.toContain("apparmor_parser");
+		const unrestricted = refusalReason(pinned, said, false);
 		expect(unrestricted).toContain("needs unprivileged user namespaces");
-		expect(unrestricted).not.toContain("apparmor");
-		expect(sandboxRefusal(join(bin, "claude"), true)).toBeNull();
+		expect(unrestricted).not.toContain("AppArmor");
 	});
 
 	test("document the AppArmor profile the runner prints", () => {
