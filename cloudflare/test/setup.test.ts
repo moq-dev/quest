@@ -4,7 +4,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HOOK_COMMAND, REFERENCE_LINE } from "quest/core";
 import { app } from "../src/index";
-import { STUBS, setupGoal, treeCheckout } from "../src/github/setup";
+import { STUBS, planCheck, setupGoal, treeCheckout } from "../src/github/setup";
 import { type Pull, type Repo, type World, fakeGitHub, intercept } from "../dev/github";
 import { privateKey } from "./github-key";
 import { delivery } from "./project-fixtures";
@@ -238,6 +238,16 @@ describe("the setup pull request", () => {
 });
 
 describe("the setup plan on GitHub", () => {
+	it("checks the goal against the tree as it will be after the merge", () => {
+		const retired = ".claude/skills/quest-retired/SKILL.md";
+		const readme = (link: string) => ({
+			path: "quest/README.md",
+			content: `# Quests\n\n## Goal\n\nReplace [it](/${link}).\n`,
+		});
+		expect(planCheck([readme("AGENTS.md")], ["AGENTS.md"])).toEqual([]);
+		expect(planCheck([readme(retired), { path: retired, content: null }], [retired])).not.toEqual([]);
+	});
+
 	it("refuses to follow a symlink", () => {
 		const checkout = treeCheckout(
 			[{ path: ".claude", type: "blob", mode: "120000", sha: "a".repeat(40) }],

@@ -104,7 +104,11 @@ export function setupGoal(text: string): string {
  * so the setup is refused before it is published rather than at the merge.
  */
 export function planCheck(changes: InitChange[], paths: Iterable<string>): string[] {
-	const exists = new Set([...paths, ...changes.map((change) => change.path)]);
+	// The tree as it will be after the merge: written files exist, deleted ones do not.
+	const exists = new Set(paths);
+	for (const change of changes)
+		if (change.content === null) exists.delete(change.path);
+		else exists.add(change.path);
 	const documents = changes.flatMap((change) =>
 		change.content !== null && change.path.startsWith("quest/") && isQuest(change.path)
 			? [parse(change.path, change.content)]
