@@ -358,6 +358,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		git(repo, "submodule", "add", "--quiet", sub, "first");
 		git(repo, "submodule", "add", "--quiet", sub, "second");
 		git(repo, "config", "-f", ".gitmodules", "submodule.second.url", join(root, "missing"));
+		git(repo, "config", "submodule.second.url", join(root, "missing"));
 		git(repo, "commit", "-am", "submodules");
 		await expect(worktrees.create(repo, "partial", 10_000_000)).rejects.toThrow();
 		const [record] = worktrees.status().records;
