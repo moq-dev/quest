@@ -542,8 +542,8 @@ The commands accept the same PR argument and authentication as
 and 1 for other failures.
 
 This repository lands through GitHub's merge queue. Its required `Queue` check
-runs `just check` and `just test` on each merge group on the self-hosted runner;
-it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
+passes a merge group only when the group's build, `just check` and `just test`
+on the self-hosted runner, passes; it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
 re-enqueues healthy heads at the back of the queue.
 
 ## Land a batch with quest land
@@ -641,7 +641,11 @@ parking it is collected at that merge: a requeue pins it, and a fix, built on th
 pin, replaces it with a lease, since building on it would revert its newer base.
 Any other moved head hands back. Forks refusing maintainer edits, refused pushes, invalid results,
 crashes, or the fixer deadline hand back with a marked comment naming the exit
-status or signal, with the tail of the job's retained log. A validated fix whose push
+status or signal, with the tail of the job's retained log. A GitHub error while
+collecting one PR hands back that PR alone, and the job's other PRs keep their own
+results. A PR whose collection fails three passes in a row, as when GitHub refuses its
+handback, is set aside with a logged warning: it leaves the job without a handback
+comment, so it rejoins batches as GitHub still queues it, and the PRs behind it go on. A validated fix whose push
 GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
 the `workflows` permission to push, is handed back with its resolution. So is a fix
 that edits protected paths beyond what the base merge carries, such as a conflict in
@@ -862,6 +866,8 @@ handback, from a stop rule, the fixer, a refusal, a crash, or a timeout, is
 posted with its reason and a recommendation, and the PR leaves the watcher's
 care until a maintainer enqueues it again. A round whose pick ended while it
 ran, by a writer's push or enqueue, is not applied, and its comment says so.
+A round whose collection fails three passes in a row, as when GitHub refuses its
+handback comment, is set aside with a logged warning, freeing its fixer slot.
 
 The watcher also keeps the repository's flaky tests in `flaky.json` in its
 state directory: each flaky verdict, across every PR, by the failure signature
@@ -1117,8 +1123,8 @@ since Windows has no `SIGTERM`.
 
 ## Run kix jobs on your machines
 
-`quest runner` turns a Linux or macOS machine with Nix into a
-[kix.quest](https://kix.quest) runner, driving Claude Code or opencode with
+`quest runner` turns a Linux or macOS machine with Nix into a runner for kix at
+[quest.moq.dev](https://quest.moq.dev), driving Claude Code or opencode with
 that machine's own logins:
 
 ```sh
@@ -1138,8 +1144,8 @@ through its CLI's own flow in its own home: `claude auth login` in a
 kix stores only an opaque account id, its kind, and a label. An opencode
 account uses only the providers it signed in to, with `--model` or opencode's
 default. Use Claude Code for Claude subscriptions, since opencode cannot sign
-in to them. kix.quest/runners shows each runner's presence and sets the order
-jobs use your accounts in.
+in to them. kix's `/runners` page shows each runner's presence and sets the
+order jobs use your accounts in.
 
 Every job runs in its own checkout with the project's devShell, which the runner
 builds with `nix print-dev-env` from the job's revision, honoring the flake's
@@ -1168,8 +1174,33 @@ sandbox, not a VM, and it narrows rather than removes the risk of running
 agent commands on your machine.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
-pins both) and unprivileged user namespaces; on Ubuntu 23.10 and later,
-AppArmor allows them only for programs with a profile granting `userns`.
+pins both) and unprivileged user namespaces, including the nested one Claude
+Code's seccomp helper makes inside the sandbox. Before taking jobs, `quest runner`
+runs a trivial command in nested sandbox namespaces and refuses to start if
+bubblewrap cannot make them. On Ubuntu 23.10 and later, AppArmor allows them
+only to programs whose profile grants `userns`, so for the runner package's
+bubblewrap the refusal prints this profile, filled in with its Nix store path,
+and the commands that install it as `/etc/apparmor.d/quest-bwrap`:
+
+```
+abi <abi/4.0>,
+include <tunables/global>
+
+profile quest-bwrap /nix/store/HASH-bubblewrap-VERSION/bin/bwrap flags=(unconfined) {
+  userns,
+}
+```
+
+It is the form Ubuntu gives other programs that sandbox themselves. Ubuntu's
+own `bwrap-userns-restrict` profile for `/usr/bin/bwrap` takes capabilities from
+the commands bubblewrap runs, which breaks Claude Code's seccomp helper, so a
+system bwrap there is refused, and a second profile for it would disable both;
+use the runner package instead. The job's commands still get no user namespace
+of their own: Claude Code's seccomp helper refuses them one, and on opencode
+accounts bubblewrap does. The profile names one exact store path, since anyone
+who can build with Nix can add a store path matching a glob, so a runner update
+that changes bubblewrap refuses to start until you install the profile it prints.
+
 Merge jobs retain existing PR submodule pointers when merging the base. Their
 `wait` tool wakes on GitHub webhook hints or reconnects and rereads the PR;
 a hint never approves work. If someone moves the head, the maintainer can
@@ -1304,26 +1335,48 @@ stolen. This initial interface refuses unknown or changed checkout ownership.
 `quest init` adds hook entries to the repository's `.claude/settings.json` that
 run `quest worktree hook` for Claude Code's `WorktreeCreate`, `WorktreeRemove`,
 `SubagentStart`, and `SubagentStop` events, so `quest` must be on the `PATH`
-Claude Code runs hooks with. The hook then creates every worktree Claude makes
-in the repository, for `--worktree`, `EnterWorktree`, isolated subagents, and
-background sessions, and Claude no longer copies `.worktreeinclude` files into
-them.
+Claude Code runs hooks with. For `claude --bg` and agent view, that is the
+environment of the shell that started the session. The hook then creates every worktree Claude makes
+in the repository: for `--worktree`, `EnterWorktree`, isolated subagents and
+workflow agents, background sessions, and `claude remote-control --spawn
+worktree`. Claude no longer copies `.worktreeinclude` files into them.
 
 Each is a `quest worktree` checkout under the main checkout's `.worktrees/`,
 named as Claude names it. Like Claude's default, it starts from the remote's
 default branch as last fetched (`origin/HEAD`), or from the session's commit
-when that is unknown; Claude's `worktree.baseRef` setting no longer applies. With only a name to go on,
+when that is unknown; Claude's `worktree.baseRef` setting no longer applies.
+For `--worktree '#123'` or a pull request's URL, Claude names the worktree
+`pr-123`, and the hook fetches origin's `refs/pull/123/head` (or GitLab's
+`refs/merge-requests/123/head`) into `origin/pr/123` (or `origin/mr/123`) and
+starts there, refusing a number origin has both refs for at different commits.
+The hook sees only the name, so `--worktree pr-123` gets that request too, and a
+number origin has no request for starts from the default base instead of
+failing. With only a name to go on,
 it declares the main checkout's top-level ignored entries as scratch, except
 `.worktrees/`, `.claude/`, and entries holding a nested repository, and
-reserves the main checkout's disk usage without `.git` and those checkouts. A
-subagent's checkout is released when the subagent finishes or stops to wait for
-an answer, and restored when it resumes, with a note telling it to reinstall
-its scratch. Another `SubagentStop` hook that keeps a subagent running defeats
+reserves the main checkout's disk usage without `.git` and those checkouts.
+
+A subagent's checkout is released when the subagent finishes or stops to wait
+for an answer, and restored when it resumes, with a note telling it to
+reinstall its scratch. Claude names an isolated subagent's worktree for its
+agent ID, and a workflow agent's for its workflow run, so the hook binds a
+workflow agent's checkout to the first subagent that starts in it, the workflow
+agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it. Claude never removes a subagent's checkout itself, so remove a
-finished one with `quest worktree remove`, which also recovers one whose
-session crashed. When Claude removes a session's checkout, `quest worktree
-remove` decides: a checkout holding unpreserved work is kept.
+without its scratch until it reinstalls it. A session's checkout, from
+`--worktree`, `EnterWorktree`, a background session, or remote control, is not
+released when the session stops; release it with `quest worktree release`.
+
+Claude never removes a subagent's or workflow agent's checkout itself, so
+remove a finished one with `quest worktree remove`, which also recovers one
+whose session crashed. When Claude removes a session's checkout, through
+`ExitWorktree`, leaving a `--worktree` session, or remote control ending a
+session whose checkout has no changes, `quest worktree remove` decides: a
+checkout holding unpreserved work is kept. `claude rm` never removes one: it
+keeps a `claude --bg --worktree` session's checkout, and refuses to remove a
+background session whose checkout it entered, saying the worktree is locked by
+something else. Don't unlock it; run `quest worktree remove` on the checkout,
+then `claude rm` again.
 
 ## Work with your agents
 
@@ -1382,7 +1435,8 @@ losing your plans. The binary carries the skills, your tool manager (mise or nix
 pins its version, and your repository's instructions stay yours. Quest supports
 macOS, Linux, and [native Windows](docs/windows.md).
 
-The hosted service is moving to [kix.quest](https://kix.quest): maintainers
+The hosted service, kix, runs at [quest.moq.dev](https://quest.moq.dev) for
+moq-dev until it opens to everyone at kix.quest: maintainers
 plan issues, start ready quests, and act on GitHub PRs through a decision UI.
 Hosted work will use explicitly selected maintainer or donor API funding.
 Automatic project history passes read updates since their prior issue/PR

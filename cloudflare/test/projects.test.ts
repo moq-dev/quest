@@ -8,6 +8,7 @@ import { type ActivityPage, associatedQuest, RETENTION, readActivity } from "../
 import { GitHubService } from "../src/github/service";
 import { privateKey } from "./github-key";
 import { type Identity, identity, oauth, origin } from "./login-fixtures";
+import { outsider, owner } from "./owners";
 import { delivery } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
@@ -41,6 +42,8 @@ function github(
 		activityErrors?: boolean;
 		repositoryName?: string;
 		repositoryOwner?: string;
+		/** The repository owner's GitHub ID; the admitted test owner's by default. */
+		owner?: number;
 		installation?: number;
 		account?: number;
 		private?: boolean;
@@ -141,7 +144,7 @@ function github(
 				...repo,
 				name: repositoryName,
 				id: options.id ?? repo.id,
-				owner: { login: repositoryOwner },
+				owner: { login: repositoryOwner, id: options.owner ?? owner },
 				private: options.private ?? false,
 				visibility: options.private ? "private" : "public",
 				default_branch: "trunk",
@@ -430,6 +433,31 @@ describe("project enrollment", () => {
 			expect(calls.some((call) => call.path.includes("/git/") || call.path === "/graphql")).toBe(false);
 		},
 	);
+	it("refuses an owner off the allowlist everything but stop controls", async () => {
+		const outside = github({ owner: outsider });
+		await expect(outside.service.previewProject(repo, "enrollment-test")).rejects.toThrow("isn't open");
+		await expect(outside.service.setContributions(repo, "enrollment-test", "enabled")).rejects.toThrow(
+			"isn't open",
+		);
+		expect(await state()).toBeNull();
+		// Refused before any authority, snapshot, or license read.
+		expect(
+			outside.calls.some(
+				(call) => call.path.endsWith("/permission") || call.path.includes("/git/") || call.path === "/graphql",
+			),
+		).toBe(false);
+		expect(outside.request.mock.calls.some(([input]) => new URL(String(input)).hostname === "spdx.org")).toBe(
+			false,
+		);
+
+		// A project whose owner leaves the allowlist, such as by a transfer, is read no more but can still be stopped.
+		await github().service.setContributions(repo, "enrollment-test", "enabled");
+		await expect(outside.service.projectState(repo, "enrollment-test", true)).rejects.toThrow("isn't open");
+		await outside.service.setContributions(repo, "enrollment-test", "paused");
+		expect(await state()).toMatchObject({ state: "paused" });
+		await outside.service.setContributions(repo, "enrollment-test", "disconnected");
+		expect(await state()).toBeNull();
+	});
 	it("can pause and disconnect even after Quest files disappear or the project becomes private", async () => {
 		await github().service.setContributions(repo, "enrollment-test", "enabled");
 		const { service, calls } = github({ noQuests: true, private: true });
@@ -452,7 +480,7 @@ describe("project enrollment", () => {
 		[{ id: 99 }, "identity"],
 		[{ private: true }, "public"],
 		[{ truncated: true }, "incomplete"],
-		[{ noQuests: true }, "setup guide"],
+		[{ noQuests: true }, "setup pull request"],
 		[{ invalid: true }, "quest check"],
 		[{ symlink: true }, "regular files"],
 	] as const)("rejects unavailable or ineligible snapshots: %j", async (options, message) => {
@@ -495,6 +523,7 @@ function world(...people: Identity[]): World {
 	return {
 		app: { id: Number(env.GITHUB_APP_ID), slug: "quest-test" },
 		installation: 5,
+		owner,
 		users: users.map((user) => ({ ...user, name: user.login, email: `${user.login}@example.test` })),
 		repos: [
 			{
@@ -745,6 +774,8 @@ type Listed = {
 	archived?: boolean;
 	license?: string | null;
 	quest?: { name: string; type: string }[] | null;
+	/** The owner's GitHub ID; the admitted test owner's by default. */
+	owner?: number;
 };
 
 /**
@@ -785,7 +816,7 @@ function picker(installations: { id: number; app_id?: number; suspended?: boolea
 			const listed = installation.repos.map((repo) => ({
 				id: repo.id,
 				name: repo.name,
-				owner: { login: "upstream" },
+				owner: { login: "upstream", id: repo.owner ?? owner },
 				private: repo.private ?? false,
 				visibility: repo.private ? "private" : "public",
 				archived: repo.archived ?? false,
@@ -810,6 +841,8 @@ function picker(installations: { id: number; app_id?: number; suspended?: boolea
 			for (const [, alias, index] of query.matchAll(/(r(\d+)): repository/g)) {
 				const repo = repos.find((repo) => repo.name === variables[`n${index}`])!;
 				expect(variables[`o${index}`]).toBe("upstream");
+				// Only an admitted owner's repositories cost a quest read.
+				expect(repo.owner ?? owner).toBe(owner);
 				const entries = repo.quest === undefined ? [{ name: "README.md", type: "blob" }] : repo.quest;
 				data[alias!] = { databaseId: repo.id, object: entries && { entries } };
 			}
@@ -834,6 +867,7 @@ describe("project picker", () => {
 		{ id: 18, name: "unlicensed", license: null },
 		{ id: 19, name: "paused" },
 		{ id: 20, name: "moved" },
+		{ id: 21, name: "outside", owner: outsider },
 	];
 	const installations = [
 		{ id: 5, repos: [...writers, ...listed] },
@@ -864,6 +898,7 @@ describe("project picker", () => {
 			"moved",
 			"nested",
 			"old",
+			"outside",
 			"paused",
 			"project",
 			"secret",
@@ -881,6 +916,8 @@ describe("project picker", () => {
 			setup: false,
 		});
 		expect(rows.old).toEqual({ state: null, problems: ["Archived or disabled on GitHub."], setup: false });
+		// An owner off the allowlist costs no quest or license read.
+		expect(rows.outside).toEqual({ state: null, problems: ["Quest isn't open to this owner yet."], setup: false });
 		for (const name of ["bare", "instructions"])
 			expect(rows[name]).toEqual({
 				state: null,
@@ -927,6 +964,7 @@ describe("project picker", () => {
 				repos: [
 					{ id: 10, name: "project" },
 					{ id: 14, name: "bare", quest: null },
+					{ id: 21, name: "outside", owner: outsider },
 				],
 			},
 		]);
@@ -938,8 +976,14 @@ describe("project picker", () => {
 		expect(html).toContain('action="/projects/github/upstream/project"');
 		expect(html).toContain("Enable contributions");
 		expect(html).toContain("No Quest files on the default branch yet.");
-		expect(html).toContain('<a href="/setup">Set up Quest</a>');
+		// A repository without Quest files enables through its setup page's form, which opens the setup pull request.
+		expect(html).toContain(
+			'<a class="button primary" href="/projects/github/upstream/bare">Enable contributions</a>',
+		);
 		expect(html).not.toContain('action="/projects/github/upstream/bare"');
+		expect(html).toContain("Quest isn&#39;t open yet.");
+		expect(html).toContain("Quest isn&#39;t open to this owner yet.");
+		expect(html).not.toContain('action="/projects/github/upstream/outside"');
 		expect(html).toContain("https://github.com/apps/quest-test/installations/new");
 		// The session's GitHub sign-in token lists repositories.
 		expect(

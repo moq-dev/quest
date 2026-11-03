@@ -117,6 +117,8 @@ const mf = new Miniflare(
 					GITHUB_APP_ID: String(data.app.id),
 					GITHUB_APP_PRIVATE_KEY: privateKey,
 					GITHUB_WEBHOOK_SECRET: secret,
+					// The seed's owner, rather than the deployed allowlist.
+					ENROLL_OWNERS: [data.owner],
 					GOOGLE_CLIENT_ID: "",
 					GOOGLE_CLIENT_SECRET: "",
 					// Notifications stay off: a push would leave localhost for a real push service.

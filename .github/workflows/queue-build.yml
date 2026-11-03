@@ -1,0 +1,59 @@
+name: Queue build
+
+# The merge queue's build of a group, on the host's self-hosted runner. Only
+# queue.yml calls it. Once queue.yml calls it at main and the quest-queue runner
+# group admits only this workflow at refs/heads/main, no other workflow can
+# reach the runner, an approved fork run's included; a PR's edit to this file
+# then runs only after it lands.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  build:
+    name: Build
+    # A caller's own event decides this, so a pull request's workflow that
+    # calls this file still gets no runner.
+    if: github.event_name == 'merge_group'
+    runs-on: [self-hosted, quest-queue]
+    # Below the queue's 90-minute response window, so a hung build reports
+    # before the group expires.
+    timeout-minutes: 60
+    env:
+      BASE: ${{ github.event.merge_group.base_sha }}
+    steps:
+      # Validate quest completion with the base's CLI, which the PR cannot weaken.
+      - name: Check out the base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.merge_group.base_sha }}
+          persist-credentials: false
+      - name: Build quest from the base
+        run: nix build --out-link "$RUNNER_TEMP/quest-base" .#quest
+      - name: Check out the merge group
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check that the PR leaves its quest accurate
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          # Build concurrency and group size are both one in main's ruleset.
+          [[ "$QUEUE_REF" =~ ^refs/heads/gh-readonly-queue/main/pr-([0-9]+)- ]] || { echo "::error::unexpected merge group ref" >&2; exit 1; }
+          head_ref=$(gh api "repos/$REPO/pulls/${BASH_REMATCH[1]}" --jq .head.ref)
+          ./quest-base/bin/quest --root "$GITHUB_WORKSPACE" check --base "$BASE" --branch "$head_ref"
+      - name: Install dependencies
+        run: nix develop --command just install
+      - name: Check
+        run: nix develop --command just check
+      - name: Test
+        run: nix develop --command just test
+      - name: Check Nix package
+        run: nix flake check
