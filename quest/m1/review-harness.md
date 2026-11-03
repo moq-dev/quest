@@ -12,11 +12,14 @@ Recurring, decided 2026-10-28 (user, /quest-plan of the follow-ups from
 was [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426).
 
 - Compare `MODELS` in `src/cli/review.ts` with each vendor's current models:
-  the newest general model, Codex at `xhigh` effort and Claude at `high`
-  (maintainer, 2026-11-03). Bump any that are stale, and check that both CLIs
-  accept the new ids and efforts. `--deep` and its strongest-model
+  the newest general model. Bump any that are stale, and check that both CLIs
+  accept the new ids and the pinned efforts. `--deep` and its strongest-model
   tier were dropped in
   [moq-dev/quest#361](https://github.com/moq-dev/quest/pull/361).
+  - The efforts are Codex `xhigh` and Claude `high` (maintainer, 2026-11-03).
+    Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
+    `/code-review high`, and codex-cli 0.166.0 ran `gpt-6.1-sol` with
+    `model_reasoning_effort="xhigh"`, both with `quest review`'s flags.
   - m0 found, with Claude Code 2.1.316 and codex-cli 0.166.0:
     `claude-opus-5-5` is Anthropic's default general model, above it only the
     premium Fable tier (`claude-fable-5-1`); `gpt-6.1-sol` is Codex's
@@ -50,7 +53,8 @@ was [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426).
     and `quest init` installs none. Recheck if either starts to.
 - The PR that finishes this run creates the next milestone's run the same
   way: listed in that milestone's `Required`, requiring this milestone's
-  README, carrying forward the model ids it found and anything to check first.
+  README, carrying forward the model ids and efforts it found and anything to
+  check first.
 
 ## Required
 

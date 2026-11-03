@@ -622,6 +622,7 @@ fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
 			expect(first.argv.slice(0, 5)).toEqual(["exec", "review", "--base", mergeBase, "--json"]);
 		} else {
 			expect(first.stdin).toBe(`/code-review high ${mergeBase}...HEAD`);
+			expect(first.argv[first.argv.indexOf("--effort") + 1]).toBe("high");
 		}
 		expect(second.stdin).toContain(`\`git diff ${mergeBase}..${head}\``);
 		// Only the change's own directories bring their instructions.
