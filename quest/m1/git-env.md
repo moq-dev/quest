@@ -7,7 +7,7 @@ repository, even when `quest` runs from a Git hook or
 `git submodule foreach`. They share one helper that drops the
 repository-local variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`
 and the rest of `git rev-parse --local-env-vars`) and keeps `-c` config,
-as Git itself does when it enters another repository. The command
+as Git itself does when it enters another repository. The command that
 `quest worktree run` starts in a reserved checkout gets the same treatment.
 
 ## Plan
