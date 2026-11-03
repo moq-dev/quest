@@ -44,7 +44,8 @@ Work:
   from source, matching how the flake pins the rest.
 - The runner refuses an opencode account when srt reports Unix-socket
   blocking disabled, with an error that names the missing helper.
-- Add to the boundary test: connecting to the Nix daemon socket, and to a
+- Add to [#404](https://github.com/moq-dev/quest/pull/404)'s boundary test,
+  in that PR if it is still open: connecting to the Nix daemon socket, and to a
   socket the test opens outside the sandbox, are both refused.
 - The filter blocks creating a Unix socket, not using one a command
   inherits or receives over `SCM_RIGHTS`. Have the boundary test list the

@@ -81,4 +81,4 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 - [Head approval](/quest/m0/kix/sandbox/head-approval.md) - a maintainer approves an exact head, such as one kix pushed, for host runners
 - [Boundary test in CI](/quest/m0/kix/sandbox/live-test.md) - the opencode sandbox's hostile-repository test runs on Linux CI with a scripted model
 - [Trust rechecked on queue](/quest/m0/kix/sandbox/trust-on-queue.md) - a job's head trust is reread whenever it queues, so the approval decision shows without a free runner
-- [Claude Code boundary test](/quest/m0/kix/sandbox/claude-boundary.md) - the same hostile-repository test for Claude Code jobs, with a fake model behind `ANTHROPIC_BASE_URL`
+- [Claude Code boundary test](/quest/m0/kix/sandbox/claude-boundary.md) - the same hostile-repository test for Claude Code jobs, with a fake model set in the account's settings

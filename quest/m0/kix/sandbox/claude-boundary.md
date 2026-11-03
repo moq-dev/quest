@@ -48,3 +48,8 @@ Work:
   in the home instead.
 - Like #404, each shell attempt first succeeds outside the sandbox, and the
   test fails rather than skips on Linux when the sandbox can't start.
+
+## Required
+
+- [No Unix sockets in opencode jobs](/quest/m0/kix/sandbox/seccomp.md) - the Unix-socket probe this test reuses
+- [Boundary test in CI](/quest/m0/kix/sandbox/live-test.md) - #404's attempts and layout this test reuses
