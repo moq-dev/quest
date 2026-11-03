@@ -635,7 +635,14 @@ test("the first pass reads removals from SETTLE before it, and forgets closed PR
 test("the watcher's tokens ask for writes only with a fixer, and pushes for workflows only when they carry one", () => {
 	expect(watchPermissions(false)).toEqual({ api: { contents: "read", pull_requests: "write", actions: "read" } });
 	expect(watchPermissions(true)).toEqual({
-		api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" },
+		api: {
+			contents: "write",
+			pull_requests: "write",
+			actions: "read",
+			merge_queues: "write",
+			checks: "read",
+			statuses: "read",
+		},
 		push: { contents: "write", pull_requests: "write" },
 		pushWorkflows: { contents: "write", pull_requests: "write", workflows: "write" },
 		read: { contents: "read" },

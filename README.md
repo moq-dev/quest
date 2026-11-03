@@ -843,7 +843,8 @@ and locks, so the two never run for the same repository at once. Without a
 fixer its token asks for `contents: read`, `pull_requests: write`, and
 `actions: read`, which the App needs for the logs. With one it also asks for
 `merge_queues: write`, which `enqueuePullRequest` needs, and `contents: write`,
-for arming auto-merge and pushing fixes; a push that carries a workflow change
+for arming auto-merge and pushing fixes, and `checks: read` and `statuses: read`,
+for the PR's own checks the fixer reads; a push that carries a workflow change
 asks for `workflows: write`.
 
 ## Gate expensive commands

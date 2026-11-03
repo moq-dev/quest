@@ -571,8 +571,9 @@ type Permissions = Record<string, "read" | "write">;
 /**
  * The installation token permissions the watcher asks for. `api` reads the queue's events, comments,
  * and the `merge_group` logs (`actions: read`); with a fixer it also re-enqueues, which needs
- * `merge_queues: write` for `enqueuePullRequest` and `contents: write` for arming auto-merge, and it
- * edits the PR body's Review. `push` lease-pushes a fix or merge, and `pushWorkflows` one that carries
+ * `merge_queues: write` for `enqueuePullRequest` and `contents: write` for arming auto-merge, it
+ * edits the PR body's Review, and it reads the PR's own checks for the fixer (`checks: read` and
+ * `statuses: read`). `push` lease-pushes a fix or merge, and `pushWorkflows` one that carries
  * a workflow change, as `quest land serve` does; `read` fetches.
  */
 export function watchPermissions(fixing: boolean): {
@@ -584,7 +585,14 @@ export function watchPermissions(fixing: boolean): {
 	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read" } };
 	const push: Permissions = { contents: "write", pull_requests: "write" };
 	return {
-		api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" },
+		api: {
+			contents: "write",
+			pull_requests: "write",
+			actions: "read",
+			merge_queues: "write",
+			checks: "read",
+			statuses: "read",
+		},
 		push,
 		pushWorkflows: { ...push, workflows: "write" },
 		read: { contents: "read" },
