@@ -20,6 +20,9 @@ export const REFERENCE_MARKER = "Quests: ";
 /** Appended to the root agent instructions when Quest is installed. */
 export const REFERENCE_LINE = "Quests: before starting work, run `quest context` and `quest guide`, and follow both.";
 
+/** Earlier releases' default reference lines, which init upgrades in place; a reworded line stays. */
+const OLD_REFERENCE_LINES: readonly string[] = ["Quests: before starting work, run `quest guide` and follow it."];
+
 /** The skill directories Claude Code and Codex read; new installs use real directories. */
 export const SKILL_DIRS = [".claude/skills", ".agents/skills"] as const;
 
@@ -136,11 +139,11 @@ export function planInit(repo: Checkout, stubs: readonly Stub[], options: { goal
 	const changes: InitChange[] = [...written, ...retired.map((dir) => ({ path: `${dir}/SKILL.md`, content: null }))];
 	if (repo.lstat(readme) === null) changes.push({ path: readme, content: questReadme(options.goal) });
 	if (settings !== undefined) changes.push({ path: CLAUDE_SETTINGS, content: settings });
-	for (const [path, marker, line] of [
-		[instructions, REFERENCE_MARKER, REFERENCE_LINE],
-		[".gitattributes", ATTRIBUTES_LINE, ATTRIBUTES_LINE],
-	]) {
-		const content = appendLine(repo.stat(path) === "file" ? repo.read(path) : "", marker, line);
+	for (const [path, marker, line, old] of [
+		[instructions, REFERENCE_MARKER, REFERENCE_LINE, OLD_REFERENCE_LINES],
+		[".gitattributes", ATTRIBUTES_LINE, ATTRIBUTES_LINE, []],
+	] as const) {
+		const content = appendLine(repo.stat(path) === "file" ? repo.read(path) : "", marker, line, old);
 		if (content !== null) changes.push({ path, content });
 	}
 	return changes;
@@ -219,10 +222,14 @@ export function lines(content: string): string[] {
 
 /**
  * `content` with `line` appended, separated from existing content by a blank
- * line, or null when a line already starts with `marker`.
+ * line, or null when a line already starts with `marker`. A line matching one
+ * of `old` exactly is replaced with `line` instead.
  */
-function appendLine(content: string, marker: string, line: string): string | null {
-	if (lines(content).some((existing) => existing.startsWith(marker))) return null;
+function appendLine(content: string, marker: string, line: string, old: readonly string[]): string | null {
+	const existing = lines(content);
+	const outdated = existing.find((l) => old.includes(l));
+	if (outdated !== undefined) return content.replace(outdated, line);
+	if (existing.some((l) => l.startsWith(marker))) return null;
 	const eol = newline(content);
 	if (content !== "") {
 		if (!content.endsWith("\n")) content += eol;
