@@ -1143,11 +1143,12 @@ checkouts are Quest's own once `quest init` installs its hooks (see
 [Claude Code checkouts](#claude-code-checkouts)).
 
 Set a shared capacity and an explicit reservation in bytes, covering the
-checkout and its expected build output. Measure representative jobs before
+checkout, the module stores its submodules clone, and its expected build output. Measure representative jobs before
 choosing the budget. Until a capacity is set, only free disk space limits new
 reservations. Reservations serialize creators and account for concurrent
 expected growth. They do not enforce filesystem quotas against arbitrary
-writers, and Git objects stored in the shared repository are not charged.
+writers, and Git objects stored in the shared repository are not charged; each
+checkout's own submodule stores are.
 
 ```sh
 quest worktree capacity 20000000000
@@ -1216,7 +1217,8 @@ pins or cloned tags) against origin and records them under
 `refs/remotes/quest-pins/`, outside origin's branch-prune namespace. Removal also checks
 submodules' files outside declared scratch and every module store, including deinitialized ones;
 commits at their HEAD or refs must be reachable from a remote-tracking ref,
-since module stores and their local branches are deleted with the checkout.
+since module stores and their local branches are deleted with the checkout, and
+a module store must have no linked worktrees of its own.
 Scratch paths inside submodules use that submodule's ignore rules. Only after
 those checks does removal use the force Git requires for submodules.
 A failed creation stays charged until its partial checkout is inspected and
@@ -1243,7 +1245,8 @@ default branch as last fetched (`origin/HEAD`), or from the session's commit
 when that is unknown; Claude's `worktree.baseRef` setting no longer applies. With only a name to go on,
 it declares the main checkout's top-level ignored entries as scratch, except
 `.worktrees/`, `.claude/`, and entries holding a nested repository, and
-reserves the main checkout's disk usage without `.git` and those checkouts. A
+reserves the main checkout's disk usage without `.git` and those checkouts, plus
+its submodule stores, which the new checkout clones again. A
 subagent's checkout is released when the subagent finishes or stops to wait for
 an answer, and restored when it resumes, with a note telling it to reinstall
 its scratch. Another `SubagentStop` hook that keeps a subagent running defeats

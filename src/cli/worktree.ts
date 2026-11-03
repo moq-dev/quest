@@ -177,14 +177,30 @@ function linkedWorktree(path: string): string | undefined {
  * Git's lock reason for the checkout actually at `path`, read through its own `.git` file and
  * administrative directory, so a root replaced by another checkout reports that checkout's lock.
  */
-function lockReason(path: string): string | undefined {
+/** A linked worktree's own Git directory, named by its `.git` file; undefined without one. */
+function adminDir(path: string): string | undefined {
 	try {
 		const admin = /^gitdir: (.+)$/m.exec(readFileSync(join(path, ".git"), "utf8"))?.[1];
-		return admin && readFileSync(resolve(path, admin.trim(), "locked"), "utf8").replace(/\r?\n$/, "");
+		return admin && resolve(path, admin.trim());
 	} catch (error) {
 		if (["ENOENT", "ENOTDIR", "EISDIR"].includes(code(error) ?? "")) return undefined;
 		throw error;
 	}
+}
+function lockReason(path: string): string | undefined {
+	const admin = adminDir(path);
+	try {
+		return admin && readFileSync(join(admin, "locked"), "utf8").replace(/\r?\n$/, "");
+	} catch (error) {
+		if (["ENOENT", "ENOTDIR", "EISDIR"].includes(code(error) ?? "")) return undefined;
+		throw error;
+	}
+}
+/** A checkout's disk usage, including the module stores its submodules cloned into its own Git directory. */
+function footprint(path: string): number {
+	const admin = adminDir(path);
+	const seen = new Set<string>();
+	return diskUsage(path, seen) + (admin ? diskUsage(join(admin, "modules"), seen) : 0);
 }
 
 function interrupted(record: WorktreeRecord): void {
@@ -251,6 +267,12 @@ function clean(root: string): { modules: string[]; stores: Set<string> } {
 		...modules.map((path) => git(path, "rev-parse", "--absolute-git-dir").trim()),
 	]);
 	for (const store of stores) {
+		// Removal deletes the store, and with it the Git directories of the store's own linked worktrees.
+		const linked = entry(join(store, "worktrees"))?.isDirectory() ? readdirSync(join(store, "worktrees")) : [];
+		if (linked.length)
+			throw new Error(
+				`submodule ${store} has linked worktrees that removal would break; remove or prune them first: ${linked.join(", ")}`,
+			);
 		// Local branches and tags in a module store disappear with the worktree. Only remote refs preserve them.
 		const commit = git(
 			root,
@@ -341,7 +363,9 @@ export function derivedDefaults(main: string): { reserve: number; scratch: strin
 	const matched = names.length ? ignored(main, names) : new Set<string>();
 	const scratch = names.filter((name) => matched.has(name) && !repositoryWithin(join(main, name))).sort();
 	const skip = new Set([join(main, ".git"), join(main, ".worktrees"), join(main, ".claude", "worktrees")]);
-	return { reserve: Math.max(1, diskUsage(main, new Set(), skip)), scratch };
+	// A new checkout clones its own module stores, about the size of the main checkout's.
+	const modules = git(main, "rev-parse", "--path-format=absolute", "--git-path", "modules").trim();
+	return { reserve: Math.max(1, diskUsage(main, new Set(), skip) + diskUsage(modules)), scratch };
 }
 
 /**
@@ -511,7 +535,7 @@ export class Worktrees {
 		let growth = 0;
 		let local = 0;
 		for (const record of registry.records) {
-			const bytes = diskUsage(record.path);
+			const bytes = footprint(record.path);
 			used += bytes;
 			if (record.phase === "released") continue;
 			const expected = Math.max(0, record.reserve - bytes);
@@ -828,7 +852,7 @@ export class Worktrees {
 	private activate(registry: Registry, record: WorktreeRecord): void {
 		if (record.phase === "active") return;
 		if (record.phase !== "released") throw new Error(`cannot use a ${record.phase} checkout`);
-		this.admit(registry, Math.max(0, record.reserve - diskUsage(record.path)), dirname(record.path));
+		this.admit(registry, Math.max(0, record.reserve - footprint(record.path)), dirname(record.path));
 		record.phase = "active";
 	}
 	/**

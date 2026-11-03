@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
 	appendFileSync,
 	existsSync,
@@ -377,6 +378,28 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		writeFileSync(join(path, "file"), "local work");
 		await expect(worktrees.remove(record.id)).rejects.toThrow("checkout has modified or untracked files:  M file");
 		expect(readFileSync(join(path, "file"), "utf8")).toBe("local work");
+	});
+	it("charges cloned module stores and keeps one that serves another worktree", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const sub = repository(join(root, "sub"));
+		// Incompressible, so the module store holds about as much as the checked-out file.
+		writeFileSync(join(sub, "blob"), randomBytes(1 << 20));
+		git(sub, "add", "blob");
+		git(sub, "commit", "-q", "-m", "blob");
+		git(repo, "submodule", "add", "--quiet", sub, "sub");
+		git(repo, "commit", "-am", "submodule");
+		expect(derivedDefaults(repo).reserve).toBeGreaterThan(2 << 20);
+		const record = await worktrees.create(repo, "stores", 1);
+		worktrees.release(record.id);
+		expect(worktrees.status().allocated).toBeGreaterThan(2 << 20);
+		const elsewhere = join(root, "elsewhere");
+		git(join(record.path, "sub"), "worktree", "add", "--quiet", "--detach", elsewhere);
+		await expect(worktrees.remove(record.id)).rejects.toThrow("has linked worktrees that removal would break");
+		expect(git(elsewhere, "rev-parse", "HEAD")).toBe(git(join(record.path, "sub"), "rev-parse", "HEAD"));
+		git(join(record.path, "sub"), "worktree", "remove", elsewhere);
+		await worktrees.remove(record.id);
+		expect(existsSync(record.path)).toBe(false);
 	});
 	it("protects a live creation without giving interrupted-checkout removal advice", async () => {
 		const { repo, worktrees } = fixture();

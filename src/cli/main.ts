@@ -788,7 +788,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Delete a finished checkout and drop its record after recursive safety checks. Refuses while supervised runs are live, " +
 				"and refuses modified, untracked, or ignored files beyond the declared scratch, and commits no branch " +
 				"or remote-tracking ref reaches, unless the GitHub upstream that holds origin's claims merged a PR whose head is exactly " +
-				"that commit. Submodules must have no changed or ignored files and no commits their remote refs do not reach, including in deinitialized module stores. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
+				"that commit. Submodules must have no changed or ignored files and no commits their remote refs do not reach, including in deinitialized module stores, and module stores must have no linked worktrees of their own. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
 		)
 		.action((id: string) => settled(state().remove(id, merged)));
 	worktree
@@ -815,7 +815,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
 				"initializes its submodules recursively, and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
 				".worktrees/, .claude/, and entries holding a nested repository; its reserve is the main checkout's disk " +
-				"usage without .git and those checkouts. An existing checkout of that name in the repository is " +
+				"usage without .git and those checkouts, plus its submodule stores. An existing checkout of that name in the repository is " +
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
 				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
 				"when it finishes or stops to wait, and SubagentStart restores it. Other checkouts are left alone. " +
