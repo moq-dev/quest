@@ -42,7 +42,7 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | blocked by design; fixer-written protected edits become a ready commit ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)) |
 | 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | fixed by [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356): the prompt allows dependency fetches and requires a build and test |
 | 2 | GitHub refused the push to a fork because the merge touches workflows: moq-dev/moq#7439, #7467 | handed back with a ready commit for `quest land apply` by [moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358) |
-| several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | [Flaky failures](/quest/m0/queue-watcher/flaky.md) |
+| several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | the watcher re-enqueues flaky failures and disables a test seen flaking twice ([moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406)) |
 | ~15 | design conflicts, correctly handed back | none |
 
 Decision prompts, selected options marked ✅:
@@ -66,7 +66,7 @@ Decision prompts, selected options marked ✅:
 - Protected paths: the fixer first could edit them (moq-dev/quest#357), then not; see the 2026-11-01 audit below.
 - Fork pushes GitHub refuses: ✅ hand back a ready commit, which `quest land apply` rebuilds
   for a maintainer to push (Grant moq-bot the `workflows` permission · Leave it manual).
-- Flaky tests: see [Flaky failures](/quest/m0/queue-watcher/flaky.md).
+- Flaky tests: the watcher re-enqueues them, and disables a test seen flaking twice in a separate PR ([moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406)).
 - Milestone for the new quests: ✅ m0 · m1
 - Restated 2026-11-01 (user, a second /quest-plan): "the merge queue can
   autonomously fix most issues. The fixer inspects the batch and tries to
@@ -137,8 +137,8 @@ Decision prompts, selected options marked ✅:
   [moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)),
   local mergeability and CI-failure parking (then
   [Bad picks](/quest/m0/queue-watcher/bad-picks.md), dropped 2026-11-02: a
-  pick GitHub refuses fails `quest merge` instead), and flaky tests (now
-  [Flaky failures](/quest/m0/queue-watcher/flaky.md), without the rerun).
+  pick GitHub refuses fails `quest merge` instead), and flaky tests (done
+  without the rerun in [moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406)).
   Deleted: the batch quest check, pre-checks, and throughput tuning, which
   only served batches (the fixer cap and reasoning effort moved to the
   watcher, as `quest land watch --fixer-jobs` and `--fixer-effort`); and queue status in
