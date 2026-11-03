@@ -50,8 +50,8 @@
           claudeCode = pkgs.claude-code.override {
             manifest = pkgs.lib.importJSON ./nix/claude-code.json;
           };
-          # `quest runner` with pinned agent CLIs, and on
-          # Linux the bubblewrap and socat Claude Code's sandbox runs its jobs' commands in.
+          # `quest runner` with pinned agent CLIs, the sandbox-runtime that runs opencode
+          # jobs' commands, and on Linux the bubblewrap and socat Claude Code's sandbox runs its jobs' commands in.
           runner = pkgs.symlinkJoin {
             name = "quest-runner-${quest.version}";
             paths = [ quest ];
@@ -59,7 +59,8 @@
             postBuild = ''
               wrapProgram $out/bin/quest \
                 --set-default QUEST_RUNNER_CLAUDE ${pkgs.lib.getExe claudeCode} \
-                --set-default QUEST_RUNNER_OPENCODE ${pkgs.lib.getExe opencode} ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "--prefix PATH : ${
+                --set-default QUEST_RUNNER_OPENCODE ${pkgs.lib.getExe opencode} \
+                --set-default QUEST_RUNNER_SRT ${pkgs.lib.getExe pkgs.sandbox-runtime} ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "--prefix PATH : ${
                   pkgs.lib.makeBinPath [
                     pkgs.bubblewrap
                     pkgs.socat
