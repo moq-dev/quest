@@ -21,6 +21,15 @@ was [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426).
     premium Fable tier (`claude-fable-5-1`); `gpt-6.1-sol` is Codex's
     first-listed "latest workhorse" in `~/.codex/models_cache.json`, beside
     the frontier `gpt-6-astra`. Neither pin changed.
+  - Check that the pinned Claude Code maps the Claude id to each cloud
+    provider. `quest review` keeps Bedrock, Vertex and Foundry routing
+    ([moq-dev/quest#424](https://github.com/moq-dev/quest/pull/424)) but
+    strips `ANTHROPIC_MODEL`, so the pin must resolve on each route.
+    Claude Code 2.1.316's model catalog lists `claude-opus-5-5` with
+    `provider_ids` (Bedrock `us.anthropic.claude-opus-5-5`; Vertex and
+    Foundry `claude-opus-5-5`). Find the new pin's entry the same way, and
+    plan a quest if a provider has none (coordinator, /quest-complete
+    follow-ups, 2026-11-03).
 - Run the live sandbox test, `just review-sandbox`, with the CLIs installed
   at the time, through `quest gate`, and plan a quest for any failure.
 - Check first:
