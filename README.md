@@ -625,12 +625,15 @@ Any other moved head hands back. Forks refusing maintainer edits, refused pushes
 crashes, or the fixer deadline hand back with a marked comment naming the exit
 status or signal, with the tail of the job's retained log. A validated fix whose push
 GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
-the `workflows` permission to push, is handed back with its resolution: the PR head,
-the base, the resolved tree, and the fixer's edits as a patch against the merge's
-conflicted result, sized to GitHub's 65,536-character comment limit. A maintainer
+the `workflows` permission to push, is handed back with its resolution. So is a fix
+that edits protected paths beyond what the base merge carries, such as a conflict in
+`flake.nix` the fixer resolved: those never land automatically. The resolution is the
+PR head, the base, the resolved tree, and the fixer's edits as a patch against the
+merge's conflicted result, or against the head itself for a fix that merges no base,
+sized to GitHub's 65,536-character comment limit. A maintainer
 runs `quest land apply <pr>`, which refuses a moved head, rebuilds and checks that
-tree, and prints an unpushed commit and its push command. A resolution too large for
-the comment hands back plainly. A handback disables
+tree, and prints an unpushed commit and its push command to run after reviewing it.
+A resolution too large for the comment hands back plainly. A handback disables
 auto-merge and carries the reason marker `quest status`
 reads. Each failure a fixer job blames a PR for is a round of its maintainer pick; a PR
 that only shared a broken batch has none. The fixer keeps going while each round
@@ -818,8 +821,8 @@ base it conflicted with. The pick keeps going while each round makes progress:
 a round with no new commit for a failure that isn't flaky, the failure a fix
 addressed recurring right after it, or three flaky rounds in a row hand it
 back. A fix is validated, lease-pushed, and recorded in Review as for the host
-gate, and a push GitHub refuses is handed back with its resolution for
-`quest land apply`. The watcher then puts the fixed, merged, or flaky head back
+gate, and a push GitHub refuses, or a fix that edits protected paths, is handed
+back with its resolution for `quest land apply`. The watcher then puts the fixed, merged, or flaky head back
 in the queue with `expectedHeadOid` bound to it: it enqueues a head whose
 required checks have passed, and arms auto-merge on one whose checks still
 run, so GitHub enqueues it once they pass. Either joins the back of the queue.

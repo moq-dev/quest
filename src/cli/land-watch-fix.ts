@@ -498,7 +498,18 @@ async function collect(
 						if (entry.repository !== job.repository && !entry.maintainerCanModify)
 							throw new FixerRefusal("fork does not allow maintainer edits");
 					} else
-						await importFix(context.root, state, job, entry, job.checkout, job.packs, head, context.read);
+						await importFix(
+							context.root,
+							state,
+							job,
+							entry,
+							job.checkout,
+							job.packs,
+							head,
+							context.read,
+							entry.head,
+							deps.warn,
+						);
 					job.published = head;
 					save(path, job);
 				}
