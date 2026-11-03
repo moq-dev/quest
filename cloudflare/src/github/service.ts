@@ -2,7 +2,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
-import { unreviewed } from "./review";
+import { REVIEW_CHECK, unreviewed } from "./review";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -1818,6 +1818,40 @@ export class GitHubService {
 				app: Number(this.#env.GITHUB_APP_ID),
 			},
 		);
+	}
+
+	/**
+	 * Write the App's `quest review` check run on `head`, a commit a job
+	 * published and GitHub attributes to a bot, from a runner's review of it, on behalf of the job's
+	 * requester. GitHub binds the run to the commit, and `unreviewed` counts
+	 * only this App's, so a passing one lets kix land exactly that head.
+	 */
+	writeReviewCheck(
+		repo: GitHubRepository,
+		userId: string,
+		input: {
+			head: string;
+			conclusion: "success" | "failure";
+			output: { title: string; summary: string; text?: string };
+		},
+	) {
+		return this.#authorized(repo, userId, { contents: "read", checks: "write" }, async (token) => {
+			// The job's head is someone else's commit after a merge job continues onto it; that one is not a runner's to pass.
+			const { committer } = await this.#api<{ committer: { type: string } | null }>(
+				token,
+				`${repositoryPath(repo)}/commits/${sha(input.head)}`,
+			);
+			if (committer?.type !== "Bot")
+				throw new GitHubError("kix records a runner's review only of a commit it published");
+			await this.#api(token, `${repositoryPath(repo)}/check-runs`, "POST", {
+				name: REVIEW_CHECK,
+				head_sha: sha(input.head),
+				status: "completed",
+				conclusion: input.conclusion,
+				completed_at: new Date().toISOString(),
+				output: input.output,
+			});
+		});
 	}
 
 	/**
