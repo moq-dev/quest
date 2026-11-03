@@ -154,7 +154,6 @@ work, done once the Required quests below have merged.
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
 - [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
 - [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - a fixer edit `validateFix` rejects for touching protected paths comes back as a commit the maintainer applies
-- [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
 
 ## Related
 

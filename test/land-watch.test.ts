@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { GitHubDependencies } from "../src/cli/github";
 import { readRemote } from "../src/cli/land";
+import { CHECK_LOG } from "../src/cli/land-checks";
 import { FLAKY_LIMIT, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
@@ -92,6 +93,9 @@ interface World {
 	unreadable?: (pull: Pull) => boolean;
 	/** PRs whose push activity GitHub has not listed yet. */
 	unlisted?: number[];
+	/** The checks each head reported from the PR's own CI, as `statusCheckRollup` contexts, with each job's log by ID. */
+	checks?: Record<string, Record<string, unknown>[]>;
+	checkLogs?: Record<number, string>;
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -169,6 +173,25 @@ function deps(world: World): GitHubDependencies {
 				if (query.includes("defaultBranchRef"))
 					return Response.json({ data: { repository: { defaultBranchRef: { name: "main" } } } });
 				const pullOf = () => world.pulls.find((item) => `PR_${item.number}` === variables.id)!;
+				if (query.includes("statusCheckRollup")) {
+					expect(variables.id).toMatch(/^PR_\d+$/);
+					const contexts = world.checks?.[variables.sha];
+					// One context a page, so a second page is read by its cursor.
+					const start = variables.after === null ? 0 : Number(variables.after);
+					const rollup =
+						contexts === undefined
+							? null
+							: {
+									contexts: {
+										nodes: contexts.slice(start, start + 1),
+										pageInfo: {
+											hasNextPage: start + 1 < contexts.length,
+											endCursor: String(start + 1),
+										},
+									},
+								};
+					return Response.json({ data: { repository: { object: { statusCheckRollup: rollup } } } });
+				}
 				const mutation = /^\s*mutation[^{]*\{\s*(\w+)/.exec(query)?.[1];
 				if (mutation === "enqueuePullRequest" || mutation === "enablePullRequestAutoMerge") {
 					const pull = pullOf();
@@ -275,7 +298,8 @@ function deps(world: World): GitHubDependencies {
 			const logs = /^\/repos\/upstream\/project\/actions\/jobs\/(\d+)\/logs$/.exec(path);
 			if (logs) {
 				const job = world.runs.flatMap((run) => run.jobs).find((item) => item.id === Number(logs[1]));
-				return job?.log === undefined ? new Response("missing", { status: 404 }) : new Response(job.log);
+				const log = job?.log ?? world.checkLogs?.[Number(logs[1])];
+				return log === undefined ? new Response("missing", { status: 404 }) : new Response(log);
 			}
 			const pullPath = /^\/repos\/upstream\/project\/pulls\/(\d+)$/.exec(path);
 			if (pullPath) {
@@ -794,6 +818,56 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		};
 		const github = { ...world([pull], [failedRun(5, at(3), base)]), origin: repo.origin };
 		github.now = Date.parse(at(6));
+		// The PR's own CI on its head: a failing optional job, a passing required check, a failing status, one still running.
+		const actions = (workflow: string) => ({
+			app: { slug: "github-actions" },
+			workflowRun: { workflow: { name: workflow } },
+		});
+		github.checks = {
+			[head]: [
+				{
+					__typename: "CheckRun",
+					name: "test",
+					status: "COMPLETED",
+					conclusion: "FAILURE",
+					detailsUrl: "https://github.com/upstream/project/actions/runs/9/job/90",
+					databaseId: 90,
+					isRequired: false,
+					checkSuite: actions("Check"),
+				},
+				{
+					__typename: "CheckRun",
+					name: "Queue",
+					status: "COMPLETED",
+					conclusion: "SKIPPED",
+					detailsUrl: "https://github.com/upstream/project/actions/runs/9/job/91",
+					databaseId: 91,
+					isRequired: true,
+					checkSuite: actions("Queue"),
+				},
+				{
+					__typename: "StatusContext",
+					context: "ci/external",
+					state: "FAILURE",
+					targetUrl: "https://ci.example/5",
+					description: "2 tests failed",
+					isRequired: false,
+				},
+				{
+					__typename: "CheckRun",
+					name: "bench",
+					status: "IN_PROGRESS",
+					conclusion: null,
+					detailsUrl: null,
+					databaseId: 92,
+					isRequired: false,
+					checkSuite: { app: { slug: "other-ci" }, workflowRun: null },
+				},
+			],
+		};
+		github.checkLogs = {
+			90: `\uFEFF2026-11-01T12:02:00.1234567Z ${"x".repeat(30_000)}\n2026-11-01T12:02:01.1234567Z FAIL pr.test.ts\n`,
+		};
 		fix.round(5, fixScript("fixed.txt"));
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
 			"removed 5 failed_checks fix",
@@ -801,8 +875,31 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		]);
 		expect(github.comments[5][0].body).toContain("The land fixer works on it in the background");
 		await exited(state);
-		// The wrapper got the removal's full log, the PR, and the effort.
-		expect(fix.calls()).toEqual([`high ${readRemoval(state, 5)!.log} 5`]);
+		// The wrapper got the removal's full log followed by the PR's own checks, the PR, and the effort.
+		const [call] = fix.calls();
+		const [effort, input, number] = call.split(" ");
+		expect([effort, number]).toEqual(["high", "5"]);
+		expect(input).not.toBe(readRemoval(state, 5)!.log);
+		const text = readFileSync(input, "utf8");
+		expect(text.startsWith(readFileSync(readRemoval(state, 5)!.log, "utf8").trimEnd())).toBe(true);
+		expect(text).toContain("FAIL queue.test.ts");
+		const own = text.slice(text.indexOf(`== The pull request's own checks on ${head} ==`));
+		expect(own.split("\n").slice(2, 6)).toEqual([
+			"failure optional Check / test (https://github.com/upstream/project/actions/runs/9/job/90)",
+			"skipped required Queue / Queue (https://github.com/upstream/project/actions/runs/9/job/91)",
+			"failure optional ci/external (https://ci.example/5): 2 tests failed",
+			"in_progress optional bench (no URL)",
+		]);
+		// Only the failing Actions job's log is read, cleaned and cut to its end.
+		expect(own).toContain(
+			"== Check / test: failure (https://github.com/upstream/project/actions/runs/9/job/90), the end of its log ==\n…",
+		);
+		expect(own.trimEnd().endsWith("\nFAIL pr.test.ts")).toBe(true);
+		expect(own).not.toContain("2026-11-01T12:02");
+		expect(own.length).toBeLessThan(CHECK_LOG + 1_000);
+		expect(github.requests.filter((request) => request.includes("/actions/jobs/9"))).toEqual([
+			"GET /repos/upstream/project/actions/jobs/90/logs",
+		]);
 
 		github.now = Date.parse(at(10));
 		// GitHub takes the head back, then fails the read that follows: the round may be in the queue, so it is
@@ -950,8 +1047,12 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		await exited(state);
 		// The code conflict's fixer got the current base and the merge's conflict, never the build's base.
 		const [call] = fix.calls();
-		expect(call).toMatch(new RegExp(`^high .*/conflict-4-${base.slice(0, 12)}\\.log 4$`));
-		expect(readFileSync(call.split(" ")[1], "utf8")).toContain("CONFLICT (content): Merge conflict in code.txt");
+		expect(call).toMatch(/^high .*\/fixer-input-4-\w+\.log 4$/);
+		const input = readFileSync(call.split(" ")[1], "utf8");
+		expect(input).toContain(`conflicts with main at ${base}`);
+		expect(input).toContain("CONFLICT (content): Merge conflict in code.txt");
+		expect(input).toContain("== The pull request's own checks on ");
+		expect(input).toContain("It reported no checks.");
 
 		github.now = Date.parse(at(8));
 		const resolved = () => git(repo.origin, "rev-parse", "refs/heads/branch-4");
@@ -961,7 +1062,11 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		]);
 		expect(git(repo.origin, "show", `${resolved()}:code.txt`)).toBe("one\nII and 2\nthree");
 		await exited(state);
-		expect(fix.calls()[1]).toBe(`high ${readRemoval(state, 6)!.log} 6`);
+		// A failed build's fixer reads that build's log first.
+		const [, input6] = fix.calls()[1].split(" ");
+		expect(
+			readFileSync(input6, "utf8").startsWith(readFileSync(readRemoval(state, 6)!.log, "utf8").trimEnd()),
+		).toBe(true);
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 6 ${failing}`]);
 		expect(github.mutations.slice(1)).toEqual([
 			`enablePullRequestAutoMerge 4 ${resolved()}`,

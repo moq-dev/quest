@@ -804,7 +804,9 @@ its PR still waits as the queue dropped it:
   credential-free wrapper, given the failure log and the PR's number, with the
   dropped head on `pr-<n>`, starting from the base the `merge_group` build
   was built on, or from the current base for a conflict, with the merge's
-  conflicts as its log. At most `--fixer-jobs` (2) run at once; the rest wait
+  conflicts as its log. The log ends with the PR's own checks on the dropped
+  head: each check's result, whether it is required, and its URL, then the
+  last 20,000 characters of each failing GitHub Actions job's log. At most `--fixer-jobs` (2) run at once; the rest wait
   for a slot. `--fixer-effort` (medium) sets the fixer's
   `model_reasoning_effort`, passed to the wrapper in `QUEST_LAND_FIXER_EFFORT`,
   which `quest land fix --effort` reads by default.
@@ -828,6 +830,13 @@ handback, from a stop rule, the fixer, a refusal, a crash, or a timeout, is
 posted with its reason and a recommendation, and the PR leaves the watcher's
 care until a maintainer enqueues it again. A round whose pick ended while it
 ran, by a writer's push or enqueue, is not applied, and its comment says so.
+
+A PR's own CI is a signal, never a gate of its own: only the base's required
+checks keep GitHub from enqueuing a head. `/quest-merge` reports the failing
+optional checks on the head it picks, and the land fixer reads every check as
+context. A public repository may run its checks on pull requests too, since
+GitHub's hosted runners are free there; a private one can skip them and rely
+on the merge queue's build on the host alone.
 
 It shares `quest land serve`'s App key, state directory, private repository,
 and locks, so the two never run for the same repository at once. Without a
