@@ -163,6 +163,23 @@ describe("checkout submodule links", { timeout: 20_000 }, () => {
 		expect(seen).toEqual([]);
 	});
 
+	test("resolves an uninitialized submodule nested in a checked-out one", () => {
+		const { tree, module } = fixture();
+		const nested = initRepository();
+		writeFileSync(join(nested, "README.md"), "# Nested\n");
+		commit(nested);
+		git(module, "-c", "protocol.file.allow=always", "submodule", "add", "-q", nested, "nested");
+		commit(module);
+		commit(tree.path);
+		git(module, "submodule", "deinit", "-q", "-f", "nested");
+		rmSync(join(module, "nested"), { recursive: true });
+		const { note, seen } = notes();
+		const at = checkout(tree.path, note);
+		expect(at.exists("dependency/nested/README.md")).toBe(true);
+		expect(at.exists("dependency/nested/missing.md")).toBe(false);
+		expect(seen).toEqual([]);
+	});
+
 	test("finds a deinitialized submodule's git directory by its name", () => {
 		const { tree } = fixture();
 		git(tree.path, "submodule", "deinit", "-q", "-f", "dependency");

@@ -139,24 +139,31 @@ interface Tree {
 
 /**
  * Whether a path exists in the checkout at `root`: on disk, or, inside a
- * submodule that is not checked out, at the commit its gitlink pins.
+ * submodule that is not checked out, at the commit its gitlink pins. A
+ * checked-out submodule is a checkout of its own, so its submodules resolve the
+ * same way. `prefix` is where `root` sits in the outermost checkout.
  */
-function onDisk(root: string, note: Note): (path: string) => boolean {
+function onDisk(root: string, note: Note, prefix = ""): (path: string) => boolean {
 	const repo = { dir: root };
 	let names: Map<string, string> | undefined;
 	// Git runs in `root`, so it names the file relative to that.
 	const modules = () =>
 		(names ??= exists(root, ".gitmodules") ? gitmodules(repo, ["-f", ".gitmodules"]) : new Map<string, string>());
-	const resolve = pins(repo, modules, note, "");
+	const resolve = pins(repo, modules, note, prefix);
+	const inner = new Map<string, (path: string) => boolean>();
 	return (path) => {
 		if (exists(root, path)) return true;
 		for (const module of modules().keys()) {
 			if (path === module) return gitlink(root, module) !== null;
 			if (!path.startsWith(`${module}/`)) continue;
-			// A checked-out submodule's files are on disk like any other.
-			if (existsSync(join(root, module, ".git"))) return false;
+			const rest = path.slice(module.length + 1);
+			if (existsSync(join(root, module, ".git"))) {
+				let within = inner.get(module);
+				if (!within) inner.set(module, (within = onDisk(join(root, module), note, `${prefix}${module}/`)));
+				return within(rest);
+			}
 			const oid = gitlink(root, module);
-			return oid !== null && resolve(module, oid, path.slice(module.length + 1));
+			return oid !== null && resolve(module, oid, rest);
 		}
 		return false;
 	};
