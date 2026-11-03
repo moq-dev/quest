@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
 import { checkout, snapshot } from "../src/cli/tree";
 import { check, formatFinding } from "../src/core";
-import { GIT_SETTINGS, Tree, configure, initRepository, tempDir, template } from "./fixture";
+import { GIT_SETTINGS, Tree, configure, initRepository, run, tempDir, template } from "./fixture";
 
 function git(root: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
@@ -182,7 +182,15 @@ describe("checkout submodule links", { timeout: 20_000 }, () => {
 		tree.append("quest/m0/epic/one.md", "\nMissing [source](../../../dependency/missing.md).\n");
 		git(tree.path, "submodule", "deinit", "-q", "-f", "dependency");
 		rmSync(join(tree.path, ".git", "modules"), { recursive: true });
-		const result = tree.run("check");
+		// A relative root, which git must not resolve twice once it runs there.
+		const cwd = process.cwd();
+		process.chdir(dirname(tree.path));
+		let result: ReturnType<typeof run>;
+		try {
+			result = run("--root", basename(tree.path), "check");
+		} finally {
+			process.chdir(cwd);
+		}
 		expect(result.code).toBe(0);
 		expect(result.stderr).toContain(`${SKIPPED} ${pin}; run git submodule update --init --recursive to check them`);
 	});

@@ -143,9 +143,10 @@ interface Tree {
  */
 function onDisk(root: string, note: Note): (path: string) => boolean {
 	const repo = { dir: root };
-	const file = join(root, ".gitmodules");
 	let names: Map<string, string> | undefined;
-	const modules = () => (names ??= existsSync(file) ? gitmodules(repo, ["-f", file]) : new Map<string, string>());
+	// Git runs in `root`, so it names the file relative to that.
+	const modules = () =>
+		(names ??= exists(root, ".gitmodules") ? gitmodules(repo, ["-f", ".gitmodules"]) : new Map<string, string>());
 	const resolve = pins(repo, modules, note, "");
 	return (path) => {
 		if (exists(root, path)) return true;
