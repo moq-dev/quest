@@ -621,7 +621,8 @@ fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
 		if (host === "CLAUDECODE") {
 			expect(first.argv.slice(0, 5)).toEqual(["exec", "review", "--base", mergeBase, "--json"]);
 		} else {
-			expect(first.stdin).toBe(`/code-review medium ${mergeBase}...HEAD`);
+			expect(first.stdin).toBe(`/code-review high ${mergeBase}...HEAD`);
+			expect(first.argv[first.argv.indexOf("--effort") + 1]).toBe("high");
 		}
 		expect(second.stdin).toContain(`\`git diff ${mergeBase}..${head}\``);
 		// Only the change's own directories bring their instructions.
@@ -638,7 +639,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	const base = git(s.repo, "rev-parse", "origin/main");
 	expect(result.stdout).toBe(
 		[
-			"reviewer codex gpt-6.1-sol medium",
+			"reviewer codex gpt-6.1-sol xhigh",
 			"session thread-1",
 			"round 1",
 			`base ${base} origin/main`,
@@ -663,7 +664,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 		expect(call.argv).toContain("--ignore-rules");
 		expect(call.argv).toContain("--ignore-user-config");
 		expect(call.argv[call.argv.indexOf("-m") + 1]).toBe("gpt-6.1-sol");
-		expect(call.argv).toContain('model_reasoning_effort="medium"');
+		expect(call.argv).toContain('model_reasoning_effort="xhigh"');
 		expect(call.argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
 		// The session's own variables never reach the reviewer.
 		expect(call.env.CLAUDECODE).toBeUndefined();
