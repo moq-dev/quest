@@ -39,7 +39,7 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | 98 | "already used its mechanical fix attempt" after a collateral requeue or an earlier conflict fix; each needed a manual re-pick | stop rules ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)), batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | ~75 | "requeued unchanged": collateral of a batch another PR broke | batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | 36 | picked again while fixing; the newer pick is kept, so nothing is lost | not planned |
-| 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | blocked by design; fixer-written protected edits become a ready commit ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)) |
+| 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | kept blocked; a fixer-written protected edit is handed back with a ready commit for `quest land apply` by [moq-dev/quest#409](https://github.com/moq-dev/quest/pull/409) |
 | 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | fixed by [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356): the prompt allows dependency fetches and requires a build and test |
 | 2 | GitHub refused the push to a fork because the merge touches workflows: moq-dev/moq#7439, #7467 | handed back with a ready commit for `quest land apply` by [moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358) |
 | several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | [Flaky failures](/quest/m0/queue-watcher/flaky.md) |
@@ -110,7 +110,7 @@ Decision prompts, selected options marked ✅:
   PRs broken against the current base, and not fixer capability. Decisions:
   - Protected paths: ✅ keep `validateFix`'s block and route fixer-written
     protected edits through moq-dev/quest#358's ready commit
-    ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)); moq-dev/quest#357 closed · keep #357 · #357 minus workflows
+    ([moq-dev/quest#409](https://github.com/moq-dev/quest/pull/409)); moq-dev/quest#357 closed · keep #357 · #357 minus workflows
   - Fixer comments: ✅ the daemon posts them from the fixer's result, no
     token in the container (moq-bot comments carry trust: `quest land apply`,
     the daemon's markers, `quest status`) · keep the token
@@ -152,7 +152,6 @@ work, done once the Required quests below have merged.
 
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
 - [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
-- [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - a fixer edit `validateFix` rejects for touching protected paths comes back as a commit the maintainer applies
 - [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
 
 ## Related

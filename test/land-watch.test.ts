@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { GitHubDependencies } from "../src/cli/github";
 import { readRemote } from "../src/cli/land";
+import { parseResolution } from "../src/cli/land-apply";
 import { FLAKY_LIMIT, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
@@ -969,6 +970,36 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(handback).toContain("<!-- quest land: failed_checks -->");
 		expect(history(state, 5)!.rounds.map((round) => round.outcome)).toEqual(["fixed", "handback"]);
 		expect(history(state, 5)!.rounds[1].rule).toBe("repeated");
+	});
+
+	test("a fix that edits a protected path is handed back unpushed, as a ready commit", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const head = repo.pull(5, { "feature.txt": "new\n" });
+		const pull: Pull = {
+			number: 5,
+			head,
+			enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+			removals: [
+				{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue", before: head },
+			],
+		};
+		const github = { ...world([pull], [failedRun(5, at(3), base)]), origin: repo.origin };
+		github.now = Date.parse(at(6));
+		fix.round(5, fixScript("flake.nix"));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 5 failed_checks fix",
+			"fixing 5",
+		]);
+		await exited(state);
+		github.now = Date.parse(at(10));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["handback 5"]);
+		expect(git(repo.origin, "rev-parse", "refs/heads/branch-5")).toBe(head);
+		expect(github.mutations).toEqual([]);
+		const handback = github.comments[5].at(-1)!.body;
+		expect(handback).toContain("off-limits fixer edit");
+		expect(handback).toContain("`quest land apply 5`");
+		expect(parseResolution(handback)).toMatchObject({ head, base: head });
 	});
 
 	test("a quest-file conflict is merged with the quest driver, and a code conflict goes to the fixer", async () => {
