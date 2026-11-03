@@ -191,7 +191,9 @@ It pushes an empty claim commit, built on the upstream default branch, to the
 quest's branch (its path without `.md`), then opens a draft PR
 from it right away and prints the PR's URL. It switches your checkout to the
 claim on a new local branch, or fast-forwards that branch if it is already
-checked out. A fork pushes to itself and opens the PR on its upstream, found
+checked out. A local branch left from an earlier attempt is not moved: the
+claim still succeeds, with a warning to switch to it and merge the claim
+commit. A fork pushes to itself and opens the PR on its upstream, found
 as for `unblocked --unclaimed`, so a fork with its own quests claims on
 itself. It reads
 readiness from the upstream default branch it builds on, not your checkout. It
@@ -310,9 +312,17 @@ invocation defaults to seven-character markers and `ours`/`base`/`theirs`;
 them. Labels must fit on one line. The fallback carries the same Git metadata
 when `quest` is missing or too old to accept those options.
 
-Existing configured drivers are preserved. For a checkout still using the old
-quest-generated command, clear its local `merge.quest.driver` entry and run any
-quest command to register the current one.
+A driver an older `quest` registered is replaced with the current one by the
+next `quest` command; any other configured driver is preserved.
+
+A clean merge can still leave this branch's list links to quests the base
+finished, which `quest check` then flags. `quest check --fix` drops every
+`Required`, `Related`, or `Closes` entry linking to a quest deleted in the
+history of `HEAD`, and of `MERGE_HEAD` during a merge, that the working tree
+lacks, and prints `M path` for each edited document. It leaves the edits
+unstaged and refuses while a quest file has unresolved conflicts. A quest moved
+rather than deleted, a link that never named a quest, and a link in prose stay
+for `quest check` to report.
 
 ## Wait for pull request activity
 
@@ -333,7 +343,8 @@ Authentication comes from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`.
 Without `--since`, the point is the current head's push time, so an existing
 review on that head is included. GitHub lists a push seconds to minutes after
 it lands, so for the current head the wait rereads the listing every 15 seconds
-until the push appears, warning once. Any other SHA must be a listed pushed tip;
+until the push appears, warning once. Any other SHA must be a tip the listing
+shows a push, or a merge into the branch such as **Update branch**, moving it to;
 otherwise pass an ISO timestamp instead. Forks use the head
 repository's activity. Deleted head repositories require a timestamp.
 The initial PR commit listing must match the resolved head; a racing push or
@@ -344,7 +355,8 @@ commit), type, actor, and URL. The last line adds a resume cursor. Pass its
 **last field** as `--since` on the next call. Cursors preserve commit membership
 and events sharing a timestamp; treat them as opaque, and use them only for the
 same PR. Explicit timestamps include events at that instant. Historical plain
-pushes come from repository activity; pushes observed while waiting come from new
+pushes come from repository activity, and a historical merge into the branch
+prints as its new commit; pushes observed while waiting come from new
 commit SHAs, regardless of git author dates. Force pushes come from the PR
 timeline, excluding the one that created the starting head. A merge through
 the queue prints `removed_from_merge_queue` about a second before `merged`, so a
@@ -1006,10 +1018,14 @@ lists; `--model` and `--effort` override them.
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
+quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
 ```
 
-The first round runs the reviewer's own review, `codex exec review --base` or
-Claude Code's `/code-review <effort> <base>...HEAD`, then resumes that session for
+Every turn reviews only the branch's own change, from the merge base of `HEAD`
+with the base's tip, so a branch behind its base draws no findings on code the
+base gained since, which a diff against its tip shows as reverted.
+The first round runs the reviewer's own review, `codex exec review --base
+<merge-base>` or Claude Code's `/code-review <effort> <merge-base>...HEAD`, then resumes that session for
 one turn that applies the base's `REVIEW.md`, if any, and reports the findings
 in one JSON schema. Later rounds resume the same session with the new head and
 `--responses`, the author's free-text fixes and refutations, which a round that
@@ -1020,7 +1036,9 @@ new session instead, which still weighs the responses. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. The session is kept per branch in the clone's
 common Git directory, so any worktree of the clone resumes it; `--new` starts
-over.
+over. `--branch` names the branch instead of the checked-out one, which a
+detached `HEAD` requires, such as a checkout of a branch another worktree
+holds, so its rounds continue that branch's session.
 
 The reviewer is read-only: Codex in its `read-only` sandbox, ignoring
 execpolicy rules, and Claude Code with only read tools and the Bash commands it

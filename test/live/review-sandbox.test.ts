@@ -369,7 +369,7 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 		let run: SpawnSyncReturns<string>;
 		try {
 			const context = {
-				base: "origin/main",
+				mergeBase: "origin/main",
 				instructions: "Do what the user asks.",
 				model: MODELS.claude.model,
 				effort: EFFORT,

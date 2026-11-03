@@ -26,6 +26,5 @@ earlier "Later work" milestone became m2.
 - [Quest log theme](/quest/m1/theme/README.md) - an MMO-style identity, copy, board, landing page, and CLI output for the demo and launch
 - [Launch material](/quest/m1/launch.md) - README, quickstart, demo, comparison, and launch-post drafts
 - [Workers in a 5-minute cache](/quest/m1/worker-cache.md) - re-plan #276's worker/coordinator split and gate tickets, after confirming the cache premise
-- [quest wait after a merge](/quest/m1/wait-merge-heads.md) - `quest wait` resolves a head that reached the branch by a merge into it
 - [Retire Decisions needed](/quest/m1/decisions-needed.md) - only `## Waiting` hands a draft back, once no open draft uses the old heading
 - [Review harness check](/quest/m1/review-harness.md) - recurring each milestone: newest pinned review models, and the live sandbox test passes
