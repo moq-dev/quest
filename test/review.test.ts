@@ -19,9 +19,10 @@ const FINDING = { file: "src/lib.ts", line: 2, severity: "high", title: "Off by 
 /**
  * Fake reviewer CLIs. Each logs its argv, stdin, and the variables it was
  * given, then answers as the FAKE_* variables say. FAKE_LOGGED_OUT removes the
- * stored login, so only a credential variable the real CLI reads
- * authenticates; like the real ones, `claude auth status` counts such a
- * variable and `codex login status` does not. FAKE_REJECTED has the API
+ * stored login, so only a credential variable the real CLI reads, or Claude
+ * Code's switch to a cloud provider, authenticates; like the real ones,
+ * `claude auth status` counts such a variable, and `codex login status` counts
+ * CODEX_ACCESS_TOKEN but not CODEX_API_KEY. FAKE_REJECTED has the API
  * reject the login in each turn with the real CLI's error, in the style it
  * names. FAKE_REPLY replaces the findings reply.
  */
@@ -33,7 +34,8 @@ const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST|PATH$)/.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 const credential = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"].some((k) => process.env[k]);
-const loggedIn = !process.env.FAKE_LOGGED_OUT || credential;
+const provider = Object.entries(process.env).some(([k, v]) => k.startsWith("CLAUDE_CODE_USE_") && v === "1");
+const loggedIn = !process.env.FAKE_LOGGED_OUT || credential || provider;
 if (argv[0] === "auth") process.exit(loggedIn ? 0 : 1);
 const at = (flag) => argv[argv.indexOf(flag) + 1];
 const result = (fields) => console.log(JSON.stringify({ type: "result", is_error: false, ...fields }));
@@ -77,9 +79,9 @@ const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST|PATH$)/.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
-if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT ? 1 : 0);
+if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT && !process.env.CODEX_ACCESS_TOKEN ? 1 : 0);
 const event = (value) => console.log(JSON.stringify(value));
-const loggedIn = !process.env.FAKE_LOGGED_OUT || process.env.CODEX_API_KEY;
+const loggedIn = !process.env.FAKE_LOGGED_OUT || process.env.CODEX_API_KEY || process.env.CODEX_ACCESS_TOKEN;
 const rejected = process.env.FAKE_REJECTED ?? (loggedIn ? undefined : "turn");
 if (rejected === "turn") {
 	const message = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
@@ -124,16 +126,19 @@ interface Setup {
 	calls(): { argv: string[]; stdin: string; env: Record<string, string>; cwd: string }[];
 }
 
-/** Credentials and reroutes the running session may hold, cleared so each test sets its own. */
+/** Credentials and routes the running session may hold, cleared so each test sets its own. */
 const HOST_CREDENTIALS = [
 	"ANTHROPIC_API_KEY",
 	"ANTHROPIC_AUTH_TOKEN",
 	"ANTHROPIC_BASE_URL",
+	"ANTHROPIC_CUSTOM_HEADERS",
 	"CLAUDE_CODE_OAUTH_TOKEN",
-	"CLAUDE_CODE_USE_BEDROCK",
-	"CLAUDE_CODE_USE_VERTEX",
-	"CLAUDE_CODE_USE_FOUNDRY",
+	...["BEDROCK", "VERTEX", "FOUNDRY", "MANTLE", "ANTHROPIC_AWS", "ANTHROPIC_GOOGLE_CLOUD"].map(
+		(provider) => `CLAUDE_CODE_USE_${provider}`,
+	),
 	"CODEX_API_KEY",
+	"CODEX_ACCESS_TOKEN",
+	"CODEX_CA_CERTIFICATE",
 ];
 
 /**
@@ -346,44 +351,150 @@ fakes("an environment credential the API rejects is named in the error", async (
 	expect(result.stderr).toContain("codex rejected CODEX_API_KEY; replace it, or run `codex login`");
 });
 
-fakes("a credential meant for another endpoint stays stripped, and the error names what reroutes it", async () => {
+fakes("a stored login the API rejects names the credential quest review strips beside it", async () => {
+	const s = setup("CODEX_THREAD_ID");
+	vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-key");
+	vi.stubEnv("FAKE_REJECTED", "status");
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain(
+		"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`; " +
+			"quest review strips ANTHROPIC_API_KEY while a stored login exists",
+	);
+});
+
+fakes.each([
+	["without a stored login", "1"],
+	["over a stored login", undefined],
+])("Claude keeps a gateway's URL, token, and headers %s, in every round", async (_, loggedOut) => {
+	const s = setup("CODEX_THREAD_ID");
+	vi.stubEnv("FAKE_LOGGED_OUT", loggedOut);
+	vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "gateway-token");
+	vi.stubEnv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8317");
+	vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "X-Gateway-Tenant: review");
+	// Neither routes anything, nor changes the reviewer's plugins, model, or account.
+	vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", "");
+	vi.stubEnv("CLAUDE_CODE_PLUGIN_DIRS", "/untrusted/plugins");
+	vi.stubEnv("CLAUDE_CODE_EFFORT_LEVEL", "max");
+	vi.stubEnv("ANTHROPIC_MODEL", "parent-model");
+	vi.stubEnv("CODEX_API_KEY", "other-provider-key");
+	vi.stubEnv("OPENAI_API_KEY", "other-provider-key");
+	vi.stubEnv("QUEST_API_KEYS", "other-agent-key");
+	vi.stubEnv("OP_SERVICE_ACCOUNT_TOKEN", "secret-manager-token");
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ findings: [] }));
+	const first = await quest("--root", s.repo, "review", "--json");
+	expect(first.code, first.stderr).toBe(0);
+	const resumed = await quest("--root", s.repo, "review", "--json");
+	expect(resumed.code, resumed.stderr).toBe(0);
+	expect(JSON.parse(resumed.stdout)).toMatchObject({ round: 2, session: JSON.parse(first.stdout).session });
+	const calls = s.calls();
+	expect(calls.map((c) => c.argv[0])).toEqual(["auth", "-p", "-p", "auth", "-p"]);
+	for (const call of calls) {
+		expect(call.env).toMatchObject({
+			ANTHROPIC_AUTH_TOKEN: "gateway-token",
+			ANTHROPIC_BASE_URL: "http://127.0.0.1:8317",
+			ANTHROPIC_CUSTOM_HEADERS: "X-Gateway-Tenant: review",
+			CLAUDE_CODE_USE_BEDROCK: "",
+		});
+		for (const name of [
+			"CODEX_THREAD_ID",
+			"CODEX_API_KEY",
+			"CLAUDE_CODE_PLUGIN_DIRS",
+			"CLAUDE_CODE_EFFORT_LEVEL",
+			"ANTHROPIC_MODEL",
+		]) {
+			expect(call.env[name], name).toBeUndefined();
+		}
+	}
+});
+
+fakes("a gateway with no credential and no stored login names the gateway", async () => {
 	const s = setup("CODEX_THREAD_ID");
 	vi.stubEnv("FAKE_LOGGED_OUT", "1");
-	vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "gateway-token");
 	vi.stubEnv("ANTHROPIC_BASE_URL", "https://gateway.example");
 	const result = await quest("--root", s.repo, "review");
 	expect(result.code).toBe(2);
 	expect(result.stderr).toContain(
-		"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset), and quest review strips ANTHROPIC_BASE_URL, which would reroute it; run `claude auth login`",
+		"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset) through ANTHROPIC_BASE_URL; run `claude auth login`",
 	);
 	expect(s.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
 });
 
-fakes.each(["0", "false", ""])("a provider switch set to %j reroutes nothing", async (value) => {
+fakes("a gateway credential the API rejects is named with the gateway", async () => {
 	const s = setup("CODEX_THREAD_ID");
-	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "gateway-token");
+	vi.stubEnv("ANTHROPIC_BASE_URL", "https://gateway.example");
+	vi.stubEnv("FAKE_REJECTED", "status");
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain(
+		"claude rejected ANTHROPIC_AUTH_TOKEN through ANTHROPIC_BASE_URL; replace it, or run `claude auth login`",
+	);
+});
+
+fakes.each(["0", "false", ""])("a provider switch set to %j routes nothing", async (value) => {
+	const s = setup("CODEX_THREAD_ID");
 	vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-key");
 	vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", value);
 	vi.stubEnv("CLAUDE_CODE_USE_VERTEX", value);
 	const result = await quest("--root", s.repo, "review");
 	expect(result.code, result.stderr).toBe(0);
-	const turns = s.calls().filter((c) => c.argv[0] !== "auth");
-	expect(turns.length).toBeGreaterThan(0);
-	for (const call of turns) {
-		expect(call.env.ANTHROPIC_API_KEY).toBe("anthropic-key");
-		expect(call.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+	expect(s.calls().length).toBeGreaterThan(1);
+	for (const call of s.calls()) {
+		// The stored login still wins over the key, and the switch reaches the CLI as set.
+		expect(call.env.ANTHROPIC_API_KEY).toBeUndefined();
+		expect(call.env.CLAUDE_CODE_USE_BEDROCK).toBe(value);
 	}
 });
 
-fakes("an enabled provider switch withholds the credential, and the error names it", async () => {
+fakes.each([
+	["BEDROCK", "ANTHROPIC_BEDROCK_BASE_URL"],
+	["VERTEX", "ANTHROPIC_VERTEX_BASE_URL"],
+	["FOUNDRY", "ANTHROPIC_FOUNDRY_BASE_URL"],
+	["MANTLE", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL"],
+	["ANTHROPIC_AWS", "ANTHROPIC_AWS_BASE_URL"],
+	["ANTHROPIC_GOOGLE_CLOUD", "ANTHROPIC_GOOGLE_CLOUD_BASE_URL"],
+])("Claude keeps the %s provider switch with its endpoint and skip-auth setting", async (provider, endpoint) => {
 	const s = setup("CODEX_THREAD_ID");
 	vi.stubEnv("FAKE_LOGGED_OUT", "1");
-	vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-key");
-	vi.stubEnv("CLAUDE_CODE_USE_VERTEX", "True");
+	vi.stubEnv(`CLAUDE_CODE_USE_${provider}`, "1");
+	vi.stubEnv(`CLAUDE_CODE_SKIP_${provider}_AUTH`, "1");
+	vi.stubEnv(endpoint, "https://provider.example");
+	vi.stubEnv("ANTHROPIC_MODEL", "parent-model");
 	const result = await quest("--root", s.repo, "review");
-	expect(result.code).toBe(2);
-	expect(result.stderr).toContain("quest review strips CLAUDE_CODE_USE_VERTEX, which would reroute it");
-	expect(s.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
+	expect(result.code, result.stderr).toBe(0);
+	expect(s.calls().length).toBeGreaterThan(1);
+	for (const call of s.calls()) {
+		expect(call.env[`CLAUDE_CODE_USE_${provider}`]).toBe("1");
+		expect(call.env[`CLAUDE_CODE_SKIP_${provider}_AUTH`]).toBe("1");
+		expect(call.env[endpoint]).toBe("https://provider.example");
+		expect(call.env.ANTHROPIC_MODEL).toBeUndefined();
+	}
+});
+
+fakes("Codex keeps CODEX_CA_CERTIFICATE always, and CODEX_ACCESS_TOKEN without a stored login", async () => {
+	const s = setup();
+	vi.stubEnv("CODEX_CA_CERTIFICATE", "/etc/gateway-ca.pem");
+	vi.stubEnv("CODEX_ACCESS_TOKEN", "agent-identity");
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	for (const call of s.calls()) {
+		expect(call.env.CODEX_CA_CERTIFICATE).toBe("/etc/gateway-ca.pem");
+		expect(call.env.CODEX_ACCESS_TOKEN).toBeUndefined();
+	}
+
+	const t = setup();
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("CODEX_CA_CERTIFICATE", "/etc/gateway-ca.pem");
+	vi.stubEnv("CODEX_ACCESS_TOKEN", "agent-identity");
+	vi.stubEnv("ANTHROPIC_BASE_URL", "https://gateway.example");
+	const result = await quest("--root", t.repo, "review");
+	expect(result.code, result.stderr).toBe(0);
+	expect(t.calls().length).toBeGreaterThan(1);
+	for (const call of t.calls().slice(1)) {
+		expect(call.env.CODEX_CA_CERTIFICATE).toBe("/etc/gateway-ca.pem");
+		expect(call.env.CODEX_ACCESS_TOKEN).toBe("agent-identity");
+		expect(call.env.ANTHROPIC_BASE_URL).toBeUndefined();
+	}
 });
 
 fakes("the reviewer CLI is found on PATH, never in the checkout it reviews", async () => {

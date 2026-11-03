@@ -55,8 +55,3 @@ Files: the guide's Workspace and Reviews sections in `assets/AGENTS.md`,
   so `quest waiting` and `/quest-unblock` list it and `/quest-afk`
   re-dispatches `/quest-review` after the reset. Spawn reports the outage
   once, not per agent.
-
-## Related
-
-- [Review through a gateway](/quest/m0/review-gateway.md) - keeps the
-  reviewer's gateway credentials, the infrastructure side of quota outages
