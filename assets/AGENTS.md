@@ -22,6 +22,7 @@ Find/create/update any references by searching for the path.
 Finished quests are deleted; git history keeps them.
 Merge conflicts are expected.
 A local merge resolves conflicting edits to link lists itself when `quest` is on PATH; GitHub's cannot, so merge the base branch locally and push.
+After merging, `quest check --fix` drops list links to quests the base finished.
 Resolve the rest, such as prose, by aligning quests.
 
 ## Format

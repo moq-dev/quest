@@ -10,8 +10,9 @@
     flake-utils.url = "github:numtide/flake-utils";
     # A reviewed quest for the dev shell's merge driver, so local merges resolve
     # link lists without running the checkout's own, possibly unreviewed, code.
-    # Only its source is pinned, so the lock never chains older pins. Bump with
-    # `nix flake update quest-pinned`.
+    # Only its source is pinned, so the lock never chains older pins. Dependabot's
+    # weekly nix update bumps it in its own PR, without the cooldown; bump it by
+    # hand with `nix flake update quest-pinned`.
     quest-pinned = {
       url = "github:moq-dev/quest";
       flake = false;

@@ -50,7 +50,7 @@ import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
-import { type Report, moveQuest, removeQuest } from "./move";
+import { type Report, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { MODELS, ReviewInputError, processDependencies as reviewDependencies, review, roundLines } from "./review";
 import { heal, init, uninstall } from "./setup";
@@ -145,14 +145,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"is a quest's path without .md (an epic's is quest/<path>/README) and that quest exists at the merge " +
 				"base with <ref>, the working tree must delete or edit it; a PR that finishes the quest deletes it, and " +
 				"one that leaves work rewrites it to what remains. Any other branch adds no finding. Fetch <ref> " +
-				"first: a stale base can predate the quest and skip it.",
+				"first: a stale base can predate the quest and skip it.\n\n" +
+				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
+				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
+				"does, such as the quests a merged base finished, with any heading left empty. It prints M for each " +
+				"edited document and leaves the edits unstaged. A quest moved rather than deleted, a link that never " +
+				"named a quest, and a link in prose stay for the check to report. Refuses outside a git work tree " +
+				"and while a quest file has unresolved conflicts.",
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
-		.action((options: { base?: string; branch?: string }) => {
+		.option("--fix", "First drop list links to quests the history deleted")
+		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
 			}
+			if (options.fix) for (const line of fixLinks(root())) print(line);
 			const findings = check(load(root()), (path) => exists(root(), path));
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
 			if (findings.length === 0) {
@@ -1126,7 +1134,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reordered list, keeps standard conflict markers, showing the base when merge.conflictStyle is diff3 " +
 				"or zdiff3. Exits 1 when a conflict remains.\n\n" +
 				"quest init registers it for quest/** as the merge.quest driver. Any other command registers the driver " +
-				"in the clone's config when .gitattributes names merge=quest and no config sets it. Without quest on " +
+				"in the clone's config when .gitattributes names merge=quest and no config sets it, or the one set is a " +
+				"driver an older quest registered; a custom driver stays. Without quest on " +
 				"the merge's PATH, the driver falls back to git merge-file, and when conflicts remain it prints to stderr " +
 				"that the file's link lists were not auto-resolved. GitHub's merges ignore merge drivers.",
 		)

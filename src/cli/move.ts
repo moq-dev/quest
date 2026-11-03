@@ -1,5 +1,6 @@
 // `quest mv` and `quest rm`: git moves or deletes the files and stages the
 // change, and the core edits the links in the documents that remain.
+// `quest check --fix` makes `rm`'s link edit for quests the history deleted.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, relative, resolve, sep } from "node:path";
@@ -110,6 +111,47 @@ export function removeQuest(root: string, arg: string, recursive: boolean): Repo
 }
 
 /**
+ * Drop every list entry that links to a quest deleted in the history of `HEAD`, and of
+ * `MERGE_HEAD` during a merge, that the working tree lacks, as `quest rm` drops the links to a
+ * quest it deletes. Merging the base brings in the quests it finished as deletions, which leaves
+ * this branch's links to them dangling. A quest the history moved is a rename, not a deletion, and
+ * a link to a path that never held a quest is a mistake; both stay for `quest check` to report, as
+ * does a link in prose. Writes the edited documents without staging them, and refuses while a
+ * quest file is unmerged, since its conflict markers are not yet a document. Returns `M path` for
+ * each.
+ */
+export function fixLinks(root: string): string[] {
+	workTree(root, "quest check --fix reads the deleted quests from git history");
+	const unmerged = git(root, "ls-files", "--unmerged", "-z", "--", "quest")
+		.split("\0")
+		.filter((line) => line !== "")
+		.map((line) => line.slice(line.indexOf("\t") + 1));
+	if (unmerged.length > 0) {
+		throw new Error(`resolve the merge conflicts in ${[...new Set(unmerged)].join(", ")} before quest check --fix`);
+	}
+	const heads = ["HEAD", "MERGE_HEAD"].filter((ref) => verified(root, ref));
+	if (heads.length === 0) return [];
+	const deleted = new Set(
+		git(root, "log", "--diff-filter=D", "--find-renames", "--name-only", "--format=", "-z", ...heads, "--", "quest")
+			.split("\0")
+			.filter(isQuest),
+	);
+	const edited = remove(sources(root), (path) => deleted.has(path) && !exists(root, path));
+	for (const [path, text] of edited) writeFileSync(join(root, path), text);
+	return modified(edited);
+}
+
+/** Whether `ref` names a commit, which an unborn `HEAD` or a missing `MERGE_HEAD` does not. */
+function verified(root: string, ref: string): boolean {
+	try {
+		git(root, "rev-parse", "--quiet", "--verify", `${ref}^{commit}`);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * A quest path as the tree writes it (`/quest/m0/a.md`), as the shell
  * completes it (`quest/m0/a.md`), or as a filesystem path to it.
  */
@@ -123,12 +165,12 @@ function treePath(root: string, arg: string): string {
 	return path;
 }
 
-/** Fail outside a git work tree: these commands stage their change. */
-function workTree(root: string) {
+/** Fail outside a git work tree, saying `why` the command needs one. */
+function workTree(root: string, why = "quest mv and rm stage their change with git") {
 	try {
 		git(root, "rev-parse", "--is-inside-work-tree");
 	} catch {
-		throw new Error(`${root} is not in a git work tree; quest mv and rm stage their change with git`);
+		throw new Error(`${root} is not in a git work tree; ${why}`);
 	}
 }
 
