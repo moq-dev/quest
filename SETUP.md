@@ -53,7 +53,8 @@ concurrent edits to quest link lists. It adds hook entries running
 settings, so Quest creates and reclaims Claude Code's worktrees; Claude Code
 then needs `quest` on its `PATH` to create any worktree in the repository. It
 prints each path it changed and is safe to rerun. Rerun after an upgrade, it
-also removes the unmodified stubs of skills the new version no longer ships.
+also rewrites the unmodified stubs whose description or setup link changed and
+removes the unmodified stubs of skills the new version no longer ships.
 
 If init refuses, it names the conflicting path. Report it and ask the user how
 to proceed; never delete or rename their files to get past it.

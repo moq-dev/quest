@@ -56,14 +56,9 @@ The prompt already lets build tools fetch from package registries (from
 regeneration needs. `flake.lock` stays a protected path in `validateFix`, and
 this quest does not open it: a fixer-written `flake.lock` comes back as a
 ready commit through
-[Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md),
+[moq-dev/quest#409](https://github.com/moq-dev/quest/pull/409),
 and that edit follows the same rule, rebuilt from the base's copy with
-`nix flake lock`. Both quests edit `assets/land-fix.md`, so whichever lands
-second merges the other's wording.
+`nix flake lock`. That PR also edited `assets/land-fix.md`: merge its wording.
 
 Cover the rule in `test/land.test.ts`, which already asserts the prompt's
 contents.
-
-## Related
-
-- [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - returns a fixer-written `flake.lock` as a ready commit, built by this quest's rule

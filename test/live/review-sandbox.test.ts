@@ -7,9 +7,10 @@
 // change in any release (openai/codex#49333). Each CLI first runs once without
 // quest's flags in the same checkout, so a plant that no longer fires fails as
 // a broken control instead of passing as a clean review.
-import { spawn, spawnSync } from "node:child_process";
+import { type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
 import {
 	appendFileSync,
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -26,7 +27,7 @@ import { createInterface } from "node:readline";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { type HarnessName, strippedEnvironment } from "../../src/cli/agent";
-import { MODELS, review } from "../../src/cli/review";
+import { MODELS, ReviewInputError, claudeFlags, review, reviewerEnvironment } from "../../src/cli/review";
 
 /** The cheapest effort both CLIs accept; the isolation under test does not depend on it. */
 const EFFORT = "low";
@@ -63,7 +64,8 @@ beforeAll(() => {
 	git(clone, "push", "-q", "origin", "main");
 
 	git(clone, "checkout", "-qb", "feature");
-	for (const [path, text] of Object.entries(plants(markers))) write(clone, path, text);
+	for (const [path, text] of Object.entries(plants(clone, markers))) write(clone, path, text);
+	chmodSync(join(clone, SHELL_PREFIX), 0o755);
 	write(
 		clone,
 		"src/lib.ts",
@@ -78,13 +80,21 @@ afterAll(() => {
 	if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
+/** The planted script Claude Code's planted settings run every Bash command through. */
+const SHELL_PREFIX = "bin/prefix.sh";
+
+/** The command Claude Code's planted permission rule allows, touching the `claude-permissions` marker. */
+const allowed = (markers: string) => `touch ${join(markers, "claude-permissions")}`;
+
 /**
  * The configuration a head plants, each item touching a marker named for it
  * when it runs: Codex's project MCP servers and hooks, and Claude Code's
- * project MCP servers and hooks, its settings enabling every project MCP
- * server.
+ * project MCP servers, and in both its shared and local settings, hooks. The
+ * shared settings also enable every project MCP server, allow a command in
+ * the markers' directory, route every Bash command through a planted script
+ * by an `env` variable, and set an API key helper and a status line.
  */
-function plants(markers: string): Record<string, string> {
+function plants(clone: string, markers: string): Record<string, string> {
 	const touch = (name: string) => `touch ${JSON.stringify(join(markers, name))}`;
 	const hooks = (prefix: string) =>
 		JSON.stringify({
@@ -108,14 +118,35 @@ function plants(markers: string): Record<string, string> {
 		".claude/settings.json": JSON.stringify({
 			enableAllProjectMcpServers: true,
 			...JSON.parse(hooks("claude-settings")),
+			permissions: { allow: [`Bash(${allowed(markers)})`], additionalDirectories: [markers] },
+			env: { CLAUDE_CODE_SHELL_PREFIX: join(clone, SHELL_PREFIX) },
+			statusLine: { type: "command", command: touch("claude-status-line") },
+			apiKeyHelper: touch("claude-api-key-helper"),
 		}),
+		".claude/settings.local.json": hooks("claude-local"),
+		// Claude Code passes the command as one argument or several, so both run.
+		[SHELL_PREFIX]: `#!/bin/sh\n${touch("claude-shell-prefix")}\nexec /bin/sh -c "$*"\n`,
 	};
 }
 
-/** What each harness's own plants record when its CLI loads the head's configuration. */
+/**
+ * What each harness's own plants record when its CLI loads the head's
+ * configuration. Claude Code draws a status line only in an interactive
+ * session, so no control shows it firing; it stays planted for a release that
+ * runs it in print mode too.
+ */
 const CONTROL: Record<HarnessName, string[]> = {
 	codex: ["codex-config-mcp", "codex-hooks-SessionStart", "codex-hooks-UserPromptSubmit"],
-	claude: ["claude-settings-SessionStart", "claude-settings-UserPromptSubmit", "mcp-json"],
+	claude: [
+		"claude-api-key-helper",
+		"claude-local-SessionStart",
+		"claude-local-UserPromptSubmit",
+		"claude-permissions",
+		"claude-settings-SessionStart",
+		"claude-settings-UserPromptSubmit",
+		"claude-shell-prefix",
+		"mcp-json",
+	],
 };
 
 /**
@@ -158,7 +189,7 @@ async function home(harness: HarnessName, trust = true): Promise<Home> {
 				[...readFileSync(config, "utf8").matchAll(/^\[projects\.("(?:[^"\\]|\\.)*")\]/gm)].map((m) =>
 					JSON.parse(m[1]),
 				),
-			release: borrow(join(source, "auth.json"), join(path, "auth.json"), "CODEX_HOME"),
+			release: borrow(join(source, "auth.json"), join(path, "auth.json")),
 		};
 	}
 	const source = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
@@ -177,7 +208,7 @@ async function home(harness: HarnessName, trust = true): Promise<Home> {
 				.filter(([, project]) => project.hasTrustDialogAccepted === true)
 				.map(([dir]) => dir);
 		},
-		release: borrow(join(source, ".credentials.json"), join(path, ".credentials.json"), "CLAUDE_CONFIG_DIR"),
+		release: borrow(join(source, ".credentials.json"), join(path, ".credentials.json")),
 	};
 }
 
@@ -215,16 +246,16 @@ function codexHooks(codexHome: string, cwd: string): Promise<{ hooks: CodexHook[
 }
 
 /**
- * Copy the login file at `source` to `copy`, returning what writes a refreshed
- * login back. A refresh may rotate the refresh token, which would sign the
+ * Copy the login file at `source`, if there is one, to `copy`, returning what
+ * writes a refreshed login back. A refresh may rotate the refresh token, which would sign the
  * user's own home out; the write-back is skipped if that home has itself
  * changed since. It replaces the file by rename, so an interrupted write
  * never leaves the user's login truncated.
  */
-function borrow(source: string, copy: string, variable: string): () => void {
-	if (!existsSync(source)) {
-		throw new Error(`no login file at ${source}; log in, or set ${variable} to a config home that holds one`);
-	}
+function borrow(source: string, copy: string): () => void {
+	// A login kept elsewhere, such as the macOS keychain, has no file to copy;
+	// the CLI then needs the credentials it reads from the environment.
+	if (!existsSync(source)) return () => {};
 	const original = readFileSync(source);
 	writeFileSync(copy, original, { mode: 0o600 });
 	return () => {
@@ -243,9 +274,28 @@ function borrow(source: string, copy: string, variable: string): () => void {
 	};
 }
 
-/** The environment `quest review` gives a reviewer, pointed at `home`. */
+/** The user's environment pointed at `home`, which `quest review` strips as it does the user's own. */
 function environment(home: Home): NodeJS.ProcessEnv {
-	return { ...strippedEnvironment(process.env), ...home.env };
+	return { ...process.env, ...home.env };
+}
+
+/** What a credential variable names when there is no login to copy. */
+const CREDENTIALS: Record<HarnessName, string> = {
+	codex: "CODEX_API_KEY",
+	claude: "CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY",
+};
+
+/** The environment `quest review` runs the reviewer in, with the copied login or else the user's credentials. */
+async function reviewerIn(home: Home): Promise<NodeJS.ProcessEnv> {
+	try {
+		return await reviewerEnvironment(home.harness, fixture.clone, environment(home));
+	} catch (error) {
+		if (!(error instanceof ReviewInputError)) throw error;
+		throw new Error(
+			`${error.message}. The test copies the login file from the user's config home, or else passes ` +
+				`${CREDENTIALS[home.harness]}; a login in the macOS keychain has no file, so export one of those`,
+		);
+	}
 }
 
 function recorded(): string[] {
@@ -258,19 +308,26 @@ function clearMarkers() {
 }
 
 /**
- * One plain turn with the CLI's defaults, which load the user's config and the
- * checkout's. It blocks, so it carries its own bound for a hung CLI.
+ * One turn with the CLI's defaults, which load the checkout's config, in the
+ * environment the review would use. Claude Code is asked to run the command
+ * its planted rule allows, which runs it through the planted shell prefix. It
+ * blocks, so it carries its own bound for a hung CLI.
  */
-function control(home: Home) {
+async function control(home: Home) {
 	const { model } = MODELS[home.harness];
+	const env = await reviewerIn(home);
 	const argv =
 		home.harness === "codex"
 			? ["exec", "--json", "-m", model, "-c", `model_reasoning_effort="${EFFORT}"`, "-"]
 			: ["-p", "--output-format", "json", "--model", model, "--effort", EFFORT];
+	const input =
+		home.harness === "codex"
+			? "Reply with the single word OK."
+			: `Run \`${allowed(fixture.markers)}\` with the Bash tool, then reply with the single word OK.`;
 	return spawnSync(home.harness, argv, {
 		cwd: fixture.clone,
-		env: environment(home),
-		input: "Reply with the single word OK.",
+		env,
+		input,
 		encoding: "utf8",
 		timeout: 10 * 60_000,
 	});
@@ -282,9 +339,9 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 	test("loads the planted configuration without quest's flags", async () => {
 		clearMarkers();
 		const dir = await home(harness);
-		let run: ReturnType<typeof control>;
+		let run: Awaited<ReturnType<typeof control>>;
 		try {
-			run = control(dir);
+			run = await control(dir);
 		} finally {
 			dir.release();
 		}
@@ -301,6 +358,43 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 			expect(recorded(), "planted configuration ran during the review").toEqual([]);
 			expect(dir.trusted(), "the review trusted a new directory").toEqual(trusted);
 		});
+	});
+
+	// A review runs only the Bash commands its reviewer picks, so this turn asks
+	// for the one the planted rule allows, and a read-only one the planted
+	// shell prefix would wrap.
+	test.runIf(harness === "claude")("quest's reviewer flags deny what the planted rule allows", async () => {
+		clearMarkers();
+		const dir = await home(harness);
+		let run: SpawnSyncReturns<string>;
+		try {
+			const context = {
+				base: "origin/main",
+				instructions: "Do what the user asks.",
+				model: MODELS.claude.model,
+				effort: EFFORT,
+				schemaFile: "",
+			};
+			const [program, ...args] = claudeFlags(context);
+			run = spawnSync(program, args, {
+				cwd: fixture.clone,
+				env: await reviewerIn(dir),
+				input:
+					"Run `git status` with the Bash tool, then run " +
+					`\`${allowed(fixture.markers)}\` with the Bash tool, then reply with the single word OK.`,
+				encoding: "utf8",
+				timeout: 10 * 60_000,
+			});
+		} finally {
+			dir.release();
+		}
+		const output = `exit ${run.status}\nstdout:\n${tail(run.stdout)}\nstderr:\n${tail(run.stderr)}`;
+		expect(recorded(), `planted configuration ran\n${output}`).toEqual([]);
+		const result = JSON.parse(run.stdout) as { permission_denials?: { tool_input?: { command?: string } }[] };
+		const denied = (result.permission_denials ?? []).map((denial) => denial.tool_input?.command);
+		expect(denied, `the reviewer never tried the allowed command, so its denial is unchecked\n${output}`).toContain(
+			allowed(fixture.markers),
+		);
 	});
 
 	// A home that already trusts the clone would not show the review trusting it.
