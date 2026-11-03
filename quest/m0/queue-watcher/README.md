@@ -134,6 +134,7 @@ Shared shape, for the children to follow:
 - [Flaky failures](/quest/m0/queue-watcher/flaky.md) - a flaky failure is re-enqueued unchanged, and a test seen flaking twice is disabled in a separate PR with a follow-up quest
 - [Watcher on the host](/quest/m0/queue-watcher/host.md) - kixelated/nixos runs the watcher for moq-dev/moq beside its fixer container
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - condition: moq's queue is proven; then moq-dev/quest switches and the others plan theirs
+- [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 
 ## Related
