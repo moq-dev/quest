@@ -1,10 +1,12 @@
 // A signed-in maintainer of an enrolled project with complete observations,
-// and a mocked GitHub that answers the requests authority checks make.
+// and the fake GitHub answering from a world that matches them.
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { createHash } from "node:crypto";
 import { vi } from "vitest";
+import { type Repo, type World, commitOf, fakeGitHub } from "../dev/github";
 import { app } from "../src/index";
-import { identity, oauth } from "./login-fixtures";
+import { type Identity, identity, oauth } from "./login-fixtures";
 import { owner } from "./owners";
 
 const db = env.DB;
@@ -57,42 +59,92 @@ export const issue = {
 };
 
 /**
- * Sign in a GitHub user, enroll project 10 for them with an open issue #1 and
- * pull request #2, and mock GitHub. `github` changes what the mock reports, and
- * `mock` reinstalls it after another sign-in replaces it. Merges of #2 record
- * their request in `merged`, and land only at `head`; `refuse` makes GitHub
- * refuse them with that message. Other GitHub IDs in `maintainers` hold the
- * maintain role too, and `limited` rate-limits every role check. A `role` of
- * null removes the signed-in user from the repository, so GitHub answers 404.
- * `labels` are #2's labels and `events` its label and landing timeline, which
- * label requests change; `landing` says it is queued or auto-merging.
- * `approved` lists the commits of #2 another maintainer approved.
+ * GitHub as the observations `maintainerOf` records saw it: `upstream/project`
+ * on installation 5, whose default branch `trunk` is at `commit` with a flake,
+ * the open issue #1, and the clean pull request #2 from `contributor/fix` at
+ * `head`, which a writer approved there. It carries no labels yet. Each call
+ * builds a new world, so tests share no GitHub state.
  */
-export async function maintainerOf() {
-	const github = {
-		flake: true,
-		pullFlake: true,
-		signature: null as { isValid: boolean; signer: { databaseId: number; login: string } | null } | null,
-		role: "maintain" as string | null,
-		issue: "open",
-		pull: "open",
-		head,
-		methods: ["squash", "merge", "rebase"],
-		refuse: null as string | null,
-		merged: [] as unknown[],
-		maintainers: [] as string[],
-		limited: false,
-		labels: [] as string[],
-		events: [] as { id: string; label: string | null }[],
-		landing: false,
-		approved: [head] as string[],
+export function world(): World {
+	return {
+		app: { id: Number(env.GITHUB_APP_ID), slug: "quest-test" },
+		installation: 5,
+		owner,
+		users: [{ id: 8, login: "reviewer", name: "Reviewer", email: "reviewer@example.test" }],
+		repos: [
+			{
+				id: 10,
+				owner: "upstream",
+				name: "project",
+				defaultBranch: "trunk",
+				maintainers: [],
+				roles: { reviewer: "write" },
+				files: [...documents, { path: "flake.nix", content: "{ outputs = _: { }; }\n" }],
+				issues: [{ number: 1, title: "Idea", author: "reporter" }],
+				pulls: [
+					{
+						number: 2,
+						title: "Fix",
+						author: "contributor",
+						branch: "contributor/fix",
+						checks: "SUCCESS",
+						review: null,
+						reviews: [{ state: "APPROVED", author: "reviewer", commit: head }],
+						merge: "CLEAN",
+						labels: [],
+						timeline: [],
+					},
+				],
+				branches: { trunk: commit, "contributor/fix": head },
+				commits: {},
+				trees: {},
+			},
+		],
 	};
-	const who = identity("github");
-	const cookie = (await oauth(who)).session!;
-	const user = (await db
+}
+
+/**
+ * Give `sha`'s commit a tree that changes the default branch's first commit's
+ * files by `entries`, as a push would; a null `sha` deletes the file at `path`.
+ */
+export function rewrite(repo: Repo, sha: string, entries: { path: string; content?: string; sha?: null }[]) {
+	const tree = createHash("sha1")
+		.update(`tree ${sha} ${JSON.stringify(entries)}`)
+		.digest("hex");
+	repo.trees[tree] = {
+		base: repo.commits[commitOf(repo)]!.tree,
+		entries: entries.map((entry) => ({ ...entry, mode: "100644", type: "blob" })),
+	};
+	repo.commits[sha]!.tree = tree;
+}
+
+/**
+ * `github`, answering every request matching `when` with GitHub's `status`
+ * error, as an outage or a rate limit does; `intercept` changes one request.
+ */
+export const failing =
+	(github: typeof fetch, when: (url: URL) => boolean, status: number, message = "Server Error"): typeof fetch =>
+	async (input, init) =>
+		when(new URL(String(input))) ? Response.json({ message }, { status }) : github(input, init);
+/** GitHub's GraphQL API, which every read of a project's activity uses. */
+export const graphql = (url: URL) => url.pathname === "/graphql";
+
+const userOf = async (who: Identity) =>
+	(await db
 		.prepare("SELECT userId FROM account WHERE providerId='github' AND accountId=?")
 		.bind(who.id)
 		.first<{ userId: string }>())!.userId;
+
+/**
+ * Sign in a GitHub user, enroll project 10 for them with complete observations
+ * of `world()`, which their `login` maintains, and answer GitHub with the fake
+ * over it. Tests change GitHub by editing `repo`. `other` signs in another
+ * GitHub user with a role on the project, `read` by default.
+ */
+export async function maintainerOf() {
+	const who = identity("github");
+	const cookie = (await oauth(who)).session!;
+	const user = await userOf(who);
 	await project(10, user);
 	const snapshot = { commit, date: "2026-10-16", documents, completed: [] };
 	const scan = {
@@ -111,165 +163,28 @@ export async function maintainerOf() {
 			)
 			.bind(JSON.stringify(pull), JSON.stringify(issue)),
 	]);
-	const mock = async (input: RequestInfo | URL, init?: RequestInit) => {
-		const url = new URL(String(input));
-		const path = url.pathname;
-		if (path.endsWith("/installation"))
-			return Response.json({
-				id: 5,
-				app_id: 123,
-				suspended_at: null,
-				permissions: {
-					metadata: "read",
-					contents: "write",
-					issues: "write",
-					pull_requests: "write",
-					checks: "read",
-				},
-			});
-		if (path === "/graphql" && String(init?.body).includes("signature {"))
-			return Response.json({
-				data: {
-					repository: {
-						pullRequest: { state: github.pull.toUpperCase(), headRefOid: github.head },
-						defaultBranchRef: {
-							name: "trunk",
-							target: { oid: commit },
-							compare: {
-								baseTarget: { oid: commit },
-								headTarget: { oid: github.head },
-								commits: {
-									totalCount: 1,
-									nodes: [{ oid: github.head, signature: github.signature }],
-									pageInfo: { hasNextPage: false, endCursor: null },
-								},
-							},
-						},
-					},
-				},
-			});
-
-		if (path === "/graphql" && String(init?.body).includes("headRefOid baseRefName body")) {
-			const reviewer = { __typename: "User", login: "reviewer" };
-			return Response.json({
-				data: {
-					repository: {
-						pullRequest: {
-							state: github.pull.toUpperCase(),
-							headRefOid: github.head,
-							baseRefName: "trunk",
-							body: "",
-							author: { __typename: "User", login: "contributor" },
-							userContentEdits: { nodes: [] },
-							latestOpinionatedReviews: {
-								nodes: github.approved.map((oid) => ({
-									state: "APPROVED",
-									author: reviewer,
-									commit: { oid },
-								})),
-							},
-						},
-					},
-				},
-			});
-		}
-		if (path === "/repos/upstream/project/rules/branches/trunk") return Response.json([]);
-		if (/^\/repos\/upstream\/project\/commits\/[0-9a-f]{40}\/check-runs$/.test(path))
-			return Response.json({ total_count: 0, check_runs: [] });
-		const commitRead = path.match(/^\/repos\/upstream\/project\/git\/commits\/([0-9a-f]{40})$/)?.[1];
-		if (commitRead) return Response.json({ sha: commitRead, tree: { sha: commit }, parents: [{ sha: commit }] });
-		if (path === "/graphql" && String(init?.body).includes("timelineItems")) {
-			return Response.json({
-				data: {
-					repository: {
-						pullRequest: {
-							id: "PR_2",
-							state: github.pull.toUpperCase(),
-							headRefOid: github.head,
-							mergeStateStatus: "BLOCKED",
-							isMergeQueueEnabled: false,
-							autoMergeRequest: github.landing ? {} : null,
-							mergeQueueEntry: null,
-							labels: { nodes: github.labels.map((name) => ({ name })) },
-							timelineItems: {
-								nodes: github.events.map((event) =>
-									event.label === null
-										? { __typename: "AutoMergeEnabledEvent", id: event.id }
-										: { __typename: "LabeledEvent", id: event.id, label: { name: event.label } },
-								),
-							},
-						},
-					},
-				},
-			});
-		}
-		if (path === "/repos/upstream/project/issues/2/labels" && init?.method === "POST") {
-			const [name] = JSON.parse(String(init.body)).labels as string[];
-			if (!github.labels.includes(name!)) github.labels.push(name!);
-			github.events.push({ id: `LE_${github.events.length + 1}`, label: name! });
-			return Response.json([]);
-		}
-		const unlabel = path.match(/^\/repos\/upstream\/project\/issues\/2\/labels\/(.+)$/)?.[1];
-		if (unlabel && init?.method === "DELETE") {
-			const name = decodeURIComponent(unlabel);
-			if (!github.labels.includes(name))
-				return Response.json({ message: "Label does not exist" }, { status: 404 });
-			github.labels = github.labels.filter((label) => label !== name);
-			return Response.json([]);
-		}
-		if (path.endsWith("/access_tokens")) return Response.json({ token: "installation-token" });
-		if (path === "/installation/token") return new Response(null, { status: 204 });
-		if (path === "/repos/upstream/project")
-			return Response.json({
-				id: 10,
-				name: "project",
-				owner: { login: "upstream", id: owner },
-				private: false,
-				visibility: "public",
-				default_branch: "trunk",
-				archived: false,
-				disabled: false,
-				allow_squash_merge: github.methods.includes("squash"),
-				allow_merge_commit: github.methods.includes("merge"),
-				allow_rebase_merge: github.methods.includes("rebase"),
-			});
-		if (path === "/repos/upstream/project/pulls/2/merge" && init?.method === "PUT") {
-			const body = JSON.parse(String(init.body));
-			github.merged.push(body);
-			if (body.sha !== head) return Response.json({ message: "Head branch was modified." }, { status: 409 });
-			if (github.refuse) return Response.json({ message: github.refuse }, { status: 405 });
-			return Response.json({ sha: "e".repeat(40), merged: true, message: "Pull Request successfully merged" });
-		}
-		if (path.startsWith("/user/")) {
-			const id = path.split("/").at(-1)!;
-			return Response.json({ id: Number(id), login: `person${id}` });
-		}
-		// Only the signed-in maintainer and `maintainers` hold the maintain role; anyone else may read.
-		const permission = path.match(/\/collaborators\/person(\d+)\/permission$/);
-		if (permission && github.limited) return Response.json({ message: "API rate limit exceeded" }, { status: 429 });
-		if (permission?.[1] === who.id && github.role === null)
-			return Response.json({ message: "Not Found" }, { status: 404 });
-		if (permission)
-			return Response.json(
-				permission[1] === who.id
-					? { user: { id: Number(who.id) }, permission: "write", role_name: github.role }
-					: github.maintainers.includes(permission[1]!)
-						? { user: { id: Number(permission[1]) }, permission: "write", role_name: "maintain" }
-						: { user: { id: Number(permission[1]) }, permission: "read", role_name: "read" },
-			);
-		// The live issue and pull request that a job binds, which observations can lag.
-		if (path === "/repos/upstream/project/issues/1") return Response.json({ state: github.issue });
-		if (path === "/repos/upstream/project/pulls/2")
-			return Response.json({ state: github.pull, head: { sha: github.head }, base: { ref: "trunk" } });
-		const ref = url.searchParams.get("ref");
-		if (path === "/repos/upstream/project/contents/flake.nix" && (ref === commit || ref === head))
-			return (ref === commit ? github.flake : github.pullFlake)
-				? Response.json({ type: "file" })
-				: new Response(null, { status: 404 });
-		throw new Error(`Unexpected GitHub request ${path}`);
+	const data = world();
+	const repo = data.repos[0]!;
+	const person = (who: Identity) => {
+		const login = `person${who.id}`;
+		data.users.push({ id: Number(who.id), login, name: `Person ${who.id}`, email: who.email });
+		return login;
 	};
-	vi.spyOn(globalThis, "fetch").mockImplementation(mock);
-	return { user, cookie, github, mock };
+	const login = person(who);
+	repo.roles![login] = "maintain";
+	const github = fakeGitHub(data);
+	vi.spyOn(globalThis, "fetch").mockImplementation(github);
+	async function other(role = "read") {
+		// Signing in replaces the fetch mock, so put back the one in place.
+		const respond = vi.mocked(globalThis.fetch).getMockImplementation()!;
+		const who = identity("github");
+		const session = (await oauth(who)).session!;
+		vi.spyOn(globalThis, "fetch").mockImplementation(respond);
+		const login = person(who);
+		repo.roles![login] = role;
+		return { session, login, id: await userOf(who) };
+	}
+	return { user, cookie, login, repo, pr: repo.pulls[0]!, github, other };
 }
 
 /**

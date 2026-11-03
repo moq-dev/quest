@@ -79,6 +79,15 @@ worker-test:
 _worker-test:
     bun run --cwd cloudflare test
 
+# Run each Worker test case in its own process, as the scheduled Isolated job does.
+# Pass `--jobs N` or file filters, for example `just worker-test-isolated inbox`.
+worker-test-isolated *args:
+    {{gate}} _worker-test-isolated {{args}}
+
+_worker-test-isolated *args:
+    bun run --cwd cloudflare build
+    bun cloudflare/scripts/isolated.ts {{args}}
+
 # Serve the Worker on localhost with seeded data and a fake GitHub, for checking UI.
 worker-seeded *args:
     bun run --cwd cloudflare seeded {{args}}

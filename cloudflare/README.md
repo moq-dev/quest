@@ -388,7 +388,8 @@ projects through the Worker's own routes: ready, claimed, and blocked quests,
 issues (one known only from a webhook, one with a long title), pull requests
 with checks and reviews (one clean to merge), and a paused second project. It then adds runners and
 jobs that are queued, running, failed, or waiting on an agent's questions, a
-tool permission, or an account limit.
+tool permission, or an account limit, and raw output behind their cards: one
+long enough to page, a short one, and one that reached the size cap.
 
 `dev/github.ts` fakes GitHub for every outbound request, so nothing leaves
 localhost and no real credential is used. It models what publication needs:
@@ -397,7 +398,9 @@ request creation, so a runner's job publishes end to end. Like
 GitHub, it scopes each installation token to the repositories and permissions
 it was minted for. Notifications are off, since a push
 would reach a real push service. Sign in with GitHub completes as the
-seeded maintainer. From a shell, sign in with a cookie jar:
+seeded maintainer. Browsers share localhost's cookies across ports, so each
+seeded server names its cookies after its port (`seeded-8788.…`), and servers
+on different ports keep their own sessions. From a shell, sign in with a cookie jar:
 
 ```sh
 curl -sL -c jar -b jar -H 'Origin: http://localhost:8787' -d provider=github http://localhost:8787/sign-in
@@ -407,6 +410,8 @@ Check phone and desktop widths with the browser's device emulation. The Worker
 tests run the same seed (`test/seed.test.ts`), so it follows schema and route
 changes, and later end-to-end tests can start from it. The publication tests
 (`test/publish.test.ts`) use the same fake with a smaller world of their own.
+`just worker-test` also starts this server with `--check` on a free port, which
+checks what only it wires up: the built static assets and its cookie names.
 
 ## Checks
 
@@ -438,6 +443,13 @@ duplicate webhooks, and hide a project whose maintainer lost authority. Push
 tests encrypt RFC 8291's example, verify VAPID signatures, decrypt what a
 subscribed device receives, and check that only decisions push, once each. No
 OAuth credentials or Cloudflare account are required for checks.
+
+The Worker tests share one runtime and reset only storage between tests, so a
+test could still lean on module-level state another left behind. A daily CI job
+(`.github/workflows/isolated.yml`) runs each test case in its own process
+instead, which is too slow for every pull request. Run it locally with
+`just worker-test-isolated`, optionally with `--jobs N` and file filters such as
+`inbox`.
 
 After changing bindings, regenerate types:
 
