@@ -247,6 +247,23 @@ to read, so kix keeps its own check there.
 When no review counts, a direct merge is refused and a merge job pauses on a
 decision. Both say which commit needs a review and how to give one.
 
+The inbox says so before the click. Each project read takes every open PR's
+body, its author's association with the repository, the writers' latest
+reviews, and the head commit's parents and this App's `quest review` check in
+one batched GraphQL request, the same request that classifies drafts, and
+keeps only the land gate's reason (`observedGap`), never the body. A PR whose
+merge is offered shows that reason beside **Merge this PR**. It counts what the
+gate counts on the head itself. The author's record counts unless GitHub's
+association (anything but owner, member, or collaborator) rules out write
+access. A merge head's reason says that an earlier review may still carry
+across it, since only the gate's tree reads can tell. The read does not look
+at rulesets, so where GitHub itself requires the review, the item is flagged
+and GitHub refuses the same head. The click's own check stays the authority:
+it confirms write access, that no App committed the head, and any carried
+review, and it reads the latest reviews, which a read can lag. The App's own
+`quest review` check run, unlike CI's, asks for a read of the PRs it names,
+so a runner's review clears the flag without a refresh.
+
 GitHub keeps auto-merge enabled across a push by anyone with write access, the
 App's included, and checks the `expectedHeadOid` kix pins only when auto-merge
 is enabled. Its merge queue likewise keeps a queued pull request across such a
@@ -608,7 +625,8 @@ Paused and disconnected projects are not read. A failed or rate-limited read is
 recorded and shown next to the refresh fallback, and is not retried: only a
 request made during it gets another round, and otherwise the next webhook or a
 refresh reads again. Checks, statuses and other pushes name no entity and
-change no candidate, so they cost no read.
+change no candidate, so they cost no read, except this App's own `quest review`
+check run, which rereads the PRs its payload names by number.
 
 The inbox also treats a PR whose row still says open as closed once a
 complete, current occupancy pass no longer lists it, so a missed close webhook
@@ -636,7 +654,8 @@ escaped titles, state, comment/review counts, current PR head, that head's check
 rollup, aggregate review decision, and up to 20 latest reviewer records with an
 explicit pagination flag. Raw bodies and individual check logs are not cached:
 a PR's body is kept only as whether it has a `## Waiting` section (or the
-older `## Decisions needed`).
+older `## Decisions needed`) and as the land gate's reason its head needs a
+review, read with the open PRs' bodies in one batched request per read.
 Unavailable/deleted entities retain their notification identity and are marked
 missing rather than disappearing or presenting old state as current.
 

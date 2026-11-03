@@ -11,6 +11,7 @@ import {
 	Worktrees,
 	canonical,
 	derivedDefaults,
+	discoveryEnv,
 	mainCheckout,
 } from "./worktree";
 
@@ -55,7 +56,11 @@ async function waiting<T>(action: () => T | Promise<T>): Promise<T> {
 }
 
 function git(path: string, ...args: string[]): string {
-	return execFileSync("git", ["-C", path, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	return execFileSync("git", ["-C", path, ...args], {
+		encoding: "utf8",
+		env: discoveryEnv(),
+		stdio: ["ignore", "pipe", "pipe"],
+	}).trim();
 }
 
 /** The top of the checkout holding `cwd`, or undefined outside any. */
@@ -126,13 +131,18 @@ const WORKFLOW_CHECKOUT = /^wf_[0-9a-f]{8}-[0-9a-f]{3}-[0-9]+$/;
  * it, which is the workflow agent itself; one that later runs there without isolation never matches.
  */
 async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise<WorktreeRecord | undefined> {
-	const path = toplevel(input.cwd);
-	const record = path === undefined ? undefined : await waiting(() => worktrees.registered(path));
+	let path = toplevel(input.cwd);
+	let record: WorktreeRecord | undefined;
+	while (path && !record) {
+		const checkout = path;
+		record = await waiting(() => worktrees.registered(checkout));
+		path = git(checkout, "rev-parse", "--show-superproject-working-tree") || undefined;
+	}
 	const agent = field(input, "agent_id");
 	if (record?.name === `agent-${agent}`) return record;
 	if (record === undefined || !WORKFLOW_CHECKOUT.test(record.name)) return undefined;
-	const bound =
-		input.hook_event_name === "SubagentStart" ? await waiting(() => worktrees.bind(record.id, agent)) : record;
+	const { id } = record;
+	const bound = input.hook_event_name === "SubagentStart" ? await waiting(() => worktrees.bind(id, agent)) : record;
 	return bound.agent === agent ? bound : undefined;
 }
 
@@ -141,15 +151,34 @@ async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise
  * out Claude's default base, or a pull request's head for `pr-<number>`, under the main checkout's
  * `.worktrees/`, with derived defaults, and prints its path; an existing checkout of that name in the
  * repository is restored instead.
- * WorktreeRemove removes the checkout, never forcing. SubagentStop releases the subagent's own
+ * WorktreeRemove removes the checkout after recursive safety checks. SubagentStop releases the subagent's own
  * checkout, and SubagentStart restores it, telling the subagent when its scratch was deleted.
  */
-export async function claudeHook(input: unknown, worktrees: Worktrees, merged: Merged): Promise<string | undefined> {
+export async function claudeHook(
+	input: unknown,
+	worktrees: Worktrees,
+	merged: Merged,
+	project?: string,
+): Promise<string | undefined> {
 	const hook = parse(input);
 	switch (hook.hook_event_name) {
 		case "WorktreeCreate": {
 			const name = field(hook, "name");
-			const main = mainCheckout(hook.cwd);
+			let cwd = toplevel(hook.cwd);
+			if (!cwd) throw new Error(`hook cwd is not in a Git checkout: ${hook.cwd}`);
+			// The hook's project anchors ownership when cwd is inside a submodule, without
+			// changing which repository a session opened directly in a vendored project owns.
+			if (project && toplevel(project)) {
+				const main = mainCheckout(project);
+				let enclosing = cwd;
+				while (mainCheckout(enclosing) !== main) {
+					const parent = git(enclosing, "rev-parse", "--show-superproject-working-tree");
+					if (!parent) break;
+					enclosing = parent;
+				}
+				if (mainCheckout(enclosing) === main) cwd = enclosing;
+			}
+			const main = mainCheckout(cwd);
 			const existing = await waiting(() => worktrees.registered(join(main, ".worktrees", name)));
 			if (existing?.name === name) {
 				// Claude reuses a name, such as a resumed workflow run's, for an agent that binds afresh.
@@ -157,7 +186,7 @@ export async function claudeHook(input: unknown, worktrees: Worktrees, merged: M
 				return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;
 			}
 			const { reserve, scratch } = derivedDefaults(main);
-			const ref = pullRequest(hook.cwd, name) ?? base(hook.cwd);
+			const ref = pullRequest(cwd, name) ?? base(cwd);
 			return `${(await waiting(() => worktrees.create(main, name, reserve, ref, scratch))).path}\n`;
 		}
 		case "WorktreeRemove": {
