@@ -57,7 +57,7 @@ import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { GUIDE, SKILLS, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
-import { type Snapshot, checkout, collect, exists, load, snapshot, under } from "./tree";
+import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
 import { pullRequestStatus, statusLines } from "./status";
 import { waitForActivity, WaitTimeout } from "./wait";
 import { Worktrees } from "./worktree";
@@ -141,6 +141,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Report every structural mistake in the tree; exit non-zero if any")
 		.description(
 			"Report every structural mistake in the tree; exit non-zero if any.\n\n" +
+				"A link into a submodule that is not checked out resolves at the commit its gitlink pins, read from " +
+				"a local git directory that holds it, such as the main worktree's; with none, its links are skipped " +
+				"with a note.\n\n" +
 				"With --base, also check that a PR from a quest's branch leaves that quest accurate. When the branch " +
 				"is a quest's path without .md (an epic's is quest/<path>/README) and that quest exists at the merge " +
 				"base with <ref>, the working tree must delete or edit it; a PR that finishes the quest deletes it, and " +
@@ -153,7 +156,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
 			}
-			const findings = check(load(root()), (path) => exists(root(), path));
+			const tree = checkout(root(), warn);
+			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
 			if (findings.length === 0) {
 				const count = collect(root()).length;
@@ -269,7 +273,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					for (const quest of shown) print(`${quest.dependents}\t${quest.path}`);
 				};
 				if (!options.unclaimed) {
-					const tree = checkout(root());
+					const tree = checkout(root(), warn);
 					if (valid(tree)) show(unblocked(tree.docs));
 					return;
 				}
@@ -280,7 +284,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					(async () => {
 						const up = await reach(root(), options.remote, deps);
 						const refs = up === null ? null : upstreamRefs(root(), up.git);
-						const tree = refs === null ? checkout(root()) : snapshot(root(), refs.base);
+						const tree = refs === null ? checkout(root(), warn) : snapshot(root(), refs.base, warn);
 						if (!valid(tree)) return null;
 						const ranked = unblocked(tree.docs);
 						const branches = ranked.map((quest) => questBranch(quest.path));
@@ -320,7 +324,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--maintainer", "Only items waiting on the maintainer")
 		.option("--limit <count>", "Maximum number of quests to print", positiveInteger("limit"))
 		.action((options: { json?: boolean; maintainer?: boolean; limit?: number }) => {
-			const tree = checkout(root());
+			const tree = checkout(root(), warn);
 			if (!valid(tree)) return;
 			const quests = waiting(tree.docs)
 				.map((quest) => (options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest))

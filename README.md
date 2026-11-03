@@ -249,6 +249,12 @@ detached, so pass the head branch:
 The check is a floor, not a review: any edit to the quest passes, so reviewers
 still judge whether a rewrite matches what remains.
 
+A link into a submodule that is not checked out, as in a fresh worktree or
+`actions/checkout` by default, resolves at the commit its gitlink pins when a
+local git directory holds that commit, such as the main worktree's. Otherwise
+`quest check` notes the submodule and skips its links rather than reporting
+them broken.
+
 ## Move and delete quests
 
 `quest mv` and `quest rm` move or delete a quest or an epic with `git mv` and
