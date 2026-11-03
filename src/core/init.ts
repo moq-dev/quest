@@ -3,10 +3,10 @@
 // The CLI applies it to a checkout and the Worker publishes it as a setup
 // pull request, so both install the same files.
 //
-// The plan touches only skill stubs (writing missing ones and removing those
-// of retired skills), one reference line in the root agent instructions, one
-// `.gitattributes` line, `quest/README.md` when missing, and Quest's hook
-// entries in `.claude/settings.json`.
+// The plan touches only skill stubs (writing missing or outdated ones and
+// removing those of retired skills), one reference line in the root agent
+// instructions, one `.gitattributes` line, `quest/README.md` when missing, and
+// Quest's hook entries in `.claude/settings.json`.
 
 /** Installed skills carry this prefix so they don't collide with a repository's own. */
 export const PREFIX = "quest-";
@@ -100,15 +100,18 @@ function refuse(path: string, why: string): never {
  */
 export function planInit(repo: Checkout, stubs: readonly Stub[], options: { goal?: string } = {}): InitChange[] {
 	const dirs = skillDirs(repo);
-	const missing = dirs.flatMap((skills) =>
+	const written = dirs.flatMap((skills) =>
 		stubs.flatMap((skill): InitChange[] => {
 			const dir = `${skills}/${skill.installed}`;
 			const path = `${dir}/SKILL.md`;
 			checkPath(repo, path, "file");
 			if (repo.stat(path) === "file") {
-				// An older version's stub stays as it is; only a missing one is written.
-				if (isStub(repo, path, skill.installed)) return [];
-				refuse(path, "is not a Quest stub");
+				if (!isStub(repo, path, skill.installed)) refuse(path, "is not a Quest stub");
+				// An older version's stub is rewritten in place, keeping its newlines; Quest writes no links, so it leaves linked ones.
+				const content = repo.read(path);
+				if (content.replaceAll("\r\n", "\n") === skill.stub) return [];
+				if (repo.lstat(dir) !== "dir" || repo.lstat(path) !== "file") return [];
+				return [{ path, content: skill.stub.replaceAll("\n", newline(content)) }];
 			} else if (repo.lstat(dir) !== null) {
 				throw new InitRefused(
 					dir,
@@ -130,7 +133,7 @@ export function planInit(repo: Checkout, stubs: readonly Stub[], options: { goal
 	checkPath(repo, CLAUDE_SETTINGS, "file");
 	const settings = installHooks(repo);
 
-	const changes: InitChange[] = [...missing, ...retired.map((dir) => ({ path: `${dir}/SKILL.md`, content: null }))];
+	const changes: InitChange[] = [...written, ...retired.map((dir) => ({ path: `${dir}/SKILL.md`, content: null }))];
 	if (repo.lstat(readme) === null) changes.push({ path: readme, content: questReadme(options.goal) });
 	if (settings !== undefined) changes.push({ path: CLAUDE_SETTINGS, content: settings });
 	for (const [path, marker, line] of [

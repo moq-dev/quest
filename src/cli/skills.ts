@@ -2,8 +2,9 @@
 //
 // A repository installs only a stub per skill, which asks the agent to run
 // `quest skill <name>`. The stub only points at the binary, so the version a
-// repository pins decides which instructions its agents follow, and upgrading
-// never rewrites repository files.
+// repository pins decides which instructions its agents follow. Upgrading
+// rewrites only the stubs themselves, when their description or setup link
+// changed and nobody edited them.
 
 import { PREFIX } from "../core";
 import guide from "../../assets/AGENTS.md";
