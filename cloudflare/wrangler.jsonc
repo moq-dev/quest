@@ -20,8 +20,8 @@
 		// The Web Push application server key; see README.md. Notifications stay off while it is empty.
 		"VAPID_PUBLIC_KEY": "",
 		// GitHub owner IDs, not logins, whose repositories may enroll until the public release
-		// (quest/m1/open.md); no enrollment, webhook, or job runs for any other owner's. GitHub frees
-		// a deleted or renamed account's login for anyone to claim, so an ID is the identity.
+		// (quest/m1/open.md); any other owner's can't enroll, deliver webhooks, or queue jobs. GitHub
+		// frees a deleted or renamed account's login for anyone to claim, so an ID is the identity.
 		// Find one with `gh api users/<login> --jq .id`; see GITHUB.md.
 		"ENROLL_OWNERS": [
 			248218914, // moq-dev

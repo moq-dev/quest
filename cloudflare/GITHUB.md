@@ -414,8 +414,11 @@ claim. `/projects` says
 Quest isn't open yet, and lists another owner's repositories as not open,
 without reading their Quest files or licenses. The service's live repository
 check treats such an owner like an archived repository: preview, opt-in,
-observations, jobs, and merges all refuse it, while pause and disconnect still
-work, so a project transferred to another owner can still be stopped. The
+observations, queuing a job, a job's issue or pull request reads, publication,
+and merges all refuse it, while pause and disconnect still work, so a project
+transferred to another owner can still be stopped. A job its maintainer queued
+before such a transfer may still start on their own runners, with nothing from
+GitHub through kix; pausing the project holds it. The
 webhook route acknowledges another owner's deliveries with `ignored` before
 recording anything, by the repository's owner for repository events and the
 installation's account for installation events. The seeded local server admits
