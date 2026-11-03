@@ -130,7 +130,7 @@ Shared shape, for the children to follow:
 ## Required
 
 - [Watcher on the host](/quest/m0/queue-watcher/host.md) - kixelated/nixos runs the watcher for moq-dev/moq beside its fixer container
-- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - condition: quest, rind and rust2 are cut over; rind and rust2 each land a PR, and a fork PR lands
+- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 

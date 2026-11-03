@@ -16,6 +16,17 @@ Decided 2026-10-28 (user, /quest-plan of the follow-ups from a 25-PR /quest-comp
   race and worked around it. Its diagnostic runs have the minimal repro: two
   processes `rmSync` the same file on `windows-11-arm` and `windows-2022`.
 - Search existing Bun issues first, and comment on a match instead of opening
-  a duplicate.
-- This quest waits on Bun. Check the report's state each time ready work is
-  triaged.
+  a duplicate. As of 2026-11-02 nobody from moq-dev has commented or opened
+  one. The closest reports are
+  [oven-sh/bun#39708](https://github.com/oven-sh/bun/issues/39708), the
+  recursive case, with its fix
+  [oven-sh/bun#39710](https://github.com/oven-sh/bun/pull/39710), and the
+  single-file fix
+  [oven-sh/bun#38550](https://github.com/oven-sh/bun/pull/38550); all three
+  are open.
+
+## Waiting
+
+- oven-sh/bun: a release fixes `rmSync` throwing `EFAULT` when two processes
+  remove one file on Windows, and Quest's pin includes it. Check the report
+  and the fix PRs above each time ready work is triaged.
