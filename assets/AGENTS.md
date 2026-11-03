@@ -178,10 +178,17 @@ Fix any merge conflicts.
 
 Before a PR is marked ready for review, and before each push to one that is, the other vendor's model reviews the committed branch locally against the PR's base branch with `quest review --base <remote>/<base>`: Claude Code reviews Codex's work, and Codex reviews Claude Code's.
 Commit and pass the repository's checks first.
+A check failure that reproduces unchanged in a checkout of the base branch is pre-existing rather than the PR's: record the command and both failures in the PR body's validation, and go on to review and readiness.
+Never alter the repository's harness to get a pass, such as by disabling a tool, unsetting its environment, or skipping a check, nor report an altered run as its checks.
+Suggest a follow-up for the failure unless an open PR already fixes it.
 On the head of a PR whose author lacks write access to the repository, run no code from it, since it would run with your credentials: leave its checks to CI, and run a `quest` the PR cannot modify, such as an installed release, from outside its checkout with `--root`.
 Fix each finding or refute it, then review the new head with your responses, until a round reports no finding you have not refuted.
 A refutation stands only when it cites evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
 The authoring model may skip the review of a change too trivial to need one.
+
+A reviewer that is out of quota or logged out is an outage, not a skip: keep the PR a draft, with a `## Waiting` item naming the reviewer, its error, and the check, such as `Codex: out of quota until 2026-11-03 15:00 UTC; check that quest review runs`.
+Give the reset time when the error names one; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
+Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
 
 The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
 Rewrite it after each round.
@@ -236,10 +243,13 @@ Pass PR bodies to `gh` on stdin (`--body-file -`).
 Before ending a task, pausing for a decision, or handing off, commit a checkpoint of the source changes, and report what remains and which checks passed or did not run.
 Finish with a clean checkout: intended changes committed and pushed, incidental generated changes restored, and pre-existing or unrelated changes preserved.
 
-Run expensive builds and test suites through `quest gate <command>`, which waits until the host has room for them; never poll the load average or cap agents by core count yourself.
+Run expensive builds and test suites through `quest gate <command>`, which waits until the host has room for them, however long that takes; never poll the load average, cap agents by core count yourself, or cancel a gate still waiting to admit its command.
+Run such a command in the foreground and read its exit code directly, not through a pipe.
+When it may outlast the tool's time limit, start it in the background and block on it in the same turn with the harness's wait for that task.
 Run no more sub-agents at once than the harness allows; queue the rest and start one as each reports.
 
 Wait on a PR's CI or reviews with `quest wait`, and on other background work with a blocking command that ends on its terminal state, not timed polls.
-Bound each wait under an hour so the prompt cache stays warm, and re-run it on timeout.
-A sub-agent ends its turn only with a final result or a question, never with background work still running.
-Back out when progress stalls rather than burn tokens.
+Bound each wait, not the work, under an hour so the prompt cache stays warm, and re-run the wait on timeout.
+A sub-agent ends its turn only with a final result or a question, never with background work still running or an interim status report.
+A coordinator relays no interim report: it resumes a sub-agent that ended its turn on one, telling it to block until its work finishes.
+Back out when progress stalls rather than burn tokens; a gate's queue or a long command still running is not a stall.

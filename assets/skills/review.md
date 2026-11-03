@@ -12,11 +12,12 @@ If it refuses because another session holds the PR, stop and report what it prin
 A draft you started in this session has no `## Waiting` section, nor the older `## Decisions needed`, so it is still yours and the command refuses it: review it without taking it.
 
 Work in a checkout of the PR's head branch, checking out the head first when someone else opened it.
-Commit everything, then run the repository's local checks, unless the guide's Reviews section says to run no code from the head, and fix any failure.
+Commit everything, then run the repository's local checks, unless the guide's Reviews section says to run no code from the head, and fix any failure the branch causes; record one that reproduces on the base as that section describes.
 
 If a `## Review` record the guide counts names the committed head, or the guide's review exemptions cover the changes since the head it names, and it leaves no finding unrefuted, run no new round and go on to pushing and marking it ready below.
 Otherwise, review the committed branch with `quest review`, as the guide's Reviews section describes; `quest review --help` explains the round.
 Run it in the foreground; a round takes minutes.
+If a round fails because the reviewer is out of quota or logged out, stop reviewing: keep the PR a draft with the `## Waiting` item the guide's Reviews section describes, hand it back, and report the outage.
 Fix each finding you agree with, or refute it with evidence the reviewer can check.
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted with evidence.

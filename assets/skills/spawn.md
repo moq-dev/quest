@@ -28,6 +28,7 @@ Present those one at a time: a short paragraph explaining the problem, the quest
 Start each quest in a background sub-agent with its own isolated worktree, since agents cannot write to a worktree their parent created.
 
 Each agent reports back only when done or blocked.
+Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in the brief of each agent started after, and report it once, not with each agent.
 
 When done, each agent's claim PR holds its work, still a draft if decisions or unfinished work remain.
 Its report lists every open decision with a recommendation.
