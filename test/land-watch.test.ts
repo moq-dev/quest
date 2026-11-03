@@ -12,7 +12,7 @@ import type { GitHubDependencies } from "../src/cli/github";
 import { readRemote } from "../src/cli/land";
 import { parseResolution } from "../src/cli/land-apply";
 import { CHECK_LOG } from "../src/cli/land-checks";
-import { FLAKY_LIMIT, history } from "../src/cli/land-fixer";
+import { COLLECTION_ATTEMPTS, FLAKY_LIMIT, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
 import type { FixContext } from "../src/cli/land-watch-fix";
@@ -1558,6 +1558,69 @@ git commit -qm 'disable render_timeout'`;
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 	});
 
+	test("a round whose handback GitHub keeps refusing is set aside, and frees its fixer slot", async () => {
+		const { repo, state, fix, context } = setup(1);
+		const base = repo.main();
+		const removed = (number: number, minute: number): Pull => {
+			const head = repo.pull(number, { [`feature-${number}.txt`]: "new\n" });
+			return {
+				number,
+				head,
+				enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+				removals: [
+					{
+						id: `R${number}`,
+						createdAt: at(minute),
+						reason: "failed_checks",
+						actor: "github-merge-queue",
+						before: head,
+					},
+				],
+			};
+		};
+		const github = {
+			...world(
+				[removed(5, 4), removed(6, 5)],
+				[failedRun(5, at(3), base), { ...failedRun(6, at(3), base), id: 8 }],
+			),
+			origin: repo.origin,
+		};
+		github.now = Date.parse(at(6));
+		fix.round(
+			5,
+			`printf '[{"number":%s,"action":"handback","diagnosis":"the test asserts the old behavior","recommendation":"decide which behavior is right"}]' "$2" > quest-land-result.json\n`,
+		);
+		fix.round(6, flakyScript);
+		// One fixer slot: 6 waits for 5's.
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 5 failed_checks fix",
+			"removed 6 failed_checks fix",
+			"fixing 5",
+		]);
+		await exited(state);
+		// GitHub refuses every comment on 5, so its handback never posts.
+		const refusing = () => {
+			const dependencies = deps(github);
+			const original = dependencies.fetch;
+			dependencies.fetch = (async (input, init) => {
+				if (init?.method === "POST" && new URL(String(input)).pathname.endsWith("/issues/5/comments"))
+					return Response.json({ message: "refused" }, { status: 422 });
+				return original(input, init);
+			}) as typeof fetch;
+			return dependencies;
+		};
+		for (let pass = 1; pass < COLLECTION_ATTEMPTS; pass++)
+			expect(await watchPass(REPOSITORY, { state }, refusing(), context)).toEqual([]);
+		expect(fix.calls()).toHaveLength(1);
+		expect(await watchPass(REPOSITORY, { state }, refusing(), context)).toEqual(["set aside 5", "fixing 6"]);
+		expect(
+			readdirSync(state).filter((name) => name.startsWith("watch-job-") && name.endsWith(".json")),
+		).toHaveLength(1);
+		await exited(state);
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			`requeued 6 ${github.pulls[1].head}`,
+		]);
+	});
 	test("a person's removal ends the pick, even of a round re-enqueued just before a restart", async () => {
 		const { repo, state, fix, context } = setup();
 		const base = repo.main();

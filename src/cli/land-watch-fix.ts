@@ -12,6 +12,7 @@ import { EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "
 import {
 	author,
 	cited,
+	COLLECTION_ATTEMPTS,
 	comment,
 	conflictFailure,
 	FixerRefusal,
@@ -95,6 +96,8 @@ interface WatchJob extends Process {
 	handback?: string;
 	/** A validated fix whose push GitHub refused, handed back for `quest land apply`. */
 	resolution?: Resolution;
+	/** Passes that failed to collect it, so one that keeps failing is set aside rather than holding a fixer slot. */
+	failures?: number;
 }
 
 const JOB = /^watch-job-.*\.json$/;
@@ -213,9 +216,21 @@ async function collectAll(
 		try {
 			output.push(...(await collect(github, state, path, job, context, deps)));
 		} catch (error) {
+			// A round that keeps failing, as when GitHub refuses its handback, is set aside, so it frees its
+			// fixer slot for the other dropped PRs. Only the pass's full collection counts, once.
+			if (!merges) job.failures = (job.failures ?? 0) + 1;
+			if ((job.failures ?? 0) >= COLLECTION_ATTEMPTS) {
+				deps.warn(
+					`quest land watch: set aside ${job.entry.number} from ${name} after ${COLLECTION_ATTEMPTS} failed collections: ${String(error)}`,
+				);
+				finish(path, job);
+				output.push(`set aside ${job.entry.number}`);
+				continue;
+			}
 			// Once a round has asked GitHub to take its head back, it may already be in the queue: it never
 			// becomes a handback on an error, and the next pass retries it, which re-enqueues only if needed.
 			if (job.requeuing !== undefined) {
+				save(path, job);
 				deps.warn(`quest land watch: fixer round ${name} pending: ${String(error)}`);
 				continue;
 			}

@@ -641,7 +641,11 @@ parking it is collected at that merge: a requeue pins it, and a fix, built on th
 pin, replaces it with a lease, since building on it would revert its newer base.
 Any other moved head hands back. Forks refusing maintainer edits, refused pushes, invalid results,
 crashes, or the fixer deadline hand back with a marked comment naming the exit
-status or signal, with the tail of the job's retained log. A validated fix whose push
+status or signal, with the tail of the job's retained log. A GitHub error while
+collecting one PR hands back that PR alone, and the job's other PRs keep their own
+results. A PR whose collection fails three passes in a row, as when GitHub refuses its
+handback, is set aside with a logged warning: it leaves the job without a handback
+comment, so it rejoins batches as GitHub still queues it, and the PRs behind it go on. A validated fix whose push
 GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
 the `workflows` permission to push, is handed back with its resolution. So is a fix
 that edits protected paths beyond what the base merge carries, such as a conflict in
@@ -864,6 +868,8 @@ handback, from a stop rule, the fixer, a refusal, a crash, or a timeout, is
 posted with its reason and a recommendation, and the PR leaves the watcher's
 care until a maintainer enqueues it again. A round whose pick ended while it
 ran, by a writer's push or enqueue, is not applied, and its comment says so.
+A round whose collection fails three passes in a row, as when GitHub refuses its
+handback comment, is set aside with a logged warning, freeing its fixer slot.
 
 A PR's own CI is a signal, never a gate of its own: only the base's required
 checks keep GitHub from enqueuing a head. `/quest-merge` reports the failing
