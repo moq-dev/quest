@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { constants } from "node:os";
+import { basename } from "node:path";
 
 /** How a caller cancels a running command: `signal` asks it to stop, and `kill` stops it outright. */
 export interface Cancellation {
@@ -13,14 +14,21 @@ export interface Cancellation {
 
 /**
  * Follow Quest's own SIGINT, SIGTERM, and SIGHUP until closed: the first aborts `signal` with its
- * name, and any later one aborts `kill`.
+ * name, and any later one aborts `kill`. When the first is a SIGTERM that Just may also forward (see
+ * `relayedByJust`), one more SIGTERM is taken as that copy rather than as a second signal.
  */
 export function interrupts(): Cancellation & { close(): void } {
 	const signal = new AbortController();
 	const kill = new AbortController();
-	const handlers = (["SIGINT", "SIGTERM", "SIGHUP"] as const).map(
-		(name) => [name, () => (signal.signal.aborted ? kill.abort() : signal.abort(name))] as const,
-	);
+	let copy = false; // Whether one more SIGTERM may still be Just's copy of the first.
+	const handle = (name: NodeJS.Signals) => {
+		if (!signal.signal.aborted) {
+			copy = name === "SIGTERM" && relayedByJust();
+			signal.abort(name);
+		} else if (copy && name === "SIGTERM") copy = false;
+		else kill.abort();
+	};
+	const handlers = (["SIGINT", "SIGTERM", "SIGHUP"] as const).map((name) => [name, () => handle(name)] as const);
 	for (const [name, handler] of handlers) process.on(name, handler);
 	return {
 		signal: signal.signal,
@@ -78,6 +86,50 @@ function foreground(): boolean {
 	} catch {
 		return false; // Forward, as for a process without a terminal.
 	}
+}
+
+/** The command name and process group in a /proc/<pid>/stat line. */
+export function statProcess(stat: string): { name: string; group: string } {
+	// The command name in parentheses may hold spaces.
+	const end = stat.lastIndexOf(")");
+	return { name: stat.slice(stat.indexOf("(") + 1, end), group: stat.slice(end + 2).split(" ")[2] };
+}
+
+/** The command name and process group of each running process in `pids`, by PID. */
+function processes(pids: number[]): Map<number, { name: string; group: string }> {
+	const found = new Map<number, { name: string; group: string }>();
+	if (process.platform === "linux") {
+		for (const pid of pids) {
+			try {
+				found.set(pid, statProcess(readFileSync(`/proc/${pid}/stat`, "utf8")));
+			} catch {} // Gone.
+		}
+		return found;
+	}
+	try {
+		const ps = execFileSync("ps", ["-o", "pid=,pgid=,comm=", "-p", pids.join(",")], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		for (const line of ps.trim().split("\n")) {
+			const [pid, group, ...command] = line.trim().split(/\s+/);
+			found.set(Number(pid), { name: basename(command.join(" ")), group });
+		}
+	} catch {} // None of them run.
+	return found;
+}
+
+/**
+ * Whether Just is this process's parent and shares its process group. Just forwards each SIGTERM it
+ * gets to the command it runs, so a SIGTERM sent to that group reaches this process twice: once
+ * directly, and once as Just's copy.
+ */
+function relayedByJust(): boolean {
+	if (process.platform === "win32") return false;
+	const found = processes([process.pid, process.ppid]);
+	const self = found.get(process.pid);
+	const parent = found.get(process.ppid);
+	return parent?.name === "just" && parent.group === self?.group;
 }
 
 /**

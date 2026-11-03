@@ -1019,7 +1019,12 @@ another Quest scope, leaves both the signal and the second signal's kill to
 the enclosing owner, which already delivers them to everything it holds. A
 signal sent with `kill` to such a gate alone therefore does not reach its
 command. Just forwards SIGTERM to the command it runs, so that command gets it
-a second time. There is no fairness guarantee, and no timeout except
+a second time. A gate that Just runs therefore takes one more SIGTERM after a
+first one as Just's copy, not as a second signal: a SIGTERM to Just's process
+group reaches the gate both directly and through Just. A repeated SIGTERM still
+kills, though when sent to Just or the gate alone, or when the two copies
+arrive together, it takes a third; a repeated Ctrl-C, which Just does not
+forward, kills at the second. There is no fairness guarantee, and no timeout except
 `--quick`'s: any other command waits as long as the host stays busy.
 
 ## Review locally
