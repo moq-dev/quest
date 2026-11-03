@@ -35,7 +35,9 @@ moq-dev/quest#246's Codex Security P1):
   CI.
 - Rewrite `cloudflare/GITHUB.md`'s trust section as a stage-by-stage table:
   intake, job creation, routing, devShell, agent run, publication, CI, review,
-  and land. For each stage, name what is trusted and why. Fix the
+  and land. For each stage, name what is trusted and why. The devShell stage
+  trusts a PR head only when current maintainers signed its commits or one
+  approved that exact head in the inbox (`head_approvals`). Fix the
   contradiction between `cloudflare/README.md` ("route only to Linux runners
   that declare VM builds") and the root README (every runner refuses untrusted
   jobs).
@@ -55,4 +57,3 @@ moq-dev/quest#246's Codex Security P1):
 ## Related
 
 - [Operator setup](/quest/m0/kix/operator-setup.md) - pilot repositories should pass this check
-- [Head approval](/quest/m0/kix/sandbox/head-approval.md) - the devShell stage's trust rule for heads without signatures

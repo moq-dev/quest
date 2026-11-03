@@ -627,12 +627,15 @@ Any other moved head hands back. Forks refusing maintainer edits, refused pushes
 crashes, or the fixer deadline hand back with a marked comment naming the exit
 status or signal, with the tail of the job's retained log. A validated fix whose push
 GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
-the `workflows` permission to push, is handed back with its resolution: the PR head,
-the base, the resolved tree, and the fixer's edits as a patch against the merge's
-conflicted result, sized to GitHub's 65,536-character comment limit. A maintainer
+the `workflows` permission to push, is handed back with its resolution. So is a fix
+that edits protected paths beyond what the base merge carries, such as a conflict in
+`flake.nix` the fixer resolved: those never land automatically. The resolution is the
+PR head, the base, the resolved tree, and the fixer's edits as a patch against the
+merge's conflicted result, or against the head itself for a fix that merges no base,
+sized to GitHub's 65,536-character comment limit. A maintainer
 runs `quest land apply <pr>`, which refuses a moved head, rebuilds and checks that
-tree, and prints an unpushed commit and its push command. A resolution too large for
-the comment hands back plainly. A handback disables
+tree, and prints an unpushed commit and its push command to run after reviewing it.
+A resolution too large for the comment hands back plainly. A handback disables
 auto-merge and carries the reason marker `quest status`
 reads. Each failure a fixer job blames a PR for is a round of its maintainer pick; a PR
 that only shared a broken batch has none. The fixer keeps going while each round
@@ -795,6 +798,19 @@ handled, so a restart neither misses nor repeats one; a crash between
 commenting and recording finds its own comment's marker and posts nothing. The
 first pass reads the ten minutes before it.
 
+GitHub often leaves a PR whose auto-merge is armed out of the queue once it is
+ready ([community#209348](https://github.com/orgs/community/discussions/209348)),
+as for a pick `quest merge --land` armed while required checks ran. Each pass,
+the watcher enqueues every such PR: open, armed, ready (its merge state is
+`CLEAN`, `HAS_HOOKS`, or `UNSTABLE`: its required checks passed and it does not
+conflict), not in the queue, and not added to it since it was armed. It
+enqueues only the head auto-merge was armed on, with `expectedHeadOid` bound to
+it: GitHub keeps auto-merge across a push, but a push by anyone but the land
+fixer ends the pick, and a head it cannot tell yet waits for the next pass. An
+armed PR whose required checks fail, or that conflicts, is left alone for
+`/quest-iterate` and a new pick. The watcher's own re-enqueues are among these
+picks. A refusal is logged once per pick and retried each pass.
+
 With `--fixer`, the watcher takes each recorded removal, oldest first, while
 its PR still waits as the queue dropped it:
 
@@ -820,8 +836,8 @@ base it conflicted with. The pick keeps going while each round makes progress:
 a round with no new commit for a failure that isn't flaky, the failure a fix
 addressed recurring right after it, or three flaky rounds in a row hand it
 back. A fix is validated, lease-pushed, and recorded in Review as for the host
-gate, and a push GitHub refuses is handed back with its resolution for
-`quest land apply`. The watcher then puts the fixed, merged, or flaky head back
+gate, and a push GitHub refuses, or a fix that edits protected paths, is handed
+back with its resolution for `quest land apply`. The watcher then puts the fixed, merged, or flaky head back
 in the queue with `expectedHeadOid` bound to it: it enqueues a head whose
 required checks have passed, and arms auto-merge on one whose checks still
 run, so GitHub enqueues it once they pass. Either joins the back of the queue.
@@ -833,9 +849,9 @@ ran, by a writer's push or enqueue, is not applied, and its comment says so.
 
 It shares `quest land serve`'s App key, state directory, private repository,
 and locks, so the two never run for the same repository at once. Without a
-fixer its token asks for `contents: read`, `pull_requests: write`, and
-`actions: read`, which the App needs for the logs. With one it also asks for
-`merge_queues: write`, which `enqueuePullRequest` needs, and `contents: write`,
+fixer its token asks for `contents: read`, `pull_requests: write`,
+`actions: read`, which the App needs for the logs, and `merge_queues: write`,
+which `enqueuePullRequest` needs. With one it also asks for `contents: write`,
 for arming auto-merge and pushing fixes; a push that carries a workflow change
 asks for `workflows: write`.
 
@@ -1122,8 +1138,10 @@ heads' devShells in a VM. A pull request's head is trusted only when every
 commit beyond the default branch has a valid signature from a current
 maintainer, so sign your commits (for example with
 [SSH signing](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#ssh-commit-signature-verification))
-for its iterate and merge jobs to run; a head kix has pushed to stays
-untrusted. A job resumes with another maintainer's answer
+for its iterate and merge jobs to run. Any other head, such as one kix
+pushed to, waits in the inbox for a maintainer to review its commits and
+approve that exact head; the approval lapses when the head moves, and counts
+only while its approver is still a maintainer. A job resumes with another maintainer's answer
 only once you approve it in the inbox. opencode runs as `opencode serve` on
 localhost behind a password made for each turn.
 
