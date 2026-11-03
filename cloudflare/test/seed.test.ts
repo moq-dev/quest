@@ -33,6 +33,7 @@ async function seeded(edit: (world: World) => void = () => {}) {
 	const { user, cookie } = await seed({
 		fetch: request,
 		db,
+		output: env.OUTPUT,
 		world: data,
 		origin,
 		secret: env.GITHUB_WEBHOOK_SECRET,
@@ -140,6 +141,33 @@ it("seeds a representative inbox through the Worker's own routes", async () => {
 	});
 	expect(merged.status).toBe(303);
 	expect(data.repos[0]!.pulls.find((p) => p.number === 12)!.closed).toBe(true);
+});
+
+it("seeds raw output that pages, ends, and reaches the cap", async () => {
+	const { request, cookie } = await seeded();
+	const html = await (await request("/inbox", { headers: { Cookie: cookie } })).text();
+	const read = async (job: string, after?: string) => {
+		const url = `/projects/github/example/rocket/jobs/${job}/output${after ? `?after=${after}` : ""}`;
+		expect(html).toContain(`data-output="${url.split("?")[0]}"`);
+		const response = await request(url, { headers: { Cookie: cookie } });
+		expect(response.status).toBe(200);
+		return response.json<{
+			output: { text: string }[];
+			next: { attempt: number; seq: number } | null;
+			truncated: number[];
+		}>();
+	};
+	// More than a page, so the card offers "Load more".
+	const first = await read("seed-plan-settings");
+	expect(first.output).toHaveLength(4);
+	expect(first.next).not.toBeNull();
+	const rest = await read("seed-plan-settings", `${first.next!.attempt}.${first.next!.seq}`);
+	expect(rest.output.at(-1)!.text).toContain("Reproduced.");
+	expect(rest.next).toBeNull();
+	expect((await read("seed-plan-config")).truncated).toEqual([]);
+	expect((await read("seed-iterate-cache")).truncated).toEqual([1]);
+	// A card without output says so when opened.
+	expect((await read("seed-start-offline")).output).toEqual([]);
 });
 
 it("lists the seeded maintainer's repositories in the project picker", async () => {

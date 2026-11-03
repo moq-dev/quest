@@ -7,7 +7,7 @@
 		"seeded": "wrangler deploy --dry-run --outdir .wrangler/seeded && bun dev/serve.ts",
 		"build": "bun scripts/build.ts",
 		"check": "bun run build && wrangler types --check && tsc --noEmit && prettier --check . && wrangler deploy --dry-run",
-		"test": "bun run build && vitest run",
+		"test": "bun run build && vitest run && bun run seeded --check",
 		"fix": "prettier --write .",
 		"types": "wrangler types",
 		"migrate": "wrangler d1 migrations apply DB --local",

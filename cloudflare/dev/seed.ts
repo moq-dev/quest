@@ -2,7 +2,9 @@
 // stubbed end-to-end tests. Sign-in, enrollment, observations, and webhooks go
 // through the Worker's own routes against the fake GitHub, so they follow the
 // current code; only runners and jobs, which need a live runner, are written
-// to D1 directly.
+// to D1 directly, and their raw output through the store a runner's uploads use.
+import { append } from "../src/jobs/output";
+import type { Runner } from "../src/jobs/store";
 import {
 	type Comment,
 	type Pull,
@@ -249,7 +251,15 @@ const form = (fields: Record<string, string>) => ({
  * paused), observe them, and add jobs in every state the inbox shows.
  * Returns the signed-in user and session cookie.
  */
-export async function seed(options: { fetch: Fetch; db: D1Database; world: World; origin: string; secret: string }) {
+export async function seed(options: {
+	fetch: Fetch;
+	db: D1Database;
+	/** The Worker's `OUTPUT` bucket, for the jobs' raw output. */
+	output: R2Bucket;
+	world: World;
+	origin: string;
+	secret: string;
+}) {
 	const { db, world, origin } = options;
 	const post = (path: string, fields: Record<string, string>, cookie: string) => {
 		const body = form(fields);
@@ -271,9 +281,10 @@ export async function seed(options: { fetch: Fetch; db: D1Database; world: World
 		302,
 		"OAuth callback",
 	);
+	// The seeded server names its cookies after its port, so match the session by suffix.
 	const cookie = cookies(callback)
 		.split("; ")
-		.filter((c) => c.startsWith("better-auth.session_token="))
+		.filter((c) => c.split("=")[0]!.endsWith("better-auth.session_token"))
 		.join("; ");
 	if (!cookie) throw new Error("Seed sign-in returned no session");
 	const me = world.users[0]!;
@@ -320,12 +331,13 @@ export async function seed(options: { fetch: Fetch; db: D1Database; world: World
 		"issue webhook",
 	);
 
-	await jobs(db, user, rocket);
+	await jobs({ DB: db, OUTPUT: options.output }, user, rocket);
 	return { user, cookie };
 }
 
 // Runners and jobs a live runner would have reported, in each state the inbox shows.
-async function jobs(db: D1Database, user: string, repo: Repo) {
+async function jobs(storage: { DB: D1Database; OUTPUT: R2Bucket }, user: string, repo: Repo) {
+	const db = storage.DB;
 	const now = Date.now();
 	const commit = commitOf(repo);
 	const head = (n: number) =>
@@ -627,4 +639,30 @@ async function jobs(db: D1Database, user: string, repo: Repo) {
 			];
 		}),
 	]);
+
+	// Raw output behind the agent cards' disclosure: a transcript long enough to
+	// page, a short one, and one that reached the size cap.
+	const output: Record<string, string[]> = {
+		"seed-plan-settings": [
+			"$ quest guide\nRead the guide.\n",
+			"$ git log --oneline -3 -- src/settings\n4b1c2d0 Save settings on blur\n9e8f7a6 Add the settings page\n",
+			"Opening issue #7 and its five comments.\nThe reports all mention a background tab on a phone.\n",
+			"$ just test settings\n✓ saves on blur (12 ms)\n✓ restores a draft (8 ms)\n",
+			"Simulating an expired session while the tab is hidden...\nThe save request returns 401 and the draft is dropped.\n",
+			"Reproduced. Writing up the cause before planning the fix.\n",
+		],
+		"seed-plan-config": [
+			"$ rg -n 'config.toml' src\nsrc/config.rs:14: let text = fs::read_to_string(path)?;\n",
+			"An empty file parses as an error, not as defaults. Asking how it should behave.\n",
+		],
+		"seed-iterate-cache": ["$ nix build .#cache\nbuilding '/nix/store/…-cache.drv'...\n"],
+	};
+	for (const [job, chunks] of Object.entries(output)) {
+		const id = list.find((j) => j.id === job)!.runner!;
+		const [, name, platform, vm] = runners.find(([runner]) => runner === id)!;
+		const runner: Runner = { id, owner: user, name, platform, vm };
+		for (const [seq, text] of chunks.entries()) await append(storage, runner, { job, attempt: 1, seq, text }, now);
+	}
+	// The cap's note, without uploading 64 MiB.
+	await db.prepare("UPDATE job_output_attempts SET truncated=1 WHERE job='seed-iterate-cache'").run();
 }
