@@ -310,9 +310,17 @@ invocation defaults to seven-character markers and `ours`/`base`/`theirs`;
 them. Labels must fit on one line. The fallback carries the same Git metadata
 when `quest` is missing or too old to accept those options.
 
-Existing configured drivers are preserved. For a checkout still using the old
-quest-generated command, clear its local `merge.quest.driver` entry and run any
-quest command to register the current one.
+A driver an older `quest` registered is replaced with the current one by the
+next `quest` command; any other configured driver is preserved.
+
+A clean merge can still leave this branch's list links to quests the base
+finished, which `quest check` then flags. `quest check --fix` drops every
+`Required`, `Related`, or `Closes` entry linking to a quest deleted in the
+history of `HEAD`, and of `MERGE_HEAD` during a merge, that the working tree
+lacks, and prints `M path` for each edited document. It leaves the edits
+unstaged and refuses while a quest file has unresolved conflicts. A quest moved
+rather than deleted, a link that never named a quest, and a link in prose stay
+for `quest check` to report.
 
 ## Wait for pull request activity
 
