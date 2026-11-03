@@ -1010,13 +1010,20 @@ branch before it is pushed for review: Codex when run from Claude Code, and
 Claude Code when run from Codex. `--harness` names the reviewer instead; an
 unknown harness, or a missing or logged-out CLI, is an error rather than a
 same-model review, as is a login the API rejects mid-round, such as an expired
-or revoked token. The reviewer uses its CLI's own stored login; a CLI with
-none keeps the credential it reads from the environment (`ANTHROPIC_API_KEY`,
-`ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code,
-`CODEX_API_KEY` for Codex), unless a stripped `ANTHROPIC_BASE_URL` or
-`CLAUDE_CODE_USE_BEDROCK`, `_VERTEX`, or `_FOUNDRY` would send it elsewhere.
+or revoked token. The reviewer reaches its model as the user's own CLI does:
+Claude Code keeps `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, and its
+cloud providers' `CLAUDE_CODE_USE_*` switches and settings, so a gateway such
+as CLIProxyAPI, Bedrock, Vertex, or Foundry works, and Codex keeps
+`CODEX_CA_CERTIFICATE`. It uses the CLI's own stored login; the credential the
+CLI reads from the environment (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or
+`CLAUDE_CODE_OAUTH_TOKEN` for Claude Code, `CODEX_API_KEY` or
+`CODEX_ACCESS_TOKEN` for Codex) passes only when the CLI has no stored login or
+a gateway or provider is set. A provider's own keys (`ANTHROPIC_AWS_API_KEY`,
+`ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`) pass only while a
+gateway or provider is set. Variables that would change the reviewer's plugins,
+permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
-`CODEX_HOME`, or the default when unset.
+`CODEX_HOME`, or the default when unset, and any gateway or provider.
 Every review runs with a pinned model and effort that `quest review --help`
 lists; `--model` and `--effort` override them.
 

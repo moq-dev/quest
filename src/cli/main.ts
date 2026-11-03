@@ -951,11 +951,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Review the checkout's committed branch against its base with the other harness: Codex when run from " +
 				"Claude Code, Claude Code when run from Codex, detected from the variables each sets. --harness names " +
-				"the reviewer instead; there is no other fallback. The reviewer uses its CLI's own stored login or, " +
-				"without one, the credential it reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or " +
-				"CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY for Codex) unless a stripped ANTHROPIC_BASE_URL or " +
-				"CLAUDE_CODE_USE_BEDROCK, _VERTEX, or _FOUNDRY would send it elsewhere. A logged-out error names the " +
-				"profile it checked, CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset. It runs " +
+				"the reviewer instead; there is no other fallback. The reviewer reaches its model as the user's own CLI " +
+				"does: Claude Code keeps ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, and its cloud providers' " +
+				"CLAUDE_CODE_USE_* switches and settings, and Codex keeps CODEX_CA_CERTIFICATE. It uses the CLI's own " +
+				"stored login; the credential the CLI reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, " +
+				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
+				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
+				"(ANTHROPIC_AWS_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN) only while one is set. A logged-out error names the profile it checked, " +
+				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider. It runs " +
 				`with ${models}. --model and --effort override them.\n\n` +
 				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
 				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +

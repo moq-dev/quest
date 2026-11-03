@@ -188,14 +188,24 @@ interface Reviewer {
 	login: string;
 	/** The variable naming the configuration directory, and so the stored login, the status check reads. */
 	profile: string;
-	/** Credentials the CLI reads from the environment, passed only when it has no stored login. */
+	/**
+	 * Credentials the CLI reads from the environment, passed when it has no
+	 * stored login or a route is set, since a route's credential is meant for it.
+	 */
 	credentials: string[];
 	/**
-	 * The variables in `env` that send the CLI's requests, and their credentials,
-	 * to another endpoint or provider. They stay stripped, and while one is set
-	 * no credential passes either, since it is meant for that endpoint.
+	 * Credentials only a gateway or provider reads, passed only while a route is
+	 * set, so an unused provider key never reaches the reviewer.
 	 */
-	reroutes(env: NodeJS.ProcessEnv): string[];
+	routeCredentials: string[];
+	/**
+	 * Variables that set how the CLI reaches its model: a gateway, a cloud
+	 * provider and its settings, headers, or a CA certificate. They always pass,
+	 * so the review goes where the user's own CLI sessions do.
+	 */
+	connection: string[];
+	/** The variables in `env` that send the CLI's requests to a gateway or another provider. */
+	routes(env: NodeJS.ProcessEnv): string[];
 	/** Matches the CLI's error for a login or credential the API rejected: expired, revoked, or invalid. */
 	unauthorized: RegExp;
 	review(context: Context, session: string): Turn;
@@ -217,6 +227,9 @@ const record = (value: unknown) =>
 const count = (value: unknown) => (typeof value === "number" ? value : 0);
 const text = (value: unknown) => (typeof value === "string" ? value : undefined);
 
+/** The cloud providers Claude Code reaches its model through, each with a `CLAUDE_CODE_USE_` switch. */
+const CLAUDE_PROVIDERS = ["BEDROCK", "VERTEX", "FOUNDRY", "MANTLE", "ANTHROPIC_AWS", "ANTHROPIC_GOOGLE_CLOUD"];
+
 /**
  * Claude Code reads no settings files: the checkout's would let a change
  * instruct or hook its reviewer, and an allow rule in any of them, such as the
@@ -230,10 +243,34 @@ const claude: Reviewer = {
 	login: "claude auth login",
 	profile: "CLAUDE_CONFIG_DIR",
 	credentials: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
-	// Claude Code turns a provider on only for `1`, `true`, `yes`, or `on`, so `0` or `false` reroutes nothing.
-	reroutes: (env) => [
+	// Claude Code lists these with its credentials, and reads them only while a provider's switch is on.
+	routeCredentials: ["ANTHROPIC_AWS_API_KEY", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN"],
+	// A provider's own settings take effect only while its switch is on. Model choices,
+	// such as ANTHROPIC_MODEL, stay stripped: the review pins its own.
+	connection: [
+		"ANTHROPIC_BASE_URL",
+		"ANTHROPIC_CUSTOM_HEADERS",
+		...CLAUDE_PROVIDERS.flatMap((provider) => [`CLAUDE_CODE_USE_${provider}`, `CLAUDE_CODE_SKIP_${provider}_AUTH`]),
+		"ANTHROPIC_AWS_BASE_URL",
+		"ANTHROPIC_AWS_WORKSPACE_ID",
+		"ANTHROPIC_BEDROCK_BASE_URL",
+		"ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+		"ANTHROPIC_BEDROCK_REGION_PREFIX",
+		"ANTHROPIC_BEDROCK_SERVICE_TIER",
+		"ANTHROPIC_FOUNDRY_BASE_URL",
+		"ANTHROPIC_FOUNDRY_RESOURCE",
+		"ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
+		"ANTHROPIC_GOOGLE_CLOUD_LOCATION",
+		"ANTHROPIC_GOOGLE_CLOUD_PROJECT",
+		"ANTHROPIC_GOOGLE_CLOUD_WORKSPACE_ID",
+		"ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
+		"ANTHROPIC_VERTEX_BASE_URL",
+		"ANTHROPIC_VERTEX_PROJECT_ID",
+	],
+	// Claude Code turns a provider on only for `1`, `true`, `yes`, or `on`, so `0` or `false` routes nothing.
+	routes: (env) => [
 		...(env.ANTHROPIC_BASE_URL ? ["ANTHROPIC_BASE_URL"] : []),
-		...["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"].filter((name) =>
+		...CLAUDE_PROVIDERS.map((provider) => `CLAUDE_CODE_USE_${provider}`).filter((name) =>
 			/^\s*(1|true|yes|on)\s*$/i.test(env[name] ?? ""),
 		),
 	],
@@ -327,9 +364,12 @@ const codex: Reviewer = {
 	login: "codex login",
 	profile: "CODEX_HOME",
 	// `codex exec` reads CODEX_API_KEY, though `codex login status` does not count it; it ignores OPENAI_API_KEY.
-	credentials: ["CODEX_API_KEY"],
-	// OPENAI_BASE_URL is never stripped, so a passed key goes where the CLI already sends its requests.
-	reroutes: () => [],
+	// CODEX_ACCESS_TOKEN is an agent identity token, which both read.
+	credentials: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+	routeCredentials: [],
+	// A gateway that intercepts TLS needs its CA. OPENAI_BASE_URL is never stripped.
+	connection: ["CODEX_CA_CERTIFICATE"],
+	routes: () => [],
 	// Such as "unexpected status 401 Unauthorized: ..." or "Your access token could not be refreshed
 	// because your refresh token was revoked. Please log out and sign in again."
 	unauthorized: /\b401 Unauthorized\b|sign in again/,
@@ -499,37 +539,43 @@ function profile(reviewer: Reviewer, env: NodeJS.ProcessEnv): string {
 	return dir ? `the profile ${reviewer.profile}=${dir}` : `its default profile (${reviewer.profile} is unset)`;
 }
 
+/** The variables among `names` that `env` sets, with their values. */
+const pick = (env: NodeJS.ProcessEnv, names: string[]) =>
+	Object.fromEntries(names.filter((name) => env[name] !== undefined).map((name) => [name, env[name]]));
+
 /**
  * Prepare the reviewer: the user's environment minus `STRIPPED`, so the CLI
- * uses its stored login, as any launched agent does. A CLI with no stored
- * login keeps the credentials it would read from the environment instead,
- * unless a stripped variable would have sent them elsewhere. A shell's API key
- * never overrides a stored subscription login, so a review is billed as the
- * user's own CLI sessions are.
+ * uses its stored login, as any launched agent does, plus the variables that
+ * connect it to its model, so it reaches it the way the user's own CLI does.
+ * A CLI with no stored login, or one sent to a gateway or another provider,
+ * also keeps the credentials it would read from the environment. Otherwise a
+ * shell's API key never overrides a stored subscription login, so a review is
+ * billed as the user's own CLI sessions are.
  */
 async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Cli> {
 	const reviewer = REVIEWERS[harness];
-	const stripped = strippedEnvironment(env);
-	const notLoggedIn = `${harness} is not logged in to ${profile(reviewer, env)}`;
-	const loggedOut = `${notLoggedIn}; run \`${reviewer.login}\``;
-	if ((await run(reviewer.status, cwd, stripped, "", undefined, signal)).code === 0) {
-		return { reviewer, env: stripped, unauthorized: loggedOut, signal };
+	const connected = { ...strippedEnvironment(env), ...pick(env, reviewer.connection) };
+	const routes = reviewer.routes(env);
+	const through = routes.length > 0 ? ` through ${names(routes)}` : "";
+	const loggedOut = `${harness} is not logged in to ${profile(reviewer, env)}${through}; run \`${reviewer.login}\``;
+	const credentials = [...reviewer.credentials, ...(routes.length > 0 ? reviewer.routeCredentials : [])].filter(
+		(name) => env[name],
+	);
+	const withCredentials = { ...connected, ...pick(env, credentials) };
+	const rejected = `${harness} rejected ${names(credentials)}${through}; replace it, or run \`${reviewer.login}\``;
+	if (routes.length > 0) {
+		if ((await run(reviewer.status, cwd, withCredentials, "", undefined, signal)).code !== 0) {
+			throw new ReviewInputError(loggedOut);
+		}
+		return { reviewer, env: withCredentials, unauthorized: credentials.length > 0 ? rejected : loggedOut, signal };
 	}
-	const reroutes = reviewer.reroutes(env);
-	if (reroutes.length > 0) {
-		throw new ReviewInputError(
-			`${notLoggedIn}, and quest review strips ${names(reroutes)}, which would reroute it; ` +
-				`run \`${reviewer.login}\``,
-		);
+	if ((await run(reviewer.status, cwd, connected, "", undefined, signal)).code === 0) {
+		const ignored =
+			credentials.length > 0 ? `; quest review strips ${names(credentials)} while a stored login exists` : "";
+		return { reviewer, env: connected, unauthorized: `${loggedOut}${ignored}`, signal };
 	}
-	const credentials = reviewer.credentials.filter((name) => env[name]);
 	if (credentials.length === 0) throw new ReviewInputError(loggedOut);
-	return {
-		reviewer,
-		env: { ...stripped, ...Object.fromEntries(credentials.map((name) => [name, env[name]])) },
-		unauthorized: `${harness} rejected ${names(credentials)}; replace it, or run \`${reviewer.login}\``,
-		signal,
-	};
+	return { reviewer, env: withCredentials, unauthorized: rejected, signal };
 }
 
 /** The environment `quest review` runs `harness`'s CLI in, for a caller that runs it with the same login. */
