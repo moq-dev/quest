@@ -4,8 +4,9 @@
 
 kix.quest opens to any maintainer: a third-party repository onboards itself,
 contributor PR heads run safely on runners, and the themed site and launch
-material announce it. Nothing here is needed for moq-dev's own repositories,
-which m0 serves first.
+material announce it. The standalone CLI runs on native Windows, whose suite
+passes nightly rather than on every pull request. Nothing here is needed for
+moq-dev's own repositories, which m0 serves first.
 
 ## Plan
 

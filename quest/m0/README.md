@@ -9,12 +9,20 @@ web app with push notifications, and their own Linux and macOS runners do
 the work through Claude Code and opencode inside each project's Nix
 devShell. The GitHub App bot publishes ordinary PRs. The standalone CLI
 (v0.1.0 shipped on 2026-10-07) keeps serving the same repositories locally on
-macOS, Linux, and native Windows.
+macOS and Linux.
 
-Work that only third-party repositories need, and the public launch, belong
-to [m1](/quest/m1/README.md).
+Work that only third-party repositories need, native Windows, and the public
+launch belong to [m1](/quest/m1/README.md).
 
 ## Plan
+
+Decided 2026-11-03 (user, /quest-complete, on
+[moq-dev/quest#455](https://github.com/moq-dev/quest/pull/455)), after the
+native Windows suite moved to m1 with nightly-only coverage:
+
+- Should m0's Goal drop native Windows?
+  - ✅ Narrow m0's Goal (recommended)
+  - Leave it
 
 Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
 
