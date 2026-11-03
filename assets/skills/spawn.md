@@ -36,7 +36,7 @@ Report each sub-agent's final status, staying silent on interim notifications, b
 As each agent reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
 Stop at the PRs, beyond the `/quest-review` each started agent runs itself: never offer or run `/quest-review`, `/quest-iterate`, or `/quest-merge` on them. Deciding them is `/quest-complete`'s job, run as its own session.
 
-Once every sub-agent has finished, plan the follow-ups the agents suggested, as the guide describes, in the foreground.
+Plan the follow-ups each agent suggests in the foreground, as the guide describes, without waiting for the other agents to finish.
 Include quest context, as many quests are concurrently in flight.
 
 Once every sub-agent has finished, remove each agent checkout `quest worktree status` lists with `quest worktree remove`, since Claude never removes a subagent's checkout; it refuses one holding unpreserved work.
