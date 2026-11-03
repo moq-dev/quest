@@ -1213,10 +1213,7 @@ export class GitHubService {
 		const latest = await this.#api<Repository>(token, repositoryPath(repo));
 		this.#repository(repo, latest);
 		this.#public(latest);
-		if (
-			latest.default_branch !== current.default_branch ||
-			latest.license?.spdx_id !== current.license?.spdx_id
-		)
+		if (latest.default_branch !== current.default_branch || latest.license?.spdx_id !== current.license?.spdx_id)
 			throw new GitHubError("Repository eligibility changed; review this project again");
 		const licenseError = await this.#license(latest);
 		if (licenseError) throw new GitHubError(licenseError);
@@ -1280,10 +1277,7 @@ export class GitHubService {
 					token,
 					`${path}/commits/${encodeURIComponent(current.default_branch)}`,
 				);
-				const root = await this.#api<Tree>(
-					token,
-					`${path}/git/trees/${sha(base.commit.tree.sha)}?recursive=1`,
-				);
+				const root = await this.#api<Tree>(token, `${path}/git/trees/${sha(base.commit.tree.sha)}?recursive=1`);
 				if (root.truncated)
 					throw new GitHubError(
 						"The repository is too large to read whole; run `quest init` in a clone instead",

@@ -894,7 +894,9 @@ describe("project picker", () => {
 		expect(html).toContain("Enable contributions");
 		expect(html).toContain("No Quest files on the default branch yet.");
 		// A repository without Quest files enables through its setup page's form, which opens the setup pull request.
-		expect(html).toContain('<a class="button primary" href="/projects/github/upstream/bare">Enable contributions</a>');
+		expect(html).toContain(
+			'<a class="button primary" href="/projects/github/upstream/bare">Enable contributions</a>',
+		);
 		expect(html).not.toContain('action="/projects/github/upstream/bare"');
 		expect(html).toContain("https://github.com/apps/quest-test/installations/new");
 		// The session's GitHub sign-in token lists repositories.

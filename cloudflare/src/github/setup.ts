@@ -61,7 +61,9 @@ export function treeCheckout(entries: TreeEntry[], files: Map<string, string>): 
 		},
 		list: (path) =>
 			entries
-				.filter((entry) => entry.path.startsWith(`${path}/`) && !entry.path.slice(path.length + 1).includes("/"))
+				.filter(
+					(entry) => entry.path.startsWith(`${path}/`) && !entry.path.slice(path.length + 1).includes("/"),
+				)
 				.map((entry) => entry.path.slice(path.length + 1)),
 		real: (path) => path,
 	};

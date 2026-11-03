@@ -219,8 +219,8 @@ export function QuestSetupPage(props: { repository: { id: number; owner: string;
 				<p>
 					This repository has no Quest files on its default branch yet. The App opens a pull request with what{" "}
 					<code>quest init</code> writes: skill stubs, <code>quest/README.md</code>, one line in the agent
-					instructions, a <code>.gitattributes</code> line, and Claude Code's worktree hooks. Contributions are
-					enabled when you merge it.
+					instructions, a <code>.gitattributes</code> line, and Claude Code's worktree hooks. Contributions
+					are enabled when you merge it.
 				</p>
 				<form method="post" action={`${projectURL(repo.owner, repo.name)}/setup`}>
 					<input type="hidden" name="id" value={repo.id} />
@@ -267,13 +267,13 @@ export function SettingUpPage(props: { setup: ProjectSetup; error?: string }) {
 					<p>The setup pull request has not been opened yet.</p>
 				) : setup.state === "open" ? (
 					<p>
-						The <a href={pull}>setup pull request #{setup.pull}</a> is open. Contributions are enabled when it
-						merges.
+						The <a href={pull}>setup pull request #{setup.pull}</a> is open. Contributions are enabled when
+						it merges.
 					</p>
 				) : (
 					<p>
-						The <a href={pull}>setup pull request #{setup.pull}</a> was closed without merging. Open it again
-						with the current default branch, or disconnect the project.
+						The <a href={pull}>setup pull request #{setup.pull}</a> was closed without merging. Open it
+						again with the current default branch, or disconnect the project.
 					</p>
 				)}
 				{retry && (

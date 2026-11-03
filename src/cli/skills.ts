@@ -29,7 +29,6 @@ export const GUIDE: string = guide;
 /** Where an agent without the CLI learns to install it. */
 const SETUP = "https://github.com/moq-dev/quest/blob/main/SETUP.md";
 
-
 /** One skill: YAML frontmatter, then the instructions. */
 export class Skill {
 	/** The frontmatter, fences excluded. */

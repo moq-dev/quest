@@ -123,9 +123,9 @@ describe("the setup pull request", () => {
 		expect((await merge(pull!)).status).toBe(202);
 		expect(await enrolled()).toEqual({ state: "enabled", enrolledBy: user });
 		expect(await setup()).toBeNull();
-		expect(
-			await db.prepare("SELECT user FROM github_project_members WHERE repository=10").first(),
-		).toEqual({ user });
+		expect(await db.prepare("SELECT user FROM github_project_members WHERE repository=10").first()).toEqual({
+			user,
+		});
 		expect(await (await view()).text()).toContain("Contributions enabled");
 	});
 
@@ -184,8 +184,7 @@ describe("the setup pull request", () => {
 	it("enables from the page when the merge webhook was missed", async () => {
 		await post("/setup", { id: "10" });
 		const [pull] = opened();
-		for (const [path, content] of await published())
-			if (content !== null) project.files.push({ path, content });
+		for (const [path, content] of await published()) if (content !== null) project.files.push({ path, content });
 		pull!.closed = pull!.merged = true;
 		const response = await view();
 		expect(response.status).toBe(303);
@@ -201,7 +200,10 @@ describe("the setup pull request", () => {
 
 describe("the setup plan on GitHub", () => {
 	it("refuses to follow a symlink", () => {
-		const checkout = treeCheckout([{ path: ".claude", type: "blob", mode: "120000", sha: "a".repeat(40) }], new Map());
+		const checkout = treeCheckout(
+			[{ path: ".claude", type: "blob", mode: "120000", sha: "a".repeat(40) }],
+			new Map(),
+		);
 		expect(() => checkout.stat(".claude/skills")).toThrow(".claude is a symbolic link");
 	});
 
