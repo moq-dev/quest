@@ -10,7 +10,7 @@ import { onTerminal, tempDir } from "./fixture";
 
 const root = resolve(import.meta.dirname, "..");
 
-function fixture() {
+async function fixture() {
 	const dir = tempDir();
 	const repo = join(dir, "repo");
 	mkdirSync(repo);
@@ -24,7 +24,7 @@ function fixture() {
 	const home = join(dir, "state");
 	const worktrees = new Worktrees(home);
 	worktrees.configure(100_000_000);
-	const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+	const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 	mkdirSync(join(record.path, "cache"));
 	return { dir, home, worktrees, record };
 }
@@ -77,7 +77,7 @@ function stopped(pid: number): boolean {
 
 describe.runIf(process.platform === "linux")("supervised runs under systemd", { timeout: 30_000 }, () => {
 	it("forwards arguments and status, stops orphaned descendants, then releases", async () => {
-		const { dir, home, worktrees, record } = fixture();
+		const { dir, home, worktrees, record } = await fixture();
 		const pidFile = join(dir, "orphan");
 		const run = supervise(
 			home,
@@ -94,7 +94,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 	});
 
 	it("forwards cancellation, stops live descendants, then releases", async () => {
-		const { dir, home, worktrees, record } = fixture();
+		const { dir, home, worktrees, record } = await fixture();
 		const pidFile = join(dir, "descendant");
 		const run = supervise(home, `sleep 1000 & echo $! > ${JSON.stringify(pidFile)}; echo ready; wait`);
 		await run.ready;
@@ -108,7 +108,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 	});
 
 	it("keeps a crashed supervisor's scratch until its scope is empty", async () => {
-		const { home, worktrees, record } = fixture();
+		const { home, worktrees, record } = await fixture();
 		const run = supervise(home, "echo ready; exec sleep 1000");
 		await run.ready;
 		run.child.kill("SIGKILL");
@@ -127,7 +127,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 	});
 
 	it("lets a terminal Ctrl-C reach the command once", async () => {
-		const { dir, home } = fixture();
+		const { dir, home } = await fixture();
 		const child = join(dir, "child.js");
 		writeFileSync(
 			child,

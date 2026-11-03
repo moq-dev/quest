@@ -12,7 +12,6 @@ import {
 	canonical,
 	derivedDefaults,
 	mainCheckout,
-	superprojectCheckout,
 } from "./worktree";
 
 /** The Claude Code events `quest worktree hook` handles, in the order `quest init` installs them. */
@@ -62,7 +61,7 @@ function git(path: string, ...args: string[]): string {
 /** The top of the checkout holding `cwd`, or undefined outside any. */
 function toplevel(cwd: string): string | undefined {
 	try {
-		return superprojectCheckout(cwd);
+		return canonical(git(cwd, "rev-parse", "--show-toplevel"));
 	} catch {
 		return undefined;
 	}
@@ -85,24 +84,43 @@ function base(cwd: string): string {
  * so a subagent that runs without isolation in another agent's checkout never matches it.
  */
 async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise<WorktreeRecord | undefined> {
-	const path = toplevel(input.cwd);
-	const record = path === undefined ? undefined : await waiting(() => worktrees.registered(path));
-	return record?.name === `agent-${field(input, "agent_id")}` ? record : undefined;
+	let path = toplevel(input.cwd);
+	while (path) {
+		const record = await waiting(() => worktrees.registered(path!));
+		if (record) return record.name === `agent-${field(input, "agent_id")}` ? record : undefined;
+		path = git(path, "rev-parse", "--show-superproject-working-tree") || undefined;
+	}
+	return undefined;
 }
 
 /**
  * Handle one hook event and return what it prints on stdout, if anything. WorktreeCreate checks
  * out Claude's default base under the main checkout's `.worktrees/`, with derived defaults, and
  * prints its path; an existing checkout of that name in the repository is restored instead.
- * WorktreeRemove removes the checkout, never forcing. SubagentStop releases the subagent's own
+ * WorktreeRemove removes the checkout after recursive safety checks. SubagentStop releases the subagent's own
  * checkout, and SubagentStart restores it, telling the subagent when its scratch was deleted.
  */
-export async function claudeHook(input: unknown, worktrees: Worktrees, merged: Merged): Promise<string | undefined> {
+export async function claudeHook(
+	input: unknown,
+	worktrees: Worktrees,
+	merged: Merged,
+	project?: string,
+): Promise<string | undefined> {
 	const hook = parse(input);
 	switch (hook.hook_event_name) {
 		case "WorktreeCreate": {
 			const name = field(hook, "name");
-			const cwd = superprojectCheckout(hook.cwd);
+			let cwd = toplevel(hook.cwd)!;
+			// The hook's project anchors ownership when cwd is inside a submodule, without
+			// changing which repository a session opened directly in a vendored project owns.
+			if (project) {
+				const main = mainCheckout(project);
+				while (mainCheckout(cwd) !== main) {
+					const parent = git(cwd, "rev-parse", "--show-superproject-working-tree");
+					if (!parent) throw new Error(`hook cwd is outside its project repository: ${hook.cwd}`);
+					cwd = parent;
+				}
+			}
 			const main = mainCheckout(cwd);
 			const existing = await waiting(() => worktrees.registered(join(main, ".worktrees", name)));
 			if (existing?.name === name) return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;

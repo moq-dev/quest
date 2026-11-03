@@ -701,6 +701,18 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		);
 	const state = () => new Worktrees();
 	const record = (value: unknown) => print(JSON.stringify(value));
+	const settled = (result: Promise<unknown>) => {
+		pending = result.then(
+			(value) => {
+				record(value);
+				return 0;
+			},
+			(error: unknown) => {
+				warn(error instanceof Error ? error.message : String(error));
+				return 1;
+			},
+		);
+	};
 	worktree
 		.command("capacity <bytes>")
 		.description("Set this user's shared disk budget in bytes; until set, only free disk space limits checkouts")
@@ -722,7 +734,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			[],
 		)
 		.action((name: string, options: { reserve: number; ref: string; scratch: string[] }) =>
-			record(state().create(root(), name, options.reserve, options.ref, options.scratch)),
+			settled(state().create(root(), name, options.reserve, options.ref, options.scratch)),
 		);
 	worktree
 		.command("run")
@@ -762,18 +774,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"and drops the record of a removed checkout",
 		)
 		.action((id: string) => record(state().release(id)));
-	const settled = (result: Promise<unknown>) => {
-		pending = result.then(
-			(value) => {
-				record(value);
-				return 0;
-			},
-			(error: unknown) => {
-				warn(error instanceof Error ? error.message : String(error));
-				return 1;
-			},
-		);
-	};
+
 	// Only a commit no local ref reaches asks the forge, so other removals need no token.
 	const merged = async (repository: string, commit: string) => {
 		const origin = readRemote(repository, "origin");
@@ -821,7 +822,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Exits 1 on failure, never 2, which would keep a subagent running.",
 		)
 		.action(() => {
-			pending = (async () => claudeHook(JSON.parse(readFileSync(0, "utf8")), state(), merged))().then(
+			pending = (async () =>
+				claudeHook(
+					JSON.parse(readFileSync(0, "utf8")),
+					state(),
+					merged,
+					program.getOptionValueSource("root") === "cli" ? root() : process.env.CLAUDE_PROJECT_DIR,
+				))().then(
 				(output) => {
 					if (output) out.stdout(output);
 					return 0;

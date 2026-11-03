@@ -1211,10 +1211,11 @@ checkout released, before `git worktree remove` deletes it. A checkout already
 removed with `git worktree remove` only drops its record, as with `release`.
 New checkouts initialize their submodules recursively before returning. Restoring
 one preserves its existing submodule pins and local work. Removal also checks
-submodules' ignored files and every module store, including deinitialized ones;
+submodules' files outside declared scratch and every module store, including deinitialized ones;
 commits at their HEAD or refs must be reachable from a remote-tracking ref,
 since module stores and their local branches are deleted with the checkout.
-Only after those checks does removal use the force Git requires for submodules.
+Scratch paths inside submodules use that submodule's ignore rules. Only after
+those checks does removal use the force Git requires for submodules.
 A failed creation stays charged until `release` drops it. Records live in
 `$QUEST_WORKTREE_HOME`, or `$XDG_STATE_HOME/quest/worktrees` (default
 `~/.local/state/quest/worktrees`). The registry lock of a process that exited on

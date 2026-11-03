@@ -1,6 +1,6 @@
 // Git checkouts under a shared disk budget. Release prunes declared scratch in place, by hand or
 // once the last supervised run in the checkout stops. Remove deletes a checkout that holds no unpreserved work.
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
 	type Stats,
@@ -19,7 +19,8 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Owner, Retained, type RunOptions, type Scopes, alive, currentOwner, systemdScopes } from "./supervise";
 
@@ -190,7 +191,8 @@ function changes(root: string, ignored: boolean): string[] {
 function submodules(root: string): string[] {
 	return git(root, "submodule", "foreach", "--quiet", "--recursive", 'printf "%s\\0" "$toplevel/$sm_path"')
 		.split("\0")
-		.filter(Boolean);
+		.filter(Boolean)
+		.map(canonical);
 }
 
 /** Module stores survive deinit; removing this worktree deletes their refs too. */
@@ -200,19 +202,28 @@ function moduleStores(path: string): string[] {
 	return readdirSync(path).flatMap((name) => moduleStores(join(path, name)));
 }
 
-function clean(root: string): void {
+function clean(root: string): { modules: string[]; stores: Set<string> } {
+	const modules = submodules(root);
+	for (const path of [...modules].reverse()) {
+		const changed = changes(path, false);
+		if (changed.length)
+			throw new Error(
+				`checkout has modified or untracked files in submodule ${path}: ${changed.slice(0, 20).join(", ")}`,
+			);
+	}
 	const found = changes(root, false);
 	if (found.length) throw new Error(`checkout has modified or untracked files: ${found.slice(0, 20).join(", ")}`);
-	for (const path of submodules(root)) {
-		const left = changes(path, true);
-		if (left.length)
-			throw new Error(
-				`submodule ${path} has modified, untracked, or ignored files: ${left.slice(0, 20).join(", ")}`,
-			);
+	for (const repository of [root, ...modules]) {
+		for (const record of git(repository, "ls-files", "--stage", "-z").split("\0")) {
+			if (!record.startsWith("160000 ")) continue;
+			const path = join(repository, record.slice(record.indexOf("\t") + 1));
+			if (entry(path)?.isDirectory() && !existsSync(join(path, ".git")) && readdirSync(path).length)
+				throw new Error(`uninitialized submodule contains files: ${path}`);
+		}
 	}
 	const stores = new Set([
 		...moduleStores(git(root, "rev-parse", "--path-format=absolute", "--git-path", "modules").trim()),
-		...submodules(root).map((path) => git(path, "rev-parse", "--absolute-git-dir").trim()),
+		...modules.map((path) => git(path, "rev-parse", "--absolute-git-dir").trim()),
 	]);
 	for (const store of stores) {
 		// Local branches and tags in a module store disappear with the worktree. Only remote refs preserve them.
@@ -231,6 +242,7 @@ function clean(root: string): void {
 		).trim();
 		if (commit) throw new Error(`submodule ${store} has commits no remote-tracking ref reaches: ${commit}`);
 	}
+	return { modules, stores };
 }
 
 /**
@@ -277,23 +289,16 @@ function repositoryWithin(path: string): string | undefined {
 	return undefined;
 }
 
-/** The enclosing checkout, climbing out of initialized submodules. */
-export function superprojectCheckout(path: string): string {
-	path = git(path, "rev-parse", "--show-toplevel").trim();
-	let parent = git(path, "rev-parse", "--show-superproject-working-tree").trim();
-	while (parent) {
-		path = parent;
-		parent = git(path, "rev-parse", "--show-superproject-working-tree").trim();
-	}
-	return canonical(path);
-}
-
 /** The repository's main checkout, which every linked worktree of it shares, from any path inside one. */
 export function mainCheckout(path: string): string {
-	const [main] = git(superprojectCheckout(path), "worktree", "list", "--porcelain", "-z").split("\0\0");
+	const [main] = git(path, "worktree", "list", "--porcelain", "-z").split("\0\0");
 	const lines = main?.split("\0") ?? [];
 	const found = lines.find((line) => line.startsWith("worktree "))?.slice(9);
 	if (!found || lines.includes("bare")) throw new Error(`repository has no main checkout: ${path}`);
+	// Git lists an absorbed submodule's store as its main worktree; core.worktree
+	// still names the actual checkout relative to that store.
+	if (canonical(found) === canonical(git(path, "rev-parse", "--path-format=absolute", "--git-common-dir").trim()))
+		return canonical(git(path, "--git-dir", found, "rev-parse", "--show-toplevel").trim());
 	return canonical(found);
 }
 
@@ -525,8 +530,14 @@ export class Worktrees {
 		});
 	}
 	/** `scratch` names the ignored paths release deletes, such as dependencies and build output. */
-	create(root: string, name: string, reserve: number, ref = "HEAD", scratch: string[] = []): WorktreeRecord {
-		return this.locked((registry) => {
+	async create(
+		root: string,
+		name: string,
+		reserve: number,
+		ref = "HEAD",
+		scratch: string[] = [],
+	): Promise<WorktreeRecord> {
+		const record = await this.lockedWait((registry) => {
 			if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name))
 				throw new Error("name must contain only letters, digits, dots, underscores, or hyphens");
 			if (!Number.isSafeInteger(reserve) || reserve <= 0)
@@ -565,15 +576,31 @@ export class Worktrees {
 					path,
 					ref,
 				);
-				git(path, "submodule", "update", "--init", "--recursive");
-				record.phase = "active";
 				return record;
 			} catch (error) {
 				record.failure = String(error);
 				throw error;
 			}
 		});
+		try {
+			// Cloning can need the network; the reservation stays charged without holding the shared lock.
+			await promisify(execFile)("git", ["-C", record.path, "submodule", "update", "--init", "--recursive"], {
+				maxBuffer: 64 * 1024 * 1024,
+			});
+			return await this.lockedWait((registry) => {
+				const current = this.find(registry, record.id);
+				if (!this.owned(current)) throw new Error(`checkout disappeared during creation: ${record.path}`);
+				current.phase = "active";
+				return current;
+			});
+		} catch (error) {
+			await this.lockedWait((registry) => {
+				this.find(registry, record.id).failure = String(error);
+			});
+			throw error;
+		}
 	}
+
 	/** Refuses unless this record exclusively owns the checkout; false once Git and the disk both lack it. */
 	private owned(record: WorktreeRecord): boolean {
 		const path = canonical(record.path);
@@ -608,15 +635,19 @@ export class Worktrees {
 				throw new Error(`scratch path is the checkout's .git entry: ${path}`);
 		}
 		if (paths.length) {
-			// icase, because a case-insensitive filesystem resolves `CACHE` to a tracked `cache`.
-			const pathspecs = paths.map((path) => `:(literal,icase)${path}`);
-			const tracked = git(root, "ls-files", "-z", "--", ...pathspecs)
-				.split("\0")
-				.filter(Boolean);
-			if (tracked.length) throw new Error(`scratch includes tracked files: ${tracked.slice(0, 20).join(", ")}`);
-			const matched = ignored(root, paths);
-			const unignored = paths.filter((path) => !matched.has(path));
-			if (unignored.length) throw new Error(`scratch must be ignored by Git: ${unignored.join(", ")}`);
+			const modules = submodules(root).sort((a, b) => b.length - a.length);
+			for (const path of paths) {
+				const absolute = join(root, path);
+				const owner = modules.find((module) => absolute.startsWith(module + sep)) ?? root;
+				const local = relative(owner, absolute);
+				// icase covers filesystem aliases of tracked paths on case-insensitive hosts.
+				const tracked = git(owner, "ls-files", "-z", "--", `:(literal,icase)${local}`)
+					.split("\0")
+					.filter(Boolean);
+				if (tracked.length)
+					throw new Error(`scratch includes tracked files: ${tracked.slice(0, 20).join(", ")}`);
+				if (!ignored(owner, [local]).has(local)) throw new Error(`scratch must be ignored by Git: ${path}`);
+			}
 			// Another checkout, such as one created inside this one, is work rather than scratch.
 			const registered = checkouts(record.repository)
 				.map((checkout) => checkout.path)
@@ -674,14 +705,16 @@ export class Worktrees {
 			}
 			interrupted(record);
 			const root = canonical(record.path);
-			clean(root);
+			const { modules, stores } = clean(root);
 			const kept = unreached(root).filter((commit) => !landed.has(commit));
 			if (kept.length)
 				throw new Error(
 					`commits that no branch or remote-tracking ref reaches, and no merged change has as its head: ${kept.join(", ")}`,
 				);
 			this.prune(registry, record);
-			const left = changes(root, true);
+			const left = [root, ...modules].flatMap((repository) =>
+				changes(repository, true).map((change) => `${repository}: ${change}`),
+			);
 			if (left.length)
 				throw new Error(
 					`ignored files outside the declared scratch remain, so the checkout was only released: ${left.slice(0, 20).join(", ")}`,
@@ -695,10 +728,7 @@ export class Worktrees {
 					record.repository,
 					"worktree",
 					"remove",
-					...(existsSync(git(root, "rev-parse", "--path-format=absolute", "--git-path", "modules").trim()) ||
-					submodules(root).length
-						? ["--force"]
-						: []),
+					...(stores.size || modules.length ? ["--force"] : []),
 					record.path,
 				);
 			} catch (error) {
