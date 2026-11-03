@@ -343,7 +343,7 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
 ## Operator setup
 
 1. Review the manifest's name, homepage, webhook URL, callback URL, permissions
-   and events. The callback is `https://kix.quest/api/auth/callback/github`;
+   and events. The callback is `https://quest.moq.dev/api/auth/callback/github`;
    **Request user authorization (OAuth) during installation** is enabled.
    Register the public App once under the service owner's account using
    [GitHub's manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)
@@ -380,10 +380,10 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
    Use GitHub's delivery/redelivery UI to retry failed deliveries. Rotate the
    private key and webhook secret through Workers secrets and the App settings.
 
-Sign-in starts at kix.quest and keeps Better Auth's persisted state and cookie
-checks. An authorization callback started by installing the App directly on
-GitHub has no sign-in state from kix.quest: its code is discarded and the
-visitor returns to the sign-in form, then completes a fresh state-bound flow
+Sign-in starts at the Worker's origin and keeps Better Auth's persisted state
+and cookie checks. An authorization callback started by installing the App
+directly on GitHub has no sign-in state from the Worker: its code is discarded
+and the visitor returns to the sign-in form, then completes a fresh state-bound flow
 that ends on `/projects`. A visitor already signed in goes straight there.
 Installation and sign-in do not enroll a repository; the maintainer still opts
 in from the project picker after a live authority check.

@@ -1117,8 +1117,8 @@ since Windows has no `SIGTERM`.
 
 ## Run kix jobs on your machines
 
-`quest runner` turns a Linux or macOS machine with Nix into a
-[kix.quest](https://kix.quest) runner, driving Claude Code or opencode with
+`quest runner` turns a Linux or macOS machine with Nix into a runner for kix at
+[quest.moq.dev](https://quest.moq.dev), driving Claude Code or opencode with
 that machine's own logins:
 
 ```sh
@@ -1138,8 +1138,8 @@ through its CLI's own flow in its own home: `claude auth login` in a
 kix stores only an opaque account id, its kind, and a label. An opencode
 account uses only the providers it signed in to, with `--model` or opencode's
 default. Use Claude Code for Claude subscriptions, since opencode cannot sign
-in to them. kix.quest/runners shows each runner's presence and sets the order
-jobs use your accounts in.
+in to them. kix's `/runners` page shows each runner's presence and sets the
+order jobs use your accounts in.
 
 Every job runs in its own checkout with the project's devShell, which the runner
 builds with `nix print-dev-env` from the job's revision, honoring the flake's
@@ -1407,7 +1407,8 @@ losing your plans. The binary carries the skills, your tool manager (mise or nix
 pins its version, and your repository's instructions stay yours. Quest supports
 macOS, Linux, and [native Windows](docs/windows.md).
 
-The hosted service is moving to [kix.quest](https://kix.quest): maintainers
+The hosted service, kix, runs at [quest.moq.dev](https://quest.moq.dev) for
+moq-dev until it opens to everyone at kix.quest: maintainers
 plan issues, start ready quests, and act on GitHub PRs through a decision UI.
 Hosted work will use explicitly selected maintainer or donor API funding.
 Automatic project history passes read updates since their prior issue/PR
