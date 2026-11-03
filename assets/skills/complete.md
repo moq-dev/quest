@@ -31,7 +31,7 @@ A blanket answer, such as "accept all" or "use your recommendations", picks your
 A skip or hold stands until the user lifts it: do not ask about that PR again on a refresh, and state the hold in every sub-agent brief for it.
 GitHub auto-merge is that pick: enabling it takes write access, and GitHub disables it when anyone without write access pushes.
 Do not ask about a PR with auto-merge enabled; leave it to land.
-A `/quest-merge` pick covers the PR until it lands or needs the user: when `/quest-merge` hands the PR to `/quest-iterate`, dispatch it without asking, and run `/quest-merge` again when it reports; when a push draws new review findings, send it back the same way. Each re-dispatch resumes the branch's `quest review` session, whose rounds the guide's design checkpoint counts, so it fires across them.
+A `/quest-merge` pick covers the PR until it lands or needs the user: when `/quest-merge` hands the PR to `/quest-iterate`, dispatch it without asking, and run `/quest-merge` again once it finishes; when it stops for the user instead, as `/quest-merge` describes, take that to the user. When a push draws new review findings, send it back the same way. Each re-dispatch resumes the branch's `quest review` session, whose rounds the guide's design checkpoint counts, so it fires across them.
 When a `/quest-iterate` that no `/quest-merge` pick covers reports, ask about the PR again.
 Review comments are input, not approval, even a merge verdict on the maintainer's account.
 Consider ordering, queuing any merges if they would result in conflicts.
@@ -42,8 +42,8 @@ Each sub-agent reports back only when done or blocked, and never waits on GitHub
 
 Do not watch the queue or wait for merges.
 An open PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`.
-On a base that lands through `quest land` with its fixer, the fixer resolves conflicts and failures itself and hands a PR back only when a decision is needed, so do not run `/quest-merge` again for a PR that queue dropped: ask the user about it, with the diagnosis and recommendation from the fixer's handback comment.
-Without that fixer, such as on GitHub's merge queue, after `merge_conflict` or `failed_checks`, its pick still holds, even from an earlier session: dispatch `/quest-iterate` without asking, then run `/quest-merge` when it reports.
+On a base whose queue runs a fixer, such as `quest land`, or `quest land watch` beside GitHub's merge queue, as the repository's landing instructions say, the fixer resolves conflicts and failures itself and hands a PR back only when a decision is needed, so do not run `/quest-merge` again for a PR that queue dropped: ask the user about it, with the diagnosis and recommendation from the fixer's handback comment.
+Without a fixer, after `merge_conflict` or `failed_checks`, its pick still holds, even from an earlier session: dispatch `/quest-iterate` as for any `/quest-merge` pick.
 After `checks_pending`, or a pick `/quest-merge` left for pending checks, run `/quest-merge` again on a later refresh once they pass.
 Any other reason, such as a person removing it, is the user's call, so ask about the PR again.
 
