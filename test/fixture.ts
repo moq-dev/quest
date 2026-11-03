@@ -21,7 +21,7 @@ import { afterAll, afterEach, expect } from "vitest";
 import { blockers, check, formatFinding, lookup, ready, renderBlocker } from "../src/core";
 import { type Output, main } from "../src/cli/main";
 import { type Terminal } from "../src/cli/theme";
-import { exists, load } from "../src/cli/tree";
+import { checkout, load } from "../src/cli/tree";
 
 export const ROOT_README = `# Quests
 
@@ -217,7 +217,8 @@ export class Tree {
 	}
 
 	findings(): string[] {
-		return check(load(this.path), (path) => exists(this.path, path)).map(formatFinding);
+		const tree = checkout(this.path, () => {});
+		return check(tree.docs, tree.exists).map(formatFinding);
 	}
 
 	/** The rendered blocker chain: one line per blocker, nesting indented. */

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { type Output, main } from "../src/cli/main";
-import { baseInstructions, findings, runningHarness } from "../src/cli/review";
+import { baseInstructions, findings, review, runningHarness, sessionFile } from "../src/cli/review";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -78,6 +78,13 @@ const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST|PATH$)/.test(k)));
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT ? 1 : 0);
+if (process.env.FAKE_HANG) {
+	// It takes a while to exit when asked to, as a CLI saving its session does.
+	process.on("SIGTERM", () => setTimeout(() => process.exit(143), 300));
+	fs.writeFileSync(process.env.FAKE_HANG, String(process.pid));
+	setInterval(() => {}, 1000);
+	return;
+}
 const event = (value) => console.log(JSON.stringify(value));
 const loggedIn = !process.env.FAKE_LOGGED_OUT || process.env.CODEX_API_KEY;
 const rejected = process.env.FAKE_REJECTED ?? (loggedIn ? undefined : "turn");
@@ -172,7 +179,7 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	vi.stubEnv("FAKE_LOG", log);
 	// The session's own profile would change the logged-out errors.
 	const unset = [...HOST_CREDENTIALS, "CLAUDECODE", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
-	for (const name of [...unset, "FAKE_LOGGED_OUT", "FAKE_REJECTED"]) {
+	for (const name of [...unset, "FAKE_LOGGED_OUT", "FAKE_REJECTED", "FAKE_HANG"]) {
 		vi.stubEnv(name, undefined);
 	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
@@ -327,6 +334,20 @@ fakes("a reviewer with no stored login reviews with the credential its CLI reads
 		expect(call.env.CODEX_API_KEY).toBeUndefined();
 		expect(call.env.CODEX_THREAD_ID).toBeUndefined();
 	}
+});
+
+fakes("an abort stops the reviewer's turn and records no round", async () => {
+	const s = setup();
+	const pid = join(s.bin, "..", "codex.pid");
+	vi.stubEnv("FAKE_HANG", pid);
+	const controller = new AbortController();
+	const round = review({ root: s.repo, signal: controller.signal }, { env: process.env });
+	while (!existsSync(pid)) await new Promise((resolve) => setTimeout(resolve, 20));
+	controller.abort();
+	await expect(round).rejects.toThrow(/abort/i);
+	// The round fails only once the CLI exited, so nothing outlives it in the checkout.
+	expect(() => process.kill(Number(readFileSync(pid, "utf8")), 0)).toThrow();
+	expect(existsSync(sessionFile(join(s.repo, ".git"), "feature"))).toBe(false);
 });
 
 fakes("a stored login wins over an environment credential, so a shell's key never changes the billing", async () => {

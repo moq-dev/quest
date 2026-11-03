@@ -6,9 +6,10 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
+import { sessionFile } from "../cli/review";
 import { save } from "../cli/worktree";
 import type { Job } from "./protocol";
 
@@ -361,9 +362,47 @@ export class Workspace {
 		save(this.#file, this.#record);
 	}
 
-	/** Delete the checkout and its record once the job is done with this runner. */
+	/**
+	 * A checkout of `head`, a commit the job published, on its own branch for
+	 * `quest review`, which reviews a branch and keeps its session per branch.
+	 * It sits beside the job's checkout, outside what the agent's sandbox can
+	 * reach, and is replaced for each head.
+	 */
+	async reviewCheckout(head: string): Promise<string> {
+		if (!/^[0-9a-f]{40}$/.test(head)) throw new Error(`not a commit: ${head}`);
+		const dir = `${this.dir}.review`;
+		await locked(this.#git, async () => {
+			await fetch(this.#git, head);
+			await remove(this.#git, dir);
+			await run("git", [
+				"-C",
+				this.#git,
+				"worktree",
+				"add",
+				"--quiet",
+				"--force",
+				"-B",
+				this.reviewBranch,
+				dir,
+				head,
+			]);
+		});
+		return dir;
+	}
+
+	/** The branch `reviewCheckout` checks out, one per job. */
+	get reviewBranch(): string {
+		return `kix-review/${basename(this.dir)}`;
+	}
+
+	/** Delete the checkout, its review checkout and session, and its record once the job is done with this runner. */
 	async remove(): Promise<void> {
-		await locked(this.#git, () => remove(this.#git, this.dir));
+		await locked(this.#git, async () => {
+			await remove(this.#git, this.dir);
+			await remove(this.#git, `${this.dir}.review`);
+			await run("git", ["-C", this.#git, "branch", "--quiet", "-D", this.reviewBranch]).catch(() => {});
+			rmSync(sessionFile(this.#git, this.reviewBranch), { force: true });
+		});
 		rmSync(this.#file, { force: true });
 	}
 }
