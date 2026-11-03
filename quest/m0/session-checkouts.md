@@ -23,8 +23,11 @@ Evidence, gathered 2026-11-02:
 
 Work:
 
-- Install `SessionEnd` and `SessionStart` hook entries through
-  `quest init`, recognised by `init` and `uninstall` like the others.
+- Add `SessionEnd` and `SessionStart` entries to the opt-in user-level hook
+  setup the docs describe. Amended 2026-11-03 (maintainer, /quest-unblock):
+  `quest init` writes no hook entries any more
+  ([quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md)),
+  so this quest no longer installs them through `init`.
 - `SessionEnd` releases (never removes) the session's checkout;
   `SessionStart` claims it again on resume. `/clear` also fires
   `SessionEnd`, so release is idempotent and the next `SessionStart`

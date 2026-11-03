@@ -23,7 +23,9 @@ agent can't do, so its README description comes from Claude Code's own code:
 - The bridge never runs `git worktree unlock` on a hook-created checkout,
   since it records no Git root for one, so quest's lock stays in place.
 
-Check it from a scratch repository set up with `quest init`, with
+Check it from a scratch repository with the worktree hooks configured (the
+opt-in user-level setup once
+[quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md) lands), with
 `QUEST_WORKTREE_HOME` isolated: start `claude remote-control --spawn worktree`,
 spawn a session from claude.ai, end it once without changes and once with an
 untracked file, and watch `quest worktree status`. Fix the README if it
