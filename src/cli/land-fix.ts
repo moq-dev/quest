@@ -1,7 +1,7 @@
 // Untrusted agent side. The host wrapper supplies only a model endpoint and its client key; the agent holds no
 // GitHub credential, and the daemon posts the comments it writes into its result.
 import { spawn, spawnSync } from "node:child_process";
-import { constants, closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import prompt from "../../assets/land-fix.md";
 import { programEnvironment, requireProgram } from "./program";
@@ -13,15 +13,51 @@ export class FixerAgentError extends Error {
 }
 
 export const FIX_RESULT = "quest-land-result.json";
-export function readFixResult(root: string): string {
-	const fd = openSync(join(root, FIX_RESULT), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+/**
+ * The repository's known flaky tests, which a daemon may write in the checkout's `.git` before a round,
+ * where no commit can carry it: a JSON array of `KnownFlaky`.
+ */
+export const FLAKY_INPUT = "quest-land-flaky.json";
+
+/** A test the fixer judged flaky before, by the `failure` it named, with the `merge_group` jobs that showed it. */
+export interface KnownFlaky {
+	failure: string;
+	jobs: string[];
+}
+
+/** A regular file of at most 100 KB, never through a link. */
+function readBounded(path: string, what: string): string {
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
 		const stat = fstatSync(fd);
-		if (!stat.isFile() || stat.size > 100_000) throw new Error("fixer result must be a regular file under 100 KB");
+		if (!stat.isFile() || stat.size > 100_000) throw new Error(`${what} must be a regular file under 100 KB`);
 		return readFileSync(fd, "utf8");
 	} finally {
 		closeSync(fd);
 	}
+}
+
+export function readFixResult(root: string): string {
+	return readBounded(join(root, FIX_RESULT), "fixer result");
+}
+
+/** The known flaky tests the daemon left in `root`'s `.git`, if any, as the agent's input lists them. */
+function knownFlaky(root: string): KnownFlaky[] {
+	const path = join(root, ".git", FLAKY_INPUT);
+	if (!existsSync(path)) return [];
+	const value = json(readBounded(path, "known flaky tests"));
+	if (
+		!Array.isArray(value) ||
+		!value.every(
+			(item) =>
+				item &&
+				typeof item.failure === "string" &&
+				Array.isArray(item.jobs) &&
+				item.jobs.every((job: unknown) => typeof job === "string"),
+		)
+	)
+		throw new Error("invalid known flaky tests");
+	return value as KnownFlaky[];
 }
 /** The longest Markdown comment a result may ask the daemon to post on its PR. */
 export const COMMENT_LIMIT = 4000;
@@ -32,10 +68,12 @@ const FAILURE_LIMIT = 200;
  * The fixer's verdict on one PR. `blame` names a PR whose own change caused the failure; a blamed PR
  * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
  * to last, that show the failure, which its comment quotes. `failure` names the failing test or step,
- * the signature the stop rules compare across a pick's rounds.
+ * the signature the stop rules compare across a pick's rounds. A requeue of a known flaky test's
+ * failure may carry `disable`: the tip of the fixer's `disable` branch, a commit on the base that skips
+ * the test and adds its follow-up quest, which the daemon opens as a PR of its own.
  */
 export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string; failure?: string } & (
-	| { number: number; action: "requeue"; reason: string }
+	| { number: number; action: "requeue"; reason: string; disable?: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
 );
@@ -98,6 +136,11 @@ function validate(item: any, pr: boolean): void {
 		)
 			throw new Error("invalid fixer failure");
 		metadata.push("failure");
+	}
+	if (pr && "disable" in item) {
+		if (item.action !== "requeue" || typeof item.disable !== "string" || !/^[a-f0-9]{40}$/.test(item.disable))
+			throw new Error("invalid fixer disable");
+		metadata.push("disable");
 	}
 	// One optional Markdown comment per PR: multiline, but no other control characters.
 	if (pr && "comment" in item) {
@@ -179,6 +222,7 @@ export async function fix(
 	if (!args && (!process.env.OPENAI_BASE_URL || !process.env.OPENAI_API_KEY))
 		throw new Error("fix needs OPENAI_BASE_URL and OPENAI_API_KEY from the container wrapper");
 	readFileSync(log); // Fail before starting an agent when the wrapper did not expose the log.
+	const flaky = numbers.length ? knownFlaky(root) : [];
 	// The daemon pinned each PR's head on its pr-<n> branch; name it so the agent need not look it up.
 	const prs = numbers.map((number) => {
 		const ref = `pr-${number}`;
@@ -240,7 +284,7 @@ export async function fix(
 		child.once("error", reject);
 		child.stdin.on("error", () => {});
 		child.stdin.end(
-			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:${prs.length ? `\n${prs.join("\n")}` : " none; the base fails alone"}\n`,
+			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:${prs.length ? `\n${prs.join("\n")}` : " none; the base fails alone"}\n${flaky.length ? `Known flaky tests: ${JSON.stringify(flaky)}\n` : ""}`,
 		);
 		child.once("close", (code) => (code === 0 ? done() : reject(new FixerAgentError(code ?? 1))));
 	});

@@ -53,7 +53,8 @@ concurrent edits to quest link lists. It adds hook entries running
 settings, so Quest creates and reclaims Claude Code's worktrees; Claude Code
 then needs `quest` on its `PATH` to create any worktree in the repository. It
 prints each path it changed and is safe to rerun. Rerun after an upgrade, it
-also removes the unmodified stubs of skills the new version no longer ships.
+also rewrites the unmodified stubs whose description or setup link changed and
+removes the unmodified stubs of skills the new version no longer ships.
 
 If init refuses, it names the conflicting path. Report it and ask the user how
 to proceed; never delete or rename their files to get past it.
@@ -80,6 +81,17 @@ GitHub Actions, add `ready_for_review` to the `pull_request` trigger's `types`
 job the condition
 `github.event_name != 'pull_request' || github.event.pull_request.draft == false`.
 Change workflows only if the user agrees.
+
+Agents push their quest branches to the repository itself, and GitHub gives
+workflows on those branches the repository's secrets and default token, so
+recommend keeping that CI read-only: code no maintainer has reviewed should
+meet only a read-only `GITHUB_TOKEN` and no write credentials. In GitHub, set
+Settings → Actions → General → Workflow permissions to read; move repository
+secrets, and organization secrets shared with the repository, into
+environments whose deployment branches are limited to protected branches; and
+keep write `permissions:` out of jobs that pull requests and pushes to other
+branches run. kix checks the same settings when a repository enrolls.
+Change settings and workflows only if the user agrees.
 
 Run `quest check`, then suggest next steps: restart the agent session so it
 loads the new skills, then `/quest-plan` (`$quest-plan` in Codex) to plan

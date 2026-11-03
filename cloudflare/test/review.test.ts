@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { type Reads, unreviewed } from "../src/github/review";
+import { type Observed, type Reads, observedGap, unreviewed } from "../src/github/review";
 
 const APP = 123;
 const sha = (name: string) => createHash("sha1").update(name).digest("hex");
@@ -270,5 +270,95 @@ describe("the review a landing needs", () => {
 			expect(await merged([])).toBeNull();
 			expect(await merged(["merge"])).toContain(carried);
 		});
+	});
+});
+
+describe("the review the inbox flags as missing before merge", () => {
+	const head = sha("head");
+	/** One read of pull request #1 at `head`, as the inbox's body batch returns it. */
+	function observed(
+		pull: {
+			approved?: string[];
+			checks?: { status: string; conclusion: string | null }[];
+			body?: string;
+			editor?: string;
+			association?: string;
+			parents?: number;
+		} = {},
+	): Observed {
+		return {
+			authorAssociation: pull.association ?? "MEMBER",
+			body: pull.body ?? "",
+			author: { __typename: "User", login: "author" },
+			userContentEdits: { nodes: pull.editor ? [{ editor: { __typename: "User", login: pull.editor } }] : [] },
+			latestOpinionatedReviews: {
+				nodes: (pull.approved ?? []).map((oid) => ({
+					state: "APPROVED",
+					author: { __typename: "User", login: "maintainer" },
+					commit: { oid },
+				})),
+			},
+			tip: {
+				nodes: [
+					{
+						commit: {
+							oid: head,
+							parents: { totalCount: pull.parents ?? 1 },
+							checkSuites: { nodes: pull.checks ? [{ checkRuns: { nodes: pull.checks } }] : [] },
+						},
+					},
+				],
+			},
+		};
+	}
+	const ask = `kix lands only a reviewed head. Approve ${short("head")} on GitHub`;
+
+	it("flags nothing once an approval, the App's check, or the author's own record counts on the head", () => {
+		expect(observedGap(observed({ approved: [head] }), head, "main")).toBeNull();
+		expect(observedGap(observed({ checks: [{ status: "COMPLETED", conclusion: "SUCCESS" }] }), head, "main")).toBe(
+			null,
+		);
+		expect(observedGap(observed({ body: `## Review\n\nClean on ${head}.` }), head, "main")).toBeNull();
+	});
+
+	it("gives the land gate's reason for a head nothing counts on", () => {
+		expect(observedGap(observed(), head, "main")).toBe(
+			`No review counts on ${short("head")} yet. ${ask} as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`,
+		);
+		expect(observedGap(observed({ approved: [sha("old")] }), head, "main")).toMatch(
+			new RegExp(
+				`^The approval of ${short("old")} does not carry to ${short("head")}: .* merges of main\\. ${ask}`,
+			),
+		);
+		for (const conclusion of ["FAILURE", null])
+			expect(observedGap(observed({ checks: [{ status: "IN_PROGRESS", conclusion }] }), head, "main")).toMatch(
+				/^No review counts/,
+			);
+	});
+
+	it.each([
+		["the author's association rules out write access", { association: "CONTRIBUTOR" }],
+		["someone else last edited the body", { editor: "maintainer" }],
+		["the record names another commit", { body: `## Review\n\nClean on ${sha("old")}.` }],
+	])("does not count the author's record when %s", (_, overrides) => {
+		const body = `## Review\n\nClean on ${head}.`;
+		expect(observedGap(observed({ body, ...overrides }), head, "main")).toMatch(/^No review counts/);
+	});
+
+	it("says a merge head's earlier review may still carry, which the click checks", () => {
+		expect(observedGap(observed({ parents: 2 }), head, "main")).toMatch(
+			new RegExp(
+				`^No review counts on ${short("head")} itself yet\\. ${short("head")} is a merge, .* which kix checks when you merge\\. ${ask}`,
+			),
+		);
+		expect(observedGap(observed({ parents: 2, approved: [sha("old")] }), head, "main")).toMatch(
+			new RegExp(`^The approval of ${short("old")} is of a commit before ${short("head")}\\.`),
+		);
+	});
+
+	it("flags nothing from a read of another head or without the reviews", () => {
+		expect(observedGap(observed(), sha("other"), "main")).toBeNull();
+		const { latestOpinionatedReviews: _, ...partial } = observed();
+		expect(observedGap(partial as Observed, head, "main")).toBeNull();
 	});
 });

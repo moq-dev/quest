@@ -4,6 +4,7 @@
 // refuses anything it does not model. Like GitHub, it scopes each installation
 // token to the repositories and permissions it was minted for.
 import { createHash } from "node:crypto";
+import { REVIEW_CHECK } from "../src/github/review";
 
 export type User = { id: number; login: string; name: string; email: string };
 /** A comment or review thread reply; a null author is a deleted account. */
@@ -23,7 +24,7 @@ export type Pull = Issue & {
 	/** Head branch; `quest/<path>` associates the pull request with that quest. */
 	branch: string;
 	checks: "SUCCESS" | "FAILURE" | "PENDING" | null;
-	/** The check runs behind `checks`. */
+	/** The check runs behind `checks`, oldest first. */
 	/** `commit` is the one a run reports on; the head by default. */
 	runs?: { name: string; conclusion: string; url: string; app?: number; context?: boolean; commit?: string }[];
 	review: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
@@ -58,6 +59,8 @@ export type Pull = Issue & {
 	timeline?: { id: string; label: string | null }[];
 	/** Auto-merge is enabled, so it lands once its requirements pass. */
 	landing?: boolean;
+	/** It is in its base's merge queue; only a base with `queue` takes it. */
+	queued?: boolean;
 	/** The enabled auto-merge's time and commit body; `quest land` reads its queue from them. */
 	autoMerge?: { enabledAt: string; commitBody: string };
 	/** A fork's head branch accepts pushes from the upstream's maintainers. */
@@ -104,10 +107,14 @@ export type Repo = {
 	trees: Record<string, Tree>;
 	/** Check names the default branch's rulesets require. */
 	required?: string[];
+	/** The default branch has a merge queue, which takes a pull request only through `enqueuePullRequest` or auto-merge. */
+	queue?: boolean;
 	/** The default branch's other ruleset rules, as `GET /rules/branches/main` lists them. */
 	rules?: Record<string, unknown>[];
 	/** The default branch's classic protection, as `GET /branches/main/protection` returns it; none when absent. */
 	protection?: Record<string, any>;
+	/** Check runs the App wrote through `POST /check-runs`, oldest first. */
+	checkRuns?: { name: string; head_sha: string; conclusion: string; app: number; output: Record<string, unknown> }[];
 	/** Rulesets by ID, as `GET /rulesets/<id>` shows them to the App. */
 	rulesets?: Record<number, { current_user_can_bypass: "always" | "pull_requests_only" | "never" }>;
 };
@@ -115,6 +122,8 @@ export type World = {
 	app: { id: number; slug: string };
 	/** The installation on the repositories' owner. */
 	installation: number;
+	/** The repositories' owner's GitHub ID, which the local server admits to enroll. */
+	owner: number;
 	users: User[];
 	repos: Repo[];
 };
@@ -157,12 +166,46 @@ function entity(repo: Repo, item: Issue) {
 
 const mergeState = (pull: Pull) => pull.merge ?? (pull.draft ? "DRAFT" : "BLOCKED");
 
-function pullNode(repo: Repo, pull: Pull) {
+/** How GitHub relates a login to the repository: only an association that can come with write access names one. */
+const association = (repo: Repo, login: string) =>
+	login === repo.owner
+		? "OWNER"
+		: [...repo.maintainers, ...(repo.writers ?? [])].includes(login)
+			? "COLLABORATOR"
+			: "CONTRIBUTOR";
+
+/** A pull request as the project read pages it, with what the inbox's body batch adds for `app`'s review check. */
+function pullNode(repo: Repo, pull: Pull, app?: unknown) {
 	const oid = headOf(repo, pull);
 	const reviews = pull.reviews ?? [];
+	const checks = (pull.runs ?? []).filter(
+		(run) => !run.context && run.name === REVIEW_CHECK && run.app === app && (run.commit ?? oid) === oid,
+	);
 	return {
 		...entity(repo, pull),
-		body: pull.body ?? "",
+		...reviewTarget(repo, pull),
+		authorAssociation: association(repo, pull.author),
+		tip: {
+			nodes: [
+				{
+					commit: {
+						oid,
+						parents: { totalCount: repo.commits[oid]?.parents.length ?? 1 },
+						checkSuites: {
+							nodes: checks.length
+								? [
+										{
+											checkRuns: {
+												nodes: [{ status: "COMPLETED", conclusion: checks.at(-1)!.conclusion }],
+											},
+										},
+									]
+								: [],
+						},
+					},
+				},
+			],
+		},
 		headRefName: pull.branch,
 		headRefOid: oid,
 		isCrossRepository: !!pull.contributor,
@@ -291,9 +334,9 @@ function holdsTarget(repo: Repo, pull: Pull) {
 		baseRefName: "main",
 		headRefOid: headOf(repo, pull),
 		mergeStateStatus: mergeState(pull),
-		isMergeQueueEnabled: false,
+		isMergeQueueEnabled: repo.queue === true,
 		autoMergeRequest: pull.landing ? { enabledAt: updatedAt } : null,
-		mergeQueueEntry: null,
+		mergeQueueEntry: pull.queued ? { state: "QUEUED" } : null,
 		labels: { nodes: (pull.labels ?? []).map((name) => ({ name })) },
 		timelineItems: {
 			nodes: (pull.timeline ?? []).map((event) =>
@@ -345,11 +388,13 @@ export const ACTIONS_APP = 15368;
 /** One page of a head's check runs and commit statuses, as `statusCheckRollup.contexts` pages them. */
 function contextPage(pull: Pull, after: unknown) {
 	const start = typeof after === "string" ? Number(after) : 0;
-	const all = (pull.runs ?? []).map((run) =>
+	const all = (pull.runs ?? []).map((run, index) =>
 		run.context
 			? { __typename: "StatusContext", context: run.name, state: run.conclusion, targetUrl: run.url }
 			: {
 					__typename: "CheckRun",
+					// GitHub numbers runs as they are created.
+					databaseId: index + 1,
 					name: run.name,
 					status: "COMPLETED",
 					conclusion: run.conclusion,
@@ -431,7 +476,7 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 		};
 	}
 
-	if (query.includes("latestOpinionatedReviews(")) {
+	if (query.includes("headRefOid baseRefName body")) {
 		const pull = repo.pulls.find((p) => p.number === variables.number);
 		return { data: { repository: { pullRequest: pull ? reviewTarget(repo, pull) : null } } };
 	}
@@ -515,7 +560,8 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 	for (const [, alias, field, number] of query.matchAll(/([sb]\d+):(issue|pullRequest)\(number:(\d+)\)/g)) {
 		const pull = repo.pulls.find((p) => p.number === Number(number));
 		const issue = repo.issues.find((i) => i.number === Number(number));
-		const found = field === "pullRequest" ? pull && pullNode(repo, pull) : issue && entity(repo, issue);
+		const found =
+			field === "pullRequest" ? pull && pullNode(repo, pull, variables.app) : issue && entity(repo, issue);
 		result[alias!] = found ?? null;
 		if (!found) errors.push({ type: "NOT_FOUND", path: ["repository", alias] });
 	}
@@ -561,7 +607,17 @@ function workflowsOf(repo: Repo, sha: string): Record<string, string> {
 	return files;
 }
 
-type Permission = "metadata" | "contents" | "issues" | "pull_requests" | "checks" | "statuses" | "administration";
+type Permission =
+	| "metadata"
+	| "contents"
+	| "issues"
+	| "pull_requests"
+	| "checks"
+	| "statuses"
+	| "administration"
+	| "secrets"
+	| "actions"
+	| "environments";
 /** What an installation token may do: the repositories (`owner/name`) and permissions it was minted for. */
 type Grant = { repositories: Set<string>; permissions: Partial<Record<Permission, string>> };
 
@@ -607,7 +663,7 @@ export function fakeGitHub(world: World) {
 	const restRepo = (repo: Repo) => ({
 		id: repo.id,
 		name: repo.name,
-		owner: { login: repo.owner },
+		owner: { login: repo.owner, id: world.owner },
 		private: false,
 		visibility: "public",
 		default_branch: repo.defaultBranch ?? "main",
@@ -729,9 +785,12 @@ export function fakeGitHub(world: World) {
 		if (match && tail === "/installation") {
 			if (!app) return unauthorized();
 			if (!repo) return notFound();
-			const permissions = Object.fromEntries(
-				["metadata", "contents", "issues", "pull_requests", "checks", "statuses"].map((p) => [p, "write"]),
-			);
+			const permissions = {
+				...Object.fromEntries(
+					["metadata", "contents", "issues", "pull_requests", "checks", "statuses"].map((p) => [p, "write"]),
+				),
+				...Object.fromEntries(["administration", "secrets", "actions", "environments"].map((p) => [p, "read"])),
+			};
 			return json({ id: world.installation, app_id: world.app.id, suspended_at: null, permissions });
 		}
 		if (!scope) return unauthorized();
@@ -813,7 +872,7 @@ export function fakeGitHub(world: World) {
 						}
 				return json({ errors: [{ type: "NOT_FOUND" }] });
 			}
-			const landing = query.match(/\b(enablePullRequestAutoMerge|mergePullRequest)\(/)?.[1];
+			const landing = query.match(/\b(enablePullRequestAutoMerge|mergePullRequest|enqueuePullRequest)\(/)?.[1];
 			if (landing) {
 				for (const repo of world.repos)
 					for (const pull of repo.pulls)
@@ -827,11 +886,25 @@ export function fakeGitHub(world: World) {
 							if (pull.closed) return json({ errors: [{ message: "Pull request is closed" }] });
 							if (variables.sha !== headOf(repo, pull))
 								return json({ errors: [{ message: "Head sha didn't match expected head" }] });
-							if (landing === "mergePullRequest") {
-								if (!["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(mergeState(pull)))
-									return json({ errors: [{ message: "Pull Request is not mergeable" }] });
+							const ready = ["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(mergeState(pull));
+							if (landing === "enqueuePullRequest") {
+								if (!repo.queue)
+									return json({
+										errors: [{ message: "Merge queue is not enabled for this branch" }],
+									});
+								if (pull.queued)
+									return json({
+										errors: [{ message: "Pull request is already in the merge queue" }],
+									});
+								if (!ready) return json({ errors: [{ message: "Pull request is not mergeable" }] });
+								pull.queued = true;
+							} else if (landing === "mergePullRequest") {
+								if (!ready) return json({ errors: [{ message: "Pull Request is not mergeable" }] });
 								pull.closed = pull.merged = true;
 							} else {
+								// A merge queue takes a ready pull request only through enqueueing it.
+								if (repo.queue && ready)
+									return json({ errors: [{ message: "Pull request is in clean status" }] });
 								pull.landing = true;
 								pull.autoMerge = {
 									enabledAt: new Date().toISOString(),
@@ -897,10 +970,33 @@ export function fakeGitHub(world: World) {
 			if (!scope.permissions.administration) return forbidden();
 			return repo.protection ? json(repo.protection) : json({ message: "Branch not protected" }, 404);
 		}
+		// The setup page's CI check finds read-only pull-request CI: a read-only
+		// default token, no secrets, and no environments.
+		if (tail === "/actions/permissions/workflow" && method === "GET")
+			return scope.permissions.administration
+				? json({ default_workflow_permissions: "read", can_approve_pull_request_reviews: false })
+				: forbidden();
+		if ((tail === "/actions/secrets" || tail === "/actions/organization-secrets") && method === "GET")
+			return scope.permissions.secrets ? json({ total_count: 0, secrets: [] }) : forbidden();
+		if (tail === "/environments" && method === "GET")
+			return scope.permissions.actions ? json({ total_count: 0, environments: [] }) : forbidden();
 		const ruleset = tail.match(/^\/rulesets\/(\d+)$/);
 		if (ruleset && method === "GET") {
 			const found = repo.rulesets?.[Number(ruleset[1])];
 			return found ? json({ id: Number(ruleset[1]), ...found }) : notFound();
+		}
+		if (tail === "/check-runs" && method === "POST") {
+			if (!writes("checks")) return forbidden();
+			if (body.status !== "completed" || typeof body.head_sha !== "string" || !repo.commits[body.head_sha])
+				return json({ message: "Validation Failed" }, 422);
+			(repo.checkRuns ??= []).push({
+				name: body.name,
+				head_sha: body.head_sha,
+				conclusion: body.conclusion,
+				app: world.app.id,
+				output: body.output,
+			});
+			return json({ id: repo.checkRuns.length, name: body.name, head_sha: body.head_sha }, 201);
 		}
 		const runs = tail.match(/^\/commits\/([0-9a-f]{40})\/check-runs$/);
 		if (runs && method === "GET") {
@@ -918,7 +1014,13 @@ export function fakeGitHub(world: World) {
 						app: { id: run.app ?? ACTIONS_APP },
 					})),
 			);
-			const check_runs = found.filter(
+			// The App's own runs, newest first as `filter=latest` keeps one per name.
+			const written = (repo.checkRuns ?? [])
+				.filter((run) => run.head_sha === runs[1])
+				.reverse()
+				.filter((run, i, all) => all.findIndex((other) => other.name === run.name) === i)
+				.map((run) => ({ ...run, status: "completed", app: { id: run.app } }));
+			const check_runs = [...written, ...found].filter(
 				(run) => (!name || run.name === name) && (!app || String(run.app.id) === app),
 			);
 			return json({ total_count: check_runs.length, check_runs });
@@ -1010,7 +1112,7 @@ export function fakeGitHub(world: World) {
 				if (typeof body.body === "string") pull.body = body.body;
 				if (body.state === "closed") {
 					pull.closed = true;
-					pull.landing = false;
+					pull.landing = pull.queued = false;
 					pull.autoMerge = undefined;
 				}
 			}
@@ -1028,7 +1130,7 @@ export function fakeGitHub(world: World) {
 			if (pull.merge !== "CLEAN") return json({ message: "Pull Request is not mergeable" }, 405);
 			pull.closed = true;
 			pull.merged = true;
-			pull.landing = false;
+			pull.landing = pull.queued = false;
 			pull.autoMerge = undefined;
 			if (pull.squash) repo.branches[pull.base ?? repo.defaultBranch ?? "main"] = pull.squash;
 			pull.mergeCommit = pull.squash ?? commitOf(repo);

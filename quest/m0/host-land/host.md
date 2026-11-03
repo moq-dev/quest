@@ -95,8 +95,6 @@ What remains:
 
 - Merge #16 once
   [kixelated/nixos#13](https://github.com/kixelated/nixos/pull/13) lands.
-- The fixer's container access to CLIProxyAPI and the Codex login, which the
-  [fixer](/quest/m0/host-land/fixer.md) needs.
 - VM tests for three more symlink attacks (an escaping chain, a link to a
   directory, a write through a symlinked directory), which the extraction
   already rejects.
@@ -112,5 +110,7 @@ Amended 2026-11-01 (maintainer, /quest-plan; see the
 except fixes the switch needs. The `QUEST_GATE_PRIORITY=1` export in the
 generated check command (planned 2026-10-31) is dropped with it. The items
 above stay, since the fixer container and its launcher serve the watcher too,
-and the gate keeps serving the repositories not yet switched. The watcher's
-own unit is [Watcher on the host](/quest/m0/queue-watcher/host.md).
+and the gate keeps serving the repositories not yet switched. The watcher
+runs from the same module as each repository's daemon in watch mode
+(`services.quest-land.repositories.<name>.watch`), live for moq-dev/moq
+since 2026-11-02.

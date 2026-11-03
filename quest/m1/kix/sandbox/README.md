@@ -17,5 +17,4 @@ design decisions for the whole sandbox stay in the m0 epic's Plan.
 ## Required
 
 - [macOS sandbox](/quest/m1/kix/sandbox/macos.md) - the boundary verified under Seatbelt, then the answer-approval gate removed
-- [Ubuntu AppArmor](/quest/m1/kix/sandbox/apparmor.md) - the sandbox starts on stock Ubuntu, or the runner refuses at startup
 - [Untrusted devShells](/quest/m1/kix/sandbox/vm.md) - untrusted PR heads build their devShell in a per-job VM

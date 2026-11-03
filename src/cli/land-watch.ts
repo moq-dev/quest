@@ -6,6 +6,7 @@ import {
 	array,
 	GitHub,
 	type GitHubDependencies,
+	GitHubGraphQLError,
 	link,
 	object,
 	type ObjectValue,
@@ -14,7 +15,8 @@ import {
 } from "./github";
 import type { Entry } from "./land";
 import { authenticatedRead } from "./land-git";
-import { fixerText, post, redactTokens } from "./land-fixer";
+import { jobLog } from "./land-checks";
+import { fixerText, post } from "./land-fixer";
 import {
 	apiDependencies,
 	daemonLoop,
@@ -26,8 +28,8 @@ import {
 	save,
 	startDaemon,
 } from "./land-serve";
-import { advanceFixes, endPick, type FixContext, readRemoval, requeuedHeads } from "./land-watch-fix";
-import { headBefore } from "./status";
+import { advanceFixes, endPick, type FixContext, readPull, readRemoval, requeuedHeads } from "./land-watch-fix";
+import { enabledHead, headBefore } from "./status";
 
 export { readRemoval } from "./land-watch-fix";
 
@@ -104,6 +106,8 @@ interface Progress {
 	 * show a removal late, after a newer one, so each is remembered by ID until it falls out of the window.
 	 */
 	handled: Record<number, Record<string, string>>;
+	/** Per open PR, the armed pick GitHub refused to enqueue on the last pass, so each refusal is reported once. */
+	refused?: Record<number, string>;
 }
 
 /** How far back of the last pass each pass reads again, for an event GitHub shows late. */
@@ -114,6 +118,8 @@ const LOOKBACK = 24 * 60 * 60_000;
 const FAILED = ["failure", "timed_out", "startup_failure"];
 /** GitHub's removal reasons that a fixer can act on. */
 const FIXABLE = ["failed_checks", "checks_timed_out", "merge_conflict"];
+/** Merge states of a PR GitHub can enqueue now: its required checks passed and it does not conflict. */
+const READY = ["CLEAN", "HAS_HOOKS", "UNSTABLE"];
 
 const REMOVALS = `pageInfo { hasNextPage endCursor }
 	nodes {
@@ -128,8 +134,10 @@ const OPEN = `query($owner: String!, $name: String!, $base: String!, $qualified:
 		pullRequests(states: OPEN, baseRefName: $base, first: 50, after: $after) {
 			pageInfo { hasNextPage endCursor }
 			nodes {
-				id number url title headRefOid headRefName maintainerCanModify
+				id number url title headRefOid headRefName maintainerCanModify mergeStateStatus
 				headRepository { nameWithOwner }
+				mergeQueueEntry { id }
+				autoMergeRequest { enabledAt commitBody }
 				removals: timelineItems(since: $since, first: 20, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { ${REMOVALS} }
 			}
 		}
@@ -208,9 +216,70 @@ async function pickOf(
 	};
 }
 
-/** A job log as GitHub serves it, without its byte-order mark or per-line timestamps, and with no token. */
-function cleanLog(text: string): string {
-	return redactTokens(text.replace(/^\uFEFF/, "").replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z /gm, ""));
+/**
+ * Enqueue each armed pick GitHub left out of the merge queue
+ * ([community#209348](https://github.com/orgs/community/discussions/209348)): an open PR whose
+ * auto-merge was armed, by a writer or by the watcher's own re-enqueue, that is now ready but was
+ * neither in the queue nor added to it since. Only the head auto-merge was armed on is enqueued, with
+ * `expectedHeadOid` bound to it: GitHub keeps auto-merge across a writer's push, but that push ends the
+ * pick, and a head `enabledHead` cannot tell yet waits for the next pass. The PR is read again just
+ * before the enqueue, so a request disabled or a PR retargeted since the pass read it is not enqueued,
+ * which `expectedHeadOid` alone would not catch. An armed pick whose required
+ * checks fail, or that conflicts, is not ready and is left alone. A refusal is reported once per pick
+ * and retried each pass; one because GitHub queued the PR first says nothing.
+ */
+async function enqueueArmed(
+	github: GitHub,
+	base: string,
+	pulls: ObjectValue[],
+	progress: Progress,
+	note: (text: string) => void,
+): Promise<string[]> {
+	const output: string[] = [];
+	const refused: Record<number, string> = {};
+	for (const pull of pulls) {
+		if (pull.autoMergeRequest == null || pull.mergeQueueEntry != null) continue;
+		if (!READY.includes(string(pull.mergeStateStatus))) continue;
+		const number = Number(pull.number);
+		const head = string(pull.headRefOid);
+		const armed = string(object(pull.autoMergeRequest).enabledAt);
+		// Queued since it was armed: GitHub took this pick, and a removal since is the removal handler's.
+		const enqueues = array(
+			object(object((await github.graphql(ENQUEUES, { id: pull.id })).node).timelineItems).nodes,
+		);
+		if (enqueues.some((node) => typeof node.createdAt === "string" && node.createdAt >= armed)) continue;
+		if ((await enabledHead(github, pull, note)) !== head) continue;
+		const now = await readPull(github, string(pull.id));
+		const request = now.autoMergeRequest == null ? null : object(now.autoMergeRequest);
+		if (
+			now.state !== "OPEN" ||
+			string(now.baseRefName) !== base ||
+			string(now.headRefOid) !== head ||
+			now.mergeQueueEntry != null ||
+			request === null ||
+			string(request.enabledAt) !== armed
+		)
+			continue;
+		try {
+			await github.graphql(
+				`mutation($id: ID!, $sha: GitObjectID!) {
+					enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $sha }) { clientMutationId }
+				}`,
+				{ id: pull.id, sha: head },
+			);
+			output.push(`enqueued ${number} ${head}`);
+		} catch (error) {
+			if (!(error instanceof GitHubGraphQLError)) throw error;
+			// GitHub moved it first, or the head moved since this pass read it: nothing to report.
+			const fresh = await readPull(github, string(pull.id));
+			if (fresh.mergeQueueEntry != null || string(fresh.headRefOid) !== head) continue;
+			const pick = `${armed} ${head}`;
+			refused[number] = pick;
+			if (progress.refused?.[number] !== pick) output.push(`refused ${number} ${head}: ${error.message}`);
+		}
+	}
+	progress.refused = refused;
+	return output;
 }
 
 /** Every page of an Actions listing, whose rows are the response's `field`. */
@@ -261,15 +330,7 @@ async function failedBuild(
 			const step = array(job.steps ?? []).find(
 				(item) => typeof item.conclusion === "string" && FAILED.includes(item.conclusion),
 			);
-			let log = "";
-			if (!running) {
-				const response = await github.request(`/repos/${repository}/actions/jobs/${Number(job.id)}/logs`, {
-					allow: [404, 410],
-				});
-				log = response.ok
-					? cleanLog(await response.text())
-					: `(GitHub has no log for this job: HTTP ${response.status})`;
-			}
+			const log = running ? "" : await jobLog(github, repository, Number(job.id));
 			jobs.push({
 				workflow: string(run.name),
 				name: string(job.name),
@@ -482,7 +543,7 @@ async function handle(
  * One pass over the base's open PRs: handle each removal from the merge queue since the last pass,
  * oldest first, and remember each one handled, so a restart neither misses nor repeats one. The
  * first pass starts `SETTLE` before it. A PR closed before a pass reads its removal is not read.
- * With a fixer, `fix` then starts it on the PRs the queue dropped and collects its rounds.
+ * Then it enqueues each armed pick GitHub left out of the queue. With a fixer, `fix` then starts it on the PRs the queue dropped and collects its rounds.
  */
 export async function watchPass(
 	repository: Repository,
@@ -566,6 +627,7 @@ export async function watchPass(
 			save(path, progress);
 		}
 	}
+	output.push(...(await enqueueArmed(github, ref, pulls, progress, (text) => output.push(text))));
 	// The next pass reads from SETTLE before this one's start; nothing older can come back.
 	const kept = new Date(Date.parse(started) - SETTLE).toISOString();
 	for (const [number, handled] of Object.entries(progress.handled)) {
@@ -582,10 +644,11 @@ type Permissions = Record<string, "read" | "write">;
 
 /**
  * The installation token permissions the watcher asks for. `api` reads the queue's events, comments,
- * and the `merge_group` logs (`actions: read`); with a fixer it also re-enqueues, which needs
- * `merge_queues: write` for `enqueuePullRequest` and `contents: write` for arming auto-merge, and it
- * edits the PR body's Review. `push` lease-pushes a fix or merge, and `pushWorkflows` one that carries
- * a workflow change, as `quest land serve` does; `read` fetches.
+ * and the `merge_group` logs (`actions: read`), and enqueues the armed picks GitHub left out of the
+ * queue, which `enqueuePullRequest` needs `merge_queues: write` for; with a fixer it also re-enqueues,
+ * which needs `contents: write` for arming auto-merge, edits the PR body's Review, and reads the PR's
+ * own checks for the fixer (`checks: read` and `statuses: read`). `push` lease-pushes a fix or merge,
+ * and `pushWorkflows` one that carries a workflow change, as `quest land serve` does; `read` fetches.
  */
 export function watchPermissions(fixing: boolean): {
 	api: Permissions;
@@ -593,10 +656,17 @@ export function watchPermissions(fixing: boolean): {
 	pushWorkflows?: Permissions;
 	read?: Permissions;
 } {
-	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read" } };
+	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" } };
 	const push: Permissions = { contents: "write", pull_requests: "write" };
 	return {
-		api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" },
+		api: {
+			contents: "write",
+			pull_requests: "write",
+			actions: "read",
+			merge_queues: "write",
+			checks: "read",
+			statuses: "read",
+		},
 		push,
 		pushWorkflows: { ...push, workflows: "write" },
 		read: { contents: "read" },

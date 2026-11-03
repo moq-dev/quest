@@ -25,6 +25,7 @@ import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/de
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import {
 	ADMITTED,
+	COLLECTION_ATTEMPTS,
 	collectFixers,
 	validateFix,
 	fixerMarkdown,
@@ -38,7 +39,7 @@ import {
 import { importFixer } from "../src/cli/land-fixer-repository";
 import { apply, parseResolution, pushCommand, resolutionSection } from "../src/cli/land-apply";
 import fixerPrompt from "../assets/land-fix.md";
-import { COMMENT_LIMIT, fix, parseBaseFix, parseFixResult } from "../src/cli/land-fix";
+import { COMMENT_LIMIT, FLAKY_INPUT, fix, parseBaseFix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
 import type { GitHubDependencies } from "../src/cli/github";
 import {
@@ -149,6 +150,7 @@ class Forge {
 		this.world = {
 			app: { id: 1, slug: "gate" },
 			installation: 5,
+			owner: 4,
 			users: [{ id: 1, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" }],
 			repos: [
 				{
@@ -1029,6 +1031,28 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
 		expect(plan.eject).toEqual([]);
 		expect(plan.waiting?.map(({ number }) => number)).toEqual([2, 3]);
+	});
+
+	test("counts only a required check's latest run from its app", async () => {
+		const forge = new Forge();
+		const test = (conclusion: string, app?: number) => ({ name: "test", conclusion, url: "u", app });
+		forge.pull("Rerun passed", { "1.txt": "1\n" }, { pull: { runs: [test("CANCELLED"), test("SUCCESS")] } });
+		forge.pull("Rerun failed", { "2.txt": "2\n" }, { pull: { runs: [test("SUCCESS"), test("CANCELLED")] } });
+		forge.pull("Other app failed", { "3.txt": "3\n" }, { pull: { runs: [test("FAILURE", 99), test("SUCCESS")] } });
+		// As on moq-dev/moq#7325: concurrency cancelled the older workflow run, whose gate failed on
+		// purpose, and the newer run passed. GitHub merges that head.
+		const scope = (conclusion: string) => ({ name: "Scope", conclusion, url: "u" });
+		forge.pull(
+			"Superseded run",
+			{ "4.txt": "4\n" },
+			{ pull: { runs: [scope("CANCELLED"), test("FAILURE"), scope("SUCCESS"), test("SUCCESS")] } },
+		);
+		const plan = await resolveQueue(REPOSITORY, "main", await forge.deps());
+		expect(plan.queue.map((entry) => entry.number)).toEqual([1, 4]);
+		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([
+			[2, "failed_checks"],
+			[3, "failed_checks"],
+		]);
 	});
 
 	test("refuses ruleset rules it does not uphold before reading the queue", async () => {
@@ -2370,6 +2394,8 @@ async function fixerFixture(
 		protectedBase?: boolean;
 		// The base the fixer merges already changed a workflow.
 		workflowBase?: boolean;
+		// The PR and the base change `flake.nix` apart, so the merge conflicts there.
+		protectedConflict?: boolean;
 		// A line the wrapper prints before the agent starts, as the host's does when its launcher admits the job.
 		admitted?: string;
 	} = {},
@@ -2377,13 +2403,14 @@ async function fixerFixture(
 	const forge = new Forge();
 	const pull = forge.pull(
 		"Fix me",
-		{ "code.txt": "one\nII\nthree\n" },
+		{ "code.txt": "one\nII\nthree\n", ...(options.protectedConflict ? { "flake.nix": "pr\n" } : {}) },
 		options.fork ? { contributor: "outside", edits: false } : {},
 	);
 	const collateral = options.collateral ? forge.pull("Bystander", { "other.txt": "fine\n" }) : undefined;
 	if (options.conflict) forge.advance({ "code.txt": "one\n2\nthree\n" });
 	if (options.protectedBase) forge.advance({ "flake.nix": "base\n" });
 	if (options.workflowBase) forge.advance({ ".github/workflows/alert.yml": "on: push\n" });
+	if (options.protectedConflict) forge.advance({ "flake.nix": "base\n" });
 	const deps = await forge.deps();
 	const plan = await resolveQueue(REPOSITORY, undefined, deps);
 	const state = sandbox();
@@ -2992,6 +3019,50 @@ fi`);
 		expect(fixture.forge.comment(1)).toContain("head moved while fixing");
 		expect(fixture.jobs()).toEqual([]);
 	});
+	const blameFirst = `printf '[{"number":1,"action":"handback","diagnosis":"breaks the check","recommendation":"run quest-iterate","blame":true},{"number":2,"action":"requeue","reason":"collateral: shared the batch with 1"}]' > quest-land-result.json`;
+	/** `deps` with GitHub failing `fails` reads of PR 1, every one when unset. */
+	const failingPull = (deps: GitHubDependencies, fails = Number.POSITIVE_INFINITY): GitHubDependencies => {
+		const original = deps.fetch;
+		return {
+			...deps,
+			fetch: (async (input, init) => {
+				if (String(input).endsWith("/pulls/1") && (init?.method ?? "GET") === "GET" && fails-- > 0)
+					return Response.json({ message: "Not Found" }, { status: 404 });
+				return original(input, init);
+			}) as typeof fetch,
+		};
+	};
+	test("hands back only the PR whose collection GitHub failed, and keeps the rest of its job's results", async () => {
+		const fixture = await fixerFixture(blameFirst, { collateral: true });
+		await fixture.finished;
+		expect(await fixture.collect(failingPull(fixture.deps, 1))).toEqual(["handback 1", "requeued 2"]);
+		expect(fixture.jobs()).toEqual([]);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("fixer collection failed");
+		const collateral = fixture.collateral!;
+		expect(collateral.landing).toBe(true);
+		expect(fixture.forge.comment(2)).toBeUndefined();
+	});
+	test("sets aside a PR whose collection keeps failing, so the rest of its job goes on", async () => {
+		const fixture = await fixerFixture(blameFirst, { collateral: true });
+		await fixture.finished;
+		const deps = failingPull(fixture.deps);
+		// Each pass retries it once; neither the retry nor the PR behind it counts as another failure.
+		for (let pass = 1; pass < COLLECTION_ATTEMPTS; pass++) {
+			expect(await fixture.collect(deps)).toEqual([]);
+			expect([...parked(fixture.state.state).keys()]).toEqual([1, 2]);
+		}
+		expect(await fixture.collect(deps)).toEqual(["set aside 1", "requeued 2"]);
+		expect(fixture.jobs()).toEqual([]);
+		// It was never handed back: it stays queued as GitHub has it, and rejoins batches.
+		expect(parked(fixture.state.state).size).toBe(0);
+		expect(fixture.pull.landing).toBe(true);
+		expect(fixture.forge.comment(1)).toBeUndefined();
+		const collateral = fixture.collateral!;
+		expect(collateral.landing).toBe(true);
+		expect(collateral.autoMerge?.commitBody).toBe(pin(collateral.head!));
+		expect(fixture.forge.comment(2)).toBeUndefined();
+	});
 	const editJob = (state: string, change: (job: Record<string, unknown>) => void) => {
 		const path = join(
 			state,
@@ -3103,6 +3174,19 @@ ${requeueScript}
 		);
 		await fix(dir, log, [1], agent, ["-"]);
 		expect(readFileSync(join(dir, "prompt.txt"), "utf8")).toContain(`PRs:\n- #1: branch pr-1 at ${head}\n`);
+		expect(readFileSync(join(dir, "prompt.txt"), "utf8")).not.toContain("Known flaky tests");
+
+		// The daemon's known flaky tests, in the checkout's .git, follow the PRs as data.
+		const known = [
+			{ failure: "cargo test: render_timeout", jobs: ["https://github.com/o/r/actions/runs/1/job/2"] },
+		];
+		writeFileSync(join(dir, ".git", FLAKY_INPUT), JSON.stringify(known));
+		await fix(dir, log, [1], agent, ["-"]);
+		expect(readFileSync(join(dir, "prompt.txt"), "utf8")).toContain(
+			`PRs:\n- #1: branch pr-1 at ${head}\nKnown flaky tests: ${JSON.stringify(known)}\n`,
+		);
+		writeFileSync(join(dir, ".git", FLAKY_INPUT), JSON.stringify([{ failure: 7, jobs: [] }]));
+		await expect(fix(dir, log, [1], agent, ["-"])).rejects.toThrow("invalid known flaky tests");
 	});
 	test("finds the agent on PATH, never in the checkout it fixes", async () => {
 		const dir = fixRepository();
@@ -3258,6 +3342,29 @@ ${requeueScript}`);
 			"quoting the command and the output",
 		])
 			expect(fixerPrompt).toContain(text);
+	});
+	test("rebuilds a conflicted lockfile from the base's copy", () => {
+		const prompt = fixerPrompt.replace(/\s+/g, " ");
+		expect(prompt).not.toContain("regenerate lockfiles");
+		for (const text of [
+			"rebuild lockfiles as [Lockfiles](#lockfiles) says",
+			"## Lockfiles",
+			"rebuild it from the base's copy, never from the PR's side",
+			"`git checkout base -- <lockfile>`",
+			"minimal resolve against the merged manifests",
+			"Never run `cargo generate-lockfile`",
+			"`cargo update -p <name> --precise <version>`",
+			"keep the base's version if it is at or past the PR's",
+			"must trace to a dependency or import change in the PR",
+			"Name the lockfiles you rebuilt in the reason.",
+			"Hand back instead of taking either side's copy",
+			"the package manager cannot rebuild the lockfile",
+			"a change does not trace to the PR",
+			"below the base's security bump",
+			"`flake.lock` is a protected path",
+			"rebuild it the same way from the base's copy, with `nix flake lock` as the minimal resolve",
+		])
+			expect(prompt).toContain(text);
 	});
 	test("has the fixer put its comments in the result instead of posting them", () => {
 		for (const text of [
@@ -3544,6 +3651,21 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 			parseBaseFix(JSON.stringify({ action: "fixed", head: "a".repeat(40), reason: "fine", failure: "x" })),
 		).toThrow();
 	});
+	test("accepts a disabling commit only on a requeue", () => {
+		const disable = "d".repeat(40);
+		const accepted = { number: 1, action: "requeue", reason: "flaky", failure: "cargo test: render", disable };
+		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		for (const value of [
+			{ number: 1, action: "requeue", reason: "flaky", disable: "short" },
+			{ number: 1, action: "requeue", reason: "flaky", disable: 7 },
+			{ number: 1, action: "fixed", head: disable, reason: "fine", disable },
+			{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", disable },
+		])
+			expect(() => parseFixResult(JSON.stringify([value]), [1])).toThrow("invalid fixer disable");
+		expect(() =>
+			parseBaseFix(JSON.stringify({ action: "fixed", head: disable, reason: "fine", disable })),
+		).toThrow();
+	});
 	test("strictly accepts one fixed or handback object for the base alone", () => {
 		const head = "a".repeat(40);
 		for (const value of [
@@ -3766,6 +3888,63 @@ describe.skipIf(process.platform === "win32")("quest land apply", () => {
 		expect(fixture.forge.ref("upstream/project", "refs/heads/topic-1")).toBe(applied.commit);
 	});
 
+	test("hands back a fixer's resolution of a protected conflict as a ready commit, never pushing it", async () => {
+		const fixture = await fixerFixture(
+			`git checkout -q pr-1
+git merge -q base || true
+printf 'pr and base\n' > flake.nix
+git add flake.nix
+git commit -qm 'preserve both sides of flake.nix'
+printf '[{"number":1,"action":"fixed","head":"%s","reason":"preserve both sides; edits flake.nix"}]' "$(git rev-parse HEAD)" > quest-land-result.json`,
+			{ protectedConflict: true },
+		);
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.pull.head).toBe(fixture.plan.queue[0].head);
+		expect(fixture.pull.landing).toBe(false);
+		const comment = fixture.forge.comment(1)!;
+		expect(comment).toContain("off-limits fixer edit");
+		expect(comment).toContain("edits protected paths beyond what the base merge carries");
+		expect(comment).toContain("reviews its protected edits");
+		const resolution = parseResolution(comment)!;
+		expect(resolution).toMatchObject({ head: fixture.plan.queue[0].head, base: fixture.plan.base.sha });
+
+		const checkout = fixture.forge.clone();
+		const applied = await apply(checkout, PR, await fixture.forge.deps());
+		expect(git(checkout, "show", "-s", "--format=%P", applied.commit)).toBe(
+			`${resolution.head} ${resolution.base}`,
+		);
+		expect(git(checkout, "show", `${applied.commit}:flake.nix`)).toBe("pr and base");
+		expect(git(checkout, "show", `${applied.commit}:code.txt`)).toBe("one\nII\nthree");
+	});
+
+	test("hands back a protected fix that merges no base as a commit on the PR head", async () => {
+		// The base moved on, and the fix leaves it unmerged.
+		const fixture = await fixerFixture(
+			`git checkout -q pr-1
+printf 'pinned\n' > flake.nix
+git add flake.nix
+git commit -qm 'pin the toolchain'
+printf '[{"number":1,"action":"fixed","head":"%s","reason":"pin the toolchain; edits flake.nix"}]' "$(git rev-parse HEAD)" > quest-land-result.json`,
+			{ conflict: true },
+		);
+		await fixture.finished;
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.pull.head).toBe(fixture.plan.queue[0].head);
+		const comment = fixture.forge.comment(1)!;
+		expect(comment).toContain("no base merge");
+		const resolution = parseResolution(comment)!;
+		expect(resolution).toMatchObject({ head: fixture.plan.queue[0].head, base: fixture.plan.queue[0].head });
+
+		const checkout = fixture.forge.clone();
+		const applied = await apply(checkout, PR, await fixture.forge.deps());
+		expect(git(checkout, "show", "-s", "--format=%P %s", applied.commit)).toBe(
+			`${resolution.head} Apply the quest land fixer's fix to topic-1`,
+		);
+		expect(git(checkout, "show", `${applied.commit}:flake.nix`)).toBe("pinned");
+		expect(git(checkout, "rev-parse", `${applied.commit}^{tree}`)).toBe(resolution.tree);
+	});
+
 	test("refuses a PR whose head moved since the handback", async () => {
 		const fixture = await refused();
 		git(fixture.forge.origin, "update-ref", "refs/heads/topic-1", fixture.plan.base.sha);
@@ -3806,6 +3985,21 @@ describe.skipIf(process.platform === "win32")("quest land apply", () => {
 		const plain = resolutionSection(1, resolution, 300);
 		expect(parseResolution(plain)).toBeUndefined();
 		expect(plain).toContain("too large for a comment");
+	});
+
+	test("says why a resolution was handed back, and when it merges no base", () => {
+		const head = "a".repeat(40);
+		const pushed = resolutionSection(1, { head, base: "b".repeat(40), tree: "c".repeat(40), patch: "" }, 1_000);
+		expect(pushed).toContain("GitHub refused the fixer's push");
+		expect(pushed).toContain(`base \`${"b".repeat(40)}\``);
+		const edited = resolutionSection(
+			1,
+			{ head, base: head, tree: "c".repeat(40), patch: "", cause: "protected" },
+			1_000,
+		);
+		expect(edited).toContain("edits protected paths");
+		expect(edited).toContain("no base merge");
+		expect(parseResolution(edited)).toEqual({ head, base: head, tree: "c".repeat(40), patch: "" });
 	});
 });
 
