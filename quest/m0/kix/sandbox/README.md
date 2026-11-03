@@ -77,7 +77,3 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 - Sources:
   [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing)
   and [sandbox-runtime](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime).
-
-## Required
-
-- [Head approval](/quest/m0/kix/sandbox/head-approval.md) - a maintainer approves an exact head, such as one kix pushed, for host runners

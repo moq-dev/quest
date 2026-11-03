@@ -993,7 +993,7 @@ export class GitHubService {
 		});
 	}
 
-	/** Recheck a queued PR head against current signatures and repository roles. */
+	/** Recheck a queued PR head against current signatures, head approvals, and repository roles. */
 	jobTrust(repo: GitHubRepository, target: string, revision: string) {
 		return this.#withRepository(repo, { contents: "read", pull_requests: "read" }, async (token, current) => {
 			this.#public(current);
@@ -1001,7 +1001,62 @@ export class GitHubService {
 		});
 	}
 
+	/**
+	 * Whether host runners may run a pull request's exact head: every commit
+	 * beyond the default branch is signed by a current maintainer, or a current
+	 * maintainer approved this head.
+	 */
 	async #pullTrust(token: string, repo: GitHubRepository, pull: number, revision: string) {
+		return (await this.#signed(token, repo, pull, revision)) || (await this.#approved(token, repo, pull, revision));
+	}
+
+	/**
+	 * Approve one exact open pull request head for host runners, as the
+	 * maintainer `userId` saw it. The approval lapses when the head moves, and
+	 * counts only while its approver keeps a maintain or admin role.
+	 */
+	approveHead(repo: GitHubRepository, userId: string, pull: number, head: string) {
+		const permissions = { pull_requests: "read" } as const;
+		return this.#authorized(repo, userId, permissions, async (token, current) => {
+			this.#public(current);
+			const live = await this.#api<{ state: string; head: { sha: string } }>(
+				token,
+				`${repositoryPath(repo)}/pulls/${number(pull)}`,
+			);
+			if (live.state !== "open" || live.head.sha !== sha(head))
+				throw new GitHubError("The pull request's head moved since you looked; review it again", 409);
+			await this.#env.DB.prepare(
+				"INSERT INTO head_approvals(repository,pull,head,approver,approvedAt) VALUES(?,?,?,?,?) ON CONFLICT(repository,pull) DO UPDATE SET head=excluded.head,approver=excluded.approver,approvedAt=excluded.approvedAt",
+			)
+				.bind(repo.id, pull, head, userId, Date.now())
+				.run();
+		});
+	}
+
+	/** Whether a current maintainer approved this exact head while it is still the open pull request's head. */
+	async #approved(token: string, repo: GitHubRepository, pull: number, revision: string) {
+		const approval = await this.#env.DB.prepare(
+			"SELECT approver FROM head_approvals WHERE repository=? AND pull=? AND head=?",
+		)
+			.bind(repo.id, pull, revision)
+			.first<{ approver: string }>();
+		if (!approval) return false;
+		const live = await this.#api<{ state: string; head: { sha: string } }>(
+			token,
+			`${repositoryPath(repo)}/pulls/${number(pull)}`,
+		);
+		if (live.state !== "open" || live.head.sha !== revision) return false;
+		try {
+			await this.#authority(token, repo, approval.approver);
+		} catch (error) {
+			if (error instanceof NotMaintainer) return false;
+			throw error;
+		}
+		return true;
+	}
+
+	/** Whether every commit of the exact head beyond the default branch is signed by a current maintainer. */
+	async #signed(token: string, repo: GitHubRepository, pull: number, revision: string) {
 		type Signer = { databaseId: number; login: string };
 		type Commit = { oid: string; signature: { isValid: boolean; signer: Signer | null } | null };
 		type Comparison = {
