@@ -3,7 +3,8 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
-import { queueHead, UNREFUSED } from "./hold";
+import { type Queued, queueHead } from "../github/merge";
+import { UNREFUSED } from "./hold";
 import { baseRemote, type Entry, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "./land-fix";
@@ -74,7 +75,7 @@ interface WatchJob extends Process {
 	/** The head being put back in the queue, recorded before asking GitHub, so a restart finds its own request. */
 	requeuing?: string;
 	/** How GitHub took the head back, once it did: the round succeeded, and only its comments may remain. */
-	requeued?: Requeue;
+	requeued?: Queued;
 	/** Why the round ended in a handback, recorded before posting it, so a restart keeps the reason. */
 	handback?: string;
 	/** A validated fix whose push GitHub refused, handed back for `quest land apply`. */
@@ -405,7 +406,7 @@ async function collect(
 			);
 	};
 	// Say how the round went back to the queue, once GitHub took it.
-	const announce = async (requeued: Requeue, result: FixResult): Promise<string[]> => {
+	const announce = async (requeued: Queued, result: FixResult): Promise<string[]> => {
 		await note();
 		const what = job.merged
 			? `with ${job.base.ref} at ${job.base.sha} merged in by the quest merge driver`
@@ -553,22 +554,25 @@ async function collect(
 	return [`handback ${number}`];
 }
 
-/** How `head` went back: enqueued, or armed to join the queue once its required checks pass. */
-type Requeue = "enqueued" | "armed";
-
 /**
  * Put `head` back in `base`'s merge queue, at the back. A PR queued or armed at it since the queue
  * dropped it, at `dropped`, needs nothing more: a restart finds its own request, and a workflow may pick
  * the fixer's push first. A refusal, or a PR retargeted from `base`, hands the PR back.
  */
-async function requeue(github: GitHub, id: string, head: string, base: string, dropped: string): Promise<Requeue> {
-	const how = (pull: ObjectValue): Requeue => (pull.mergeQueueEntry != null ? "enqueued" : "armed");
+async function requeue(github: GitHub, id: string, head: string, base: string, dropped: string): Promise<Queued> {
+	const how = (pull: ObjectValue): Queued => (pull.mergeQueueEntry != null ? "enqueued" : "armed");
 	let pull = await readPull(github, id);
 	if (string(pull.baseRefName) !== base) throw new FixerRefusal(`retargeted from ${base} before it was re-enqueued`);
 	if (string(pull.headRefOid) !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 	if (!queued(pull, dropped)) {
 		try {
-			await queueHead(github, id, head, string(pull.mergeStateStatus));
+			await queueHead(
+				(query, variables) => github.graphql(query, variables),
+				id,
+				head,
+				string(pull.mergeStateStatus),
+				"merge",
+			);
 		} catch (error) {
 			if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 				throw error;
