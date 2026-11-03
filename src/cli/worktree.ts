@@ -587,6 +587,30 @@ export class Worktrees {
 			await promisify(execFile)("git", ["-C", record.path, "submodule", "update", "--init", "--recursive"], {
 				maxBuffer: 64 * 1024 * 1024,
 			});
+			for (const module of submodules(record.path)) {
+				const tips = new Set([
+					git(module, "rev-parse", "HEAD").trim(),
+					...git(module, "for-each-ref", "--format=%(objectname)").split("\n").filter(Boolean),
+				]);
+				for (const tip of tips) {
+					if (!git(module, "rev-list", "-n1", tip, "--not", "--remotes").trim()) continue;
+					// SHA fetches and cloned tags need a durable record of remote preservation.
+					// Keep it outside origin's branch-prune refspec; later local tips still fail removal.
+					await promisify(execFile)(
+						"git",
+						[
+							"-C",
+							module,
+							"fetch",
+							"--no-tags",
+							"--no-write-fetch-head",
+							"origin",
+							`${tip}:refs/remotes/quest-pins/${tip}`,
+						],
+						{ maxBuffer: 64 * 1024 * 1024 },
+					);
+				}
+			}
 			return await this.lockedWait((registry) => {
 				const current = this.find(registry, record.id);
 				if (!this.owned(current)) throw new Error(`checkout disappeared during creation: ${record.path}`);

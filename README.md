@@ -1210,7 +1210,10 @@ It then prunes the scratch and refuses ignored files that remain, leaving the
 checkout released, before `git worktree remove` deletes it. A checkout already
 removed with `git worktree remove` only drops its record, as with `release`.
 New checkouts initialize their submodules recursively before returning. Restoring
-one preserves its existing submodule pins and local work. Removal also checks
+one preserves its existing submodule pins and local work. Creation verifies any
+new module tips not reached by remote-tracking branches (such as SHA-fetched
+pins or cloned tags) against origin and records them under
+`refs/remotes/quest-pins/`, outside origin's branch-prune namespace. Removal also checks
 submodules' files outside declared scratch and every module store, including deinitialized ones;
 commits at their HEAD or refs must be reachable from a remote-tracking ref,
 since module stores and their local branches are deleted with the checkout.

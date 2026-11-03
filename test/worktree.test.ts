@@ -351,6 +351,27 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(existsSync(join(nested, "cache"))).toBe(false);
 		expect(readFileSync(join(nested, "file"), "utf8")).toBe("local work");
 	});
+	it("records remotely fetched module pins and tags outside the branch-prune namespace", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const sub = repository(join(root, "sub"));
+		git(sub, "commit", "--allow-empty", "-m", "published pin");
+		const pin = git(sub, "rev-parse", "HEAD");
+		git(sub, "tag", "-a", "published", "-m", "remote tag", pin);
+		git(sub, "reset", "--hard", "HEAD~1");
+		for (const name of ["pinned", "tagged"]) git(repo, "submodule", "add", "--quiet", sub, name);
+		git(join(repo, "pinned"), "checkout", "--detach", pin);
+		git(repo, "commit", "-am", "modules");
+		const record = await worktrees.create(repo, "published", 10_000_000);
+		for (const name of ["pinned", "tagged"]) {
+			const module = join(record.path, name);
+			expect(git(module, "rev-list", "HEAD", "--all", "--not", "--remotes")).toBe("");
+			git(module, "fetch", "--prune", "origin");
+			expect(git(module, "rev-list", "HEAD", "--all", "--not", "--remotes")).toBe("");
+		}
+		await worktrees.remove(record.id);
+		expect(existsSync(record.path)).toBe(false);
+	});
 	it("keeps a partly initialized creation charged and gives recovery advice for its lock and submodules", async () => {
 		const { root, repo, worktrees } = fixture();
 		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
