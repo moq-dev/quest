@@ -760,14 +760,22 @@ function detached(dir: string, rest: string) {
 }
 
 describe("the Windows job stub", () => {
-	test("passes the exact exit status and restores the caller's BUN_BE_BUN", async () => {
-		const script = "process.exit(process.env.BUN_BE_BUN === process.env.EXPECTED ? 7 : 1)";
+	test("passes the exact exit status and restores the caller's environment", async () => {
+		const script =
+			"process.exit(process.env.BUN_BE_BUN === process.env.EXPECTED && !('QUEST_GATE_JOB' in process.env) ? 7 : 1)";
 		const env: NodeJS.ProcessEnv = { ...process.env, EXPECTED: "keep" };
 		delete env.BUN_BE_BUN;
 		const command = [process.execPath, "-e", script];
 		expect(await job(command, { ...env, BUN_BE_BUN: "keep" }, cancellation().cancel)).toBe(7);
 		const unset = "process.exit(process.env.BUN_BE_BUN === undefined ? 7 : 1)";
 		expect(await job([process.execPath, "-e", unset], env, cancellation().cancel)).toBe(7);
+	});
+
+	test("passes the command's arguments unchanged", async () => {
+		// The tail of argv, since Bun may put more before the arguments of a script passed with -e.
+		const args = ["a b", 'say "hi"', "back\\slash\\", ""];
+		const script = `process.exit(JSON.stringify(process.argv.slice(-${args.length})) === ${JSON.stringify(JSON.stringify(args))} ? 7 : 1)`;
+		expect(await job([process.execPath, "-e", script, ...args], process.env, cancellation().cancel)).toBe(7);
 	});
 
 	test("reports a command that cannot start as a shell would", async () => {

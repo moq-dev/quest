@@ -3,8 +3,10 @@
 // the command: everything the command starts is created inside that job and cannot break away.
 
 /**
- * Runs as `<Bun> -e STUB <BUN_BE_BUN as JSON> <command...>`, with `BUN_BE_BUN=1` so a compiled Quest
- * runs it as Bun would; it restores the caller's value before the command starts.
+ * Runs as `<Bun> -e STUB`, with `BUN_BE_BUN=1` so a compiled Quest runs it as Bun would. The command
+ * and the caller's `BUN_BE_BUN` arrive as JSON in `QUEST_GATE_JOB`, since Bun's `process.argv` for
+ * `-e` differs between platforms; the stub restores the caller's environment before the command
+ * starts.
  *
  * On Windows it creates a job that kills every process left in it once its last handle closes, and
  * joins it. Only the stub holds that handle, so the job ends with the stub: when the command exits,
@@ -21,8 +23,8 @@
  */
 export const STUB = [
 	"const { spawn } = require('node:child_process');",
-	"const [, keep, file, ...args] = process.argv;",
-	"const original = JSON.parse(keep);",
+	"const { keep: original, command: [file, ...args] } = JSON.parse(process.env.QUEST_GATE_JOB);",
+	"delete process.env.QUEST_GATE_JOB;",
 	"if (original === null) delete process.env.BUN_BE_BUN; else process.env.BUN_BE_BUN = original;",
 	"if (process.platform === 'win32') {",
 	"  try {",
@@ -61,7 +63,7 @@ export const STUB = [
 /** The stub's command line and environment for running `command` with `env` in a job of its own. */
 export function stubbed(command: string[], env: NodeJS.ProcessEnv): [string[], NodeJS.ProcessEnv] {
 	return [
-		[process.execPath, "-e", STUB, JSON.stringify(env.BUN_BE_BUN ?? null), ...command],
-		{ ...env, BUN_BE_BUN: "1" },
+		[process.execPath, "-e", STUB],
+		{ ...env, BUN_BE_BUN: "1", QUEST_GATE_JOB: JSON.stringify({ keep: env.BUN_BE_BUN ?? null, command }) },
 	];
 }

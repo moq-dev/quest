@@ -17,7 +17,8 @@ import {
 	writeSync,
 } from "node:fs";
 import { constants, hostname } from "node:os";
-import { join } from "node:path";
+// Cgroup paths are POSIX paths, also in the tests that parse them on Windows.
+import { join } from "node:path/posix";
 import type { Readable, Writable } from "node:stream";
 import { type Cancellation, cancelled, follow, forwards, interrupts, requested } from "./interrupt";
 
