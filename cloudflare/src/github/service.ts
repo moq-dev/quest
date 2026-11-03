@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
+import { CI_PERMISSIONS, type CIPermission, ciProblems } from "./ci";
 import { unreviewed } from "./review";
 import { positiveId } from "./webhook";
 import {
@@ -20,7 +21,7 @@ export interface GitHubRepository {
 	name: string;
 	id: number;
 }
-type Permission = "metadata" | "contents" | "issues" | "pull_requests" | "checks" | "statuses";
+type Permission = "metadata" | "contents" | "issues" | "pull_requests" | "checks" | "statuses" | CIPermission;
 type Permissions = Partial<Record<Permission, "read" | "write">>;
 /** What reading a project's observations needs. */
 const observing: Permissions = {
@@ -148,6 +149,8 @@ export type ProjectPreview = {
 	licenseError: string | null;
 	quests: { path: string; title: string }[];
 	state: ContributionState | null;
+	/** What lets pull-request CI write (`./ci.ts`); empty when nothing does. */
+	ci: string[];
 };
 type Tree = { truncated: boolean; tree: { path: string; type: string; mode: string; sha: string }[] };
 
@@ -263,10 +266,12 @@ export class GitHubService {
 		}
 	}
 
+	/** `optional` permissions join the token when the installation grants them; `action` sees the token's scope. */
 	async #withInstallation<T>(
 		repo: Pick<GitHubRepository, "owner" | "name"> & { id?: number },
 		permissions: Permissions,
-		action: (token: string, installationId: number) => Promise<T>,
+		action: (token: string, installationId: number, scope: Permissions) => Promise<T>,
+		optional: Permissions = {},
 	) {
 		if (!name(repo.owner) || !name(repo.name)) throw new GitHubError("Invalid repository");
 		const path = `/repos/${repo.owner}/${repo.name}`;
@@ -286,6 +291,10 @@ export class GitHubService {
 			if (!granted || (level === "write" && granted !== "write"))
 				throw new GitHubError(`GitHub ${permission} permission required`);
 		}
+		for (const [permission, level] of Object.entries(optional)) {
+			const granted = installation.permissions[permission as Permission];
+			if (granted && (level === "read" || granted === "write")) scope[permission as Permission] = level;
+		}
 		const minted = await this.#api<{ token: string }>(
 			this.#jwt(),
 			`/app/installations/${installation.id}/access_tokens`,
@@ -298,7 +307,7 @@ export class GitHubService {
 		if (!minted.token) throw new GitHubError("Installation token unavailable");
 		try {
 			await this.#gate(installation.id);
-			return await action(minted.token, installation.id);
+			return await action(minted.token, installation.id, scope);
 		} finally {
 			// Do not turn a completed mutation into a retryable error if cleanup
 			// fails. GitHub also expires installation tokens after one hour.
@@ -313,16 +322,22 @@ export class GitHubService {
 	async #withRepository<T>(
 		repo: GitHubRepository,
 		permissions: Permissions,
-		action: (token: string, current: Repository, installationId: number) => Promise<T>,
+		action: (token: string, current: Repository, installationId: number, scope: Permissions) => Promise<T>,
 		allowUnavailable = false,
+		optional: Permissions = {},
 	) {
 		const path = repositoryPath(repo);
-		return this.#withInstallation(repo, permissions, async (token, installation) => {
-			const current = await this.#api<Repository>(token, path);
-			this.#repository(repo, current, allowUnavailable);
-			await this.#gate(installation);
-			return action(token, current, installation);
-		});
+		return this.#withInstallation(
+			repo,
+			permissions,
+			async (token, installation, scope) => {
+				const current = await this.#api<Repository>(token, path);
+				this.#repository(repo, current, allowUnavailable);
+				await this.#gate(installation);
+				return action(token, current, installation, scope);
+			},
+			optional,
+		);
 	}
 
 	/**
@@ -386,18 +401,20 @@ export class GitHubService {
 		repo: GitHubRepository,
 		userId: string,
 		permissions: Permissions,
-		action: (token: string, current: Repository, installationId: number) => Promise<T>,
+		action: (token: string, current: Repository, installationId: number, scope: Permissions) => Promise<T>,
 		allowUnavailable = false,
+		optional: Permissions = {},
 	) {
 		return this.#withRepository(
 			repo,
 			permissions,
-			async (token, current, installationId) => {
+			async (token, current, installationId, scope) => {
 				await this.#maintainer(token, repo, userId);
 				await this.#gate(installationId);
-				return action(token, current, installationId);
+				return action(token, current, installationId, scope);
 			},
 			allowUnavailable,
+			optional,
 		);
 	}
 
@@ -700,7 +717,7 @@ export class GitHubService {
 		repo: GitHubRepository,
 		current: Repository,
 		installation: number,
-	): Promise<ProjectPreview> {
+	): Promise<Omit<ProjectPreview, "ci">> {
 		const snapshot = await this.#snapshot(token, repo, current);
 		return {
 			repository: repo,
@@ -1096,9 +1113,21 @@ export class GitHubService {
 		return commits.size === count && (count === 0 || commits.has(revision));
 	}
 
-	previewProject(repo: GitHubRepository, userId: string) {
-		return this.#authorized(repo, userId, { contents: "read" }, (token, current, installation) =>
-			this.#preview(token, repo, current, installation),
+	/** The setup page's preview, with the pull-request CI check (`./ci.ts`) on the same token. */
+	previewProject(repo: GitHubRepository, userId: string): Promise<ProjectPreview> {
+		return this.#authorized(
+			repo,
+			userId,
+			{ contents: "read" },
+			async (token, current, installation, scope) => ({
+				...(await this.#preview(token, repo, current, installation)),
+				ci: await ciProblems(
+					{ get: (path) => this.#api(token, `${repositoryPath(repo)}${path}`) },
+					new Set((Object.keys(CI_PERMISSIONS) as CIPermission[]).filter((p) => scope[p])),
+				),
+			}),
+			false,
+			CI_PERMISSIONS,
 		);
 	}
 

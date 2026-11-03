@@ -230,6 +230,32 @@ export function ProjectSetupPage(props: { preview: ProjectPreview; enrollment: E
 					</>
 				)}
 			</section>
+			<section class="ql-panel panel">
+				<h2>Pull-request CI</h2>
+				<p>
+					kix publishes job branches on this repository, where GitHub gives their workflows the repository's
+					secrets and default token. Keep that CI read-only, so code no maintainer has reviewed meets only a
+					read-only <code>GITHUB_TOKEN</code> and no write credentials.
+				</p>
+				{preview.ci.length ? (
+					<ul role="alert">
+						{preview.ci.map((problem) => (
+							<li>{problem}</li>
+						))}
+					</ul>
+				) : (
+					<p class="muted">
+						The default token is read-only, no repository or organization secrets reach workflows, and
+						environment secrets deploy only from protected branches.
+					</p>
+				)}
+				<p class="note-small">
+					Jobs still run either way. kix does not read workflow files, so also keep write{" "}
+					<code>permissions:</code> and secrets out of jobs that pull requests and pushes to unprotected
+					branches trigger, including <code>pull_request_target</code> and <code>workflow_run</code> jobs that
+					check out a pull request's head.
+				</p>
+			</section>
 			<section>
 				<h2>Ready quests</h2>
 				{props.enrollment && (
