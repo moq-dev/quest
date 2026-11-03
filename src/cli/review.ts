@@ -181,6 +181,11 @@ interface Reviewer {
 	 */
 	credentials: string[];
 	/**
+	 * Credentials only a gateway or provider reads, passed only while a route is
+	 * set, so an unused provider key never reaches the reviewer.
+	 */
+	routeCredentials: string[];
+	/**
 	 * Variables that set how the CLI reaches its model: a gateway, a cloud
 	 * provider and its settings, headers, or a CA certificate. They always pass,
 	 * so the review goes where the user's own CLI sessions do.
@@ -225,21 +230,20 @@ const claude: Reviewer = {
 	login: "claude auth login",
 	profile: "CLAUDE_CONFIG_DIR",
 	credentials: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
-	// A provider's own keys and settings take effect only while its switch is on. Model choices,
+	// Claude Code lists these with its credentials, and reads them only while a provider's switch is on.
+	routeCredentials: ["ANTHROPIC_AWS_API_KEY", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN"],
+	// A provider's own settings take effect only while its switch is on. Model choices,
 	// such as ANTHROPIC_MODEL, stay stripped: the review pins its own.
 	connection: [
 		"ANTHROPIC_BASE_URL",
 		"ANTHROPIC_CUSTOM_HEADERS",
 		...CLAUDE_PROVIDERS.flatMap((provider) => [`CLAUDE_CODE_USE_${provider}`, `CLAUDE_CODE_SKIP_${provider}_AUTH`]),
-		"ANTHROPIC_AWS_API_KEY",
 		"ANTHROPIC_AWS_BASE_URL",
 		"ANTHROPIC_AWS_WORKSPACE_ID",
 		"ANTHROPIC_BEDROCK_BASE_URL",
 		"ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
 		"ANTHROPIC_BEDROCK_REGION_PREFIX",
 		"ANTHROPIC_BEDROCK_SERVICE_TIER",
-		"ANTHROPIC_FOUNDRY_API_KEY",
-		"ANTHROPIC_FOUNDRY_AUTH_TOKEN",
 		"ANTHROPIC_FOUNDRY_BASE_URL",
 		"ANTHROPIC_FOUNDRY_RESOURCE",
 		"ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
@@ -349,6 +353,7 @@ const codex: Reviewer = {
 	// `codex exec` reads CODEX_API_KEY, though `codex login status` does not count it; it ignores OPENAI_API_KEY.
 	// CODEX_ACCESS_TOKEN is an agent identity token, which both read.
 	credentials: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+	routeCredentials: [],
 	// A gateway that intercepts TLS needs its CA. OPENAI_BASE_URL is never stripped.
 	connection: ["CODEX_CA_CERTIFICATE"],
 	routes: () => [],
@@ -513,7 +518,9 @@ async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv
 	const routes = reviewer.routes(env);
 	const through = routes.length > 0 ? ` through ${names(routes)}` : "";
 	const loggedOut = `${harness} is not logged in to ${profile(reviewer, env)}${through}; run \`${reviewer.login}\``;
-	const credentials = reviewer.credentials.filter((name) => env[name]);
+	const credentials = [...reviewer.credentials, ...(routes.length > 0 ? reviewer.routeCredentials : [])].filter(
+		(name) => env[name],
+	);
 	const withCredentials = { ...connected, ...pick(env, credentials) };
 	const rejected = `${harness} rejected ${names(credentials)}${through}; replace it, or run \`${reviewer.login}\``;
 	if (routes.length > 0) {

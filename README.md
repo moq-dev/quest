@@ -939,7 +939,9 @@ as CLIProxyAPI, Bedrock, Vertex, or Foundry works, and Codex keeps
 CLI reads from the environment (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or
 `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code, `CODEX_API_KEY` or
 `CODEX_ACCESS_TOKEN` for Codex) passes only when the CLI has no stored login or
-a gateway or provider is set. Variables that would change the reviewer's plugins,
+a gateway or provider is set. A provider's own keys (`ANTHROPIC_AWS_API_KEY`,
+`ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`) pass only while a
+gateway or provider is set. Variables that would change the reviewer's plugins,
 permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME`, or the default when unset, and any gateway or provider.

@@ -130,8 +130,11 @@ interface Setup {
 const HOST_CREDENTIALS = [
 	"ANTHROPIC_API_KEY",
 	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_AWS_API_KEY",
 	"ANTHROPIC_BASE_URL",
 	"ANTHROPIC_CUSTOM_HEADERS",
+	"ANTHROPIC_FOUNDRY_API_KEY",
+	"ANTHROPIC_FOUNDRY_AUTH_TOKEN",
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	...["BEDROCK", "VERTEX", "FOUNDRY", "MANTLE", "ANTHROPIC_AWS", "ANTHROPIC_GOOGLE_CLOUD"].map(
 		(provider) => `CLAUDE_CODE_USE_${provider}`,
@@ -471,6 +474,31 @@ fakes.each([
 		expect(call.env[endpoint]).toBe("https://provider.example");
 		expect(call.env.ANTHROPIC_MODEL).toBeUndefined();
 	}
+});
+
+fakes("Claude gets a provider's keys only while a gateway or provider is set", async () => {
+	const keys = ["ANTHROPIC_AWS_API_KEY", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN"];
+	const s = setup("CODEX_THREAD_ID");
+	for (const key of keys) vi.stubEnv(key, "provider-key");
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	expect(s.calls().length).toBeGreaterThan(1);
+	for (const call of s.calls()) for (const key of keys) expect(call.env[key], key).toBeUndefined();
+
+	// With no stored login and no route, they are no login: the review stops before it starts.
+	const t = setup("CODEX_THREAD_ID");
+	for (const key of keys) vi.stubEnv(key, "provider-key");
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	const loggedOut = await quest("--root", t.repo, "review");
+	expect(loggedOut.code).toBe(2);
+	expect(loggedOut.stderr).toContain("claude is not logged in");
+	expect(t.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
+
+	const u = setup("CODEX_THREAD_ID");
+	for (const key of keys) vi.stubEnv(key, "provider-key");
+	vi.stubEnv("CLAUDE_CODE_USE_FOUNDRY", "1");
+	const routed = await quest("--root", u.repo, "review");
+	expect(routed.code, routed.stderr).toBe(0);
+	for (const call of u.calls()) for (const key of keys) expect(call.env[key], key).toBe("provider-key");
 });
 
 fakes("Codex keeps CODEX_CA_CERTIFICATE always, and CODEX_ACCESS_TOKEN without a stored login", async () => {

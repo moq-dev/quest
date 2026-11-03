@@ -933,7 +933,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"CLAUDE_CODE_USE_* switches and settings, and Codex keeps CODEX_CA_CERTIFICATE. It uses the CLI's own " +
 				"stored login; the credential the CLI reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, " +
 				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
-				"when the CLI has no stored login or a gateway or provider is set. A logged-out error names the profile it checked, " +
+				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
+				"(ANTHROPIC_AWS_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN) only while one is set. A logged-out error names the profile it checked, " +
 				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider. It runs " +
 				`with ${models}. --model and --effort override them.\n\n` +
 				"The first round runs the reviewer's own review (`codex exec review --base`, or Claude Code's " +
