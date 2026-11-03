@@ -82,8 +82,19 @@ export type Repo = {
 	maintainers: string[];
 	/** Logins that can write without maintaining, whose approvals count as GitHub's writers' do. */
 	writers?: string[];
+	/**
+	 * Roles by login, ahead of `maintainers` and `writers`, such as admin, triage, or a custom role.
+	 * Null is someone without access, whose permission GitHub answers 404 for.
+	 */
+	roles?: Record<string, string | null>;
 	/** Defaults to main. */
 	defaultBranch?: string;
+	private?: boolean;
+	archived?: boolean;
+	/** The SPDX ID of the license GitHub detects; MIT by default, none when null. */
+	license?: string | null;
+	/** The merge methods the repository allows; all of them by default. */
+	mergeMethods?: ("merge" | "squash" | "rebase")[];
 	/** The default branch's files. */
 	files: { path: string; content: string }[];
 	issues: Issue[];
@@ -92,7 +103,7 @@ export type Repo = {
 	 * Upstream branches and their commits. A pull request's branch that is not
 	 * listed is at a commit derived from its number; a `quest/*` branch with no
 	 * open pull request is a claim, unless it is still at a merged one's head.
-	 * Listing `main` moves the default branch on for comparisons with it.
+	 * Listing the default branch moves it on from the commit of `files`.
 	 */
 	branches: Record<string, string>;
 	/**
@@ -104,9 +115,9 @@ export type Repo = {
 	trees: Record<string, Tree>;
 	/** Check names the default branch's rulesets require. */
 	required?: string[];
-	/** The default branch's other ruleset rules, as `GET /rules/branches/main` lists them. */
+	/** The default branch's other ruleset rules, as `GET /rules/branches/<default>` lists them. */
 	rules?: Record<string, unknown>[];
-	/** The default branch's classic protection, as `GET /branches/main/protection` returns it; none when absent. */
+	/** The default branch's classic protection, as `GET /branches/<default>/protection` returns it; none when absent. */
 	protection?: Record<string, any>;
 	/** Rulesets by ID, as `GET /rulesets/<id>` shows them to the App. */
 	rulesets?: Record<number, { current_user_can_bypass: "always" | "pull_requests_only" | "never" }>;
@@ -127,14 +138,25 @@ export const blob = (content: string | Uint8Array) => {
 	const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : content;
 	return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 };
+/** The default branch's first commit, whose tree is `files`. Objects derive from the ID, which a rename keeps. */
+export const commitOf = (repo: Repo) => sha1(`commit ${repo.id}`);
+const treeOf = (repo: Repo) => sha1(`tree ${repo.id}`);
+const defaultOf = (repo: Repo) => repo.defaultBranch ?? "main";
+const methodsOf = (repo: Repo) => repo.mergeMethods ?? ["merge", "squash", "rebase"];
 /** The default branch's commit. */
-export const commitOf = (repo: Repo) => sha1(`commit ${repo.owner}/${repo.name}`);
-const treeOf = (repo: Repo) => sha1(`tree ${repo.owner}/${repo.name}`);
+const tipOf = (repo: Repo) => repo.branches[defaultOf(repo)] ?? commitOf(repo);
+/** A login's role: its listed one, else maintain or write as `maintainers` and `writers` say, else read. */
+const roleOf = (repo: Repo, login: string) =>
+	repo.roles && login in repo.roles
+		? repo.roles[login]!
+		: repo.maintainers.includes(login)
+			? "maintain"
+			: repo.writers?.includes(login)
+				? "write"
+				: "read";
 /** A pull request's head commit: the one it ended at, or its branch's tip where the world lists one. */
 export const headOf = (repo: Repo, pull: Pull) =>
-	pull.head ??
-	(pull.contributor ? {} : repo.branches)[pull.branch] ??
-	sha1(`head ${repo.owner}/${repo.name}#${pull.number}`);
+	pull.head ?? (pull.contributor ? {} : repo.branches)[pull.branch] ?? sha1(`head ${repo.id}#${pull.number}`);
 // GitHub's database IDs differ from numbers; derive stable ones per repository.
 export const databaseId = (repo: Repo, number: number) => String(repo.id * 1000 + number);
 const updatedAt = "2026-10-20T12:00:00Z";
@@ -214,7 +236,7 @@ function pullTarget(repo: Repo, pull: Pull, after: unknown) {
 	return {
 		...issueTarget(pull, after),
 		isDraft: !!pull.draft,
-		baseRefName: "main",
+		baseRefName: pull.base ?? defaultOf(repo),
 		headRefName: pull.branch,
 		headRefOid: oid,
 		reviews: connection(
@@ -263,13 +285,13 @@ function reviewTarget(repo: Repo, pull: Pull) {
 	for (const review of pull.reviews ?? [])
 		if (
 			["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(review.state) &&
-			[...repo.maintainers, ...(repo.writers ?? [])].includes(review.author)
+			["admin", "maintain", "write"].includes(roleOf(repo, review.author) ?? "")
 		)
 			latest.set(review.author, review);
 	return {
 		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
 		headRefOid: headOf(repo, pull),
-		baseRefName: pull.base ?? "main",
+		baseRefName: pull.base ?? defaultOf(repo),
 		body: pull.body ?? "",
 		author: actor(pull.author),
 		userContentEdits: { nodes: pull.editor ? [{ editor: actor(pull.editor) }] : [] },
@@ -288,7 +310,7 @@ function holdsTarget(repo: Repo, pull: Pull) {
 	return {
 		id: nodeId(repo, pull),
 		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
-		baseRefName: "main",
+		baseRefName: pull.base ?? defaultOf(repo),
 		headRefOid: headOf(repo, pull),
 		mergeStateStatus: mergeState(pull),
 		isMergeQueueEnabled: false,
@@ -339,6 +361,9 @@ function queueTarget(repo: Repo, pull: Pull) {
 	};
 }
 
+/** Source-available licenses SPDX lists without OSI approval; the fake's SPDX approves every other. */
+const UNAPPROVED = new Set(["BUSL-1.1", "SSPL-1.0", "Elastic-2.0"]);
+
 /** The fake's GitHub Actions app, which reports a run unless it names another. */
 export const ACTIONS_APP = 15368;
 
@@ -379,8 +404,8 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 	if (query.includes("signature {")) {
 		const pull = repo.pulls.find((p) => p.number === variables.number);
 		if (!pull) return { data: { repository: { pullRequest: null } } };
-		const branch = repo.defaultBranch ?? "main";
-		const anchor = repo.branches[branch] ?? commitOf(repo);
+		const branch = defaultOf(repo);
+		const anchor = tipOf(repo);
 		const comparison = query.includes("compare(headRef:");
 		const base = comparison ? anchor : (repo.branches[pull.base ?? branch] ?? anchor);
 		const head = comparison ? String(variables.revision) : headOf(repo, pull);
@@ -453,15 +478,16 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 			},
 		};
 	}
-	if (query.includes("defaultBranchRef")) return { data: { repository: { defaultBranchRef: { name: "main" } } } };
+	if (query.includes("defaultBranchRef"))
+		return { data: { repository: { defaultBranchRef: { name: defaultOf(repo) } } } };
 	if (query.includes("queue:pullRequests(")) {
-		const queued = repo.pulls.filter((pull) => !pull.closed && variables.base === "main");
+		const queued = repo.pulls.filter((pull) => !pull.closed && variables.base === defaultOf(repo));
 		return {
 			data: {
 				repository: {
 					ref:
-						variables.qualified === "refs/heads/main"
-							? { target: { oid: repo.branches.main ?? commitOf(repo) } }
+						variables.qualified === `refs/heads/${defaultOf(repo)}`
+							? { target: { oid: tipOf(repo) } }
 							: null,
 					queue: page(queued.map((pull) => queueTarget(repo, pull))),
 				},
@@ -546,18 +572,15 @@ function connect(repo: Repo) {
 	for (const tip of tips) repo.commits[tip] ??= { parents: [main], tree: treeOf(repo), message: "Work" };
 }
 
-/** A tree's `.github/workflows` files and their blob IDs: the default branch's files, then each written tree's changes. */
-function workflowsOf(repo: Repo, sha: string): Record<string, string> {
-	const workflow = (path: string) => path.startsWith(".github/workflows/");
-	if (sha === treeOf(repo))
-		return Object.fromEntries(repo.files.filter((f) => workflow(f.path)).map((f) => [f.path, blob(f.content)]));
+/** A tree's files and their blob IDs: `files` for the first commit's, then each written tree's changes. */
+function filesOf(repo: Repo, sha: string): Record<string, string> {
+	if (sha === treeOf(repo)) return Object.fromEntries(repo.files.map((f) => [f.path, blob(f.content)]));
 	const written = repo.trees[sha];
 	if (!written) return {};
-	const files = workflowsOf(repo, written.base);
+	const files = filesOf(repo, written.base);
 	for (const entry of written.entries as { path: string; sha?: string | null; content?: string }[])
-		if (workflow(entry.path))
-			if (entry.sha === null) delete files[entry.path];
-			else files[entry.path] = entry.sha ?? blob(entry.content ?? "");
+		if (entry.sha === null) delete files[entry.path];
+		else files[entry.path] = entry.sha ?? blob(entry.content ?? "");
 	return files;
 }
 
@@ -600,7 +623,7 @@ export function fakeGitHub(world: World) {
 		draft: !!pull.draft,
 		user: { login: pull.author },
 		created_at: new Date(pull.createdAt ?? Date.parse(updatedAt)).toISOString(),
-		base: { ref: "main" },
+		base: { ref: pull.base ?? defaultOf(repo) },
 		head: { ref: pull.branch, sha: headOf(repo, pull), repo: headRepo(repo, pull) },
 	});
 
@@ -608,13 +631,15 @@ export function fakeGitHub(world: World) {
 		id: repo.id,
 		name: repo.name,
 		owner: { login: repo.owner },
-		private: false,
-		visibility: "public",
-		default_branch: repo.defaultBranch ?? "main",
-		archived: false,
+		private: !!repo.private,
+		visibility: repo.private ? "private" : "public",
+		default_branch: defaultOf(repo),
+		archived: !!repo.archived,
 		disabled: false,
-		license: { spdx_id: "MIT" },
-		allow_squash_merge: true,
+		license: repo.license === null ? null : { spdx_id: repo.license ?? "MIT" },
+		allow_squash_merge: methodsOf(repo).includes("squash"),
+		allow_merge_commit: methodsOf(repo).includes("merge"),
+		allow_rebase_merge: methodsOf(repo).includes("rebase"),
 		allow_auto_merge: true,
 	});
 
@@ -637,8 +662,8 @@ export function fakeGitHub(world: World) {
 				repositories: repos.map((repo) => ({
 					...restRepo(repo),
 					permissions: {
-						admin: false,
-						maintain: repo.maintainers.includes(me.login),
+						admin: roleOf(repo, me.login) === "admin",
+						maintain: ["admin", "maintain"].includes(roleOf(repo, me.login) ?? ""),
 						push: true,
 						pull: true,
 					},
@@ -692,7 +717,11 @@ export function fakeGitHub(world: World) {
 		const method = request.method;
 		const path = url.pathname;
 		const me = world.users[0]!;
-		if (url.origin === "https://spdx.org") return json({ licenseId: "MIT", isOsiApproved: true });
+		const license = url.origin === "https://spdx.org" && path.match(/^\/licenses\/([^/]+)\.json$/)?.[1];
+		if (license) {
+			const licenseId = decodeURIComponent(license);
+			return json({ licenseId, isOsiApproved: !UNAPPROVED.has(licenseId) });
+		}
 		if (url.origin === "https://github.com" && path === "/login/oauth/access_token")
 			return json({ access_token: USER_TOKEN, token_type: "bearer", scope: "" });
 		if (url.origin !== "https://api.github.com") return missing(method, request.url);
@@ -854,17 +883,11 @@ export function fakeGitHub(world: World) {
 		const permission = tail.match(/^\/collaborators\/([^/]+)\/permission$/);
 		if (permission) {
 			const found = world.users.find((u) => u.login === permission[1]);
-			if (!found) return notFound();
-			const role = repo.maintainers.includes(found.login)
-				? "maintain"
-				: repo.writers?.includes(found.login)
-					? "write"
-					: "read";
-			return json({
-				user: { id: found.id },
-				permission: role === "read" ? "read" : "write",
-				role_name: role,
-			});
+			const role = found && roleOf(repo, found.login);
+			if (!found || !role) return notFound();
+			// The legacy permission is the base role's; a custom role's is read here.
+			const legacy = role === "admin" ? "admin" : ["maintain", "write"].includes(role) ? "write" : "read";
+			return json({ user: { id: found.id }, permission: legacy, role_name: role });
 		}
 		const listed = tail.match(/^\/commits\/([0-9a-f]{40})$/)?.[1];
 		if (listed && method === "GET") {
@@ -875,12 +898,14 @@ export function fakeGitHub(world: World) {
 				committer: found.committer ? { login: found.committer, type: actor(found.committer).__typename } : null,
 			});
 		}
-		if (tail === "/commits/main") return json({ sha: commitOf(repo), commit: { tree: { sha: treeOf(repo) } } });
+		const trunk = `/${encodeURIComponent(defaultOf(repo))}`;
+		if (tail === `/commits${trunk}`)
+			return json({ sha: tipOf(repo), commit: { tree: { sha: repo.commits[tipOf(repo)]!.tree } } });
 		// Read access sees whether classic protection is on and its required checks; the rest needs administration.
-		if (tail === "/branches/main" && method === "GET") {
+		if (tail === `/branches${trunk}` && method === "GET") {
 			const checks = repo.protection?.required_status_checks;
 			return json({
-				name: "main",
+				name: defaultOf(repo),
 				protection: repo.protection
 					? {
 							enabled: true,
@@ -893,7 +918,7 @@ export function fakeGitHub(world: World) {
 					: { enabled: false },
 			});
 		}
-		if (tail === "/branches/main/protection" && method === "GET") {
+		if (tail === `/branches${trunk}/protection` && method === "GET") {
 			if (!scope.permissions.administration) return forbidden();
 			return repo.protection ? json(repo.protection) : json({ message: "Branch not protected" }, 404);
 		}
@@ -923,7 +948,7 @@ export function fakeGitHub(world: World) {
 			);
 			return json({ total_count: check_runs.length, check_runs });
 		}
-		if (tail.startsWith("/rules/branches/main") && method === "GET") {
+		if (tail === `/rules/branches${trunk}` && method === "GET") {
 			const contexts = (repo.required ?? []).map((context) => ({ context }));
 			return json([
 				...(contexts.length
@@ -973,7 +998,7 @@ export function fakeGitHub(world: World) {
 			const [prefix, qualified] = String(body.head).split(":");
 			const owner = qualified === undefined ? repo.owner : prefix;
 			const branch = qualified ?? prefix;
-			if (owner !== repo.owner || !branch || body.base !== "main" || !branches.get(branch))
+			if (owner !== repo.owner || !branch || body.base !== defaultOf(repo) || !branches.get(branch))
 				return json({ message: "Validation Failed: head is invalid" }, 422);
 			if (repo.pulls.some((pull) => !pull.closed && !pull.contributor && pull.branch === branch))
 				return json({ message: `A pull request already exists for ${body.head}.` }, 422);
@@ -1025,12 +1050,16 @@ export function fakeGitHub(world: World) {
 			const refused = pull.mergeRefusals?.shift();
 			if (refused) return json({ message: refused.message }, refused.status);
 			if (body.sha !== headOf(repo, pull)) return json({ message: "Head branch was modified" }, 409);
+			const methods = { merge: "Merge commits", squash: "Squash merges", rebase: "Rebase merges" } as const;
+			const merging = (body.merge_method ?? "merge") as keyof typeof methods;
+			if (!methodsOf(repo).includes(merging))
+				return json({ message: `${methods[merging]} are not allowed on this repository.` }, 405);
 			if (pull.merge !== "CLEAN") return json({ message: "Pull Request is not mergeable" }, 405);
 			pull.closed = true;
 			pull.merged = true;
 			pull.landing = false;
 			pull.autoMerge = undefined;
-			if (pull.squash) repo.branches[pull.base ?? repo.defaultBranch ?? "main"] = pull.squash;
+			if (pull.squash) repo.branches[pull.base ?? defaultOf(repo)] = pull.squash;
 			pull.mergeCommit = pull.squash ?? commitOf(repo);
 			return json({
 				sha: pull.mergeCommit,
@@ -1076,10 +1105,10 @@ export function fakeGitHub(world: World) {
 			pull.labels = current.filter((label) => label !== name);
 			return json(pull.labels.map((label) => ({ name: label })));
 		}
-		const compare = tail.match(/^\/compare\/([0-9a-f]{40})\.\.\.(main|[0-9a-f]{40})$/);
+		const compare = tail.match(/^\/compare\/([0-9a-f]{40})\.\.\.([^/]+)$/);
 		if (compare && method === "GET") {
 			const from = compare[1]!;
-			const base = compare[2] === "main" ? (repo.branches.main ?? commitOf(repo)) : compare[2]!;
+			const base = compare[2] === encodeURIComponent(defaultOf(repo)) ? tipOf(repo) : compare[2]!;
 			if (!repo.commits[from] || !repo.commits[base]) return notFound();
 			const ancestors = (tip: string, seen = new Set<string>()): Set<string> => {
 				if (seen.has(tip)) return seen;
@@ -1103,14 +1132,20 @@ export function fakeGitHub(world: World) {
 		}
 		if (tail === "/contents/.github" && method === "GET") {
 			const tree = repo.commits[url.searchParams.get("ref") ?? ""]?.tree;
-			const files = Object.entries(tree ? workflowsOf(repo, tree) : {}).sort();
+			const files = Object.entries(tree ? filesOf(repo, tree) : {})
+				.filter(([path]) => path.startsWith(".github/workflows/"))
+				.sort();
 			if (!files.length) return notFound();
 			const sha = sha1(`workflows ${JSON.stringify(files)}`);
 			return json([{ name: "workflows", path: ".github/workflows", type: "dir", sha }]);
 		}
+		// A file at a commit or branch, the default branch's by default.
 		if (tail.startsWith("/contents/")) {
-			const file = repo.files.find((f) => f.path === decodeURIComponent(tail.slice("/contents/".length)));
-			return file ? json({ type: "file", path: file.path }) : notFound();
+			const path = decodeURIComponent(tail.slice("/contents/".length));
+			const ref = url.searchParams.get("ref") ?? defaultOf(repo);
+			const tree = repo.commits[repo.commits[ref] ? ref : (branches.get(ref) ?? "")]?.tree;
+			if (!tree) return json({ message: `No commit found for the ref ${ref}` }, 404);
+			return path in filesOf(repo, tree) ? json({ type: "file", path }) : notFound();
 		}
 		return missing(method, request.url);
 	};
