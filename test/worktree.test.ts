@@ -689,7 +689,8 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 	});
 	it("checks out a pull request's head from origin for Claude's pr-<number> names", async () => {
 		const { root, repo, worktrees } = fixture();
-		const create = (name: string) => claudeHook({ hook_event_name: "WorktreeCreate", cwd: repo, name }, worktrees, noForge);
+		const create = (name: string) =>
+			claudeHook({ hook_event_name: "WorktreeCreate", cwd: repo, name }, worktrees, noForge);
 		// Without an origin, a pr- name is only a name.
 		const plain = (await create("pr-1"))!.trim();
 		expect(git(plain, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "HEAD"));
