@@ -8,7 +8,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { dirname, join, posix } from "node:path";
 
 import { type HarnessName, LINE_LIMIT, boundedLines, strippedEnvironment } from "./agent";
 import { gitOutput } from "./claims";
@@ -17,6 +17,8 @@ import { save } from "./worktree";
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
 export class ReviewInputError extends Error {}
+/** `--responses` is missing after a round with findings, or given with no round to answer. */
+export class ResponsesError extends ReviewInputError {}
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
 
@@ -112,6 +114,8 @@ export interface ReviewOptions {
 	responses?: string;
 	/** Start a new session instead of resuming the branch's last one. */
 	fresh?: boolean;
+	/** Stops the reviewer CLI, failing the round; the session keeps its earlier rounds. */
+	signal?: AbortSignal;
 }
 
 export interface ReviewDependencies {
@@ -135,7 +139,7 @@ interface State {
 }
 
 /** What a turn needs to build its command line. */
-interface Context {
+export interface Context {
 	base: string;
 	/** The base's agent instructions, given in place of the checkout's. */
 	instructions: string;
@@ -275,7 +279,7 @@ const claude: Reviewer = {
 	},
 };
 
-function claudeFlags(context: Context): string[] {
+export function claudeFlags(context: Context): string[] {
 	return [
 		"claude",
 		"-p",
@@ -403,8 +407,19 @@ const TAIL = 16 * 1024;
  * outlives the command. The CLI is found on PATH's absolute directories, never
  * in the checkout under review, and the CLI's own commands keep only those too.
  */
-function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string, reader?: Reader) {
+function run(
+	argv: string[],
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+	stdin: string,
+	reader?: Reader,
+	signal?: AbortSignal,
+) {
 	return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason);
+			return;
+		}
 		let program: string;
 		try {
 			program = requireProgram(argv[0], env);
@@ -420,8 +435,17 @@ function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string,
 		const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 		const handlers = signals.map((name) => [name, () => child.kill(name)] as const);
 		for (const [name, handler] of handlers) process.on(name, handler);
+		// An abort stops the CLI, killing it after a grace period, and the turn fails once it has exited.
+		let killing: ReturnType<typeof setTimeout> | undefined;
+		const abort = () => {
+			child.kill("SIGTERM");
+			killing = setTimeout(() => child.kill("SIGKILL"), ABORT_GRACE_MS);
+		};
+		signal?.addEventListener("abort", abort, { once: true });
 		const done = () => {
 			for (const [name, handler] of handlers) process.off(name, handler);
+			signal?.removeEventListener("abort", abort);
+			clearTimeout(killing);
 		};
 		let stderr = "";
 		const lines = boundedLines(LINE_LIMIT, (line) => reader?.line(line));
@@ -438,10 +462,14 @@ function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string,
 		});
 		child.once("close", (code) => {
 			done();
-			resolve({ code: code ?? 1, stderr });
+			if (signal?.aborted) reject(signal.reason);
+			else resolve({ code: code ?? 1, stderr });
 		});
 	});
 }
+
+/** How long an aborted reviewer CLI has to exit before it is killed. */
+const ABORT_GRACE_MS = 10_000;
 
 /** The reviewer CLI with the environment it runs in and the error for a login the API rejects. */
 interface Cli {
@@ -449,6 +477,8 @@ interface Cli {
 	env: NodeJS.ProcessEnv;
 	/** Thrown when a turn fails on authentication, as a logged-out status check fails. */
 	unauthorized: string;
+	/** Stops the review's CLI turns. */
+	signal?: AbortSignal;
 }
 
 const names = (list: string[]) => list.join(" and ");
@@ -467,13 +497,13 @@ function profile(reviewer: Reviewer, env: NodeJS.ProcessEnv): string {
  * never overrides a stored subscription login, so a review is billed as the
  * user's own CLI sessions are.
  */
-async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv): Promise<Cli> {
+async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Cli> {
 	const reviewer = REVIEWERS[harness];
 	const stripped = strippedEnvironment(env);
 	const notLoggedIn = `${harness} is not logged in to ${profile(reviewer, env)}`;
 	const loggedOut = `${notLoggedIn}; run \`${reviewer.login}\``;
-	if ((await run(reviewer.status, cwd, stripped, "")).code === 0) {
-		return { reviewer, env: stripped, unauthorized: loggedOut };
+	if ((await run(reviewer.status, cwd, stripped, "", undefined, signal)).code === 0) {
+		return { reviewer, env: stripped, unauthorized: loggedOut, signal };
 	}
 	const reroutes = reviewer.reroutes(env);
 	if (reroutes.length > 0) {
@@ -488,13 +518,23 @@ async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv
 		reviewer,
 		env: { ...stripped, ...Object.fromEntries(credentials.map((name) => [name, env[name]])) },
 		unauthorized: `${harness} rejected ${names(credentials)}; replace it, or run \`${reviewer.login}\``,
+		signal,
 	};
+}
+
+/** The environment `quest review` runs `harness`'s CLI in, for a caller that runs it with the same login. */
+export async function reviewerEnvironment(
+	harness: HarnessName,
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+	return (await prepare(harness, cwd, env)).env;
 }
 
 /** Run one reviewer turn, failing on any error it reports, and as logged out on an authentication error. */
 async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 	const reader = cli.reviewer.reader();
-	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader);
+	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader, cli.signal);
 	const reply = reader.reply();
 	if (code !== 0 || reply.error !== undefined) {
 		// A login can expire or be revoked while the status check still passes. A CLI may report it
@@ -696,6 +736,11 @@ function defaultBranch(root: string, remote: string): string {
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
 
+/** Where a branch's review session is kept, under the clone's common Git directory `common`. */
+export function sessionFile(common: string, branch: string): string {
+	return join(common, "quest", "review", `${digest(branch)}.json`);
+}
+
 function load(path: string): State | undefined {
 	try {
 		return JSON.parse(readFileSync(path, "utf8")) as State;
@@ -726,22 +771,22 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		);
 	}
 
-	const dir = join(gitOutput(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), "quest", "review");
+	const statePath = sessionFile(gitOutput(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
+	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
-	const statePath = join(dir, `${digest(branch)}.json`);
 	const stored = load(statePath);
 	const state = options.fresh || stored?.reviewer !== harness ? undefined : stored;
 	const previous = state?.rounds.at(-1);
 	if (previous === undefined && options.responses !== undefined) {
-		throw new ReviewInputError("--responses answers a previous round, and this branch has none to resume");
+		throw new ResponsesError("--responses answers a previous round, and this branch has none to resume");
 	}
 	if (previous !== undefined && previous.findings > 0 && options.responses === undefined) {
-		throw new ReviewInputError(
+		throw new ResponsesError(
 			`the last round reported ${previous.findings} finding(s); pass --responses with a fix or refutation for each`,
 		);
 	}
 
-	const cli = await prepare(harness, root, deps.env);
+	const cli = await prepare(harness, root, deps.env, options.signal);
 
 	// The reviewer's sandbox has no network, so the base is fetched first.
 	const baseRef = options.base ?? `origin/${defaultBranch(root, "origin")}`;

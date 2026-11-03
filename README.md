@@ -251,6 +251,12 @@ detached, so pass the head branch:
 The check is a floor, not a review: any edit to the quest passes, so reviewers
 still judge whether a rewrite matches what remains.
 
+A link into a submodule that is not checked out, as in a fresh worktree or
+`actions/checkout` by default, resolves at the commit its gitlink pins when a
+local git directory holds that commit, such as the main worktree's. Otherwise
+`quest check` notes the submodule and skips its links rather than reporting
+them broken.
+
 ## Move and delete quests
 
 `quest mv` and `quest rm` move or delete a quest or an epic with `git mv` and
@@ -847,6 +853,22 @@ posted with its reason and a recommendation, and the PR leaves the watcher's
 care until a maintainer enqueues it again. A round whose pick ended while it
 ran, by a writer's push or enqueue, is not applied, and its comment says so.
 
+The watcher also keeps the repository's flaky tests in `flaky.json` in its
+state directory: each flaky verdict, across every PR, by the failure signature
+the fixer named, with the `merge_group` jobs that showed it. Each failed
+build's round is told the tests that flaked before and are not yet disabled, in
+`.git/quest-land-flaky.json` in its checkout, which `quest land fix` passes to
+the agent. One verdict alone only re-enqueues the PR, since one judgment could
+hide a real bug. When a listed test flakes again, the fixer also commits its
+disabling on a `disable` branch from the base: the skip in the test
+framework's own form, naming the follow-up quest it adds to the repository's
+m0 `flaky` epic, `quest/m0/flaky/<name>.md`, to fix or delete the test. The
+watcher validates that commit as it does a base fix, requiring exactly one new
+follow-up quest, pushes it to `quest-land/flaky-<sha>`, opens it as a pull
+request with its Review recorded, and enqueues it like any other, with no
+maintainer's pick. A refused disable waits for the test's next flake, and a
+pull request GitHub refuses to enqueue says so and waits for a maintainer.
+
 It shares `quest land serve`'s App key, state directory, private repository,
 and locks, so the two never run for the same repository at once. Without a
 fixer its token asks for `contents: read`, `pull_requests: write`,
@@ -908,22 +930,36 @@ the host's load. `quest agent` drops the variable, as it drops an admission.
 Each admission records the gate's process ID, and counts as running until that
 process exits; a reused process ID only makes a command wait for the load
 again. The gate holds no lock while the command runs, and it owns the
-command's descendants. Once the command exits, or the gate is cancelled and the
-command exits, any descendant still running is killed, so a cancelled build or
-test run leaves nothing behind. A second SIGINT, SIGTERM, or SIGHUP kills them
-all at once. How far ownership reaches depends on the host:
+command's descendants. Once the command exits, any descendant still running is
+killed, so a build or test run leaves nothing behind.
+
+Cancelling the gate with SIGINT, SIGTERM, or SIGHUP delivers that signal to
+every process it owns, as a terminal's Ctrl-C reaches its whole foreground
+process group. Each one runs its own handling, even behind wrappers that would
+not pass the signal on: a Bash script blocked on its foreground command, GNU
+`time`, which dies without forwarding it, or Just. The gate then waits until
+each process that got the signal has exited, so a phase that outlives the
+wrappers around it still finishes its cleanup, and only then kills whatever is
+left. A second SIGINT, SIGTERM, or SIGHUP kills everything at once. A cancelled
+gate exits with 128 plus the signal's number. How far ownership reaches depends
+on the host:
 
 - Linux with a systemd 254+ user manager, unified cgroup v2, and Linux 5.14+
   runs the command in its own systemd user scope, as `quest worktree run` does,
   and owns every descendant, including ones that start their own process group
   or session. Only a process that asks another service manager to start it
   escapes.
+  A cancelled gate waits until the scope is empty.
 - macOS, and Linux without such a user manager (as in most containers and on
   Ubuntu 22.04), run the command as the leader of a new session and own its
   process group. A descendant that moves to another process group or session,
   as a daemon does, is outside it. The session has no controlling terminal: the
   command keeps the terminal as its streams, but cannot open `/dev/tty`, and
-  Ctrl-Z suspends only Quest.
+  Ctrl-Z suspends only Quest. Nothing reports that a process group emptied, so
+  the command gets a pipe on descriptor 3, which every descendant inherits
+  unless it or a parent closes it, as Bun and Node do for the processes they
+  start. A cancelled gate waits until every process holding it has exited,
+  including one outside the group that the signal never reached.
 - Windows owns only the command itself.
 
 A nested invocation runs immediately inside the admitted command, and a gate
@@ -936,11 +972,14 @@ This repository's `just check`, `just test`, `just worker-check`, and
 `just worker-test` run through the gate.
 
 Arguments, working directory, environment, terminal streams, and the exit
-status pass through, and waiting happens before the command starts. A
-terminal's Ctrl-C reaches the command's process group once; SIGTERM and SIGHUP
-sent to Quest are forwarded to the command, and a cancelled gate exits with
-128 plus the signal's number. There is no fairness guarantee, and no timeout
-except `--quick`'s: any other command waits as long as the host stays busy.
+status pass through, and waiting happens before the command starts. Each
+process gets a cancelling signal once from Quest: a nested gate, or one inside
+another Quest scope, leaves both the signal and the second signal's kill to
+the enclosing owner, which already delivers them to everything it holds. A
+signal sent with `kill` to such a gate alone therefore does not reach its
+command. Just forwards SIGTERM to the command it runs, so that command gets it
+a second time. There is no fairness guarantee, and no timeout except
+`--quick`'s: any other command waits as long as the host stays busy.
 
 ## Review locally
 
@@ -986,9 +1025,13 @@ allow rule, even the user's own, widens that. Codex skips the user's config,
 whose project trust would load the checkout's `.codex/config.toml` and start its
 MCP servers outside the sandbox. Whether those flags isolate is up to each
 CLI's release, so `just review-sandbox`, in this repository, plants project MCP
-servers and hooks for both CLIs on a head, runs `quest review` with the
-installed CLIs and copies of your logins, and fails if any of it runs or the
-review trusts a new directory. It spends real usage, so CI never runs it; run it
+servers and hooks for both CLIs on a head, and for Claude Code local settings,
+an allow rule, an `env` shell prefix, an API key helper, and a status line. It
+runs `quest review` with the installed CLIs and copies of your logins, and
+fails if any of it runs, the review trusts a new directory, or the reviewer's
+flags let the planted rule allow a command. A login with no file to copy, such
+as one in the macOS keychain, needs the CLI's credential exported instead:
+`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, or `CODEX_API_KEY`. It spends real usage, so CI never runs it; run it
 after upgrading either CLI. The base is fetched first, since
 the sandbox has no network. The reviewer follows the base's `AGENTS.md` and `CLAUDE.md`, at the
 root and in each directory holding a changed path, never the checkout's, so a
@@ -1187,7 +1230,12 @@ one run, since the next run starts without scratch.
 
 `run` owns processes through a systemd user scope per run, so it needs Linux
 5.14+ with a systemd 254+ user manager and unified cgroup v2; it fails on other
-hosts.
+hosts. It handles signals as the gate does on such a host: SIGINT, SIGTERM, or
+SIGHUP reaches every process in the run's scope, the run waits until the scope
+is empty, and a second signal kills everything at once. A run inside another
+Quest scope, such as a gate's, binds its own scope to that one, so the
+enclosing owner's kill stops it too, and leaves a repeated signal's kill to
+that owner: it may be the copy of SIGTERM that Just forwards.
 Work handed to another service manager, such as `systemd-run` or a container
 daemon, escapes the scope. If the supervisor itself is killed, its command keeps
 running and its scratch is kept; the next `quest worktree` command drops the run

@@ -38,7 +38,7 @@ import {
 import { importFixer } from "../src/cli/land-fixer-repository";
 import { apply, parseResolution, pushCommand, resolutionSection } from "../src/cli/land-apply";
 import fixerPrompt from "../assets/land-fix.md";
-import { COMMENT_LIMIT, fix, parseBaseFix, parseFixResult } from "../src/cli/land-fix";
+import { COMMENT_LIMIT, FLAKY_INPUT, fix, parseBaseFix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
 import type { GitHubDependencies } from "../src/cli/github";
 import {
@@ -3106,6 +3106,19 @@ ${requeueScript}
 		);
 		await fix(dir, log, [1], agent, ["-"]);
 		expect(readFileSync(join(dir, "prompt.txt"), "utf8")).toContain(`PRs:\n- #1: branch pr-1 at ${head}\n`);
+		expect(readFileSync(join(dir, "prompt.txt"), "utf8")).not.toContain("Known flaky tests");
+
+		// The daemon's known flaky tests, in the checkout's .git, follow the PRs as data.
+		const known = [
+			{ failure: "cargo test: render_timeout", jobs: ["https://github.com/o/r/actions/runs/1/job/2"] },
+		];
+		writeFileSync(join(dir, ".git", FLAKY_INPUT), JSON.stringify(known));
+		await fix(dir, log, [1], agent, ["-"]);
+		expect(readFileSync(join(dir, "prompt.txt"), "utf8")).toContain(
+			`PRs:\n- #1: branch pr-1 at ${head}\nKnown flaky tests: ${JSON.stringify(known)}\n`,
+		);
+		writeFileSync(join(dir, ".git", FLAKY_INPUT), JSON.stringify([{ failure: 7, jobs: [] }]));
+		await expect(fix(dir, log, [1], agent, ["-"])).rejects.toThrow("invalid known flaky tests");
 	});
 	test("finds the agent on PATH, never in the checkout it fixes", async () => {
 		const dir = fixRepository();
@@ -3545,6 +3558,21 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		// The base fix has no signature: nothing compares its rounds.
 		expect(() =>
 			parseBaseFix(JSON.stringify({ action: "fixed", head: "a".repeat(40), reason: "fine", failure: "x" })),
+		).toThrow();
+	});
+	test("accepts a disabling commit only on a requeue", () => {
+		const disable = "d".repeat(40);
+		const accepted = { number: 1, action: "requeue", reason: "flaky", failure: "cargo test: render", disable };
+		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		for (const value of [
+			{ number: 1, action: "requeue", reason: "flaky", disable: "short" },
+			{ number: 1, action: "requeue", reason: "flaky", disable: 7 },
+			{ number: 1, action: "fixed", head: disable, reason: "fine", disable },
+			{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", disable },
+		])
+			expect(() => parseFixResult(JSON.stringify([value]), [1])).toThrow("invalid fixer disable");
+		expect(() =>
+			parseBaseFix(JSON.stringify({ action: "fixed", head: disable, reason: "fine", disable })),
 		).toThrow();
 	});
 	test("strictly accepts one fixed or handback object for the base alone", () => {
