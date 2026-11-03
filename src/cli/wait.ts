@@ -15,7 +15,8 @@ import {
 	string,
 } from "./github";
 import { LAND_CHECK } from "./land";
-import { classifyCheck, enabledHead, newestChecks } from "./status";
+import { latestContexts } from "../github/checks";
+import { classifyCheck, enabledHead } from "./status";
 
 const POLL = 5 * 60_000;
 /**
@@ -362,7 +363,7 @@ async function watch(
 			const page = object(contexts.pageInfo);
 			after = page.hasNextPage === true ? string(page.endCursor) : null;
 		} while (after !== null);
-		return { head: head!, base: string(pull.baseRefName), checks: newestChecks(rows).map(check), pull };
+		return { head: head!, base: string(pull.baseRefName), checks: latestContexts(rows).map(check), pull };
 	};
 	/**
 	 * What the base branch requires, read once per wait. Only a requirement says whether a missing

@@ -1033,6 +1033,28 @@ test("a rerun supersedes a cancelled run of a required check, which never wakes 
 	expect(query).toContain("checkSuite { status app { databaseId }");
 });
 
+test("a superseded workflow run's failed gate never wakes the wait, as on moq-dev/moq#7325", async () => {
+	// Concurrency cancelled the older run, whose gate then failed on purpose; the newer run passed.
+	const older: CheckFixture[] = [
+		{ name: "Scope", result: "CANCELLED", time: LATER, id: 1 },
+		{ name: "Release gate", required: true, result: "FAILURE", time: LATER, id: 2 },
+	];
+	const fixture = setup([pull(), response([pushed()]), response([committed(A)]), response([committed(A)])], [A], {
+		checks: [
+			checks([...older, { name: "Scope", id: 3 }, { name: "Release gate", required: true, id: 4 }]),
+			checks([
+				...older,
+				{ name: "Scope", result: "SUCCESS", time: LATEST, id: 3 },
+				{ name: "Release gate", required: true, result: "SUCCESS", time: LATEST, id: 4 },
+			]),
+		],
+		protected: ["Release gate"],
+	});
+	const lines = await waitForActivity(pr, {}, fixture.deps);
+	expect(fixture.sleeps).toEqual([300_000]);
+	expect(lines).toEqual([expect.stringMatching(/^2026-10-07T12:08:00Z checks:passed Release_gate /)]);
+});
+
 test("optional checks never stand in for required checks that have not started", async () => {
 	const fixture = setup(
 		[pull(), response([pushed()]), response([committed(A)]), response([committed(A)]), response([committed(A)])],

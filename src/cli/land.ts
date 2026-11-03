@@ -16,7 +16,8 @@ import {
 	requirements,
 	string,
 } from "./github";
-import { appOf, classifyCheck, newestChecks } from "./status";
+import { appOf, latestContexts } from "../github/checks";
+import { classifyCheck } from "./status";
 import { committedSources, snapshot } from "./tree";
 
 /** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
@@ -133,7 +134,7 @@ const CONTEXTS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		__typename
 		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { app { databaseId } } }
-		... on StatusContext { context state targetUrl }
+		... on StatusContext { context state createdAt targetUrl }
 	}`;
 
 const QUEUE = `query($owner: String!, $name: String!, $base: String!, $qualified: String!, $after: String) {
@@ -438,16 +439,17 @@ async function contexts(github: GitHub, repository: Repository, node: ObjectValu
 
 /**
  * The required checks a head failed, and those pending or not yet reported, each from its app. Only
- * each check's newest run counts, so a rerun supersedes a cancelled or failed run.
+ * each check's latest run counts, as for GitHub's mergeability, so a rerun supersedes a cancelled or
+ * failed run.
  */
 function checks(contexts: ObjectValue[], required: RequiredCheck[]): { failing: string[]; pending: string[] } {
 	const failing: string[] = [];
 	const pending: string[] = [];
-	const newest = newestChecks(contexts);
+	const latest = latestContexts(contexts);
 	for (const need of required) {
 		let result: "passed" | "failing" | "pending" = "pending";
 		let reported = false;
-		for (const context of newest) {
+		for (const context of latest) {
 			const { check, outcome } = classifyCheck(context);
 			if (check.name !== need.name || (need.app !== null && appOf(context) !== need.app)) continue;
 			// A name reported by more than one app, or as both a run and a status, counts only once every report passes.

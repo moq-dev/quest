@@ -1,5 +1,6 @@
 import { createHash, createPrivateKey, sign } from "node:crypto";
 import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
+import { checksState, latestContexts } from "../../../src/github/checks";
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
 import { unreviewed } from "./review";
@@ -1222,12 +1223,12 @@ export class GitHubService {
 		const reviews = `reviews(first: 50, after: $after) { nodes { author { login } state body submittedAt } ${pageInfo} }`;
 		const threads = `reviewThreads(first: 100, after: $after) { nodes { id isResolved isOutdated path line comments(first: 50) { ${commentFields} ${pageInfo} } } ${pageInfo} }`;
 		const contexts = (after: boolean) =>
-			`contexts(first: 100${after ? ", after: $after" : ""}) { nodes { __typename ... on CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state description targetUrl } } ${pageInfo} }`;
+			`contexts(first: 100${after ? ", after: $after" : ""}) { nodes { __typename ... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { app { databaseId } } } ... on StatusContext { context state description createdAt targetUrl } } ${pageInfo} }`;
 		const query =
 			kind === "issues"
 				? `issue(number: $number) { number title state body author { login } ${comments} }`
 				: `pullRequest(number: $number) { number title state body isDraft author { login } baseRefName headRefName headRefOid ${comments} ${reviews} ${threads}
- commits(last: 1) { nodes { commit { oid statusCheckRollup { state ${contexts(false)} } } } } }`;
+ commits(last: 1) { nodes { commit { oid statusCheckRollup { ${contexts(false)} } } } } }`;
 		type Connection<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 		type Comment = { author: { login: string } | null; body: string; createdAt?: string; submittedAt?: string };
 		type Review = Comment & { state: string };
@@ -1241,6 +1242,8 @@ export class GitHubService {
 		};
 		type Check = {
 			__typename: string;
+			databaseId?: number;
+			checkSuite?: { app: { databaseId: number } | null } | null;
 			name?: string;
 			status?: string;
 			conclusion?: string | null;
@@ -1248,9 +1251,10 @@ export class GitHubService {
 			context?: string;
 			state?: string;
 			description?: string | null;
+			createdAt?: string;
 			targetUrl?: string | null;
 		};
-		type Rollup = { state: string; contexts: Connection<Check> };
+		type Rollup = { contexts: Connection<Check> };
 		type Item = {
 			number: number;
 			title: string;
@@ -1376,6 +1380,8 @@ export class GitHubService {
 						"check contexts",
 					)
 				: [];
+			// Only each check's latest run counts, as for mergeability; the rollup's own state counts them all.
+			const checks = latestContexts(allChecks);
 			return {
 				kind: "pull" as const,
 				...common,
@@ -1387,8 +1393,8 @@ export class GitHubService {
 				threads: unresolved,
 				checks: {
 					commit: head?.oid ?? null,
-					state: head?.statusCheckRollup?.state ?? null,
-					runs: allChecks.map((c) =>
+					state: head?.statusCheckRollup ? checksState(checks) : null,
+					runs: checks.map((c) =>
 						c.__typename === "CheckRun"
 							? { name: c.name!, state: c.conclusion ?? c.status ?? null, url: c.detailsUrl ?? null }
 							: {

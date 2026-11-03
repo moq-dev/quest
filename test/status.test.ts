@@ -477,6 +477,30 @@ test("counts only each check's newest run from its app", async () => {
 	expect(status.checks.pending).toEqual([]);
 });
 
+test("judges checks by their latest runs, not the rollup's state, as on moq-dev/moq#7325", async () => {
+	// A cancelled run's gate failed on purpose; the newer run of the same workflow passed, and GitHub's
+	// merge state counted the pass while its rollup state stayed FAILURE.
+	const latest = (name: string, conclusion: string, databaseId: number) => ({
+		...run(name, "COMPLETED", conclusion, name === "Release gate"),
+		databaseId,
+		checkSuite: { app: { databaseId: 15368 } },
+	});
+	const body = pull({
+		checks: page([
+			latest("Scope", "CANCELLED", 1),
+			latest("Release gate", "FAILURE", 2),
+			latest("Scope", "SUCCESS", 3),
+			latest("Release gate", "SUCCESS", 4),
+		]),
+		reviews: page([]),
+		threads: page([]),
+	});
+	const fixture = setup([body]);
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(statusLines(status)).toContain("checks success passed=2 failing=0 pending=0");
+	expect(fixture.texts[0].replace(/\s+/g, " ")).toContain("... on StatusContext { context state createdAt targetUrl");
+});
+
 test("long lists page only the connections that have more, keeping the first page's PR fields", async () => {
 	const fixture = setup([
 		pull({

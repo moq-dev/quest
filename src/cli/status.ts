@@ -11,6 +11,7 @@ import {
 	type PullRequest,
 	string,
 } from "./github";
+import { checksState, contextOutcome, latestContexts } from "../github/checks";
 import { EJECTED, pinned } from "./land";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
 
@@ -34,7 +35,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 				... on IssueComment { createdAt body authorAssociation author { __typename login } }
 			} }
 			reactions(last: 100) { nodes { ...reaction } }
-			commits(last: 1) { nodes { commit { oid statusCheckRollup { state
+			commits(last: 1) { nodes { commit { oid statusCheckRollup { __typename
 				contexts(first: 100, after: $checks) @include(if: $moreChecks) {
 					pageInfo { hasNextPage endCursor }
 					nodes {
@@ -43,7 +44,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 							databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
 							checkSuite { app { databaseId } }
 						}
-						... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
+						... on StatusContext { context state createdAt targetUrl isRequired(pullRequestNumber: $number) }
 					}
 				}
 			} } } }
@@ -62,9 +63,6 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 	}
 }
 fragment reaction on Reaction { content createdAt user { login } }`;
-
-/** Completed check-run conclusions that do not fail; anything else completed fails. */
-const PASSING = ["success", "neutral", "skipped"];
 
 export interface Check {
 	name: string;
@@ -265,13 +263,14 @@ function summarize(
 ): Status {
 	const head = string(pull.headRefOid);
 	const url = string(pull.url);
+	// The rollup's own state counts runs a newer run of the same check replaced.
 	const checks = {
-		state: rollup === null ? null : lower(rollup.state),
+		state: rollup === null ? null : lower(checksState(contexts)),
 		passed: 0,
 		failing: [],
 		pending: [],
 	} as Status["checks"];
-	for (const context of newestChecks(contexts)) {
+	for (const context of latestContexts(contexts)) {
 		const { check, outcome } = classifyCheck(context);
 		if (outcome === "passed") checks.passed++;
 		else checks[outcome].push(check);
@@ -384,33 +383,6 @@ function ejection(node: ObjectValue): string | null {
 }
 
 /**
- * Each check's newest report, in rollup order. A rerun, or a workflow run again on the same head,
- * reports a check run again under the same name from the same app, and only the newest counts, as it
- * does for GitHub's required checks; check run IDs increase as runs are created. A commit status is
- * already its context's newest. Check runs need `databaseId` and `checkSuite { app { databaseId } }`.
- */
-export function newestChecks(contexts: ObjectValue[]): ObjectValue[] {
-	const newest = new Map<string, ObjectValue>();
-	for (const context of contexts) {
-		if (context.__typename !== "CheckRun") continue;
-		const key = JSON.stringify([appOf(context), context.name]);
-		const seen = newest.get(key);
-		if (seen === undefined || Number(context.databaseId) > Number(seen.databaseId)) newest.set(key, context);
-	}
-	return contexts.filter(
-		(context) =>
-			context.__typename !== "CheckRun" || newest.get(JSON.stringify([appOf(context), context.name])) === context,
-	);
-}
-
-/** The GitHub App behind a check run; a commit status has none. */
-export function appOf(context: ObjectValue): number | null {
-	if (context.__typename !== "CheckRun" || context.checkSuite == null) return null;
-	const app = object(context.checkSuite).app;
-	return app == null ? null : Number(object(app).databaseId);
-}
-
-/**
  * A check run or commit status from a `statusCheckRollup` context, and whether it passed, failed, or
  * is still pending. `quest wait` shares this, so both commands agree on what passes.
  */
@@ -425,12 +397,7 @@ export function classifyCheck(context: ObjectValue): { check: Check; outcome: "p
 				: lower(run ? context.conclusion : context.state),
 		url: optional(run ? context.detailsUrl : context.targetUrl),
 	};
-	if (run ? context.status !== "COMPLETED" : ["pending", "expected"].includes(check.result))
-		return { check, outcome: "pending" };
-	return {
-		check,
-		outcome: (run ? PASSING.includes(check.result) : check.result === "success") ? "passed" : "failing",
-	};
+	return { check, outcome: contextOutcome(context) };
 }
 
 /** Stable plain lines: a record type, then space-separated fields, with any free text last. */
