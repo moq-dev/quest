@@ -1329,26 +1329,48 @@ stolen. This initial interface refuses unknown or changed checkout ownership.
 `quest init` adds hook entries to the repository's `.claude/settings.json` that
 run `quest worktree hook` for Claude Code's `WorktreeCreate`, `WorktreeRemove`,
 `SubagentStart`, and `SubagentStop` events, so `quest` must be on the `PATH`
-Claude Code runs hooks with. The hook then creates every worktree Claude makes
-in the repository, for `--worktree`, `EnterWorktree`, isolated subagents, and
-background sessions, and Claude no longer copies `.worktreeinclude` files into
-them.
+Claude Code runs hooks with. For `claude --bg` and agent view, that is the
+environment of the shell that started the session. The hook then creates every worktree Claude makes
+in the repository: for `--worktree`, `EnterWorktree`, isolated subagents and
+workflow agents, background sessions, and `claude remote-control --spawn
+worktree`. Claude no longer copies `.worktreeinclude` files into them.
 
 Each is a `quest worktree` checkout under the main checkout's `.worktrees/`,
 named as Claude names it. Like Claude's default, it starts from the remote's
 default branch as last fetched (`origin/HEAD`), or from the session's commit
-when that is unknown; Claude's `worktree.baseRef` setting no longer applies. With only a name to go on,
+when that is unknown; Claude's `worktree.baseRef` setting no longer applies.
+For `--worktree '#123'` or a pull request's URL, Claude names the worktree
+`pr-123`, and the hook fetches origin's `refs/pull/123/head` (or GitLab's
+`refs/merge-requests/123/head`) into `origin/pr/123` (or `origin/mr/123`) and
+starts there, refusing a number origin has both refs for at different commits.
+The hook sees only the name, so `--worktree pr-123` gets that request too, and a
+number origin has no request for starts from the default base instead of
+failing. With only a name to go on,
 it declares the main checkout's top-level ignored entries as scratch, except
 `.worktrees/`, `.claude/`, and entries holding a nested repository, and
-reserves the main checkout's disk usage without `.git` and those checkouts. A
-subagent's checkout is released when the subagent finishes or stops to wait for
-an answer, and restored when it resumes, with a note telling it to reinstall
-its scratch. Another `SubagentStop` hook that keeps a subagent running defeats
+reserves the main checkout's disk usage without `.git` and those checkouts.
+
+A subagent's checkout is released when the subagent finishes or stops to wait
+for an answer, and restored when it resumes, with a note telling it to
+reinstall its scratch. Claude names an isolated subagent's worktree for its
+agent ID, and a workflow agent's for its workflow run, so the hook binds a
+workflow agent's checkout to the first subagent that starts in it, the workflow
+agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it. Claude never removes a subagent's checkout itself, so remove a
-finished one with `quest worktree remove`, which also recovers one whose
-session crashed. When Claude removes a session's checkout, `quest worktree
-remove` decides: a checkout holding unpreserved work is kept.
+without its scratch until it reinstalls it. A session's checkout, from
+`--worktree`, `EnterWorktree`, a background session, or remote control, is not
+released when the session stops; release it with `quest worktree release`.
+
+Claude never removes a subagent's or workflow agent's checkout itself, so
+remove a finished one with `quest worktree remove`, which also recovers one
+whose session crashed. When Claude removes a session's checkout, through
+`ExitWorktree`, leaving a `--worktree` session, or remote control ending a
+session whose checkout has no changes, `quest worktree remove` decides: a
+checkout holding unpreserved work is kept. `claude rm` never removes one: it
+keeps a `claude --bg --worktree` session's checkout, and refuses to remove a
+background session whose checkout it entered, saying the worktree is locked by
+something else. Don't unlock it; run `quest worktree remove` on the checkout,
+then `claude rm` again.
 
 ## Work with your agents
 

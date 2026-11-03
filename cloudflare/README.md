@@ -27,7 +27,10 @@ renders the repository's `docs/*.md` into `build/docs.json`, so the Markdown
 stays the single source and its relative links keep working on GitHub: links to
 other docs become `/docs/<name>` and other repository paths point at GitHub. It
 also snapshots this repository's `quest/` tree and finished quests into
-`build/board.json`, which supplies the public board. Enrolled repositories use authenticated
+`build/board.json`, which supplies the public board. It renders the skill
+stubs `quest init` installs into `build/stubs.json`, for the setup pull request
+a repository without Quest files gets when enrolling
+([GITHUB.md](GITHUB.md#setup-pull-request)). Enrolled repositories use authenticated
 GitHub snapshots through the same board model. A shallow clone has no
 history, so its board shows no finished work. It also copies `design/theme/`,
 `src/site.css`, the scripts, and the web app manifest into `build/public/`,
