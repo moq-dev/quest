@@ -260,7 +260,8 @@ When it may outlast the tool's time limit, start it in the background and block 
 Run no more sub-agents at once than the harness allows; queue the rest and start one as each reports.
 
 Wait on a PR's CI or reviews with `quest wait`, and on other background work with a blocking command that ends on its terminal state, not timed polls.
-Bound each wait, not the work, under an hour so the prompt cache stays warm, and re-run the wait on timeout.
+Bound each wait, not the work, under an hour so the prompt cache stays warm; `quest wait` has no deadline without `--timeout`.
+Re-run a wait that times out, passing the resume point a timed-out `quest wait` printed as its `--since`, so activity during the first wait is still reported.
 A sub-agent ends its turn only with a final result or a question, never with background work still running or an interim status report.
 A coordinator relays no interim report: it resumes a sub-agent that ended its turn on one, telling it to block until its work finishes.
 Back out when progress stalls rather than burn tokens; a gate's queue or a long command still running is not a stall.
