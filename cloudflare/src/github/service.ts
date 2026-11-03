@@ -1399,21 +1399,34 @@ export class GitHubService {
 						? await branch.commit(base.sha, files, message)
 						: await branch.commit(existing, files, message, base.sha);
 				const db = this.#env.DB;
-				await db
+				// Record the commit only while the setup is still the one read above, so a disconnect,
+				// an enable, or another retry made during the GitHub reads stands.
+				const [unchanged, args] =
+					row === null
+						? ["NOT EXISTS(SELECT 1 FROM github_project_setups WHERE id=?)", [repo.id]]
+						: [
+								"EXISTS(SELECT 1 FROM github_project_setups WHERE id=? AND head IS ? AND pending IS ? AND pull IS ?)",
+								[repo.id, row.head, row.pending, row.pull],
+							];
+				const recorded = await db
 					.prepare(
 						`INSERT INTO github_project_setups(id,owner,name,installation,head,pending,pull,state,enrolledBy,updatedAt)
-					VALUES(?,?,?,?,NULL,?,NULL,'open',?,?)
+					SELECT ?,?,?,?,NULL,?,NULL,'open',?,? WHERE ${unchanged} AND NOT EXISTS(SELECT 1 FROM github_projects WHERE id=?)
 					ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,name=excluded.name,installation=excluded.installation,pending=excluded.pending,pull=NULL,state='open',failure=NULL,enrolledBy=excluded.enrolledBy,updatedAt=excluded.updatedAt`,
 					)
-					.bind(repo.id, repo.owner, repo.name, installation, commit, userId, Date.now())
+					.bind(repo.id, repo.owner, repo.name, installation, commit, userId, Date.now(), ...args, repo.id)
 					.run();
+				if (!recorded.meta.changes)
+					throw new GitHubError("This project changed while its setup was being written; review it again.");
 				if (!(await branch.move(existing, commit)))
 					throw new PublicationBlocked(
 						`The ${SETUP_BRANCH} branch changed while the setup was being written; try again.`,
 					);
 				await db
-					.prepare("UPDATE github_project_setups SET head=?,pending=NULL,updatedAt=? WHERE id=?")
-					.bind(commit, Date.now(), repo.id)
+					.prepare(
+						"UPDATE github_project_setups SET head=?,pending=NULL,updatedAt=? WHERE id=? AND pending=?",
+					)
+					.bind(commit, Date.now(), repo.id, commit)
 					.run();
 
 				const pulls = `${path}/pulls`;
@@ -1444,10 +1457,13 @@ export class GitHubService {
 				else if (found.title !== pull.title || found.body !== pull.body)
 					await this.#api(token, `${pulls}/${number(found.number)}`, "PATCH", pull);
 				await db
-					.prepare("UPDATE github_project_setups SET pull=?,state='open',updatedAt=? WHERE id=?")
-					.bind(number(found.number), Date.now(), repo.id)
+					.prepare("UPDATE github_project_setups SET pull=?,state='open',updatedAt=? WHERE id=? AND head=?")
+					.bind(number(found.number), Date.now(), repo.id, commit)
 					.run();
-				return setupOf((await this.#setupRow(repo.id))!);
+				// A disconnect while the pull request opened leaves it on GitHub, untracked, as a disconnect always does.
+				const now = await this.#setupRow(repo.id);
+				if (!now) throw new GitHubError("This project was disconnected while its setup was being written.");
+				return setupOf(now);
 			},
 		);
 	}

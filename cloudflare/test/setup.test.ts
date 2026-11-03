@@ -220,6 +220,31 @@ describe("the setup pull request", () => {
 		expect(opened().filter((pull) => !pull.closed)).toEqual([]);
 	});
 
+	it("keeps a disconnect made while a retry is written", async () => {
+		await post("/setup", { id: "10" });
+		const [first] = opened();
+		first!.closed = true;
+		const earlier = project.branches["kix/setup"]!;
+		// The maintainer disconnects while the retry's commit is created.
+		vi.mocked(globalThis.fetch).mockImplementation(
+			intercept(
+				github,
+				(url, method) => method === "POST" && url.pathname.endsWith("/git/commits"),
+				async (next) => {
+					const response = await next();
+					await db.prepare("DELETE FROM github_project_setups WHERE id=10").run();
+					return response;
+				},
+			),
+		);
+		const response = await post("/setup", { id: "10" });
+		expect(response.status).toBe(403);
+		expect(await response.text()).toContain("changed while its setup was being written");
+		expect(await setup()).toBeNull();
+		expect(project.branches["kix/setup"]).toBe(earlier);
+		expect(opened().filter((pull) => !pull.closed)).toEqual([]);
+	});
+
 	it("enables from the page when the merge webhook was missed", async () => {
 		await post("/setup", { id: "10" });
 		const [pull] = opened();
