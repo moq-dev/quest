@@ -25,5 +25,14 @@ to every contributor, so Quest's hooks become user-level opt-in; see the
   ([moq-dev/quest#431](https://github.com/moq-dev/quest/pull/431)) uses the
   same plan, so it stops proposing hooks too.
 - The `quest worktree hook` command stays, for users who opt in.
+- Removing moq's four wrapped entries, whether `init` here or
+  [repo-config](/quest/m0/user-dev-shell/repo-config.md) does it first, ends
+  Quest's reclaim of Claude Code checkouts in moq. Nothing replaces it: the
+  maintainer's user-level setup (kixelated/dotfiles) loads only the dev
+  shell, and the epic's decision rejected moving Quest's hooks into the
+  maintainer's settings. So this quest doesn't wait on that setup, and the
+  same end state results in either order. A user who wants reclaim adds the
+  opt-in entries the docs describe. Any removal through the enrollment setup
+  PR shows in that PR's diff.
 - Test `init` and `uninstall` on a repository with plain and wrapped
   entries, and with other hooks beside them, which stay.

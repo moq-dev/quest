@@ -41,8 +41,15 @@ install `quest` on Claude's `PATH`):
   user-level hook allows a checkout itself when its `.envrc`, `flake.nix`,
   and `flake.lock` match the remote's default branch (rejected: whitelisting
   `~/work` and `~/worktrees` in `direnv.toml`, which would also evaluate a
-  fork PR's dev shell; keeping manual allows). A branch that changes them,
-  or a fork PR head, still needs a manual allow.
+  fork PR's dev shell; keeping manual allows). A branch that changes them
+  still needs a manual allow. Amended 2026-11-03 (review of
+  [moq-dev/quest#458](https://github.com/moq-dev/quest/pull/458)): those
+  three files alone don't make a checkout reviewed. Any repository's fresh
+  clone matches its own default branch. A fork PR head can change another
+  file the dev shell runs, such as moq.pro's `dev/mbx-shim.sh`. Both were
+  auto-allowed in a reproduction against the merged hook.
+  [The allow rule](/quest/m0/user-dev-shell/allow-rule.md) narrows it to
+  trusted repositories and reviewed code.
 - AGENTS.md instructions to run tools through `nix develop`? ✅ Remove them in
   all five repositories once the user-level hooks are on every host the
   maintainer runs agents on (rejected: this repository only; keeping them as
@@ -55,5 +62,6 @@ moq-dev/moq's `.codex/hooks/direnv.sh`.
 
 ## Required
 
+- [The dev-shell hook allows only trusted, reviewed checkouts](/quest/m0/user-dev-shell/allow-rule.md) - the user-level hook's automatic `direnv allow` skips other repositories' clones and fork PR heads
 - [quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md) - `quest init` stops writing hook entries and removes the ones it or a wrapper wrote; the docs describe the hooks as user-level opt-in
 - [Repositories drop dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - quest, moq, moq.pro, rind, and rust2 drop their dev-shell hooks, Quest worktree hooks, and `nix develop` instructions
