@@ -14,8 +14,8 @@ import {
 	mainCheckout,
 } from "./worktree";
 
-/** The Claude Code events `quest worktree hook` handles, in the order `quest init` installs them. */
-export const HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"] as const;
+// The events this handles are the core's HOOK_EVENTS, which `quest init` installs.
+export { HOOK_EVENTS } from "../core";
 
 /** The fields of a Claude Code hook's JSON input that these events read. */
 interface HookInput {

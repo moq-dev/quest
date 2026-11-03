@@ -5,6 +5,7 @@
 // repository pins decides which instructions its agents follow, and upgrading
 // never rewrites repository files.
 
+import { PREFIX } from "../core";
 import guide from "../../assets/AGENTS.md";
 import afk from "../../assets/skills/afk.md";
 import audit from "../../assets/skills/audit.md";
@@ -28,8 +29,6 @@ export const GUIDE: string = guide;
 /** Where an agent without the CLI learns to install it. */
 const SETUP = "https://github.com/moq-dev/quest/blob/main/SETUP.md";
 
-/** Installed skills carry this prefix so they don't collide with a repository's own. */
-export const PREFIX = "quest-";
 
 /** One skill: YAML frontmatter, then the instructions. */
 export class Skill {
