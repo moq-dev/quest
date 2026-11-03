@@ -96,6 +96,8 @@ describe("the setup pull request", () => {
 		const html = await form.text();
 		expect(html).toContain("Set up Quest");
 		expect(html).toContain('name="goal"');
+		// The fake's CI settings are read-only, so the CI check finds nothing.
+		expect(html).toContain("The default token is read-only");
 
 		const response = await post("/setup", { id: "10", goal: "Ship a fast parser.\n# Not a heading" });
 		expect(response.status).toBe(303);

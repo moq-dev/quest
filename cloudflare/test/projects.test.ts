@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
 import { readBoard } from "../src/board/model";
 import { type ActivityPage, associatedQuest, RETENTION, readActivity } from "../src/github/state";
+import { CI_PERMISSIONS, READS } from "../src/github/ci";
 import { GitHubService } from "../src/github/service";
 import { privateKey } from "./github-key";
 import { identity, oauth, origin } from "./login-fixtures";
@@ -11,6 +12,20 @@ import { outsider, owner } from "./owners";
 import { delivery } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
+/** A repository's Actions settings, as the CI check reads them. */
+type CISettings = {
+	token?: "read" | "write";
+	repository?: string[];
+	organization?: string[];
+	/** Branches GitHub reports protected, listing the first hundred; `trunk` by default. */
+	protected?: string[];
+	/** Other branches that exist. */
+	branches?: string[];
+	/** `policy` is null for any branch, "protected", or branch patterns, with `tag:` marking a tag pattern. */
+	environments?: { name: string; policy: null | "protected" | string[]; secrets: number }[];
+	/** Paths below the repository that GitHub refuses. */
+	fail?: string[];
+};
 const repo = { owner: "upstream", name: "project", id: 10 };
 const commit = "a".repeat(40);
 const tree = "b".repeat(40);
@@ -68,6 +83,8 @@ function github(
 		licenseStatus?: number;
 		licenseFails?: boolean;
 		onLicenseRead?: () => void;
+		/** The repository's Actions settings; the installation grants the CI check's permissions only with this. */
+		ci?: CISettings;
 	} = {},
 ) {
 	const repositoryName = options.repositoryName ?? repo.name;
@@ -125,6 +142,7 @@ function github(
 								pull_requests: "read",
 								checks: "read",
 								statuses: "read",
+								...(options.ci && CI_PERMISSIONS),
 							},
 						},
 				{ status: options.missing ? 404 : 200 },
@@ -154,6 +172,70 @@ function github(
 		}
 		if (path.startsWith("/user/"))
 			return Response.json({ id: Number(path.split("/").at(-1)), login: "maintainer" });
+		if (options.ci && path.startsWith(`${repositoryBase}/`)) {
+			const ci = options.ci;
+			const rest = path.slice(repositoryBase.length);
+			const failed = ci.fail?.includes(rest) ? Response.json({ message: "Forbidden" }, { status: 403 }) : null;
+			const secrets = (names: string[]) => ({
+				total_count: names.length,
+				secrets: names.map((name) => ({ name })),
+			});
+			if (rest === "/actions/permissions/workflow")
+				return failed ?? Response.json({ default_workflow_permissions: ci.token ?? "read" });
+			if (rest === "/actions/secrets") return failed ?? Response.json(secrets(ci.repository ?? []));
+			if (rest === "/actions/organization-secrets")
+				return failed ?? Response.json(secrets(ci.organization ?? []));
+			const protectedBranches = ci.protected ?? ["trunk"];
+			if (rest === "/branches") {
+				expect(url.searchParams.get("protected")).toBe("true");
+				return (
+					failed ?? Response.json(protectedBranches.slice(0, 100).map((name) => ({ name, protected: true })))
+				);
+			}
+			const branch = rest.match(/^\/branches\/(.+)$/)?.[1];
+			if (branch !== undefined) {
+				const name = branch.split("/").map(decodeURIComponent).join("/");
+				if (!protectedBranches.includes(name) && !ci.branches?.includes(name))
+					return Response.json({ message: "Branch not found" }, { status: 404 });
+				return failed ?? Response.json({ name, protected: protectedBranches.includes(name) });
+			}
+			const environments = ci.environments ?? [];
+			if (rest === "/environments")
+				return (
+					failed ??
+					Response.json({
+						total_count: environments.length,
+						environments: environments.slice(0, 100).map(({ name, policy }) => ({
+							name,
+							deployment_branch_policy:
+								policy === null
+									? null
+									: {
+											protected_branches: policy === "protected",
+											custom_branch_policies: Array.isArray(policy),
+										},
+						})),
+					})
+				);
+			const environment = rest.match(/^\/environments\/([^/]+)\/(secrets|deployment-branch-policies)$/);
+			const found = environment && environments.find((e) => e.name === decodeURIComponent(environment[1]!));
+			if (found && environment![2] === "secrets")
+				return failed ?? Response.json(secrets(Array.from({ length: found.secrets }, (_, i) => `S${i}`)));
+			if (found && Array.isArray(found.policy))
+				return (
+					failed ??
+					Response.json({
+						total_count: found.policy.length,
+						branch_policies: found.policy
+							.slice(0, 100)
+							.map((name) =>
+								name.startsWith("tag:")
+									? { name: name.slice(4), type: "tag" }
+									: { name, type: "branch" },
+							),
+					})
+				);
+		}
 		if (path.endsWith("/permission")) {
 			return Response.json({
 				user: { id: options.account ?? 7007 },
@@ -279,6 +361,184 @@ describe("project enrollment", () => {
 		]);
 		expect(calls.some((call) => call.path === `/repos/upstream/project/git/trees/${tree}?recursive=1`)).toBe(true);
 		expect(calls.at(-1)?.path).toBe("/installation/token");
+	});
+	it("asks for the CI check's permissions an installation has not accepted, without failing the preview", async () => {
+		const { service, calls } = github();
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Accept the App's Administration (read), Secrets (read), Actions (read), Environments (read) permissions in its GitHub installation settings so kix can check the default workflow token, repository and organization secrets, environments.",
+		]);
+		expect(calls.some((call) => call.path.includes("/actions/") || call.path.includes("/environments"))).toBe(
+			false,
+		);
+	});
+	it("finds nothing to fix in read-only pull-request CI", async () => {
+		const { service, calls } = github({
+			ci: {
+				environments: [
+					{ name: "release", policy: "protected", secrets: 2 },
+					{ name: "land", policy: ["trunk", "gh-readonly-queue/trunk/*", "tag:v*"], secrets: 1 },
+					{ name: "preview", policy: null, secrets: 0 },
+				],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([]);
+		expect(calls.filter((call) => call.path.endsWith("/access_tokens")).at(-1)?.body.permissions).toEqual({
+			metadata: "read",
+			contents: "read",
+			...CI_PERMISSIONS,
+		});
+		// Protected branches are read once however many policies name them, and
+		// an environment's secrets only when its policy lets an unprotected branch deploy.
+		expect(calls.filter((call) => call.path.startsWith("/repos/upstream/project/branches"))).toHaveLength(1);
+		expect(calls.filter((call) => call.path.includes("secrets?")).map((call) => call.path)).toEqual([
+			"/repos/upstream/project/actions/secrets?per_page=100",
+			"/repos/upstream/project/actions/organization-secrets?per_page=100",
+			"/repos/upstream/project/environments/preview/secrets?per_page=100",
+		]);
+	});
+	it("warns about each way pull-request CI can write", async () => {
+		const { service } = github({
+			ci: {
+				token: "write",
+				repository: ["NPM_TOKEN"],
+				organization: ["DISCORD_WEBHOOK", "CACHIX"],
+				protected: ["trunk"],
+				environments: [
+					{ name: "open", policy: null, secrets: 1 },
+					{ name: "wild", policy: ["release/*", "tag:v*"], secrets: 2 },
+					{ name: "loose", policy: ["trunk", "staging"], secrets: 1 },
+					{ name: "queue", policy: ["gh-readonly-queue/staging/*"], secrets: 1 },
+				],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"The default GITHUB_TOKEN can write. Set Settings → Actions → General → Workflow permissions to read repository contents and packages.",
+			"Every workflow, including those on kix's branches, receives 1 repository secret: NPM_TOKEN. Move them into environments limited to protected branches.",
+			"Every workflow, including those on kix's branches, receives 2 organization secrets: DISCORD_WEBHOOK, CACHIX. Stop sharing them with this repository, or move them into environments limited to protected branches.",
+			"Environment open has 1 secret and lets any branch deploy. Limit its deployment branches to protected branches.",
+			"Environment wild has 2 secrets and lets release/* deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
+			"Environment loose has 1 secret and lets staging deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
+			"Environment queue has 1 secret and lets gh-readonly-queue/staging/* deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
+		]);
+	});
+	it("looks up a named branch that a full page of protected branches leaves out", async () => {
+		const many = Array.from({ length: 100 }, (_, i) => `keep/${i}`);
+		const { service, calls } = github({
+			ci: {
+				protected: [...many, "release/v1"],
+				branches: ["staging"],
+				environments: [
+					{ name: "ship", policy: ["release/v1", "keep/0"], secrets: 1 },
+					{ name: "stage", policy: ["staging", "missing"], secrets: 1 },
+					{ name: "again", policy: ["release/v1"], secrets: 1 },
+				],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Environment stage has 1 secret and lets staging, missing deploy, which kix cannot confirm are protected branches. Limit its deployment branches to protected branches.",
+		]);
+		// Each branch the page left out is looked up once.
+		expect(
+			calls.filter((call) => /\/branches\/./.test(call.path)).map((call) => call.path.split("/branches/")[1]),
+		).toEqual(["release/v1", "staging", "missing"]);
+	});
+	it("does not confirm a deployment policy with more patterns than one page holds", async () => {
+		const { service } = github({
+			ci: {
+				environments: [{ name: "big", policy: Array.from({ length: 101 }, () => "trunk"), secrets: 1 }],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Environment big has 1 secret and lists 101 deployment branch and tag patterns, more than kix reads. Limit its deployment branches to protected branches.",
+		]);
+	});
+	it("warns that a protected-branches policy admits every branch while none is protected", async () => {
+		const { service } = github({
+			ci: { protected: [], environments: [{ name: "deploy", policy: "protected", secrets: 1 }] },
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Environment deploy has 1 secret and allows only protected branches, but no branch is protected, so GitHub lets any branch deploy. Limit its deployment branches to protected branches.",
+		]);
+	});
+	it("reports a failed CI read as a warning and checks the rest", async () => {
+		const { service } = github({
+			ci: { repository: ["TOKEN"], fail: ["/actions/permissions/workflow", "/environments"] },
+		});
+		const preview = await service.previewProject(repo, "enrollment-test");
+		expect(preview.quests).toHaveLength(1);
+		expect(preview.ci).toEqual([
+			"kix could not read the default workflow token's permissions; review this project again later.",
+			"Every workflow, including those on kix's branches, receives 1 repository secret: TOKEN. Move them into environments limited to protected branches.",
+			"kix could not read environments; review this project again later.",
+		]);
+	});
+	it.each([
+		{
+			name: "many environments",
+			ci: {
+				environments: Array.from({ length: 20 }, (_, i) => ({
+					name: `env-${i}`,
+					policy: ["feature/*"],
+					secrets: 1,
+				})),
+			},
+		},
+		{
+			name: "branch lookups past a full page of protected branches",
+			ci: {
+				protected: Array.from({ length: 100 }, (_, i) => `keep/${i}`),
+				environments: [
+					{ name: "wide", policy: Array.from({ length: 60 }, (_, i) => `other/${i}`), secrets: 1 },
+					{ name: "open", policy: null, secrets: 1 },
+				],
+			},
+		},
+	])("stops a CI check with $name within Workers Free's 50 external subrequests", async ({ ci }) => {
+		const { service, calls } = github({ ci, subrequestLimit: 50 });
+		await service.resolveRepository(repo.owner, repo.name);
+		const preview = await service.previewProject(repo, "enrollment-test");
+		expect(preview.ci.at(-1)).toBe(
+			`kix stopped after ${READS} reads of this repository's settings, before checking every environment. Limit each environment with secrets to protected branches.`,
+		);
+		expect(preview.ci.filter((problem) => problem.startsWith("kix could not"))).toEqual([]);
+		expect(calls.length).toBeLessThanOrEqual(50);
+	});
+	it("does not report a check that spent its last read on its last environment as stopped", async () => {
+		// Four reads before environments, then one for each one's secrets.
+		const environments = Array.from({ length: READS - 4 }, (_, i) => ({
+			name: `env-${i}`,
+			policy: null,
+			secrets: 1,
+		}));
+		const { service } = github({ ci: { environments } });
+		const { ci } = await service.previewProject(repo, "enrollment-test");
+		expect(ci).toHaveLength(READS - 4);
+		expect(ci.filter((problem) => problem.startsWith("kix stopped"))).toEqual([]);
+	});
+	it("shows the CI check on the project's setup page", async () => {
+		const who = identity("github");
+		const { session } = await oauth(who);
+		const { request } = github({ account: Number(who.id), ci: { token: "write" } });
+		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		const html = await (
+			await app.request(`${origin}/projects/github/upstream/project`, { headers: { Cookie: session! } }, testEnv)
+		).text();
+		expect(html).toContain("Pull-request CI");
+		expect(html).toContain("The default GITHUB_TOKEN can write.");
+		// Warnings never block enabling contributions.
+		expect(html).not.toContain("disabled");
+	});
+	it("shows the CI check beside the setup pull request's form, since merging it enables contributions", async () => {
+		const who = identity("github");
+		const { session } = await oauth(who);
+		const { request } = github({ account: Number(who.id), noQuests: true, ci: { repository: ["NPM_TOKEN"] } });
+		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		const html = await (
+			await app.request(`${origin}/projects/github/upstream/project`, { headers: { Cookie: session! } }, testEnv)
+		).text();
+		expect(html).toContain("Open the setup pull request");
+		expect(html).toContain("Pull-request CI");
+		expect(html).toContain("receives 1 repository secret: NPM_TOKEN");
 	});
 	it.each(["AGENTS.md", "CLAUDE.md"])("ignores root and nested %s instructions like the CLI", async (filename) => {
 		const { service, calls } = github({

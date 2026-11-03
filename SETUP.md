@@ -82,6 +82,17 @@ job the condition
 `github.event_name != 'pull_request' || github.event.pull_request.draft == false`.
 Change workflows only if the user agrees.
 
+Agents push their quest branches to the repository itself, and GitHub gives
+workflows on those branches the repository's secrets and default token, so
+recommend keeping that CI read-only: code no maintainer has reviewed should
+meet only a read-only `GITHUB_TOKEN` and no write credentials. In GitHub, set
+Settings → Actions → General → Workflow permissions to read; move repository
+secrets, and organization secrets shared with the repository, into
+environments whose deployment branches are limited to protected branches; and
+keep write `permissions:` out of jobs that pull requests and pushes to other
+branches run. kix checks the same settings when a repository enrolls.
+Change settings and workflows only if the user agrees.
+
 Run `quest check`, then suggest next steps: restart the agent session so it
 loads the new skills, then `/quest-plan` (`$quest-plan` in Codex) to plan
 work or `/quest-import` to bring in open GitHub issues.
