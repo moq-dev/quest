@@ -695,7 +695,10 @@ export class Worktrees {
 					record.repository,
 					"worktree",
 					"remove",
-					...(submodules(root).length ? ["--force"] : []),
+					...(existsSync(git(root, "rev-parse", "--path-format=absolute", "--git-path", "modules").trim()) ||
+					submodules(root).length
+						? ["--force"]
+						: []),
 					record.path,
 				);
 			} catch (error) {
