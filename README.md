@@ -1200,7 +1200,7 @@ Once a checkout is finished, remove it and its record:
 quest worktree remove example
 ```
 
-`remove` never forces. It refuses while supervised runs are live, and refuses
+`remove` checks files and commits recursively before deleting a checkout. It refuses while supervised runs are live, and refuses
 modified or untracked files and any commit, at `HEAD` or under the checkout's
 own refs such as `refs/bisect/`, that no branch or remote-tracking ref
 reaches. A squash-merged change leaves its commits unreached, so they count as
@@ -1209,6 +1209,12 @@ PR whose head is exactly that commit; other commits need no forge or token.
 It then prunes the scratch and refuses ignored files that remain, leaving the
 checkout released, before `git worktree remove` deletes it. A checkout already
 removed with `git worktree remove` only drops its record, as with `release`.
+New checkouts initialize their submodules recursively before returning. Restoring
+one preserves its existing submodule pins and local work. Removal also checks
+submodules' ignored files and every module store, including deinitialized ones;
+commits at their HEAD or refs must be reachable from a remote-tracking ref,
+since module stores and their local branches are deleted with the checkout.
+Only after those checks does removal use the force Git requires for submodules.
 A failed creation stays charged until `release` drops it. Records live in
 `$QUEST_WORKTREE_HOME`, or `$XDG_STATE_HOME/quest/worktrees` (default
 `~/.local/state/quest/worktrees`). The registry lock of a process that exited on

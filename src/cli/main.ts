@@ -784,10 +784,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	worktree
 		.command("remove <id>")
 		.description(
-			"Delete a finished checkout and drop its record, never forcing. Refuses while supervised runs are live, " +
+			"Delete a finished checkout and drop its record after recursive safety checks. Refuses while supervised runs are live, " +
 				"and refuses modified, untracked, or ignored files beyond the declared scratch, and commits no branch " +
 				"or remote-tracking ref reaches, unless the GitHub upstream that holds origin's claims merged a PR whose head is exactly " +
-				"that commit. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
+				"that commit. Submodules must have no changed or ignored files and no commits their remote refs do not reach, including in deinitialized module stores. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
 		)
 		.action((id: string) => settled(state().remove(id, merged)));
 	worktree
@@ -812,7 +812,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				".\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
-				"and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
+				"initializes its submodules recursively, and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
 				".worktrees/, .claude/, and entries holding a nested repository; its reserve is the main checkout's disk " +
 				"usage without .git and those checkouts. An existing checkout of that name in the repository is " +
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +

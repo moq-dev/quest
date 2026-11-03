@@ -174,14 +174,63 @@ function interrupted(record: WorktreeRecord): void {
 
 /** Git status entries, plus ignored paths (collapsed to their directories) when `ignored` is set. */
 function changes(root: string, ignored: boolean): string[] {
-	const args = ["status", "--porcelain=v1", "-z", "--untracked-files=normal", ...(ignored ? ["--ignored"] : [])];
+	const args = [
+		"status",
+		"--porcelain=v1",
+		"-z",
+		"--untracked-files=normal",
+		"--ignore-submodules=none",
+		...(ignored ? ["--ignored"] : []),
+	];
 	return git(root, ...args)
 		.split("\0")
 		.filter(Boolean);
 }
+/** Initialized submodule checkouts, including nested ones. NULs preserve spaces and newlines. */
+function submodules(root: string): string[] {
+	return git(root, "submodule", "foreach", "--quiet", "--recursive", 'printf "%s\\0" "$toplevel/$sm_path"')
+		.split("\0")
+		.filter(Boolean);
+}
+
+/** Module stores survive deinit; removing this worktree deletes their refs too. */
+function moduleStores(path: string): string[] {
+	if (!entry(path)?.isDirectory()) return [];
+	if (entry(join(path, "HEAD")) && entry(join(path, "config"))) return [path, ...moduleStores(join(path, "modules"))];
+	return readdirSync(path).flatMap((name) => moduleStores(join(path, name)));
+}
+
 function clean(root: string): void {
 	const found = changes(root, false);
 	if (found.length) throw new Error(`checkout has modified or untracked files: ${found.slice(0, 20).join(", ")}`);
+	for (const path of submodules(root)) {
+		const left = changes(path, true);
+		if (left.length)
+			throw new Error(
+				`submodule ${path} has modified, untracked, or ignored files: ${left.slice(0, 20).join(", ")}`,
+			);
+	}
+	const stores = new Set([
+		...moduleStores(git(root, "rev-parse", "--path-format=absolute", "--git-path", "modules").trim()),
+		...submodules(root).map((path) => git(path, "rev-parse", "--absolute-git-dir").trim()),
+	]);
+	for (const store of stores) {
+		// Local branches and tags in a module store disappear with the worktree. Only remote refs preserve them.
+		const commit = git(
+			root,
+			"--git-dir",
+			store,
+			"--work-tree",
+			root,
+			"rev-list",
+			"-n1",
+			"HEAD",
+			"--all",
+			"--not",
+			"--remotes",
+		).trim();
+		if (commit) throw new Error(`submodule ${store} has commits no remote-tracking ref reaches: ${commit}`);
+	}
 }
 
 /**
@@ -228,9 +277,20 @@ function repositoryWithin(path: string): string | undefined {
 	return undefined;
 }
 
+/** The enclosing checkout, climbing out of initialized submodules. */
+export function superprojectCheckout(path: string): string {
+	path = git(path, "rev-parse", "--show-toplevel").trim();
+	let parent = git(path, "rev-parse", "--show-superproject-working-tree").trim();
+	while (parent) {
+		path = parent;
+		parent = git(path, "rev-parse", "--show-superproject-working-tree").trim();
+	}
+	return canonical(path);
+}
+
 /** The repository's main checkout, which every linked worktree of it shares, from any path inside one. */
 export function mainCheckout(path: string): string {
-	const [main] = git(path, "worktree", "list", "--porcelain", "-z").split("\0\0");
+	const [main] = git(superprojectCheckout(path), "worktree", "list", "--porcelain", "-z").split("\0\0");
 	const lines = main?.split("\0") ?? [];
 	const found = lines.find((line) => line.startsWith("worktree "))?.slice(9);
 	if (!found || lines.includes("bare")) throw new Error(`repository has no main checkout: ${path}`);
@@ -505,6 +565,7 @@ export class Worktrees {
 					path,
 					ref,
 				);
+				git(path, "submodule", "update", "--init", "--recursive");
 				record.phase = "active";
 				return record;
 			} catch (error) {
@@ -585,7 +646,7 @@ export class Worktrees {
 		});
 	}
 	/**
-	 * Deletes a finished checkout and drops its record, never forcing. Refuses while supervised runs
+	 * Deletes a finished checkout and drops its record after checking files and commits recursively. Refuses while supervised runs
 	 * are live, and refuses a checkout holding modified, untracked, or ignored files beyond its
 	 * declared scratch, or a commit no branch or remote-tracking ref reaches. Such a commit counts as
 	 * preserved only when `merged` reports a merged change whose head is exactly that commit.
@@ -628,7 +689,15 @@ export class Worktrees {
 			const reason = `quest worktree ${record.id}`;
 			git(record.repository, "worktree", "unlock", record.path);
 			try {
-				git(record.repository, "worktree", "remove", record.path);
+				// Git requires --force for initialized submodules. The recursive checks above
+				// cover their files and every module store, including deinitialized modules.
+				git(
+					record.repository,
+					"worktree",
+					"remove",
+					...(submodules(root).length ? ["--force"] : []),
+					record.path,
+				);
 			} catch (error) {
 				try {
 					git(record.repository, "worktree", "lock", "--reason", reason, record.path);

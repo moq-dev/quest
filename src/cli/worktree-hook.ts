@@ -12,6 +12,7 @@ import {
 	canonical,
 	derivedDefaults,
 	mainCheckout,
+	superprojectCheckout,
 } from "./worktree";
 
 /** The Claude Code events `quest worktree hook` handles, in the order `quest init` installs them. */
@@ -61,7 +62,7 @@ function git(path: string, ...args: string[]): string {
 /** The top of the checkout holding `cwd`, or undefined outside any. */
 function toplevel(cwd: string): string | undefined {
 	try {
-		return canonical(git(cwd, "rev-parse", "--show-toplevel"));
+		return superprojectCheckout(cwd);
 	} catch {
 		return undefined;
 	}
@@ -101,11 +102,12 @@ export async function claudeHook(input: unknown, worktrees: Worktrees, merged: M
 	switch (hook.hook_event_name) {
 		case "WorktreeCreate": {
 			const name = field(hook, "name");
-			const main = mainCheckout(hook.cwd);
+			const cwd = superprojectCheckout(hook.cwd);
+			const main = mainCheckout(cwd);
 			const existing = await waiting(() => worktrees.registered(join(main, ".worktrees", name)));
 			if (existing?.name === name) return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;
 			const { reserve, scratch } = derivedDefaults(main);
-			const ref = base(hook.cwd);
+			const ref = base(cwd);
 			return `${(await waiting(() => worktrees.create(main, name, reserve, ref, scratch))).path}\n`;
 		}
 		case "WorktreeRemove": {

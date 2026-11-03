@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from "../src/cli/supervise";
 import { GitHub, mergedHead } from "../src/cli/github";
 import { main } from "../src/cli/main";
-import { Worktrees, canonical, derivedDefaults, diskUsage } from "../src/cli/worktree";
+import { Worktrees, canonical, derivedDefaults, diskUsage, mainCheckout } from "../src/cli/worktree";
 import { claudeHook } from "../src/cli/worktree-hook";
 import { initRepository, run, template } from "./fixture";
 
@@ -289,14 +289,109 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(readFileSync(join(record.path, ".env"), "utf8")).toBe("secret");
 		expect(worktrees.status().records[0].phase).toBe("released");
 		rmSync(join(record.path, ".env"));
-		// Git refuses a checkout with submodules; the checkout keeps its lock and record.
+		// A clean submodule whose commits its remote has does not prevent removal.
 		const sub = repository(join(root, "sub"));
 		git(record.path, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", sub, "sub");
 		git(record.path, "commit", "-m", "submodule");
 		git(record.path, "update-ref", "refs/remotes/origin/work", "HEAD");
-		await expect(worktrees.remove(record.id)).rejects.toThrow("submodules");
-		kept();
-		expect(worktrees.release(record.id).phase).toBe("released");
+		await worktrees.remove(record.id);
+		expect(existsSync(record.path)).toBe(false);
+	});
+	it("initializes nested submodules before returning a new checkout and preserves them on restore", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const inner = repository(join(root, "inner"));
+		const sub = repository(join(root, "sub"));
+		git(sub, "submodule", "add", "--quiet", inner, "nested/inner");
+		git(sub, "commit", "-am", "nested submodule");
+		git(repo, "submodule", "add", "--quiet", sub, "sub");
+		git(repo, "commit", "-am", "submodule");
+		const record = worktrees.create(repo, "nested", 10_000_000);
+		const nested = join(record.path, "sub", "nested", "inner");
+		expect(readFileSync(join(nested, "file"), "utf8")).toBe("original\n");
+		expect(mainCheckout(nested)).toBe(canonical(repo));
+		const child = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: nested, name: "agent-child" },
+			worktrees,
+			async () => false,
+		))!.trim();
+		expect(child).toBe(join(canonical(repo), ".worktrees", "agent-child"));
+		expect(git(child, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "HEAD"));
+		await claudeHook(
+			{ hook_event_name: "SubagentStop", cwd: join(child, "sub", "nested", "inner"), agent_id: "child" },
+			worktrees,
+			async () => false,
+		);
+		expect(worktrees.status().records.find((record) => record.name === "agent-child")?.phase).toBe("released");
+		await claudeHook(
+			{ hook_event_name: "SubagentStart", cwd: join(child, "sub"), agent_id: "child" },
+			worktrees,
+			async () => false,
+		);
+		expect(worktrees.status().records.find((record) => record.name === "agent-child")?.phase).toBe("active");
+		writeFileSync(join(nested, "file"), "local work");
+		worktrees.release(record.id);
+		worktrees.restore(record.id);
+		expect(readFileSync(join(nested, "file"), "utf8")).toBe("local work");
+	});
+	it("keeps nested submodule files and commits, including branches whose HEAD is back at the pin", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const inner = repository(join(root, "inner"));
+		const sub = repository(join(root, "sub"));
+		git(sub, "submodule", "add", "--quiet", inner, "nested/inner");
+		git(sub, "commit", "-am", "nested submodule");
+		git(repo, "submodule", "add", "--quiet", sub, "sub");
+		git(repo, "commit", "-am", "submodule");
+		const record = worktrees.create(repo, "nested", 10_000_000);
+		// Populate explicitly too, so the removal protection can be tested independently of creation.
+		git(record.path, "submodule", "update", "--init", "--recursive");
+		const nested = join(record.path, "sub", "nested", "inner");
+		writeFileSync(join(nested, "file"), "local work");
+		await expect(worktrees.remove(record.id)).rejects.toThrow("modified or untracked");
+		git(nested, "checkout", "--", "file");
+		writeFileSync(join(nested, ".env"), "ignored work");
+		await expect(worktrees.remove(record.id)).rejects.toThrow("ignored files");
+		expect(readFileSync(join(nested, ".env"), "utf8")).toBe("ignored work");
+		rmSync(join(nested, ".env"));
+		git(
+			nested,
+			"-c",
+			"user.name=Test",
+			"-c",
+			"user.email=test@example.com",
+			"commit",
+			"--allow-empty",
+			"-m",
+			"local",
+		);
+		const local = git(nested, "rev-parse", "HEAD");
+		git(nested, "branch", "local-only", local);
+		git(nested, "checkout", "--detach", "HEAD~1");
+		await expect(worktrees.remove(record.id)).rejects.toThrow(local);
+		// Deinitializing does not make the repository's local refs disposable.
+		git(record.path, "submodule", "deinit", "--all");
+		await expect(worktrees.remove(record.id)).rejects.toThrow(local);
+		expect(worktrees.status().records).toHaveLength(1);
+		const store = git(
+			record.path,
+			"rev-parse",
+			"--path-format=absolute",
+			"--git-path",
+			"modules/sub/modules/nested/inner",
+		);
+		git(
+			record.path,
+			"--git-dir",
+			store,
+			"--work-tree",
+			record.path,
+			"update-ref",
+			"refs/remotes/origin/local-only",
+			local,
+		);
+		await worktrees.remove(record.id);
+		expect(existsSync(record.path)).toBe(false);
 	});
 	it("serializes reservations across independent repositories and preserves failed allocations", () => {
 		const { root, repo, home, worktrees } = fixture();
