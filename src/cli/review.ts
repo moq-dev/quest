@@ -135,7 +135,7 @@ interface State {
 }
 
 /** What a turn needs to build its command line. */
-interface Context {
+export interface Context {
 	base: string;
 	/** The base's agent instructions, given in place of the checkout's. */
 	instructions: string;
@@ -275,7 +275,7 @@ const claude: Reviewer = {
 	},
 };
 
-function claudeFlags(context: Context): string[] {
+export function claudeFlags(context: Context): string[] {
 	return [
 		"claude",
 		"-p",
@@ -489,6 +489,15 @@ async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv
 		env: { ...stripped, ...Object.fromEntries(credentials.map((name) => [name, env[name]])) },
 		unauthorized: `${harness} rejected ${names(credentials)}; replace it, or run \`${reviewer.login}\``,
 	};
+}
+
+/** The environment `quest review` runs `harness`'s CLI in, for a caller that runs it with the same login. */
+export async function reviewerEnvironment(
+	harness: HarnessName,
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+	return (await prepare(harness, cwd, env)).env;
 }
 
 /** Run one reviewer turn, failing on any error it reports, and as logged out on an authentication error. */
