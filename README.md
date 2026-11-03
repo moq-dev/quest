@@ -906,13 +906,21 @@ all at once. How far ownership reaches depends on the host:
   as a daemon does, is outside it. The session has no controlling terminal: the
   command keeps the terminal as its streams, but cannot open `/dev/tty`, and
   Ctrl-Z suspends only Quest.
-- Windows owns only the command itself.
+- Windows runs the command under a small Bun stub in a Job Object that kills
+  every process left in it once the stub exits, and lets none break away. It
+  owns every descendant, including detached ones, and stops them once the
+  command exits or the gate is killed. Windows has no signals to forward:
+  Ctrl-C reaches every process on the console, and killing the gate
+  terminates the job.
 
-A nested invocation runs immediately inside the admitted command, and a gate
-inside another Quest scope, such as `quest worktree run`, leaves ownership to
-that scope: an owner of its own would take the command out of the enclosing
-one's reach. Internal compiler or test worker parallelism remains the command's
-responsibility.
+A nested invocation runs immediately inside the admitted command. A gate inside
+another Quest scope, such as `quest worktree run`, runs its command in a child
+cgroup of its own within that scope, which systemd delegates to the scope's
+processes, so the gate owns its own subtree and the enclosing scope still
+reaches it. A scope started by an older Quest, without delegation, keeps
+ownership instead: a scope of the gate's own would take the command out of
+the enclosing one's reach. Internal compiler or test worker parallelism remains
+the command's responsibility.
 
 This repository's `just check`, `just test`, `just worker-check`, and
 `just worker-test` run through the gate.
@@ -1167,7 +1175,8 @@ one run, since the next run starts without scratch.
 
 `run` owns processes through a systemd user scope per run, so it needs Linux
 5.14+ with a systemd 254+ user manager and unified cgroup v2; it fails on other
-hosts.
+hosts. The scope is delegated, so a `quest gate` inside it owns its command
+through a child cgroup of the scope.
 Work handed to another service manager, such as `systemd-run` or a container
 daemon, escapes the scope. If the supervisor itself is killed, its command keeps
 running and its scratch is kept; the next `quest worktree` command drops the run

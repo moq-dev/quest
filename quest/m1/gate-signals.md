@@ -89,9 +89,12 @@ records whether its own TERM handler ran:
   gate". Also test that a `quest worktree run` nested in a gate scope still
   forwards to its own scope. Add GNU `time` to the devshell if the fixture needs it. Update the
   gate's section of the README.
+- A gate inside a delegated Quest scope no longer runs `direct`: it runs the
+  `nested` owner (`src/cli/gate.ts`), a child cgroup of its own inside the
+  scope, through the same `contain` (`src/cli/supervise.ts`) as
+  `systemdScopes.run`. That child shares the enclosing scope's cgroup subtree,
+  so the scope-wide signal already reaches it: hold back there as in `direct`.
+  On Windows the gate runs a Job Object stub (`src/cli/job.ts`) and forwards
+  no signal.
 - Adoption in moq.pro bumps its `quest` flake input past this fix. That
   belongs to #3137, not to this quest.
-
-## Related
-
-- [Own gated descendants everywhere](/quest/m2/gate-ownership.md) - delegated sub-cgroups and Windows Job Objects for the same owners
