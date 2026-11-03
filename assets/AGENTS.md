@@ -80,7 +80,9 @@ Make every reference you show the user clickable: link issues, PRs, and commits 
 Sub-agents report those URLs so the parent can link them.
 
 Block on user decisions.
-Explain the quest or PR, the decision, and your recommendation, then ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
+Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
+Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed the work.
+Then give your recommendation and ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
 Do not use asynchronous question tools.
 
 If no blocking tool is available, or it returns without an answer, put the question and numbered choices in your final reply and end the turn.
@@ -113,6 +115,9 @@ A release or pin bump that unblocks work is its own quest.
 
 So is anything waiting on an outside party or a human action (an upstream fix, a customer, a decision).
 Its `Waiting` section names who acts, the condition, and how to check or advance it; it is deleted once the condition clears.
+Automate a step rather than leave it to a person whenever an agent can take it.
+A `Maintainer:` item says why an agent cannot take the step and what automation was considered.
+Record a wait there, not in a draft PR that only holds evidence or steps for a person.
 Unlike a blocked quest it stays ready, so it resurfaces every time ready work is triaged instead of stalling in the backlog.
 `quest waiting` lists every waiting item, the maintainer's first, ranked by what each unblocks, and `/quest-unblock` walks the maintainer through them.
 
