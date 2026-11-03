@@ -12,9 +12,10 @@ batching host gate (`quest land serve`) is then retired.
 
 The epic finishes with an end-to-end run on moq-dev/moq: a PR the queue drops
 for a failing build is fixed and re-enqueued, a PR dropped for a conflict is
-resolved and re-enqueued, a flaky failure is re-enqueued unchanged, and a
-design conflict is handed back. The README's landing section describes the
-watcher.
+resolved and re-enqueued, a flaky failure is re-enqueued unchanged, a test
+seen flaking twice is disabled by a PR that lands through moq's queue with its
+`quest/m0/flaky/` epic passing `quest check`, and a design conflict is handed
+back. The README's landing section describes the watcher.
 
 Non-goals: moq's own switch (its ruleset, its `merge_group` workflow, the
 runner label, and retiring its `quest land` requirement). moq-dev/moq plans
@@ -79,6 +80,11 @@ Decision prompts, selected options marked ✅:
   - ✅ The fixer re-enqueues them unchanged, and a test seen flaking twice is
     disabled in a separate PR with a follow-up quest; the rerun before blame
     (#375) is dropped. Done in [moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406).
+    Refined 2026-11-03 (coordinator, /quest-complete follow-ups): a failure
+    that reproduces on the base or comes from the runner is not a flaky
+    verdict ([Genuine flakes only](/quest/m0/queue-watcher/flaky-verdicts.md)).
+    The end-to-end run covers the first disable PR, and the host gate gets
+    no flaky record, since its work is frozen until it is retired.
 - Pick record (decided 2026-11-02, replacing "Picks GitHub refuses to
   enqueue: ✅ The watcher fixes them"):
   - ✅ GitHub's records only. Drop the comment and `pick.ts`. The watcher
@@ -131,6 +137,7 @@ Shared shape, for the children to follow:
 
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
+- [Genuine flakes only](/quest/m0/queue-watcher/flaky-verdicts.md) - a failure on the base or from the runner never counts toward disabling a test
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 
 ## Related

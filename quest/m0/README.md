@@ -85,6 +85,8 @@ ownership-manifest design:
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
+- [Split the rejected-login review test](/quest/m0/review-test-load.md) - each rejected-login variant is its own test, within the default limit under load
+- [Native Windows suite](/quest/m0/windows-suite.md) - Check's Windows jobs pass on main again, and a Windows regression is caught before it lands
 - [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` exits distinctly on a reviewer's quota and prints the reset time
 - [Drafts in quest waiting](/quest/m0/waiting-drafts.md) - `quest waiting` lists open draft PRs' `## Waiting` items beside the tree's
 - [Rejected options in decision records](/quest/m0/decision-records.md) - grill and plan label rejected options so no one reads them as qualifiers
@@ -93,6 +95,7 @@ ownership-manifest design:
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - report concurrent `rmSync` `EFAULT` on Windows, and drop the workaround once Bun fixes it
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
+- [Gate load wording](/quest/m0/gate-load-wording.md) - stop naming Spotlight as the cause of a fresh macOS runner's load
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
 - [Worktree hooks here](/quest/m0/worktree-hooks.md) - `quest` reaches Claude Code's hooks and the merge driver in this repository, then `quest init` installs the hooks
 - [Remote control worktrees](/quest/m0/worktree-routes.md) - live-check `claude remote-control --spawn worktree` against the hooks, from a session spawned on claude.ai

@@ -136,4 +136,5 @@ fixes what it finds:
 - [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/moq and moq-dev/quest
 - [Private repositories](/quest/m0/kix/private.md) - moq-dev/moq.pro enrolls, visible only to signed-in users who can read it
 - [Job sandbox](/quest/m0/kix/sandbox/README.md) - head approval for kix-pushed heads, and opencode sandboxed
+- [Runner reviews](/quest/m0/kix/runner-review.md) - a runner's review fetches without blocking it, under the workspace lock, with a pinned Codex
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs

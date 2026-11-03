@@ -35,5 +35,13 @@ Work:
   push and fails when the tag and `package.json` differ. Check that the
   release has the Windows archives SETUP.md expects, then drop the
   `SETUP.md` caveat.
+- Check that the Install check (`.github/workflows/install-check.yml`, which
+  Release calls) passes all 12 jobs on the new tag. Against v0.1.0 its 4
+  Windows jobs fail because that release has no Windows assets ("No matching
+  asset found for platform windows-x64", and a 404 for the archive):
+  [run 40144909978](https://github.com/moq-dev/quest/actions/runs/40144909978)
+  and [run 41660575051](https://github.com/moq-dev/quest/actions/runs/41660575051),
+  as [moq-dev/quest#430](https://github.com/moq-dev/quest/pull/430)
+  noted (coordinator, /quest-complete follow-ups, 2026-11-03).
 - Decide in the PR how later releases are cut, such as a step in the release
   checklist or a recurring quest through `/quest-recurring`.
