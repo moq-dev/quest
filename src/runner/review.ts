@@ -60,13 +60,16 @@ export interface ReviewRequest {
 	reviewer: Reviewer;
 	/** The agent's fixes and refutations of the last round's findings. */
 	responses?: string;
+	/** Stops the review when its attempt stops. */
+	signal?: AbortSignal;
 }
 
 /** Review `head` as `quest review` would on its branch, resuming the job's review session. */
 export async function reviewHead(request: ReviewRequest): Promise<Round> {
+	request.signal?.throwIfAborted();
 	const root = await request.workspace.reviewCheckout(request.head);
 	return review(
-		{ root, harness: request.reviewer.harness, responses: request.responses },
+		{ root, harness: request.reviewer.harness, responses: request.responses, signal: request.signal },
 		{ env: request.reviewer.env },
 	);
 }

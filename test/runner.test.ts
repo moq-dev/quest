@@ -2395,6 +2395,53 @@ describe("runner reviews", () => {
 		}
 	});
 
+	posix("fail a job whose agent ends before answering its review, and stop a review when the job stops", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+				],
+			});
+			r.assign(job(r.upstream.commit));
+			expect(await r.result()).toMatchObject({
+				outcome: "failed",
+				summary: "The agent published 0000000, but ended before answering its review's findings: done",
+			});
+		} finally {
+			await r.runner.shutdown();
+		}
+		let started!: () => void;
+		const reviewing = new Promise<void>((resolve) => (started = resolve));
+		let aborted = false;
+		const stopped = rig(undefined, "claude", (request) => {
+			started();
+			return new Promise((_, reject) =>
+				request.signal!.addEventListener("abort", () => {
+					aborted = true;
+					reject(request.signal!.reason);
+				}),
+			);
+		});
+		try {
+			stopped.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+				],
+			});
+			stopped.assign(job(stopped.upstream.commit));
+			await reviewing;
+			stopped.hub.socket.deliver({ type: "cancel", job: "job1", attempt: 1 });
+			expect(await stopped.result()).toMatchObject({ outcome: "cancelled" });
+			expect(aborted).toBe(true);
+			expect(stopped.reviews).toEqual([]);
+		} finally {
+			await stopped.runner.shutdown();
+		}
+	});
+
 	posix("lands a merge job's head only once its review passes", async () => {
 		const r = rig(undefined, "claude", rounds([finding]));
 		try {

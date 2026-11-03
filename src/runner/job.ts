@@ -108,6 +108,12 @@ export class Attempt {
 	#account: Account | undefined;
 	/** Heads this attempt's reviews passed, which a delivery of the same head does not review again. */
 	#passed = new Set<string>();
+	/** A delivered head whose review found something the agent has not answered yet. */
+	#outstanding: string | null = null;
+	/** Stops a running review when the attempt stops. */
+	#reviewing = new AbortController();
+	/** Settles once no review runs, so the attempt never removes a checkout a review still uses. */
+	#reviewRun: Promise<unknown> = Promise.resolve();
 	#agent: Running | undefined;
 	/** Aborts the devShell build, which runs before there is an agent to stop. */
 	#preparing = new AbortController();
@@ -169,6 +175,7 @@ export class Attempt {
 	#halt(): void {
 		this.wake();
 		this.#preparing.abort();
+		this.#reviewing.abort();
 		this.#agent?.stop();
 	}
 
@@ -300,6 +307,9 @@ export class Attempt {
 
 	async #conclude(exit: Exit | null, account: Account): Promise<void> {
 		if (exit?.limited) this.ctx.limited(account, exit.limited.until);
+		// A review the agent left running when it exited ends before its checkout can go.
+		this.#reviewing.abort();
+		await this.#reviewRun;
 		if (this.#stopped || this.#paused) return;
 		// Whatever happens next, the work so far goes to the branch first.
 		const unsaved = await this.#save("Work in progress").then(
@@ -321,6 +331,11 @@ export class Attempt {
 			);
 		}
 		const reply = exit?.reply?.trim();
+		if (this.#outstanding)
+			return this.#finish(
+				"failed",
+				`The agent published ${this.#outstanding.slice(0, 7)}, but ended before answering its review's findings${reply ? `: ${reply}` : "."}${unsaved}`,
+			);
 		return this.#finish(
 			"failed",
 			exit?.failed
@@ -439,7 +454,15 @@ export class Attempt {
 		let round: Round;
 		try {
 			const reviewer = reviewerFor(this.#account!, ctx.accounts(), (a) => ctx.home(a), ctx.env);
-			round = await ctx.review({ workspace: this.#workspace!, head, reviewer, responses });
+			const running = ctx.review({
+				workspace: this.#workspace!,
+				head,
+				reviewer,
+				responses,
+				signal: this.#reviewing.signal,
+			});
+			this.#reviewRun = running.catch(() => {});
+			round = await running;
 		} catch (error) {
 			if (error instanceof ResponsesError)
 				throw new Error(
@@ -742,10 +765,14 @@ export class Attempt {
 						...(followups.length && { followups }),
 					});
 					const reviewed = await this.#review(published, responses);
+					// A stop or cancel during the review aborted it; nothing more happens for this delivery.
+					const stopped = this.#closed();
+					if (stopped) return stopped;
 					const note = reviewed.note ? `\n\n${reviewed.note}` : "";
+					// The work is on its pull request, but not landed or finished until the review passes.
+					this.#outstanding = reviewed.passed === false ? published.head : null;
 					if (reviewed.passed === false) {
-						// The work is on its pull request, but not landed or finished until the review passes.
-						if (!land) this.#delivered = delivery();
+						this.#delivered = undefined;
 						return `${land ? "Not landed" : `Delivered${published.pull ? `: ${published.pull.url}` : ""}`}, but the review needs your fixes or refutations before you end your turn.${note}`;
 					}
 					if (land) {

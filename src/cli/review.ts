@@ -114,6 +114,8 @@ export interface ReviewOptions {
 	responses?: string;
 	/** Start a new session instead of resuming the branch's last one. */
 	fresh?: boolean;
+	/** Stops the reviewer CLI, failing the round; the session keeps its earlier rounds. */
+	signal?: AbortSignal;
 }
 
 export interface ReviewDependencies {
@@ -405,7 +407,14 @@ const TAIL = 16 * 1024;
  * outlives the command. The CLI is found on PATH's absolute directories, never
  * in the checkout under review, and the CLI's own commands keep only those too.
  */
-function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string, reader?: Reader) {
+function run(
+	argv: string[],
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+	stdin: string,
+	reader?: Reader,
+	signal?: AbortSignal,
+) {
 	return new Promise<{ code: number; stderr: string }>((resolve, reject) => {
 		let program: string;
 		try {
@@ -418,6 +427,8 @@ function run(argv: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string,
 			cwd,
 			env: programEnvironment(env),
 			stdio: ["pipe", "pipe", "pipe"],
+			// An abort kills the CLI, and the turn fails with Node's AbortError.
+			signal,
 		});
 		const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 		const handlers = signals.map((name) => [name, () => child.kill(name)] as const);
@@ -451,6 +462,8 @@ interface Cli {
 	env: NodeJS.ProcessEnv;
 	/** Thrown when a turn fails on authentication, as a logged-out status check fails. */
 	unauthorized: string;
+	/** Stops the review's CLI turns. */
+	signal?: AbortSignal;
 }
 
 const names = (list: string[]) => list.join(" and ");
@@ -469,13 +482,13 @@ function profile(reviewer: Reviewer, env: NodeJS.ProcessEnv): string {
  * never overrides a stored subscription login, so a review is billed as the
  * user's own CLI sessions are.
  */
-async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv): Promise<Cli> {
+async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Cli> {
 	const reviewer = REVIEWERS[harness];
 	const stripped = strippedEnvironment(env);
 	const notLoggedIn = `${harness} is not logged in to ${profile(reviewer, env)}`;
 	const loggedOut = `${notLoggedIn}; run \`${reviewer.login}\``;
-	if ((await run(reviewer.status, cwd, stripped, "")).code === 0) {
-		return { reviewer, env: stripped, unauthorized: loggedOut };
+	if ((await run(reviewer.status, cwd, stripped, "", undefined, signal)).code === 0) {
+		return { reviewer, env: stripped, unauthorized: loggedOut, signal };
 	}
 	const reroutes = reviewer.reroutes(env);
 	if (reroutes.length > 0) {
@@ -490,13 +503,14 @@ async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv
 		reviewer,
 		env: { ...stripped, ...Object.fromEntries(credentials.map((name) => [name, env[name]])) },
 		unauthorized: `${harness} rejected ${names(credentials)}; replace it, or run \`${reviewer.login}\``,
+		signal,
 	};
 }
 
 /** Run one reviewer turn, failing on any error it reports, and as logged out on an authentication error. */
 async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 	const reader = cli.reviewer.reader();
-	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader);
+	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader, cli.signal);
 	const reply = reader.reply();
 	if (code !== 0 || reply.error !== undefined) {
 		// A login can expire or be revoked while the status check still passes. A CLI may report it
@@ -748,7 +762,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		);
 	}
 
-	const cli = await prepare(harness, root, deps.env);
+	const cli = await prepare(harness, root, deps.env, options.signal);
 
 	// The reviewer's sandbox has no network, so the base is fetched first.
 	const baseRef = options.base ?? `origin/${defaultBranch(root, "origin")}`;
