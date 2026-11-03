@@ -454,7 +454,8 @@ fakes.each([
 	["MANTLE", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL"],
 	["ANTHROPIC_AWS", "ANTHROPIC_AWS_BASE_URL"],
 	["ANTHROPIC_GOOGLE_CLOUD", "ANTHROPIC_GOOGLE_CLOUD_BASE_URL"],
-])("Claude keeps the %s provider switch with its endpoint and skip-auth setting", async (provider, endpoint) => {
+	["ANTHROPIC_GOOGLE_CLOUD", "ANTHROPIC_GOOGLE_CLOUD_LOCATION"],
+])("Claude keeps the %s provider switch with its %s and skip-auth setting", async (provider, endpoint) => {
 	const s = setup("CODEX_THREAD_ID");
 	vi.stubEnv("FAKE_LOGGED_OUT", "1");
 	vi.stubEnv(`CLAUDE_CODE_USE_${provider}`, "1");
