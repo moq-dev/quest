@@ -1168,8 +1168,33 @@ sandbox, not a VM, and it narrows rather than removes the risk of running
 agent commands on your machine.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
-pins both) and unprivileged user namespaces; on Ubuntu 23.10 and later,
-AppArmor allows them only for programs with a profile granting `userns`.
+pins both) and unprivileged user namespaces, including the nested one Claude
+Code's seccomp helper makes inside the sandbox. Before taking jobs, `quest runner`
+runs a trivial command in nested sandbox namespaces and refuses to start if
+bubblewrap cannot make them. On Ubuntu 23.10 and later, AppArmor allows them
+only to programs whose profile grants `userns`, so for the runner package's
+bubblewrap the refusal prints this profile, filled in with its Nix store path,
+and the commands that install it as `/etc/apparmor.d/quest-bwrap`:
+
+```
+abi <abi/4.0>,
+include <tunables/global>
+
+profile quest-bwrap /nix/store/HASH-bubblewrap-VERSION/bin/bwrap flags=(unconfined) {
+  userns,
+}
+```
+
+It is the form Ubuntu gives other programs that sandbox themselves. Ubuntu's
+own `bwrap-userns-restrict` profile for `/usr/bin/bwrap` takes capabilities from
+the commands bubblewrap runs, which breaks Claude Code's seccomp helper, so a
+system bwrap there is refused, and a second profile for it would disable both;
+use the runner package instead. The job's commands still get no user namespace
+of their own: Claude Code's seccomp helper refuses them one, and on opencode
+accounts bubblewrap does. The profile names one exact store path, since anyone
+who can build with Nix can add a store path matching a glob, so a runner update
+that changes bubblewrap refuses to start until you install the profile it prints.
+
 Merge jobs retain existing PR submodule pointers when merging the base. Their
 `wait` tool wakes on GitHub webhook hints or reconnects and rereads the PR;
 a hint never approves work. If someone moves the head, the maintainer can
