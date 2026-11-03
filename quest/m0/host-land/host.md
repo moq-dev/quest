@@ -95,8 +95,6 @@ What remains:
 
 - Merge #16 once
   [kixelated/nixos#13](https://github.com/kixelated/nixos/pull/13) lands.
-- The fixer's container access to CLIProxyAPI and the Codex login, which the
-  [fixer](/quest/m0/host-land/fixer.md) needs.
 - VM tests for three more symlink attacks (an escaping chain, a link to a
   directory, a write through a symlinked directory), which the extraction
   already rejects.
