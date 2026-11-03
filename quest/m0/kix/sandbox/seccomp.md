@@ -3,8 +3,8 @@
 ## Goal
 
 The sandbox-runtime (srt) that runs opencode jobs' commands applies its
-seccomp filter, so a sandboxed command cannot connect to any Unix socket,
-the Nix daemon's included. The runner refuses to start an opencode job when
+seccomp filter, so a sandboxed command cannot create a Unix socket and so
+cannot connect to one, the Nix daemon's included. The runner refuses to start an opencode job when
 srt reports Unix-socket blocking disabled, and the boundary test probes the
 daemon socket, so a package bump that drops the filter fails CI. srt's
 always-writable `/tmp/claude` is denied too.
@@ -46,5 +46,10 @@ Work:
   blocking disabled, with an error that names the missing helper.
 - Add to the boundary test: connecting to the Nix daemon socket, and to a
   socket the test opens outside the sandbox, are both refused.
+- The filter blocks creating a Unix socket, not using one a command
+  inherits or receives over `SCM_RIGHTS`. Have the boundary test list the
+  command's open descriptors (`/proc/self/fd`) and fail on any Unix socket
+  other than its stdio's, so nothing the runner or opencode passes down
+  reaches a host socket.
 - Add `/tmp/claude` to `denyWrite` if srt honours it over its own write
   paths without leaving a placeholder behind; otherwise record why not.

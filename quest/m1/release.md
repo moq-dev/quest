@@ -24,12 +24,16 @@ Evidence, gathered 2026-11-02:
 
 Work:
 
-- Tag the next version from `main` once the open worktree-hook work
+- First, before any release: `SETUP.md` does not yet say v0.1.0 lacks the
+  hook, so add that the release routes lack it and point at the flake
+  route until a release has it.
+- Once the open worktree-hook work
   ([moq-dev/quest#423](https://github.com/moq-dev/quest/pull/423),
   [#425](https://github.com/moq-dev/quest/pull/425)) has landed or been
-  dropped; `.github/workflows/release.yml` publishes on the tag push. Check
-  that the release has the Windows archives SETUP.md expects.
-- Until a release has the hook, SETUP.md says the release routes lack it
-  and points at the flake route.
+  dropped, bump `package.json`'s `version` in a PR to `main`, then tag that
+  version from `main`; `.github/workflows/release.yml` publishes on the tag
+  push and fails when the tag and `package.json` differ. Check that the
+  release has the Windows archives SETUP.md expects, then drop the
+  `SETUP.md` caveat.
 - Decide in the PR how later releases are cut, such as a step in the release
   checklist or a recurring quest through `/quest-recurring`.

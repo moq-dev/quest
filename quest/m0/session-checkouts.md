@@ -29,5 +29,13 @@ Work:
   `SessionStart` claims it again on resume. `/clear` also fires
   `SessionEnd`, so release is idempotent and the next `SessionStart`
   reclaims it. An idle background session never ends; leave it held.
+- Claude Code bounds `SessionEnd` hooks by a short budget
+  (`CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`) and does not wait past it.
+  Measure a release with scratch to delete, and set the entry's timeout to
+  cover it. A release that fails or is cut short leaves the checkout
+  reserved with its failure recorded, as `settle` does
+  (`src/cli/worktree.ts`), and the next `SessionStart` for that session, or
+  `quest worktree release` by hand, finishes it. Verify a killed release
+  this way too.
 - Verify each route live as #425 did, from a session that is not itself
   worktree-isolated.

@@ -21,4 +21,6 @@ Decided 2026-11-02 (user, /quest-spawn follow-ups): ✅ plan as stated
   already detects the heading. Each item names its PR's URL.
 - Keep `quest waiting` usable offline: without GitHub access it prints the
   tree's items and says the drafts were skipped.
-- Update `assets/skills/unblock.md` to read the command's output.
+- Update `assets/skills/unblock.md` to read the command's output, keeping
+  its per-draft `quest status <pr>` hold check, so it still skips a draft
+  another session holds.
