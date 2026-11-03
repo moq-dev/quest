@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
 import { check, chunks, parse, render, resolveLists } from "../src/core";
-import { type ResolveOptions, resolveFile } from "../src/cli/resolve";
+import { DRIVER, OLD_DRIVERS, type ResolveOptions, resolveFile } from "../src/cli/resolve";
 import { heal, init, uninstall } from "../src/cli/setup";
 import { tempDir } from "./fixture";
 
@@ -388,6 +388,42 @@ describe.skipIf(process.platform === "win32")("the merge driver", () => {
 		uninstall(dir);
 		expect(readFileSync(join(dir, ".gitattributes"), "utf8")).toBe("* text=auto\n");
 		expect(spawnSync("git", ["-C", dir, "config", "--get", "merge.quest.driver"]).status).toBe(1);
+	});
+
+	test("any command upgrades a driver an older quest registered, but not a custom one", () => {
+		const dir = diverged();
+		writeFileSync(join(dir, ".gitattributes"), "quest/** merge=quest\n");
+		expect(OLD_DRIVERS).not.toContain(DRIVER);
+		for (const old of OLD_DRIVERS) {
+			git(dir, "config", "merge.quest.driver", old);
+			heal(dir);
+			expect(git(dir, "config", "--get", "merge.quest.driver")).toBe(DRIVER);
+		}
+		// A copy of an old driver in another scope is shadowed, not edited.
+		const global = join(tempDir(), "gitconfig");
+		writeFileSync(global, `[merge "quest"]\n\tdriver = ${JSON.stringify(OLD_DRIVERS[0])}\n`);
+		git(dir, "config", "--local", "--unset", "merge.quest.driver");
+		const env = { ...process.env, GIT_CONFIG_GLOBAL: global };
+		const read = (scope: string) =>
+			execFileSync("git", ["-C", dir, "config", scope, "--get", "merge.quest.driver"], {
+				encoding: "utf8",
+				env,
+			}).trim();
+		expect(read("--global")).toBe(OLD_DRIVERS[0]);
+		const saved = process.env.GIT_CONFIG_GLOBAL;
+		process.env.GIT_CONFIG_GLOBAL = global;
+		try {
+			heal(dir);
+		} finally {
+			if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+			else process.env.GIT_CONFIG_GLOBAL = saved;
+		}
+		expect(read("--local")).toBe(DRIVER);
+		expect(read("--global")).toBe(OLD_DRIVERS[0]);
+
+		git(dir, "config", "merge.quest.driver", `${OLD_DRIVERS[0]} # mine`);
+		heal(dir);
+		expect(git(dir, "config", "--get", "merge.quest.driver")).toBe(`${OLD_DRIVERS[0]} # mine`);
 	});
 
 	test("nothing registers without attributes or outside a work tree", () => {

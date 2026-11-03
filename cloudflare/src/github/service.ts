@@ -1,8 +1,8 @@
 import { createHash, createPrivateKey, sign } from "node:crypto";
 import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
-import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
+import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
-import { unreviewed } from "./review";
+import { REVIEW_CHECK, unreviewed } from "./review";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -1846,6 +1846,40 @@ export class GitHubService {
 	}
 
 	/**
+	 * Write the App's `quest review` check run on `head`, a commit a job
+	 * published and GitHub attributes to a bot, from a runner's review of it, on behalf of the job's
+	 * requester. GitHub binds the run to the commit, and `unreviewed` counts
+	 * only this App's, so a passing one lets kix land exactly that head.
+	 */
+	writeReviewCheck(
+		repo: GitHubRepository,
+		userId: string,
+		input: {
+			head: string;
+			conclusion: "success" | "failure";
+			output: { title: string; summary: string; text?: string };
+		},
+	) {
+		return this.#authorized(repo, userId, { contents: "read", checks: "write" }, async (token) => {
+			// The job's head is someone else's commit after a merge job continues onto it; that one is not a runner's to pass.
+			const { committer } = await this.#api<{ committer: { type: string } | null }>(
+				token,
+				`${repositoryPath(repo)}/commits/${sha(input.head)}`,
+			);
+			if (committer?.type !== "Bot")
+				throw new GitHubError("kix records a runner's review only of a commit it published");
+			await this.#api(token, `${repositoryPath(repo)}/check-runs`, "POST", {
+				name: REVIEW_CHECK,
+				head_sha: sha(input.head),
+				status: "completed",
+				conclusion: input.conclusion,
+				completed_at: new Date().toISOString(),
+				output: input.output,
+			});
+		});
+	}
+
+	/**
 	 * Merge exactly `expectedHead` with the first method the repository
 	 * allows: squash, then a merge commit, then rebase, once a review counts on
 	 * it. GitHub enforces branch rules, reviews, and checks; a refusal says why
@@ -1907,6 +1941,7 @@ export class GitHubService {
 			mergeState: row.mergeStateStatus,
 			queue: row.isMergeQueueEnabled === true,
 			landing: row.autoMergeRequest !== null || row.mergeQueueEntry !== null,
+			queued: row.mergeQueueEntry !== null,
 			labels: row.labels.nodes.map((label) => label.name).filter(isHoldLabel),
 			events: row.timelineItems.nodes.map((event) => ({
 				id: event.id,
@@ -2003,11 +2038,12 @@ export class GitHubService {
 
 	/**
 	 * Land a merge job's pull request at exactly `head`, while the job still
-	 * holds it: enable auto-merge bound to that head, which enters the merge
-	 * queue when the base has one, or merge at once when GitHub would refuse
-	 * auto-merge because nothing is left to wait for. `method` is the one the
-	 * repository's instructions name, or else the first the repository allows.
-	 * A base that requires the `quest land` check queues it for that gate
+	 * holds it: enable auto-merge bound to that head, or merge at once when
+	 * GitHub would refuse auto-merge because nothing is left to wait for.
+	 * A base with a merge queue gets the head enqueued instead, or auto-merge
+	 * armed while its required checks may still be pending, as `quest merge`
+	 * does. `method` is the one the repository's instructions name, or else
+	 * the first the repository allows. A base that requires the `quest land` check queues it for that gate
 	 * instead, as `quest merge` does: squash auto-merge whose commit body
 	 * pins the head. Either way, only once a review counts on the head.
 	 */
@@ -2040,19 +2076,11 @@ export class GitHubService {
 				const waiting = await this.#unreviewed(token, repo, current, pull, input.head);
 				if (waiting) throw new PublicationBlocked(waiting);
 				const gated = await this.#gated(token, repo, holds.base);
-				let mutation: "mergePullRequest" | "enablePullRequestAutoMerge" =
-					!gated && immediateMerge(holds.mergeState, holds.queue)
-						? "mergePullRequest"
-						: "enablePullRequestAutoMerge";
-				const submit = async () => {
+				/** Send one landing mutation, turning GitHub's refusal into the job's. */
+				const mutate = async (query: string, variables: Record<string, string | null>) => {
 					const result = await this.#api<{ errors?: { message?: unknown }[] }>(token, "/graphql", "POST", {
-						query: `mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!, $body: String) { ${mutation}(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: $method, commitBody: $body }) { clientMutationId } }`,
-						variables: {
-							id: holds.id,
-							sha: input.head,
-							method: gated ? "SQUASH" : (input.method ?? mergeMethod(current)).toUpperCase(),
-							body: gated ? `${LAND_PIN}: ${input.head}` : null,
-						},
+						query,
+						variables,
 					});
 					if (result.errors?.length) {
 						const reason = result.errors[0]?.message;
@@ -2061,13 +2089,46 @@ export class GitHubService {
 						);
 					}
 				};
+				// A merge queue lands what it enqueues; `quest land`'s gate queues through auto-merge instead.
+				if (!gated && holds.queue) {
+					try {
+						await queueHead(
+							mutate,
+							holds.id,
+							input.head,
+							holds.mergeState,
+							input.method ?? mergeMethod(current),
+						);
+					} catch (error) {
+						if (!(error instanceof PublicationBlocked)) throw error;
+						// Already queued at this head, as when this repeats an earlier landing: nothing that matters was refused.
+						const fresh = await this.#holds(token, repo, pull);
+						check(fresh);
+						if (!fresh.queued) throw error;
+					}
+					await this.#invalidate(repo);
+					return { merged: false };
+				}
+				let mutation: "mergePullRequest" | "enablePullRequestAutoMerge" =
+					!gated && immediateMerge(holds.mergeState, holds.queue)
+						? "mergePullRequest"
+						: "enablePullRequestAutoMerge";
+				const submit = () =>
+					mutate(
+						`mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!, $body: String) { ${mutation}(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: $method, commitBody: $body }) { clientMutationId } }`,
+						{
+							id: holds.id,
+							sha: input.head,
+							method: gated ? "SQUASH" : (input.method ?? mergeMethod(current)).toUpperCase(),
+							body: gated ? `${LAND_PIN}: ${input.head}` : null,
+						},
+					);
 				try {
 					await submit();
 				} catch (error) {
 					if (
 						mutation !== "enablePullRequestAutoMerge" ||
 						gated ||
-						holds.queue ||
 						!cleanAutoMergeRefusal(error instanceof Error ? error.message : null)
 					)
 						throw error;
@@ -2125,6 +2186,8 @@ type Holds = {
 	queue: boolean;
 	/** Auto-merge is enabled or the pull request is in the merge queue. */
 	landing: boolean;
+	/** The pull request is in the merge queue. */
+	queued: boolean;
 	/** Its `quest:*` labels. */
 	labels: string[];
 	/** Oldest first; `label` is null for a landing that started. */
