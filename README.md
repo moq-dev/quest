@@ -848,7 +848,9 @@ its PR still waits as the queue dropped it:
   credential-free wrapper, given the failure log and the PR's number, with the
   dropped head on `pr-<n>`, starting from the base the `merge_group` build
   was built on, or from the current base for a conflict, with the merge's
-  conflicts as its log. At most `--fixer-jobs` (2) run at once; the rest wait
+  conflicts as its log. The log ends with the PR's own checks on the dropped
+  head: each check's result, whether it is required, and its URL, then the
+  last 20,000 characters of each failing GitHub Actions job's log. At most `--fixer-jobs` (2) run at once; the rest wait
   for a slot. `--fixer-effort` (medium) sets the fixer's
   `model_reasoning_effort`, passed to the wrapper in `QUEST_LAND_FIXER_EFFORT`,
   which `quest land fix --effort` reads by default.
@@ -875,6 +877,13 @@ ran, by a writer's push or enqueue, is not applied, and its comment says so.
 A round whose collection fails three passes in a row, as when GitHub refuses its
 handback comment, is set aside with a logged warning, freeing its fixer slot.
 
+A PR's own CI is a signal, never a gate of its own: only the base's required
+checks keep GitHub from enqueuing a head. `/quest-merge` reports the failing
+optional checks on the head it picks, and the land fixer reads every check as
+context. A public repository may run its checks on pull requests too, since
+GitHub's hosted runners are free there; a private one can skip them and rely
+on the merge queue's build on the host alone.
+
 The watcher also keeps the repository's flaky tests in `flaky.json` in its
 state directory: each flaky verdict, across every PR, by the failure signature
 the fixer named, with the `merge_group` jobs that showed it. Each failed
@@ -896,7 +905,8 @@ and locks, so the two never run for the same repository at once. Without a
 fixer its token asks for `contents: read`, `pull_requests: write`,
 `actions: read`, which the App needs for the logs, and `merge_queues: write`,
 which `enqueuePullRequest` needs. With one it also asks for `contents: write`,
-for arming auto-merge and pushing fixes; a push that carries a workflow change
+for arming auto-merge and pushing fixes, and `checks: read` and `statuses: read`,
+for the PR's own checks the fixer reads; a push that carries a workflow change
 asks for `workflows: write`.
 
 ## Gate expensive commands
