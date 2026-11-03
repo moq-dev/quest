@@ -694,7 +694,7 @@ export function author(result?: Pick<FixResult, "agent" | "model">): string {
 	);
 }
 /** The PR body with the fix recorded in its `## Review` section; the line names the agent, and the author's text stays as written. */
-function review(body: string, head: string, reason: string, attribution: string): string {
+export function review(body: string, head: string, reason: string, attribution: string): string {
 	const line = `mechanical fix by ${attribution}: ${fixerText(reason)} (head ${head})`;
 	if (body.includes(line)) return body;
 	const section = /^## Review[ \t]*\r?$/m.exec(body);

@@ -144,7 +144,7 @@ interface State {
 }
 
 /** What a turn needs to build its command line. */
-interface Context {
+export interface Context {
 	/**
 	 * The merge base of `HEAD` with the base's tip, so every turn reviews only
 	 * the branch's own change, never the base's newer commits.
@@ -288,7 +288,7 @@ const claude: Reviewer = {
 	},
 };
 
-function claudeFlags(context: Context): string[] {
+export function claudeFlags(context: Context): string[] {
 	return [
 		"claude",
 		"-p",
@@ -530,6 +530,15 @@ async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv
 		unauthorized: `${harness} rejected ${names(credentials)}; replace it, or run \`${reviewer.login}\``,
 		signal,
 	};
+}
+
+/** The environment `quest review` runs `harness`'s CLI in, for a caller that runs it with the same login. */
+export async function reviewerEnvironment(
+	harness: HarnessName,
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+	return (await prepare(harness, cwd, env)).env;
 }
 
 /** Run one reviewer turn, failing on any error it reports, and as logged out on an authentication error. */

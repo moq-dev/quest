@@ -88,7 +88,6 @@ ownership-manifest design:
 - [Checks are judged by their latest run](/quest/m0/latest-check-runs.md) - `quest status`, `quest wait`, and the gate count each check's latest run on the head, as GitHub does, so a superseded cancelled or failed run stops failing them or refusing release-plz PRs GitHub would merge
 - [Current landing status](/quest/m0/status-landing.md) - `quest status` clears a stale `landing-stopped` reason once the PR is queued again
 - [Agents don't stall](/quest/m0/agent-stalls.md) - long waits block in the same turn, pre-existing failures don't stop review, and reviewer outages become waits
-- [Context before decision prompts](/quest/m0/prompt-context.md) - every prompt explains the work first, and maintainer steps say why an agent can't take them
 - [Spawn keeps finding work](/quest/m0/spawn-refill.md) - recompute ready quests per report, resume leftover local branches, and check open PRs before claiming
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
@@ -103,4 +102,3 @@ ownership-manifest design:
 - [Review through a gateway](/quest/m0/review-gateway.md) - `quest review` keeps gateway, cloud-provider, and Codex connection variables
 - [opencode 2.x](/quest/m0/opencode-sdk.md) - the runner drives the opencode 2.x binary through `@opencode/client`, removing the interim 1.19.0 pin
 - [Waiting sections](/quest/m0/waiting-sections.md) - this repository's waiting quests move from prose to `## Waiting`
-- [Review harness check](/quest/m0/review-harness.md) - recurring each milestone: newest pinned review models, and the live sandbox test passes
