@@ -51,7 +51,10 @@ exists. It also appends `quest/** merge=quest` to `.gitattributes` and sets
 concurrent edits to quest link lists. It adds hook entries running
 `quest worktree hook` to `.claude/settings.json`, keeping the file's other
 settings, so Quest creates and reclaims Claude Code's worktrees; Claude Code
-then needs `quest` on its `PATH` to create any worktree in the repository. It
+then needs `quest` on the `PATH` it started with to create any worktree in the
+repository. A dev shell that a SessionStart hook loads reaches only Claude's
+Bash commands, so with a flake pin, tell the user to start Claude Code inside
+the dev shell or also install `quest` on their `PATH`. It
 prints each path it changed and is safe to rerun. Rerun after an upgrade, it
 also removes the unmodified stubs of skills the new version no longer ships.
 

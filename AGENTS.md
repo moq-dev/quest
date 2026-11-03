@@ -1,3 +1,5 @@
+Quests: before starting work, run `quest guide` and read it completely.
+
 Keep the core independent of a particular repository, agent, or issue tracker.
 Prefer simple, maintainable changes and ask about consequential product choices.
 
@@ -11,10 +13,10 @@ Do not edit `CONTRIBUTING.md`, `PROMPTING.md`, `assets/AGENTS.md`, or
 
 ## Development
 
-- Run `quest guide` and read it completely before starting work.
 - Keep README examples consistent with the CLI's actual `--help` output.
   In this checkout, `quest` means `bun run --silent quest`; the dev shell's
-  `quest` is a pinned build for the merge driver, not this checkout.
+  `quest` is a pinned build for the merge driver, not this checkout, and
+  Claude Code's worktree hooks run the `quest` installed on its `PATH`.
 - Use an isolated worktree under `.worktrees/`. Preserve existing changes.
 - Use the Nix shell so local tooling matches CI: `nix develop`
 - Run `just install` in a fresh checkout to install the locked dependencies.

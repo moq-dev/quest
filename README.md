@@ -1220,7 +1220,9 @@ stolen. This initial interface refuses unknown or changed checkout ownership.
 `quest init` adds hook entries to the repository's `.claude/settings.json` that
 run `quest worktree hook` for Claude Code's `WorktreeCreate`, `WorktreeRemove`,
 `SubagentStart`, and `SubagentStop` events, so `quest` must be on the `PATH`
-Claude Code runs hooks with. The hook then creates every worktree Claude makes
+Claude Code runs hooks with: the one it started with. Variables a SessionStart
+hook writes to `CLAUDE_ENV_FILE`, such as a direnv dev shell, reach only its
+Bash commands, not other hooks. The hook then creates every worktree Claude makes
 in the repository, for `--worktree`, `EnterWorktree`, isolated subagents, and
 background sessions, and Claude no longer copies `.worktreeinclude` files into
 them.

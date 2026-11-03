@@ -18,6 +18,19 @@ For automatic shell loading, install direnv and approve this checkout with
 `direnv allow`. The Claude SessionStart hook loads an already-approved environment;
 it does not grant approval. No background garbage collection runs on entry.
 
+Claude Code runs this repository's worktree hooks (`quest worktree hook`, which
+`quest init` installs) with the `PATH` it started with; the SessionStart hook's
+dev shell reaches only its Bash commands. Install a reviewed `quest` there,
+outside any checkout, so hooks never run a PR head's code:
+`nix profile add github:moq-dev/quest` builds `main` as of the install, and
+`nix profile upgrade quest` moves it. A release that ships `quest worktree hook`,
+installed as [SETUP.md](SETUP.md) describes, works too. Local merges outside
+the dev shell find it as their merge driver. Without one, Claude Code
+can't create a worktree here: isolated subagents, `--worktree`, and
+`EnterWorktree` fail with a `WorktreeCreate` hook error that `quest` is not
+found, and subagent hooks report the same error. A session started inside the
+dev shell (`nix develop -c claude`) uses its pinned `quest` instead.
+
 `flake.lock` pins Bun and the developer tools; `bun.lock` pins the
 dependencies. `packageManager` in `package.json` names the same Bun for CI
 runners without Nix, and `nix flake check` fails when the two disagree. Without
