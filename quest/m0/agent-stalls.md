@@ -60,7 +60,3 @@ Files: the guide's Workspace and Reviews sections in `assets/AGENTS.md`,
 
 - [Review through a gateway](/quest/m0/review-gateway.md) - keeps the
   reviewer's gateway credentials, the infrastructure side of quota outages
-- [Gate admission on CI](/quest/m0/gate-ci-admission.md) - admission on
-  loaded hosts; open [moq-dev/quest#324](https://github.com/moq-dev/quest/pull/324)
-  and [moq-dev/quest#342](https://github.com/moq-dev/quest/pull/342) admit
-  quick and lone commands sooner

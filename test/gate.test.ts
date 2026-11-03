@@ -18,12 +18,14 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
 	admit,
+	alive,
 	COMMAND_MEMORY,
 	claimDirectory,
 	direct,
 	fileHost,
 	gate,
 	group,
+	type Admission,
 	type Host,
 	hostLimits,
 	linuxMemory,
@@ -107,6 +109,9 @@ test("load and memory pressure wait whatever the ledger holds", async () => {
 	const events: string[] = [];
 	const state = { now: 0, load: 9, memory: 0 };
 	const host = testHost(tempDir(), state, events);
+	// A build admitted long ago still runs, so the load is the gate's to wait out.
+	const build = { id: "build", at: -10 * RECENT_MS, pid: process.pid };
+	expect(host.publish(host.ledger(), [build])).toBe(true);
 	const sleep = host.sleep;
 	host.sleep = async (ms, signal) => {
 		await sleep(ms, signal);
@@ -115,7 +120,69 @@ test("load and memory pressure wait whatever the ledger holds", async () => {
 	};
 	await admit({ load: 4, memory: GiB }, host, signal, (reason) => events.push(reason));
 	expect(events).toEqual(["load", `sleep ${SETTLE_MS}`, "memory", `sleep ${SETTLE_MS}`]);
-	expect(host.ledger().admissions).toEqual([{ id: expect.any(String), at: 2 * SETTLE_MS }]);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: 2 * SETTLE_MS, pid: process.pid }]);
+});
+
+test("load from outside the gate admits one command at a time while none runs", async () => {
+	// A fresh macOS runner's Spotlight index holds the load above its CPUs for the whole job.
+	const directory = tempDir();
+	const state = { now: 0, load: 12, memory: Infinity };
+	const limits = { load: 3, memory: GiB };
+	const finished = new Set<string>();
+	const host = (events: string[]) => ({
+		...testHost(directory, state, events),
+		running: (admission: Admission) => !finished.has(admission.id),
+	});
+	const events: string[] = [];
+	const lone = host(events);
+	lone.sleep = async () => {
+		throw new Error("a lone command waited for load it cannot wait out");
+	};
+	await admit(limits, lone, signal, (reason) => events.push(reason));
+	expect(events).toEqual([]);
+	// The first command still runs, so the next waits for the load until it ends.
+	const [first] = host([]).ledger().admissions;
+	const next = host(events);
+	next.sleep = async (ms) => {
+		events.push(`sleep ${ms}`);
+		state.now += ms;
+		finished.add(first.id);
+	};
+	await admit(limits, next, signal, (reason) => events.push(reason));
+	expect(events).toEqual(["load", `sleep ${SETTLE_MS}`]);
+	expect(next.ledger().admissions.map(({ id }) => id)).toEqual([first.id, expect.any(String)]);
+});
+
+test("a running admission keeps its slot past the minute, and a finished one expires", async () => {
+	const directory = tempDir();
+	const now = 10 * RECENT_MS;
+	const host = fileHost(directory, () => now);
+	const exited = spawnSync(process.execPath, ["-e", ""]).pid;
+	expect(alive(process.pid)).toBe(true);
+	expect(alive(exited)).toBe(false);
+	host.publish(host.ledger(), [
+		{ id: "running", at: 0, pid: process.pid },
+		{ id: "exited", at: 0, pid: exited },
+		{ id: "unknown", at: 0 },
+	]);
+	expect(host.ledger().admissions.map((admission) => host.running(admission))).toEqual([true, false, false]);
+	const events: string[] = [];
+	// The running build's load is the gate's own, so it waits for the load to fall.
+	const state = { now, load: 2, memory: Infinity };
+	const busy = testHost(directory, state, events);
+	busy.sleep = async (ms) => {
+		events.push(`sleep ${ms}`);
+		state.load = 0;
+	};
+	await admit({ load: 1, memory: 1 }, busy, signal, (reason) => events.push(reason));
+	expect(events).toEqual(["load", `sleep ${SETTLE_MS}`]);
+	expect(host.ledger().admissions).toEqual([
+		{ id: "running", at: 0, pid: process.pid },
+		{ id: expect.any(String), at: now, pid: process.pid },
+	]);
+	// A malformed process ID reads as a version cut short.
+	writeFileSync(join(directory, "100"), JSON.stringify([{ id: "a", at: 0, pid: -1 }]));
+	expect(host.ledger()).toEqual({ version: 100, admissions: [] });
 });
 
 test("a burst that all read the ledger before any records admits only what the rule allows", async () => {
@@ -153,7 +220,7 @@ test("a caller stalled after sampling the host decides again and records when it
 		return state.memory;
 	};
 	await admit(limits, stalled, signal);
-	expect(stalled.ledger().admissions).toEqual([{ id: expect.any(String), at: SETTLE_MS }]);
+	expect(stalled.ledger().admissions).toEqual([{ id: expect.any(String), at: SETTLE_MS, pid: process.pid }]);
 	// The next caller spaces itself from the publication, not from the stale sample.
 	const events: string[] = [];
 	await admit(limits, testHost(directory, state, events), signal);
@@ -225,7 +292,7 @@ test("a backward clock step dates future admissions now, and they expire a minut
 	expect(events).toEqual([`sleep ${SETTLE_MS}`]);
 	expect(host.ledger().admissions).toEqual([
 		{ id: "before", at: RECENT_MS },
-		{ id: expect.any(String), at: RECENT_MS + SETTLE_MS },
+		{ id: expect.any(String), at: RECENT_MS + SETTLE_MS, pid: process.pid },
 	]);
 	state.now += RECENT_MS + SETTLE_MS;
 	events.length = 0;
@@ -398,8 +465,11 @@ test.skipIf(process.platform === "win32")("an account without a home shares a pr
 
 test("cancelling a waiting caller rejects admission", async () => {
 	const controller = new AbortController();
+	const file = fileHost(tempDir());
+	// A build still runs, so the load is the gate's to wait out.
+	file.publish(file.ledger(), [{ id: "build", at: 0, pid: process.pid }]);
 	const busy: Host = {
-		...fileHost(tempDir()),
+		...file,
 		load: () => 9,
 		sleep: async () => controller.abort(new Error("cancelled")),
 	};

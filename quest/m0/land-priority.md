@@ -30,5 +30,4 @@ about 80 PRs queued, while agent gates kept the host loaded.
 
 ## Related
 
-- [Gate admission on CI](/quest/m0/gate-ci-admission.md) - admission when load sits high for other reasons
 - [Gate bench](/quest/m0/gate-bench.md) - admission measurements on an idle host

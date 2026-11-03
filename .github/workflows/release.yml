@@ -123,9 +123,15 @@ jobs:
       - name: Check the binary's lifecycle
         shell: bash
         run: bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest"
-      # Check's suite runs on Linux and Windows only. The gate's owners run live
-      # here without admission, which can wait out the job on a busy runner.
-      - name: Check that the gate owns its command's descendants
+      # The binary gates real commands. A fresh macOS runner's Spotlight index
+      # holds its load above its CPUs, which must not keep a lone command waiting.
+      # Ubuntu 22.04's systemd 249 is too old for Quest's scopes, so it checks the
+      # process-group fallback.
+      - name: Check that the gate admits and owns its command's descendants
+        shell: bash
+        run: bash scripts/gate-check.sh "$RUNNER_TEMP/quest"
+      # Check's suite runs on Linux and Windows only.
+      - name: Check the gate's owners natively
         if: runner.os == 'macOS'
         run: |
           bun install --frozen-lockfile
