@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
 import { GitHubService, type GitHubRepository } from "../src/github/service";
 import { deliveryRetention } from "../src/github/webhook";
+import { outsider, owner } from "./owners";
 import { delivery } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
@@ -159,6 +160,51 @@ describe("signed GitHub webhooks", () => {
 		});
 		expect((await env.DB.prepare("SELECT * FROM github_project_activity").all()).results).toHaveLength(1);
 	});
+	it("acknowledges and drops every delivery from an owner off the allowlist", async () => {
+		// Enrolled before its owner left the allowlist, such as by a transfer.
+		await env.DB.prepare(
+			"INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) VALUES(10,'upstream','project',5,'enabled','app-test',0)",
+		).run();
+		const from = { installation: { id: 5 }, repository: { id: 10, owner: { id: outsider } } };
+		const dropped = [
+			delivery("installation", {
+				action: "suspend",
+				installation: { id: 5, app_id: 123, account: { id: outsider } },
+			}),
+			delivery("installation_repositories", {
+				action: "added",
+				installation: { id: 5, account: { id: outsider } },
+			}),
+			delivery("pull_request", { ...from, action: "opened", pull_request: { id: 200, number: 2 } }),
+			delivery("push", { ...from, ref: "refs/heads/quest/m0/foo", created: true }),
+			// A repository that names no owner is not admitted either.
+			delivery("issues", {
+				...from,
+				repository: { id: 10, owner: {} },
+				action: "opened",
+				issue: { id: 1, number: 1 },
+			}),
+		];
+		for (const response of await Promise.all(dropped)) {
+			expect(response.status).toBe(202);
+			expect(await response.json()).toEqual({ status: "ignored" });
+		}
+		for (const table of [
+			"github_deliveries",
+			"github_installations",
+			"github_project_activity",
+			"github_project_state",
+		])
+			expect((await env.DB.prepare(`SELECT * FROM ${table}`).all()).results).toEqual([]);
+		// The admitted owner's deliveries still land.
+		await delivery("pull_request", {
+			...from,
+			repository: { id: 10, owner: { id: owner } },
+			action: "opened",
+			pull_request: { id: 200, number: 2 },
+		});
+		expect((await env.DB.prepare("SELECT * FROM github_project_activity").all()).results).toHaveLength(1);
+	});
 	it("ignores entity pointers from a previous installation or an unenrolled repository", async () => {
 		await env.DB.prepare(
 			"INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) VALUES(10,'upstream','project',8,'enabled','app-test',0)",
@@ -254,7 +300,7 @@ function github(
 			return json({
 				id: 10,
 				name: "project",
-				owner: { login: repo.owner },
+				owner: { login: repo.owner, id: owner },
 				archived: false,
 				disabled: false,
 				allow_squash_merge: (options.merges ?? ["squash", "merge", "rebase"]).includes("squash"),

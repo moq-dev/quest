@@ -149,6 +149,7 @@ class Forge {
 		this.world = {
 			app: { id: 1, slug: "gate" },
 			installation: 5,
+			owner: 4,
 			users: [{ id: 1, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" }],
 			repos: [
 				{

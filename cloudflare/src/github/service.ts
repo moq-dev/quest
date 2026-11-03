@@ -42,7 +42,7 @@ interface Installation {
 interface Repository {
 	id: number;
 	name: string;
-	owner: { login: string };
+	owner: { login: string; id: number };
 	archived: boolean;
 	disabled: boolean;
 	private: boolean;
@@ -88,6 +88,14 @@ export class PublicationBlocked extends GitHubError {}
 export class BranchChanged extends PublicationBlocked {}
 /** A maintainer check that was answered with a denial, rather than one that could not complete. */
 export class NotMaintainer extends GitHubError {}
+/** The repository's owner is not on the operator's allowlist, so nothing may run for it yet. */
+export class NotOpen extends GitHubError {
+	constructor() {
+		super(
+			"Quest isn't open to this repository's owner yet. Until the public release, only invited owners can enroll.",
+		);
+	}
+}
 
 /** One file a publication sets or, with null content, deletes. */
 /** One path's new content, or null to delete it, with its Git mode: a file, an executable, or a symlink. */
@@ -155,6 +163,12 @@ interface GitHubEnvironment {
 	DB: D1Database;
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY: string;
+	ENROLL_OWNERS: readonly number[];
+}
+
+/** Whether the operator admits a GitHub owner, by the ID that a later holder of its login cannot take. */
+export function admitted(env: Pick<GitHubEnvironment, "ENROLL_OWNERS">, owner: unknown) {
+	return positiveId(owner) && env.ENROLL_OWNERS.includes(owner);
 }
 
 function name(value: string) {
@@ -244,6 +258,11 @@ export class GitHubService {
 		if (state?.blocked) throw new GitHubError("GitHub installation revoked or suspended");
 	}
 
+	/**
+	 * Check the live repository is the one asked for and still available. An
+	 * owner off the allowlist makes it unavailable, so no enrollment, read,
+	 * job, or merge runs for it; `allowUnavailable` keeps stop controls working.
+	 */
 	#repository(repo: GitHubRepository, current: Repository, allowUnavailable = false) {
 		if (
 			current.id !== repo.id ||
@@ -252,6 +271,7 @@ export class GitHubService {
 			(!allowUnavailable && (current.archived || current.disabled))
 		)
 			throw new GitHubError("Repository identity or availability changed");
+		if (!allowUnavailable && !admitted(this.#env, current.owner.id)) throw new NotOpen();
 	}
 
 	async #license(current: Repository): Promise<string | null> {
@@ -465,7 +485,11 @@ export class GitHubService {
 		}
 		if (!found.length) return [];
 
-		const open = found.filter(({ repo }) => !repo.archived && !repo.disabled && repo.private === false);
+		// Only an admitted owner's repositories cost quest and license reads.
+		const open = found.filter(
+			({ repo }) =>
+				admitted(this.#env, repo.owner.id) && !repo.archived && !repo.disabled && repo.private === false,
+		);
 		const quests = await this.#questFiles(
 			userToken,
 			open.map(({ repo }) => repo),
@@ -484,7 +508,8 @@ export class GitHubService {
 			found.map(async ({ repo, installation }): Promise<Candidate> => {
 				const problems: string[] = [];
 				let setup = false;
-				if (repo.archived || repo.disabled) problems.push("Archived or disabled on GitHub.");
+				if (!admitted(this.#env, repo.owner.id)) problems.push("Quest isn't open to this owner yet.");
+				else if (repo.archived || repo.disabled) problems.push("Archived or disabled on GitHub.");
 				else if (repo.private !== false || repo.visibility !== "public")
 					problems.push("Private. Contributions need a public repository.");
 				else {

@@ -451,6 +451,11 @@ domain, which requires the `kix.quest` zone in the same Cloudflare account;
 `workers.dev` is disabled so sign-in has one origin. `AUTH_URL` is the only
 authentication origin and supplies generated absolute links.
 
+Until the public release, only repositories whose owner's GitHub ID is in
+`ENROLL_OWNERS` (`wrangler.jsonc`) may enroll. Find an owner's ID with
+`gh api users/<login> --jq .id` and note its login beside it; see
+[the owner allowlist](GITHUB.md#owner-allowlist).
+
 For an existing deployment, retain the Worker name, D1 database ID, and
 `AUTH_SECRET` so account data is preserved. The `create` commands above are
 for a fresh deployment only. For another environment, change `routes`,

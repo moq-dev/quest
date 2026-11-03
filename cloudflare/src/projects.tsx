@@ -83,6 +83,9 @@ export function ProjectsPage(props: {
 				Choose a public open-source repository you maintain. Keep its issues, reviews, CI, and merge protections
 				on GitHub.
 			</p>
+			<p class="note-small">
+				Quest isn't open yet. Until the public release, only invited owners' repositories can enroll.
+			</p>
 			{props.error && <p role="alert">{props.error}</p>}
 			<section class="ql-panel panel">
 				<h2>Your repositories</h2>

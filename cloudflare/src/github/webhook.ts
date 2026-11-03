@@ -3,7 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import * as landing from "../jobs/landing";
 import { wake } from "../jobs/wake";
 import { arrived } from "../push/notify";
-import { GitHubService } from "./service";
+import { admitted, GitHubService } from "./service";
 
 export function positiveId(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -92,6 +92,10 @@ githubWebhooks.post("/webhooks/github", async (c) => {
 		return c.json({ error: "Invalid repository event" }, 400);
 	}
 	if (observed.has(event) && !positiveId(repository)) return c.json({ error: "Invalid repository" }, 400);
+	// An owner off the allowlist gets nothing recorded, read, or woken. Installation
+	// events name their account; repository events, the repository's owner.
+	const owner = observed.has(event) ? payload.repository.owner?.id : payload.installation?.account?.id;
+	if (event !== "ping" && !admitted(c.env, owner)) return c.json({ status: "ignored" }, 202);
 	const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (b) =>
 		b.toString(16).padStart(2, "0"),
 	).join("");

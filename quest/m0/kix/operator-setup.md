@@ -42,4 +42,3 @@ bounded test PR verify the integration before contributors are invited.
 ## Required
 
 - [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the live origin and registered App
-- [Owner allowlist](/quest/m0/kix/owners.md) - only moq-dev can enroll before contributors are invited

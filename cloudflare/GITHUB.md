@@ -403,6 +403,22 @@ permission. Subsequent authorized operations scope tokens by repository ID.
 Resolution uses the same installation gates and token revocation as other
 reads; it never consumes GitHub's shared anonymous repository-lookup quota.
 
+### Owner allowlist
+
+Until the public release, only repositories whose owner's GitHub ID is in
+`ENROLL_OWNERS` (`wrangler.jsonc`, each ID with its login in a comment) may
+enroll; the deployed list is moq-dev. Logins are not identities: GitHub frees
+a deleted or renamed account's login for anyone to claim. `/projects` says
+Quest isn't open yet, and lists another owner's repositories as not open,
+without reading their Quest files or licenses. The service's live repository
+check treats such an owner like an archived repository: preview, opt-in,
+observations, jobs, and merges all refuse it, while pause and disconnect still
+work, so a project transferred to another owner can still be stopped. The
+webhook route acknowledges another owner's deliveries with `ignored` before
+recording anything, by the repository's owner for repository events and the
+installation's account for installation events. The seeded local server admits
+its fake owner instead. Removing the list opens enrollment to everyone.
+
 The preview reads the default branch at an exact commit, validates its Quest
 tree with the shared core, and lists ready quests. Blob selection uses the
 core's `isQuest` predicate, excluding root and nested `AGENTS.md`/`CLAUDE.md`
