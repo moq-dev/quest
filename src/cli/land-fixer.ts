@@ -140,6 +140,8 @@ interface Job extends Process {
 	base?: boolean;
 	results?: FixResult[];
 	handbacks?: Record<number, string>;
+	/** Passes that failed to collect each PR, so one that keeps failing is set aside rather than holding up the rest. */
+	failures?: Record<number, number>;
 	/** PRs a handback is taking out of the queue, recorded before their auto-merge is disabled. */
 	left?: number[];
 	/** Validated fixes GitHub refused to publish, handed back for a maintainer to push. */
@@ -847,25 +849,71 @@ export async function collectFixers(
 			continue;
 		}
 
-		try {
-			output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read, checkBase)));
-		} catch (error) {
-			// The gate's own base check failing to run is not the fixer's failure: retry it later.
-			if (error instanceof BaseCheckError) {
-				deps.warn(`quest land fixer: base check pending for ${name}: ${String(error.cause)}`);
-				continue;
-			}
-			// Keep the first reason: a GitHub error while handing back a crash must not replace the crash.
-			job.error ??= `fixer collection failed: ${String(error)}; run /quest-iterate`;
+		// The first try checks the base if it must; a retry only hands back, so it never checks it.
+		const failed = new Set<number>();
+		for (let retry = false; ; retry = true) {
 			try {
+				output.push(
+					...(await collectJob(
+						root,
+						state,
+						path,
+						job,
+						deps,
+						token,
+						timeout,
+						read,
+						retry ? undefined : checkBase,
+					)),
+				);
+				break;
+			} catch (error) {
+				// The gate's own base check failing to run is not the fixer's failure: retry it later.
+				if (error instanceof BaseCheckError) {
+					deps.warn(`quest land fixer: base check pending for ${name}: ${String(error.cause)}`);
+					break;
+				}
+				const aside = failCollection(job, error, failed);
 				save(path, job);
-				output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read)));
-			} catch (failure) {
-				deps.warn(`quest land fixer: handback pending for ${name}: ${String(failure)}`);
+				if (aside !== undefined) {
+					deps.warn(
+						`quest land fixer: set aside ${aside} from ${name} after ${COLLECTION_ATTEMPTS} failed collections: ${String(error)}`,
+					);
+					output.push(`set aside ${aside}`);
+				} else if (retry) {
+					deps.warn(`quest land fixer: handback pending for ${name}: ${String(error)}`);
+					break;
+				}
 			}
 		}
 	}
 	return output;
+}
+
+/** Passes in a row that fail to collect the same PR before it is set aside, so its job's other PRs go on. */
+export const COLLECTION_ATTEMPTS = 3;
+
+/**
+ * Record a failure collecting `job` against the PR it was working on, its first PR left: that PR alone
+ * is handed back with it, and its job's other PRs keep their own results. A reason already recorded,
+ * such as a crash's, still wins. A PR that keeps failing, as when GitHub refuses its handback, is set
+ * aside: it leaves the job, so it rejoins batches as GitHub still queues it, and its number is returned.
+ */
+function failCollection(job: Job, error: unknown, failed: Set<number>): number | undefined {
+	const reason = `fixer collection failed: ${String(error)}; run /quest-iterate`;
+	const number = job.numbers[0];
+	if (number === undefined) {
+		job.error ??= reason;
+		return undefined;
+	}
+	if (!job.error) (job.handbacks ??= {})[number] ??= reason;
+	// A pass's retry of the same PR is not another failed collection.
+	const failures = (job.failures ??= {});
+	if (!failed.has(number)) failures[number] = (failures[number] ?? 0) + 1;
+	failed.add(number);
+	if (failures[number] < COLLECTION_ATTEMPTS) return undefined;
+	job.numbers.shift();
+	return number;
 }
 
 /** An exit status as a cause: a signal by name (143 is SIGTERM), or a crash with its code (101 is a Rust panic). */
