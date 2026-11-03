@@ -1088,7 +1088,10 @@ language servers and formatters are off. The CLI itself, Claude Code or
 commands start from a minimal environment, so its login, the opencode server's
 password, and the kix tools' token stay out of their reach. This is an OS
 sandbox, not a VM, and it narrows rather than removes the risk of running
-agent commands on your machine.
+agent commands on your machine. On Linux, `just test` in this repository runs
+a scripted model through the pinned opencode and sandbox-runtime in a checkout
+that tries to read credentials, write outside its sandbox, plant opencode
+config, and reach the network, and fails if any attempt gets through.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
 pins both) and unprivileged user namespaces; on Ubuntu 23.10 and later,

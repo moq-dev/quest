@@ -36,6 +36,13 @@ jobs:
           sudo loginctl enable-linger "$USER"
           sudo systemctl start "user@$(id -u).service"
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+      # The sandbox boundary test runs bubblewrap from the Nix store, which Ubuntu's
+      # AppArmor would refuse the unprivileged user namespace it needs.
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Check
         run: nix develop --command just check
       - name: Test
