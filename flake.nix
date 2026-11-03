@@ -98,6 +98,8 @@
                 shellcheck
                 shfmt
                 nixfmt
+                # GNU time, which the gate's cancellation tests put between Bash and their leaf.
+                time
               ]
               # `flock` (the land daemon's repository lock) and `script` (the tests' terminal), which
               # self-hosted NixOS runners don't otherwise provide.

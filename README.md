@@ -928,22 +928,36 @@ the host's load. `quest agent` drops the variable, as it drops an admission.
 Each admission records the gate's process ID, and counts as running until that
 process exits; a reused process ID only makes a command wait for the load
 again. The gate holds no lock while the command runs, and it owns the
-command's descendants. Once the command exits, or the gate is cancelled and the
-command exits, any descendant still running is killed, so a cancelled build or
-test run leaves nothing behind. A second SIGINT, SIGTERM, or SIGHUP kills them
-all at once. How far ownership reaches depends on the host:
+command's descendants. Once the command exits, any descendant still running is
+killed, so a build or test run leaves nothing behind.
+
+Cancelling the gate with SIGINT, SIGTERM, or SIGHUP delivers that signal to
+every process it owns, as a terminal's Ctrl-C reaches its whole foreground
+process group. Each one runs its own handling, even behind wrappers that would
+not pass the signal on: a Bash script blocked on its foreground command, GNU
+`time`, which dies without forwarding it, or Just. The gate then waits until
+each process that got the signal has exited, so a phase that outlives the
+wrappers around it still finishes its cleanup, and only then kills whatever is
+left. A second SIGINT, SIGTERM, or SIGHUP kills everything at once. A cancelled
+gate exits with 128 plus the signal's number. How far ownership reaches depends
+on the host:
 
 - Linux with a systemd 254+ user manager, unified cgroup v2, and Linux 5.14+
   runs the command in its own systemd user scope, as `quest worktree run` does,
   and owns every descendant, including ones that start their own process group
   or session. Only a process that asks another service manager to start it
   escapes.
+  A cancelled gate waits until the scope is empty.
 - macOS, and Linux without such a user manager (as in most containers and on
   Ubuntu 22.04), run the command as the leader of a new session and own its
   process group. A descendant that moves to another process group or session,
   as a daemon does, is outside it. The session has no controlling terminal: the
   command keeps the terminal as its streams, but cannot open `/dev/tty`, and
-  Ctrl-Z suspends only Quest.
+  Ctrl-Z suspends only Quest. Nothing reports that a process group emptied, so
+  the command gets a pipe on descriptor 3, which every descendant inherits
+  unless it or a parent closes it, as Bun and Node do for the processes they
+  start. A cancelled gate waits until every process holding it has exited,
+  including one outside the group that the signal never reached.
 - Windows owns only the command itself.
 
 A nested invocation runs immediately inside the admitted command, and a gate
@@ -956,11 +970,14 @@ This repository's `just check`, `just test`, `just worker-check`, and
 `just worker-test` run through the gate.
 
 Arguments, working directory, environment, terminal streams, and the exit
-status pass through, and waiting happens before the command starts. A
-terminal's Ctrl-C reaches the command's process group once; SIGTERM and SIGHUP
-sent to Quest are forwarded to the command, and a cancelled gate exits with
-128 plus the signal's number. There is no fairness guarantee, and no timeout
-except `--quick`'s: any other command waits as long as the host stays busy.
+status pass through, and waiting happens before the command starts. Each
+process gets a cancelling signal once from Quest: a nested gate, or one inside
+another Quest scope, leaves both the signal and the second signal's kill to
+the enclosing owner, which already delivers them to everything it holds. A
+signal sent with `kill` to such a gate alone therefore does not reach its
+command. Just forwards SIGTERM to the command it runs, so that command gets it
+a second time. There is no fairness guarantee, and no timeout except
+`--quick`'s: any other command waits as long as the host stays busy.
 
 ## Review locally
 
@@ -1211,7 +1228,12 @@ one run, since the next run starts without scratch.
 
 `run` owns processes through a systemd user scope per run, so it needs Linux
 5.14+ with a systemd 254+ user manager and unified cgroup v2; it fails on other
-hosts.
+hosts. It handles signals as the gate does on such a host: SIGINT, SIGTERM, or
+SIGHUP reaches every process in the run's scope, the run waits until the scope
+is empty, and a second signal kills everything at once. A run inside another
+Quest scope, such as a gate's, binds its own scope to that one, so the
+enclosing owner's kill stops it too, and leaves a repeated signal's kill to
+that owner: it may be the copy of SIGTERM that Just forwards.
 Work handed to another service manager, such as `systemd-run` or a container
 daemon, escapes the scope. If the supervisor itself is killed, its command keeps
 running and its scratch is kept; the next `quest worktree` command drops the run
