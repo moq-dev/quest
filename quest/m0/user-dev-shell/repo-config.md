@@ -28,4 +28,4 @@ Decided 2026-11-03 (maintainer, /quest-unblock); see the
 
 ## Waiting
 
-- Maintainer: pull kixelated/dotfiles and run its `install` on every host that runs agents (`nixos`, `nixos2`, `desktop`, `kixtop`), since the repositories' hooks must not go before the user-level ones arrive; check on each host that `~/.claude-personal/settings.json` has the dev-shell `SessionStart` hook and that a fresh worktree's session resolves `just`
+- Maintainer: merge [kixelated/dotfiles#33](https://github.com/kixelated/dotfiles/pull/33) (the user-level hooks; live on the `desktop` host since 2026-11-03), then pull kixelated/dotfiles and run `bin/install-dev-shell.py` (or the full `install`, with `codex` on `PATH`) on every host that runs agents (`nixos`, `nixos2`, `desktop`, `kixtop`), since the repositories' hooks must not go before the user-level ones arrive; check on each host that `~/.claude-personal/settings.json` has the dev-shell `SessionStart` hook and that a fresh worktree's session resolves `just`
