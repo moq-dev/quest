@@ -1,3 +1,7 @@
+# The bundled skills import as text, as in the root bunfig.toml, so the build can render their stubs.
+[loader]
+".md" = "text"
+
 # Scripts run on Bun even when a tool declares a Node shebang, as in the root bunfig.toml.
 [run]
 bun = true

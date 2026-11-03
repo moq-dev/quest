@@ -185,7 +185,7 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 }
 
 /** Repository activity types that move a branch to a new head, including merges into it. */
-const BRANCH_UPDATES = ["push", "force_push", "branch_creation", "pr_merge", "merge_queue_merge"];
+export const BRANCH_UPDATES = ["push", "force_push", "branch_creation", "pr_merge", "merge_queue_merge"];
 
 /**
  * The head a PR node's auto-merge request was enabled on, or null when that cannot be told. GitHub

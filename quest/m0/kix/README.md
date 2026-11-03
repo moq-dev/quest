@@ -138,5 +138,3 @@ fixes what it finds:
 - [Private repositories](/quest/m0/kix/private.md) - moq-dev/moq.pro enrolls, visible only to signed-in users who can read it
 - [Job sandbox](/quest/m0/kix/sandbox/README.md) - head approval for kix-pushed heads, and opencode sandboxed
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs
-- [Merge queue enqueue](/quest/m0/kix/enqueue.md) - kix enqueues ready PRs into a merge queue instead of only arming auto-merge
-- [Runner review checks](/quest/m0/kix/review-check.md) - runners publish the App's `quest review` check, so their heads land without a human approval
