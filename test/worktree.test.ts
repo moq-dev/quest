@@ -351,6 +351,23 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(existsSync(join(nested, "cache"))).toBe(false);
 		expect(readFileSync(join(nested, "file"), "utf8")).toBe("local work");
 	});
+	it("keeps a partly initialized creation charged and gives recovery advice for its lock and submodules", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const sub = repository(join(root, "sub"));
+		git(repo, "submodule", "add", "--quiet", sub, "first");
+		git(repo, "submodule", "add", "--quiet", sub, "second");
+		git(repo, "config", "-f", ".gitmodules", "submodule.second.url", join(root, "missing"));
+		git(repo, "commit", "-am", "submodules");
+		await expect(worktrees.create(repo, "partial", 10_000_000)).rejects.toThrow();
+		const [record] = worktrees.status().records;
+		expect(record.phase).toBe("creating");
+		expect(existsSync(join(record.path, "first", ".git"))).toBe(true);
+		expect(() => worktrees.release(record.id)).toThrow("inspect and preserve");
+		expect(() => worktrees.release(record.id)).toThrow("git worktree unlock");
+		expect(() => worktrees.release(record.id)).toThrow("--force for submodules");
+		expect(worktrees.status().allocated).toBe(10_000_000);
+	});
 	it("keeps nested submodule files and commits, including branches whose HEAD is back at the pin", async () => {
 		const { root, repo, worktrees } = fixture();
 		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");

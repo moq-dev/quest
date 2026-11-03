@@ -169,7 +169,7 @@ function lockReason(path: string): string | undefined {
 function interrupted(record: WorktreeRecord): void {
 	if (record.phase === "creating")
 		throw new Error(
-			`creation was interrupted; inspect and remove the partial checkout with git worktree remove, then release again: ${record.path}`,
+			`creation was interrupted; inspect and preserve the partial checkout, including submodule work; use git worktree unlock then git worktree remove (with --force for submodules), then release again: ${record.path}`,
 		);
 }
 

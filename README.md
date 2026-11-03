@@ -1216,7 +1216,9 @@ commits at their HEAD or refs must be reachable from a remote-tracking ref,
 since module stores and their local branches are deleted with the checkout.
 Scratch paths inside submodules use that submodule's ignore rules. Only after
 those checks does removal use the force Git requires for submodules.
-A failed creation stays charged until `release` drops it. Records live in
+A failed creation stays charged until its partial checkout is inspected and
+removed, then `release` drops its record. Unlock it before removing it; Git
+requires `--force` for submodules, so preserve their files and commits first. Records live in
 `$QUEST_WORKTREE_HOME`, or `$XDG_STATE_HOME/quest/worktrees` (default
 `~/.local/state/quest/worktrees`). The registry lock of a process that exited on
 this host is reclaimed; a live lock, or one held from another host, is never
