@@ -812,11 +812,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				".\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
-				"and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
+				"and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
+				"pull request's URL, checks out that request's head from origin instead, when origin has one. Its scratch is the main checkout's top-level ignored entries, except " +
 				".worktrees/, .claude/, and entries holding a nested repository; its reserve is the main checkout's disk " +
 				"usage without .git and those checkouts. An existing checkout of that name in the repository is " +
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
 				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
+				"or a workflow agent's, named for its run and bound to the first subagent that starts in it, " +
 				"when it finishes or stops to wait, and SubagentStart restores it. Other checkouts are left alone. " +
 				"Exits 1 on failure, never 2, which would keep a subagent running.",
 		)
