@@ -28,6 +28,21 @@ export const DRIVER =
 	"printf 'quest: %s, so link lists in %s were not auto-resolved\\n' \"$quest_merge_reason\" %P >&2; " +
 	'exit "$quest_merge_status"';
 
+/**
+ * Drivers earlier quest versions registered. A clone that kept one is upgraded to `DRIVER`, while
+ * any other string, a custom driver, is left alone. When `DRIVER` changes, add its old value here.
+ */
+export const OLD_DRIVERS: readonly string[] = [
+	// moq-dev/quest#219
+	"if quest help resolve >/dev/null 2>&1; then quest resolve %A %O %B; " +
+		"else git merge-file -L ours -L base -L theirs %A %O %B; fi",
+	// moq-dev/quest#256
+	"if quest help resolve >/dev/null 2>&1; " +
+		"then quest resolve %A %O %B --marker-size=%L --ours-label=%X --base-label=%S --theirs-label=%Y; " +
+		'quest_merge_status=$?; if [ "$quest_merge_status" -le 1 ]; then exit "$quest_merge_status"; fi; fi; ' +
+		"git merge-file --marker-size=%L -L %X -L %S -L %Y %A %O %B",
+];
+
 export interface ResolveOptions {
 	markerSize?: number;
 	oursLabel?: string;

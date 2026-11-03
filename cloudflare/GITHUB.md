@@ -14,7 +14,7 @@ and installation tokens stay inside the Worker; agents receive neither.
 | Contents: write       | Read quest files, write job branches and iterated PR heads on the upstream | Read for quest reads; write only for that publication or merge |
 | Issues: write         | Read native issues, publish approved comments, label merge jobs' PRs       | Read or write for that operation                               |
 | Pull requests: write  | Observe, open and update job PRs, explicitly merge an exact head           | Read or write for that operation                               |
-| Checks: read          | Observe checks on a commit                                                 | Check reads only                                               |
+| Checks: write         | Observe checks; record a runner's review as the `quest review` check run   | Read for check reads; write only to record a runner's review   |
 | Commit statuses: read | Observe legacy CI status contexts                                          | Check reads only                                               |
 
 The manifest subscribes to push, issues, issue comments, pull requests, reviews,
@@ -26,7 +26,7 @@ user permission, which Better Auth needs to sign in users whose email is private
 It grants no repository authority: the user token is used only for the sign-in
 profile and email reads and to list the [project picker](#project-enrollment)'s
 repositories, and never for repository writes or authority checks. No organization,
-administration, workflow, or checks-write permissions are requested. These installation grants
+administration, or workflow permissions are requested. These installation grants
 are necessarily broader than individual operations: minted tokens always name
 one repository ID and the particular permissions required. Tokens are never
 cached and are revoked after use; failed cleanup is logged without secrets and
@@ -217,7 +217,8 @@ landed (`src/github/review.ts`):
 - an approval on GitHub of that commit by a person with write access other than
   the pull request's author; reviews by Apps never count;
 - a completed, successful `quest review` check run on that commit, written by
-  this App. Only the App can write one, and GitHub binds it to the commit;
+  this App from a runner's review (see [Runner reviews](#runner-reviews)).
+  Only the App can write one, and GitHub binds it to the commit;
 - or the author's own `## Review` record, as the guide's default review policy
   counts it in every enrolled repository: the `## Review` section of the PR
   body names the commit's full SHA, the author has write access, and the body's
@@ -289,6 +290,35 @@ plan/start/bootstrap publication on the enrolled upstream without a fork,
 GitHub's signature on App-authored API commits, and pushing or resetting a job
 branch under the repository's branch rules.
 
+### Runner reviews
+
+A runner reviews the heads its jobs publish, so they land through the gate
+above without a person's approval. When a job delivers a head it published,
+other than to a pull request that stays a draft, the runner process runs
+`quest review` on that head with the other vendor's model: Codex for a job on
+an Anthropic account, Claude Code otherwise. It runs outside the agent's
+sandbox, in a checkout of the published commit the agent cannot reach, and
+reports the round over `POST /api/runner/review`. The agent never touches the
+report, so it can neither skip nor fake the review. A merge job publishes its
+fixes, has them reviewed, and lands only a head whose review found nothing.
+
+kix records the round as the App's `quest review` check run on the commit,
+with the reviewer, model, effort, and round as its summary and each finding as
+plain text: `success` when the round found nothing, `failure` otherwise. The
+agent fixes or refutes each finding and delivers again; the next round resumes
+the reviewer's session with its responses. kix records a report only from the
+job's current attempt, only on the head kix itself last published for the job
+and GitHub attributes to a bot, not one a merge job continued onto,
+and only from another vendor's model than the job's account runs, and writes it
+with `checks: write` on behalf of the job's requester, after rechecking their
+maintainer authority.
+
+Claude Code reviews with one of the runner's Claude Code accounts that is not
+limited. Runners hold no Codex accounts, so Codex reviews with the login of
+the user running `quest runner`. A runner that cannot review, for want of a
+reviewer or because the review failed, says so to the agent and leaves the
+head to a person's approval, as before.
+
 ## Webhooks and revocation
 
 `POST /webhooks/github` verifies `X-Hub-Signature-256` over the exact raw bytes
@@ -313,7 +343,7 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
 ## Operator setup
 
 1. Review the manifest's name, homepage, webhook URL, callback URL, permissions
-   and events. The callback is `https://kix.quest/api/auth/callback/github`;
+   and events. The callback is `https://quest.moq.dev/api/auth/callback/github`;
    **Request user authorization (OAuth) during installation** is enabled.
    Register the public App once under the service owner's account using
    [GitHub's manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)
@@ -334,7 +364,10 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
    PEM keys, installation tokens or `.dev.vars`.
 3. Install the public App on selected upstream repositories. Existing
    installations must accept permission increases before operations needing
-   those grants become available. GitHub's installation UI, not browser form
+   those grants become available. An App registered before runner reviews
+   holds `checks: read`: raise it to **Checks: write** in the App's settings,
+   and have each installation accept the change, or runners' reviews are not
+   recorded and their heads need a person's approval to land. GitHub's installation UI, not browser form
    claims, chooses repository access. Enroll each repository on `/projects`;
    jobs publish their branches there, with no fork setup.
 4. Run `bun run wrangler d1 migrations apply DB --remote`, then the normal
@@ -347,10 +380,10 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
    Use GitHub's delivery/redelivery UI to retry failed deliveries. Rotate the
    private key and webhook secret through Workers secrets and the App settings.
 
-Sign-in starts at kix.quest and keeps Better Auth's persisted state and cookie
-checks. An authorization callback started by installing the App directly on
-GitHub has no sign-in state from kix.quest: its code is discarded and the
-visitor returns to the sign-in form, then completes a fresh state-bound flow
+Sign-in starts at the Worker's origin and keeps Better Auth's persisted state
+and cookie checks. An authorization callback started by installing the App
+directly on GitHub has no sign-in state from the Worker: its code is discarded
+and the visitor returns to the sign-in form, then completes a fresh state-bound flow
 that ends on `/projects`. A visitor already signed in goes straight there.
 Installation and sign-in do not enroll a repository; the maintainer still opts
 in from the project picker after a live authority check.

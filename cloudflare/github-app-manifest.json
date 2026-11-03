@@ -1,10 +1,10 @@
 {
 	"name": "Quest",
-	"url": "https://kix.quest",
+	"url": "https://quest.moq.dev",
 	"description": "Versioned quest plans and explicitly approved GitHub operations.",
 	"public": true,
 	"hook_attributes": {
-		"url": "https://kix.quest/webhooks/github",
+		"url": "https://quest.moq.dev/webhooks/github",
 		"active": true
 	},
 	"default_permissions": {
@@ -12,7 +12,7 @@
 		"contents": "write",
 		"issues": "write",
 		"pull_requests": "write",
-		"checks": "read",
+		"checks": "write",
 		"statuses": "read",
 		"email_addresses": "read"
 	},
@@ -28,6 +28,6 @@
 		"check_suite",
 		"status"
 	],
-	"callback_urls": ["https://kix.quest/api/auth/callback/github"],
+	"callback_urls": ["https://quest.moq.dev/api/auth/callback/github"],
 	"request_oauth_on_install": true
 }

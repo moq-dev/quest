@@ -4,9 +4,9 @@
 
 The Worker serves `https://kix.quest` instead of `https://quest.moq.dev`, and
 any owner who installs the App may enroll. The App's homepage, callback, and
-webhook URLs, `cloudflare/wrangler.jsonc`'s route and `AUTH_URL`, and
-`quest runner`'s default `--url` all name kix.quest, and quest.moq.dev
-redirects there.
+webhook URLs, `cloudflare/wrangler.jsonc`'s route and `AUTH_URL`, `quest runner`'s
+default `--url`, and the docs that name the live origin all name kix.quest,
+and quest.moq.dev redirects there.
 
 ## Plan
 
