@@ -7,7 +7,8 @@ repository, even when `quest` runs from a Git hook or
 `git submodule foreach`. They share one helper that drops the
 repository-local variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`
 and the rest of `git rev-parse --local-env-vars`) and keeps `-c` config,
-as Git itself does when it enters another repository.
+as Git itself does when it enters another repository. The command
+`quest worktree run` starts in a reserved checkout gets the same treatment.
 
 ## Plan
 
@@ -16,6 +17,18 @@ user's 2026-11-02 instruction to decide follow-ups from evidence): plan it,
 [S], m1. No moq-dev repository runs `quest` from a Git hook (none has
 lefthook, pre-commit, husky or a hooks directory), so only adopters with
 such hooks reach it.
+
+Decided 2026-11-03 (user, /quest-complete, on
+[moq-dev/quest#455](https://github.com/moq-dev/quest/pull/455)):
+
+- Should `quest worktree run` drop inherited Git location variables from the
+  user's command? Today it hands the command Quest's own environment, so a
+  command started from a hook in one checkout acts on that checkout's
+  repository, not the reserved one it runs in.
+  - ✅ Drop them, keeping `-c` config (recommended): the command runs in a
+    different checkout, where an inherited location names the wrong
+    repository
+  - Pass the environment through unchanged, as now
 
 Evidence, gathered 2026-11-03:
 
@@ -42,15 +55,6 @@ Work:
 - Leave `src/runner/` as it is: the runner process isn't started by Git.
 - Test `quest check` with links into a submodule, run under an inherited
   `GIT_DIR` and `GIT_INDEX_FILE`.
-- Then make the change the maintainer picks below.
-
-## Waiting
-
-- Maintainer: should `quest worktree run` drop the same variables from the
-  user's command? Today it hands the command Quest's own environment
-  (`src/cli/supervise.ts:339`), so a command started from a hook in one
-  checkout acts on that checkout's repository, not the reserved one it runs
-  in. Options: (1, recommended) drop them, keeping `-c` config, since the
-  command runs in a different checkout, where an inherited location names
-  the wrong repository; (2) pass the environment through unchanged, as
-  now. Check by a ✅ recorded in this quest's Plan.
+- Have `quest worktree run` drop the same variables from the user's
+  command, keeping `-c` config (`src/cli/supervise.ts:339` hands it Quest's
+  own environment today), and test it from a hook-like environment.
