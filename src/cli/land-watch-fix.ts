@@ -7,6 +7,7 @@ import { type Queued, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
 import { baseRemote, type Entry, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
+import { checksSection } from "./land-checks";
 import { EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "./land-fix";
 import {
 	author,
@@ -76,7 +77,7 @@ interface WatchJob extends Process {
 	/** When the queue dropped it. */
 	dropped: string;
 	reason: "failed_checks" | "merge_conflict";
-	/** The failure log the fixer reads, which a handback's comment quotes. */
+	/** The fixer's input, which a handback's comment quotes: the failure log, then the PR's own checks. */
 	log: string;
 	/** The failure's signature when the fixer names none: the failing job and step, or the conflict's base. */
 	failure: string;
@@ -347,6 +348,14 @@ async function take(
 		if (existsSync(path)) log = path;
 	}
 	if (!slot) return undefined;
+	// The fixer reads the PR's own checks on the dropped head after the queue's log, as a signal only.
+	const input = join(state, `fixer-input-${number}-${deps.now().toString(36)}.log`);
+	writeFileSync(
+		input,
+		`${readFileSync(log, "utf8").trimEnd()}\n\n${await checksSection(github, repository, entry.id, removal.head)}`,
+		{ mode: 0o600 },
+	);
+	log = input;
 
 	const checkout = mkdtempSync(join(state, "fix-"));
 	try {

@@ -20,6 +20,8 @@ The head is landable when:
 - every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, and no decision is open;
 - its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base.
 
+A failing optional check does not stop the pick, since the PR's own CI is only a signal: name each one failing on the head, with its URL, when you report the pick, and queue it anyway.
+
 Otherwise run `/quest-iterate` on it, saying what it needs: a review of the head, fixes, or decisions, then run this skill again once it finishes; if it stops for the user instead, such as when it cannot push or reaches a design checkpoint, report that.
 Run it in this session, where its grill interview can ask the user; under a coordinator such as `/quest-complete`, hand it back, and the coordinator dispatches it in a sub-agent.
 While its required checks are only pending, report that the pick stands until they pass; do not wait for them.

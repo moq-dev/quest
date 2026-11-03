@@ -79,17 +79,7 @@ export async function unreviewed(reads: Reads, landing: Landing): Promise<string
 	if (pull.state !== "OPEN") return "The pull request is no longer open.";
 	if (pull.headRefOid !== landing.head) return "The pull request's head moved since you looked; review it again.";
 	if (await enforced(reads, pull.baseRefName)) return null;
-	const author = pull.author?.login.toLowerCase();
-	const approved = new Set(
-		pull.latestOpinionatedReviews.nodes.flatMap((review) =>
-			review.state === "APPROVED" &&
-			review.author?.__typename === "User" &&
-			review.author.login.toLowerCase() !== author &&
-			review.commit
-				? [review.commit.oid]
-				: [],
-		),
-	);
+	const approved = approvals(pull);
 	const recorded = await ownRecord(reads, pull);
 	const commits = new Map<string, Promise<GitCommit>>();
 	const commit = (sha: string) => {
@@ -109,10 +99,109 @@ export async function unreviewed(reads: Reads, landing: Landing): Promise<string
 		// A merge kix cannot read in full is one it cannot verify, so it carries no review.
 		reviewed = merges < MERGES ? await baseMerge(reads, commit, landing.branch, reviewed).catch(() => null) : null;
 	}
-	const head = short(landing.head);
+	return refusal(approved, landing.head, landing.branch);
+}
+
+/**
+ * Why a head with no review that counts on it, of those `unreviewed` reads,
+ * cannot land. `unverified` is for a merge head whose earlier review may still
+ * carry across it, which a caller without the trees cannot tell.
+ */
+function refusal(approved: Set<string>, sha: string, branch: string, unverified = false) {
+	const head = short(sha);
 	const ask = `kix lands only a reviewed head. Approve ${head} on GitHub as someone with write access other than the pull request's author, have a runner's \`${REVIEW_CHECK}\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`;
+	const earlier = [...approved].map(short).join(", ");
+	if (unverified)
+		return `${approved.size ? `The approval of ${earlier} is of a commit before ${head}` : `No review counts on ${head} itself yet`}. ${head} is a merge, and a review carries across merges of ${branch} that resolved no conflict, which kix checks when you merge. ${ask}`;
 	if (!approved.size) return `No review counts on ${head} yet. ${ask}`;
-	return `The approval of ${[...approved].map(short).join(", ")} does not carry to ${head}: what changed since is more than conflict-free merges of ${landing.branch}. ${ask}`;
+	return `The approval of ${earlier} does not carry to ${head}: what changed since is more than conflict-free merges of ${branch}. ${ask}`;
+}
+
+/** The commits a writer other than the pull request's author approved, as a person rather than an App. */
+function approvals(pull: Pick<PullRow, "author" | "latestOpinionatedReviews">) {
+	const author = pull.author?.login.toLowerCase();
+	return new Set(
+		pull.latestOpinionatedReviews.nodes.flatMap((review) =>
+			review.state === "APPROVED" &&
+			review.author?.__typename === "User" &&
+			review.author.login.toLowerCase() !== author &&
+			review.commit
+				? [review.commit.oid]
+				: [],
+		),
+	);
+}
+
+/**
+ * The full SHAs the `## Review` section of the pull request's body names,
+ * when its author, a person, wrote the body as it stands; else none.
+ */
+function named(pull: Pick<PullRow, "author" | "body" | "userContentEdits">): Set<string> {
+	const author = pull.author;
+	if (author?.__typename !== "User") return new Set();
+	const editor = pull.userContentEdits?.nodes[0]?.editor;
+	if (editor !== undefined && editor?.login.toLowerCase() !== author.login.toLowerCase()) return new Set();
+	const section = /^##[ \t]+Review[ \t]*$([\s\S]*?)(?=^##?[ \t]|(?![\s\S]))/m.exec(pull.body.replace(/\r/g, ""));
+	return new Set(section?.[1]!.match(/\b[0-9a-f]{40}\b/g) ?? []);
+}
+
+/**
+ * The fields of an open pull request the inbox's reads add for
+ * `observedGap`: those `unreviewed` reads first, and the head commit's
+ * parents and the App's `quest review` check on it, for the App ID `$app`.
+ */
+export const OBSERVED = `authorAssociation body author { __typename login }
+ userContentEdits(first:1) { nodes { editor { __typename login } } }
+ latestOpinionatedReviews(first:100,writersOnly:true) { nodes { state author { __typename login } commit { oid } } }
+ tip:commits(last:1) { nodes { commit { oid parents { totalCount }
+ checkSuites(first:10,filterBy:{appId:$app}) { nodes { checkRuns(first:1,filterBy:{checkName:"${REVIEW_CHECK}",checkType:LATEST}) { nodes { status conclusion } } } } } } }`;
+export type Observed = Pick<PullRow, "body" | "author" | "userContentEdits" | "latestOpinionatedReviews"> & {
+	/** How GitHub relates the author to the repository, such as `MEMBER` or `CONTRIBUTOR`. */
+	authorAssociation: string;
+	tip: {
+		nodes: {
+			commit: {
+				oid: string;
+				parents: { totalCount: number };
+				/** Only the App's own suites: the query filters them by its ID. */
+				checkSuites: { nodes: { checkRuns: { nodes: { status: string; conclusion: string | null }[] } }[] };
+			};
+		}[];
+	};
+};
+/** The associations that can come with write access; any other rules it out. */
+const WRITERS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+/**
+ * Why `unreviewed` would refuse to land `head`, as far as one read of the
+ * pull request shows, or null when a review counts or may count on it. The
+ * inbox shows this before a maintainer picks merge; the click's own
+ * `unreviewed` stays the authority.
+ *
+ * It counts what `unreviewed` counts on the head itself: a writer's approval,
+ * the App's passing check, or the author's own record when GitHub's
+ * association leaves write access possible (the click confirms that, and that
+ * no App committed the head). A review from before a merge may carry across
+ * it, which only the click's reads of the trees can tell, so a merge head's
+ * reason says so. A ruleset that makes GitHub require the review itself is
+ * not read here; GitHub refuses the same unreviewed head there.
+ */
+export function observedGap(pull: Observed, head: string, branch: string): string | null {
+	const tip = pull.tip?.nodes?.at(-1)?.commit;
+	// A read missing what this weighs flags nothing; the click still checks.
+	if (
+		tip?.oid !== head ||
+		!Array.isArray(tip.checkSuites?.nodes) ||
+		!Array.isArray(pull.latestOpinionatedReviews?.nodes)
+	)
+		return null;
+	const approved = approvals(pull);
+	const checked = tip.checkSuites.nodes.some((suite) =>
+		suite.checkRuns.nodes.some((run) => run.status === "COMPLETED" && run.conclusion === "SUCCESS"),
+	);
+	if (approved.has(head) || checked) return null;
+	if (WRITERS.has(pull.authorAssociation) && named(pull).has(head)) return null;
+	return refusal(approved, head, branch, tip.parents.totalCount > 1);
 }
 
 /**
@@ -121,18 +210,13 @@ export async function unreviewed(reads: Reads, landing: Landing): Promise<string
  * The record is self-reported, so it counts only as the author's own word.
  */
 async function ownRecord(reads: Reads, pull: PullRow): Promise<Set<string>> {
-	const author = pull.author;
-	if (author?.__typename !== "User") return new Set();
-	const editor = pull.userContentEdits?.nodes[0]?.editor;
-	if (editor !== undefined && editor?.login.toLowerCase() !== author.login.toLowerCase()) return new Set();
-	const section = /^##[ \t]+Review[ \t]*$([\s\S]*?)(?=^##?[ \t]|(?![\s\S]))/m.exec(pull.body.replace(/\r/g, ""));
-	const named = new Set(section?.[1]!.match(/\b[0-9a-f]{40}\b/g) ?? []);
-	if (!named.size) return named;
+	const recorded = named(pull);
+	if (!recorded.size) return recorded;
 	try {
 		const { permission } = await reads.get<{ permission: string }>(
-			`/collaborators/${encodeURIComponent(author.login)}/permission`,
+			`/collaborators/${encodeURIComponent(pull.author!.login)}/permission`,
 		);
-		return permission === "admin" || permission === "write" ? named : new Set();
+		return permission === "admin" || permission === "write" ? recorded : new Set();
 	} catch {
 		// An author kix cannot confirm can write is one whose word it does not take.
 		return new Set();

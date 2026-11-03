@@ -14,7 +14,7 @@ import {
 import { checksState, latestContexts } from "../../../src/github/checks";
 import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
-import { REVIEW_CHECK, unreviewed } from "./review";
+import { OBSERVED, type Observed, observedGap, REVIEW_CHECK, unreviewed } from "./review";
 import { GOAL_LIMIT, SETUP_BRANCH, STUBS, planCheck, planned, setupGoal, setupPull, treeCheckout } from "./setup";
 import { positiveId } from "./webhook";
 import {
@@ -889,7 +889,7 @@ export class GitHubService {
 				error.path?.length !== 2 || error.path[0] !== "repository" || !/^s\d+$/.test(String(error.path[1])),
 		);
 		if (partial || !response.data?.repository) throw new GitHubError("Project activity unavailable");
-		await this.#draftBodies(token, repo, scan, response.data.repository, stale);
+		await this.#bodies(token, repo, current, scan, response.data.repository, stale);
 		// A rename, transfer, visibility change, or revocation during the read
 		// must not publish fresh observations.
 		const latest = await this.#api<Repository>(token, repositoryPath(repo));
@@ -903,16 +903,22 @@ export class GitHubService {
 		await reconcile(this.#env.DB, repo, snapshot, scan, response.data.repository, stale, row!.revision, row!.epoch);
 	}
 
-	async #draftBodies(
+	/**
+	 * Read every open pull request's body and the reviews on its head in one
+	 * batch, then require the same identity and version before publishing. A
+	 * draft's body says whether it is handed back, and the reviews say why the
+	 * land gate would refuse its head (`observedGap`). Metadata pages, which
+	 * also page closed history, never request bodies.
+	 */
+	async #bodies(
 		token: string,
 		repo: GitHubRepository,
+		current: Repository,
 		scan: Scan,
 		page: ActivityPage,
 		stale: Awaited<ReturnType<typeof staleEntities>>,
 	) {
-		// Bodies are needed only to classify open drafts. Metadata pages never request them.
-		// Read those drafts in one batch, then require the same identity/version before publishing.
-		const drafts = new Map<number, (Pull & { body?: string })[]>();
+		const open = new Map<number, (Pull & { body?: string })[]>();
 		const rows = [
 			...(scan.history.pulls !== false
 				? (page.pullRequests?.nodes ?? []).filter(
@@ -925,44 +931,41 @@ export class GitHubService {
 			...stale.map((_, i) => page[`s${i}`]),
 		];
 		for (const item of rows) {
-			if (!item || !("isDraft" in item) || !item.isDraft || item.state !== "OPEN") continue;
-			const draft = item as Pull & { body?: string };
-			if (!positiveId(draft.number)) throw new GitHubError("Invalid draft observation");
-			drafts.set(draft.number, [...(drafts.get(draft.number) ?? []), draft]);
+			if (!item || !("isDraft" in item) || item.state !== "OPEN") continue;
+			const pull = item as Pull & { body?: string };
+			if (!positiveId(pull.number)) throw new GitHubError("Invalid pull request observation");
+			open.set(pull.number, [...(open.get(pull.number) ?? []), pull]);
 		}
-		if (drafts.size) {
-			const numbers = [...drafts.keys()];
-			const result = await this.#api<{
-				data?: {
-					repository?: Record<
-						string,
-						| (Pick<Pull, "databaseId" | "updatedAt" | "headRefOid" | "state" | "isDraft"> & {
-								body: string;
-						  })
-						| null
-					>;
-				};
-				errors?: unknown[];
-			}>(token, "/graphql", "POST", {
-				query: `query($owner: String!, $name: String!) { repository(owner:$owner,name:$name) { ${numbers.map((number, i) => `b${i}:pullRequest(number:${number}) { databaseId:fullDatabaseId updatedAt headRefOid state isDraft body }`).join("\n")} } }`,
-				variables: { owner: repo.owner, name: repo.name },
-			});
-			if (result.errors?.length || !result.data?.repository) throw new GitHubError("Draft bodies unavailable");
-			for (const [i, number] of numbers.entries()) {
-				const body = result.data.repository[`b${i}`];
-				for (const item of drafts.get(number)!) {
-					if (
-						!body ||
-						typeof body.body !== "string" ||
-						body.databaseId !== item.databaseId ||
-						body.updatedAt !== item.updatedAt ||
-						body.headRefOid !== item.headRefOid ||
-						body.state !== "OPEN" ||
-						!body.isDraft
-					)
-						throw new ProjectChanged();
-					item.body = body.body;
-				}
+		if (!open.size) return;
+		const numbers = [...open.keys()];
+		const result = await this.#api<{
+			data?: {
+				repository?: Record<
+					string,
+					(Pick<Pull, "databaseId" | "updatedAt" | "headRefOid" | "state" | "isDraft"> & Observed) | null
+				>;
+			};
+			errors?: unknown[];
+		}>(token, "/graphql", "POST", {
+			query: `query($owner: String!, $name: String!, $app: Int!) { repository(owner:$owner,name:$name) { ${numbers.map((number, i) => `b${i}:pullRequest(number:${number}) { databaseId:fullDatabaseId updatedAt headRefOid state isDraft ${OBSERVED} }`).join("\n")} } }`,
+			variables: { owner: repo.owner, name: repo.name, app: Number(this.#env.GITHUB_APP_ID) },
+		});
+		if (result.errors?.length || !result.data?.repository) throw new GitHubError("Pull request bodies unavailable");
+		for (const [i, number] of numbers.entries()) {
+			const read = result.data.repository[`b${i}`];
+			for (const item of open.get(number)!) {
+				if (
+					!read ||
+					typeof read.body !== "string" ||
+					read.databaseId !== item.databaseId ||
+					read.updatedAt !== item.updatedAt ||
+					read.headRefOid !== item.headRefOid ||
+					read.state !== "OPEN" ||
+					read.isDraft !== item.isDraft
+				)
+					throw new ProjectChanged();
+				item.body = read.body;
+				item.unreviewed = observedGap(read, read.headRefOid, current.default_branch);
 			}
 		}
 	}
