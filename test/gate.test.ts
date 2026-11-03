@@ -1070,6 +1070,44 @@ describe("the Windows job stub", () => {
 	test("reports a command that cannot start as a shell would", async () => {
 		expect(await job([join(tempDir(), "missing")], process.env, cancellation().cancel)).toBe(127);
 	});
+
+	test("hands the command the caller's environment, not the working directory's .env files", async () => {
+		// The stub runs as Bun in the command's directory, where Bun would load `.env` files by default.
+		const dir = tempDir();
+		for (const file of [".env", ".env.development", ".env.local"]) writeFileSync(join(dir, file), "LEAK=1\n");
+		const out = join(dir, "env.json");
+		const script = "require('node:fs').writeFileSync(process.env.OUT, JSON.stringify(process.env))";
+		const env = { ...process.env, OUT: out, CALLER: "kept" };
+		const cwd = process.cwd();
+		process.chdir(dir);
+		try {
+			// The command is Bun too, so it must not load them either.
+			const command = [process.execPath, "--no-env-file", "-e", script];
+			expect(await job(command, env, cancellation().cancel)).toBe(0);
+		} finally {
+			process.chdir(cwd);
+		}
+		const seen = JSON.parse(readFileSync(out, "utf8"));
+		expect(seen.CALLER).toBe("kept");
+		expect(seen).not.toHaveProperty("LEAK");
+	});
+});
+
+test("the checkout's Bun config hands a gated command no .env files from its directory", () => {
+	// `bun run quest` reads bunfig.toml, which turns Bun's `.env` loading off. The built CLIs opt out
+	// in their shebang and compile flags, which scripts/lifecycle-check.sh covers.
+	const dir = tempDir();
+	for (const file of [".env", ".env.development", ".env.local"]) writeFileSync(join(dir, file), "LEAK=1\n");
+	const script = "process.stdout.write(JSON.stringify(process.env))";
+	const result = spawnSync(process.execPath, [config, bin, "gate", process.execPath, "--no-env-file", "-e", script], {
+		cwd: dir,
+		encoding: "utf8",
+		env: { ...process.env, QUEST_GATE_ADMITTED: "1", CALLER: "kept" },
+	});
+	expect(result.status, result.stderr).toBe(0);
+	const seen = JSON.parse(result.stdout);
+	expect(seen.CALLER).toBe("kept");
+	expect(seen).not.toHaveProperty("LEAK");
 });
 
 describe.runIf(process.platform === "win32")("a job object", () => {
