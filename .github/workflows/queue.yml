@@ -40,50 +40,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The build runs in queue-build.yml so its runner group can admit that
+  # workflow alone; see that file. This calls the merge group's own copy until
+  # that file is on main, when the call moves to
+  # moq-dev/quest/.github/workflows/queue-build.yml@main.
+  build:
+    name: Queue build
+    if: github.event_name == 'merge_group'
+    uses: ./.github/workflows/queue-build.yml
+
+  # The required context. A reusable workflow's jobs report as
+  # `Queue build / Build`, so this job reports the build's result under the
+  # name main's ruleset requires. It skips with the build on pull requests, and
+  # runs even when the build fails or is cancelled, since a skipped context
+  # would pass the group.
   queue:
     name: Queue
-    if: github.event_name == 'merge_group'
-    runs-on: [self-hosted, quest-queue]
-    # Below the queue's 90-minute response window, so a hung build reports
-    # before the group expires.
-    timeout-minutes: 60
-    env:
-      BASE: ${{ github.event.merge_group.base_sha }}
+    needs: build
+    if: always() && github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      # Validate quest completion with the base's CLI, which the PR cannot weaken.
-      - name: Check out the base
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.merge_group.base_sha }}
-          persist-credentials: false
-      - name: Build quest from the base
-        run: nix build --out-link "$RUNNER_TEMP/quest-base" .#quest
-      - name: Check out the merge group
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Check that the PR leaves its quest accurate
-        working-directory: ${{ runner.temp }}
+      - name: Require the build to pass
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
-        run: |
-          # Build concurrency and group size are both one in main's ruleset.
-          [[ "$QUEUE_REF" =~ ^refs/heads/gh-readonly-queue/main/pr-([0-9]+)- ]] || { echo "::error::unexpected merge group ref" >&2; exit 1; }
-          head_ref=$(gh api "repos/$REPO/pulls/${BASH_REMATCH[1]}" --jq .head.ref)
-          ./quest-base/bin/quest --root "$GITHUB_WORKSPACE" check --base "$BASE" --branch "$head_ref"
-      - name: Install dependencies
-        run: nix develop --command just install
-      - name: Check
-        run: nix develop --command just check
-      - name: Test
-        run: nix develop --command just test
-      - name: Check Nix package
-        run: nix flake check
+          RESULT: ${{ needs.build.result }}
+        run: '[[ "$RESULT" == success ]] || { echo "::error::the queue build ended $RESULT" >&2; exit 1; }'
 
-  # The merge queue still builds every group with the job above; this only
+  # The merge queue still builds every group with the jobs above; this only
   # satisfies the PR-side requirement, as a pull_request run's skipped job does.
   report:
     name: Report Queue

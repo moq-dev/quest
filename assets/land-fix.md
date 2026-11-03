@@ -28,7 +28,8 @@ For each PR, requeue it unchanged if healthy (if the failure was flaky, name the
 flaky test in its `failure` so it can be followed up), commit a
 mechanical fix on its own branch, or hand it back with diagnosis and recommendation.
 Allowed fixes: preserve both sides' intent in conflicts, format/lint, regenerate
-lockfiles/generated files, or follow a base rename. Merge base where practical.
+generated files, rebuild lockfiles as [Lockfiles](#lockfiles) says, or follow a
+base rename. Merge base where practical.
 flake.nix, flake.lock, shell.nix, default.nix, nix/, .envrc, .github/, .gitmodules,
 and gitlinks (submodule entries) anywhere are protected. Merging the base may carry
 the base's own changes to those paths: that is no edit of yours when they come out
@@ -78,6 +79,47 @@ daemon still posts its own outcome comment.
 A fixed head must be the tip of pr-<number>, descend from its pinned head, and
 contain only that PR's fix and base history. Leave all other PR branches intact.
 Keep the result file uncommitted.
+
+## Lockfiles
+
+When merging the base leaves a lockfile (`bun.lock`, `package-lock.json`,
+`pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock`, `go.sum`,
+and the like) conflicted or out of date with the merged manifests, rebuild it from
+the base's copy, never from the PR's side: the base's copy carries dependency
+changes the base made, such as a security bump, that the PR's copy would revert.
+
+1. Resolve the manifests first (`package.json`, `Cargo.toml`, `pyproject.toml`,
+   `go.mod`, and the like), preserving both sides' intent.
+2. Take the base's lockfile: `git checkout base -- <lockfile>`.
+3. Run the package manager's minimal resolve against the merged manifests, such
+   as `bun install`, `npm install`, `cargo update --workspace` or a `cargo build`,
+   `uv lock`, or `go mod tidy`. Never run `cargo generate-lockfile`, `bun update`,
+   `uv lock --upgrade`, a `cargo update` without `--workspace`, or another update
+   that moves versions neither side asked for.
+4. Reapply any lockfile change the PR made without a manifest change, such as a
+   `cargo update -p`, with a pinned targeted update such as
+   `cargo update -p <name> --precise <version>`. Where the base also moved that
+   package, keep the base's version if it is at or past the PR's.
+5. Compare the result with the base's copy (`git diff base -- <lockfile>`) and
+   with the PR's own changes (`git diff base...pr-<number> -- <lockfile>`):
+   every lockfile change, and any manifest change the package manager made itself
+   (such as `go mod tidy` editing `go.mod`), must trace to a dependency or import
+   change in the PR.
+
+Name the lockfiles you rebuilt in the reason. Hand back instead of taking either
+side's copy, quoting the command's output or the offending diff in the diagnosis,
+when:
+
+- the package manager cannot rebuild the lockfile, or cannot reapply the PR's own
+  lockfile change with a pinned update;
+- a change does not trace to the PR;
+- the PR's manifest no longer admits a version the base moved to, such as a pin
+  below the base's security bump, or the base moved a package below the PR's
+  version: keeping either version is a behavior decision, not a mechanical fix.
+
+`flake.lock` is a protected path. When the fix must edit it, as the protected-path
+rule above allows, rebuild it the same way from the base's copy, with
+`nix flake lock` as the minimal resolve.
 
 ## Flaky tests
 

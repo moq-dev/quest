@@ -547,8 +547,8 @@ The commands accept the same PR argument and authentication as
 and 1 for other failures.
 
 This repository lands through GitHub's merge queue. Its required `Queue` check
-runs `just check` and `just test` on each merge group on the self-hosted runner;
-it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
+passes a merge group only when the group's build, `just check` and `just test`
+on the self-hosted runner, passes; it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
 re-enqueues healthy heads at the back of the queue.
 
 ## Land a batch with quest land
