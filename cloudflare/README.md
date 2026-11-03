@@ -178,7 +178,8 @@ Changes a workflow may not publish pause the job with a `publication`
 decision. The current attempt of a job on an issue or pull request reads it at
 `GET /api/runner/context?job=…&attempt=…`, as the App with the requester's
 current authority: an issue's text and comments, or a pull request's text,
-comments, reviews, unresolved review threads, and checks at its head. A new
+comments, reviews, unresolved review threads, and checks at its head, each by
+its latest run as `quest status` judges them. A new
 plan's attempt reads its `idea` and `context` there instead. [GITHUB.md](GITHUB.md#publication) describes the request, its
 validation, and how interrupted publications are reconciled. After a delivery,
 the runner reviews the head the job published with the other vendor's model

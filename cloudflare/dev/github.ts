@@ -23,7 +23,7 @@ export type Pull = Issue & {
 	/** Head branch; `quest/<path>` associates the pull request with that quest. */
 	branch: string;
 	checks: "SUCCESS" | "FAILURE" | "PENDING" | null;
-	/** The check runs behind `checks`. */
+	/** The check runs behind `checks`, oldest first. */
 	/** `commit` is the one a run reports on; the head by default. */
 	runs?: { name: string; conclusion: string; url: string; app?: number; context?: boolean; commit?: string }[];
 	review: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
@@ -353,11 +353,13 @@ export const ACTIONS_APP = 15368;
 /** One page of a head's check runs and commit statuses, as `statusCheckRollup.contexts` pages them. */
 function contextPage(pull: Pull, after: unknown) {
 	const start = typeof after === "string" ? Number(after) : 0;
-	const all = (pull.runs ?? []).map((run) =>
+	const all = (pull.runs ?? []).map((run, index) =>
 		run.context
 			? { __typename: "StatusContext", context: run.name, state: run.conclusion, targetUrl: run.url }
 			: {
 					__typename: "CheckRun",
+					// GitHub numbers runs as they are created.
+					databaseId: index + 1,
 					name: run.name,
 					status: "COMPLETED",
 					conclusion: run.conclusion,

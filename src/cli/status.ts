@@ -11,6 +11,7 @@ import {
 	type PullRequest,
 	string,
 } from "./github";
+import { checksState, contextOutcome, latestContexts } from "../github/checks";
 import { EJECTED, pinned } from "./land";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
 
@@ -34,13 +35,16 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 				... on IssueComment { createdAt body authorAssociation author { __typename login } }
 			} }
 			reactions(last: 100) { nodes { ...reaction } }
-			commits(last: 1) { nodes { commit { oid statusCheckRollup { state
+			commits(last: 1) { nodes { commit { oid statusCheckRollup { __typename
 				contexts(first: 100, after: $checks) @include(if: $moreChecks) {
 					pageInfo { hasNextPage endCursor }
 					nodes {
 						__typename
-						... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: $number) }
-						... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
+						... on CheckRun {
+							databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
+							checkSuite { app { databaseId } }
+						}
+						... on StatusContext { context state createdAt targetUrl isRequired(pullRequestNumber: $number) }
 					}
 				}
 			} } } }
@@ -59,9 +63,6 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 	}
 }
 fragment reaction on Reaction { content createdAt user { login } }`;
-
-/** Completed check-run conclusions that do not fail; anything else completed fails. */
-const PASSING = ["success", "neutral", "skipped"];
 
 export interface Check {
 	name: string;
@@ -112,7 +113,10 @@ export interface Status {
 	/** `head` is the head it was enabled on, or null when that cannot be told; see {@link enabledHead}. */
 	autoMerge: { method: string; enabledBy: string; enabledAt: string; head: string | null } | null;
 	mergeQueue: { state: string; position: number; enqueuedAt: string } | null;
-	/** The latest exit from the merge queue, auto-merge, or `quest land`'s queue, and the reason for it. */
+	/**
+	 * The latest exit from the merge queue, auto-merge, or `quest land`'s queue, and the reason for it;
+	 * null once the PR is queued again.
+	 */
 	landingStopped: { reason: string; actor: string; at: string } | null;
 	checks: { state: string | null; passed: number; failing: Check[]; pending: Check[] };
 	/** Each reviewer's latest submitted review, oldest first. */
@@ -259,13 +263,14 @@ function summarize(
 ): Status {
 	const head = string(pull.headRefOid);
 	const url = string(pull.url);
+	// The rollup's own state counts runs a newer run of the same check replaced.
 	const checks = {
-		state: rollup === null ? null : lower(rollup.state),
+		state: rollup === null ? null : lower(checksState(contexts)),
 		passed: 0,
 		failing: [],
 		pending: [],
 	} as Status["checks"];
-	for (const context of contexts) {
+	for (const context of latestContexts(contexts)) {
 		const { check, outcome } = classifyCheck(context);
 		if (outcome === "passed") checks.passed++;
 		else checks[outcome].push(check);
@@ -317,9 +322,16 @@ function summarize(
 
 	const autoMerge = pull.autoMergeRequest === null ? null : object(pull.autoMergeRequest);
 	const queue = pull.mergeQueueEntry === null ? null : object(pull.mergeQueueEntry);
-	const stopped = array(object(pull.timelineItems).nodes)
+	const last = array(object(pull.timelineItems).nodes)
 		.filter((node) => node.__typename !== "IssueComment" || ejection(node) !== null)
 		.at(-1);
+	// Entering the merge queue or auto-merge at or after the latest exit supersedes it. `quest land`'s
+	// enqueue disables auto-merge just before enabling it again, often within the same second.
+	const entered = [autoMerge?.enabledAt, queue?.enqueuedAt].flatMap((at) =>
+		at == null ? [] : [Date.parse(string(at))],
+	);
+	const stopped =
+		last !== undefined && !entered.some((at) => at >= Date.parse(string(last.createdAt))) ? last : undefined;
 	return {
 		url,
 		state: lower(pull.state) as Status["state"],
@@ -385,12 +397,7 @@ export function classifyCheck(context: ObjectValue): { check: Check; outcome: "p
 				: lower(run ? context.conclusion : context.state),
 		url: optional(run ? context.detailsUrl : context.targetUrl),
 	};
-	if (run ? context.status !== "COMPLETED" : ["pending", "expected"].includes(check.result))
-		return { check, outcome: "pending" };
-	return {
-		check,
-		outcome: (run ? PASSING.includes(check.result) : check.result === "success") ? "passed" : "failing",
-	};
+	return { check, outcome: contextOutcome(context) };
 }
 
 /** Stable plain lines: a record type, then space-separated fields, with any free text last. */
