@@ -424,6 +424,8 @@ function Actions(props: { item: Item; view: ProjectView | undefined; runners: Ru
 	const active = item.job && ["queued", "running", "waiting"].includes(item.job.state) && !item.job.cancel;
 	return (
 		<div class="decision-actions">
+			{/* Said before the click, which the land gate still decides. */}
+			{merge?.pull.unreviewed && <p class="muted">{merge.pull.unreviewed}</p>}
 			{merge?.clean && (
 				<form method="post" action={`${base}/pulls/${merge.pull.number}/merge`}>
 					<input type="hidden" name="head" value={merge.pull.headRefOid} />

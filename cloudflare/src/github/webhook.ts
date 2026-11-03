@@ -3,6 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import * as landing from "../jobs/landing";
 import { wake } from "../jobs/wake";
 import { arrived } from "../push/notify";
+import { REVIEW_CHECK } from "./review";
 import { GitHubService } from "./service";
 
 export function positiveId(value: unknown): value is number {
@@ -169,6 +170,30 @@ githubWebhooks.post("/webhooks/github", async (c) => {
 			WHERE repository=? AND kind='pull' AND number=? AND ${pending} AND ${enrolled}`,
 				).bind(now, repository, issue.number, delivery, digest, event, repository, installation),
 			);
+		// CI's checks cost no read, but the App's own review check decides whether
+		// the inbox flags a head as needing a review, so it marks the pull requests
+		// its payload lists for a read by number; the read itself says whether
+		// anything changed. An untracked PR waits for history.
+		const run = event === "check_run" ? payload.check_run : null;
+		const reviewed =
+			run?.name === REVIEW_CHECK &&
+			String(run.app?.id) === c.env.GITHUB_APP_ID &&
+			Array.isArray(run.pull_requests)
+				? [
+						...new Set(
+							run.pull_requests
+								.filter((pr: any) => pr?.base?.repo?.id === repository && positiveId(pr.number))
+								.map((pr: any) => pr.number as number),
+						),
+					]
+				: [];
+		if (reviewed.length)
+			statements.push(
+				c.env.DB.prepare(
+					`UPDATE github_project_activity SET stale=stale+1
+			WHERE repository=? AND kind='pull' AND number IN (SELECT value FROM json_each(?)) AND ${pending} AND ${enrolled}`,
+				).bind(repository, JSON.stringify(reviewed), delivery, digest, event, repository, installation),
+			);
 		const invalidating = invalidates(event, payload);
 		if (invalidating)
 			statements.push(
@@ -176,9 +201,9 @@ githubWebhooks.post("/webhooks/github", async (c) => {
 					`UPDATE github_project_state SET invalidated=1,revision=revision+1 WHERE repository=? AND ${pending} AND ${enrolled}`,
 				).bind(repository, delivery, digest, event, repository, installation),
 			);
-		// What the inbox shows changed: ask for a background read. CI and other
-		// pushes change neither, so they cost no read.
-		if (named || discussed || invalidating) {
+		// What the inbox shows changed: ask for a background read. Other checks
+		// and pushes change neither, so they cost no read.
+		if (named || discussed || reviewed.length || invalidating) {
 			reads = statements.length;
 			statements.push(
 				c.env.DB.prepare(

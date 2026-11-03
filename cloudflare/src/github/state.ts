@@ -52,6 +52,12 @@ export type Pull = Entity & {
 	mergeStateStatus?: string;
 	/** The hold label a session holds it with, such as a merge job's; absent in older observations. */
 	hold?: string | null;
+	/**
+	 * Why kix's land gate would refuse its head, as far as the read shows
+	 * (`observedGap`), or null when a review counts or may count on it.
+	 * Absent in older observations, which flag nothing.
+	 */
+	unreviewed?: string | null;
 	reviews: { totalCount: number };
 	latestReviews: {
 		nodes: { state: string; author: { login: string } | null; commit: { oid: string } | null }[];

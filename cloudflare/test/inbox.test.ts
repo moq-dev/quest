@@ -261,6 +261,21 @@ describe("decision inbox", () => {
 		const moved = await submit(merge, [["head", "b".repeat(40)]]);
 		expect(moved.status).toBe(403);
 		expect(await moved.text()).toContain("head moved since you looked; review it again");
+		// The item says up front when the read found no review counting on the head, and the click still checks.
+		expect(active).not.toContain("kix lands only a reviewed head");
+		const reason = `The approval of ccccccc does not carry to ${head.slice(0, 7)}: what changed since is more than conflict-free merges of trunk. kix lands only a reviewed head.`;
+		await db
+			.prepare(
+				"UPDATE github_project_activity SET data=json_set(data,'$.unreviewed',?) WHERE repository=10 AND id='21'",
+			)
+			.bind(`${reason} <b>Approve it</b>.`)
+			.run();
+		const flagged = thread(await inbox());
+		expect(flagged).toMatch(
+			new RegExp(
+				`<p class="muted">${reason.replace(/[.()]/g, "\\$&")} &lt;b&gt;Approve it[\\s\\S]*action="${merge}"`,
+			),
+		);
 		// A pick of merge never lands a head without a review that counts on it, and says why.
 		github.approved = ["c".repeat(40)];
 		const unreviewed = await submit(merge, [["head", head]]);

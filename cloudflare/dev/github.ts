@@ -4,6 +4,7 @@
 // refuses anything it does not model. Like GitHub, it scopes each installation
 // token to the repositories and permissions it was minted for.
 import { createHash } from "node:crypto";
+import { REVIEW_CHECK } from "../src/github/review";
 
 export type User = { id: number; login: string; name: string; email: string };
 /** A comment or review thread reply; a null author is a deleted account. */
@@ -157,12 +158,46 @@ function entity(repo: Repo, item: Issue) {
 
 const mergeState = (pull: Pull) => pull.merge ?? (pull.draft ? "DRAFT" : "BLOCKED");
 
-function pullNode(repo: Repo, pull: Pull) {
+/** How GitHub relates a login to the repository: only an association that can come with write access names one. */
+const association = (repo: Repo, login: string) =>
+	login === repo.owner
+		? "OWNER"
+		: [...repo.maintainers, ...(repo.writers ?? [])].includes(login)
+			? "COLLABORATOR"
+			: "CONTRIBUTOR";
+
+/** A pull request as the project read pages it, with what the inbox's body batch adds for `app`'s review check. */
+function pullNode(repo: Repo, pull: Pull, app?: unknown) {
 	const oid = headOf(repo, pull);
 	const reviews = pull.reviews ?? [];
+	const checks = (pull.runs ?? []).filter(
+		(run) => !run.context && run.name === REVIEW_CHECK && run.app === app && (run.commit ?? oid) === oid,
+	);
 	return {
 		...entity(repo, pull),
-		body: pull.body ?? "",
+		...reviewTarget(repo, pull),
+		authorAssociation: association(repo, pull.author),
+		tip: {
+			nodes: [
+				{
+					commit: {
+						oid,
+						parents: { totalCount: repo.commits[oid]?.parents.length ?? 1 },
+						checkSuites: {
+							nodes: checks.length
+								? [
+										{
+											checkRuns: {
+												nodes: [{ status: "COMPLETED", conclusion: checks.at(-1)!.conclusion }],
+											},
+										},
+									]
+								: [],
+						},
+					},
+				},
+			],
+		},
 		headRefName: pull.branch,
 		headRefOid: oid,
 		isCrossRepository: !!pull.contributor,
@@ -431,7 +466,7 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 		};
 	}
 
-	if (query.includes("latestOpinionatedReviews(")) {
+	if (query.includes("headRefOid baseRefName body")) {
 		const pull = repo.pulls.find((p) => p.number === variables.number);
 		return { data: { repository: { pullRequest: pull ? reviewTarget(repo, pull) : null } } };
 	}
@@ -515,7 +550,8 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 	for (const [, alias, field, number] of query.matchAll(/([sb]\d+):(issue|pullRequest)\(number:(\d+)\)/g)) {
 		const pull = repo.pulls.find((p) => p.number === Number(number));
 		const issue = repo.issues.find((i) => i.number === Number(number));
-		const found = field === "pullRequest" ? pull && pullNode(repo, pull) : issue && entity(repo, issue);
+		const found =
+			field === "pullRequest" ? pull && pullNode(repo, pull, variables.app) : issue && entity(repo, issue);
 		result[alias!] = found ?? null;
 		if (!found) errors.push({ type: "NOT_FOUND", path: ["repository", alias] });
 	}
