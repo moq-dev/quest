@@ -32,12 +32,12 @@ permissions:
   contents: read
   pull-requests: read
 
-# Each group has its own ref, so a group never cancels another; a pull request's
-# skipped runs replace their own. Dispatches all run on main, so each PR head's
-# report has its own group too.
-concurrency:
-  group: queue-${{ github.ref }}-${{ inputs.sha }}
-  cancel-in-progress: true
+# No concurrency group. A pull request's `Queue` job waits on `build` before it
+# skips, so cancelling the run then, as a second event for the PR would,
+# reports `Queue` cancelled and fails the requirement; even a group without
+# cancel-in-progress cancels a pending run. Each merge group has its own ref, so
+# its run never had another to replace, and a repeated dispatch only reports the
+# same skipped context twice.
 
 jobs:
   # The build runs in queue-build.yml so its runner group can admit that
