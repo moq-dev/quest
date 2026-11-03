@@ -1009,6 +1009,7 @@ describe("prompts", () => {
 		expect(prompt).toContain("kix adds for this job: Extra rule.");
 		expect(prompt).toContain("Use tabs.");
 		expect(prompt).toContain("# The start workflow");
+		expect(prompt).toContain("# Engineering context");
 		expect(prompt).toContain("# Quest guide");
 	});
 

@@ -244,6 +244,16 @@ test("init keeps a reworded reference line", () => {
 	expect(read(dir, "AGENTS.md")).toBe("# Repo\n");
 });
 
+test("init upgrades an earlier release's default reference line", () => {
+	const dir = tempDir();
+	writeFileSync(
+		join(dir, "AGENTS.md"),
+		"# Repo\r\n\r\nQuests: before starting work, run `quest guide` and follow it.\r\n",
+	);
+	init(dir);
+	expect(read(dir, "AGENTS.md")).toBe(`# Repo\r\n\r\n${REFERENCE_LINE}\r\n`);
+});
+
 /** The stub an earlier release installed for `/quest-ready`, before `/quest-review` replaced it. */
 const READY_STUB =
 	"---\nname: quest-ready\ndescription: Mark a draft PR ready for review, wait for an automated review, then decide whether to merge.\n---\n\nRun `quest skill ready` and follow its output.\nIf `quest` is not installed, follow https://github.com/kixelated/quest/blob/main/SETUP.md first.\n";

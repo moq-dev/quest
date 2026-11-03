@@ -4,7 +4,7 @@ Give your repository a quest log that you and your agents share: plans as
 Markdown files, dependencies that `quest check` keeps honest, and work that
 arrives as pull requests you review.
 
-The binary carries the skills and the quest guide, so your repository only pins a
+The binary carries the skills, the quest guide, and the engineering context, so your repository only pins a
 version and installs small stubs that call it.
 
 ## Set it up
