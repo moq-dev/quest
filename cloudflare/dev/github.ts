@@ -121,6 +121,8 @@ export type World = {
 	app: { id: number; slug: string };
 	/** The installation on the repositories' owner. */
 	installation: number;
+	/** The repositories' owner's GitHub ID, which the local server admits to enroll. */
+	owner: number;
 	users: User[];
 	repos: Repo[];
 };
@@ -613,7 +615,7 @@ export function fakeGitHub(world: World) {
 	const restRepo = (repo: Repo) => ({
 		id: repo.id,
 		name: repo.name,
-		owner: { login: repo.owner },
+		owner: { login: repo.owner, id: world.owner },
 		private: false,
 		visibility: "public",
 		default_branch: repo.defaultBranch ?? "main",
