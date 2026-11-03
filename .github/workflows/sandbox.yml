@@ -2,7 +2,10 @@ name: Sandbox
 
 # The runner sandbox's boundary test (`just runner-sandbox`) runs nightly on a
 # GitHub-hosted runner, outside pull requests and the merge queue, so landing
-# never waits on it; a failed scheduled run notifies the repository's watchers.
+# never waits on it. GitHub reports a failed scheduled run only to the account
+# that last changed the cron schedule (with Actions notifications on), not to
+# the repository's watchers; that is the maintainer, whose account lands the
+# workflow, so they see a boundary failure.
 on:
   schedule:
     - cron: "23 7 * * *"
