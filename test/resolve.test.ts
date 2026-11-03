@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
-import { chunks, render, resolveLists } from "../src/core";
+import { check, chunks, parse, render, resolveLists } from "../src/core";
 import { type ResolveOptions, resolveFile } from "../src/cli/resolve";
 import { heal, init, uninstall } from "../src/cli/setup";
 import { tempDir } from "./fixture";
@@ -200,6 +200,52 @@ describe("resolve", () => {
 			conflicts: 0,
 		});
 	});
+
+	describe("a Required list both sides emptied", () => {
+		const plan = "# [S] Quest\n\n## Goal\n\nGoal.\n\n## Plan\n\nPlan.\n";
+		const related = `\n## Related\n\n${item("r")}\n`;
+		const empty = (text: string) =>
+			check([parse("quest/README.md", text)], () => true).filter((f) => f.message.includes("is empty"));
+
+		for (const [name, tail] of [
+			["at the end", ""],
+			["before another section", related],
+		] as const) {
+			test(`loses its heading ${name}`, () => {
+				const base = `${quest([item("a"), item("b")])}${tail}`;
+				// Each side finished one of the last two blockers.
+				const { text, conflicts } = merge(base, `${quest([item("b")])}${tail}`, `${quest([item("a")])}${tail}`);
+				expect({ text, conflicts }).toEqual({ text: `${plan}${tail}`, conflicts: 0 });
+				expect(empty(text)).toEqual([]);
+			});
+		}
+
+		test("loses its heading beside a conflict left in prose", () => {
+			const { text, conflicts } = merge(
+				quest([item("a"), item("b")], "Base plan."),
+				quest([item("b")], "Our plan."),
+				quest([item("a")], "Their plan."),
+			);
+			expect(conflicts).toBe(1);
+			expect(text).toContain("<<<<<<< ours\nOur plan.\n=======\nTheir plan.\n>>>>>>> theirs\n");
+			expect(text).not.toContain("## Required");
+		});
+
+		test("keeps its heading while a conflict in it remains", () => {
+			// Ours removing b against theirs editing it stays a conflict, even with no lines on ours.
+			const head = ["# [S] Quest", "", "## Goal", "", "Goal.", "", "## Required", ""];
+			const kept = { ours: [], base: [item("b")], theirs: [item("b", "edited")] };
+			const merged = [head, { ours: [], base: [item("a")], theirs: [] }, [""], kept, [""]];
+			expect(resolveLists("quest/README.md", merged)).toEqual([head, [], [""], kept, [""]]);
+		});
+
+		test("keeps a Related heading for quest check to report", () => {
+			const doc = (names: string[]) => `${plan}\n## Related\n\n${names.map((n) => item(n)).join("\n")}\n`;
+			const { text, conflicts } = merge(doc(["a", "b"]), doc(["b"]), doc(["a"]));
+			expect({ text, conflicts }).toEqual({ text: `${plan}\n## Related\n\n`, conflicts: 0 });
+			expect(empty(text)).toHaveLength(1);
+		});
+	});
 });
 
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
@@ -284,6 +330,9 @@ describe.skipIf(process.platform === "win32")("the merge driver", () => {
 		const merged = mergeMain(dir, tools);
 		expect(merged.status).toBe(1);
 		expect(readFileSync(join(dir, "quest/README.md"), "utf8")).toContain("<<<<<<< HEAD\n");
+		expect(merged.stderr).toContain(
+			"quest: no quest resolve on PATH, so link lists in quest/README.md were not auto-resolved\n",
+		);
 	});
 
 	for (const mode of ["quest", "missing", "older"] as const) {
@@ -320,6 +369,10 @@ describe.skipIf(process.platform === "win32")("the merge driver", () => {
 			const result = mergeMain(dir, mode === "quest" ? `${tools}:${process.env.PATH}` : tools, "their'branch");
 			expect(result.status, result.stderr).toBe(1);
 			expect(readFileSync(join(dir, "quest/README.md"), "utf8")).toBe(expected);
+			const reason = { quest: null, missing: "no quest resolve on PATH", older: "quest resolve failed" }[mode];
+			const warning = "so link lists in quest/README.md were not auto-resolved";
+			if (reason === null) expect(result.stderr).not.toContain(warning);
+			else expect(result.stderr).toContain(`quest: ${reason}, ${warning}\n`);
 		});
 	}
 

@@ -13,6 +13,8 @@ updates:
       # Bump by hand once @cloudflare/vitest-plugin's peer range includes the new major.
       - dependency-name: vitest
         update-types: ["version-update:semver-major"]
+      # The flake's opencode-sdk check pins the SDK to nixpkgs' opencode; bump both together.
+      - dependency-name: "@opencode-ai/sdk"
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -31,3 +33,6 @@ updates:
     groups:
       nix:
         patterns: ["*"]
+    ignore:
+      # Pinned to the last nixpkgs with opencode 1.x until /quest/m0/opencode-sdk.md removes it.
+      - dependency-name: nixpkgs-opencode

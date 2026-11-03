@@ -10,10 +10,14 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, requested } from "./interrupt";
 import { systemdScopes } from "./supervise";
 
-/** One admitted command: a unique id and the wall-clock time it was admitted. */
+/**
+ * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
+ * the gate that runs it, which holds a slot until that command ends.
+ */
 export interface Admission {
 	id: string;
 	at: number;
+	pid?: number;
 }
 
 /** One version of the host's admission ledger. Versions only grow; 0 is the empty ledger. */
@@ -30,6 +34,8 @@ export interface Host {
 	memory(): number;
 	/** Wall-clock milliseconds, shared by every process on the host. */
 	now(): number;
+	/** Whether the gate that recorded this admission still runs its command. */
+	running(admission: Admission): boolean;
 	/** The newest ledger. */
 	ledger(): Ledger;
 	/**
@@ -70,11 +76,13 @@ export const QUICK_MS = RECENT_MS;
 /**
  * How a caller is admitted ahead of the rest.
  *
- * - `priority`: wait only for memory, never for load. Its admissions still count
- *   against every other caller's headroom, so it goes first while the host is
- *   loaded. For work whose own runner bounds it, such as the land daemon's check.
- * - `quick`: wait at most QUICK_MS, then start. For a command too cheap to be
- *   worth holding back, such as a formatter or a linter.
+ * - `priority`: wait only for memory, never for load, whether or not another
+ *   gated command runs. Its admissions still count against every other caller's
+ *   headroom, so it goes first while the host is loaded. For work whose own
+ *   runner bounds it, such as a check that lands PRs.
+ * - `quick`: wait at most QUICK_MS, then start whatever the load and memory.
+ *   For a command too cheap to be worth holding back, such as a formatter or a
+ *   linter. Once started, it holds a slot like any admission.
  */
 export interface Precedence {
 	priority?: boolean;
@@ -231,8 +239,24 @@ function parse(text: string): Admission[] {
 	}
 	const valid =
 		Array.isArray(value) &&
-		value.every((entry: Partial<Admission>) => typeof entry?.id === "string" && Number.isFinite(entry?.at));
+		value.every(
+			(entry: Partial<Admission>) =>
+				typeof entry?.id === "string" &&
+				Number.isFinite(entry?.at) &&
+				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)),
+		);
 	return valid ? (value as Admission[]) : [];
+}
+
+/** Whether a process with this ID exists on the host. A reused ID reads as alive, which only defers to load. */
+export function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		// EPERM: it exists, but belongs to another user.
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
 }
 
 /**
@@ -287,6 +311,7 @@ export function fileHost(directory: string, now = Date.now): Host {
 					? linuxMemory().available
 					: process.availableMemory(),
 		now,
+		running: (admission) => admission.pid !== undefined && alive(admission.pid),
 		ledger,
 		publish(base, admissions) {
 			mkdirSync(directory, { recursive: true });
@@ -341,6 +366,10 @@ export function fileHost(directory: string, now = Date.now): Host {
  *    time, SETTLE_MS after the previous admission.
  * 3. Otherwise wait.
  *
+ * The load limit applies only while an admitted command still runs. Without
+ * one, the load is work the gate cannot wait out, such as a fresh macOS
+ * runner's Spotlight index, so the raw load counts as having room.
+ *
  * Each caller decides against the newest ledger and publishes its admission
  * atomically, so concurrent callers never exceed the rule and one always wins
  * while it has room. No fairness promise, and no admission timeout except a
@@ -360,22 +389,26 @@ export async function admit(
 		const ledger = host.ledger();
 		// Sampled after the read, so only a backward clock step dates an admission in the future.
 		const now = host.now();
-		const recent = ledger.admissions.filter((admission) => admission.at > now - RECENT_MS);
-		if (recent.some((admission) => admission.at > now)) {
+		// A running admission stays in the ledger past the minute, so later callers still see its slot.
+		const running = new Set(ledger.admissions.filter((admission) => host.running(admission)));
+		const kept = ledger.admissions.filter((admission) => admission.at > now - RECENT_MS || running.has(admission));
+		const recent = kept.filter((admission) => admission.at > now - RECENT_MS);
+		if (kept.some((admission) => admission.at > now)) {
 			// Date those now, so they still count and space admissions but expire a minute after
 			// the step. A forward step can only expire admissions up to a minute early.
 			host.publish(
 				ledger,
-				recent.map((admission) => ({ id: admission.id, at: Math.min(admission.at, now) })),
+				kept.map((admission) => ({ ...admission, at: Math.min(admission.at, now) })),
 			);
 			continue;
 		}
 		if (now >= deadline) {
 			// Recorded like any admission, so it still counts against the others' headroom.
-			if (host.publish(ledger, [...recent, { id, at: now }])) return;
+			if (host.publish(ledger, [...kept, { id, at: now, pid: process.pid }])) return;
 			continue;
 		}
-		const load = precedence.priority ? 0 : host.load();
+		// Priority ignores load, whether or not a gated command runs; memory still applies.
+		const load = precedence.priority ? 0 : running.size > 0 ? host.load() : Math.min(host.load(), limits.load);
 		const memory = host.memory();
 		let wait = SETTLE_MS;
 		if (load > limits.load) waiting?.("load");
@@ -389,7 +422,7 @@ export async function admit(
 				// A caller descheduled since sampling would record a stale time, which lets the
 				// next one skip its spacing; decide again once the stall reaches that interval.
 				const at = host.now();
-				if (at - now < SETTLE_MS && host.publish(ledger, [...recent, { id, at }])) return;
+				if (at - now < SETTLE_MS && host.publish(ledger, [...kept, { id, at, pid: process.pid }])) return;
 				continue;
 			}
 		}
@@ -401,8 +434,9 @@ export async function admit(
 const ADMITTED = "QUEST_GATE_ADMITTED";
 
 /**
- * Set to 1 by whatever runs the land daemon's check, such as its sandbox, so
- * every gate inside the check is admitted with priority (see `Precedence`).
+ * Set to 1 by whatever runs a check that lands PRs, such as a merge queue build
+ * or the land daemon's sandbox, so every gate inside the check is admitted with
+ * priority (see `Precedence`).
  */
 export const PRIORITY = "QUEST_GATE_PRIORITY";
 

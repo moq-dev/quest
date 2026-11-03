@@ -1,16 +1,19 @@
-# Run untrusted PR heads on sandboxed runners
+# Sandbox maintainers' jobs
 
 ## Goal
 
-Jobs on PR heads containing non-maintainer commits route to Linux runners,
-which build the PR's devShell in a per-job VM before its commands run in the
-OS sandbox every Claude Code job already uses. opencode jobs' commands run in
-that sandbox too. kix classifies PR heads whose commits all
-carry a current maintainer's valid signature as trusted, so those run on any runner. The
-sandbox is verified on macOS, and the owner's approval of another
-maintainer's answer is lifted once it is.
+Every job's commands run in the OS sandbox, opencode's included, and a
+maintainer can approve one exact PR head, such as one kix pushed, so its
+iterate and merge jobs run on any runner. Runners keep refusing PR heads with
+non-maintainer commits until
+[contributor sandboxing](/quest/m1/kix/sandbox/README.md) in m1.
 
 ## Plan
+
+Decided 2026-10-30 (user, /quest-plan): the untrusted-head VM, stock-Ubuntu
+AppArmor, and macOS verification moved to
+[m1](/quest/m1/kix/sandbox/README.md), since moq-dev's maintainers run their
+own jobs. The decisions below still cover both epics.
 
 Decided 2026-10-15, from Codex's review of moq-dev/quest#121:
 
@@ -58,10 +61,12 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
   cannot run their checks without installing dependencies. An untrusted
   revision's commands reach no network host. The answer-approval gate stays
   until the sandbox is verified on macOS.
-- Decided 2026-10-24 (user) on the same PR: opencode jobs keep running
-  their commands unconfined, as before the sandbox, until
-  [opencode sandboxing](/quest/m0/kix/sandbox/opencode.md) ships. The README
-  says so.
+- opencode jobs' commands run under sandbox-runtime, set as opencode's
+  shell, with the same policy
+  ([moq-dev/quest#338](https://github.com/moq-dev/quest/pull/338)).
+  opencode 1.19 still imports the plugins a checkout's own `opencode.json`
+  or `.opencode/` names, even with project config disabled, so the runner
+  keeps the agent from creating them and refuses a checkout that holds them.
 - Decided 2026-10-24 (user) in `/quest-plan`: split the remaining work into
   the children below, ranked so the earliest unblock the most. Dropped
   (user): read-only registry access, which Claude Code's sandbox cannot
@@ -73,7 +78,4 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 ## Required
 
 - [Head approval](/quest/m0/kix/sandbox/head-approval.md) - a maintainer approves an exact head, such as one kix pushed, for host runners
-- [opencode sandboxing](/quest/m0/kix/sandbox/opencode.md) - opencode jobs' commands run in the same sandbox as Claude Code's
-- [macOS sandbox](/quest/m0/kix/sandbox/macos.md) - the boundary verified under Seatbelt, then the answer-approval gate removed
-- [Ubuntu AppArmor](/quest/m0/kix/sandbox/apparmor.md) - the sandbox starts on stock Ubuntu, or the runner refuses at startup
-- [Untrusted devShells](/quest/m0/kix/sandbox/vm.md) - untrusted PR heads build their devShell in a per-job VM
+- [Boundary test in CI](/quest/m0/kix/sandbox/live-test.md) - the opencode sandbox's hostile-repository test runs on Linux CI with a scripted model

@@ -56,33 +56,38 @@ export function lookup(docs: Doc[], path: string): Doc | null {
 }
 
 /**
- * Every quest that can be started now, in tree order: the root's `Required`
- * walked depth first, then any quest no epic lists, by path.
+ * Every document's path in tree order: the root's `Required` walked depth
+ * first, each epic before its children, then any document no epic lists, by
+ * path.
+ */
+export function treeOrder(docs: Doc[]): string[] {
+	const sorted = [...docs].sort((a, b) => comparePaths(a.path, b.path));
+	const remaining = new Map(sorted.map((doc) => [doc.path, doc]));
+	const pending = [ROOT];
+	const order: string[] = [];
+	for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+		const doc = remaining.get(path);
+		if (!doc) continue;
+		remaining.delete(path);
+		order.push(path);
+		if (isEpic(doc)) pending.push(...children(doc).reverse());
+	}
+	return [...order, ...remaining.keys()];
+}
+
+/**
+ * Every quest that can be started now, in tree order.
  *
  * An epic is not listed while it still requires children; a README with
  * none left is the epic's own remaining work and lists like any other quest.
  * A quest is ready when it has no `## Required` heading.
  */
 export function ready(docs: Doc[]): string[] {
-	const sorted = [...docs].sort((a, b) => comparePaths(a.path, b.path));
-	const remaining = new Map(sorted.map((doc) => [doc.path, doc]));
-	const open = (doc: Doc) => !has(doc, "Required");
-	const pending = [ROOT];
-	const found: string[] = [];
-	for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
-		const doc = remaining.get(path);
-		if (!doc) continue;
-		remaining.delete(path);
-		if (isEpic(doc)) {
-			pending.push(...children(doc).reverse());
-		} else if (open(doc)) {
-			found.push(path);
-		}
-	}
-	for (const doc of remaining.values()) {
-		if (!isEpic(doc) && open(doc)) found.push(doc.path);
-	}
-	return found;
+	const byPath = new Map(docs.map((doc) => [doc.path, doc]));
+	return treeOrder(docs).filter((path) => {
+		const doc = byPath.get(path)!;
+		return !isEpic(doc) && !has(doc, "Required");
+	});
 }
 
 /** The blockers of one document: its `Required` entries, which for an epic include its children. */

@@ -7,6 +7,8 @@
 // inserts a new quest next to them. Such a conflict merges item by item: keep
 // what neither side removed and add what either side inserted. Anything else,
 // including prose, a heading, or an item both sides rewrote, stays a conflict.
+// A `Required` list the merge empties loses its heading too, since an empty
+// one would block its quest forever.
 
 import { parse } from "./doc";
 import { LIST_SECTIONS } from "./rules";
@@ -27,9 +29,10 @@ export type Chunk = Clean | Conflict;
 const SIDES = ["ours", "base", "theirs"] as const;
 type Side = (typeof SIDES)[number];
 
-/** A list entry as one side has it: the destination of its opening link, and its source lines. */
+/** A list entry as one side has it: the destination of its opening link, its section, and its source lines. */
 interface Item {
 	key: string;
+	section: string;
 	lines: string[];
 }
 
@@ -103,7 +106,9 @@ export function render(chunks: Chunk[], size: number, diff3: boolean, labels = L
  * removed, with the one side's edit when only one side changed one, and
  * inserted are the entries either side added, after the entry that precedes
  * them on that side, ours before theirs. Entries are matched by their opening
- * link's destination. Every other conflict is returned as it was.
+ * link's destination. A `Required` section this leaves with nothing but
+ * blank lines is dropped with its heading. Every other conflict is returned as
+ * it was.
  */
 export function resolveLists(path: string, merged: Chunk[]): Chunk[] {
 	const items = {
@@ -111,10 +116,85 @@ export function resolveLists(path: string, merged: Chunk[]): Chunk[] {
 		base: lists(path, merged, "base"),
 		theirs: lists(path, merged, "theirs"),
 	};
-	return merged.map((chunk, index) => {
+	const emptied = new Set<number>();
+	const resolved = merged.map((chunk, index) => {
 		const [ours, base, theirs] = SIDES.map((side) => items[side].get(index));
 		if (ours === undefined || base === undefined || theirs === undefined) return chunk;
-		return mergeItems(ours, base, theirs) ?? chunk;
+		const lines = mergeItems(ours, base, theirs);
+		if (lines === null) return chunk;
+		if (lines.length === 0 && base.some((item) => item.section === "Required")) emptied.add(index);
+		return lines;
+	});
+	return emptied.size === 0 ? resolved : dropEmptyRequired(path, resolved, emptied);
+}
+
+/**
+ * `merged` without each `Required` heading whose section holds one of the
+ * `emptied` resolutions and otherwise only blank lines, with no conflict left
+ * in it, along with that section's lines. As `quest rm` does, a blank line
+ * left doubled by the removal goes too.
+ */
+function dropEmptyRequired(path: string, merged: Chunk[], emptied: Set<number>): Chunk[] {
+	// The document with every conflict taken from ours; `clean` marks lines outside a conflict.
+	// `at` and `open` hold where each emptied list and each remaining conflict
+	// sits, as the index of the line after it, since either can have no lines.
+	const lines: string[] = [];
+	const clean: boolean[] = [];
+	const at: number[] = [];
+	const open: number[] = [];
+	merged.forEach((chunk, index) => {
+		if (emptied.has(index)) at.push(lines.length);
+		if (!Array.isArray(chunk)) open.push(lines.length);
+		const own = Array.isArray(chunk) ? chunk : chunk.ours;
+		lines.push(...own);
+		clean.push(...own.map(() => Array.isArray(chunk)));
+	});
+	const doc = parse(path, lines.join("\n"));
+	// A trailing newline leaves an empty last element, which is not a line.
+	const count = lines.length > 0 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
+
+	// Indices, 0-based, of the lines to drop.
+	const dropped = new Set<number>();
+	doc.headings.forEach((heading, index) => {
+		if (heading.text !== "Required" || !clean[heading.line - 1]) return;
+		const next = doc.headings[index + 1];
+		if (next !== undefined && !clean[next.line - 1]) return;
+		// The section's body is the 0-based lines from `heading.line` up to `end`.
+		const end = next === undefined ? count : next.line - 1;
+		const inside = (line: number) => line >= heading.line && line <= end;
+		if (!at.some(inside) || open.some(inside)) return;
+		const body = Array.from({ length: end - heading.line }, (_, i) => heading.line + i);
+		if (!body.every((i) => lines[i].trim() === "")) return;
+		dropped.add(heading.line - 1);
+		for (const i of body) dropped.add(i);
+	});
+	if (dropped.size === 0) return merged;
+
+	// Removing a block between two blank lines would leave both; keep one.
+	let line = 0;
+	let gap = false;
+	let blank = false;
+	return merged.map((chunk) => {
+		if (!Array.isArray(chunk)) {
+			line += chunk.ours.length;
+			gap = false;
+			blank = false;
+			return chunk;
+		}
+		const kept: string[] = [];
+		for (const text of chunk) {
+			if (dropped.has(line++)) {
+				gap = true;
+				continue;
+			}
+			const empty = text.trim() === "";
+			if (!(gap && empty && blank)) {
+				kept.push(text);
+				blank = empty;
+			}
+			gap = false;
+		}
+		return kept;
 	});
 }
 
@@ -156,7 +236,11 @@ function lists(path: string, merged: Chunk[], side: Side): Map<number, Item[]> {
 			return ok;
 		});
 		if (!valid || next !== last + 1) continue;
-		const items = entries.map((entry) => ({ key: entry.target!, lines: lines.slice(entry.line - 1, entry.end) }));
+		const items = entries.map((entry) => ({
+			key: entry.target!,
+			section: entry.section!,
+			lines: lines.slice(entry.line - 1, entry.end),
+		}));
 		if (items.every((item) => selfContained(path, item))) out.set(index, items);
 	}
 	return out;

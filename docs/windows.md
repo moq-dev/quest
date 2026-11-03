@@ -86,6 +86,10 @@ Quest does not bundle or start an agent. Install the native tools separately:
   native PowerShell and Windows sandboxing. Follow its current device and
   enterprise-policy requirements.
 
+`quest agent` launches Claude Code natively for `/quest-spawn api`, including
+npm's `claude.cmd` shim, and `quest agent stop` ends the agent's whole process
+tree at once. Its Codex agents need Linux worktree supervision.
+
 The skills remain the same workflows. Claims and PR work need Git for Windows
 and the appropriate GitHub credentials, and repository builds need that project's
 own native toolchain. A repository requiring Nix or Linux-only checks still needs

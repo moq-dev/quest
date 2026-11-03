@@ -7,11 +7,12 @@ versioned Markdown, with a standalone CLI and a reversible adoption path.
 
 ## Plan
 
-`m0` is the first public release; `m1` holds later work. Add `m2` and later
-horizons when concrete work warrants them, keeping milestone numbers stable as
-earlier milestones complete.
+`m0` is adoption on moq-dev's own repositories, `m1` the public release,
+and `m2` later work. Add later horizons when concrete work warrants them,
+keeping milestone numbers stable as earlier milestones complete.
 
 ## Required
 
-- [M0: First public release](/quest/m0/README.md) - install, set up, work, and leave, driven from one pinned binary, paired with the Kix decision UI and your own runners
-- [M1: Later work](/quest/m1/README.md) - cloud runners, a native mobile app, shared runners, and donated reviews and CI
+- [M0: moq-dev adoption](/quest/m0/README.md) - kix at quest.moq.dev, used daily on moq-dev/moq, moq-dev/quest, and moq-dev/moq.pro, beside the standalone CLI
+- [M1: Public release](/quest/m1/README.md) - kix.quest open to any maintainer, with onboarding, contributor sandboxing, the themed site, and launch material
+- [M2: Later work](/quest/m2/README.md) - cloud runners, a native mobile app, shared runners, and donated reviews and CI

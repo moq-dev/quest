@@ -143,7 +143,7 @@ export function entities(project: Enrollment, state: ProjectState | null) {
 
 /**
  * A PR whose observed draft its starter still holds, or that a session holds
- * with a `quest:*` label, such as one whose landing is queued, so nothing
+ * with a hold label, such as a merge job whose landing is queued, so nothing
  * waits on the maintainer.
  */
 function held(entity: Pick<Item, "kind" | "activity">) {

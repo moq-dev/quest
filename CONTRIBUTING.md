@@ -48,20 +48,12 @@ fixer's recorded mechanical fix that changes no behavior still apply. Online rev
 never waited for. Dependabot PRs that only bump patch versions or a lockfile
 need no review.
 
-PRs land on `main` only through `quest land` (see the README): queue one with
-`quest merge <pr> <token> --land <sha>`, and the host daemon
-`quest land serve` runs `just check` and `just test` once per batch through its
-configured sandbox. Before each landing, the daemon merges the base into the PR
-head with the quest merge driver and verifies the tested tree, then pushes that
-head with a lease and squash-merges it through GitHub. If branch permissions
-refuse the push, it fast-forwards the base to the tested squash with a lease and
-closes the PR with a linked-commit comment instead. Confirmed conflicts, moved heads, or a tree mismatch eject the
-remaining batch. Transient refusals are retried; a racing base rebuilds the queue; already merged PRs stay merged. Failed batches are ejected together, with
-a log tail in each comment and the full log retained on the host. The optional
-credential-free `quest land fix` container makes one mechanical attempt per
-maintainer pick. The daemon validates and lease-pushes fixes, records the new
-head in Review, and requeues healthy PRs; other results are handed back. The admin bypass of `main`'s
-ruleset is for emergencies.
+PRs land on `main` through GitHub's merge queue, one PR at a time, as squash commits.
+Queue the reviewed head with `quest merge <pr> --land <sha>` (`/quest-merge` does this).
+The required `Queue` check skips on pull requests; the merge group runs `just check` and `just test` on the self-hosted runner.
+The host's `quest land watch` daemon runs the Codex fixer when the queue drops a PR for a failed build or a conflict, and re-enqueues healthy heads at the back of the queue.
+A fix that needs a maintainer decision is handed back with a diagnosis on the PR.
+The admin bypass of `main`'s ruleset is for emergencies.
 
 Every AI-authored GitHub post must end with `(written by <model>)`, naming the
 running model. This is separate from commit co-author trailers.

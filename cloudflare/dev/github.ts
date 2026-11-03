@@ -24,21 +24,25 @@ export type Pull = Issue & {
 	branch: string;
 	checks: "SUCCESS" | "FAILURE" | "PENDING" | null;
 	/** The check runs behind `checks`. */
-	runs?: { name: string; conclusion: string; url: string; app?: number; context?: boolean }[];
+	/** `commit` is the one a run reports on; the head by default. */
+	runs?: { name: string; conclusion: string; url: string; app?: number; context?: boolean; commit?: string }[];
 	review: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
-	reviews?: { state: string; author: string; body?: string }[];
+	/** Oldest first; `commit` is the one a review was submitted on, the head by default. */
+	reviews?: { state: string; author: string; body?: string; commit?: string }[];
 	threads?: Thread[];
 	draft?: boolean;
-	/** Opened from the service fork, so its branch is not on the upstream. */
-	fork?: boolean;
 	/** Opened from this contributor's own fork, which the bot cannot update. */
 	contributor?: string;
-	/** A `## Decisions needed` section in it hands a draft back to the maintainer. */
+	/** A `## Waiting` section in it hands a draft back to the maintainer. */
 	body?: string;
+	/** Who last edited the body; never edited when absent. */
+	editor?: string;
 	/** Closed by merging it; set with `closed`. */
 	merged?: boolean;
 	/** Optional squash result supplied by fixtures that model real git merges. */
 	squash?: string;
+	/** The commit a REST merge made. */
+	mergeCommit?: string;
 	/** REST mergeability can lag the base; fixtures can also model policy refusals. */
 	mergeable?: boolean | null;
 	mergeableState?: string;
@@ -63,6 +67,8 @@ export type Commit = {
 	parents: string[];
 	tree: string;
 	message: string;
+	/** The account GitHub attributes the commit to; the App's bot for commits written through the API. */
+	committer?: string;
 	/** GitHub's authenticated signature result, independent of author identity. */
 	signature?: { isValid: boolean; signer: { databaseId: number; login: string } | null } | null;
 };
@@ -74,6 +80,8 @@ export type Repo = {
 	name: string;
 	/** Logins with the maintain role; everyone else can only read. */
 	maintainers: string[];
+	/** Logins that can write without maintaining, whose approvals count as GitHub's writers' do. */
+	writers?: string[];
 	/** Defaults to main. */
 	defaultBranch?: string;
 	/** The default branch's files. */
@@ -87,12 +95,9 @@ export type Repo = {
 	 * Listing `main` moves the default branch on for comparisons with it.
 	 */
 	branches: Record<string, string>;
-	/** Branches on the repository's service fork, `<forks>/<name>`, and their commits. */
-	fork: Record<string, string>;
 	/**
-	 * Commits beyond the default branch's, shared with the service fork as a fork
-	 * network shares objects. The fake adds the default branch's commit and every
-	 * branch tip it does not find here, as children of the default branch.
+	 * Commits beyond the default branch's, including contributor-fork heads.
+	 * The fake adds the default branch's commit and every branch tip it does not find here, as children of the default branch.
 	 */
 	commits: Record<string, Commit>;
 	/** Trees written through the API. */
@@ -103,20 +108,20 @@ export type Repo = {
 	rules?: Record<string, unknown>[];
 	/** The default branch's classic protection, as `GET /branches/main/protection` returns it; none when absent. */
 	protection?: Record<string, any>;
+	/** Rulesets by ID, as `GET /rulesets/<id>` shows them to the App. */
+	rulesets?: Record<number, { current_user_can_bypass: "always" | "pull_requests_only" | "never" }>;
 };
 export type World = {
 	app: { id: number; slug: string };
 	/** The installation on the repositories' owner. */
 	installation: number;
-	/** The installation on the service fork namespace. */
-	forkInstallation: number;
-	/** The service fork namespace, `GITHUB_FORK_OWNER`. */
-	forks: string;
 	users: User[];
 	repos: Repo[];
 };
 
 const sha1 = (text: string) => createHash("sha1").update(text).digest("hex");
+/** The signed-in user's GitHub App token. */
+const USER_TOKEN = "fake-user-token";
 /** The Git object ID of a file's content, which the Worker verifies. */
 export const blob = (content: string | Uint8Array) => {
 	const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : content;
@@ -128,14 +133,14 @@ const treeOf = (repo: Repo) => sha1(`tree ${repo.owner}/${repo.name}`);
 /** A pull request's head commit: the one it ended at, or its branch's tip where the world lists one. */
 export const headOf = (repo: Repo, pull: Pull) =>
 	pull.head ??
-	(pull.fork ? repo.fork : pull.contributor ? {} : repo.branches)[pull.branch] ??
+	(pull.contributor ? {} : repo.branches)[pull.branch] ??
 	sha1(`head ${repo.owner}/${repo.name}#${pull.number}`);
 // GitHub's database IDs differ from numbers; derive stable ones per repository.
 export const databaseId = (repo: Repo, number: number) => String(repo.id * 1000 + number);
 const updatedAt = "2026-10-20T12:00:00Z";
 const nodeId = (repo: Repo, pull: Pull) => `PR_${databaseId(repo, pull.number)}`;
 // The open pull requests whose branch is on the upstream itself.
-const upstreamPulls = (repo: Repo) => repo.pulls.filter((pull) => !pull.closed && !pull.fork && !pull.contributor);
+const upstreamPulls = (repo: Repo) => repo.pulls.filter((pull) => !pull.closed && !pull.contributor);
 
 function entity(repo: Repo, item: Issue) {
 	return {
@@ -160,6 +165,7 @@ function pullNode(repo: Repo, pull: Pull) {
 		body: pull.body ?? "",
 		headRefName: pull.branch,
 		headRefOid: oid,
+		isCrossRepository: !!pull.contributor,
 		isDraft: !!pull.draft,
 		reviewDecision: pull.review,
 		mergeStateStatus: mergeState(pull),
@@ -249,6 +255,34 @@ function pullTarget(repo: Repo, pull: Pull, after: unknown) {
 	};
 }
 
+const actor = (login: string) => ({ __typename: login.endsWith("[bot]") ? "Bot" : "User", login });
+
+/** A pull request's author and each writer's latest approval or change request, as the review gate reads them. */
+function reviewTarget(repo: Repo, pull: Pull) {
+	const latest = new Map<string, NonNullable<Pull["reviews"]>[number]>();
+	for (const review of pull.reviews ?? [])
+		if (
+			["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(review.state) &&
+			[...repo.maintainers, ...(repo.writers ?? [])].includes(review.author)
+		)
+			latest.set(review.author, review);
+	return {
+		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
+		headRefOid: headOf(repo, pull),
+		baseRefName: pull.base ?? "main",
+		body: pull.body ?? "",
+		author: actor(pull.author),
+		userContentEdits: { nodes: pull.editor ? [{ editor: actor(pull.editor) }] : [] },
+		latestOpinionatedReviews: {
+			nodes: [...latest.values()].map((r) => ({
+				state: r.state,
+				author: actor(r.author),
+				commit: { oid: r.commit ?? headOf(repo, pull) },
+			})),
+		},
+	};
+}
+
 /** A pull request's labels, the timeline that added them, and its landing, as a merge hold reads them. */
 function holdsTarget(repo: Repo, pull: Pull) {
 	return {
@@ -274,11 +308,10 @@ function holdsTarget(repo: Repo, pull: Pull) {
 const page = <T>(nodes: T[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
 
 /** The repository holding a pull request's head branch, as `owner/name`. */
-const holderOf = (repo: Repo, pull: Pull, forks: string) =>
-	`${pull.fork ? forks : (pull.contributor ?? repo.owner)}/${repo.name}`;
+const holderOf = (repo: Repo, pull: Pull) => `${pull.contributor ?? repo.owner}/${repo.name}`;
 
 /** A pull request as `quest land` reads its queue: auto-merge, head, reviews, and checks. */
-function queueTarget(repo: Repo, pull: Pull, forks: string) {
+function queueTarget(repo: Repo, pull: Pull) {
 	return {
 		id: nodeId(repo, pull),
 		number: pull.number,
@@ -289,7 +322,7 @@ function queueTarget(repo: Repo, pull: Pull, forks: string) {
 		headRefOid: headOf(repo, pull),
 		maintainerCanModify: !!pull.maintainerCanModify,
 		reviewDecision: pull.review,
-		headRepository: { nameWithOwner: holderOf(repo, pull, forks) },
+		headRepository: { nameWithOwner: holderOf(repo, pull) },
 		autoMergeRequest: pull.landing
 			? { enabledAt: pull.autoMerge?.enabledAt ?? updatedAt, commitBody: pull.autoMerge?.commitBody ?? "" }
 			: null,
@@ -331,7 +364,7 @@ function contextPage(pull: Pull, after: unknown) {
 	};
 }
 
-function graphql(repo: Repo, query: string, variables: Record<string, unknown>, forks: string) {
+function graphql(repo: Repo, query: string, variables: Record<string, unknown>) {
 	const blobs = [...query.matchAll(/(q\d+): object\(oid: "([0-9a-f]{40})"\)/g)];
 	if (blobs.length) {
 		const files = new Map(repo.files.map((file) => [blob(file.content), file.content]));
@@ -398,6 +431,10 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>, 
 		};
 	}
 
+	if (query.includes("latestOpinionatedReviews(")) {
+		const pull = repo.pulls.find((p) => p.number === variables.number);
+		return { data: { repository: { pullRequest: pull ? reviewTarget(repo, pull) : null } } };
+	}
 	if (query.includes("timelineItems(")) {
 		const pull = repo.pulls.find((p) => p.number === variables.number);
 		return { data: { repository: { pullRequest: pull ? holdsTarget(repo, pull) : null } } };
@@ -426,7 +463,7 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>, 
 						variables.qualified === "refs/heads/main"
 							? { target: { oid: repo.branches.main ?? commitOf(repo) } }
 							: null,
-					queue: page(queued.map((pull) => queueTarget(repo, pull, forks))),
+					queue: page(queued.map((pull) => queueTarget(repo, pull))),
 				},
 			},
 		};
@@ -443,9 +480,7 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>, 
 		for (const pull of upstreamPulls(repo)) tips.set(pull.branch, headOf(repo, pull));
 		for (const [branch, oid] of Object.entries(repo.branches)) tips.set(branch, oid);
 		const merged = (branch: string) =>
-			repo.pulls
-				.filter((pull) => pull.merged && !pull.fork && !pull.contributor && pull.branch === branch)
-				.reverse();
+			repo.pulls.filter((pull) => pull.merged && !pull.contributor && pull.branch === branch).reverse();
 		result.refs = page(
 			[...tips].flatMap(([branch, oid]) =>
 				branch.startsWith("quest/")
@@ -507,11 +542,7 @@ function tree(repo: Repo) {
 function connect(repo: Repo) {
 	const main = commitOf(repo);
 	repo.commits[main] ??= { parents: [], tree: treeOf(repo), message: "Initial commit" };
-	const tips = [
-		...Object.values(repo.branches),
-		...Object.values(repo.fork),
-		...repo.pulls.map((pull) => headOf(repo, pull)),
-	];
+	const tips = [...Object.values(repo.branches), ...repo.pulls.map((pull) => headOf(repo, pull))];
 	for (const tip of tips) repo.commits[tip] ??= { parents: [main], tree: treeOf(repo), message: "Work" };
 }
 
@@ -550,21 +581,18 @@ export function fakeGitHub(world: World) {
 		console.warn(`fake GitHub: no model for ${method} ${url}`);
 		return json({ message: "Not modeled by the fake GitHub" }, 501);
 	};
-	const upstream = (name: string) => world.repos.find((r) => r.name === name);
-	// The service fork of `repo`, and a contributor's fork, as GitHub describes their repositories.
-	const forkId = (repo: Repo) => repo.id * 10;
+	// A contributor's fork is readable as a PR head, but has no App installation.
 	const headRepo = (repo: Repo, pull: Pull) =>
-		pull.fork
-			? { id: forkId(repo), name: repo.name, owner: { login: world.forks } }
-			: pull.contributor
-				? { id: forkId(repo) + 1, name: repo.name, owner: { login: pull.contributor } }
-				: { id: repo.id, name: repo.name, owner: { login: repo.owner } };
+		pull.contributor
+			? { id: repo.id * 10 + 1, name: repo.name, owner: { login: pull.contributor } }
+			: { id: repo.id, name: repo.name, owner: { login: repo.owner } };
 	const restPull = (repo: Repo, pull: Pull) => ({
 		number: pull.number,
 		node_id: nodeId(repo, pull),
 		html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${pull.number}`,
 		state: pull.closed ? "closed" : "open",
 		merged: pull.merged ?? false,
+		merge_commit_sha: pull.mergeCommit ?? null,
 		mergeable: pull.mergeable !== undefined ? pull.mergeable : pull.merge !== "DIRTY",
 		mergeable_state: pull.mergeableState ?? (pull.merge === "DIRTY" ? "dirty" : "clean"),
 		title: pull.title,
@@ -576,17 +604,78 @@ export function fakeGitHub(world: World) {
 		head: { ref: pull.branch, sha: headOf(repo, pull), repo: headRepo(repo, pull) },
 	});
 
+	const restRepo = (repo: Repo) => ({
+		id: repo.id,
+		name: repo.name,
+		owner: { login: repo.owner },
+		private: false,
+		visibility: "public",
+		default_branch: repo.defaultBranch ?? "main",
+		archived: false,
+		disabled: false,
+		license: { spdx_id: "MIT" },
+		allow_squash_merge: true,
+		allow_auto_merge: true,
+	});
+
+	/**
+	 * What the signed-in user's own token reads: the installation on the
+	 * repositories' owner, its repositories with the user's role, and each
+	 * default branch's `quest` directory, as the project picker asks.
+	 */
+	function userRead(path: string, body: Record<string, any>, me: User): Response | null {
+		if (path === "/user/installations")
+			return json({
+				total_count: 1,
+				installations: [{ id: world.installation, app_id: world.app.id, suspended_at: null, permissions: {} }],
+			});
+		const listed = path.match(/^\/user\/installations\/(\d+)\/repositories$/);
+		if (listed) {
+			const repos = Number(listed[1]) === world.installation ? world.repos : [];
+			return json({
+				total_count: repos.length,
+				repositories: repos.map((repo) => ({
+					...restRepo(repo),
+					permissions: {
+						admin: false,
+						maintain: repo.maintainers.includes(me.login),
+						push: true,
+						pull: true,
+					},
+				})),
+			});
+		}
+		if (path !== "/graphql") return null;
+		const { query, variables } = body as { query: string; variables: Record<string, string> };
+		const data: Record<string, unknown> = {};
+		for (const [, alias, index] of query.matchAll(/(r(\d+)): repository\(/g)) {
+			const repo = world.repos.find(
+				(r) => r.owner === variables[`o${index}`] && r.name === variables[`n${index}`],
+			);
+			if (!repo) continue;
+			const entries = new Map<string, string>();
+			for (const file of repo.files) {
+				const [top, name, ...rest] = file.path.split("/");
+				if (top === "quest" && name) entries.set(name, rest.length ? "tree" : "blob");
+			}
+			data[alias!] = {
+				databaseId: repo.id,
+				object: entries.size ? { entries: [...entries].map(([name, type]) => ({ name, type })) } : null,
+			};
+		}
+		return json({ data });
+	}
+
 	/** The repositories an installation token may name, by `owner/name`. */
 	function grant(installation: number, input: { repository_ids?: number[]; repositories?: string[] }) {
-		const fork = installation === world.forkInstallation;
-		if (!fork && installation !== world.installation) return null;
+		if (installation !== world.installation) return null;
 		const names = (input.repositories ?? []).map((name) => {
-			const repo = fork ? upstream(name) : world.repos.find((r) => r.name === name);
-			return repo && `${fork ? world.forks : repo.owner}/${repo.name}`;
+			const repo = world.repos.find((r) => r.name === name);
+			return repo && `${repo.owner}/${repo.name}`;
 		});
 		const ids = (input.repository_ids ?? []).map((id) => {
-			const repo = world.repos.find((r) => (fork ? forkId(r) : r.id) === id);
-			return repo && `${fork ? world.forks : repo.owner}/${repo.name}`;
+			const repo = world.repos.find((r) => r.id === id);
+			return repo && `${repo.owner}/${repo.name}`;
 		});
 		const all = [...names, ...ids];
 		return all.length && all.every(Boolean) ? new Set(all as string[]) : null;
@@ -605,7 +694,7 @@ export function fakeGitHub(world: World) {
 		const me = world.users[0]!;
 		if (url.origin === "https://spdx.org") return json({ licenseId: "MIT", isOsiApproved: true });
 		if (url.origin === "https://github.com" && path === "/login/oauth/access_token")
-			return json({ access_token: "fake-user-token", token_type: "bearer", scope: "" });
+			return json({ access_token: USER_TOKEN, token_type: "bearer", scope: "" });
 		if (url.origin !== "https://api.github.com") return missing(method, request.url);
 		const text = await request.text();
 		const body = text ? (JSON.parse(text) as Record<string, any>) : {};
@@ -616,6 +705,7 @@ export function fakeGitHub(world: World) {
 		// The App authenticates as itself with a JWT, and as an installation with a token minted from it.
 		const app = token.split(".").length === 3;
 		const unauthorized = () => json({ message: "Bad credentials" }, 401);
+		if (token === USER_TOKEN) return userRead(path, body, me) ?? unauthorized();
 		if (path === "/app") return app ? json({ id: world.app.id, slug: world.app.slug }) : unauthorized();
 		const mint = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/);
 		if (mint && method === "POST") {
@@ -635,21 +725,14 @@ export function fakeGitHub(world: World) {
 		const match = path.match(/^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/);
 		const fullName = match && `${match[1]}/${match[2]}`;
 		const tail = match?.[3] ?? "";
-		const service = match?.[1] === world.forks ? upstream(match[2]!) : undefined;
-		const repo = service ?? (match && world.repos.find((r) => r.owner === match[1] && r.name === match[2]));
+		const repo = match && world.repos.find((r) => r.owner === match[1] && r.name === match[2]);
 		if (match && tail === "/installation") {
 			if (!app) return unauthorized();
 			if (!repo) return notFound();
-			const permissions = service
-				? { metadata: "read", contents: "write" }
-				: Object.fromEntries(
-						["metadata", "contents", "issues", "pull_requests", "checks", "statuses"].map((p) => [
-							p,
-							"write",
-						]),
-					);
-			const installation = service ? world.forkInstallation : world.installation;
-			return json({ id: installation, app_id: world.app.id, suspended_at: null, permissions });
+			const permissions = Object.fromEntries(
+				["metadata", "contents", "issues", "pull_requests", "checks", "statuses"].map((p) => [p, "write"]),
+			);
+			return json({ id: world.installation, app_id: world.app.id, suspended_at: null, permissions });
 		}
 		if (!scope) return unauthorized();
 		// An installation token reaches only its repositories, and writes only what it was granted.
@@ -715,6 +798,11 @@ export function fakeGitHub(world: World) {
 									},
 								});
 							if (!writes("pull_requests")) return json({ errors: [{ type: "FORBIDDEN" }] });
+							// GitHub refuses a merged or closed PR's, though it still reports its auto-merge request.
+							if (pull.merged || pull.closed)
+								return json({
+									errors: [{ message: "Can't disable auto-merge for this pull request." }],
+								});
 							if (!pull.landing)
 								return json({
 									errors: [{ message: "Auto-merge is not enabled for this pull request" }],
@@ -758,34 +846,33 @@ export function fakeGitHub(world: World) {
 			const repo = world.repos.find((r) => r.owner === variables.owner && r.name === variables.name);
 			if (!repo || !scope.repositories.has(`${repo.owner}/${repo.name}`))
 				return json({ errors: [{ type: "NOT_FOUND", message: "Not Found" }] });
-			return json(graphql(repo, query, variables, world.forks));
+			return json(graphql(repo, query, variables));
 		}
 		if (!repo || !scope.repositories.has(fullName!)) return notFound();
-		if (service) return serviceFork(repo, tail, method, body, writes) ?? missing(method, request.url);
 
-		if (tail === "")
-			return json({
-				id: repo.id,
-				name: repo.name,
-				owner: { login: repo.owner },
-				private: false,
-				visibility: "public",
-				default_branch: repo.defaultBranch ?? "main",
-				archived: false,
-				disabled: false,
-				license: { spdx_id: "MIT" },
-				allow_squash_merge: true,
-				allow_auto_merge: true,
-			});
+		if (tail === "") return json(restRepo(repo));
 		const permission = tail.match(/^\/collaborators\/([^/]+)\/permission$/);
 		if (permission) {
 			const found = world.users.find((u) => u.login === permission[1]);
 			if (!found) return notFound();
-			const role = repo.maintainers.includes(found.login) ? "maintain" : "read";
+			const role = repo.maintainers.includes(found.login)
+				? "maintain"
+				: repo.writers?.includes(found.login)
+					? "write"
+					: "read";
 			return json({
 				user: { id: found.id },
-				permission: role === "maintain" ? "write" : "read",
+				permission: role === "read" ? "read" : "write",
 				role_name: role,
+			});
+		}
+		const listed = tail.match(/^\/commits\/([0-9a-f]{40})$/)?.[1];
+		if (listed && method === "GET") {
+			const found = repo.commits[listed];
+			if (!found) return notFound();
+			return json({
+				sha: listed,
+				committer: found.committer ? { login: found.committer, type: actor(found.committer).__typename } : null,
 			});
 		}
 		if (tail === "/commits/main") return json({ sha: commitOf(repo), commit: { tree: { sha: treeOf(repo) } } });
@@ -810,6 +897,32 @@ export function fakeGitHub(world: World) {
 			if (!scope.permissions.administration) return forbidden();
 			return repo.protection ? json(repo.protection) : json({ message: "Branch not protected" }, 404);
 		}
+		const ruleset = tail.match(/^\/rulesets\/(\d+)$/);
+		if (ruleset && method === "GET") {
+			const found = repo.rulesets?.[Number(ruleset[1])];
+			return found ? json({ id: Number(ruleset[1]), ...found }) : notFound();
+		}
+		const runs = tail.match(/^\/commits\/([0-9a-f]{40})\/check-runs$/);
+		if (runs && method === "GET") {
+			if (!scope.permissions.checks) return forbidden();
+			const name = url.searchParams.get("check_name");
+			const app = url.searchParams.get("app_id");
+			const found = repo.pulls.flatMap((pull) =>
+				(pull.runs ?? [])
+					.filter((run) => !run.context && (run.commit ?? headOf(repo, pull)) === runs[1])
+					.map((run) => ({
+						name: run.name,
+						head_sha: runs[1],
+						status: "completed",
+						conclusion: run.conclusion.toLowerCase(),
+						app: { id: run.app ?? ACTIONS_APP },
+					})),
+			);
+			const check_runs = found.filter(
+				(run) => (!name || run.name === name) && (!app || String(run.app.id) === app),
+			);
+			return json({ total_count: check_runs.length, check_runs });
+		}
 		if (tail.startsWith("/rules/branches/main") && method === "GET") {
 			const contexts = (repo.required ?? []).map((context) => ({ context }));
 			return json([
@@ -827,6 +940,7 @@ export function fakeGitHub(world: World) {
 				return repo.branches[name] ?? (pull ? headOf(repo, pull) : null);
 			},
 			set: (name: string, sha: string) => (repo.branches[name] = sha),
+			delete: (name: string) => delete repo.branches[name],
 		};
 		const git = gitData(repo, branches, tail, method, body, writes);
 		if (git) return git;
@@ -843,15 +957,25 @@ export function fakeGitHub(world: World) {
 			// Newest first, as GitHub lists them.
 			return json(found.reverse().map((pull) => restPull(repo, pull)));
 		}
+		if (tail === "/issues" && method === "POST") {
+			if (!writes("issues")) return forbidden();
+			const issue: Issue = {
+				number: Math.max(0, ...repo.issues.map((i) => i.number), ...repo.pulls.map((p) => p.number)) + 1,
+				title: String(body.title),
+				author: `${world.app.slug}[bot]`,
+				body: typeof body.body === "string" ? body.body : undefined,
+			};
+			repo.issues.push(issue);
+			return json({ number: issue.number, title: issue.title, state: "open" }, 201);
+		}
 		if (tail === "/pulls" && method === "POST") {
 			if (!writes("pull_requests")) return forbidden();
-			const [owner, branch] = String(body.head).split(":");
-			const fork = owner === world.forks;
-			if ((!fork && owner !== repo.owner) || !branch || body.base !== "main")
-				return json({ message: "Validation Failed" }, 422);
-			if (!(fork ? repo.fork[branch] : branches.get(branch)))
+			const [prefix, qualified] = String(body.head).split(":");
+			const owner = qualified === undefined ? repo.owner : prefix;
+			const branch = qualified ?? prefix;
+			if (owner !== repo.owner || !branch || body.base !== "main" || !branches.get(branch))
 				return json({ message: "Validation Failed: head is invalid" }, 422);
-			if (repo.pulls.some((pull) => !pull.closed && !!pull.fork === fork && pull.branch === branch))
+			if (repo.pulls.some((pull) => !pull.closed && !pull.contributor && pull.branch === branch))
 				return json({ message: `A pull request already exists for ${body.head}.` }, 422);
 			const pull: Pull = {
 				number: Math.max(0, ...repo.issues.map((i) => i.number), ...repo.pulls.map((p) => p.number)) + 1,
@@ -859,7 +983,6 @@ export function fakeGitHub(world: World) {
 				author: `${world.app.slug}[bot]`,
 				body: body.body,
 				branch,
-				fork,
 				draft: !!body.draft,
 				checks: null,
 				review: null,
@@ -873,8 +996,13 @@ export function fakeGitHub(world: World) {
 			const list: Issue[] = item[1] === "pulls" ? repo.pulls : repo.issues;
 			const found = list.find((i) => String(i.number) === item[2]);
 			if (!found) return notFound();
-			if (item[1] === "issues")
+			if (item[1] === "issues") {
+				if (method === "PATCH") {
+					if (!writes("issues")) return forbidden();
+					if (body.state === "closed") found.closed = true;
+				}
 				return json({ number: found.number, title: found.title, state: found.closed ? "closed" : "open" });
+			}
 			const pull = found as Pull;
 			if (method === "PATCH") {
 				if (!writes("pull_requests")) return forbidden();
@@ -903,8 +1031,9 @@ export function fakeGitHub(world: World) {
 			pull.landing = false;
 			pull.autoMerge = undefined;
 			if (pull.squash) repo.branches[pull.base ?? repo.defaultBranch ?? "main"] = pull.squash;
+			pull.mergeCommit = pull.squash ?? commitOf(repo);
 			return json({
-				sha: pull.squash ?? commitOf(repo),
+				sha: pull.mergeCommit,
 				merged: true,
 				message: "Pull Request successfully merged",
 			});
@@ -947,13 +1076,18 @@ export function fakeGitHub(world: World) {
 			pull.labels = current.filter((label) => label !== name);
 			return json(pull.labels.map((label) => ({ name: label })));
 		}
-		const compare = tail.match(/^\/compare\/([0-9a-f]{40})\.\.\.main$/);
+		const compare = tail.match(/^\/compare\/([0-9a-f]{40})\.\.\.(main|[0-9a-f]{40})$/);
 		if (compare && method === "GET") {
-			const base = repo.branches.main ?? commitOf(repo);
 			const from = compare[1]!;
-			if (!repo.commits[from]) return notFound();
-			const reaches = (sha: string, target: string): boolean =>
-				sha === target || (repo.commits[sha]?.parents ?? []).some((parent) => reaches(parent, target));
+			const base = compare[2] === "main" ? (repo.branches.main ?? commitOf(repo)) : compare[2]!;
+			if (!repo.commits[from] || !repo.commits[base]) return notFound();
+			const ancestors = (tip: string, seen = new Set<string>()): Set<string> => {
+				if (seen.has(tip)) return seen;
+				seen.add(tip);
+				for (const parent of repo.commits[tip]?.parents ?? []) ancestors(parent, seen);
+				return seen;
+			};
+			const reaches = (sha: string, target: string) => ancestors(sha).has(target);
 			const status =
 				from === base
 					? "identical"
@@ -962,7 +1096,10 @@ export function fakeGitHub(world: World) {
 						: reaches(from, base)
 							? "behind"
 							: "diverged";
-			return json({ status });
+			// The nearest common ancestor: one no other common ancestor descends from.
+			const common = [...ancestors(from)].filter((sha) => ancestors(base).has(sha));
+			const nearest = common.find((sha) => !common.some((other) => other !== sha && reaches(other, sha)));
+			return json({ status, merge_base_commit: nearest ? { sha: nearest } : null });
 		}
 		if (tail === "/contents/.github" && method === "GET") {
 			const tree = repo.commits[url.searchParams.get("ref") ?? ""]?.tree;
@@ -978,42 +1115,17 @@ export function fakeGitHub(world: World) {
 		return missing(method, request.url);
 	};
 
-	/** The upstream's service fork: its identity, and its branches in the upstream's object store. */
-	function serviceFork(
-		upstream: Repo,
-		tail: string,
-		method: string,
-		body: Record<string, any>,
-		writes: (permission: Permission) => boolean,
-	) {
-		if (tail === "")
-			return json({
-				id: forkId(upstream),
-				name: upstream.name,
-				owner: { login: world.forks },
-				fork: true,
-				parent: { id: upstream.id },
-				private: false,
-				visibility: "public",
-				default_branch: "main",
-				archived: false,
-				disabled: false,
-			});
-		const branches = {
-			get: (name: string) => upstream.fork[name] ?? null,
-			set: (name: string, sha: string) => (upstream.fork[name] = sha),
-		};
-		return gitData(upstream, branches, tail, method, body, writes);
-	}
-
 	/**
-	 * Git's database API on one repository's `branches`, with the objects its
-	 * fork network shares: commits and trees build on known ones, and a branch
-	 * update fast-forwards unless forced. Null when `tail` is not a Git request.
+	 * Git's database API on one repository's `branches` and object store:
+	 * commits and trees build on known ones, and a branch update fast-forwards unless forced. Null when `tail` is not a Git request.
 	 */
 	function gitData(
 		network: Repo,
-		branches: { get(name: string): string | null; set(name: string, sha: string): void },
+		branches: {
+			get(name: string): string | null;
+			set(name: string, sha: string): void;
+			delete(name: string): void;
+		},
 		tail: string,
 		method: string,
 		body: Record<string, any>,
@@ -1043,6 +1155,11 @@ export function fakeGitHub(world: World) {
 			if (!body.force && !ancestor(body.sha)) return invalid("Update is not a fast forward");
 			branches.set(branch, body.sha);
 			return json({ ref: `refs/heads/${branch}`, object: { type: "commit", sha: body.sha } });
+		}
+		if (branch && method === "DELETE") {
+			if (!branches.get(branch)) return invalid("Reference does not exist");
+			branches.delete(branch);
+			return new Response(null, { status: 204 });
 		}
 		if (tail === "/git/refs" && method === "POST") {
 			const name = typeof body.ref === "string" && body.ref.startsWith("refs/heads/") && body.ref.slice(11);
@@ -1101,7 +1218,13 @@ export function fakeGitHub(world: World) {
 				return invalid("Invalid commit");
 			// GitHub stamps each commit with the time, so even identical changes get a new commit.
 			const sha = sha1(`commit ${Object.keys(network.commits).length} ${body.tree} ${parents} ${body.message}`);
-			network.commits[sha] = { parents, tree: body.tree, message: body.message };
+			// No author or committer: GitHub attributes the commit to the App's bot.
+			network.commits[sha] = {
+				parents,
+				tree: body.tree,
+				message: body.message,
+				committer: `${world.app.slug}[bot]`,
+			};
 			return json({ sha }, 201);
 		}
 		return null;

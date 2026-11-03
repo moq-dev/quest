@@ -37,6 +37,11 @@ The observable outcome and important boundaries.
 
 Current decisions, open questions, or implementation guidance.
 
+## Waiting
+
+- Maintainer: the decision or action only they can take, and how to check it is done
+- moq-dev/moq: a condition another party must meet, and how to check or advance it
+
 ## Required
 
 - [Child quest](/quest/foo/bar.md) - the outcome, so the list reads without opening it
@@ -56,6 +61,10 @@ The `Goal` section is required; everything else is optional. Use these exact hea
 
 Size the title `[XS]` to `[XL]` for implementation, verification, and landing.
 An epic carries no size until its last child is removed; its README is then the epic's remaining work.
+
+`Waiting` lists what the work waits on outside the tree; each item opens with who acts, `Maintainer:` or the outside party, before a colon.
+A decision item gives its options and a recommendation.
+Remove an item once its condition clears, and the heading with its last item.
 
 `Required` lists the quests that must finish before the work starts.
 The list is ordered by priority, inserted at rank.
@@ -95,15 +104,16 @@ Search the tree and git history first before making a new quest.
 
 Split independently completable work into separate quests.
 A suggested follow-up becomes a quest only through `/quest-plan`, never as an agent-session task or a GitHub issue.
-Plan recommended follow-ups without offering first: run `/quest-plan` on each one in turn, one follow-up per run.
-A background agent that cannot prompt reports them for its caller to plan.
+Plan recommended follow-ups without offering first: run `/quest-plan` on each one in turn, one follow-up per run; its interview lets the user drop it.
+A background agent that cannot prompt reports them, and its caller plans them the same way.
 Group related quests in an epic; its README holds the work no child owns.
 
 A release or pin bump that unblocks work is its own quest.
 
 So is anything waiting on an outside party or a human action (an upstream fix, a customer, a decision).
-Its Goal names the condition and how to check or advance it; it is deleted once the condition clears.
+Its `Waiting` section names who acts, the condition, and how to check or advance it; it is deleted once the condition clears.
 Unlike a blocked quest it stays ready, so it resurfaces every time ready work is triaged instead of stalling in the backlog.
+`quest waiting` lists every waiting item, the maintainer's first, ranked by what each unblocks, and `/quest-unblock` walks the maintainer through them.
 
 ## Execution
 
@@ -129,7 +139,7 @@ In a fork's clone, it pushes to the fork and opens the PR upstream; a fork
 whose parent keeps no quests is its own upstream.
 It exits 3 when the quest is blocked or someone else holds it; pick other work.
 `quest start --release <quest>` gives back a claim before any work is pushed.
-If a claim looks stale, such as a draft without `## Decisions needed` or a
+If a claim looks stale, such as a draft without `## Waiting` or a
 branch with no open PR that has been quiet a long time, offer the user to take
 it over, saying how long ago it was last active.
 
@@ -146,6 +156,9 @@ A PR that another session pushed to in the last hour is theirs: report its event
 Before each push to a branch that already has a PR, confirm the PR is still open: a push after it merges brings the deleted branch back.
 The claim push from `quest start`, made before its draft PR exists, is exempt.
 
+Prefer the exhaustive solution: a quest's PR handles every case of its problem, including those its reviews find, rather than landing part of it and splitting the rest into new quests.
+Leave work for later only when it waits on an outside condition or a maintainer decision, or lies outside the quest's Goal.
+
 A quest's PR leaves its quest accurate when it merges.
 The PR that finishes a quest deletes its file and every link to it.
 A PR that leaves work rewrites the quest to what remains, rather than noting it only in the PR body.
@@ -153,8 +166,9 @@ A PR that leaves work rewrites the quest to what remains, rather than noting it 
 
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
 When a quest is complete, review it locally and mark its PR ready for review with `/quest-review`, even if you made choices without asking; list those choices in the PR body for review.
-Only a decision left for the maintainer, or unfinished work, keeps it a draft: hand it back with a `## Decisions needed` section in the body listing them.
+Only a decision left for the maintainer, an outside condition, or unfinished work keeps it a draft: hand it back with a `## Waiting` section in the body listing them, in the same form as a quest's.
 Tools read only whether that heading is present; a draft without it still belongs to its starter.
+Drafts handed back before `## Waiting` replaced it use `## Decisions needed`, which counts the same.
 A draft suggests `/quest-iterate`; a PR ready for review suggests `/quest-merge`.
 Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` plans them.
 Add a closing keyword for every issue under `Closes`.
@@ -186,7 +200,8 @@ Leave a comment on any review feedback you disagree with.
 
 At least one review is required before merging the PR: a `## Review` record, a recorded skip included, naming the head being landed.
 Changes since the last review skip a new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged,
-or a land fixer's recorded mechanical fix that changes no behavior.
+a land fixer's recorded mechanical fix that changes no behavior,
+or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
 Any other change needs a local review of the new head.
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
@@ -197,7 +212,9 @@ Every fourth round, stop before fixing more findings and reconsider the approach
 Report that judgment and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
-Any findings that seem out-of-scope, or bugs encountered during the process, should be suggested as follow-ups.
+Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.
+Never defer a relevant fix to a follow-up just to narrow the PR.
+Suggest only out-of-scope discoveries as follow-ups.
 
 ## Deletion
 

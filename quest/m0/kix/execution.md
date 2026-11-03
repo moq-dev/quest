@@ -2,7 +2,7 @@
 
 ## Goal
 
-A maintainer starts ready work through kix.quest, follows it through agent
+A maintainer starts ready work through kix, follows it through agent
 summaries, answers its questions, and receives a normal contribution PR. New
 PR notifications present useful next actions, including explicitly
 requested iteration, in the same decision UI.
@@ -27,12 +27,12 @@ time:
 - A start job claims through the bot exactly as `quest start` does: a draft
   PR. kix treats PRs that local sessions hold as owned, shows that owner on
   the card, and never acts on them: a `quest:*` label, or a draft with no
-  `## Decisions needed` section. The inbox already lists such a draft, or a
+  `## Waiting` (or older `## Decisions needed`) section. The inbox already lists such a draft, or a
   PR whose observation shows a `quest:*` label, as in progress, with no
   actions; showing the owner remains. A stale one is offered to the
   maintainer for takeover.
 - A PR with no `quest:*` label that is ready, or a draft with
-  `## Decisions needed`, is a decision item offering the
+  `## Waiting` (or older `## Decisions needed`), is a decision item offering the
   `/quest-complete` actions, one decision per PR: mark ready, merge (merging
   directly or through a merge job already ship), iterate, skip, or delete. Owned
   PRs never push a notification.
@@ -68,4 +68,4 @@ Earlier guidance:
 
 ## Required
 
-- [Job sandbox](/quest/m0/kix/sandbox/README.md) - safe iteration on PRs with contributors' commits
+- [Job sandbox](/quest/m0/kix/sandbox/README.md) - iterate and merge jobs on approved kix-pushed heads, with opencode sandboxed

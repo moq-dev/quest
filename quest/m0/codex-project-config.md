@@ -19,5 +19,5 @@ Decided 2026-10-28 (user, /quest-plan of the follow-ups from [moq-dev/quest#271]
 - Do not post upstream, on #49333 or a new issue; the maintainer declined.
   Only watch for the change.
 - This quest waits on Codex. Check #49333 and Codex release notes each time
-  ready work is triaged; [the live sandbox test](/quest/m0/review-sandbox.md)
+  ready work is triaged; the live sandbox test, `just review-sandbox`,
   catches a release that changes the behavior first.

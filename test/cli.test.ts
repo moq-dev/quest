@@ -37,6 +37,30 @@ test("unblocked accepts a filesystem path", () => {
 	expect(tree.run("unblocked", `${tree.path}/quest/m0/epic/two.md`).stdout).toBe("quest/m0/epic/one.md\n");
 });
 
+test("waiting lists the maintainer's items first, one per line", () => {
+	const tree = Tree.baseline()
+		.append("quest/m0/epic/one.md", "\n## Waiting\n\n- moq-dev/moq: a release carries the fix.\n")
+		.append("quest/m0/epic/two.md", "\n## Waiting\n\n- Maintainer: pick a name.\n");
+	expect(tree.run("waiting")).toEqual({
+		code: 0,
+		stdout:
+			"0\tblocked\tquest/m0/epic/two.md\tMaintainer: pick a name.\n" +
+			"1\tready\tquest/m0/epic/one.md\tmoq-dev/moq: a release carries the fix.\n",
+		stderr: "",
+	});
+	expect(tree.run("waiting", "--maintainer").stdout).toBe(
+		"0\tblocked\tquest/m0/epic/two.md\tMaintainer: pick a name.\n",
+	);
+	expect(JSON.parse(tree.run("waiting", "--json", "--limit", "1").stdout)).toEqual([
+		{
+			path: "quest/m0/epic/two.md",
+			dependents: 0,
+			ready: false,
+			waits: [{ line: expect.any(Number), party: "Maintainer", text: "pick a name." }],
+		},
+	]);
+});
+
 test("unblocked rejects a path that is not a quest", () => {
 	const out = Tree.baseline().run("unblocked", "nope.md");
 	expect(out.code).toBe(1);
@@ -63,7 +87,7 @@ test("init and uninstall print each changed path and nothing else", () => {
 	const init = run("--root", root, "init");
 	expect(init.code).toBe(0);
 	expect(init.stdout).toMatch(/^(\S+\n)+$/);
-	expect(init.stdout).toContain("quest/README.md\nAGENTS.md\n");
+	expect(init.stdout).toContain("quest/README.md\n.claude/settings.json\nAGENTS.md\n");
 	expect(run("--root", root, "init").stdout).toBe("");
 	expect(run("--root", root, "uninstall").stdout).toMatch(/^(\S+\n)+$/);
 	expect(run("--root", root, "uninstall").stdout).toBe("");

@@ -3,6 +3,7 @@ import { SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as projects from "../src/board/project";
 import { app } from "../src/index";
+import { identity, oauth } from "./login-fixtures";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -247,6 +248,17 @@ describe("Worker", () => {
 		expect(outbound).not.toHaveBeenCalled();
 		const users = await env.DB.prepare("SELECT count(*) AS count FROM user").first<{ count: number }>();
 		expect(users?.count).toBe(before?.count);
+	});
+	it("returns a signed-in maintainer from installing the App straight to the project picker", async () => {
+		const { session } = await oauth(identity("github"));
+		const outbound = vi.spyOn(globalThis, "fetch");
+		const response = await SELF.fetch(
+			`${origin}/api/auth/callback/github?code=install-code&installation_id=5&setup_action=install`,
+			{ headers: { Cookie: session! }, redirect: "manual" },
+		);
+		expect(response.status).toBe(303);
+		expect(response.headers.get("location")).toBe("/projects");
+		expect(outbound).not.toHaveBeenCalled();
 	});
 	it("rejects OAuth callbacks without a valid state", async () => {
 		const before = await env.DB.prepare("SELECT count(*) AS count FROM user").first<{ count: number }>();

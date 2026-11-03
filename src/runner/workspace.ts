@@ -56,6 +56,11 @@ export interface Snapshot {
 	submodules: { path: string; sha: string }[];
 }
 
+/** A snapshot before any file is read: each changed path's blob, or null to delete it. */
+interface Pending extends Omit<Snapshot, "changes"> {
+	files: { path: string; mode: string; blob: string | null }[];
+}
+
 export class Workspace {
 	readonly dir: string;
 	#record: Record;
@@ -105,7 +110,7 @@ export class Workspace {
 			if (record && record.head === job.head && existsSync(join(dir, ".git")))
 				return new Workspace(git, dir, file, record);
 			const previous = record && existsSync(join(dir, ".git")) ? new Workspace(git, dir, file, record) : null;
-			const source = previous ? await previous.snapshot(true) : null;
+			const source = previous ? await previous.#pending() : null;
 			if (previous) {
 				const entries = (await run("git", ["-C", dir, "ls-files", "--stage", "-z"])).stdout.split("\0");
 				const links = [
@@ -198,16 +203,35 @@ export class Workspace {
 	}
 
 	/** The worktree's files that differ from what the branch holds, untracked ones included and ignored ones not. */
-	async snapshot(preserving = false): Promise<Snapshot> {
-		if (!preserving && (await this.conflicts()).length)
+	async snapshot(): Promise<Snapshot> {
+		if ((await this.conflicts()).length)
 			throw new Error("Resolve and stage the preserved merge conflicts before publishing");
-		if (!preserving && this.#record.reapply) {
+		if (this.#record.reapply) {
 			try {
 				await run("git", ["-C", this.dir, "merge-base", "--is-ancestor", this.#record.base, "HEAD"]);
 			} catch {
 				throw new Error("Merge and commit the selected head with the preserved work before publishing");
 			}
 		}
+		const { tree, merge, files, submodules } = await this.#pending();
+		const contents = await blobs(
+			this.dir,
+			files.flatMap((file) => (file.blob ? [file.blob] : [])),
+		);
+		const changes = files.map(({ path, mode, blob }): Change => {
+			if (!blob) return { path, content: null };
+			return {
+				path,
+				content: contents.get(blob)!.toString("base64"),
+				...(mode === "100755" && { executable: true }),
+				...(mode === "120000" && { symlink: true }),
+			};
+		});
+		return { tree, merge, changes, submodules };
+	}
+
+	/** The worktree's tree and the paths that differ from what the branch holds, by blob, before reading any file. */
+	async #pending(): Promise<Pending> {
 		const index = `${this.#file.replace(/\.json$/, "")}.index`;
 		const env = { ...process.env, GIT_INDEX_FILE: index };
 		const git = (args: string[]) =>
@@ -219,30 +243,17 @@ export class Workspace {
 			const tree = (await git(["write-tree"])).stdout.trim();
 			const diff = (await git(["diff-tree", "-r", "-z", "--no-renames", merge ?? this.#record.base, tree]))
 				.stdout;
-			const changes: Change[] = [];
+			const files: Pending["files"] = [];
 			const submodules: Snapshot["submodules"] = [];
 			const fields = diff.split("\0");
 			for (let i = 0; i + 1 < fields.length; i += 2) {
 				const [, mode, , blob, status] = fields[i]!.split(" ");
 				const path = fields[i + 1]!;
-				if (status === "D") changes.push({ path, content: null });
+				if (status === "D") files.push({ path, mode: mode!, blob: null });
 				else if (mode === "160000") submodules.push({ path, sha: blob! });
-				else {
-					const content = (
-						await run("git", ["-C", this.dir, "cat-file", "blob", blob!], {
-							encoding: "buffer",
-							maxBuffer: 64 * 1024 * 1024,
-						})
-					).stdout.toString("base64");
-					changes.push({
-						path,
-						content,
-						...(mode === "100755" && { executable: true }),
-						...(mode === "120000" && { symlink: true }),
-					});
-				}
+				else files.push({ path, mode: mode!, blob: blob! });
 			}
-			return { tree, merge, changes, submodules };
+			return { tree, merge, files, submodules };
 		} finally {
 			rmSync(index, { force: true });
 		}
@@ -255,8 +266,8 @@ export class Workspace {
 	}
 
 	/** Preserve tracked/untracked source in a local Git ref before replacing any stale checkout. */
-	async #checkpoint(job: string, snapshot: Snapshot): Promise<{ ref: string; sha: string } | null> {
-		if (!snapshot.changes.length && !snapshot.merge && !snapshot.submodules.length) return null;
+	async #checkpoint(job: string, pending: Pending): Promise<{ ref: string; sha: string } | null> {
+		if (!pending.files.length && !pending.merge && !pending.submodules.length) return null;
 		const local = (await run("git", ["-C", this.dir, "rev-parse", "HEAD"])).stdout.trim();
 		// published() keeps a synthetic tree base. The real published head is
 		// needed too, so merging an external descendant uses that publication
@@ -271,7 +282,7 @@ export class Workspace {
 				"-C",
 				this.dir,
 				"commit-tree",
-				snapshot.tree,
+				pending.tree,
 				...parents.flatMap((sha) => ["-p", sha]),
 				"-m",
 				"Preserved unpublished kix workspace",
@@ -388,6 +399,29 @@ async function remove(git: string, dir: string): Promise<void> {
 		rmSync(dir, { recursive: true, force: true });
 	}
 	await run("git", ["-C", git, "worktree", "prune"]).catch(() => {});
+}
+
+/**
+ * Read blobs with one `cat-file --batch`: `<oid> blob <size>\n<content>\n`
+ * each, in input order. One process rather than one per file keeps a large
+ * publication from paying a spawn per path. kix refuses publications over
+ * 16 MiB, so the 64 MiB buffer bounds only what it would reject anyway.
+ */
+async function blobs(dir: string, oids: string[]): Promise<Map<string, Buffer>> {
+	const contents = new Map<string, Buffer>();
+	if (!oids.length) return contents;
+	const reading = run("git", ["-C", dir, "cat-file", "--batch"], { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+	reading.child.stdin!.end(`${oids.join("\n")}\n`);
+	const { stdout } = await reading;
+	let offset = 0;
+	for (const oid of oids) {
+		const header = stdout.indexOf(10, offset);
+		const [, type, size] = stdout.toString("utf8", offset, header).split(" ");
+		if (type !== "blob") throw new Error(`could not read blob ${oid}`);
+		contents.set(oid, stdout.subarray(header + 1, header + 1 + Number(size)));
+		offset = header + 1 + Number(size) + 1;
+	}
+	return contents;
 }
 
 /**

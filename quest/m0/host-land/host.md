@@ -81,6 +81,16 @@ Deployed 2026-10-30 from
 - The `quest-land` Actions runner is retired, and the host pins quest at
   `49cd094`, whose checks get a standalone shallow clone.
 
+Deployed 2026-10-31 for moq.pro and rust2
+([kixelated/nixos#16](https://github.com/kixelated/nixos/pull/16)):
+`moq-pro` and `rust2` instances, remote-only daemon checkouts so private
+repositories need no clone credential, check images that resolve
+`*.localhost` through nsncd and ship the CI runners' `dejavu-fonts-minimal`,
+check output written to a file instead of a shared non-blocking pipe,
+`restartIfChanged = false` on check and fixer instances, submodules
+initialized before the fixer's dev shell, and `KillMode=process` on the
+daemons so a restart keeps detached fixers.
+
 What remains:
 
 - Merge #16 once
@@ -92,3 +102,15 @@ What remains:
   already rejects.
 - moq-bot's `organization_self_hosted_runners` write permission served only
   the retired runner; the maintainer may drop it.
+- The VM test's switch steps fail on about a third of runs with "Job for
+  quest-land-fixer.socket canceled" when several `*-socket-refresh`
+  services restart at once (user, 2026-10-31). Find the race and fix it,
+  without retrying the test.
+
+Amended 2026-11-01 (maintainer, /quest-plan; see the
+[queue watcher](/quest/m0/queue-watcher/README.md)): host-gate work is frozen
+except fixes the switch needs. The `QUEST_GATE_PRIORITY=1` export in the
+generated check command (planned 2026-10-31) is dropped with it. The items
+above stay, since the fixer container and its launcher serve the watcher too,
+and the gate keeps serving the repositories not yet switched. The watcher's
+own unit is [Watcher on the host](/quest/m0/queue-watcher/host.md).

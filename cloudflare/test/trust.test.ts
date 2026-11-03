@@ -27,15 +27,12 @@ beforeEach(async () => {
 		issues: [],
 		pulls: [{ number: 2, title: "Fix", author: "maintainer", branch: "fix", checks: null, review: null }],
 		branches: { main: base, fix: head },
-		fork: {},
 		trees: {},
 		commits: { [base]: { parents: [], tree, message: "Base" }, [head]: commit() },
 	};
 	const world: World = {
 		app: { id: Number(env.GITHUB_APP_ID), slug: "quest" },
 		installation: 5,
-		forkInstallation: 6,
-		forks: env.GITHUB_FORK_OWNER,
 		users: [
 			{ id: 7, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" },
 			{ id: 8, login: "contributor", name: "Contributor", email: "contributor@example.test" },

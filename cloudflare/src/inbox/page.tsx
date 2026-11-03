@@ -1,4 +1,4 @@
-import { type Pull, continued, startable } from "../github/state";
+import { type Pull, startable } from "../github/state";
 import { type Prompt, parsePrompt } from "../jobs/prompt";
 import { type Done, PLAN_LIMITS, PUBLICATION_REPLY, inboxURL } from "../jobs/routes";
 import { Marker, Notifications } from "../layout";
@@ -286,8 +286,8 @@ function PublicationForm(props: { item: Item }) {
 			{restart && (
 				<>
 					<p class="note-small muted">
-						Or start over: kix resets <code>{item.job!.branch}</code> on its fork to the commit this job
-						started from, discarding the commits on it, and runs the job again with a new agent.
+						Or start over: kix resets <code>{item.job!.branch}</code> on the repository to the commit this
+						job started from, discarding the commits on it, and runs the job again with a new agent.
 					</p>
 					<button class="button quiet" name="restart" value="1" formnovalidate>
 						Start over
@@ -351,8 +351,8 @@ function blocked(item: Item, view: ProjectView | undefined) {
 	if (!state?.project.available)
 		return `${failed || "GitHub reported changes. "}Refresh to start new work from current state.`;
 	// A retry continues its failed job's pull request, so that claim does not block it.
-	const retry = item.need === "retry" && item.job ? continued(state, item.job) : null;
-	if (item.kind === "quest" && !startable(state, item.target, retry))
+	const retrying = item.need === "retry" ? item.job : null;
+	if (item.kind === "quest" && !startable(state, item.target, retrying))
 		return "This quest is no longer ready to start, such as when it is claimed or removed.";
 	if ((item.kind === "issue" || item.kind === "pull") && !item.activity?.data)
 		return `${failed}Refresh to read this from GitHub.`;

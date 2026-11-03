@@ -40,6 +40,12 @@ _test:
     bash scripts/lifecycle-check.sh "$PWD/dist/quest"
     just worker-test
 
+# Check that `quest review` runs nothing a reviewed head plants, with the real
+# Codex and Claude Code CLIs. Uses each CLI's login and spends its usage; run it
+# after upgrading either CLI. Arguments go to vitest, such as `-t codex`.
+review-sandbox *args:
+    QUEST_LIVE=1 bun run vitest run {{args}}
+
 # Apply formatters without changing program behavior.
 fix:
     bun run fix
