@@ -1220,7 +1220,10 @@ export class GitHubService {
 			userId,
 			state === "enabled" ? { contents: "read" } : {},
 			async (token, current, installation) => {
-				if (state === "enabled") return this.#enable(token, repo, current, installation, userId, userId);
+				if (state === "enabled") {
+					await this.#enable(token, repo, current, installation, userId, userId);
+					return [];
+				}
 				// Recheck the local revocation gate after potentially long content reads.
 				await this.#gate(installation);
 				if (state === "disconnected") {
@@ -1251,7 +1254,10 @@ export class GitHubService {
 	/**
 	 * Enable contributions after checking eligibility live, enrolling the
 	 * project as `enroller`'s and making `userId`, whose authority the caller
-	 * checked, a member. A project setting up leaves that state.
+	 * checked, a member. A project setting up leaves that state. With `pull`,
+	 * as when its setup pull request merged, it enables only while that setup
+	 * is still recorded, so a disconnect or a pause made during the live checks
+	 * stands; it returns whether it enabled.
 	 */
 	async #enable(
 		token: string,
@@ -1260,7 +1266,8 @@ export class GitHubService {
 		installation: number,
 		userId: string,
 		enroller: string,
-	): Promise<Stopped[]> {
+		pull?: number,
+	): Promise<boolean> {
 		const preview = await this.#preview(token, repo, current, installation);
 		if (preview.licenseError) throw new GitHubError(preview.licenseError);
 		// The repository or license can change during content reads. Check
@@ -1275,26 +1282,33 @@ export class GitHubService {
 		await this.#maintainer(token, repo, userId);
 		// Recheck the local revocation gate after potentially long content reads.
 		await this.#gate(installation);
-		await this.#env.DB.batch([
+		// Every write checks the setup in the same transaction, before the last one removes it.
+		const [guard, args] =
+			pull === undefined
+				? ["1", []]
+				: ["EXISTS(SELECT 1 FROM github_project_setups WHERE id=? AND pull=?)", [repo.id, pull]];
+		const [, , enabled] = await this.#env.DB.batch([
 			this.#env.DB.prepare(
-				"DELETE FROM github_project_state WHERE repository=? AND EXISTS(SELECT 1 FROM github_projects WHERE id=? AND installation<>?)",
-			).bind(repo.id, repo.id, installation),
+				`DELETE FROM github_project_state WHERE repository=? AND EXISTS(SELECT 1 FROM github_projects WHERE id=? AND installation<>?) AND ${guard}`,
+			).bind(repo.id, repo.id, installation, ...args),
 			this.#env.DB.prepare(
-				"DELETE FROM github_project_activity WHERE repository=? AND EXISTS(SELECT 1 FROM github_projects WHERE id=? AND installation<>?)",
-			).bind(repo.id, repo.id, installation),
+				`DELETE FROM github_project_activity WHERE repository=? AND EXISTS(SELECT 1 FROM github_projects WHERE id=? AND installation<>?) AND ${guard}`,
+			).bind(repo.id, repo.id, installation, ...args),
 			this.#env.DB.prepare(
-				`INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) VALUES(?,?,?,?,'enabled',?,?)
+				`INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) SELECT ?,?,?,?,'enabled',?,? WHERE ${guard}
 					ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,name=excluded.name,installation=excluded.installation,state=excluded.state,updatedAt=excluded.updatedAt`,
-			).bind(repo.id, repo.owner, repo.name, installation, enroller, Date.now()),
+			).bind(repo.id, repo.owner, repo.name, installation, enroller, Date.now(), ...args),
 			// The project did not exist when the check above ran.
 			...[...new Set([userId, enroller])].map((user) =>
 				this.#env.DB.prepare(
-					"INSERT INTO github_project_members(repository,user) VALUES(?,?) ON CONFLICT DO NOTHING",
-				).bind(repo.id, user),
+					`INSERT INTO github_project_members(repository,user) SELECT ?,? WHERE ${guard} ON CONFLICT DO NOTHING`,
+				).bind(repo.id, user, ...args),
 			),
-			this.#env.DB.prepare("DELETE FROM github_project_setups WHERE id=?").bind(repo.id),
+			pull === undefined
+				? this.#env.DB.prepare("DELETE FROM github_project_setups WHERE id=?").bind(repo.id)
+				: this.#env.DB.prepare("DELETE FROM github_project_setups WHERE id=? AND pull=?").bind(repo.id, pull),
 		]);
-		return [];
+		return enabled!.meta.changes > 0;
 	}
 
 	/** The setup recorded for a repository, without checking GitHub. */
@@ -1502,8 +1516,16 @@ export class GitHubService {
 				);
 				if (pull.merged) {
 					try {
-						await this.#enable(token, repo, current, installation, actor, row.enrolledBy);
-						return "enabled";
+						if (await this.#enable(token, repo, current, installation, actor, row.enrolledBy, row.pull))
+							return "enabled";
+						// A disconnect, a retry, or another reconciliation changed the setup meanwhile; report where it stands now.
+						const now = await this.#setupRow(repo.id);
+						if (now) return setupOf(now);
+						const project = await db
+							.prepare("SELECT 1 FROM github_projects WHERE id=?")
+							.bind(repo.id)
+							.first();
+						return project ? "enabled" : null;
 					} catch (error) {
 						if (!(error instanceof GitHubError)) throw error;
 						await db

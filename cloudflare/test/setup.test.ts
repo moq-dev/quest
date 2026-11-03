@@ -230,6 +230,26 @@ describe("the setup pull request", () => {
 		expect(await enrolled()).toMatchObject({ state: "enabled" });
 	});
 
+	it("keeps a disconnect made while a merged setup is being enabled", async () => {
+		await post("/setup", { id: "10" });
+		const [pull] = opened();
+		// The maintainer disconnects after the reconciliation read the merged pull request.
+		vi.mocked(globalThis.fetch).mockImplementation(
+			intercept(
+				github,
+				(url, method) => method === "GET" && url.pathname.endsWith(`/pulls/${pull!.number}`),
+				async (next) => {
+					const response = await next();
+					await db.prepare("DELETE FROM github_project_setups WHERE id=10").run();
+					return response;
+				},
+			),
+		);
+		expect((await merge(pull!)).status).toBe(202);
+		expect(await enrolled()).toBeNull();
+		expect(await db.prepare("SELECT 1 FROM github_project_members WHERE repository=10").first()).toBeNull();
+	});
+
 	it("lists a project setting up on the picker", async () => {
 		await post("/setup", { id: "10" });
 		const html = await (await app.request(`${origin}/projects`, { headers: { Cookie: session } }, testEnv)).text();
