@@ -101,7 +101,7 @@
               ]
               # `flock` (the land daemon's repository lock) and `script` (the tests' terminal), which
               # self-hosted NixOS runners don't otherwise provide.
-              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.util-linux ];
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux ];
           };
           formatter = pkgs.nixfmt;
           checks = {
