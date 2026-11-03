@@ -29,11 +29,16 @@ flaky test in its `failure` so it can be followed up), commit a
 mechanical fix on its own branch, or hand it back with diagnosis and recommendation.
 Allowed fixes: preserve both sides' intent in conflicts, format/lint, regenerate
 lockfiles/generated files, or follow a base rename. Merge base where practical.
-Never edit flake.nix, flake.lock, shell.nix, default.nix, nix/, .envrc, .github/,
-.gitmodules, or gitlinks (submodule entries) anywhere. Merging the base may carry
-the base's own changes to those paths: that is allowed when they come out exactly as
-a plain `git merge` of the base leaves them, with no conflict there for you to edit. Never push or contact
-GitHub. Anything needing behavior changes or review must be handed back.
+flake.nix, flake.lock, shell.nix, default.nix, nix/, .envrc, .github/, .gitmodules,
+and gitlinks (submodule entries) anywhere are protected. Merging the base may carry
+the base's own changes to those paths: that is no edit of yours when they come out
+exactly as a plain `git merge` of the base leaves them, with no conflict there for you
+to edit. Prefer a fix that leaves them alone. When the mechanical fix itself must
+edit one, such as a conflict there that a resolution preserving both sides settles,
+make it and report it `fixed`, naming the protected paths it edits in the reason:
+quest land never pushes it, but hands the PR back with your commit ready for a
+maintainer to review and apply. Never push or contact GitHub. Anything needing
+behavior changes or review must be handed back.
 
 Build tools may fetch the dependencies the repository's manifests and lockfiles
 name: from their package registries, such as crates.io, npm, PyPI, and the Go
