@@ -87,8 +87,9 @@ ownership-manifest design:
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
 - [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` exits distinctly on a reviewer's quota and prints the reset time
 - [Drafts in quest waiting](/quest/m0/waiting-drafts.md) - `quest waiting` lists open draft PRs' `## Waiting` items beside the tree's
-- [Rejected options in decision records](/quest/m0/decision-records.md) - grill and plan label rejected options so no one reads them as qualifiers
+- [Decision records](/quest/m0/decision-records.md) - grill and plan label rejected options, and record a decision in the PR when the PR deletes the quest
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
+- [Per-PR picks in /quest-complete](/quest/m0/complete-per-pr.md) - one question per PR, with no grouped or blanket option offered
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Bun EFAULT report](/quest/m0/bun-efault.md) - report concurrent `rmSync` `EFAULT` on Windows, and drop the workaround once Bun fixes it
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
