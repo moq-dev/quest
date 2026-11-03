@@ -104,8 +104,7 @@ ownership-manifest design:
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
 - [Gate load wording](/quest/m0/gate-load-wording.md) - stop naming Spotlight as the cause of a fresh macOS runner's load
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
-- [Worktree hooks here](/quest/m0/worktree-hooks.md) - `quest` reaches Claude Code's hooks and the merge driver in this repository, then `quest init` installs the hooks
-- [Wrapped worktree hooks](/quest/m0/wrapped-hooks.md) - `quest init` accepts a hook that runs `… worktree hook` through a wrapper such as `nix run`
+- [Agents get the dev shell from user settings](/quest/m0/user-dev-shell/README.md) - maintainers' own Claude and Codex settings load the dev shell; repositories drop dev-shell hooks, Quest worktree hooks, and `nix develop` instructions, and `quest init` writes no hooks
 - [Remote control worktrees](/quest/m0/worktree-routes.md) - live-check `claude remote-control --spawn worktree` against the hooks, from a session spawned on claude.ai
 - [Session checkouts released](/quest/m0/session-checkouts.md) - a Claude session's own checkout is released when the session ends and reclaimed on resume
 - [claude rm upstream report](/quest/m0/claude-rm-upstream.md) - waiting on approval: ask Claude Code to run `WorktreeRemove` instead of advising an unlock

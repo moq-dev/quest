@@ -23,12 +23,24 @@ Evidence, gathered 2026-11-02:
 
 Work:
 
-- Install `SessionEnd` and `SessionStart` hook entries through
-  `quest init`, recognised by `init` and `uninstall` like the others.
+- Add `SessionEnd` and `SessionStart` entries to the opt-in user-level hook
+  setup the docs describe. Amended 2026-11-03 (maintainer, /quest-unblock):
+  `quest init` writes no hook entries anymore
+  ([quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md)),
+  so this quest no longer installs them through `init`.
 - `SessionEnd` releases (never removes) the session's checkout;
   `SessionStart` claims it again on resume. `/clear` also fires
   `SessionEnd`, so release is idempotent and the next `SessionStart`
   reclaims it. An idle background session never ends; leave it held.
+- Remote control's `bridge-*` checkouts are session checkouts too, and the
+  release covers them if `SessionEnd` fires in a bridge-spawned session.
+  [Remote control's live check](/quest/m0/worktree-routes.md) confirms
+  whether it does. Release only prunes the declared scratch: it keeps every
+  other file and Git's worktree lock (`release` and `prune` in
+  `src/cli/worktree.ts`; only `remove` unlocks). The bridge still decides at
+  session end, as that quest describes: it removes a clean checkout through
+  `WorktreeRemove` and keeps one with changes. Verify that order in the same
+  live check.
 - Claude Code bounds `SessionEnd` hooks by a short budget
   (`CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`) and does not wait past it.
   Measure a release with scratch to delete, and set the entry's timeout to
