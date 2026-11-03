@@ -344,6 +344,24 @@ describe("worktrees", { timeout: 20_000 }, () => {
 			async () => false,
 		);
 		expect(worktrees.status().records.find((record) => record.name === "agent-child")?.phase).toBe("active");
+		// A workflow agent that starts inside a submodule of its checkout binds it there too.
+		const flow = "wf_04c8d372-2e7-1";
+		const workflow = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: nested, name: flow },
+			worktrees,
+			async () => false,
+			repo,
+		))!.trim();
+		for (const event of ["SubagentStart", "SubagentStop"])
+			await claudeHook(
+				{ hook_event_name: event, cwd: join(workflow, "sub", "nested", "inner"), agent_id: "flow" },
+				worktrees,
+				async () => false,
+			);
+		expect(worktrees.status().records.find((record) => record.name === flow)).toMatchObject({
+			phase: "released",
+			agent: "flow",
+		});
 		writeFileSync(join(nested, "file"), "local work");
 		mkdirSync(join(nested, "cache"));
 		writeFileSync(join(nested, "cache", "output"), "build output");
