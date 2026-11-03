@@ -25,6 +25,7 @@ import {
 	fileHost,
 	gate,
 	group,
+	inside,
 	type Admission,
 	type Host,
 	hostLimits,
@@ -37,7 +38,7 @@ import {
 	scope,
 	scoped,
 } from "../src/cli/gate";
-import { enclosed, forwards, foregroundStat } from "../src/cli/interrupt";
+import { forwards, foregroundStat } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
 
@@ -576,15 +577,26 @@ test.skipIf(process.platform === "win32")("cancellation forwards the received si
 });
 
 test("a nested call, or one inside a Quest scope, leaves its command to the enclosing owner", () => {
-	expect(owner({ QUEST_GATE_ADMITTED: "1" })).toBe(direct);
-	const cgroup = join(tempDir(), "cgroup");
+	const dir = tempDir();
 	const slice = "0::/user.slice/user-1000.slice/user@1000.service/app.slice";
-	writeFileSync(cgroup, `${slice}/quest-worktree-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope\n`);
-	expect(scoped(cgroup)).toBe(true);
-	writeFileSync(cgroup, `${slice}/quest-gate-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope\n`);
-	expect(scoped(cgroup)).toBe(true);
-	writeFileSync(cgroup, `${slice}/app-terminal-42.scope\n`);
-	expect(scoped(cgroup)).toBe(false);
+	const cgroup = (unit: string) => {
+		const file = join(dir, unit);
+		writeFileSync(file, `${slice}/${unit}\n`);
+		return file;
+	};
+	const terminal = cgroup("app-terminal-42.scope");
+	const worktree = cgroup("quest-worktree-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope");
+	const gated = cgroup("quest-gate-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope");
+	expect(scoped(worktree)).toBe(true);
+	expect(scoped(gated)).toBe(true);
+	expect(scoped(terminal)).toBe(false);
+	if (process.platform === "win32") return expect(owner({ QUEST_GATE_ADMITTED: "1" })).toBe(direct);
+	// The enclosing owner signals the command too unless it was not one of Quest's.
+	expect(owner({ QUEST_GATE_ADMITTED: "1" }, terminal)).toBe(direct);
+	expect(owner({ QUEST_GATE_ADMITTED: "1", QUEST_GATE_GROUP: "1" }, terminal)).toBe(inside);
+	if (process.platform !== "linux") return;
+	expect(owner({ QUEST_GATE_ADMITTED: "1" }, gated)).toBe(inside);
+	expect(owner({}, worktree)).toBe(inside);
 });
 
 /** Gone, or a zombie its new parent has not reaped yet: either way it runs no code. */
@@ -788,23 +800,17 @@ describe.skipIf(process.platform === "win32")("a process group", () => {
 
 test("a cancellation without a signal's name always passes, even on Windows", () => {
 	expect(forwards(AbortSignal.abort())).toBe(true);
-	expect(forwards(AbortSignal.abort(), { QUEST_GATE_GROUP: "1" })).toBe(true);
+	expect(forwards(AbortSignal.abort(), true)).toBe(true);
 });
 
 test.skipIf(process.platform === "win32")("a signal is left to reach the child wherever it already did", () => {
 	// Signals that may be sent to Quest alone pass.
-	expect(forwards(AbortSignal.abort("SIGHUP"), {})).toBe(true);
-	expect(forwards(AbortSignal.abort("SIGTERM"), {})).toBe(true);
+	expect(forwards(AbortSignal.abort("SIGHUP"), false)).toBe(true);
+	expect(forwards(AbortSignal.abort("SIGTERM"), false)).toBe(true);
 	// The group owner, and a Quest scope's owner, deliver each to everything they hold.
-	for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-		expect(forwards(AbortSignal.abort(name), { QUEST_GATE_GROUP: "1" })).toBe(false);
-		expect(forwards(AbortSignal.abort(name), {}, true)).toBe(false);
-		// That owner also kills everything at its second signal.
-		expect(enclosed(AbortSignal.abort(name), { QUEST_GATE_GROUP: "1" })).toBe(true);
-		expect(enclosed(AbortSignal.abort(name), {}, true)).toBe(true);
-	}
-	expect(enclosed(AbortSignal.abort("SIGTERM"), {})).toBe(false);
-	expect(enclosed(AbortSignal.abort(), { QUEST_GATE_GROUP: "1" })).toBe(false);
+	for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) expect(forwards(AbortSignal.abort(name), true)).toBe(false);
+	vi.stubEnv("QUEST_GATE_GROUP", "1");
+	expect(forwards(AbortSignal.abort("SIGTERM"))).toBe(false);
 	// pid (comm with spaces) state ppid pgrp session tty_nr tpgid ...
 	expect(foregroundStat("42 (a ) b) S 1 42 42 34816 42 4194560")).toBe(true);
 	expect(foregroundStat("42 (a ) b) S 1 42 42 34816 77 4194560")).toBe(false);

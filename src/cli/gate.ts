@@ -8,7 +8,7 @@ import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, use
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type Cancellation, cancelled, enclosed, follow, forwards, GROUP, interrupts, requested } from "./interrupt";
+import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { systemdScopes } from "./supervise";
 
 /**
@@ -450,31 +450,39 @@ export const PRIORITY = "QUEST_GATE_PRIORITY";
 export type Owner = (command: string[], env: NodeJS.ProcessEnv, cancel: Cancellation) => Promise<number>;
 
 /**
- * Run the command as a plain child, for a caller whose own owner already holds its descendants.
- * Where that owner already signalled the child, it also kills everything at its second signal, so
- * this leaves both to it (see `enclosed`).
+ * Run the command as a plain child. `held` says whether an enclosing owner that signals everything
+ * it holds, Quest's group owner (see `GROUP`) or a Quest scope, also holds the child. Its signal
+ * then already reached the child, and it also kills everything at its second one, so this leaves
+ * both to it: a repeated signal, such as the SIGTERM Just forwards to its own child on top of the
+ * owner's, is no kill here.
  */
-export const direct: Owner = (command, env, cancel) =>
-	new Promise((resolve, reject) => {
-		const child = spawn(command[0], command.slice(1), { env, stdio: "inherit" });
-		// The command shares this process's cgroup, so a Quest scope around this process holds it too.
-		const scope = process.platform === "linux" && scoped();
-		const stop = () => {
-			if (forwards(cancel.signal, process.env, scope)) child.kill(requested(cancel.signal));
-		};
-		const terminate = () => {
-			if (!enclosed(cancel.signal, process.env, scope)) child.kill("SIGKILL");
-		};
-		const cleanup = follow(cancel, stop, terminate);
-		child.once("error", (error) => {
-			cleanup();
-			reject(error);
+function plain(held: boolean): Owner {
+	return (command, env, cancel) =>
+		new Promise((resolve, reject) => {
+			const child = spawn(command[0], command.slice(1), { env, stdio: "inherit" });
+			const stop = () => {
+				if (forwards(cancel.signal, held)) child.kill(requested(cancel.signal));
+			};
+			const terminate = () => {
+				if (!(held && received(cancel.signal))) child.kill("SIGKILL");
+			};
+			const cleanup = follow(cancel, stop, terminate);
+			child.once("error", (error) => {
+				cleanup();
+				reject(error);
+			});
+			child.once("close", (code, killed) => {
+				cleanup();
+				resolve(code ?? (killed ? 128 + constants.signals[killed] : 1));
+			});
 		});
-		child.once("close", (code, killed) => {
-			cleanup();
-			resolve(code ?? (killed ? 128 + constants.signals[killed] : 1));
-		});
-	});
+}
+
+/** Run the command as a plain child, for a caller whose own owner already holds its descendants. */
+export const direct: Owner = plain(false);
+
+/** Run the command as a plain child of an enclosing owner that signals everything it holds. */
+export const inside: Owner = plain(true);
 
 /** Run the command in its own systemd scope, whose cgroup holds every descendant (see supervise.ts). */
 export const scope: Owner = (command, env, cancel) =>
@@ -559,13 +567,16 @@ export function scoped(self = "/proc/self/cgroup"): boolean {
 /**
  * The strongest owner this host offers. A nested call runs inside its admitted command, and a call
  * inside a Quest scope inside that scope: moving into an owner of its own would take its command out
- * of reach of the enclosing one. Linux owns descendants through a systemd scope, and settles for a
- * process group, like macOS, without a systemd user manager. Windows owns only the command.
+ * of reach of the enclosing one, which also signals it when it is Quest's (see `inside`). Linux
+ * owns descendants through a systemd scope, and settles for a process group, like macOS, without a
+ * systemd user manager. Windows owns only the command.
  */
-export function owner(env = process.env): Owner {
-	if (env[ADMITTED] === "1" || process.platform === "win32") return direct;
+export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
+	if (process.platform === "win32") return direct;
+	// A Quest scope around this process holds the command too, since it shares the cgroup.
+	const enclosed = process.platform === "linux" && scoped(cgroup);
+	if (env[ADMITTED] === "1" || enclosed) return env[GROUP] === "1" || enclosed ? inside : direct;
 	if (process.platform !== "linux") return group;
-	if (scoped()) return direct;
 	try {
 		systemdScopes.check();
 		return scope;

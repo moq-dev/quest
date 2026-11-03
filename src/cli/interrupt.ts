@@ -88,39 +88,31 @@ function foreground(): boolean {
 export const GROUP = "QUEST_GATE_GROUP";
 
 /** Whether an aborted `Cancellation.signal` names a signal Quest received, not a caller's own abort. */
-function received(signal: AbortSignal): boolean {
+export function received(signal: AbortSignal): boolean {
 	const name = signal.reason;
 	return typeof name === "string" && name in constants.signals;
-}
-
-/**
- * Whether an enclosing owner that signals everything it holds also holds the child, so the signal
- * Quest received already reached it: Quest's group owner (see `GROUP`), which delivers SIGINT,
- * SIGTERM, and SIGHUP to its whole process group, or a Quest scope that also holds the child
- * (`scope`), whose owner delivers them to every process in the scope. That owner also kills
- * everything at its second signal, so a nested Quest leaves both to it. A repeated signal, such as
- * the SIGTERM Just forwards to its own child on top of the owner's, is then no kill.
- */
-export function enclosed(signal: AbortSignal, env = process.env, scope = false): boolean {
-	return received(signal) && process.platform !== "win32" && (env[GROUP] === "1" || scope);
 }
 
 /**
  * Whether to pass on the signal an aborted `Cancellation.signal` asks for. An abort without a
  * signal's name came from the caller, not a signal the child may also have received, so it always
  * passes. Otherwise the signal is held back wherever it already reached the child, since a nested
- * Quest that receives it twice treats the second as a kill: under an enclosing owner (see
- * `enclosed`), and for SIGINT while Quest is in its terminal's foreground process group, since a
- * terminal's Ctrl-C reaches that whole group. SIGTERM and SIGHUP, and SIGINT while Quest is in the
- * background, may otherwise have been sent to Quest alone, so they pass.
+ * Quest that receives it twice treats the second as a kill:
  *
- * The trade-off: a signal sent with `kill` to a Quest whose child it is held back from is not
- * forwarded, so that child stops only once the enclosing owner, or the terminal, is signalled.
- * Windows delivers Ctrl-C to every process on the console and has no signal to forward:
- * `child.kill()` terminates the child outright.
+ * - `held`: an enclosing owner that signals everything it holds also holds the child. Quest's group
+ *   owner (see `GROUP`) delivers SIGINT, SIGTERM, and SIGHUP to its whole process group, and a
+ *   Quest scope's owner to every process in the scope.
+ * - SIGINT while Quest is in its terminal's foreground process group, since a terminal's Ctrl-C
+ *   reaches that whole group.
+ *
+ * SIGTERM and SIGHUP, and SIGINT while Quest is in the background, may otherwise have been sent to
+ * Quest alone, so they pass. The trade-off: a signal sent with `kill` to a Quest whose child it is
+ * held back from is not forwarded, so that child stops only once the enclosing owner, or the
+ * terminal, is signalled. Windows delivers Ctrl-C to every process on the console and has no
+ * signal to forward: `child.kill()` terminates the child outright.
  */
-export function forwards(signal: AbortSignal, env = process.env, scope = false): boolean {
+export function forwards(signal: AbortSignal, held = process.env[GROUP] === "1"): boolean {
 	if (!received(signal)) return true;
-	if (process.platform === "win32" || enclosed(signal, env, scope)) return false;
+	if (process.platform === "win32" || held) return false;
 	return signal.reason !== "SIGINT" || !foreground();
 }
