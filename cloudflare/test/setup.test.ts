@@ -7,6 +7,7 @@ import { app } from "../src/index";
 import { STUBS, planCheck, setupGoal, treeCheckout } from "../src/github/setup";
 import { type Pull, type Repo, type World, fakeGitHub, intercept } from "../dev/github";
 import { privateKey } from "./github-key";
+import { owner } from "./owners";
 import { delivery } from "./project-fixtures";
 import { identity, oauth, origin } from "./login-fixtures";
 
@@ -31,6 +32,7 @@ beforeEach(async () => {
 	world = {
 		app: { id: Number(env.GITHUB_APP_ID), slug: "quest-test" },
 		installation: 5,
+		owner,
 		users: [{ id: Number(who.id), login, name: "Maintainer", email: who.email }],
 		repos: [
 			{
@@ -82,7 +84,7 @@ async function merge(pull: Pull) {
 	return delivery("pull_request", {
 		action: "closed",
 		installation: { id: 5 },
-		repository: { id: 10, name: "project", owner: { login: "upstream" }, default_branch: "main" },
+		repository: { id: 10, name: "project", owner: { login: "upstream", id: owner }, default_branch: "main" },
 		pull_request: { id: 9001, number: pull.number, merged: true },
 	});
 }
@@ -170,7 +172,7 @@ describe("the setup pull request", () => {
 		const closed = await delivery("pull_request", {
 			action: "closed",
 			installation: { id: 5 },
-			repository: { id: 10, name: "project", owner: { login: "upstream" }, default_branch: "main" },
+			repository: { id: 10, name: "project", owner: { login: "upstream", id: owner }, default_branch: "main" },
 			pull_request: { id: 9001, number: first!.number, merged: false },
 		});
 		expect(closed.status).toBe(202);
