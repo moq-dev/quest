@@ -2,7 +2,7 @@
 // systemd user scope, named once and never reused, so its cgroup holds every descendant that does
 // not ask another service manager to start it. Other hosts fail explicitly; only the gate settles
 // for a process group there (see `group` in gate.ts).
-import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, execFile, execFileSync, spawn } from "node:child_process";
 import { closeSync, existsSync, constants as fs, openSync, readFileSync, watch, writeSync } from "node:fs";
 import { constants, hostname } from "node:os";
 import { join } from "node:path";
@@ -52,9 +52,10 @@ export interface RunOptions {
 	/** The command's environment; Quest's own when omitted. */
 	env?: NodeJS.ProcessEnv;
 	/**
-	 * Asking stops a command that has not started, and otherwise forwards the requested signal (see
-	 * `forwards`), so the command's own handling of it runs; killing stops the whole scope. Without
-	 * it, the run follows Quest's own signals (see `interrupts`).
+	 * Asking stops a command that has not started, and otherwise delivers the requested signal to
+	 * every process in the scope unless it already reached them (see `forwards`), so each one's own
+	 * handling of it runs; killing stops the whole scope. Without it, the run follows Quest's own
+	 * signals (see `interrupts`).
 	 */
 	cancel?: Cancellation;
 	/** Pipes the command's streams to a protocol consumer instead of inheriting them. */
@@ -69,9 +70,11 @@ export interface Scopes {
 	/** Kill every process left in the scope and resolve once it is empty, including when it is already gone. */
 	stop(unit: string): Promise<void>;
 	/**
-	 * Run a command in a new scope, then stop its remaining descendants. Resolves with the command's
-	 * exit status, or the cancelled status once asked to stop, only once the scope is empty. Rejects
-	 * with `Retained` when that cannot be confirmed, and otherwise only when the command never started.
+	 * Run a command in a new scope, then stop its remaining descendants: at once, or, when a
+	 * cancellation signalled the whole scope, once the scope empties or the run is killed, so each
+	 * process can finish its own cleanup. Resolves with the command's exit status, or the cancelled
+	 * status once asked to stop, only once the scope is empty. Rejects with `Retained` when that
+	 * cannot be confirmed, and otherwise only when the command never started.
 	 */
 	run(unit: string, cwd: string, command: string[], options?: RunOptions): Promise<number>;
 }
@@ -103,8 +106,11 @@ function populated(group: string): boolean {
 	}
 }
 
-/** Resolves once the cgroup has no process left, including when it is already gone. */
-function vacated(group: string): Promise<void> {
+/**
+ * Resolves once the cgroup has no process left, including when it is already gone, or once `until`
+ * aborts.
+ */
+function vacated(group: string, until?: AbortSignal): Promise<void> {
 	return new Promise((resolve, reject) => {
 		let watcher: ReturnType<typeof watch> | undefined;
 		let finished = false;
@@ -112,9 +118,13 @@ function vacated(group: string): Promise<void> {
 			if (finished) return;
 			finished = true;
 			watcher?.close();
+			until?.removeEventListener("abort", abandon);
 			if (error) reject(error);
 			else resolve();
 		};
+		const abandon = () => finish();
+		if (until?.aborted) return finish();
+		until?.addEventListener("abort", abandon, { once: true });
 		const check = () => {
 			try {
 				if (!populated(group)) finish();
@@ -159,6 +169,28 @@ export function kill(group: string): void {
 		const code = (error as NodeJS.ErrnoException).code ?? "";
 		if (!["ENOENT", "ENODEV"].includes(code) || existsSync(group)) throw error;
 	}
+}
+
+/** Whether the cgroup still holds a process, or `otherwise` when that cannot be read. */
+function populatedOr(group: string, otherwise: boolean): boolean {
+	try {
+		return populated(group);
+	} catch {
+		return otherwise;
+	}
+}
+
+/**
+ * Send `signal` to every process in the scope, as systemd's default `KillMode=control-group` stops
+ * a unit, then call `done`. cgroup v2 offers only SIGKILL (`cgroup.kill`) itself.
+ */
+function signalScope(unit: string, signal: NodeJS.Signals, done: (error?: string) => void): void {
+	execFile(
+		"systemctl",
+		["--user", "kill", "--kill-whom=all", `--signal=${signal}`, unit],
+		{ encoding: "utf8" },
+		(error, _stdout, stderr) => done(error ? stderr.trim() || error.message : undefined),
+	);
 }
 
 /** The scope's cgroup directory, or undefined once systemd no longer knows the unit. */
@@ -237,15 +269,28 @@ export const systemdScopes: Scopes = {
 			let admitted = false;
 			let interrupted = 0;
 			let failure: Error | undefined;
+			// Set once every process in the scope was asked to stop; aborted once they no longer get time to.
+			let signalled = false;
+			const drain = new AbortController();
 			const stop = () => {
 				if (interrupted) return;
 				interrupted = cancelled(cancel.signal);
-				if (admitted) {
-					if (forwards(cancel.signal)) child.kill(requested(cancel.signal));
-				} else admission.destroy(); // The shell reads end-of-file and never starts the command.
+				// The shell reads end-of-file and never starts the command.
+				if (!admitted) return admission.destroy();
+				if (!forwards(cancel.signal)) return;
+				const name = requested(cancel.signal);
+				signalled = true;
+				signalScope(unit, name, (error) => {
+					// The scope is gone once its last process exits, which leaves nothing to signal.
+					if (!error || !group || !populatedOr(group, true)) return;
+					process.stderr.write(`quest: cannot signal every process in ${unit}, only its command: ${error}\n`);
+					child.kill(name);
+					drain.abort();
+				});
 			};
 			const terminate = () => {
 				stop();
+				drain.abort();
 				if (group) kill(group);
 			};
 			const unfollow = follow(cancel, stop, terminate);
@@ -288,6 +333,9 @@ export const systemdScopes: Scopes = {
 					// Descendants that outlive the command are orphans of this run: stop them.
 					if (group) {
 						try {
+							// Every process got the signal, so let each finish its own cleanup, even one that
+							// outlives the wrappers that exited first, until a second signal kills them.
+							if (signalled) await vacated(group, drain.signal);
 							kill(group);
 							await vacated(group);
 						} catch (error) {

@@ -5,8 +5,9 @@ import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { scope } from "../src/cli/gate";
 import { Worktrees } from "../src/cli/worktree";
-import { onTerminal, tempDir } from "./fixture";
+import { created, onTerminal, signalled, tempDir } from "./fixture";
 
 const root = resolve(import.meta.dirname, "..");
 
@@ -143,5 +144,24 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 		});
 		expect(result.output).toContain("interrupts=1");
 		expect(result.code).toBe(130);
+	});
+
+	it("still forwards a signal to its own scope from inside a gate's", async () => {
+		const { dir, home } = fixture();
+		const leaf = signalled(dir, ["SIGTERM"], 200);
+		const stop = new AbortController();
+		const command = ["bun", `--config=${join(root, "bunfig.toml")}`, join(root, "src/cli/bin.ts")];
+		// The run itself stays in the gate's scope, which signals it, but its command moves to a scope
+		// of its own, which only the run can signal.
+		const result = scope(
+			[...command, "worktree", "run", "work", "--", process.execPath, leaf.script],
+			{ ...process.env, QUEST_WORKTREE_HOME: home, QUEST_GATE_ADMITTED: "1" },
+			{ signal: stop.signal, kill: new AbortController().signal },
+		);
+		await created(leaf.ready);
+		stop.abort("SIGTERM");
+		expect(await result).toBe(143);
+		expect(leaf.log()).toEqual(["SIGTERM"]);
+		expect(existsSync(leaf.done)).toBe(true);
 	});
 });

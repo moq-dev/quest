@@ -6,8 +6,9 @@ import { randomUUID } from "node:crypto";
 import { linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, userInfo } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, requested } from "./interrupt";
+import { type Cancellation, cancelled, enclosed, follow, forwards, GROUP, interrupts, requested } from "./interrupt";
 import { systemdScopes } from "./supervise";
 
 /**
@@ -442,19 +443,29 @@ export const PRIORITY = "QUEST_GATE_PRIORITY";
 
 /**
  * Runs an admitted command with inherited streams and resolves with its exact exit status.
- * Asking to cancel forwards the requested signal unless the command already has it (see
- * `forwards`), so the command's own handling of it runs; killing stops it outright.
+ * Asking to cancel delivers the requested signal to every process the owner holds, unless they
+ * already have it (see `forwards`), so each one's own handling of it runs; killing stops them
+ * outright.
  */
 export type Owner = (command: string[], env: NodeJS.ProcessEnv, cancel: Cancellation) => Promise<number>;
 
-/** Run the command as a plain child, for a caller whose own owner already holds its descendants. */
+/**
+ * Run the command as a plain child, for a caller whose own owner already holds its descendants.
+ * Where that owner already signalled the child, it also kills everything at its second signal, so
+ * this leaves both to it (see `enclosed`).
+ */
 export const direct: Owner = (command, env, cancel) =>
 	new Promise((resolve, reject) => {
 		const child = spawn(command[0], command.slice(1), { env, stdio: "inherit" });
+		// The command shares this process's cgroup, so a Quest scope around this process holds it too.
+		const scope = process.platform === "linux" && scoped();
 		const stop = () => {
-			if (forwards(cancel.signal)) child.kill(requested(cancel.signal));
+			if (forwards(cancel.signal, process.env, scope)) child.kill(requested(cancel.signal));
 		};
-		const cleanup = follow(cancel, stop, () => child.kill("SIGKILL"));
+		const terminate = () => {
+			if (!enclosed(cancel.signal, process.env, scope)) child.kill("SIGKILL");
+		};
+		const cleanup = follow(cancel, stop, terminate);
 		child.once("error", (error) => {
 			cleanup();
 			reject(error);
@@ -473,17 +484,30 @@ export const scope: Owner = (command, env, cancel) =>
  * Run the command as the leader of a new session, whose process group holds every descendant that
  * does not move to another group or session. Once the command exits, the rest of its group is
  * killed. The session has no controlling terminal: the command keeps its inherited streams, but a
- * terminal's signals reach it only through Quest, which stands in for the terminal: every SIGINT
- * Quest receives goes to the whole group, as a terminal's Ctrl-C would, and Quest inside the group
- * leaves it there (see `GROUP`).
+ * terminal's signals reach it only through Quest, which stands in for the terminal: every SIGINT,
+ * SIGTERM, and SIGHUP Quest receives goes to the whole group, as a terminal's Ctrl-C would, and
+ * Quest inside the group leaves it there (see `GROUP`).
+ *
+ * No event reports that a process group emptied, so a cancelled run instead waits on a token: the
+ * write end of a pipe on the command's descriptor 3 (`TOKEN`), which every descendant holds unless
+ * it or a parent closes it, as Bun and Node do for what they start. Its read end ends once every
+ * holder has exited, so each one, such as a leaf that outlives the wrappers around it, finishes its
+ * own cleanup before the rest of the group is killed, unless a second signal kills it first.
  */
 export const group: Owner = (command, env, cancel) =>
 	new Promise((resolve, reject) => {
 		const child = spawn(command[0], command.slice(1), {
 			env: { ...env, [GROUP]: "1" },
-			stdio: "inherit",
+			stdio: ["inherit", "inherit", "inherit", "pipe"],
 			detached: true,
 		});
+		const token = child.stdio[TOKEN] as Readable;
+		const released = new Promise<void>((resolve) => {
+			token.once("end", resolve);
+			token.once("close", resolve);
+			token.once("error", () => resolve());
+		});
+		token.resume(); // Holders' writes are discarded; only the end matters.
 		const signal = (name: NodeJS.Signals) => {
 			try {
 				process.kill(-child.pid!, name);
@@ -491,26 +515,38 @@ export const group: Owner = (command, env, cancel) =>
 				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
 			}
 		};
+		let signalled = false;
 		const stop = () => {
-			const name = requested(cancel.signal);
-			if (name === "SIGINT") signal(name);
-			else child.kill(name);
+			signalled = true;
+			signal(requested(cancel.signal));
 		};
 		const terminate = () => signal("SIGKILL");
 		child.once("error", reject);
 		if (child.pid === undefined) return; // It never started.
 		const cleanup = follow(cancel, stop, terminate);
-		child.once("exit", (code, killed) => {
+		const killed = new Promise<void>((resolve) => {
+			if (cancel.kill.aborted) resolve();
+			else cancel.kill.addEventListener("abort", () => resolve(), { once: true });
+		});
+		child.once("exit", async (code, name) => {
+			// Every process in the group got the signal, so let each holder finish its own cleanup.
+			if (signalled) await Promise.race([released, killed]);
 			cleanup();
+			token.destroy();
 			try {
-				// The group outlives its leader while any member remains, so its ID is not reused yet.
+				// The group outlives its leader while any member remains, so its ID is not reused yet. A
+				// group that emptied during the drain could only be mistaken once the host cycled through
+				// every process ID.
 				terminate();
 			} catch (error) {
 				return reject(error);
 			}
-			resolve(code ?? 128 + constants.signals[killed!]);
+			resolve(code ?? 128 + constants.signals[name!]);
 		});
 	});
+
+/** The descriptor on which the group owner hands its command the token (see `group`). */
+const TOKEN = 3;
 
 /** Whether this process already runs in a Quest scope, which then holds whatever it starts. */
 export function scoped(self = "/proc/self/cgroup"): boolean {

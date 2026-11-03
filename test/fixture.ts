@@ -11,6 +11,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	watch,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -314,4 +315,57 @@ export async function onTerminal(
 	});
 	const [code] = await once(child, "exit");
 	return { code, output };
+}
+
+/** Resolves once `file` exists, woken by its directory's change events rather than a poll. */
+export function created(file: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const check = () => {
+			if (!existsSync(file)) return;
+			watcher.close();
+			resolve();
+		};
+		const watcher = watch(dirname(file), check);
+		watcher.on("error", reject);
+		check(); // Registration precedes the check, covering a file created during setup.
+	});
+}
+
+/**
+ * A script for `process.execPath` that handles `signals` as a process with cleanup to do would.
+ * Once its handlers are installed, it writes its PID to `ready`. Each signal it gets is appended to
+ * `received`. The cleanup after the first takes `cleanup` milliseconds, longer than wrappers that
+ * exit at once on the same signal, and catches a repeated delivery; it then creates `done` and
+ * exits 0. Without `cleanup`, it never finishes.
+ */
+export function signalled(dir: string, signals: NodeJS.Signals[], cleanup?: number) {
+	const paths = {
+		script: join(dir, "leaf.js"),
+		ready: join(dir, "ready"),
+		received: join(dir, "received"),
+		done: join(dir, "done"),
+	};
+	writeFileSync(
+		paths.script,
+		`const { appendFileSync, writeFileSync } = require("node:fs");
+		let first = true;
+		for (const name of ${JSON.stringify(signals)})
+			process.on(name, () => {
+				appendFileSync(${JSON.stringify(paths.received)}, name + "\\n");
+				if (!first || ${cleanup === undefined}) return;
+				first = false;
+				setTimeout(() => {
+					writeFileSync(${JSON.stringify(paths.done)}, "");
+					process.exit(0);
+				}, ${cleanup ?? 0});
+			});
+		writeFileSync(${JSON.stringify(paths.ready)}, String(process.pid));
+		setInterval(() => {}, 1000);`,
+	);
+	return {
+		...paths,
+		pid: () => Number(readFileSync(paths.ready, "utf8")),
+		/** The signals received so far, in order. */
+		log: () => (existsSync(paths.received) ? readFileSync(paths.received, "utf8").trim().split("\n") : []),
+	};
 }
