@@ -18,6 +18,12 @@ import {
 // The events this handles are the core's HOOK_EVENTS, which `quest init` installs.
 export { HOOK_EVENTS } from "../core";
 
+/**
+ * The guide's workspace, which holds an agent's reports and logs. Its parent reads them after it stops,
+ * so a subagent's automatic release keeps it; removing the checkout deletes it with the other scratch.
+ */
+const WORKSPACE = ".tmp";
+
 /** The fields of a Claude Code hook's JSON input that these events read. */
 interface HookInput {
 	hook_event_name: string;
@@ -201,17 +207,17 @@ export async function claudeHook(
 		case "SubagentStart": {
 			const record = await subagentCheckout(worktrees, hook);
 			if (!record) return undefined;
-			const released = record.phase === "released" && record.scratch.length > 0;
+			const deleted = record.phase === "released" ? record.scratch.filter((path) => path !== WORKSPACE) : [];
 			await waiting(() => worktrees.restore(record.id));
-			if (!released) return undefined;
+			if (!deleted.length) return undefined;
 			const additionalContext =
-				`Quest released this checkout while you were stopped, deleting its ignored scratch (${record.scratch.join(", ")}). ` +
+				`Quest released this checkout while you were stopped, deleting its ignored scratch (${deleted.join(", ")}). ` +
 				"Reinstall or rebuild what you need before using it.";
 			return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext } })}\n`;
 		}
 		case "SubagentStop": {
 			const record = await subagentCheckout(worktrees, hook);
-			if (record) await waiting(() => worktrees.release(record.id));
+			if (record) await waiting(() => worktrees.release(record.id, [WORKSPACE]));
 			return undefined;
 		}
 		default:

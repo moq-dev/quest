@@ -696,14 +696,16 @@ export class Worktrees {
 	 * The checkout, its Git state, and untracked source stay in place. A checkout that Git and the
 	 * disk both lack, such as one removed with `git worktree remove`, drops its record instead.
 	 */
-	private prune(registry: Registry, record: WorktreeRecord): void {
+	/** `keep` names declared scratch paths to leave in place this time. */
+	private prune(registry: Registry, record: WorktreeRecord, keep: readonly string[] = []): void {
 		if (!this.owned(record)) {
 			registry.records.splice(registry.records.indexOf(record), 1);
 			return;
 		}
 		interrupted(record);
 		const root = canonical(record.path);
-		const paths = record.scratch.filter((path) => present(root, path)); // Reruns skip pruned paths.
+		// Reruns skip pruned paths.
+		const paths = record.scratch.filter((path) => !keep.includes(path) && present(root, path));
 		const admin = entry(join(root, ".git"));
 		for (const path of paths) {
 			// Case folding and other platform aliases can still name the checkout's .git entry.
@@ -743,12 +745,15 @@ export class Worktrees {
 		}
 		record.phase = "released";
 	}
-	/** Prunes the scratch declared at creation; refuses while a supervised run may still use it. */
-	release(id: string): WorktreeRecord {
+	/**
+	 * Prunes the scratch declared at creation, except the paths in `keep`, which removal still deletes;
+	 * refuses while a supervised run may still use it.
+	 */
+	release(id: string, keep: readonly string[] = []): WorktreeRecord {
 		return this.locked((registry) => {
 			const record = this.find(registry, id);
 			this.idle(record);
-			this.prune(registry, record);
+			this.prune(registry, record, keep);
 			delete record.failure;
 			return record;
 		});
