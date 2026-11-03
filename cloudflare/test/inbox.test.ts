@@ -1,6 +1,7 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Pull, Repo } from "../dev/github";
 import { app } from "../src/index";
 import { QUIET, cards } from "../src/inbox/activity";
 import { questHref } from "../src/inbox/model";
@@ -8,8 +9,8 @@ import * as output from "../src/jobs/output";
 import * as store from "../src/jobs/store";
 import { INBOX_HEADER } from "../src/jobs/hub";
 import { privateKey } from "./github-key";
-import { identity, oauth, origin } from "./login-fixtures";
-import { commit, delivery, head, maintainerOf, project, pull } from "./project-fixtures";
+import { origin } from "./login-fixtures";
+import { commit, delivery, failing, graphql, head, maintainerOf, project, pull, rewrite } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
 const db = env.DB;
@@ -17,11 +18,14 @@ const jobs = "/projects/github/upstream/project/jobs";
 
 let user = "";
 let cookie = "";
-let github: Awaited<ReturnType<typeof maintainerOf>>["github"];
-let mock: Awaited<ReturnType<typeof maintainerOf>>["mock"];
+let login = "";
+let repo: Repo;
+let pr: Pull;
+let github: typeof fetch;
+let other: Awaited<ReturnType<typeof maintainerOf>>["other"];
 
 beforeEach(async () => {
-	({ user, cookie, github, mock } = await maintainerOf());
+	({ user, cookie, login, repo, pr, github, other } = await maintainerOf());
 });
 afterEach(() => vi.restoreAllMocks());
 const sockets: WebSocket[] = [];
@@ -67,18 +71,12 @@ async function inbox(query: Record<string, string> = {}, session = cookie) {
 	expect(response.status).toBe(200);
 	return response.text();
 }
-/** Sign in another GitHub user, who holds the maintain role when `maintains`. */
-async function other(maintains: boolean) {
-	const who = identity("github");
-	const session = (await oauth(who)).session!;
-	vi.spyOn(globalThis, "fetch").mockImplementation(mock);
-	if (maintains) github.maintainers.push(who.id);
-	const { userId } = (await db
-		.prepare("SELECT userId FROM account WHERE providerId='github' AND accountId=?")
-		.bind(who.id)
-		.first<{ userId: string }>())!;
-	return { session, id: userId };
-}
+/** The merges of #2 requested of GitHub. */
+const merges = () =>
+	vi
+		.mocked(globalThis.fetch)
+		.mock.calls.filter(([input, init]) => init?.method === "PUT" && String(input).endsWith("/pulls/2/merge"))
+		.map(([, init]) => JSON.parse(String(init!.body)));
 /** Open the project's activity page, which checks maintainer authority. */
 function visit(session = cookie) {
 	return app.request(`${origin}/projects/github/upstream/project/state`, { headers: { Cookie: session } }, testEnv);
@@ -166,6 +164,9 @@ describe("decision inbox", () => {
 
 	it("coalesces webhook updates into the same item and marks it unread again", async () => {
 		await inbox();
+		// GitHub has the new issue, but cannot answer the reads these webhooks ask for.
+		repo.issues.push({ number: 3, title: "Crash", author: "reporter" });
+		vi.mocked(globalThis.fetch).mockImplementation(failing(github, graphql, 502));
 		const event = {
 			action: "synchronize",
 			installation: { id: 5 },
@@ -178,6 +179,7 @@ describe("decision inbox", () => {
 		expect((await delivery("pull_request", event)).status).toBe(202);
 		const opened = { ...event, action: "opened", issue: { id: 13, number: 3 }, pull_request: undefined };
 		expect((await delivery("issues", opened)).status).toBe(202);
+		vi.mocked(globalThis.fetch).mockImplementation(github);
 		const html = await inbox({ project: "10", item: "issues/1" });
 		expect(html.match(/>Fix</g)).toHaveLength(1);
 		expect(html).toMatch(/Fix<\/a><span class="entry-meta"><span class="tag">New/);
@@ -262,15 +264,17 @@ describe("decision inbox", () => {
 		expect(moved.status).toBe(403);
 		expect(await moved.text()).toContain("head moved since you looked; review it again");
 		// A pick of merge never lands a head without a review that counts on it, and says why.
-		github.approved = ["c".repeat(40)];
+		pr.reviews![0]!.commit = "c".repeat(40);
 		const unreviewed = await submit(merge, [["head", head]]);
 		expect(unreviewed.status).toBe(403);
 		expect(await unreviewed.text()).toContain(
 			`The approval of ccccccc does not carry to ${head.slice(0, 7)}: what changed since is more than conflict-free merges of trunk. kix lands only a reviewed head.`,
 		);
-		expect(github.merged).toHaveLength(0);
-		github.approved = [head];
-		github.refuse = "At least 1 approving review is required by reviewers with write access.";
+		expect(merges()).toHaveLength(0);
+		pr.reviews![0]!.commit = head;
+		pr.mergeRefusals = [
+			{ status: 405, message: "At least 1 approving review is required by reviewers with write access." },
+		];
 		const refused = await submit(merge, [["head", head]], {
 			Referer: `${origin}/inbox?project=10&item=pulls%2F2`,
 		});
@@ -284,16 +288,16 @@ describe("decision inbox", () => {
 		);
 		expect(explained).toContain('<a href="/inbox?project=10&amp;item=pulls%2F2">Return to the item</a>');
 		// Each click is one request bound to its head; a refusal is never retried.
-		expect(github.merged).toHaveLength(1);
-		github.refuse = null;
-		github.methods = ["squash"];
+		expect(merges()).toHaveLength(1);
+		repo.mergeMethods = ["squash"];
 		const merged = await submit(merge, [
 			["head", head],
 			["version", "0"],
 		]);
 		expect(merged.status).toBe(303);
 		expect(merged.headers.get("Location")).toBe("/inbox?done=merge");
-		expect(github.merged.at(-1)).toEqual({ sha: head, merge_method: "squash" });
+		expect(merges().at(-1)).toEqual({ sha: head, merge_method: "squash" });
+		expect(pr.merged).toBe(true);
 		// The merged item is finished, and no new work starts before GitHub is read again.
 		const html = await inbox();
 		expect(html).toMatch(/Skipped and finished \(1\)[\s\S]*Fix/);
@@ -320,7 +324,7 @@ describe("decision inbox", () => {
 			["revision", head],
 		]);
 		expect(picked.status).toBe(303);
-		expect(github.labels).toEqual(["quest:kix"]);
+		expect(pr.labels).toEqual(["quest:kix"]);
 		const [job] = await store.listJobs(db, 10);
 		expect(job).toMatchObject({ workflow: "merge", hold: "LE_1" });
 		expect(thread(await inbox({ project: "10", item: "pulls/2" }))).not.toContain("Merge this PR");
@@ -348,15 +352,15 @@ describe("decision inbox", () => {
 		expect(held.status).toBe(409);
 		expect(await held.text()).toContain("job before merging it");
 		await db.prepare("DELETE FROM jobs").run();
-		github.role = "write";
+		repo.roles![login] = "write";
 		const outsider = await submit(merge, [["head", head]]);
 		expect(outsider.status).toBe(403);
 		expect(await outsider.text()).toContain("Current GitHub maintainer authority required");
-		expect(github.merged).toHaveLength(0);
+		expect(merges()).toHaveLength(0);
 	});
 
 	it("offers a bootstrap job when the default branch has no flake", async () => {
-		github.flake = false;
+		rewrite(repo, commit, [{ path: "flake.nix", sha: null }]);
 		const refused = await submit(jobs, [
 			["workflow", "start"],
 			["target", "quest/first.md"],
@@ -442,7 +446,7 @@ describe("decision inbox", () => {
 		const { id, runner } = await running();
 		const prompt = { questions: [{ question: "Ship it?", options: [{ label: "Yes" }, { label: "No" }] }] };
 		const { question } = await store.ask(db, runner, id, 1, { summary: "Asked.", session: "s", prompt }, 3);
-		const co = await other(true);
+		const co = await other("maintain");
 		expect((await visit(co.session)).status).toBe(200);
 		const viewer = await socket(await live());
 		const ctx = createExecutionContext();
@@ -824,7 +828,7 @@ describe("decision inbox", () => {
 	});
 
 	it("shows a co-maintainer the project once they open it", async () => {
-		const co = await other(true);
+		const co = await other("maintain");
 		let html = await inbox({}, co.session);
 		expect(html).toContain("No enrolled projects yet");
 		expect(html).not.toContain("Idea");
@@ -836,7 +840,7 @@ describe("decision inbox", () => {
 	});
 
 	it("never lists a project for a non-maintainer", async () => {
-		const outsider = await other(false);
+		const outsider = await other();
 		const refused = await visit(outsider.session);
 		expect(refused.status).toBe(403);
 		expect(await refused.text()).toContain("Current GitHub maintainer authority required");
@@ -852,7 +856,7 @@ describe("decision inbox", () => {
 			["version", "0"],
 		]);
 		expect(await reads()).toBe(1);
-		github.role = "write";
+		repo.roles![login] = "write";
 		let html = await inbox();
 		expect(html).not.toContain("Idea");
 		expect(html).not.toContain("Unavailable");
@@ -860,7 +864,7 @@ describe("decision inbox", () => {
 		expect(await members()).toEqual([]);
 		expect(await reads()).toBe(0);
 		// Regaining the role does not restore membership until the maintainer opens the project.
-		github.role = "maintain";
+		repo.roles![login] = "maintain";
 		expect(await inbox()).not.toContain("Idea");
 		expect((await visit()).status).toBe(200);
 		html = await inbox();
@@ -873,7 +877,7 @@ describe("decision inbox", () => {
 			["item", "issues/1"],
 			["version", "0"],
 		]);
-		github.role = null;
+		repo.roles![login] = null;
 		const html = await inbox();
 		expect(html).not.toContain("Unavailable");
 		expect(html).toContain("No enrolled projects yet");
@@ -886,7 +890,10 @@ describe("decision inbox", () => {
 			["item", "issues/1"],
 			["version", "0"],
 		]);
-		github.limited = true;
+		// GitHub rate-limits every role check.
+		vi.mocked(globalThis.fetch).mockImplementation(
+			failing(github, (url) => url.pathname.endsWith("/permission"), 429, "API rate limit exceeded"),
+		);
 		let html = await inbox({ done: "answer" });
 		expect(html).toContain("Unavailable: GitHub request failed (429)");
 		expect(html).not.toContain("Idea");
@@ -897,7 +904,7 @@ describe("decision inbox", () => {
 		expect((await visit()).status).toBe(403);
 		expect(await members()).toEqual([user]);
 		expect(await reads()).toBe(1);
-		github.limited = false;
+		vi.mocked(globalThis.fetch).mockImplementation(github);
 		html = await inbox();
 		expect(html).toMatch(/Skipped and finished \(1\)[\s\S]*Idea/);
 	});
@@ -939,11 +946,11 @@ describe("agent cards", () => {
 
 	it("sends only fixed live hints to known maintainers and rereads escaped, authorized cards", async () => {
 		const { id, runner } = await running();
-		const co = await other(true);
+		const co = await other("maintain");
 		await visit(co.session);
 		const mine = await socket(await live());
 		const theirs = await socket(await live(co.session));
-		const outsider = await other(false);
+		const outsider = await other();
 		const outside = await socket(await live(outsider.session));
 		const machine = await socket(
 			await app.request(
@@ -984,7 +991,7 @@ describe("agent cards", () => {
 		expect(html).toContain("Fresh &lt;script&gt;alert(1)&lt;/script&gt;");
 		expect(html).not.toContain("private raw output");
 		expect(html).toContain(`data-output="${jobs}/${id}/output"`);
-		github.role = "write";
+		repo.roles![login] = "write";
 		expect(await (await fragment()).text()).not.toContain("Fresh");
 	});
 
@@ -1092,18 +1099,18 @@ describe("agent cards", () => {
 		expect(mine.status).toBe(200);
 		expect(await mine.json()).toMatchObject({ output: [{ text: "raw log" }] });
 		expect((await read(id)).status).toBe(403);
-		const outsider = await other(false);
+		const outsider = await other();
 		const refused = await read(id, outsider.session);
 		expect(refused.status).toBe(403);
 		expect(await refused.text()).not.toContain("raw log");
-		const co = await other(true);
+		const co = await other("maintain");
 		expect((await read(id, co.session)).status).toBe(200);
 		// A maintainer whose role was revoked is refused on the next request, without reloading the page.
-		github.role = "write";
+		repo.roles![login] = "write";
 		const revoked = await read(id, cookie);
 		expect(revoked.status).toBe(403);
 		expect(await revoked.text()).not.toContain("raw log");
-		github.role = null;
+		repo.roles![login] = null;
 		expect((await read(id, cookie)).status).toBe(403);
 	});
 

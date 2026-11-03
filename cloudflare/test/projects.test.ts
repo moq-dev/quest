@@ -1,12 +1,13 @@
 import { env } from "cloudflare:workers";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type World, fakeGitHub } from "../dev/github";
 import { app } from "../src/index";
 import { readBoard } from "../src/board/model";
 import { type ActivityPage, associatedQuest, RETENTION, readActivity } from "../src/github/state";
 import { GitHubService } from "../src/github/service";
 import { privateKey } from "./github-key";
-import { identity, oauth, origin } from "./login-fixtures";
+import { type Identity, identity, oauth, origin } from "./login-fixtures";
 import { delivery } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
@@ -481,6 +482,45 @@ describe("project enrollment", () => {
 	});
 });
 
+/**
+ * The fake GitHub's `upstream/project`, ID 10 on installation 5, whose default
+ * branch `trunk` holds `documents`. The enrollment test's account maintains
+ * it, as do the logins of `people`, who sign in.
+ */
+function world(...people: Identity[]): World {
+	const users = [
+		{ id: 7007, login: "maintainer" },
+		...people.map((who) => ({ id: Number(who.id), login: `person${who.id}` })),
+	];
+	return {
+		app: { id: Number(env.GITHUB_APP_ID), slug: "quest-test" },
+		installation: 5,
+		users: users.map((user) => ({ ...user, name: user.login, email: `${user.login}@example.test` })),
+		repos: [
+			{
+				...repo,
+				defaultBranch: "trunk",
+				maintainers: users.map((user) => user.login),
+				files: documents.map((doc) => ({ ...doc })),
+				issues: [],
+				pulls: [],
+				branches: {},
+				commits: {},
+				trees: {},
+			},
+		],
+	};
+}
+
+/** Enroll the project for the enrollment test's account against the fake GitHub over `world(who)`. */
+async function enrolled(who: Identity) {
+	const data = world(who);
+	const fake = fakeGitHub(data);
+	vi.spyOn(globalThis, "fetch").mockImplementation(fake);
+	await new GitHubService(testEnv).setContributions(repo, "enrollment-test", "enabled");
+	return { data, fake };
+}
+
 describe("project setup routes", () => {
 	it.each([
 		{ private: true, repositoryName: repo.name },
@@ -490,17 +530,20 @@ describe("project setup routes", () => {
 		{ archived: true, repositoryName: "renamed" },
 		{ invalid: true, repositoryName: "renamed" },
 	])("lets a replacement maintainer reach stop controls when preview fails: %j", async (options) => {
-		await github().service.setContributions(repo, "enrollment-test", "enabled");
 		const who = identity("github");
+		const { data, fake } = await enrolled(who);
 		const { session } = await oauth(who);
 		const account = await env.DB.prepare("SELECT userId FROM account WHERE providerId='github' AND accountId=?")
 			.bind(who.id)
 			.first<{ userId: string }>();
 		expect(account!.userId).not.toBe("enrollment-test");
 		expect(await github().service.projects(account!.userId)).toEqual([]);
-		const { request } = github({ ...options, account: Number(who.id) });
+		// The repository becomes private or archived, is renamed, or its quest tree breaks.
+		const project = data.repos[0]!;
+		Object.assign(project, { private: options.private, archived: options.archived, name: options.repositoryName });
+		if (options.invalid) project.files[1]!.content = "# Bad quest";
 		const route = `${origin}/projects/github/upstream/${options.repositoryName}`;
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		vi.spyOn(globalThis, "fetch").mockImplementation(fake);
 		const response = await app.request(route, { headers: { Cookie: session! } }, testEnv);
 		expect(response.status).toBe(403);
 		const html = await response.text();
@@ -530,11 +573,13 @@ describe("project setup routes", () => {
 	});
 
 	it("keeps stop controls after transfer without inheriting opt-in for the new installation", async () => {
-		await github().service.setContributions(repo, "enrollment-test", "enabled");
 		const who = identity("github");
+		const { data, fake } = await enrolled(who);
 		const { session } = await oauth(who);
-		const { request } = github({ account: Number(who.id), repositoryOwner: "receiving", installation: 6 });
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		// The repository moves to another owner, whose installation of the App is another.
+		data.repos[0]!.owner = "receiving";
+		data.installation = 6;
+		vi.spyOn(globalThis, "fetch").mockImplementation(fake);
 		const route = `${origin}/projects/github/receiving/project`;
 		const response = await app.request(route, { headers: { Cookie: session! } }, testEnv);
 		expect(response.status).toBe(200);
@@ -563,11 +608,11 @@ describe("project setup routes", () => {
 		expect(await state()).toBeNull();
 	});
 	it("does not expose enrolled stop controls or accept their forms without current authority", async () => {
-		await github().service.setContributions(repo, "enrollment-test", "enabled");
 		const who = identity("github");
+		const { data, fake } = await enrolled(who);
 		const { session } = await oauth(who);
-		const { request } = github({ account: Number(who.id), role: "write", private: true });
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		Object.assign(data.repos[0]!, { private: true, roles: { [`person${who.id}`]: "write" } });
+		vi.spyOn(globalThis, "fetch").mockImplementation(fake);
 		const response = await app.request(
 			`${origin}/projects/github/upstream/project`,
 			{ headers: { Cookie: session! } },
@@ -614,8 +659,9 @@ describe("project setup routes", () => {
 	it("disables opt-in for unapproved licensing and rejects a forged enable form", async () => {
 		const who = identity("github");
 		const { session } = await oauth(who);
-		const { request } = github({ account: Number(who.id), license: "BUSL-1.1", approval: [false, false] });
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		const data = world(who);
+		data.repos[0]!.license = "BUSL-1.1";
+		vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(data));
 		const response = await app.request(
 			`${origin}/projects/github/upstream/project`,
 			{ headers: { Cookie: session! } },
@@ -639,9 +685,9 @@ describe("project setup routes", () => {
 	it("renders ready quests in the existing visual system and enables eligible repositories through authenticated forms", async () => {
 		const who = identity("github");
 		const { session } = await oauth(who);
-		// The fixture verifies the actual linked account supplied by this session.
-		const { request } = github({ account: Number(who.id) });
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		// GitHub checks the role of the account linked to this session.
+		const data = world(who);
+		vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(data));
 		const response = await app.request(
 			`${origin}/projects/github/upstream/project`,
 			{ headers: { Cookie: session! } },
@@ -673,8 +719,7 @@ describe("project setup routes", () => {
 		expect(posted.status).toBe(303);
 		expect(await state()).toMatchObject({ state: "enabled" });
 		// Authenticated stop controls do not depend on readable Quest snapshots.
-		const unavailable = github({ account: Number(who.id), noQuests: true, private: true });
-		vi.mocked(globalThis.fetch).mockImplementation(unavailable.request as typeof fetch);
+		Object.assign(data.repos[0]!, { files: [], private: true });
 		for (const state of ["paused", "disconnected"]) {
 			const stopped = await app.request(
 				`${origin}/projects/github/upstream/project`,
@@ -903,7 +948,7 @@ describe("project picker", () => {
 				.every((call) => call.authorization === "Bearer mock-token"),
 		).toBe(true);
 		// The row's form is the setup page's: enabling rechecks authority and eligibility with an installation token.
-		vi.mocked(globalThis.fetch).mockImplementation(github({ account: Number(who.id) }).request as typeof fetch);
+		vi.mocked(globalThis.fetch).mockImplementation(fakeGitHub(world(who)));
 		const posted = await app.request(
 			`${origin}/projects/github/upstream/project`,
 			{
@@ -918,22 +963,15 @@ describe("project picker", () => {
 	});
 	it("asks to sign in with GitHub again when the user's token cannot list repositories", async () => {
 		const { session } = await oauth(identity("github"));
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-			const url = new URL(String(input));
-			if (url.pathname === "/app") return Response.json({ id: 123, slug: "quest-test" });
-			return Response.json({ message: "Bad credentials" }, { status: 401 });
-		});
+		// GitHub no longer accepts the token the session signed in with.
+		vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(world()));
 		const html = await (await app.request(`${origin}/projects`, { headers: { Cookie: session! } }, testEnv)).text();
 		expect(html).toContain("Your GitHub repositories could not be listed");
 		expect(html).toContain("Find an enrolled project");
 	});
 	it("asks a user without a linked GitHub account to link one", async () => {
 		const { session } = await oauth(identity("google"));
-		const outbound = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-			const url = new URL(String(input));
-			if (url.pathname === "/app") return Response.json({ id: 123, slug: "quest-test" });
-			throw new Error(`Unexpected request ${url.href}`);
-		});
+		const outbound = vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(world()));
 		const html = await (await app.request(`${origin}/projects`, { headers: { Cookie: session! } }, testEnv)).text();
 		expect(html).toContain(
 			'<a href="/account">Link your GitHub account</a> to list the repositories you maintain.',
