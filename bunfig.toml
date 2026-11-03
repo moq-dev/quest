@@ -1,3 +1,7 @@
+# Quest never loads `.env` files: the commands it runs get the environment it
+# was started with. The bundle's shebang and the compiled binary opt out too.
+env = false
+
 # Markdown assets (the bundled skills and guide) import as text, at runtime and
 # in `bun build`. vitest.config.ts mirrors this for the test runner.
 [loader]

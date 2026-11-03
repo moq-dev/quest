@@ -919,6 +919,11 @@ quest gate bun run test
 quest gate cargo build --release
 ```
 
+Like every command Quest runs, the gated command gets the environment Quest was
+started with. Quest never loads the working directory's `.env` files, as Bun
+otherwise would, so a repository's `.env.development` cannot override the
+variables a gated build was given.
+
 Admission is sized from the host, with no configuration. Every platform waits
 while the host-wide 1-minute load average exceeds the host's CPU count, or while
 available memory is below one command's budget: 4 GiB, or a quarter of RAM on

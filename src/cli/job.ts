@@ -3,7 +3,8 @@
 // the command: everything the command starts is created inside that job and cannot break away.
 
 /**
- * Runs as `<Bun> -e STUB`, with `BUN_BE_BUN=1` so a compiled Quest runs it as Bun would. The command
+ * Runs as `<Bun> --no-env-file -e STUB`, with `BUN_BE_BUN=1` so a compiled Quest runs it as Bun
+ * would, but without loading the working directory's `.env` files into the command. The command
  * and the caller's `BUN_BE_BUN` arrive as JSON in `QUEST_GATE_JOB`, since Bun's `process.argv` for
  * `-e` differs between platforms; the stub restores the caller's environment before the command
  * starts.
@@ -63,7 +64,7 @@ export const STUB = [
 /** The stub's command line and environment for running `command` with `env` in a job of its own. */
 export function stubbed(command: string[], env: NodeJS.ProcessEnv): [string[], NodeJS.ProcessEnv] {
 	return [
-		[process.execPath, "-e", STUB],
+		[process.execPath, "--no-env-file", "-e", STUB],
 		{ ...env, BUN_BE_BUN: "1", QUEST_GATE_JOB: JSON.stringify({ keep: env.BUN_BE_BUN ?? null, command }) },
 	];
 }
