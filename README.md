@@ -1012,10 +1012,14 @@ lists; `--model` and `--effort` override them.
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
+quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
 ```
 
-The first round runs the reviewer's own review, `codex exec review --base` or
-Claude Code's `/code-review <effort> <base>...HEAD`, then resumes that session for
+Every turn reviews only the branch's own change, from the merge base of `HEAD`
+with the base's tip, so a branch behind its base draws no findings on code the
+base gained since, which a diff against its tip shows as reverted.
+The first round runs the reviewer's own review, `codex exec review --base
+<merge-base>` or Claude Code's `/code-review <effort> <merge-base>...HEAD`, then resumes that session for
 one turn that applies the base's `REVIEW.md`, if any, and reports the findings
 in one JSON schema. Later rounds resume the same session with the new head and
 `--responses`, the author's free-text fixes and refutations, which a round that
@@ -1026,7 +1030,9 @@ new session instead, which still weighs the responses. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. The session is kept per branch in the clone's
 common Git directory, so any worktree of the clone resumes it; `--new` starts
-over.
+over. `--branch` names the branch instead of the checked-out one, which a
+detached `HEAD` requires, such as a checkout of a branch another worktree
+holds, so its rounds continue that branch's session.
 
 The reviewer is read-only: Codex in its `read-only` sandbox, ignoring
 execpolicy rules, and Claude Code with only read tools and the Bash commands it

@@ -948,13 +948,17 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"CLAUDE_CODE_USE_BEDROCK, _VERTEX, or _FOUNDRY would send it elsewhere. A logged-out error names the " +
 				"profile it checked, CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset. It runs " +
 				`with ${models}. --model and --effort override them.\n\n` +
-				"The first round runs the reviewer's own review (`codex exec review --base`, or Claude Code's " +
-				"`/code-review <effort> <base>...HEAD`), then resumes that session for one turn that applies the base's " +
+				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
+				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
+				"reviewer's own review (`codex exec review --base <merge-base>`, or Claude Code's " +
+				"`/code-review <effort> <merge-base>...HEAD`), then resumes that session for one turn that applies the base's " +
 				"REVIEW.md, if any, and reports the findings in one JSON schema. Later rounds on the branch resume the " +
 				"same session with the new head and --responses, the author's fixes and refutations of the last " +
 				"round's findings, required while that round reported any. A resumed session keeps the instructions it " +
 				"started with, so when the applicable AGENTS.md or CLAUDE.md files change, the round starts a new " +
-				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it.\n\n" +
+				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
+				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules or user config, Claude Code with " +
 				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
@@ -970,10 +974,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
+		.option("--branch <name>", "Branch whose review session to continue, instead of the checked-out one")
 		.option("--json", "Print one JSON object")
 		.action(
 			(options: {
 				base?: string;
+				branch?: string;
 				harness?: HarnessName;
 				model?: string;
 				effort?: string;
