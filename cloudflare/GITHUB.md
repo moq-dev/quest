@@ -16,6 +16,10 @@ and installation tokens stay inside the Worker; agents receive neither.
 | Pull requests: write  | Observe, open and update job PRs, explicitly merge an exact head           | Read or write for that operation                               |
 | Checks: read          | Observe checks on a commit                                                 | Check reads only                                               |
 | Commit statuses: read | Observe legacy CI status contexts                                          | Check reads only                                               |
+| Administration: read  | Read whether the default workflow token can write                          | The setup page's [CI check](#read-only-pull-request-ci) only   |
+| Secrets: read         | List the names of Actions secrets that reach every workflow                | The setup page's CI check only                                 |
+| Actions: read         | List environments and their deployment branch policies                     | The setup page's CI check only                                 |
+| Environments: read    | Count each environment's secrets                                           | The setup page's CI check only                                 |
 
 The manifest subscribes to push, issues, issue comments, pull requests, reviews,
 review threads, inline review comments, checks and statuses. Existing App registrations
@@ -26,11 +30,31 @@ user permission, which Better Auth needs to sign in users whose email is private
 It grants no repository authority: the user token is used only for the sign-in
 profile and email reads and to list the [project picker](#project-enrollment)'s
 repositories, and never for repository writes or authority checks. No organization,
-administration, workflow, or checks-write permissions are requested. These installation grants
+administration-write, workflow, or checks-write permissions are requested, and
+GitHub never returns a secret's value, only its name. These installation grants
 are necessarily broader than individual operations: minted tokens always name
 one repository ID and the particular permissions required. Tokens are never
 cached and are revoked after use; failed cleanup is logged without secrets and
 does not retry a successful write. GitHub also expires tokens after an hour.
+
+## Trust by stage
+
+Each stage of a job trusts as little as it can. Untrusted text, such as an
+issue, a pull request, a comment, a prompt answer, or anything an agent writes,
+is data at every stage: it never grants authority, approves work, or changes
+what kix may write.
+
+| Stage        | What is trusted                                                                                                                                                                                        | Why                                                                                                                                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Intake       | GitHub's live answers to kix's own reads. A webhook only asks for a read; its signature proves GitHub sent it, not that its contents are current                                                       | Deliveries arrive late, out of order, or not at all, and bodies are anyone's text ([webhooks](#webhooks-and-revocation), [project state](#project-state-and-activity))                                                  |
+| Job creation | The signed-in maintainer's request, after a live check of their maintain or admin role, bound to the revision or head the maintainer saw                                                               | A browser's claims grant nothing, and a head that moved since observations read it is refused ([README](README.md))                                                                                                     |
+| Routing      | The requester's own runners, and their owner's word for each runner. Untrusted heads go only to Linux runners whose owner declared VM builds; kix does not verify the flag                             | A runner is its owner's machine and risk, and jobs never reach another user's runner                                                                                                                                    |
+| devShell     | A trusted revision: the default branch, or a pull request head whose every commit beyond the default branch carries a valid signature from a current maintainer. A head kix pushed to is never trusted | The runner's host Nix evaluates the flake outside the sandbox, and "kix published it" proves only that a runner sent it ([head approval](../quest/m0/kix/sandbox/head-approval.md) plans an explicit per-head approval) |
+| Agent run    | Nothing the agent does. Its commands run in an OS sandbox with no GitHub credential, and it acts on an answer only once the runner's owner gave or approved it                                         | Issue and pull request text can inject prompts ([README](../README.md))                                                                                                                                                 |
+| Publication  | Nothing in the submitted files. kix writes them as Git data to the job's branch or the same-repository head it iterates, refuses workflow files and the default branch, and fences out stale attempts                                      | A prompt-injected agent or a compromised runner can send anything ([Publication](#publication))                                                                                                                         |
+| CI           | The enrolled repository's settings keep pull-request CI read-only. A runner's request to mark its pull request ready is its owner's statement, and under read-only CI it starts only harmless checks   | GitHub gives same-repository branches' workflows the repository's secrets and default token, unlike fork pull requests ([Read-only pull-request CI](#read-only-pull-request-ci))                                        |
+| Review       | A review that counts on the exact head: a writer's approval, the App's `quest review` check, or the author's own `## Review` record on a commit no App made. An agent's recommendation never counts    | Picking merge approves the head the maintainer saw, not whatever is pushed after it ([Landing only reviewed heads](#landing-only-reviewed-heads))                                                                       |
+| Land         | The maintainer's explicit pick of that head, under GitHub's branch rules and checks                                                                                                                    | kix never writes the default branch itself; GitHub's refusals stand ([Merge jobs](#merge-jobs))                                                                                                                         |
 
 ## Trusted boundary
 
@@ -240,8 +264,9 @@ An author's record carries only across merges no App committed.
 kix defers to GitHub only where GitHub enforces the same rule: a ruleset on the
 base that requires an approval and either dismisses stale approvals or requires
 approval of the most recent push, which GitHub reports this App cannot bypass.
-Classic branch protection's review settings need the administration permission
-to read, so kix keeps its own check there.
+Classic branch protection's review settings need the administration
+permission, which landing tokens do not carry, so kix keeps its own check
+there.
 
 When no review counts, a direct merge is refused and a merge job pauses on a
 decision. Both say which commit needs a review and how to give one.
@@ -263,15 +288,45 @@ one, kix turns that pull request's auto-merge off. If GitHub refuses or does
 not show whether it is on, the job pushes nothing and pauses on a decision. The
 new head lands only through a new landing.
 
+### Read-only pull-request CI
+
 kix pull requests come from upstream branches, and GitHub gives workflows on
-same-repository branches the repository's secrets, unlike fork pull requests.
-So enrolled repositories must keep pull-request CI read-only: a read-only
-default `GITHUB_TOKEN`, no write secrets at repository level, and write
-credentials only in environments limited to protected branches. Agent-written
-code then runs in CI before review with nothing it can write through.
-`pull_request_target` and `workflow_run` jobs that check out a PR head fall
-under the same rule. kix never runs pull request code in the publisher and
-grants runners no GitHub credentials.
+same-repository branches the repository's secrets and default token, unlike
+fork pull requests. Pushing a job branch also runs its `push` workflows. So
+enrolled repositories must keep that CI read-only: a read-only default
+`GITHUB_TOKEN`, no secrets at repository or organization level, and secrets
+only in environments limited to protected branches. Agent-written code then
+runs in CI before review with nothing it can write through. Jobs whose
+workflow asks for write `permissions:` itself, and `pull_request_target` and
+`workflow_run` jobs that check out a PR head, fall under the same rule. kix
+never runs pull request code in the publisher and grants runners no GitHub
+credentials. This rule, rather than a service fork or a review gate on every
+push, is kix's answer to agent-written code reaching CI.
+
+The project's setup page, where a maintainer enables contributions and later
+pauses them, checks the repository's settings with the installation's token
+(`src/github/ci.ts`) and lists each problem it finds:
+
+- the default workflow token can write;
+- Actions secrets at repository level, or organization secrets shared with the
+  repository, by name;
+- an environment with secrets whose deployment branches include one GitHub
+  does not report protected.
+
+An environment limited to protected branches passes while some branch is
+protected, since GitHub lets every branch deploy when none is. One limited to
+selected branches passes when each branch pattern names a protected branch,
+or the merge queue's `gh-readonly-queue/<branch>/*` for one; a wildcard could
+match a branch kix writes, so it is reported. Tag patterns pass, since kix
+never writes tags. Required reviewers on an environment do not count: a
+reviewer approves a deployment, not the code a job branch carries.
+
+The check only warns: enabling still works, and jobs still run. A failed read
+becomes a warning of its own. It checks the first 12 environments, so the page
+stays within a Worker's subrequest budget, and says when there are more. It
+does not read workflow files, so the page reminds the maintainer of the rest
+of the rule. An installation that has not accepted the check's permissions
+gets a warning naming them instead of the checks they cover.
 
 Installation grants are broader than any one publication: `contents: write`
 and `pull_requests: write` cover every installed repository. Each token names
@@ -337,11 +392,16 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
    those grants become available. GitHub's installation UI, not browser form
    claims, chooses repository access. Enroll each repository on `/projects`;
    jobs publish their branches there, with no fork setup.
-4. Run `bun run wrangler d1 migrations apply DB --remote`, then the normal
+4. Existing App registrations must add the **Administration**, **Secrets**,
+   **Actions**, and **Environments** repository permissions, each read-only,
+   which the setup page's [CI check](#read-only-pull-request-ci) reads with.
+   Each installation then accepts them on GitHub; until it does, the check
+   names them instead of running.
+5. Run `bun run wrangler d1 migrations apply DB --remote`, then the normal
    Worker deployment from [README](README.md). GitHub App setup, credentials,
    production deployment and live installation tests
    are operator work; this change performs none of those external actions.
-5. Send a GitHub ping, check successful delivery, then test installation
+6. Send a GitHub ping, check successful delivery, then test installation
    suspension/removal and repository deselection in a development installation.
    Check that service operations reject revoked access and reduced permissions.
    Use GitHub's delivery/redelivery UI to retry failed deliveries. Rotate the
