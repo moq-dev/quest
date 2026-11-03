@@ -992,13 +992,22 @@ on the host:
   unless it or a parent closes it, as Bun and Node do for the processes they
   start. A cancelled gate waits until every process holding it has exited,
   including one outside the group that the signal never reached.
-- Windows owns only the command itself.
+- Windows runs the command under a small Bun stub in a Job Object that kills
+  every process left in it once the stub exits, and lets none break away. It
+  owns every descendant, including detached ones, and stops them once the
+  command exits or the gate is killed. Windows has no signals to forward:
+  Ctrl-C reaches every process on the console, and killing the gate
+  terminates the job.
 
-A nested invocation runs immediately inside the admitted command, and a gate
-inside another Quest scope, such as `quest worktree run`, leaves ownership to
-that scope: an owner of its own would take the command out of the enclosing
-one's reach. Internal compiler or test worker parallelism remains the command's
-responsibility.
+A nested invocation runs immediately inside the admitted command. A gate inside
+another Quest scope, such as `quest worktree run`, runs its command in a child
+cgroup of its own within that scope, which systemd delegates to the scope's
+processes, so the gate owns its own subtree and the enclosing scope still
+reaches it; a cancelled gate there waits until that child cgroup is empty.
+A scope started by an older Quest, without delegation, keeps
+ownership instead: a scope of the gate's own would take the command out of
+the enclosing one's reach. Internal compiler or test worker parallelism remains
+the command's responsibility.
 
 This repository's `just check`, `just test`, `just worker-check`, and
 `just worker-test` run through the gate.
@@ -1308,6 +1317,8 @@ is empty, and a second signal kills everything at once. A run inside another
 Quest scope, such as a gate's, binds its own scope to that one, so the
 enclosing owner's kill stops it too, and leaves a repeated signal's kill to
 that owner: it may be the copy of SIGTERM that Just forwards.
+The scope is delegated, so a `quest gate` inside it owns its command through a
+child cgroup of the scope.
 Work handed to another service manager, such as `systemd-run` or a container
 daemon, escapes the scope. If the supervisor itself is killed, its command keeps
 running and its scratch is kept; the next `quest worktree` command drops the run
