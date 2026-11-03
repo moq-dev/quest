@@ -99,7 +99,6 @@ ownership-manifest design:
 - [Rejected options in decision records](/quest/m0/decision-records.md) - grill and plan label rejected options so no one reads them as qualifiers
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
-- [Bun EFAULT report](/quest/m0/bun-efault.md) - report concurrent `rmSync` `EFAULT` on Windows, and drop the workaround once Bun fixes it
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
 - [Gate load wording](/quest/m0/gate-load-wording.md) - stop naming Spotlight as the cause of a fresh macOS runner's load
