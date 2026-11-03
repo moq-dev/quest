@@ -10,7 +10,7 @@ A background agent that cannot prompt never picks an answer: it puts each open d
 
 Work the tree in **rounds**.
 The **frontier** is every decision whose prerequisites are already settled.
-Ask the whole frontier in one synchronous round, following the guide's Questions section.
+Ask the whole frontier in one synchronous round, following `quest context`'s Questions section.
 Open each question with the context it needs, including the settled answers it builds on, since a later round's question often hangs off a decision made rounds earlier.
 Mark one answer per question as (recommended) and wait for the user's answers (never guess) before the next round.
 

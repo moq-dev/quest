@@ -19,7 +19,7 @@ Start every quest you would recommend starting, without asking: well planned, wi
 Print each quest you skip and why, suggesting `/quest-plan` for any with significant design issues.
 
 Ask only when unsure, such as a quest that may not be worth implementing or may not be worth doing now.
-Present those one at a time: a short paragraph explaining the problem, the quest's goal, and your recommendation, then one synchronous question following the guide's Questions section, offering:
+Present those one at a time: a short paragraph explaining the problem, the quest's goal, and your recommendation, then one synchronous question following `quest context`'s Questions section, offering:
 
 - `/quest-start`: If the quest should start now.
 - skip: If the quest should not be started yet.

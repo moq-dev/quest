@@ -1491,8 +1491,8 @@ Follow https://github.com/moq-dev/quest/blob/main/SETUP.md to set up Quest here.
 ```
 
 The [getting started guide](docs/getting-started.md) covers what happens next.
-`quest guide` prints the format and workflow, and `quest context` the engineering rules
-shared by every repository that uses Quest.
+`quest context` prints the rules agents follow in every task, and `quest guide` the
+quest format and workflow they read before working on a quest.
 
 ## Where this is going
 

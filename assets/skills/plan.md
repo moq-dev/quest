@@ -27,4 +27,4 @@ Record each settled decision and its reason in the quest's Plan, so later sessio
 New work joins the milestone the user picked, at its rank; an epic groups related quests, and its README holds the work no child owns (the end-to-end test, the docs page).
 
 When done, commit, open the PR as a draft, and run `/quest-review` on it, which reviews the branch, records the `## Review` section, and marks the PR ready.
-Quests planned as follow-ups of an open PR may be committed to that PR instead, whose next push is reviewed as the guide's Reviews section describes.
+Quests planned as follow-ups of an open PR may be committed to that PR instead, whose next push is reviewed as `quest context`'s Reviews section describes.
