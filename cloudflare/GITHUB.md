@@ -475,8 +475,10 @@ Submitting it opens the App's setup pull request, with no runner involved
 the skill stubs this deployment's `quest` ships (rendered into
 `build/stubs.json` at build time), `quest/README.md` with the answer as its
 Goal, the `Quests: ` line in the root agent instructions, the `.gitattributes`
-line, and Claude Code's hook entries in `.claude/settings.json`. The answer is
-escaped so it cannot open a heading. A path init would refuse, such as a skill
+line, and Claude Code's hook entries in `.claude/settings.json`. Heading
+syntax in the answer is escaped, and the planned `quest/README.md` must pass
+`quest check`, so a goal that would fail it, such as one linking a missing
+quest, is refused before anything is written instead of when enabling. A path init would refuse, such as a skill
 directory that is not a Quest stub or invalid settings JSON, is named on the
 page and nothing is written; kix never deletes or renames a repository's
 files. The plan does not follow symlinks, since a Git tree stores their targets

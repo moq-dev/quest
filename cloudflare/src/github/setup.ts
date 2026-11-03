@@ -1,7 +1,17 @@
 // The setup pull request: what `quest init` writes, planned by the core from
 // a repository's default branch on GitHub and published by the App, for a
 // maintainer enrolling a repository that has no Quest files yet.
-import { type Checkout, type InitChange, InitRefused, type Kind, SKILL_DIRS, type Stub } from "quest/core";
+import {
+	type Checkout,
+	type InitChange,
+	InitRefused,
+	type Kind,
+	SKILL_DIRS,
+	type Stub,
+	check,
+	isQuest,
+	parse,
+} from "quest/core";
 import stubs from "../../build/stubs.json";
 
 /** The branch the App publishes the setup on, outside the quest claim namespace. */
@@ -72,18 +82,35 @@ export function treeCheckout(entries: TreeEntry[], files: Map<string, string>): 
 /**
  * The maintainer's answer to what the project is working toward, as
  * `quest/README.md`'s Goal: trimmed, with Unix newlines, and with any line that
- * would make a heading escaped, so it stays inside the Goal section.
+ * would make a heading escaped, so it stays inside the Goal section. Escaping
+ * covers the common slips; `planCheck` refuses anything else `quest check`
+ * would.
  */
 export function setupGoal(text: string): string {
 	return (
 		text
-			.replaceAll("\r\n", "\n")
+			.replace(/\r\n?/g, "\n")
 			.trim()
 			.split("\n")
 			// An ATX heading opens with `#`; a line of only `=` or `-` underlines the one above as a setext heading.
 			.map((line) => line.replace(/^(\s{0,3})(#|(?:=+|-+)\s*$)/, "$1\\$2"))
 			.join("\n")
 	);
+}
+
+/**
+ * What `quest check` would report on the quest files `changes` write over a
+ * tree holding `paths`, such as a goal whose Markdown leaves the Goal section,
+ * so the setup is refused before it is published rather than at the merge.
+ */
+export function planCheck(changes: InitChange[], paths: Iterable<string>): string[] {
+	const exists = new Set([...paths, ...changes.map((change) => change.path)]);
+	const documents = changes.flatMap((change) =>
+		change.content !== null && change.path.startsWith("quest/") && isQuest(change.path)
+			? [parse(change.path, change.content)]
+			: [],
+	);
+	return check(documents, (path) => exists.has(path)).map((finding) => finding.message);
 }
 
 /** What each planned change is for, in the pull request body. */

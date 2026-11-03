@@ -141,6 +141,17 @@ describe("the setup pull request", () => {
 		expect(await setup()).toBeNull();
 	});
 
+	it.each(["Ship parser\n> ## Other", "Ship parser\n- ## Other", "See [the plan](/quest/plan.md)"])(
+		"refuses a goal quest check would refuse: %j",
+		async (goal) => {
+			const response = await post("/setup", { id: "10", goal });
+			expect(response.status).toBe(403);
+			expect(await response.text()).toContain("would not pass");
+			expect(project.branches["kix/setup"]).toBeUndefined();
+			expect(await setup()).toBeNull();
+		},
+	);
+
 	it("leaves a branch it did not write alone", async () => {
 		const main = Object.keys(project.commits)[0]!;
 		project.branches["kix/setup"] = main;
@@ -239,5 +250,6 @@ describe("the setup plan on GitHub", () => {
 		expect(setupGoal("  One\r\n## Required\n   ### Deep\n")).toBe("One\n\\## Required\n   \\### Deep");
 		expect(setupGoal("Ship a parser\n---\nThen more\n===  ")).toBe("Ship a parser\n\\---\nThen more\n\\===");
 		expect(setupGoal("- a list item\n-- not a rule")).toBe("- a list item\n-- not a rule");
+		expect(setupGoal("Ship parser\r---")).toBe("Ship parser\n\\---");
 	});
 });

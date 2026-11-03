@@ -14,7 +14,7 @@ import {
 import { cleanAutoMergeRefusal, immediateMerge } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
 import { unreviewed } from "./review";
-import { GOAL_LIMIT, SETUP_BRANCH, STUBS, planned, setupGoal, setupPull, treeCheckout } from "./setup";
+import { GOAL_LIMIT, SETUP_BRANCH, STUBS, planCheck, planned, setupGoal, setupPull, treeCheckout } from "./setup";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -1294,6 +1294,14 @@ export class GitHubService {
 					if (error instanceof InitRefused) throw new GitHubError(error.message);
 					throw error;
 				}
+				const problems = planCheck(
+					changes,
+					root.tree.map((entry) => entry.path),
+				);
+				if (problems.length)
+					throw new GitHubError(
+						`The goal would not pass \`quest check\` in quest/README.md (${problems.join("; ")}); reword it and try again.`,
+					);
 				const pull = setupPull(changes, { flake: root.tree.some((entry) => entry.path === "flake.nix") });
 
 				const branch = this.#disarming(
