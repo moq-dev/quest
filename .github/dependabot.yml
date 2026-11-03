@@ -30,7 +30,12 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+      # The dev shell's merge driver should carry quest's latest reviewed fixes.
+      exclude: ["quest-pinned"]
     groups:
+      # Its own PR, so a nixpkgs bump that needs work does not hold it back.
+      quest-pinned:
+        patterns: ["quest-pinned"]
       nix:
         patterns: ["*"]
     ignore:

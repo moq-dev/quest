@@ -77,6 +77,14 @@ const merges = () =>
 		.mocked(globalThis.fetch)
 		.mock.calls.filter(([input, init]) => init?.method === "PUT" && String(input).endsWith("/pulls/2/merge"))
 		.map(([, init]) => JSON.parse(String(init!.body)));
+/** Sign pull request #2's head as the signed-in maintainer, so its jobs run on any runner. */
+async function signed() {
+	const { accountId } = (await db
+		.prepare("SELECT accountId FROM account WHERE providerId='github' AND userId=?")
+		.bind(user)
+		.first<{ accountId: string }>())!;
+	repo.commits[head]!.signature = { isValid: true, signer: { databaseId: Number(accountId), login } };
+}
 /** Open the project's activity page, which checks maintainer authority. */
 function visit(session = cookie) {
 	return app.request(`${origin}/projects/github/upstream/project/state`, { headers: { Cookie: session } }, testEnv);
@@ -226,6 +234,7 @@ describe("decision inbox", () => {
 	});
 
 	it("starts work bound to the revision on screen and shows its progress plainly", async () => {
+		await signed();
 		const stale = await submit(jobs, [
 			["workflow", "iterate"],
 			["target", "pulls/2"],
@@ -252,6 +261,44 @@ describe("decision inbox", () => {
 		expect((await store.readJob(db, job!.id))!.state).toBe("cancelled");
 		// A stopped job sets its item aside until the pull request changes.
 		expect(await inbox()).toMatch(/Skipped and finished \(1\)[\s\S]*Fix/);
+	});
+
+	it("asks a maintainer to approve a head without maintainer signatures, then queues it for any runner", async () => {
+		const started = await submit(jobs, [
+			["workflow", "iterate"],
+			["target", "pulls/2"],
+			["revision", head],
+		]);
+		expect(started.status).toBe(303);
+		const [job] = await store.listJobs(db, 10);
+		expect(job).toMatchObject({ trusted: 0, state: "queued" });
+		let html = thread(await inbox({ project: "10", item: "pulls/2" }));
+		expect(html).toContain("Head to approve");
+		expect(html).toContain(`href="https://github.com/upstream/project/compare/${commit}...${head}"`);
+		expect(html).toContain('action="/projects/github/upstream/project/pulls/2/approve"');
+		expect(html).not.toContain("none of your runners are online");
+		// A non-maintainer cannot approve, and an approval binds the head on screen.
+		const outsider = await other();
+		const refused = await submit("/projects/github/upstream/project/pulls/2/approve", [["head", head]], {
+			Cookie: outsider.session,
+		});
+		expect(refused.status).toBe(403);
+		expect(await refused.text()).toContain("maintainer authority required");
+		const stale = await submit("/projects/github/upstream/project/pulls/2/approve", [["head", "b".repeat(40)]]);
+		expect(stale.status).toBe(403);
+		expect(await stale.text()).toContain("head moved since you looked");
+		expect(await store.readJob(db, job!.id)).toMatchObject({ trusted: 0 });
+		const approved = await submit("/projects/github/upstream/project/pulls/2/approve", [["head", head]]);
+		expect(approved.status).toBe(303);
+		expect(approved.headers.get("Location")).toBe("/inbox?done=trust");
+		// The queued job is reclassified at once, though no runner has dispatched it.
+		expect(await store.readJob(db, job!.id)).toMatchObject({ trusted: 1, state: "queued" });
+		expect(
+			await db.prepare("SELECT head,approver FROM head_approvals WHERE repository=10 AND pull=2").first(),
+		).toEqual({ head, approver: user });
+		html = thread(await inbox({ project: "10", item: "pulls/2" }));
+		expect(html).not.toContain("Head to approve");
+		expect(html).toContain("none of your runners are online");
 	});
 
 	it("merges a clean pull request at the head on screen, or says why GitHub refused", async () => {

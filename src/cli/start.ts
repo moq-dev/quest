@@ -157,7 +157,10 @@ function checkout(root: string, branch: string, sha: string, warn: (message: str
 			warn(`${branch} has diverged from the claim commit; merge ${sha} into it before pushing`);
 		}
 	} else if (succeeds(root, ["rev-parse", "--verify", "--quiet", ref])) {
-		warn(`local branch ${branch} already exists; merge the claim commit ${sha} into it before pushing`);
+		warn(
+			`claimed, but local branch ${branch} already exists from an earlier attempt; ` +
+				`switch to it, merge the claim commit ${sha} into it, and resume that work before pushing`,
+		);
 	} else if (!succeeds(root, ["switch", "--quiet", "-c", branch, sha])) {
 		gitOutput(root, ["update-ref", ref, sha, ""]);
 		warn(`created ${branch} but could not switch to it; run git switch ${branch}`);
