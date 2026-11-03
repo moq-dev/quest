@@ -1,7 +1,7 @@
 // `quest init` and `quest uninstall`: install skill stubs and reverse it.
 //
-// Init touches only stubs (writing missing ones and removing those of retired
-// skills), one reference line, one `.gitattributes` line, an empty
+// Init touches only stubs (writing missing or outdated ones and removing those
+// of retired skills), one reference line, one `.gitattributes` line, an empty
 // `quest/README.md` when missing, Quest's hook entries in
 // `.claude/settings.json`, and the clone's merge driver config. Uninstall never
 // deletes the quest tree.
@@ -22,7 +22,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 
 import { gitOutput } from "./claims";
-import { DRIVER } from "./resolve";
+import { DRIVER, OLD_DRIVERS } from "./resolve";
 import { PREFIX, SKILLS } from "./skills";
 import { HOOK_EVENTS } from "./worktree-hook";
 
@@ -58,15 +58,19 @@ const QUEST_ROOT_README = "# Quests\n\n## Goal\n\nWhat this project is working t
  */
 export function init(root: string): string[] {
 	const dirs = skillDirs(root);
-	const missing = dirs.flatMap((skills) =>
+	const written = dirs.flatMap((skills) =>
 		SKILLS.flatMap((skill) => {
 			const dir = `${skills}/${skill.installed}`;
 			const path = `${dir}/SKILL.md`;
 			checkPath(root, path, "file");
 			if (isFile(join(root, path))) {
-				// An older version's stub stays as it is; only a missing one is written.
-				if (isStub(root, path, skill.installed)) return [];
-				throw new Error(`${path} is not a Quest stub; remove or rename it before running \`quest init\``);
+				if (!isStub(root, path, skill.installed))
+					throw new Error(`${path} is not a Quest stub; remove or rename it before running \`quest init\``);
+				// An older version's stub is rewritten in place, keeping its newlines; Quest writes no links, so it leaves linked ones.
+				const content = read(root, path);
+				if (content.replaceAll("\r\n", "\n") === skill.stub) return [];
+				if (!isRealDir(join(root, dir)) || kind(join(root, path)) !== "file") return [];
+				return [{ path, stub: skill.stub.replaceAll("\n", newline(content)) }];
 			} else if (existsSync(join(root, dir))) {
 				throw new Error(`${dir} exists without SKILL.md; remove or rename it before running \`quest init\``);
 			}
@@ -84,7 +88,7 @@ export function init(root: string): string[] {
 	const settings = installHooks(root);
 
 	const changes: string[] = [];
-	for (const { path, stub } of missing) {
+	for (const { path, stub } of written) {
 		mkdirSync(dirname(join(root, path)), { recursive: true });
 		writeFileSync(join(root, path), stub);
 		changes.push(path);
@@ -123,13 +127,15 @@ export function heal(root: string): void {
 }
 
 /**
- * Set `merge.quest.driver` in the clone's config when no config sets it, and
- * only inside a git work tree: git ignores a driver named only in
- * `.gitattributes`. A failed write is ignored, leaving git's own merge.
+ * Set `merge.quest.driver` in the clone's config when no config sets it, or
+ * the one in effect is a driver an older quest registered, and only inside a
+ * git work tree: git ignores a driver named only in `.gitattributes`. A custom
+ * driver stays. A failed write is ignored, leaving the driver as it was.
  */
 function register(root: string): void {
 	try {
-		if (gitOutput(root, ["config", "--get", "merge.quest.driver"]) !== "") return;
+		const current = gitOutput(root, ["config", "--get", "merge.quest.driver"]);
+		if (current !== "" && !OLD_DRIVERS.includes(current)) return;
 		if (gitOutput(root, ["rev-parse", "--is-inside-work-tree"]) !== "true") return;
 		gitOutput(root, ["config", "--local", "merge.quest.driver", DRIVER]);
 	} catch {
