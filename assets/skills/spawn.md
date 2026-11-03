@@ -8,7 +8,8 @@ Your goal is to execute many quests in parallel.
 The scope consists of all ready quests that are not claimed.
 Run `quest unblocked --unclaimed --json` for unclaimed ready candidates in milestone priority, descending downstream impact, then tree order.
 The count is distinct transitive dependents; other prerequisites may still remain.
-Use that order when dispatching, and recompute after the quest tree changes.
+Use that order when dispatching.
+As each agent reports, rerun `quest unblocked --unclaimed --json`, which reads the upstream tree afresh, and start the newly ready quests you would recommend, within the harness's agent limit: merges elsewhere and released claims make more work ready while the spawn runs.
 An explicit argument takes precedence: filter to the selected quests/epics and honor their requested order.
 It lists each skipped claim on stderr with how long ago it was last active; offer the user any that look stale, as the guide describes.
 Each agent claims its quest with `quest start`, which refuses one claimed since; a refusal is a skip, not a failure.
@@ -25,9 +26,13 @@ Present those one at a time: a short paragraph explaining the problem, the quest
 - deprioritize: If the quest should wait behind other work; `/quest-plan` moves it down.
 - `/quest-delete`: If the quest should be deleted.
 
+Before dispatching a quest, search open PRs for one already doing its work, as the guide's Execution section describes; one listing of open PRs with their changed files covers every quest.
+Skip a quest a match already implements; otherwise list the matches by URL in its brief, so the agent judges them before claiming instead of searching again.
+
 Start each quest in a background sub-agent with its own isolated worktree, since agents cannot write to a worktree their parent created.
 
 Each agent reports back only when done or blocked.
+Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in the brief of each agent started after, and report it once, not with each agent.
 
 When done, each agent's claim PR holds its work, still a draft if decisions or unfinished work remain.
 Its report lists every open decision with a recommendation.
@@ -35,6 +40,9 @@ Report each sub-agent's final status, staying silent on interim notifications, b
 
 As each agent reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
 Stop at the PRs, beyond the `/quest-review` each started agent runs itself: never offer or run `/quest-review`, `/quest-iterate`, or `/quest-merge` on them. Deciding them is `/quest-complete`'s job, run as its own session.
+
+Stop dispatching once no agent is running and no ready quest is left to start, then wrap up as below; never wait on a merge for more work.
+The final summary names each queued PR, armed for auto-merge or in a merge queue as `quest status` reports, whose merge would make a quest ready, with those quests, so the user can rerun `/quest-spawn` once they land, by hand or with `/loop`.
 
 Plan the follow-ups each agent suggests in the foreground, as the guide describes, without waiting for the other agents to finish.
 Include quest context, as many quests are concurrently in flight.

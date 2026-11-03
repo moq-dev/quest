@@ -10,9 +10,17 @@ import { BoardPage, QuestPage, SHOWN, questCrumbs } from "./board/pages";
 import { type Project, findProject, home } from "./board/project";
 import { DocIndex, DocPage, findDoc } from "./docs";
 import { Home } from "./home";
-import { type Candidate, type Enrollment, GitHubError, GitHubService } from "./github/service";
+import { type Candidate, type Enrollment, GitHubError, GitHubService, NoQuestFiles } from "./github/service";
 import { readActivity } from "./github/state";
-import { ProjectsPage, ProjectSetupPage, ProjectStopControls, ProjectStatePage, projectURL } from "./projects";
+import {
+	ProjectsPage,
+	ProjectSetupPage,
+	ProjectStopControls,
+	ProjectStatePage,
+	QuestSetupPage,
+	SettingUpPage,
+	projectURL,
+} from "./projects";
 import { githubWebhooks } from "./github/webhook";
 import { activeHighlights, cards, highlights } from "./inbox/activity";
 import * as inbox from "./inbox/model";
@@ -134,6 +142,7 @@ app.get("/projects", async (c) => {
 		{ title: "Project setup", description: "Opt your Quest repository into contributions." },
 		<ProjectsPage
 			projects={await github.projects(session.user.id)}
+			setups={await github.setups(session.user.id)}
 			candidates={candidates}
 			linked={account !== null}
 			installation={installation}
@@ -155,7 +164,28 @@ app.get("/projects/github/:owner/:repository", async (c) => {
 		enrolled = await github.enrolledProject(c.req.param("owner"), c.req.param("repository"), session.user.id);
 		const repository =
 			enrolled ?? (await github.resolveRepository(c.req.param("owner"), c.req.param("repository")));
-		const preview = await github.previewProject(repository, session.user.id);
+		if (!enrolled) {
+			// A project setting up shows its setup pull request, and enables once that merged.
+			const setup = await github.settleSetup(repository, session.user.id);
+			if (setup === "enabled") return c.redirect(projectURL(repository.owner, repository.name), 303);
+			if (setup)
+				return page(
+					c,
+					{ title: `${repository.owner}/${repository.name} setup`, description: "Set up Quest." },
+					<SettingUpPage setup={setup} />,
+				);
+		}
+		let preview;
+		try {
+			preview = await github.previewProject(repository, session.user.id);
+		} catch (error) {
+			if (!(error instanceof NoQuestFiles) || enrolled) throw error;
+			return page(
+				c,
+				{ title: `${repository.owner}/${repository.name} setup`, description: "Set up Quest." },
+				<QuestSetupPage repository={repository} />,
+			);
+		}
 		return page(
 			c,
 			{
@@ -221,6 +251,32 @@ app.post("/projects/github/:owner/:repository", async (c) => {
 					<a href="/projects">Return to project setup</a>.
 				</p>
 			</section>,
+			403,
+		);
+	}
+});
+
+// Enrolling a repository without Quest files opens the App's setup pull request.
+app.post("/projects/github/:owner/:repository/setup", async (c) => {
+	const session = await createAuth(c.env).api.getSession({ headers: c.req.raw.headers });
+	if (!session) return c.json({ error: "Sign in required" }, 401);
+	const { id, goal = "" } = await c.req.parseBody();
+	if (typeof id !== "string" || !/^[1-9]\d*$/.test(id) || typeof goal !== "string")
+		return c.json({ error: "Invalid project choice" }, 400);
+	const repository = { id: Number(id), owner: c.req.param("owner"), name: c.req.param("repository") };
+	const href = projectURL(repository.owner, repository.name);
+	const github = new GitHubService(c.env);
+	try {
+		// A pull request closed or merged since the last look changes what opening means.
+		if ((await github.settleSetup(repository, session.user.id)) === "enabled") return c.redirect(href, 303);
+		await github.openSetup(repository, session.user.id, goal);
+		return c.redirect(href, 303);
+	} catch (error) {
+		if (!(error instanceof GitHubError)) throw error;
+		return page(
+			c,
+			{ title: "Setup not opened", description: "The setup pull request could not be opened." },
+			<QuestSetupPage repository={repository} error={error.message} />,
 			403,
 		);
 	}

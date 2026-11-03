@@ -191,7 +191,9 @@ It pushes an empty claim commit, built on the upstream default branch, to the
 quest's branch (its path without `.md`), then opens a draft PR
 from it right away and prints the PR's URL. It switches your checkout to the
 claim on a new local branch, or fast-forwards that branch if it is already
-checked out. A fork pushes to itself and opens the PR on its upstream, found
+checked out. A local branch left from an earlier attempt is not moved: the
+claim still succeeds, with a warning to switch to it and merge the claim
+commit. A fork pushes to itself and opens the PR on its upstream, found
 as for `unblocked --unclaimed`, so a fork with its own quests claims on
 itself. It reads
 readiness from the upstream default branch it builds on, not your checkout. It
@@ -341,7 +343,8 @@ Authentication comes from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`.
 Without `--since`, the point is the current head's push time, so an existing
 review on that head is included. GitHub lists a push seconds to minutes after
 it lands, so for the current head the wait rereads the listing every 15 seconds
-until the push appears, warning once. Any other SHA must be a listed pushed tip;
+until the push appears, warning once. Any other SHA must be a tip the listing
+shows a push, or a merge into the branch such as **Update branch**, moving it to;
 otherwise pass an ISO timestamp instead. Forks use the head
 repository's activity. Deleted head repositories require a timestamp.
 The initial PR commit listing must match the resolved head; a racing push or
@@ -352,7 +355,8 @@ commit), type, actor, and URL. The last line adds a resume cursor. Pass its
 **last field** as `--since` on the next call. Cursors preserve commit membership
 and events sharing a timestamp; treat them as opaque, and use them only for the
 same PR. Explicit timestamps include events at that instant. Historical plain
-pushes come from repository activity; pushes observed while waiting come from new
+pushes come from repository activity, and a historical merge into the branch
+prints as its new commit; pushes observed while waiting come from new
 commit SHAs, regardless of git author dates. Force pushes come from the PR
 timeline, excluding the one that created the starting head. A merge through
 the queue prints `removed_from_merge_queue` about a second before `merged`, so a
@@ -375,7 +379,8 @@ present (except `quest land`'s, which no head carries), and every required
 check passed; it names the last required check that passed and is dated when
 the head went idle. Each prints once per head, with the check's name
 (spaces as `_`) in the actor field and its details URL. Results count as
-`quest status` counts them, so neutral and skipped results pass. Each job of a
+`quest status` counts them, so neutral and skipped results pass and a rerun
+supersedes an earlier run of the same check. Each job of a
 workflow a ruleset requires is required.
 Requiredness comes from the base branch's protection and rulesets, readable
 with read access. A failed optional check prints separately as `check:failed`,
@@ -451,8 +456,8 @@ comes last, and a missing value prints as `-`:
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
-| `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when. |
-| `checks` | The head's rollup state and `passed=`, `failing=`, `pending=` counts. |
+| `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
+| `checks` | `failure` if any check fails, else `pending` if any is pending, else `success`, and `passed=`, `failing=`, `pending=` counts, all from each check's latest run; `-` when the head has no checks. |
 | `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
@@ -461,7 +466,11 @@ comes last, and a missing value prints as `-`:
 | `starter-hold` | A draft its starter owns: last activity time, PR URL, and `last active` age. Last activity is not when ownership began. |
 
 The node ID is what GraphQL's `addPullRequestReviewThreadReply` and
-`resolveReviewThread` take. Neutral and skipped checks pass. A required check
+`resolveReviewThread` take. Neutral and skipped checks pass. Only each check's
+latest run counts, as for GitHub's mergeability: a rerun, or the same workflow
+run again on the head, supersedes an earlier run of that name from the same
+app, and a newer commit status supersedes an older one of its context. GitHub's
+own rollup state counts the superseded runs too. A required check
 is one branch protection or a ruleset requires for this PR. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
@@ -538,8 +547,8 @@ The commands accept the same PR argument and authentication as
 and 1 for other failures.
 
 This repository lands through GitHub's merge queue. Its required `Queue` check
-runs `just check` and `just test` on each merge group on the self-hosted runner;
-it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
+passes a merge group only when the group's build, `just check` and `just test`
+on the self-hosted runner, passes; it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
 re-enqueues healthy heads at the back of the queue.
 
 ## Land a batch with quest land
@@ -637,7 +646,11 @@ parking it is collected at that merge: a requeue pins it, and a fix, built on th
 pin, replaces it with a lease, since building on it would revert its newer base.
 Any other moved head hands back. Forks refusing maintainer edits, refused pushes, invalid results,
 crashes, or the fixer deadline hand back with a marked comment naming the exit
-status or signal, with the tail of the job's retained log. A validated fix whose push
+status or signal, with the tail of the job's retained log. A GitHub error while
+collecting one PR hands back that PR alone, and the job's other PRs keep their own
+results. A PR whose collection fails three passes in a row, as when GitHub refuses its
+handback, is set aside with a logged warning: it leaves the job without a handback
+comment, so it rejoins batches as GitHub still queues it, and the PRs behind it go on. A validated fix whose push
 GitHub refuses, such as a merged base's `.github/workflows` changes that the App lacks
 the `workflows` permission to push, is handed back with its resolution. So is a fix
 that edits protected paths beyond what the base merge carries, such as a conflict in
@@ -668,7 +681,8 @@ quest links with `quest resolve`. A failed batch halves the next batch's size,
 down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
 additions stay queued. A PR whose required checks are still running stays queued
-and sits out batches until they pass. If any are still pending two hours after
+and sits out batches until they pass; only each check's latest run counts, as in
+`quest status`. If any are still pending two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
 bisection: success lands one squash commit per PR. A failure, or a base that
@@ -858,6 +872,8 @@ handback, from a stop rule, the fixer, a refusal, a crash, or a timeout, is
 posted with its reason and a recommendation, and the PR leaves the watcher's
 care until a maintainer enqueues it again. A round whose pick ended while it
 ran, by a writer's push or enqueue, is not applied, and its comment says so.
+A round whose collection fails three passes in a row, as when GitHub refuses its
+handback comment, is set aside with a logged warning, freeing its fixer slot.
 
 The watcher also keeps the repository's flaky tests in `flaky.json` in its
 state directory: each flaky verdict, across every PR, by the failure signature
@@ -1008,10 +1024,14 @@ lists; `--model` and `--effort` override them.
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
+quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
 ```
 
-The first round runs the reviewer's own review, `codex exec review --base` or
-Claude Code's `/code-review <effort> <base>...HEAD`, then resumes that session for
+Every turn reviews only the branch's own change, from the merge base of `HEAD`
+with the base's tip, so a branch behind its base draws no findings on code the
+base gained since, which a diff against its tip shows as reverted.
+The first round runs the reviewer's own review, `codex exec review --base
+<merge-base>` or Claude Code's `/code-review <effort> <merge-base>...HEAD`, then resumes that session for
 one turn that applies the base's `REVIEW.md`, if any, and reports the findings
 in one JSON schema. Later rounds resume the same session with the new head and
 `--responses`, the author's free-text fixes and refutations, which a round that
@@ -1022,7 +1042,9 @@ new session instead, which still weighs the responses. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. The session is kept per branch in the clone's
 common Git directory, so any worktree of the clone resumes it; `--new` starts
-over.
+over. `--branch` names the branch instead of the checked-out one, which a
+detached `HEAD` requires, such as a checkout of a branch another worktree
+holds, so its rounds continue that branch's session.
 
 The reviewer is read-only: Codex in its `read-only` sandbox, ignoring
 execpolicy rules, and Claude Code with only read tools and the Bash commands it
@@ -1107,8 +1129,8 @@ since Windows has no `SIGTERM`.
 
 ## Run kix jobs on your machines
 
-`quest runner` turns a Linux or macOS machine with Nix into a
-[kix.quest](https://kix.quest) runner, driving Claude Code or opencode with
+`quest runner` turns a Linux or macOS machine with Nix into a runner for kix at
+[quest.moq.dev](https://quest.moq.dev), driving Claude Code or opencode with
 that machine's own logins:
 
 ```sh
@@ -1128,8 +1150,8 @@ through its CLI's own flow in its own home: `claude auth login` in a
 kix stores only an opaque account id, its kind, and a label. An opencode
 account uses only the providers it signed in to, with `--model` or opencode's
 default. Use Claude Code for Claude subscriptions, since opencode cannot sign
-in to them. kix.quest/runners shows each runner's presence and sets the order
-jobs use your accounts in.
+in to them. kix's `/runners` page shows each runner's presence and sets the
+order jobs use your accounts in.
 
 Every job runs in its own checkout with the project's devShell, which the runner
 builds with `nix print-dev-env` from the job's revision, honoring the flake's
@@ -1158,8 +1180,33 @@ sandbox, not a VM, and it narrows rather than removes the risk of running
 agent commands on your machine.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
-pins both) and unprivileged user namespaces; on Ubuntu 23.10 and later,
-AppArmor allows them only for programs with a profile granting `userns`.
+pins both) and unprivileged user namespaces, including the nested one Claude
+Code's seccomp helper makes inside the sandbox. Before taking jobs, `quest runner`
+runs a trivial command in nested sandbox namespaces and refuses to start if
+bubblewrap cannot make them. On Ubuntu 23.10 and later, AppArmor allows them
+only to programs whose profile grants `userns`, so for the runner package's
+bubblewrap the refusal prints this profile, filled in with its Nix store path,
+and the commands that install it as `/etc/apparmor.d/quest-bwrap`:
+
+```
+abi <abi/4.0>,
+include <tunables/global>
+
+profile quest-bwrap /nix/store/HASH-bubblewrap-VERSION/bin/bwrap flags=(unconfined) {
+  userns,
+}
+```
+
+It is the form Ubuntu gives other programs that sandbox themselves. Ubuntu's
+own `bwrap-userns-restrict` profile for `/usr/bin/bwrap` takes capabilities from
+the commands bubblewrap runs, which breaks Claude Code's seccomp helper, so a
+system bwrap there is refused, and a second profile for it would disable both;
+use the runner package instead. The job's commands still get no user namespace
+of their own: Claude Code's seccomp helper refuses them one, and on opencode
+accounts bubblewrap does. The profile names one exact store path, since anyone
+who can build with Nix can add a store path matching a glob, so a runner update
+that changes bubblewrap refuses to start until you install the profile it prints.
+
 Merge jobs retain existing PR submodule pointers when merging the base. Their
 `wait` tool wakes on GitHub webhook hints or reconnects and rereads the PR;
 a hint never approves work. If someone moves the head, the maintainer can
@@ -1212,11 +1259,12 @@ checkouts are Quest's own once `quest init` installs its hooks (see
 [Claude Code checkouts](#claude-code-checkouts)).
 
 Set a shared capacity and an explicit reservation in bytes, covering the
-checkout and its expected build output. Measure representative jobs before
+checkout, the module stores its submodules clone, and its expected build output. Measure representative jobs before
 choosing the budget. Until a capacity is set, only free disk space limits new
 reservations. Reservations serialize creators and account for concurrent
 expected growth. They do not enforce filesystem quotas against arbitrary
-writers, and Git objects stored in the shared repository are not charged.
+writers, and Git objects stored in the shared repository are not charged; each
+checkout's own submodule stores are.
 
 ```sh
 quest worktree capacity 20000000000
@@ -1274,7 +1322,7 @@ Once a checkout is finished, remove it and its record:
 quest worktree remove example
 ```
 
-`remove` never forces. It refuses while supervised runs are live, and refuses
+`remove` checks files and commits recursively before deleting a checkout. It refuses while supervised runs are live, and refuses
 modified or untracked files and any commit, at `HEAD` or under the checkout's
 own refs such as `refs/bisect/`, that no branch or remote-tracking ref
 reaches. A squash-merged change leaves its commits unreached, so they count as
@@ -1283,7 +1331,20 @@ PR whose head is exactly that commit; other commits need no forge or token.
 It then prunes the scratch and refuses ignored files that remain, leaving the
 checkout released, before `git worktree remove` deletes it. A checkout already
 removed with `git worktree remove` only drops its record, as with `release`.
-A failed creation stays charged until `release` drops it. Records live in
+New checkouts initialize their submodules recursively before returning. Restoring
+one preserves its existing submodule pins and local work. Creation verifies any
+new module tips not reached by remote-tracking branches (such as SHA-fetched
+pins or cloned tags) against origin and records them under
+`refs/remotes/quest-pins/`, outside origin's branch-prune namespace. Removal also checks
+submodules' files outside declared scratch and every module store, including deinitialized ones;
+commits at their HEAD or refs must be reachable from a remote-tracking ref,
+since module stores and their local branches are deleted with the checkout, and
+a module store must have no linked worktrees of its own.
+Scratch paths inside submodules use that submodule's ignore rules. Only after
+those checks does removal use the force Git requires for submodules.
+A failed creation stays charged until its partial checkout is inspected and
+removed, then `release` drops its record. Unlock it before removing it; Git
+requires `--force` for submodules, so preserve their files and commits first. Records live in
 `$QUEST_WORKTREE_HOME`, or `$XDG_STATE_HOME/quest/worktrees` (default
 `~/.local/state/quest/worktrees`). The registry lock of a process that exited on
 this host is reclaimed; a live lock, or one held from another host, is never
@@ -1294,26 +1355,49 @@ stolen. This initial interface refuses unknown or changed checkout ownership.
 `quest init` adds hook entries to the repository's `.claude/settings.json` that
 run `quest worktree hook` for Claude Code's `WorktreeCreate`, `WorktreeRemove`,
 `SubagentStart`, and `SubagentStop` events, so `quest` must be on the `PATH`
-Claude Code runs hooks with. The hook then creates every worktree Claude makes
-in the repository, for `--worktree`, `EnterWorktree`, isolated subagents, and
-background sessions, and Claude no longer copies `.worktreeinclude` files into
-them.
+Claude Code runs hooks with. For `claude --bg` and agent view, that is the
+environment of the shell that started the session. The hook then creates every worktree Claude makes
+in the repository: for `--worktree`, `EnterWorktree`, isolated subagents and
+workflow agents, background sessions, and `claude remote-control --spawn
+worktree`. Claude no longer copies `.worktreeinclude` files into them.
 
 Each is a `quest worktree` checkout under the main checkout's `.worktrees/`,
 named as Claude names it. Like Claude's default, it starts from the remote's
 default branch as last fetched (`origin/HEAD`), or from the session's commit
-when that is unknown; Claude's `worktree.baseRef` setting no longer applies. With only a name to go on,
+when that is unknown; Claude's `worktree.baseRef` setting no longer applies.
+For `--worktree '#123'` or a pull request's URL, Claude names the worktree
+`pr-123`, and the hook fetches origin's `refs/pull/123/head` (or GitLab's
+`refs/merge-requests/123/head`) into `origin/pr/123` (or `origin/mr/123`) and
+starts there, refusing a number origin has both refs for at different commits.
+The hook sees only the name, so `--worktree pr-123` gets that request too, and a
+number origin has no request for starts from the default base instead of
+failing. With only a name to go on,
 it declares the main checkout's top-level ignored entries as scratch, except
 `.worktrees/`, `.claude/`, and entries holding a nested repository, and
-reserves the main checkout's disk usage without `.git` and those checkouts. A
-subagent's checkout is released when the subagent finishes or stops to wait for
-an answer, and restored when it resumes, with a note telling it to reinstall
-its scratch. Another `SubagentStop` hook that keeps a subagent running defeats
+reserves the main checkout's disk usage without `.git` and those checkouts, plus
+its submodule stores, which the new checkout clones again.
+
+A subagent's checkout is released when the subagent finishes or stops to wait
+for an answer, and restored when it resumes, with a note telling it to
+reinstall its scratch. Claude names an isolated subagent's worktree for its
+agent ID, and a workflow agent's for its workflow run, so the hook binds a
+workflow agent's checkout to the first subagent that starts in it, the workflow
+agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it. Claude never removes a subagent's checkout itself, so remove a
-finished one with `quest worktree remove`, which also recovers one whose
-session crashed. When Claude removes a session's checkout, `quest worktree
-remove` decides: a checkout holding unpreserved work is kept.
+without its scratch until it reinstalls it. A session's checkout, from
+`--worktree`, `EnterWorktree`, a background session, or remote control, is not
+released when the session stops; release it with `quest worktree release`.
+
+Claude never removes a subagent's or workflow agent's checkout itself, so
+remove a finished one with `quest worktree remove`, which also recovers one
+whose session crashed. When Claude removes a session's checkout, through
+`ExitWorktree`, leaving a `--worktree` session, or remote control ending a
+session whose checkout has no changes, `quest worktree remove` decides: a
+checkout holding unpreserved work is kept. `claude rm` never removes one: it
+keeps a `claude --bg --worktree` session's checkout, and refuses to remove a
+background session whose checkout it entered, saying the worktree is locked by
+something else. Don't unlock it; run `quest worktree remove` on the checkout,
+then `claude rm` again.
 
 ## Work with your agents
 
@@ -1372,7 +1456,8 @@ losing your plans. The binary carries the skills, your tool manager (mise or nix
 pins its version, and your repository's instructions stay yours. Quest supports
 macOS, Linux, and [native Windows](docs/windows.md).
 
-The hosted service is moving to [kix.quest](https://kix.quest): maintainers
+The hosted service, kix, runs at [quest.moq.dev](https://quest.moq.dev) for
+moq-dev until it opens to everyone at kix.quest: maintainers
 plan issues, start ready quests, and act on GitHub PRs through a decision UI.
 Hosted work will use explicitly selected maintainer or donor API funding.
 Automatic project history passes read updates since their prior issue/PR

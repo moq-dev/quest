@@ -359,7 +359,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Claim a ready quest: push an empty claim commit, built on the upstream default branch, to the quest's " +
 				"branch (its path without .md), then open a draft PR from it right away. Switches the " +
 				"checkout to the claim on a new local branch, or fast-forwards that branch when it is checked out, " +
-				"and prints the PR URL, or the branch off GitHub.\n\n" +
+				"and prints the PR URL, or the branch off GitHub. A local branch left from an earlier attempt is not " +
+				"moved: the claim still succeeds, with a warning to switch to it and merge the claim commit.\n\n" +
 				"Readiness comes from the fetched upstream default branch's tree, not the checkout. Fails on a tree " +
 				"quest check rejects, which can hide a blocker. Refuses a blocked quest, one missing from the " +
 				"upstream default branch, and one already held: a branch upstream or an open PR from that branch in " +
@@ -437,7 +438,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Issue-comment edits print as edited, including updates to older bot status comments. The account's own edits are ignored.",
 		)
 		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
-		.option("--since <point>", "ISO timestamp, pushed-tip SHA, or resume cursor (default: current head push time)")
+		.option("--since <point>", "ISO timestamp, branch-tip SHA, or resume cursor (default: current head push time)")
 		.option("--timeout <seconds>", "Maximum wait in seconds", positiveSeconds)
 		.action((value: string, options: { since?: string; timeout?: number }) => {
 			const pr = pullRequest(value, root());
@@ -462,13 +463,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
 				"url, state, draft, head, mergeable, merge-state, review-decision, auto-merge, merge-queue, " +
-				"landing-stopped, and checks; auto-merge gives its method, who enabled it and when, and the head it was " +
+				"landing-stopped, and checks, whose state and counts follow each check's latest run; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
 				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
 				"quest land's queue, with the reason (such as merge_conflict, failed_checks, manual, or manually_disabled), " +
-				"actor, and time. Then " +
-				"a check line per failing or pending check, marked required or optional; a review line per " +
+				"actor, and time, until the PR enters the merge queue or auto-merge again. Then " +
+				"a check line per failing or pending check, marked required or optional, counting only each check's latest run; a review line per " +
 				"reviewer's latest review, marked current or stale against the head; a reacted:<content> line per " +
 				"reaction on the PR or a review; and a thread line per unresolved review thread, led by its node ID. " +
 				"A missing value prints as -. --json prints the same facts as one deterministic object.\n\n" +
@@ -714,6 +715,18 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		);
 	const state = () => new Worktrees();
 	const record = (value: unknown) => print(JSON.stringify(value));
+	const settled = (result: Promise<unknown>) => {
+		pending = result.then(
+			(value) => {
+				record(value);
+				return 0;
+			},
+			(error: unknown) => {
+				warn(error instanceof Error ? error.message : String(error));
+				return 1;
+			},
+		);
+	};
 	worktree
 		.command("capacity <bytes>")
 		.description("Set this user's shared disk budget in bytes; until set, only free disk space limits checkouts")
@@ -735,7 +748,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			[],
 		)
 		.action((name: string, options: { reserve: number; ref: string; scratch: string[] }) =>
-			record(state().create(root(), name, options.reserve, options.ref, options.scratch)),
+			settled(state().create(root(), name, options.reserve, options.ref, options.scratch)),
 		);
 	worktree
 		.command("run")
@@ -775,18 +788,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"and drops the record of a removed checkout",
 		)
 		.action((id: string) => record(state().release(id)));
-	const settled = (result: Promise<unknown>) => {
-		pending = result.then(
-			(value) => {
-				record(value);
-				return 0;
-			},
-			(error: unknown) => {
-				warn(error instanceof Error ? error.message : String(error));
-				return 1;
-			},
-		);
-	};
+
 	// Only a commit no local ref reaches asks the forge, so other removals need no token.
 	const merged = async (repository: string, commit: string) => {
 		const origin = readRemote(repository, "origin");
@@ -797,10 +799,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	worktree
 		.command("remove <id>")
 		.description(
-			"Delete a finished checkout and drop its record, never forcing. Refuses while supervised runs are live, " +
+			"Delete a finished checkout and drop its record after recursive safety checks. Refuses while supervised runs are live, " +
 				"and refuses modified, untracked, or ignored files beyond the declared scratch, and commits no branch " +
 				"or remote-tracking ref reaches, unless the GitHub upstream that holds origin's claims merged a PR whose head is exactly " +
-				"that commit. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
+				"that commit. Submodules must have no changed or ignored files and no commits their remote refs do not reach, including in deinitialized module stores, and module stores must have no linked worktrees of their own. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
 		)
 		.action((id: string) => settled(state().remove(id, merged)));
 	worktree
@@ -825,16 +827,24 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				".\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
-				"and prints its path. Its scratch is the main checkout's top-level ignored entries, except " +
+				"initializes its submodules recursively, and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
+				"pull request's URL, checks out that request's head from origin instead, when origin has one. Its scratch is the main checkout's top-level ignored entries, except " +
 				".worktrees/, .claude/, and entries holding a nested repository; its reserve is the main checkout's disk " +
-				"usage without .git and those checkouts. An existing checkout of that name in the repository is " +
+				"usage without .git and those checkouts, plus its submodule stores. An existing checkout of that name in the repository is " +
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
 				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
+				"or a workflow agent's, named for its run and bound to the first subagent that starts in it, " +
 				"when it finishes or stops to wait, and SubagentStart restores it. Other checkouts are left alone. " +
 				"Exits 1 on failure, never 2, which would keep a subagent running.",
 		)
 		.action(() => {
-			pending = (async () => claudeHook(JSON.parse(readFileSync(0, "utf8")), state(), merged))().then(
+			pending = (async () =>
+				claudeHook(
+					JSON.parse(readFileSync(0, "utf8")),
+					state(),
+					merged,
+					program.getOptionValueSource("root") === "cli" ? root() : process.env.CLAUDE_PROJECT_DIR,
+				))().then(
 				(output) => {
 					if (output) out.stdout(output);
 					return 0;
@@ -947,13 +957,17 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"CLAUDE_CODE_USE_BEDROCK, _VERTEX, or _FOUNDRY would send it elsewhere. A logged-out error names the " +
 				"profile it checked, CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset. It runs " +
 				`with ${models}. --model and --effort override them.\n\n` +
-				"The first round runs the reviewer's own review (`codex exec review --base`, or Claude Code's " +
-				"`/code-review <effort> <base>...HEAD`), then resumes that session for one turn that applies the base's " +
+				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
+				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
+				"reviewer's own review (`codex exec review --base <merge-base>`, or Claude Code's " +
+				"`/code-review <effort> <merge-base>...HEAD`), then resumes that session for one turn that applies the base's " +
 				"REVIEW.md, if any, and reports the findings in one JSON schema. Later rounds on the branch resume the " +
 				"same session with the new head and --responses, the author's fixes and refutations of the last " +
 				"round's findings, required while that round reported any. A resumed session keeps the instructions it " +
 				"started with, so when the applicable AGENTS.md or CLAUDE.md files change, the round starts a new " +
-				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it.\n\n" +
+				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
+				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules or user config, Claude Code with " +
 				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
@@ -969,10 +983,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
+		.option("--branch <name>", "Branch whose review session to continue, instead of the checked-out one")
 		.option("--json", "Print one JSON object")
 		.action(
 			(options: {
 				base?: string;
+				branch?: string;
 				harness?: HarnessName;
 				model?: string;
 				effort?: string;

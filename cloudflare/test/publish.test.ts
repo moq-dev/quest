@@ -9,6 +9,7 @@ import * as store from "../src/jobs/store";
 import { type Repo, type World, blob, commitOf, fakeGitHub, intercept as around } from "../dev/github";
 import { privateKey } from "./github-key";
 import { origin } from "./login-fixtures";
+import { owner } from "./owners";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
 const db = env.DB;
@@ -26,6 +27,7 @@ function world(): World {
 	return {
 		app: { id: Number(env.GITHUB_APP_ID), slug: "quest-test" },
 		installation: 5,
+		owner,
 		users: [{ id: githubUser, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" }],
 		repos: [
 			{
@@ -2069,6 +2071,36 @@ describe("job context", () => {
 				...(r.context && { description: null }),
 			})),
 		);
+	});
+
+	it("lists each check's latest run, as on moq-dev/moq#7325", async () => {
+		// Concurrency cancelled the older workflow run, whose gate failed on purpose; the newer run
+		// passed. GitHub's rollup state counted both and read FAILURE, yet GitHub merges the head.
+		const pull = project.pulls[0]!;
+		pull.runs = [
+			{ name: "Scope", conclusion: "CANCELLED", url: "https://ci.test/1" },
+			{ name: "Release gate", conclusion: "FAILURE", url: "https://ci.test/1" },
+			{ name: "Scope", conclusion: "SUCCESS", url: "https://ci.test/2" },
+			{ name: "Release gate", conclusion: "SUCCESS", url: "https://ci.test/2" },
+			{ name: "Release gate", conclusion: "FAILURE", url: "https://other.test", app: 99 },
+		];
+		const id = await running({
+			workflow: "iterate",
+			target: "pulls/2",
+			revision: prHead,
+			branch: "contributor/fix",
+			trusted: false,
+		});
+		const body = (await (await read(id, 1)).json()) as Record<string, any>;
+		expect(body.checks.state).toBe("FAILURE");
+		expect(body.checks.runs).toEqual([
+			{ name: "Scope", state: "SUCCESS", url: "https://ci.test/2" },
+			{ name: "Release gate", state: "SUCCESS", url: "https://ci.test/2" },
+			{ name: "Release gate", state: "FAILURE", url: "https://other.test" },
+		]);
+		pull.runs.pop();
+		const passing = (await (await read(id, 1)).json()) as Record<string, any>;
+		expect(passing.checks.state).toBe("SUCCESS");
 	});
 
 	it.each(["comments", "reviews", "reviewThreads", "thread comments", "checks"])(

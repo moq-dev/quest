@@ -1,8 +1,21 @@
 import { createHash, createPrivateKey, sign } from "node:crypto";
-import { HOLD_PREFIX, isHoldLabel, latestHold, heldToken, check, isQuest, parse, ready } from "quest/core";
+import {
+	HOLD_PREFIX,
+	InitRefused,
+	isHoldLabel,
+	latestHold,
+	heldToken,
+	check,
+	isQuest,
+	parse,
+	planInit,
+	ready,
+} from "quest/core";
+import { checksState, latestContexts } from "../../../src/github/checks";
 import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../../../src/github/merge";
 import { osiApproved } from "../licenses";
 import { REVIEW_CHECK, unreviewed } from "./review";
+import { GOAL_LIMIT, SETUP_BRANCH, STUBS, planCheck, planned, setupGoal, setupPull, treeCheckout } from "./setup";
 import { positiveId } from "./webhook";
 import {
 	activityQuery,
@@ -42,7 +55,7 @@ interface Installation {
 interface Repository {
 	id: number;
 	name: string;
-	owner: { login: string };
+	owner: { login: string; id: number };
 	archived: boolean;
 	disabled: boolean;
 	private: boolean;
@@ -88,6 +101,21 @@ export class PublicationBlocked extends GitHubError {}
 export class BranchChanged extends PublicationBlocked {}
 /** A maintainer check that was answered with a denial, rather than one that could not complete. */
 export class NotMaintainer extends GitHubError {}
+/** The repository's owner is not on the operator's allowlist, so nothing may run for it yet. */
+export class NotOpen extends GitHubError {
+	constructor() {
+		super(
+			"Quest isn't open to this repository's owner yet. Until the public release, only invited owners can enroll.",
+		);
+	}
+}
+
+/** The default branch has no Quest files, so the project sets up Quest before enabling. */
+export class NoQuestFiles extends GitHubError {
+	constructor() {
+		super("Quest files are required. Open the setup pull request first.");
+	}
+}
 
 /** One file a publication sets or, with null content, deletes. */
 /** One path's new content, or null to delete it, with its Git mode: a file, an executable, or a symlink. */
@@ -131,8 +159,11 @@ export type ContributionState = "enabled" | "paused";
 export type Enrollment = GitHubRepository & { state: ContributionState };
 /** A repository the App reaches and the user maintains, as the project picker lists it. */
 export type Candidate = GitHubRepository & {
-	/** Its contribution state under its current installation, or null when it is not enrolled there. */
-	state: ContributionState | null;
+	/**
+	 * Its contribution state under its current installation, `setup` while its
+	 * setup pull request is pending, or null when it is not enrolled there.
+	 */
+	state: ContributionState | "setup" | null;
 	/** Why contributions cannot be enabled yet; empty when enabling may go on to its live checks. */
 	problems: string[];
 	/** Whether its default branch has no Quest files, so setting up Quest comes first. */
@@ -140,6 +171,31 @@ export type Candidate = GitHubRepository & {
 };
 /** A running job attempt whose project was disconnected, which its runner must stop. */
 export type Stopped = { actor: string; runner: string; job: string; attempt: number };
+type SetupRow = {
+	id: number;
+	owner: string;
+	name: string;
+	installation: number;
+	head: string | null;
+	pending: string | null;
+	pull: number | null;
+	state: "open" | "closed";
+	failure: string | null;
+	enrolledBy: string;
+};
+/**
+ * A project enrolled, setting up: the App's setup pull request, until it
+ * merges. A null `pull` is a setup whose pull request was not opened yet.
+ * `failure` is why a merged setup could not enable contributions.
+ */
+export type ProjectSetup = GitHubRepository & {
+	pull: number | null;
+	state: "open" | "closed";
+	failure: string | null;
+};
+function setupOf(row: SetupRow): ProjectSetup {
+	return { id: row.id, owner: row.owner, name: row.name, pull: row.pull, state: row.state, failure: row.failure };
+}
 export type ProjectPreview = {
 	repository: GitHubRepository;
 	branch: string;
@@ -155,6 +211,12 @@ interface GitHubEnvironment {
 	DB: D1Database;
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY: string;
+	ENROLL_OWNERS: readonly number[];
+}
+
+/** Whether the operator admits a GitHub owner, by the ID that a later holder of its login cannot take. */
+export function admitted(env: Pick<GitHubEnvironment, "ENROLL_OWNERS">, owner: unknown) {
+	return positiveId(owner) && env.ENROLL_OWNERS.includes(owner);
 }
 
 function name(value: string) {
@@ -244,6 +306,11 @@ export class GitHubService {
 		if (state?.blocked) throw new GitHubError("GitHub installation revoked or suspended");
 	}
 
+	/**
+	 * Check the live repository is the one asked for and still available. An
+	 * owner off the allowlist makes it unavailable, so no enrollment, read,
+	 * job, or merge runs for it; `allowUnavailable` keeps stop controls working.
+	 */
 	#repository(repo: GitHubRepository, current: Repository, allowUnavailable = false) {
 		if (
 			current.id !== repo.id ||
@@ -252,6 +319,7 @@ export class GitHubService {
 			(!allowUnavailable && (current.archived || current.disabled))
 		)
 			throw new GitHubError("Repository identity or availability changed");
+		if (!allowUnavailable && !admitted(this.#env, current.owner.id)) throw new NotOpen();
 	}
 
 	async #license(current: Repository): Promise<string | null> {
@@ -465,7 +533,11 @@ export class GitHubService {
 		}
 		if (!found.length) return [];
 
-		const open = found.filter(({ repo }) => !repo.archived && !repo.disabled && repo.private === false);
+		// Only an admitted owner's repositories cost quest and license reads.
+		const open = found.filter(
+			({ repo }) =>
+				admitted(this.#env, repo.owner.id) && !repo.archived && !repo.disabled && repo.private === false,
+		);
 		const quests = await this.#questFiles(
 			userToken,
 			open.map(({ repo }) => repo),
@@ -480,11 +552,21 @@ export class GitHubService {
 					.all<{ id: number; installation: number; state: ContributionState }>()
 			).results.map((row) => [row.id, row]),
 		);
+		const setups = new Set(
+			(
+				await this.#env.DB.prepare(
+					"SELECT id FROM github_project_setups WHERE id IN (SELECT value FROM json_each(?))",
+				)
+					.bind(JSON.stringify(found.map(({ repo }) => repo.id)))
+					.all<{ id: number }>()
+			).results.map((row) => row.id),
+		);
 		const candidates = await Promise.all(
 			found.map(async ({ repo, installation }): Promise<Candidate> => {
 				const problems: string[] = [];
 				let setup = false;
-				if (repo.archived || repo.disabled) problems.push("Archived or disabled on GitHub.");
+				if (!admitted(this.#env, repo.owner.id)) problems.push("Quest isn't open to this owner yet.");
+				else if (repo.archived || repo.disabled) problems.push("Archived or disabled on GitHub.");
 				else if (repo.private !== false || repo.visibility !== "public")
 					problems.push("Private. Contributions need a public repository.");
 				else {
@@ -505,7 +587,7 @@ export class GitHubService {
 					id: repo.id,
 					owner: repo.owner.login,
 					name: repo.name,
-					state: row?.installation === installation ? row.state : null,
+					state: row?.installation === installation ? row.state : setups.has(repo.id) ? "setup" : null,
 					problems,
 					setup,
 				};
@@ -635,12 +717,11 @@ export class GitHubService {
 		const root = await this.#api<Tree>(token, `${path}/git/trees/${sha(commit.commit.tree.sha)}?recursive=1`);
 		if (root.truncated) throw new GitHubError("Repository tree is incomplete");
 		const quest = root.tree.find((entry) => entry.path === "quest" && entry.type === "tree");
-		if (!quest) throw new GitHubError("Quest files are required. Follow the existing Quest setup guide first.");
+		if (!quest) throw new NoQuestFiles();
 		const entries = root.tree.filter(
 			(entry) => entry.path.startsWith("quest/") && isQuest(entry.path) && entry.type === "blob",
 		);
-		if (!entries.length)
-			throw new GitHubError("Quest files are required. Follow the existing Quest setup guide first.");
+		if (!entries.length) throw new NoQuestFiles();
 		// Read the pinned blobs together: a REST request per file can exhaust a
 		// Worker's subrequest budget during enrollment even for a small quest tree.
 		const fields = entries.map((entry, i) => {
@@ -1166,21 +1247,8 @@ export class GitHubService {
 			state === "enabled" ? { contents: "read" } : {},
 			async (token, current, installation) => {
 				if (state === "enabled") {
-					const preview = await this.#preview(token, repo, current, installation);
-					if (preview.licenseError) throw new GitHubError(preview.licenseError);
-					// The repository or license can change during content reads. Check
-					// current eligibility again, rather than persisting the preview's grant.
-					const latest = await this.#api<Repository>(token, repositoryPath(repo));
-					this.#repository(repo, latest);
-					this.#public(latest);
-					if (
-						latest.default_branch !== current.default_branch ||
-						latest.license?.spdx_id !== current.license?.spdx_id
-					)
-						throw new GitHubError("Repository eligibility changed; review this project again");
-					const licenseError = await this.#license(latest);
-					if (licenseError) throw new GitHubError(licenseError);
-					await this.#maintainer(token, repo, userId);
+					await this.#enable(token, repo, current, installation, userId, userId);
+					return [];
 				}
 				// Recheck the local revocation gate after potentially long content reads.
 				await this.#gate(installation);
@@ -1195,35 +1263,338 @@ export class GitHubService {
 							"INSERT OR IGNORE INTO output_cleanup(job,at) SELECT DISTINCT a.job,? FROM job_output_attempts a JOIN jobs j ON j.id=a.job WHERE j.repository=?",
 						).bind(Date.now(), repo.id),
 						this.#env.DB.prepare("DELETE FROM github_projects WHERE id=?").bind(repo.id),
+						// A project still setting up has only this; its pull request stays as it is.
+						this.#env.DB.prepare("DELETE FROM github_project_setups WHERE id=?").bind(repo.id),
 					]);
 					return running!.results;
 				}
-				if (state === "paused") {
-					await this.#env.DB.prepare("UPDATE github_projects SET state='paused',updatedAt=? WHERE id=?")
-						.bind(Date.now(), repo.id)
-						.run();
-				} else {
-					await this.#env.DB.batch([
-						this.#env.DB.prepare(
-							"DELETE FROM github_project_state WHERE repository=? AND EXISTS(SELECT 1 FROM github_projects WHERE id=? AND installation<>?)",
-						).bind(repo.id, repo.id, installation),
-						this.#env.DB.prepare(
-							"DELETE FROM github_project_activity WHERE repository=? AND EXISTS(SELECT 1 FROM github_projects WHERE id=? AND installation<>?)",
-						).bind(repo.id, repo.id, installation),
-						this.#env.DB.prepare(
-							`INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) VALUES(?,?,?,?,'enabled',?,?)
-					ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,name=excluded.name,installation=excluded.installation,state=excluded.state,updatedAt=excluded.updatedAt`,
-						).bind(repo.id, repo.owner, repo.name, installation, userId, Date.now()),
-						// The project did not exist when the check above ran.
-						this.#env.DB.prepare(
-							"INSERT INTO github_project_members(repository,user) VALUES(?,?) ON CONFLICT DO NOTHING",
-						).bind(repo.id, userId),
-					]);
-				}
+				await this.#env.DB.prepare("UPDATE github_projects SET state='paused',updatedAt=? WHERE id=?")
+					.bind(Date.now(), repo.id)
+					.run();
 				return [];
 			},
 			state !== "enabled",
 		);
+	}
+
+	/**
+	 * Enable contributions after checking eligibility live, enrolling the
+	 * project as `enroller`'s and making `userId`, whose authority the caller
+	 * checked, a member. A project setting up leaves that state. With `pull`,
+	 * as when its setup pull request merged, it enables only while that setup
+	 * is still recorded, so a disconnect or a pause made during the live checks
+	 * stands; it returns whether it enabled.
+	 */
+	async #enable(
+		token: string,
+		repo: GitHubRepository,
+		current: Repository,
+		installation: number,
+		userId: string,
+		enroller: string,
+		pull?: number,
+	): Promise<boolean> {
+		const preview = await this.#preview(token, repo, current, installation);
+		if (preview.licenseError) throw new GitHubError(preview.licenseError);
+		// The repository or license can change during content reads. Check
+		// current eligibility again, rather than persisting the preview's grant.
+		const latest = await this.#api<Repository>(token, repositoryPath(repo));
+		this.#repository(repo, latest);
+		this.#public(latest);
+		if (latest.default_branch !== current.default_branch || latest.license?.spdx_id !== current.license?.spdx_id)
+			throw new GitHubError("Repository eligibility changed; review this project again");
+		const licenseError = await this.#license(latest);
+		if (licenseError) throw new GitHubError(licenseError);
+		await this.#maintainer(token, repo, userId);
+		// Recheck the local revocation gate after potentially long content reads.
+		await this.#gate(installation);
+		// Every write checks the setup in the same transaction, before the last one removes it.
+		const [guard, args] =
+			pull === undefined
+				? ["1", []]
+				: ["EXISTS(SELECT 1 FROM github_project_setups WHERE id=? AND pull=?)", [repo.id, pull]];
+		const [, , enabled] = await this.#env.DB.batch([
+			this.#env.DB.prepare(
+				`DELETE FROM github_project_state WHERE repository=? AND EXISTS(SELECT 1 FROM github_projects WHERE id=? AND installation<>?) AND ${guard}`,
+			).bind(repo.id, repo.id, installation, ...args),
+			this.#env.DB.prepare(
+				`DELETE FROM github_project_activity WHERE repository=? AND EXISTS(SELECT 1 FROM github_projects WHERE id=? AND installation<>?) AND ${guard}`,
+			).bind(repo.id, repo.id, installation, ...args),
+			this.#env.DB.prepare(
+				`INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) SELECT ?,?,?,?,'enabled',?,? WHERE ${guard}
+					ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,name=excluded.name,installation=excluded.installation,state=excluded.state,updatedAt=excluded.updatedAt`,
+			).bind(repo.id, repo.owner, repo.name, installation, enroller, Date.now(), ...args),
+			// The project did not exist when the check above ran.
+			...[...new Set([userId, enroller])].map((user) =>
+				this.#env.DB.prepare(
+					`INSERT INTO github_project_members(repository,user) SELECT ?,? WHERE ${guard} ON CONFLICT DO NOTHING`,
+				).bind(repo.id, user, ...args),
+			),
+			pull === undefined
+				? this.#env.DB.prepare("DELETE FROM github_project_setups WHERE id=?").bind(repo.id)
+				: this.#env.DB.prepare("DELETE FROM github_project_setups WHERE id=? AND pull=?").bind(repo.id, pull),
+		]);
+		return enabled!.meta.changes > 0;
+	}
+
+	/** The setup recorded for a repository, without checking GitHub. */
+	async #setupRow(id: number) {
+		return this.#env.DB.prepare("SELECT * FROM github_project_setups WHERE id=?").bind(id).first<SetupRow>();
+	}
+
+	/**
+	 * Open the App's setup pull request on a repository with no Quest files,
+	 * writing what `quest init` would, with `goal` as `quest/README.md`'s Goal.
+	 * The project is then enrolled, setting up, until the pull request merges.
+	 * Opening again after the pull request closed publishes a fresh plan on the
+	 * same branch. A conflict `quest init` would refuse names its path, and
+	 * nothing is written.
+	 */
+	openSetup(repo: GitHubRepository, userId: string, goal: string): Promise<ProjectSetup> {
+		if (goal.length > GOAL_LIMIT) throw new GitHubError(`Keep the goal under ${GOAL_LIMIT} characters`);
+		return this.#authorized(
+			repo,
+			userId,
+			{ contents: "write", pull_requests: "write" },
+			async (token, current, installation) => {
+				this.#public(current);
+				const licenseError = await this.#license(current);
+				if (licenseError) throw new GitHubError(licenseError);
+				const enrolled = await this.#env.DB.prepare("SELECT 1 FROM github_projects WHERE id=?")
+					.bind(repo.id)
+					.first();
+				if (enrolled) throw new GitHubError("This project is already enrolled");
+				const row = await this.#setupRow(repo.id);
+				if (row?.state === "open" && row.pull !== null) return setupOf(row);
+
+				const path = repositoryPath(repo);
+				const base = await this.#api<{ sha: string; commit: { tree: { sha: string } } }>(
+					token,
+					`${path}/commits/${encodeURIComponent(current.default_branch)}`,
+				);
+				const root = await this.#api<Tree>(token, `${path}/git/trees/${sha(base.commit.tree.sha)}?recursive=1`);
+				if (root.truncated)
+					throw new GitHubError(
+						"The repository is too large to read whole; run `quest init` in a clone instead",
+					);
+				if (root.tree.some((entry) => entry.path.startsWith("quest/") && isQuest(entry.path)))
+					throw new GitHubError(
+						"The default branch already has Quest files, so contributions can be enabled directly",
+					);
+				let changes;
+				try {
+					const checkout = treeCheckout(root.tree, await this.#planFiles(token, repo, root.tree));
+					changes = planInit(checkout, STUBS, { goal: setupGoal(goal) });
+				} catch (error) {
+					if (error instanceof InitRefused) throw new GitHubError(error.message);
+					throw error;
+				}
+				const problems = planCheck(
+					changes,
+					root.tree.map((entry) => entry.path),
+				);
+				if (problems.length)
+					throw new GitHubError(
+						`The goal would not pass \`quest check\` in quest/README.md (${problems.join("; ")}); reword it and try again.`,
+					);
+				const pull = setupPull(changes, { flake: root.tree.some((entry) => entry.path === "flake.nix") });
+
+				const branch = this.#disarming(
+					token,
+					current,
+					SETUP_BRANCH,
+					this.#branch(token, current, SETUP_BRANCH, async () => false),
+				);
+				// Only a branch kix left there is replaced; anything else is the maintainer's.
+				const existing = await branch.head();
+				if (existing !== null && existing !== row?.head && existing !== row?.pending)
+					throw new PublicationBlocked(
+						`The ${SETUP_BRANCH} branch already exists with commits the App did not write. Delete or rename it on GitHub, then try again.`,
+					);
+				const files = changes.map((change) => ({
+					path: change.path,
+					content: change.content === null ? null : new TextEncoder().encode(change.content),
+					mode: "100644" as const,
+				}));
+				const message =
+					"chore: set up Quest\n\nWrites what `quest init` installs: skill stubs, quest/README.md, the agent\ninstructions' Quests line, the merge driver's .gitattributes line, and\nClaude Code's worktree hooks.\n";
+				// A retry builds on the default branch's files, but keeps kix's earlier commit as a parent,
+				// so the branch only fast-forwards: a push since the check above makes it fail rather than vanish.
+				const commit =
+					existing === null
+						? await branch.commit(base.sha, files, message)
+						: await branch.commit(existing, files, message, base.sha);
+				const db = this.#env.DB;
+				// Record the commit only while the setup is still the one read above, so a disconnect,
+				// an enable, or another retry made during the GitHub reads stands.
+				const [unchanged, args] =
+					row === null
+						? ["NOT EXISTS(SELECT 1 FROM github_project_setups WHERE id=?)", [repo.id]]
+						: [
+								"EXISTS(SELECT 1 FROM github_project_setups WHERE id=? AND head IS ? AND pending IS ? AND pull IS ?)",
+								[repo.id, row.head, row.pending, row.pull],
+							];
+				const recorded = await db
+					.prepare(
+						`INSERT INTO github_project_setups(id,owner,name,installation,head,pending,pull,state,enrolledBy,updatedAt)
+					SELECT ?,?,?,?,NULL,?,NULL,'open',?,? WHERE ${unchanged} AND NOT EXISTS(SELECT 1 FROM github_projects WHERE id=?)
+					ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,name=excluded.name,installation=excluded.installation,pending=excluded.pending,pull=NULL,state='open',failure=NULL,enrolledBy=excluded.enrolledBy,updatedAt=excluded.updatedAt`,
+					)
+					.bind(repo.id, repo.owner, repo.name, installation, commit, userId, Date.now(), ...args, repo.id)
+					.run();
+				if (!recorded.meta.changes)
+					throw new GitHubError("This project changed while its setup was being written; review it again.");
+				if (!(await branch.move(existing, commit)))
+					throw new PublicationBlocked(
+						`The ${SETUP_BRANCH} branch changed while the setup was being written; try again.`,
+					);
+				await db
+					.prepare(
+						"UPDATE github_project_setups SET head=?,pending=NULL,updatedAt=? WHERE id=? AND pending=?",
+					)
+					.bind(commit, Date.now(), repo.id, commit)
+					.run();
+
+				const pulls = `${path}/pulls`;
+				const label = `${current.owner.login}:${SETUP_BRANCH}`;
+				const opened = async () =>
+					(
+						await this.#api<PullHead[]>(
+							token,
+							`${pulls}?state=open&per_page=100&head=${encodeURIComponent(label)}`,
+						)
+					)[0] ?? null;
+				let found = await opened();
+				if (!found)
+					try {
+						found = await this.#api<PullHead>(token, pulls, "POST", {
+							head: SETUP_BRANCH,
+							base: current.default_branch,
+							title: pull.title,
+							body: pull.body,
+							draft: false,
+						});
+					} catch (error) {
+						// A concurrent setup may have opened it first.
+						if (!(error instanceof GitHubError) || error.status !== 422) throw error;
+						found = await opened();
+						if (!found) throw error;
+					}
+				else if (found.title !== pull.title || found.body !== pull.body)
+					await this.#api(token, `${pulls}/${number(found.number)}`, "PATCH", pull);
+				await db
+					.prepare("UPDATE github_project_setups SET pull=?,state='open',updatedAt=? WHERE id=? AND head=?")
+					.bind(number(found.number), Date.now(), repo.id, commit)
+					.run();
+				// A disconnect while the pull request opened leaves it on GitHub, untracked, as a disconnect always does.
+				const now = await this.#setupRow(repo.id);
+				if (!now) throw new GitHubError("This project was disconnected while its setup was being written.");
+				return setupOf(now);
+			},
+		);
+	}
+
+	/** The text of each file the setup plan may read, from one GraphQL read of their pinned blobs. */
+	async #planFiles(token: string, repo: GitHubRepository, tree: Tree["tree"]) {
+		const entries = tree.filter((entry) => entry.type === "blob" && entry.mode !== "120000" && planned(entry.path));
+		const files = new Map<string, string>();
+		if (!entries.length) return files;
+		const fields = entries.map(
+			(entry, i) => `q${i}: object(oid: "${sha(entry.sha)}") { ... on Blob { oid text isBinary isTruncated } }`,
+		);
+		const result = await this.#api<{
+			data?: {
+				repository: Record<
+					string,
+					{ oid: string; text: string | null; isBinary: boolean | null; isTruncated: boolean } | null
+				> | null;
+			};
+			errors?: unknown[];
+		}>(token, "/graphql", "POST", {
+			query: `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${fields.join("\n")} } }`,
+			variables: { owner: repo.owner, name: repo.name },
+		});
+		if (result.errors?.length || !result.data?.repository) throw new GitHubError("Repository files unavailable");
+		entries.forEach((entry, i) => {
+			const blob = result.data!.repository![`q${i}`];
+			if (!blob || blob.isBinary !== false || blob.isTruncated !== false || typeof blob.text !== "string") return;
+			// As for the quest snapshot, a lossy conversion must not change what the plan edits.
+			const content = Buffer.from(blob.text, "utf8");
+			const oid = createHash("sha1").update(`blob ${content.length}\0`).update(content).digest("hex");
+			if (oid === entry.sha) files.set(entry.path, blob.text);
+		});
+		return files;
+	}
+
+	/**
+	 * `repo`'s setup reconciled with its pull request, rechecking `userId`'s
+	 * authority: null when it has none, and `enabled` when its pull request
+	 * merged and contributions are now enabled, as its enroller asked. If
+	 * enabling fails, the setup keeps the reason until a later reconciliation
+	 * succeeds. With no `userId`, as from a webhook, the enroller's own
+	 * authority is checked.
+	 */
+	async settleSetup(repo: GitHubRepository, userId?: string): Promise<ProjectSetup | "enabled" | null> {
+		const row = await this.#setupRow(repo.id);
+		if (!row) return null;
+		const actor = userId ?? row.enrolledBy;
+		return this.#authorized(
+			repo,
+			actor,
+			{ contents: "read", pull_requests: "read" },
+			async (token, current, installation) => {
+				const db = this.#env.DB;
+				// Names are navigation metadata; a rename keeps the same setup.
+				const named = { ...row, owner: current.owner.login, name: current.name };
+				if (named.owner !== row.owner || named.name !== row.name)
+					await db
+						.prepare("UPDATE github_project_setups SET owner=?,name=? WHERE id=?")
+						.bind(named.owner, named.name, repo.id)
+						.run();
+				if (row.pull === null) return setupOf(named);
+				const pull = await this.#api<PullHead & { merged?: boolean }>(
+					token,
+					`${repositoryPath(repo)}/pulls/${number(row.pull)}`,
+				);
+				if (pull.merged) {
+					try {
+						if (await this.#enable(token, repo, current, installation, actor, row.enrolledBy, row.pull))
+							return "enabled";
+						// A disconnect, a retry, or another reconciliation changed the setup meanwhile; report where it stands now.
+						const now = await this.#setupRow(repo.id);
+						if (now) return setupOf(now);
+						const project = await db
+							.prepare("SELECT 1 FROM github_projects WHERE id=?")
+							.bind(repo.id)
+							.first();
+						return project ? "enabled" : null;
+					} catch (error) {
+						if (!(error instanceof GitHubError)) throw error;
+						await db
+							.prepare("UPDATE github_project_setups SET failure=?,updatedAt=? WHERE id=? AND pull=?")
+							.bind(error.message, Date.now(), repo.id, row.pull)
+							.run();
+						return setupOf({ ...named, failure: error.message });
+					}
+				}
+				const state = pull.state === "open" ? "open" : "closed";
+				if (state !== row.state)
+					await db
+						.prepare("UPDATE github_project_setups SET state=?,updatedAt=? WHERE id=? AND pull=?")
+						.bind(state, Date.now(), repo.id, row.pull)
+						.run();
+				return setupOf({ ...named, state });
+			},
+		);
+	}
+
+	/** The setups the user asked for that have not enabled contributions yet. */
+	async setups(userId: string): Promise<ProjectSetup[]> {
+		return (
+			await this.#env.DB.prepare("SELECT * FROM github_project_setups WHERE enrolledBy=? ORDER BY owner,name")
+				.bind(userId)
+				.all<SetupRow>()
+		).results.map(setupOf);
 	}
 
 	// Reads also require authority: installations may contain private repositories.
@@ -1277,12 +1648,12 @@ export class GitHubService {
 		const reviews = `reviews(first: 50, after: $after) { nodes { author { login } state body submittedAt } ${pageInfo} }`;
 		const threads = `reviewThreads(first: 100, after: $after) { nodes { id isResolved isOutdated path line comments(first: 50) { ${commentFields} ${pageInfo} } } ${pageInfo} }`;
 		const contexts = (after: boolean) =>
-			`contexts(first: 100${after ? ", after: $after" : ""}) { nodes { __typename ... on CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state description targetUrl } } ${pageInfo} }`;
+			`contexts(first: 100${after ? ", after: $after" : ""}) { nodes { __typename ... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { app { databaseId } } } ... on StatusContext { context state description createdAt targetUrl } } ${pageInfo} }`;
 		const query =
 			kind === "issues"
 				? `issue(number: $number) { number title state body author { login } ${comments} }`
 				: `pullRequest(number: $number) { number title state body isDraft author { login } baseRefName headRefName headRefOid ${comments} ${reviews} ${threads}
- commits(last: 1) { nodes { commit { oid statusCheckRollup { state ${contexts(false)} } } } } }`;
+ commits(last: 1) { nodes { commit { oid statusCheckRollup { ${contexts(false)} } } } } }`;
 		type Connection<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 		type Comment = { author: { login: string } | null; body: string; createdAt?: string; submittedAt?: string };
 		type Review = Comment & { state: string };
@@ -1296,6 +1667,8 @@ export class GitHubService {
 		};
 		type Check = {
 			__typename: string;
+			databaseId?: number;
+			checkSuite?: { app: { databaseId: number } | null } | null;
 			name?: string;
 			status?: string;
 			conclusion?: string | null;
@@ -1303,9 +1676,10 @@ export class GitHubService {
 			context?: string;
 			state?: string;
 			description?: string | null;
+			createdAt?: string;
 			targetUrl?: string | null;
 		};
-		type Rollup = { state: string; contexts: Connection<Check> };
+		type Rollup = { contexts: Connection<Check> };
 		type Item = {
 			number: number;
 			title: string;
@@ -1431,6 +1805,8 @@ export class GitHubService {
 						"check contexts",
 					)
 				: [];
+			// Only each check's latest run counts, as for mergeability; the rollup's own state counts them all.
+			const checks = latestContexts(allChecks);
 			return {
 				kind: "pull" as const,
 				...common,
@@ -1442,8 +1818,8 @@ export class GitHubService {
 				threads: unresolved,
 				checks: {
 					commit: head?.oid ?? null,
-					state: head?.statusCheckRollup?.state ?? null,
-					runs: allChecks.map((c) =>
+					state: head?.statusCheckRollup ? checksState(checks) : null,
+					runs: checks.map((c) =>
 						c.__typename === "CheckRun"
 							? { name: c.name!, state: c.conclusion ?? c.status ?? null, url: c.detailsUrl ?? null }
 							: {
