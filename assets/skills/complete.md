@@ -56,3 +56,16 @@ Dispatch already selected actions before asking the next question; background wo
 
 Once every sub-agent has finished, remove local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
 Leave the worktree you are running in and any holding uncommitted work; list those in your summary.
+
+## Control
+
+Answer these requests at any point, without stopping running sub-agents:
+
+- "finish up": ask about no new PR and dispatch nothing new, plan the follow-ups collected so far and each later one as its sub-agent reports, let running sub-agents report, then clean up and write the final summary. When a picked PR's sub-agent reports, still run `/quest-merge` on it, but dispatch nothing it hands back; list each pick left standing in the summary.
+- "pause": dispatch nothing new until the user says to resume; running sub-agents continue, and their reports are handled as usual.
+- "status": a compact list of each sub-agent and PR in flight with its pick, state, and how long ago it was dispatched or last reported.
+
+A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result, and the PR's pick still stands.
+Resume that sub-agent by messaging it, so it keeps its context and checkout.
+If it cannot be resumed, release the hold it took on the PR with the token `quest status <pr>` shows, then dispatch a new sub-agent with the same brief.
+While the error persists, such as a rate limit before its reset, resume and dispatch nothing until it clears, and report it once rather than per sub-agent.
