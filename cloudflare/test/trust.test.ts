@@ -5,6 +5,7 @@ import { GitHubService } from "../src/github/service";
 import * as store from "../src/jobs/store";
 import { verify } from "../src/jobs/trust";
 import { privateKey } from "./github-key";
+import { owner } from "./owners";
 
 const db = env.DB;
 const base = "a".repeat(40);
@@ -33,6 +34,7 @@ beforeEach(async () => {
 	const world: World = {
 		app: { id: Number(env.GITHUB_APP_ID), slug: "quest" },
 		installation: 5,
+		owner,
 		users: [
 			{ id: 7, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" },
 			{ id: 8, login: "contributor", name: "Contributor", email: "contributor@example.test" },

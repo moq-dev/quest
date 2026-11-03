@@ -124,8 +124,11 @@ Decision prompts, selected options marked ✅:
     closed unmerged by the merge-queue switch below.
 - Amended 2026-11-01 (maintainer, /quest-plan in moq-dev/moq): a fixer merge
   on [moq-dev/moq#7318](https://github.com/moq-dev/moq/pull/7318) rebuilt
-  `bun.lock` from the PR's side and undid the base's advisory fix; see
-  [Lockfile merges](/quest/m0/land-fixer/lockfile.md).
+  `bun.lock` from the PR's side and undid the base's advisory fix.
+  [moq-dev/quest#410](https://github.com/moq-dev/quest/pull/410) gave
+  `assets/land-fix.md` a Lockfiles procedure: rebuild from the base's copy with
+  the package manager's minimal resolve, and hand back any change that does not
+  trace to the PR.
 
 - Superseded 2026-11-01 (maintainer, /quest-plan; see the
   [queue watcher](/quest/m0/queue-watcher/README.md)): repositories land
@@ -151,7 +154,6 @@ work, done once the Required quests below have merged.
 ## Required
 
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
-- [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
 - [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
 
 ## Related

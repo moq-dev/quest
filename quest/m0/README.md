@@ -84,10 +84,9 @@ ownership-manifest design:
 
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
-- [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - lockfile merges, protected edits as ready commits, workflow pushes, and the PR's own CI as context
+- [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
 - [Checks are judged by their latest run](/quest/m0/latest-check-runs.md) - `quest status`, `quest wait`, and the gate count each check's latest run on the head, as GitHub does, so a superseded cancelled or failed run stops failing them or refusing release-plz PRs GitHub would merge
 - [Current landing status](/quest/m0/status-landing.md) - `quest status` clears a stale `landing-stopped` reason once the PR is queued again
-- [Agents don't stall](/quest/m0/agent-stalls.md) - long waits block in the same turn, pre-existing failures don't stop review, and reviewer outages become waits
 - [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` exits distinctly on a reviewer's quota and prints the reset time
 - [Drafts in quest waiting](/quest/m0/waiting-drafts.md) - `quest waiting` lists open draft PRs' `## Waiting` items beside the tree's
 - [Rejected options in decision records](/quest/m0/decision-records.md) - grill and plan label rejected options so no one reads them as qualifiers
