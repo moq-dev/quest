@@ -667,25 +667,38 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 	it("releases a stopped subagent's own checkout and restores it on resume", async () => {
 		const { repo, worktrees } = fixture();
 		mkdirSync(join(repo, "cache"));
+		mkdirSync(join(repo, ".tmp"));
+		appendFileSync(join(repo, ".git", "info", "exclude"), ".tmp/\n");
 		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-abc" };
 		const path = (await claudeHook(create, worktrees, noForge))!.trim();
 		mkdirSync(join(path, "cache", "nested"), { recursive: true });
+		mkdirSync(join(path, ".tmp"));
+		writeFileSync(join(path, ".tmp", "report.md"), "findings\n");
 		// A subagent without isolation runs in this checkout too, but stops under another ID.
 		expect(await claudeHook(subagent("SubagentStop", path, "other"), worktrees, noForge)).toBeUndefined();
 		expect(existsSync(join(path, "cache"))).toBe(true);
 		await claudeHook(subagent("SubagentStop", join(path, "cache", "nested"), "abc"), worktrees, noForge);
 		expect(existsSync(join(path, "cache"))).toBe(false);
 		expect(worktrees.status().records[0].phase).toBe("released");
+		// The parent reads the stopped subagent's report from its workspace.
+		expect(readFileSync(join(path, ".tmp", "report.md"), "utf8")).toBe("findings\n");
 		const resumed = await claudeHook(subagent("SubagentStart", path, "abc"), worktrees, noForge);
 		expect(JSON.parse(resumed!).hookSpecificOutput).toMatchObject({
 			hookEventName: "SubagentStart",
-			additionalContext: expect.stringContaining("cache"),
+			additionalContext: expect.not.stringContaining(".tmp"),
 		});
+		expect(JSON.parse(resumed!).hookSpecificOutput.additionalContext).toContain("cache");
 		expect(worktrees.status().records[0].phase).toBe("active");
 		// A fresh subagent's checkout is already active and needs no notice.
 		expect(await claudeHook(subagent("SubagentStart", path, "abc"), worktrees, noForge)).toBeUndefined();
 		// Subagents outside any quest checkout are left alone.
 		expect(await claudeHook(subagent("SubagentStop", repo, "abc"), worktrees, noForge)).toBeUndefined();
+		// Once the parent is done, removal deletes the workspace with the checkout.
+		await claudeHook(subagent("SubagentStop", path, "abc"), worktrees, noForge);
+		expect(existsSync(join(path, ".tmp", "report.md"))).toBe(true);
+		await claudeHook({ hook_event_name: "WorktreeRemove", cwd: repo, worktree_path: path }, worktrees, noForge);
+		expect(existsSync(path)).toBe(false);
+		expect(worktrees.status().records).toHaveLength(0);
 	});
 	it("checks out a pull request's head from origin for Claude's pr-<number> names", async () => {
 		const { root, repo, worktrees } = fixture();

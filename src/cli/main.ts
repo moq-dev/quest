@@ -833,7 +833,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
 				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
 				"or a workflow agent's, named for its run and bound to the first subagent that starts in it, " +
-				"when it finishes or stops to wait, and SubagentStart restores it. Other checkouts are left alone. " +
+				"when it finishes or stops to wait, keeping its .tmp/ workspace for the parent to read until removal, and SubagentStart restores it. Other checkouts are left alone. " +
 				"Exits 1 on failure, never 2, which would keep a subagent running.",
 		)
 		.action(() => {

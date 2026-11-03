@@ -1358,7 +1358,9 @@ reserves the main checkout's disk usage without `.git` and those checkouts.
 
 A subagent's checkout is released when the subagent finishes or stops to wait
 for an answer, and restored when it resumes, with a note telling it to
-reinstall its scratch. Claude names an isolated subagent's worktree for its
+reinstall its scratch. That release keeps `.tmp/`, the guide's workspace, so
+the parent can read the reports and logs a stopped subagent left there;
+removing the checkout deletes it. Claude names an isolated subagent's worktree for its
 agent ID, and a workflow agent's for its workflow run, so the hook binds a
 workflow agent's checkout to the first subagent that starts in it, the workflow
 agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
