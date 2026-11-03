@@ -38,4 +38,4 @@ items, m0, ranked right after the [cutover](/quest/m0/queue-watcher/follow.md).
 
 ## Related
 
-- [Watcher on the host](/quest/m0/queue-watcher/host.md) - the host module these runners and daemons share
+- [Gate host](/quest/m0/host-land/host.md) - the host module these runners and daemons share

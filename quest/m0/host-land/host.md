@@ -112,5 +112,7 @@ Amended 2026-11-01 (maintainer, /quest-plan; see the
 except fixes the switch needs. The `QUEST_GATE_PRIORITY=1` export in the
 generated check command (planned 2026-10-31) is dropped with it. The items
 above stay, since the fixer container and its launcher serve the watcher too,
-and the gate keeps serving the repositories not yet switched. The watcher's
-own unit is [Watcher on the host](/quest/m0/queue-watcher/host.md).
+and the gate keeps serving the repositories not yet switched. The watcher
+runs from the same module as each repository's daemon in watch mode
+(`services.quest-land.repositories.<name>.watch`), live for moq-dev/moq
+since 2026-11-02.
