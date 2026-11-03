@@ -67,5 +67,5 @@ Answer these requests at any point, without stopping running sub-agents:
 
 A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result, and the PR's pick still stands.
 Resume that sub-agent by messaging it, so it keeps its context and checkout.
-If it cannot be resumed, release the hold it took on the PR with the token `quest status <pr>` shows, then dispatch a new sub-agent with the same brief.
+If it cannot be resumed, dispatch a new sub-agent with the same brief plus the token of the hold it took on the PR, which `quest status <pr>` shows, so the new one keeps that hold rather than releasing it.
 While the error persists, such as a rate limit before its reset, resume and dispatch nothing until it clears, and report it once rather than per sub-agent.

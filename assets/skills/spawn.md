@@ -53,7 +53,7 @@ Answer these requests at any point, without stopping running agents:
 
 A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result.
 Resume that agent by messaging it, or with `quest agent resume` under `api`, so it keeps its context and checkout.
-If it cannot be resumed, release the hold it took on its PR, if any, with the token `quest status <pr>` shows, then start a new agent with the same brief plus its claim PR and checkout, so it continues that work rather than claiming again.
+If it cannot be resumed, start a new agent with the same brief plus its claim PR, its checkout, and the token of any hold it took on the PR, which `quest status <pr>` shows, so the new one continues that work and keeps that hold rather than claiming again.
 While the error persists, such as a rate limit before its reset, resume and start nothing until it clears, and report it once rather than per agent.
 
 ## API keys
