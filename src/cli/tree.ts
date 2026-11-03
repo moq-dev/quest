@@ -50,7 +50,7 @@ export function load(root: string): Doc[] {
 	return sources(root).map((source) => parse(source.path, source.text));
 }
 
-/** Whether a repository-relative path exists under `root`. */
+/** Whether a repository-relative path exists under `root`, on disk alone. */
 export function exists(root: string, path: string): boolean {
 	return existsSync(join(root, path));
 }
@@ -61,19 +61,30 @@ export interface Snapshot {
 	exists(path: string): boolean;
 }
 
-/** The quest tree in the checkout at `root`. */
-export function checkout(root: string): Snapshot {
-	return { docs: load(root), exists: (path) => exists(root, path) };
+/**
+ * Called once per submodule whose links are skipped, rather than reported broken,
+ * because no local git directory holds the commit its gitlink pins.
+ */
+export type Note = (message: string) => void;
+
+/**
+ * The quest tree in the checkout at `root`. A path inside a submodule that is
+ * not checked out, as in a fresh worktree, resolves at the submodule's pinned
+ * commit instead of its empty directory.
+ */
+export function checkout(root: string, note: Note): Snapshot {
+	return { docs: load(root), exists: onDisk(root, note) };
 }
 
 /**
  * The quest tree at `commit`, read from git rather than the checkout, with
  * paths relative to `root` as on disk. A symbolic link is a path, not a quest.
- * With `submodules` false, as in a bare repository with no submodule checkouts,
- * every path inside a submodule exists rather than being read from it.
+ * A path inside a submodule resolves at the commit its gitlink pins; with
+ * `note` null, as in a bare repository with no submodule checkouts, every such
+ * path exists instead.
  */
-export function snapshot(root: string, commit: string, submodules = true): Snapshot {
-	const tree = committedSources(root, commit, submodules);
+export function snapshot(root: string, commit: string, note: Note | null): Snapshot {
+	const tree = committedSources(root, commit, note);
 	return { docs: tree.sources.map((source) => parse(source.path, source.text)), exists: tree.exists };
 }
 
@@ -89,16 +100,17 @@ export interface CommittedSource extends Source {
 export function committedSources(
 	root: string,
 	commit: string,
-	submodules = true,
+	note: Note | null,
 ): { sources: CommittedSource[]; exists(path: string): boolean } {
-	const tree = committed(root, commit, submodules);
+	const repo = { dir: root };
+	const tree = committed(repo, commit, note, "");
 	const quests = tree.entries.filter(
 		({ mode, type, path }) => type === "blob" && mode !== "120000" && path.startsWith("quest/") && isQuest(path),
 	);
 	if (quests.length === 0) throw new Error(`no quest documents found under ${under(root, "quest")} at ${commit}`);
 
 	// One `cat-file --batch` reads every document: `<oid> blob <size>\n<content>\n` each, in input order.
-	const batch = git(root, ["cat-file", "--batch"], `${quests.map((quest) => quest.oid).join("\n")}\n`);
+	const batch = git(repo, ["cat-file", "--batch"], `${quests.map((quest) => quest.oid).join("\n")}\n`);
 	let offset = 0;
 	const sources = quests.map(({ path, mode }) => {
 		const header = batch.indexOf(10, offset);
@@ -110,6 +122,9 @@ export function committedSources(
 	return { sources: sources.sort((a, b) => comparePaths(a.path, b.path)), exists: tree.exists };
 }
 
+/** A repository to read: a work tree, or a submodule's git directory without one. */
+type Repo = { dir: string } | { gitdir: string };
+
 interface Entry {
 	mode: string;
 	type: string;
@@ -117,18 +132,66 @@ interface Entry {
 	path: string;
 }
 
+interface Tree {
+	entries: Entry[];
+	exists(path: string): boolean;
+}
+
+/**
+ * Whether a path exists in the checkout at `root`: on disk, or, inside a
+ * submodule that is not checked out, at the commit its gitlink pins. A
+ * checked-out submodule is a checkout of its own, so its submodules resolve the
+ * same way. `prefix` is where `root` sits in the outermost checkout.
+ */
+function onDisk(root: string, note: Note, prefix = ""): (path: string) => boolean {
+	const repo = { dir: root };
+	let names: Map<string, string> | undefined;
+	// Git runs in `root`, so it names the file relative to that.
+	const modules = () =>
+		(names ??= exists(root, ".gitmodules") ? gitmodules(repo, ["-f", ".gitmodules"]) : new Map<string, string>());
+	const resolve = pins(repo, modules, note, prefix);
+	const inner = new Map<string, (path: string) => boolean>();
+	return (path) => {
+		if (exists(root, path)) return true;
+		for (const module of modules().keys()) {
+			if (path === module) return gitlink(root, module) !== null;
+			if (!path.startsWith(`${module}/`)) continue;
+			const rest = path.slice(module.length + 1);
+			if (existsSync(join(root, module, ".git"))) {
+				let within = inner.get(module);
+				if (!within) inner.set(module, (within = onDisk(join(root, module), note, `${prefix}${module}/`)));
+				return within(rest);
+			}
+			const oid = gitlink(root, module);
+			return oid !== null && resolve(module, oid, rest);
+		}
+		return false;
+	};
+}
+
+/** The commit the index pins the submodule at `module` to, or null when that path is no gitlink. */
+function gitlink(root: string, module: string): string | null {
+	// `<mode> <oid> <stage>\t<path>`, listing the files under `module` instead when it is a directory.
+	for (const entry of git({ dir: root }, ["ls-files", "-s", "-z", "--", `:(literal)${module}`])
+		.toString("utf8")
+		.split("\0")) {
+		const tab = entry.indexOf("\t");
+		const [mode, oid] = entry.slice(0, tab).split(" ");
+		if (mode === "160000" && entry.slice(tab + 1) === module) return oid;
+	}
+	return null;
+}
+
 /** Committed paths, descending into a gitlink only when a link needs its contents. */
-function committed(
-	root: string,
-	commit: string,
-	submodules = true,
-): { entries: Entry[]; exists(path: string): boolean } {
+function committed(repo: Repo, commit: string, note: Note | null, prefix: string): Tree {
 	const entries: Entry[] = [];
 	const paths = new Set<string>();
 	const modules = new Map<string, string>();
-	const loaded = new Map<string, ReturnType<typeof committed>>();
-	// `<mode> <type> <oid>\t<path>`; run in `root`, git lists only its subtree, relative to it.
-	for (const entry of git(root, ["ls-tree", "-r", "-z", commit]).toString("utf8").split("\0")) {
+	// `<mode> <type> <oid>\t<path>`; run in a work tree, git lists only its subtree, relative to it.
+	const full = "gitdir" in repo ? ["--full-tree"] : [];
+	for (const entry of git(repo, ["ls-tree", ...full, "-r", "-z", commit])
+		.toString("utf8")
+		.split("\0")) {
 		if (entry === "") continue;
 		const tab = entry.indexOf("\t");
 		const [mode, type, oid] = entry.slice(0, tab).split(" ");
@@ -141,37 +204,121 @@ function committed(
 		}
 		if (type === "commit") modules.set(path, oid);
 	}
+	let names: Map<string, string> | undefined;
+	const resolve =
+		note && pins(repo, () => (names ??= gitmodules(repo, ["--blob", `${commit}:.gitmodules`])), note, prefix);
 	return {
 		entries,
 		exists(path) {
 			if (paths.has(path)) return true;
 			for (const [module, oid] of modules) {
 				if (!path.startsWith(`${module}/`)) continue;
-				if (!submodules) return true;
-				let tree = loaded.get(module);
-				if (!tree) {
-					const dir = join(root, module);
-					try {
-						// Without its own gitdir, `git -C` would silently read the parent repository.
-						if (!existsSync(join(dir, ".git"))) throw new Error("submodule is not initialized");
-						tree = committed(dir, oid);
-					} catch (error) {
-						throw new Error(
-							`cannot read submodule ${module} at ${oid}: ${(error as Error).message}; run git submodule update --init --recursive and ensure that commit is available`,
-						);
-					}
-					loaded.set(module, tree);
-				}
-				return tree.exists(path.slice(module.length + 1));
+				return !resolve || resolve(module, oid, path.slice(module.length + 1));
 			}
 			return false;
 		},
 	};
 }
 
-function git(root: string, args: string[], input = ""): Buffer {
+/**
+ * Whether a path inside the submodule at `module` exists at `oid`, the commit
+ * its gitlink pins, reading each submodule's tree once. A submodule whose
+ * commit no local git directory holds is noted and its paths all exist, since
+ * a missing checkout says nothing about whether a link is broken.
+ */
+function pins(
+	repo: Repo,
+	names: () => Map<string, string>,
+	note: Note,
+	prefix: string,
+): (module: string, oid: string, path: string) => boolean {
+	const loaded = new Map<string, Tree | null>();
+	return (module, oid, path) => {
+		let tree = loaded.get(module);
+		if (tree === undefined) {
+			tree = pinned(repo, module, names().get(module) ?? module, oid, note, `${prefix}${module}/`);
+			if (tree === null) {
+				note(
+					`skipped links into submodule ${prefix}${module}: no local git directory holds its pinned commit ${oid}; run git submodule update --init --recursive to check them`,
+				);
+			}
+			loaded.set(module, tree);
+		}
+		return tree === null || tree.exists(path);
+	};
+}
+
+/**
+ * The tree of the submodule `name` at `module` at commit `oid`, read from the
+ * first local git directory that holds that commit: the submodule's own
+ * checkout, where `git submodule` keeps it for this work tree, then where it
+ * keeps it for the main work tree, which a fresh linked worktree has not
+ * initialized but shares objects with. Null when none holds it.
+ */
+function pinned(repo: Repo, module: string, name: string, oid: string, note: Note, prefix: string): Tree | null {
+	const candidates: Repo[] = [];
+	// Without its own gitdir, `git -C` would silently read the parent repository.
+	if ("dir" in repo && existsSync(join(repo.dir, module, ".git"))) candidates.push({ dir: join(repo.dir, module) });
+	// Git refuses a name that would climb out of its modules directory, so never follow one.
+	if (!name.split(/[/\\]/).includes("..")) {
+		candidates.push(...modulesDirs(repo, name));
+	}
+	for (const candidate of candidates) {
+		try {
+			return committed(candidate, oid, note, prefix);
+		} catch {
+			// That git directory lacks the commit; try the next.
+		}
+	}
+	return null;
+}
+
+/** Where `git submodule` keeps the submodule `name`'s git directory for this work tree, then for the main one. */
+function modulesDirs(repo: Repo, name: string): Repo[] {
+	const dirs: Repo[] = [];
 	try {
-		return execFileSync("git", ["-C", root, ...args], { input, maxBuffer: 1 << 30, stdio: "pipe" });
+		const [own, common] = git(repo, [
+			"rev-parse",
+			"--path-format=absolute",
+			"--git-path",
+			`modules/${name}`,
+			"--git-common-dir",
+		])
+			.toString("utf8")
+			.trim()
+			.split("\n");
+		for (const gitdir of new Set([own, join(common, "modules", name)])) {
+			if (existsSync(gitdir)) dirs.push({ gitdir });
+		}
+	} catch {
+		// Not a repository git can locate a submodule directory for; only a checkout can hold it.
+	}
+	return dirs;
+}
+
+/** Each submodule's name by its path, from the `.gitmodules` file `git config` reads with `source`. */
+function gitmodules(repo: Repo, source: string[]): Map<string, string> {
+	let out: string;
+	try {
+		out = git(repo, ["config", "-z", ...source, "--get-regexp", "^submodule\\..*\\.path$"]).toString("utf8");
+	} catch {
+		// No `.gitmodules`, or no submodule in it: every name is its path.
+		return new Map();
+	}
+	const names = new Map<string, string>();
+	// `submodule.<name>.path\n<path>\0` each.
+	for (const entry of out.split("\0")) {
+		const newline = entry.indexOf("\n");
+		if (newline < 0) continue;
+		names.set(entry.slice(newline + 1), entry.slice("submodule.".length, newline - ".path".length));
+	}
+	return names;
+}
+
+function git(repo: Repo, args: string[], input = ""): Buffer {
+	const where = "dir" in repo ? ["-C", repo.dir] : [`--git-dir=${repo.gitdir}`];
+	try {
+		return execFileSync("git", [...where, ...args], { input, maxBuffer: 1 << 30, stdio: "pipe" });
 	} catch (error) {
 		const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
 		throw new Error(`git ${args[0]} failed${stderr ? `: ${stderr}` : ""}`);

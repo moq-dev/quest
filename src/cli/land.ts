@@ -611,7 +611,7 @@ function prune(dir: string, head: string): string[] {
 	if (finished.size === 0) return [];
 	let tree: ReturnType<typeof committedSources>;
 	try {
-		tree = committedSources(dir, git(dir, ["write-tree"]), false);
+		tree = committedSources(dir, git(dir, ["write-tree"]), null);
 	} catch {
 		// A tree `quest check` cannot read is its finding to report, not this edit's.
 		return [];
@@ -680,7 +680,7 @@ function screener(dir: string, driver: string, plan: Plan) {
  */
 function questCheck(dir: string, commit: string): Finding[] {
 	try {
-		const tree = snapshot(dir, commit, false);
+		const tree = snapshot(dir, commit, null);
 		return check(tree.docs, tree.exists);
 	} catch (error) {
 		// Its messages name the scratch worktree, a host path the PR comment need not show.

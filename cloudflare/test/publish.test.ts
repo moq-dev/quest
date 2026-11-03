@@ -1171,7 +1171,8 @@ describe("merge jobs", () => {
 	const lands = () =>
 		requests().flatMap((r) => {
 			const mutation =
-				r.path === "/graphql" && r.body.query.match(/(enablePullRequestAutoMerge|mergePullRequest)\(/)?.[1];
+				r.path === "/graphql" &&
+				r.body.query.match(/(enablePullRequestAutoMerge|mergePullRequest|enqueuePullRequest)\(/)?.[1];
 			return mutation ? [{ mutation, variables: r.body.variables }] : [];
 		});
 	/** Answer every landing mutation with GitHub's refusal. */
@@ -1309,6 +1310,100 @@ describe("merge jobs", () => {
 		const response = await publish({ job: id, attempt: 1, head: prHead, land: { method: "squash" } });
 		expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
 		expect(lands().map((l) => l.mutation)).toEqual(["enablePullRequestAutoMerge"]);
+	});
+
+	describe("on a base with a merge queue", () => {
+		beforeEach(() => {
+			project.queue = true;
+		});
+
+		it("enqueues a ready head pinned to it, and keeps its hold while queued", async () => {
+			const id = await merging();
+			pull().merge = "CLEAN";
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: { method: "squash" } });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands()).toEqual([{ mutation: "enqueuePullRequest", variables: { id: "PR_10002", sha: prHead } }]);
+			expect(pull().queued).toBe(true);
+			expect(pull().merged).not.toBe(true);
+			await store.finish(db, machine, id, 1, { outcome: "completed", summary: "Landing", result: undefined }, 0);
+			await landing.ended(testEnv, id);
+			expect(pull().labels).toEqual(["quest:kix"]);
+		});
+
+		it("arms auto-merge bound to the head while its required checks may be pending", async () => {
+			const id = await merging();
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: { method: "squash" } });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands()).toEqual([
+				{
+					mutation: "enablePullRequestAutoMerge",
+					variables: { id: "PR_10002", sha: prHead, method: "SQUASH" },
+				},
+			]);
+			expect(pull().landing).toBe(true);
+			expect(pull().queued).not.toBe(true);
+		});
+
+		it("enqueues an UNKNOWN head after GitHub refuses auto-merge as clean", async () => {
+			const id = await merging();
+			pull().merge = "UNKNOWN";
+			vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+				if (String(init?.body ?? "").includes("enablePullRequestAutoMerge(")) pull().merge = "CLEAN";
+				return github(input, init);
+			});
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands().map((l) => [l.mutation, l.variables.sha])).toEqual([
+				["enablePullRequestAutoMerge", prHead],
+				["enqueuePullRequest", prHead],
+			]);
+			expect(pull().queued).toBe(true);
+		});
+
+		it("reports a refused enqueue as the job's blocked landing", async () => {
+			const id = await merging();
+			pull().merge = "DIRTY";
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(response.status).toBe(202);
+			expect((await job(id)).questions.at(-1)!.prompt).toEqual({
+				type: "publication",
+				blocked: "GitHub refused to land the pull request: Pull request is not mergeable",
+			});
+			expect(lands().map((l) => l.mutation)).toEqual(["enqueuePullRequest"]);
+			expect(pull().queued).toBeUndefined();
+		});
+
+		it("accepts a head already queued, as a repeated landing finds it", async () => {
+			const id = await merging();
+			pull().merge = "CLEAN";
+			pull().queued = true;
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands().map((l) => l.mutation)).toEqual(["enqueuePullRequest"]);
+		});
+
+		it("still queues for quest land on a base that requires its check", async () => {
+			const id = await merging();
+			pull().merge = "BLOCKED";
+			project.required = ["quest land"];
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(await response.json()).toEqual({ head: prHead, landed: { merged: false } });
+			expect(lands()).toEqual([
+				{
+					mutation: "enablePullRequestAutoMerge",
+					variables: { id: "PR_10002", sha: prHead, method: "SQUASH", body: `Quest-Land-Head: ${prHead}` },
+				},
+			]);
+		});
+
+		it("enqueues nothing before a review counts on the head", async () => {
+			const id = await merging(false);
+			pull().merge = "CLEAN";
+			const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+			expect(response.status).toBe(202);
+			expect(lands()).toEqual([]);
+			expect(pull().queued).toBeUndefined();
+		});
 	});
 
 	it.each(["Pull request is in clean status", "Auto merge is not allowed for this repository"])(
@@ -1678,6 +1773,133 @@ describe("merge jobs", () => {
 				expect(await land(id)).toBe(defers ? null : waiting(prHead));
 			},
 		);
+
+		describe("records a runner's review as the App's check", () => {
+			/** Report a review round of `head`, as the runner does after a delivery. */
+			async function report(body: Record<string, unknown>, token = machine.token) {
+				const text = JSON.stringify({
+					attempt: 1,
+					reviewer: "codex",
+					model: "gpt-6.1-sol",
+					effort: "medium",
+					round: 1,
+					findings: [],
+					...body,
+				});
+				return app.request(
+					`${origin}/api/runner/review`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${token}`,
+							"Content-Type": "application/json",
+							"Content-Length": String(new TextEncoder().encode(text).length),
+						},
+						body: text,
+					},
+					testEnv,
+				);
+			}
+			/** Publish a fix on pull request #2 without landing it, returning the head kix committed. */
+			async function fix(id: string) {
+				const response = await publish({
+					job: id,
+					attempt: 1,
+					head: prHead,
+					message: "fix",
+					changes: [file("a", "1")],
+				});
+				expect(response.status).toBe(200);
+				return ((await response.json()) as { head: string }).head;
+			}
+			const finding = {
+				file: "a",
+				line: 1,
+				severity: "high",
+				title: "Breaks on null",
+				body: "Ends a fence: ``` and mentions @maintainer",
+			};
+
+			it("records findings as a failing check, which lands nothing", async () => {
+				const id = await merging(false);
+				const head = await fix(id);
+				const failed = await report({ job: id, head, findings: [finding] });
+				expect(await failed.json()).toEqual({ conclusion: "failure" });
+				expect(project.checkRuns).toEqual([
+					{
+						name: "quest review",
+						head_sha: head,
+						conclusion: "failure",
+						app: Number(env.GITHUB_APP_ID),
+						output: {
+							title: "1 finding",
+							summary:
+								"A kix runner reviewed this commit with `quest review`: codex, gpt-6.1-sol at medium effort, round 1.",
+							text: "````text\nhigh a:1 Breaks on null\n\nEnds a fence: ``` and mentions @maintainer\n````",
+						},
+					},
+				]);
+				// Written as the App for the job's requester, with only the check write it needs.
+				const write = requests().find((r) => r.path.endsWith("/check-runs") && r.method === "POST")!;
+				expect(write.path).toBe("/repos/upstream/project/check-runs");
+				const minted = requests().filter((r) => r.path.endsWith("/access_tokens"));
+				expect(minted.map((r) => r.body.permissions)).toContainEqual({
+					metadata: "read",
+					contents: "read",
+					checks: "write",
+				});
+				expect(await land(id, head)).toBe(waiting(head));
+				expect(lands()).toEqual([]);
+			});
+
+			it("lands a head the job published once a later round of its review passes", async () => {
+				const id = await merging(false);
+				const head = await fix(id);
+				await report({ job: id, head, findings: [finding] });
+				const passed = await report({ job: id, head, round: 2 });
+				expect(await passed.json()).toEqual({ conclusion: "success" });
+				expect(project.checkRuns!.at(-1)!.output).toEqual({
+					title: "No findings",
+					summary:
+						"A kix runner reviewed this commit with `quest review`: codex, gpt-6.1-sol at medium effort, round 2.",
+				});
+				expect(await land(id, head)).toBeNull();
+				expect(lands().map((l) => l.variables.sha)).toEqual([head]);
+			});
+
+			it("refuses a head the job did not publish, a stale attempt, its own vendor, and malformed findings", async () => {
+				const id = await merging(false);
+				const refused = async (body: Record<string, unknown>, error: string) => {
+					const response = await report({ job: id, ...body });
+					expect(response.status).toBe(409);
+					expect(await response.json()).toEqual({ error });
+				};
+				const published = "kix records a review only of the head this job last published";
+				// The pull request's own head, before the job published anything.
+				await refused({ head: prHead }, published);
+				const head = await fix(id);
+				await refused({ head: prHead }, published);
+				await refused({ head, attempt: 2 }, "Attempt is no longer current");
+				await refused(
+					{ head, reviewer: "claude" },
+					"A review counts only from another vendor's model than the one the job runs on",
+				);
+				await refused(
+					{ head, findings: [{ ...finding, severity: "urgent" }] },
+					"Each finding needs a file, line or null, severity, title, and body",
+				);
+				await refused({ head, reviewer: "gemini" }, "The reviewer is claude or codex");
+				// A head someone else committed, which the job's branch holds after a merge job continues onto it.
+				project.commits[head]!.committer = "contributor";
+				const foreign = await report({ job: id, head });
+				expect(foreign.status).toBe(403);
+				expect(await foreign.json()).toEqual({
+					error: "kix records a runner's review only of a commit it published",
+				});
+				expect((await report({ job: id, head }, "x".repeat(43))).status).toBe(401);
+				expect(project.checkRuns ?? []).toEqual([]);
+			});
+		});
 	});
 
 	it("gives the pull request back when the job fails, and lands nothing for other workflows", async () => {
