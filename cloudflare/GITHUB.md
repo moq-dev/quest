@@ -407,8 +407,10 @@ reads; it never consumes GitHub's shared anonymous repository-lookup quota.
 
 Until the public release, only repositories whose owner's GitHub ID is in
 `ENROLL_OWNERS` (`wrangler.jsonc`, each ID with its login in a comment) may
-enroll; the deployed list is moq-dev. Logins are not identities: GitHub frees
-a deleted or renamed account's login for anyone to claim. `/projects` says
+enroll; the deployed list is the moq-dev organization and the kixelated user.
+Users and organizations are checked alike, by ID alone. Logins are not
+identities: GitHub frees a deleted or renamed account's login for anyone to
+claim. `/projects` says
 Quest isn't open yet, and lists another owner's repositories as not open,
 without reading their Quest files or licenses. The service's live repository
 check treats such an owner like an archived repository: preview, opt-in,

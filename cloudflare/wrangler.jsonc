@@ -25,6 +25,7 @@
 		// Find one with `gh api users/<login> --jq .id`; see GITHUB.md.
 		"ENROLL_OWNERS": [
 			248218914, // moq-dev
+			432854, // kixelated
 		],
 	},
 	"secrets": {

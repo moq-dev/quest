@@ -30,7 +30,7 @@ live rehearsal on the operator's runner.
 
 Decided 2026-10-30 (user, /quest-plan): m0 serves moq-dev/moq, then
 moq-dev/quest, then the private moq-dev/moq.pro, at quest.moq.dev with only
-moq-dev allowed to enroll. Onboarding, read-only CI checks, contributor
+moq-dev allowed to enroll (and, decided 2026-11-03, the kixelated user). Onboarding, read-only CI checks, contributor
 sandboxing, and the guide moved to [m1](/quest/m1/kix/README.md), and
 kix.quest opens in [m1](/quest/m1/open.md).
 

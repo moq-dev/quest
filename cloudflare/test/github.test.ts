@@ -205,6 +205,25 @@ describe("signed GitHub webhooks", () => {
 		});
 		expect((await env.DB.prepare("SELECT * FROM github_project_activity").all()).results).toHaveLength(1);
 	});
+	it("admits an allowlisted user account the same as an organization", async () => {
+		await env.DB.prepare(
+			"INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) VALUES(10,'someone','project',5,'enabled','app-test',0)",
+		).run();
+		const account = { id: owner, login: "someone", type: "User" };
+		const created = await delivery("installation", {
+			action: "created",
+			installation: { id: 5, app_id: 123, account },
+		});
+		expect(await created.json()).not.toEqual({ status: "ignored" });
+		expect(await state()).toMatchObject({ blocked: 0, revision: 1 });
+		await delivery("pull_request", {
+			action: "opened",
+			installation: { id: 5 },
+			repository: { id: 10, owner: account },
+			pull_request: { id: 200, number: 2 },
+		});
+		expect((await env.DB.prepare("SELECT * FROM github_project_activity").all()).results).toHaveLength(1);
+	});
 	it("ignores entity pointers from a previous installation or an unenrolled repository", async () => {
 		await env.DB.prepare(
 			"INSERT INTO github_projects(id,owner,name,installation,state,enrolledBy,updatedAt) VALUES(10,'upstream','project',8,'enabled','app-test',0)",

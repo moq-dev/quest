@@ -12,7 +12,9 @@ redirects there.
 
 Decided 2026-10-30 (user, /quest-plan): m0 hosts at quest.moq.dev and only
 moq-dev may enroll, so nothing is spent making a public service before it
-works for moq-dev. This quest undoes both for the launch.
+works for moq-dev. Decided 2026-11-03 (user, /quest-complete on
+[moq-dev/quest#407](https://github.com/moq-dev/quest/pull/407)): the
+kixelated user may enroll too. This quest undoes both for the launch.
 
 - Remove the owner allowlist: the `ENROLL_OWNERS` Worker variable, its
   checks in `cloudflare/src/github/service.ts` and the webhook route, the
