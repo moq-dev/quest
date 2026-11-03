@@ -104,7 +104,7 @@ const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
 	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 } } }`;
 
-async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
+export async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
 	return object((await github.graphql(PULL, { id })).node);
 }
 

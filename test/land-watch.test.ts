@@ -62,6 +62,8 @@ interface Pull {
 	title?: string;
 	/** Its head branch, `branch-<number>` by default. */
 	branch?: string;
+	/** Its head branch's pushes, oldest first, in place of those its removals imply. */
+	pushes?: { sha: string; at: string }[];
 }
 interface Job {
 	id: number;
@@ -97,6 +99,10 @@ interface World {
 	unreadable?: (pull: Pull) => boolean;
 	/** PRs whose push activity GitHub has not listed yet. */
 	unlisted?: number[];
+	/** Called on each read of a PR's push activity, as a change GitHub makes while the watcher reads it. */
+	onActivity?: (pull: Pull) => void;
+	/** GitHub's refusal of an enqueue of `pull`, if it refuses one. */
+	refuseEnqueue?: (pull: Pull) => string | undefined;
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -136,6 +142,8 @@ function removalNode(event: Removed) {
 function pushes(world: World, pull: Pull) {
 	const rows: { activity_type: string; after: string; timestamp: string }[] = [];
 	const stamp = (time: number) => new Date(time).toISOString().replace(".000", "");
+	if (pull.pushes)
+		return pull.pushes.map((push) => ({ activity_type: "push", after: push.sha, timestamp: push.at })).reverse();
 	for (const event of pull.removals) {
 		const enqueued = pull.enqueues.filter((added) => added.createdAt <= event.createdAt).at(-1)?.createdAt;
 		const time = Date.parse(enqueued ?? event.createdAt) - 1000;
@@ -182,6 +190,8 @@ function deps(world: World): GitHubDependencies {
 					world.mutations.push(`${mutation} ${pull.number} ${variables.sha}`);
 					if (variables.sha !== headOf(world, pull))
 						return Response.json({ errors: [{ type: "UNPROCESSABLE", message: "head moved" }] });
+					const refusal = mutation === "enqueuePullRequest" ? world.refuseEnqueue?.(pull) : undefined;
+					if (refusal) return Response.json({ errors: [{ type: "UNPROCESSABLE", message: refusal }] });
 					const now = new Date(world.now).toISOString().replace(".000", "");
 					if (mutation === "enablePullRequestAutoMerge") pull.armed = now;
 					else {
@@ -190,7 +200,7 @@ function deps(world: World): GitHubDependencies {
 					}
 					return Response.json({ data: { [mutation]: { clientMutationId: null } } });
 				}
-				if (query.includes("mergeStateStatus")) {
+				if (query.includes("mergeStateStatus") && !query.includes("pullRequests(states: OPEN")) {
 					const pull = pullOf();
 					if (world.unreadable?.(pull)) {
 						world.unreadable = undefined;
@@ -244,6 +254,9 @@ function deps(world: World): GitHubDependencies {
 										headRefName: branchOf(pull),
 										maintainerCanModify: false,
 										headRepository: { nameWithOwner: "upstream/project" },
+										mergeStateStatus: pull.mergeState ?? "CLEAN",
+										mergeQueueEntry: pull.queued ? { id: `MQE_${pull.number}` } : null,
+										autoMergeRequest: pull.armed ? { enabledAt: pull.armed, commitBody: "" } : null,
 										removals: removalPage(pull, variables.since, null),
 									})),
 									pageInfo: { hasNextPage: false, endCursor: null },
@@ -335,6 +348,7 @@ function deps(world: World): GitHubDependencies {
 			const activity = /^\/repos\/upstream\/project\/activity$/.exec(path);
 			if (activity) {
 				const pull = world.pulls.find((item) => branchOf(item) === url.searchParams.get("ref"))!;
+				world.onActivity?.(pull);
 				return Response.json(world.unlisted?.includes(pull.number) ? [] : pushes(world, pull));
 			}
 			throw new Error(`unexpected request: ${path}`);
@@ -639,8 +653,107 @@ test("the first pass reads removals from SETTLE before it, and forgets closed PR
 	expect(JSON.parse(readFileSync(join(state, "watch.json"), "utf8")).handled).toEqual({});
 });
 
+test("an armed pick GitHub never queued is enqueued once ready, only at the head it was armed on", async () => {
+	const state = tempDir();
+	const armed = (number: number, extra: Partial<Pull> = {}): Pull => ({
+		number,
+		head: HEAD,
+		enqueues: [],
+		removals: [],
+		armed: at(2),
+		...extra,
+	});
+	const github = world([
+		// Its required checks still run: auto-merge waits for them.
+		armed(20, { mergeState: "BLOCKED" }),
+		// A writer pushed since auto-merge was armed, which ends the pick.
+		armed(21, {
+			head: PUSHED,
+			pushes: [
+				{ sha: HEAD, at: at(1) },
+				{ sha: PUSHED, at: at(3) },
+			],
+		}),
+		// GitHub queued it once armed; the queue's removal of it is the removal handler's.
+		armed(22, { mergeState: "UNSTABLE", enqueues: [{ createdAt: at(2), actor: "maintainer" }] }),
+		// Its required checks failed, or it conflicts: it needs /quest-iterate and a new pick.
+		armed(23, { mergeState: "BLOCKED" }),
+		armed(24, { mergeState: "DIRTY" }),
+		// GitHub has not listed the push of its head yet.
+		armed(25),
+		// In the queue already, or never armed.
+		armed(26, { queued: at(3) }),
+		{ number: 27, head: HEAD, enqueues: [], removals: [] },
+	]);
+	github.unlisted = [25];
+	github.now = Date.parse(at(4));
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toEqual([]);
+
+	github.pulls[0].mergeState = "HAS_HOOKS";
+	github.unlisted = [];
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
+		`enqueued 20 ${HEAD}`,
+		`enqueued 25 ${HEAD}`,
+	]);
+	expect(github.mutations).toEqual([`enqueuePullRequest 20 ${HEAD}`, `enqueuePullRequest 25 ${HEAD}`]);
+	// Queued now: nothing more to do.
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toHaveLength(2);
+});
+
+test("a refused enqueue of an armed pick is reported once and retried, and says nothing when GitHub queued it first", async () => {
+	const state = tempDir();
+	const github = world([
+		{ number: 30, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		{ number: 31, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+	]);
+	github.now = Date.parse(at(4));
+	let refusing = true;
+	github.refuseEnqueue = (pull) => {
+		if (pull.number === 31) {
+			// GitHub moved it first, between the pass's read and its enqueue.
+			pull.queued = at(4);
+			return "Pull request is already in the merge queue";
+		}
+		return refusing ? "Pull request is not mergeable" : undefined;
+	};
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
+		`refused 30 ${HEAD}: GitHub GraphQL error: Pull request is not mergeable`,
+	]);
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toEqual([
+		`enqueuePullRequest 30 ${HEAD}`,
+		`enqueuePullRequest 31 ${HEAD}`,
+		`enqueuePullRequest 30 ${HEAD}`,
+	]);
+	refusing = false;
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([`enqueued 30 ${HEAD}`]);
+	expect(JSON.parse(readFileSync(join(state, "watch.json"), "utf8")).refused).toEqual({});
+});
+
+test("an armed pick withdrawn or retargeted while the pass reads it is not enqueued", async () => {
+	const state = tempDir();
+	const github = world([
+		{ number: 32, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		{ number: 33, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		{ number: 34, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+	]);
+	github.now = Date.parse(at(4));
+	github.onActivity = (pull) => {
+		if (pull.number === 32) pull.armed = undefined;
+		if (pull.number === 33) pull.base = "release";
+		// Disabled and armed again: a new pick, which the next pass weighs on its own.
+		if (pull.number === 34) pull.armed = at(3);
+	};
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toEqual([]);
+});
+
 test("the watcher's tokens ask for writes only with a fixer, and pushes for workflows only when they carry one", () => {
-	expect(watchPermissions(false)).toEqual({ api: { contents: "read", pull_requests: "write", actions: "read" } });
+	expect(watchPermissions(false)).toEqual({
+		api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" },
+	});
 	expect(watchPermissions(true)).toEqual({
 		api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" },
 		push: { contents: "write", pull_requests: "write" },
@@ -1033,6 +1146,11 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(requeued).toContain(
 			"unchanged, since the land fixer judged the failure flaky: `just test: render_timeout`",
 		);
+
+		// The merge's checks passed, but GitHub left the armed pick out of the queue: the watcher enqueues it.
+		github.pulls.find((pull) => pull.number === 3)!.mergeState = "CLEAN";
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`enqueued 3 ${merged()}`]);
+		expect(github.mutations.at(-1)).toBe(`enqueuePullRequest 3 ${merged()}`);
 	});
 
 	test("a Dependabot pick by the App is fixed like any other, until it is flaky three times in a row", async () => {

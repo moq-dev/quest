@@ -84,8 +84,8 @@ Decision prompts, selected options marked ✅:
   - ✅ GitHub's records only. Drop the comment and `pick.ts`. The watcher
     reads queue events and auto-merge state. A pick GitHub refuses fails the
     command, and /quest-merge recommends /quest-iterate as it does today.
-    `bad-picks.md` shrinks to enqueueing PRs with auto-merge armed that
-    GitHub never queued
+    Bad picks shrinks to enqueueing PRs with auto-merge armed that GitHub
+    never queued, which `quest land watch` now does
     ([community#209348](https://github.com/orgs/community/discussions/209348)).
   - Comment only on refusal
   - Keep the comment on every pick
@@ -101,8 +101,7 @@ Decision prompts, selected options marked ✅:
   [community#50327](https://github.com/orgs/community/discussions/50327)).
   /quest-merge already refuses heads with failing checks or conflicts, so a
   refusal only happens if the base moves between that check and the enqueue.
-  See `quest land watch` (`src/cli/land-watch.ts`) and
-  [Bad picks](/quest/m0/queue-watcher/bad-picks.md).
+  See `quest land watch` (`src/cli/land-watch.ts`, `enqueueArmed`).
 - Milestone:
   - ✅ m0, at the top
 
@@ -130,7 +129,6 @@ Shared shape, for the children to follow:
 
 ## Required
 
-- [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - a pick whose auto-merge is armed on a ready PR GitHub never queued is enqueued at the head it was armed on
 - [Watcher on the host](/quest/m0/queue-watcher/host.md) - kixelated/nixos runs the watcher for moq-dev/moq beside its fixer container
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - condition: quest, rind and rust2 are cut over; rind and rust2 each land a PR, and a fork PR lands
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval

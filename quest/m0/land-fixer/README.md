@@ -51,8 +51,8 @@ Decision prompts, selected options marked ✅:
   - Yes, as stated (triage and local mergeability stay separate)
   - Narrower: only the attempt budget and offline builds
   - ✅ Broader: also fold batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
-    and [Local mergeability](/quest/m0/queue-watcher/bad-picks.md) into
-    this epic
+    and Local mergeability (later Bad picks, finished by `quest land watch`
+    enqueueing armed picks GitHub never queued) into this epic
 - How attempts count: unlimited while progressing, with three stop rules
   ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)).
 - How the fixer gets dependencies:
@@ -102,8 +102,7 @@ Decision prompts, selected options marked ✅:
   disables auto-merge. Batch triage
   ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) built this parking:
   a PR is parked while a fixer job holds it (`src/cli/land-park.ts`), and
-  [Local mergeability](/quest/m0/queue-watcher/bad-picks.md) follows the same
-  rule.
+  Local mergeability was to follow the same rule.
 - Audit of the merge-queue plan, 2026-11-01 (an independent read-only
   agent; the maintainer then decided each point). On moq over 24 hours: 128
   landed and 390 ejected; 66 of 138 sandbox checks failed; batches stayed at
@@ -136,8 +135,8 @@ Decision prompts, selected options marked ✅:
   the attempt budget (now the stop rules,
   [moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)),
   local mergeability and CI-failure parking (then
-  [Bad picks](/quest/m0/queue-watcher/bad-picks.md), dropped 2026-11-02: a
-  pick GitHub refuses fails `quest merge` instead), and flaky tests (done
+  Bad picks, dropped 2026-11-02: a pick GitHub refuses fails `quest merge`
+  instead, and the watcher only enqueues armed picks GitHub never queued), and flaky tests (done
   without the rerun in [moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406)).
   Deleted: the batch quest check, pre-checks, and throughput tuning, which
   only served batches (the fixer cap and reasoning effort moved to the
