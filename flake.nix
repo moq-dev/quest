@@ -82,21 +82,26 @@
           };
           apps.default = flake-utils.lib.mkApp { drv = quest; };
           devShells.default = pkgs.mkShell {
-            packages = with pkgs; [
-              # Installs dependencies, runs every script and tool, and compiles the release binaries.
-              bun
-              # `quest resolve` for the merge driver; `just` and `bun run quest` run the checkout.
-              questPinned
-              just
-              jq
-              git
-              gh
-              direnv
-              actionlint
-              shellcheck
-              shfmt
-              nixfmt
-            ];
+            packages =
+              with pkgs;
+              [
+                # Installs dependencies, runs every script and tool, and compiles the release binaries.
+                bun
+                # `quest resolve` for the merge driver; `just` and `bun run quest` run the checkout.
+                questPinned
+                just
+                jq
+                git
+                gh
+                direnv
+                actionlint
+                shellcheck
+                shfmt
+                nixfmt
+              ]
+              # `flock` (the land daemon's repository lock) and `script` (the tests' terminal), which
+              # self-hosted NixOS runners don't otherwise provide.
+              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.util-linux ];
           };
           formatter = pkgs.nixfmt;
           checks = {
