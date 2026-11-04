@@ -35,6 +35,12 @@ export function pin(sha: string): string {
 /** How a `quest land serve` instance lands each PR: as a squash commit, or as a merge commit keeping its ancestry. */
 export type LandMethod = "squash" | "merge";
 
+/**
+ * How many times the gate retries while GitHub catches up on a push, 15.5 s of backoff in all. A
+ * merge still unsettled after them throws, and the next round rebuilds the queue as GitHub then shows it.
+ */
+export const SETTLE_RETRIES = 5;
+
 /** The repository setting that allows each merge method. */
 export const ALLOWS: Record<Method, string> = {
 	merge: "allow_merge_commit",

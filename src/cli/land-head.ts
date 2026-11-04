@@ -13,6 +13,7 @@ import {
 	type RemoteRead,
 	mergeBase,
 	resolveQueue,
+	SETTLE_RETRIES,
 	tryGit,
 	type Entry,
 	type Plan,
@@ -223,24 +224,41 @@ export async function finishFallback(
 	}
 	// The commit is on the base. Every step below is safe to repeat, so a restart resumes where it stopped.
 	const github = new GitHub(deps);
+	// A merge commit brings the head into the base, and GitHub marks a PR merged once a push does,
+	// though its documentation names only pushes to the default branch. A close would race that, so
+	// it waits for GitHub first and closes only a PR GitHub has not marked. A squash never marks it.
+	const merged = plan.method === "merge" && (await markedMerged(github, entry));
 	const issue = `/repos/${plan.repository}/issues/${entry.number}`;
 	const marker = `<!-- quest land: landed ${commit} -->`;
 	const comments = await github.all(`${issue}/comments?per_page=100`);
 	if (!comments.some((comment) => string(comment.body).includes(marker))) {
 		const url = `https://github.com/${plan.repository}/commit/${commit}`;
-		// A merge commit brings the head into the base, which GitHub shows as merged; a squash does not.
-		const why =
-			plan.method === "squash" ? "; GitHub cannot show a fork PR as merged without a push to its branch" : "";
+		const why = merged
+			? ""
+			: plan.method === "squash"
+				? "; GitHub cannot show a fork PR as merged without a push to its branch"
+				: "; GitHub did not mark this PR merged from that push";
 		await github.request(`${issue}/comments`, {
 			body: { body: `landed as [${commit}](${url}) by quest land${why}.\n\n${marker}` },
 		});
 	}
-	// GitHub marks a PR merged once a push brings its head into the base, as a merge commit's second
-	// parent does; closing it first would race that and leave it closed instead.
-	if (plan.method === "squash") await closeTested(github, plan, entry);
+	if (!merged) await closeTested(github, plan, entry);
 	unlinkSync(path);
 	forgetHeads(state, entry.number);
 	return `landed ${entry.number} ${commit}`;
+}
+
+/** Whether GitHub marks the PR merged within its settling time after the base push. */
+async function markedMerged(github: GitHub, entry: Entry): Promise<boolean> {
+	for (let attempt = 0; ; attempt++) {
+		const data = await github.graphql("query($id: ID!) { node(id: $id) { ... on PullRequest { state } } }", {
+			id: entry.id,
+		});
+		const state = object(data.node).state;
+		if (state === "MERGED") return true;
+		if (state !== "OPEN" || attempt >= SETTLE_RETRIES) return false;
+		await github.pause(500 * 2 ** attempt);
+	}
 }
 
 /**

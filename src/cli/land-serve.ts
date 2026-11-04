@@ -31,6 +31,7 @@ import {
 	ejection,
 	git,
 	type LandMethod,
+	SETTLE_RETRIES,
 	readRemote,
 	type Overlap,
 	type RemoteRead,
@@ -344,12 +345,6 @@ async function reportStalled(github: GitHub, plan: Plan, state: string, now: num
 
 type MergeResult =
 	{ sha: string } | { reason: "head_moved" | "merge_conflict" | "merge_refused"; detail: string } | null;
-
-/**
- * How many times a merge is retried while GitHub catches up on a push, 15.5 s of backoff in all. A
- * merge still unsettled after them throws, and the next round rebuilds the queue as GitHub then shows it.
- */
-const SETTLE_RETRIES = 5;
 
 /**
  * Retry only GitHub's pending mergeability or base refresh. Any other refusal, such as `method` being

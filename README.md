@@ -760,7 +760,8 @@ If the PR branch push is refused for permissions, the daemon instead pushes the
 tested commit to the base as a fast-forward, leased on the expected parent. It
 comments on the PR with a link to the landed commit and closes it, so a squashed
 fork PR shows as closed rather than merged. A merge commit brings the PR's head
-into the base, so GitHub shows that PR as merged and it needs no close. A PR branch lease
+into the base, so the daemon first waits about 15 seconds for GitHub to mark
+that PR merged, and closes it only if GitHub does not. A PR branch lease
 failure ejects `head_moved`. A locally prepared or API tree mismatch, or a merge
 commit with another second parent, logs CRITICAL. A PR whose prepared tree
 differs ejects alone as `tree_mismatch`; an already-landed one stays merged. Either way, the rest of the batch stays queued

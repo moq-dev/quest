@@ -351,6 +351,9 @@ class Forge {
 			execFileSync("git", ["update-ref", "--stdin"], { cwd: this.origin, input: updates.join("") });
 	}
 
+	/** Whether GitHub marks a PR merged once a push brings its head into main, before each request. */
+	indirect = false;
+
 	/** GitHub's view after a landing: a PR whose head it had synced and that reached main merged. */
 	settle(): void {
 		const main = this.main();
@@ -395,6 +398,7 @@ class Forge {
 			fetch: async (input, init) => {
 				const number = /\/pulls\/(\d+)\/merge$/.exec(String(input))?.[1];
 				if (number && init?.method === "PUT") this.beforeMerge?.(Number(number));
+				if (this.indirect) this.settle();
 				this.sync();
 				// GitHub knows a branch the daemon pushed before it opens a PR from it.
 				if (String(input).endsWith("/pulls") && init?.method === "POST") {
@@ -622,25 +626,31 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		},
 	);
 
-	test("a fork's fallback base push keeps its head as the merge commit's second parent", async () => {
-		const forge = new Forge();
-		const one = forge.pull("Mine", { "mine.txt": "yes" });
-		const fork = forge.pull("Fork", { "fork.txt": "yes" }, { contributor: "friend", edits: false });
-		const head = fork.head!;
-		const deps = await forge.deps();
-		const plan = await resolveQueue(REPOSITORY, MERGE, deps);
-		const root = forge.clone();
-		const chain = await build(root, plan);
-		// The fork lands behind PR 1's merge, which GitHub made, so its tested link is reparented onto it.
-		const output = await serveBatch(root, plan, sandbox(), deps, async () => deps.token);
-		expect(output).toEqual([`landed 1 ${one.squash}`, `landed 2 ${forge.main()}`]);
-		expect(git(forge.origin, "show", "-s", "--format=%P", "main")).toBe(`${one.squash} ${head}`);
-		expect(git(forge.origin, "rev-parse", "main^{tree}")).toBe(chain.links[1].tree);
-		expect(forge.comment(2)).not.toContain("GitHub cannot show");
-		// GitHub marks it merged from the pushed head, so the gate leaves it open rather than race that.
-		expect(fork.closed).not.toBe(true);
-		expect(forge.merges.map(({ number }) => number)).toEqual([1]);
-	});
+	test.each([true, false])(
+		"a fork's fallback base push keeps its head as the merge commit's second parent (GitHub marks it merged %s)",
+		async (indirect) => {
+			const forge = new Forge();
+			forge.indirect = indirect;
+			const one = forge.pull("Mine", { "mine.txt": "yes" });
+			const fork = forge.pull("Fork", { "fork.txt": "yes" }, { contributor: "friend", edits: false });
+			const head = fork.head!;
+			const deps = await forge.deps();
+			const plan = await resolveQueue(REPOSITORY, MERGE, deps);
+			const root = forge.clone();
+			const chain = await build(root, plan);
+			// The fork lands behind PR 1's merge, which GitHub made, so its tested link is reparented onto it.
+			const output = await serveBatch(root, plan, sandbox(), deps, async () => deps.token);
+			expect(output).toEqual([`landed 1 ${one.squash}`, `landed 2 ${forge.main()}`]);
+			expect(git(forge.origin, "show", "-s", "--format=%P", "main")).toBe(`${one.squash} ${head}`);
+			expect(git(forge.origin, "rev-parse", "main^{tree}")).toBe(chain.links[1].tree);
+			expect(forge.comment(2)).not.toContain("GitHub cannot show");
+			// The gate waits for GitHub to mark it merged from the pushed head, and closes it only when GitHub does not.
+			expect(fork.merged === true).toBe(indirect);
+			expect(fork.closed).toBe(true);
+			expect(forge.comment(2)?.includes("GitHub did not mark this PR merged")).toBe(!indirect);
+			expect(forge.merges.map(({ number }) => number)).toEqual([1]);
+		},
+	);
 
 	test.each(["refused", "moved"])("fallback base push %s stops without closing", async (mode) => {
 		const forge = new Forge();
