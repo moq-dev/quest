@@ -824,10 +824,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("hook")
 		.summary("Handle a Claude Code worktree or subagent hook event read on stdin")
 		.description(
-			"Handle the Claude Code hook event whose JSON input arrives on stdin; `quest init` installs it in " +
-				".claude/settings.json for " +
+			"Handle the Claude Code hook event whose JSON input arrives on stdin, for " +
 				HOOK_EVENTS.join(", ") +
-				".\n\n" +
+				". Add it to your own Claude Code settings for those events to opt in, as the README describes.\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
 				"initializes its submodules recursively, and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
@@ -1211,16 +1210,24 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	program
 		.command("init")
 		.description(
-			"Install skill stubs, a quest root, agent pointers, Claude Code worktree hooks, and the merge driver for this repository",
+			"Install skill stubs, a quest root, agent pointers, and the merge driver for this repository, and remove " +
+				"the Claude Code worktree hooks earlier versions added to .claude/settings.json",
 		)
 		.action(() => {
 			const changes = init(root());
-			for (const line of theme ? theme.init(changes) : changes) print(line);
+			for (const { hooks = [] } of changes)
+				for (const hook of hooks)
+					warn(
+						`removed the ${hook.event} hook \`${hook.command}\` from .claude/settings.json; ` +
+							"Quest's worktree hooks are now opt-in in your own Claude settings (see the README)",
+					);
+			const paths = changes.map((change) => change.path);
+			for (const line of theme ? theme.init(paths) : paths) print(line);
 		});
 
 	program
 		.command("uninstall")
-		.description("Remove Quest stubs, markers, hooks, and the merge driver installed by `quest init`")
+		.description("Remove Quest stubs, markers, worktree hooks, and the merge driver from this repository")
 		.action(() => {
 			const changes = uninstall(root());
 			for (const line of theme ? theme.uninstall(changes) : changes) print(line);

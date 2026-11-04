@@ -73,5 +73,4 @@ moq-dev/moq's `.codex/hooks/direnv.sh`.
 
 ## Required
 
-- [quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md) - `quest init` stops writing hook entries and removes the ones it or a wrapper wrote; the docs describe the hooks as user-level opt-in
 - [Repositories drop dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - quest, moq, moq.pro, rind, and rust2 drop their dev-shell hooks, Quest worktree hooks, and `nix develop` instructions

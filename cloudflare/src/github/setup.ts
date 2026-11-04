@@ -120,11 +120,12 @@ export function planCheck(changes: InitChange[], paths: Iterable<string>): strin
 /** What each planned change is for, in the pull request body. */
 function purpose(change: InitChange): string {
 	const path = change.path;
+	if (change.hooks?.length)
+		return `removes Quest's worktree hooks (${change.hooks.map((hook) => `\`${hook.command}\` for ${hook.event}`).join(", ")}), which each user now opts into in their own Claude settings`;
 	if (change.content === null) return "removes the stub of a skill Quest no longer ships";
 	if (path.endsWith("/SKILL.md")) return "a skill stub";
 	if (path === "quest/README.md") return "the quest tree's root, with the project's goal";
 	if (path === ".gitattributes") return "routes `quest/**` through the `quest` merge driver";
-	if (path === ".claude/settings.json") return "Claude Code's worktree hooks, which run `quest worktree hook`";
 	return "points agents at `quest context`";
 }
 

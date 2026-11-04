@@ -1296,7 +1296,7 @@ The experimental `quest worktree` commands share one disk budget across this
 user's repositories and release a checkout's disk by deleting its declared
 scratch in place. They only operate on Git worktrees they create; use the
 owning application for Codex or other managed checkouts. Claude Code's
-checkouts are Quest's own once `quest init` installs its hooks (see
+checkouts are Quest's own once you opt into its hooks (see
 [Claude Code checkouts](#claude-code-checkouts)).
 
 Set a shared capacity and an explicit reservation in bytes, covering the
@@ -1395,11 +1395,31 @@ stolen. This initial interface refuses unknown or changed checkout ownership.
 
 ### Claude Code checkouts
 
-`quest init` adds hook entries to the repository's `.claude/settings.json` that
-run `quest worktree hook` for Claude Code's `WorktreeCreate`, `WorktreeRemove`,
-`SubagentStart`, and `SubagentStop` events, so `quest` must be on the `PATH`
+Quest's hooks for Claude Code are an opt-in each user adds to their own
+settings, `~/.claude/settings.json`, so they apply in every repository that
+user opens and no repository forces them on its contributors. Merge these
+entries into the file's `hooks`:
+
+```json
+{
+  "hooks": {
+    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
+    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }]
+  }
+}
+```
+
+Only one hook can manage Claude's worktrees, so remove any other
+`WorktreeCreate` or `WorktreeRemove` hook first. `quest` must be on the `PATH`
 Claude Code runs hooks with. For `claude --bg` and agent view, that is the
-environment of the shell that started the session. The hook then creates every worktree Claude makes
+environment of the shell that started the session. Earlier versions of
+`quest init` wrote these entries to a repository's `.claude/settings.json`;
+`quest init` and `quest uninstall` now remove them there, along with wrappers
+that run Quest, such as `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`.
+
+The hook then creates every worktree Claude makes
 in the repository: for `--worktree`, `EnterWorktree`, isolated subagents and
 workflow agents, background sessions, and `claude remote-control --spawn
 worktree`. Claude no longer copies `.worktreeinclude` files into them.

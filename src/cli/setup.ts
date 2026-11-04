@@ -22,29 +22,28 @@ import {
 	ATTRIBUTES_LINE,
 	CLAUDE_SETTINGS,
 	type Checkout,
-	HOOK_EVENTS,
+	type InitChange,
 	type Kind,
 	REFERENCE_MARKER,
 	SKILL_DIRS,
 	installedStubs,
-	isQuestHook,
 	lines,
 	newline,
-	parseSettings,
 	planInit,
-	renderSettings,
+	removeHooks,
 } from "../core";
 import { gitOutput } from "./claims";
 import { DRIVER, OLD_DRIVERS } from "./resolve";
 import { SKILLS } from "./skills";
 
-export { ATTRIBUTES_LINE, HOOK_COMMAND, REFERENCE_LINE } from "../core";
+export { ATTRIBUTES_LINE, REFERENCE_LINE } from "../core";
 
 /**
- * Install Quest stubs and markers under `root`. Returns the paths it changed, relative to `root`.
- * A conflict throws before anything is written, so a refused init leaves the repository as it was.
+ * Install Quest stubs and markers under `root`, and remove the hook entries earlier versions wrote.
+ * Returns the changes it made. A conflict throws before anything is written, so a refused init leaves
+ * the repository as it was.
  */
-export function init(root: string): string[] {
+export function init(root: string): InitChange[] {
 	const changes = planInit(checkout(root), SKILLS);
 	for (const { path, content } of changes) {
 		if (content === null) {
@@ -56,7 +55,7 @@ export function init(root: string): string[] {
 		}
 	}
 	register(root);
-	return changes.map((change) => change.path);
+	return changes;
 }
 
 /** The checkout under `root`, as the core's file plan reads it. */
@@ -123,7 +122,12 @@ function unregister(root: string): void {
 /** Remove Quest stubs and markers under `root`. Returns the paths it changed, relative to `root`. */
 export function uninstall(root: string): string[] {
 	const changes: string[] = [];
-	if (uninstallHooks(root)) changes.push(CLAUDE_SETTINGS);
+	const settings = isFile(join(root, CLAUDE_SETTINGS)) ? removeHooks(read(root, CLAUDE_SETTINGS)) : undefined;
+	if (settings !== undefined) {
+		if (settings.content === null) rmSync(join(root, CLAUDE_SETTINGS));
+		else writeFileSync(join(root, CLAUDE_SETTINGS), settings.content);
+		changes.push(CLAUDE_SETTINGS);
+	}
 	for (const skills of SKILL_DIRS) {
 		if (!isRealDir(join(root, skills))) continue;
 		for (const dir of installedStubs(checkout(root), skills)) changes.push(removeStub(root, dir));
@@ -216,40 +220,5 @@ function removeLine(root: string, path: string, marker: string): boolean {
 	} else {
 		writeFileSync(join(root, path), `${kept}${eol}`);
 	}
-	return true;
-}
-
-/**
- * Remove exactly Quest's hook handlers, then the groups, events, and hooks object they leave empty,
- * deleting the file when nothing else remains. A file that is missing or malformed is left alone.
- */
-function uninstallHooks(root: string): boolean {
-	let parsed;
-	try {
-		parsed = isFile(join(root, CLAUDE_SETTINGS)) ? parseSettings(read(root, CLAUDE_SETTINGS)) : undefined;
-	} catch {
-		return false;
-	}
-	if (!parsed?.settings.hooks) return false;
-	const { settings, indent, eol } = parsed;
-	const hooks = settings.hooks!;
-	let changed = false;
-	for (const event of HOOK_EVENTS) {
-		const groups = hooks[event];
-		if (!groups) continue;
-		const kept = groups.flatMap((group) => {
-			const handlers = group.hooks ?? [];
-			const others = handlers.filter((handler) => !isQuestHook(handler));
-			if (others.length === handlers.length) return [group];
-			changed = true;
-			return others.length ? [{ ...group, hooks: others }] : [];
-		});
-		if (kept.length) hooks[event] = kept;
-		else delete hooks[event];
-	}
-	if (!changed) return false;
-	if (Object.keys(hooks).length === 0) delete settings.hooks;
-	if (Object.keys(settings).length === 0) rmSync(join(root, CLAUDE_SETTINGS));
-	else writeFileSync(join(root, CLAUDE_SETTINGS), renderSettings(settings, indent, eol));
 	return true;
 }

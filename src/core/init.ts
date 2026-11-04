@@ -6,7 +6,9 @@
 // The plan touches only skill stubs (writing missing or outdated ones and
 // removing those of retired skills), one reference line in the root agent
 // instructions, one `.gitattributes` line, `quest/README.md` when missing, and
-// Quest's hook entries in `.claude/settings.json`.
+// the hook entries earlier versions wrote to `.claude/settings.json`, which it
+// removes: Quest's worktree hooks are a user-level opt-in, since a
+// repository's settings would force them on every contributor.
 
 /** Installed skills carry this prefix so they don't collide with a repository's own. */
 export const PREFIX = "quest-";
@@ -32,17 +34,8 @@ export const SKILL_DIRS = [".claude/skills", ".agents/skills"] as const;
 /** Routes quest files through the `quest` merge driver; uninstall removes lines starting with it. */
 export const ATTRIBUTES_LINE = "quest/** merge=quest";
 
-/** Claude Code's shared project settings, where init installs the worktree lifecycle hooks. */
+/** Claude Code's shared project settings, where earlier versions installed the worktree hooks. */
 export const CLAUDE_SETTINGS = ".claude/settings.json";
-
-/** The one command each installed hook entry runs; the logic lives in the binary, so upgrades never rewrite it. */
-export const HOOK_COMMAND = "quest worktree hook";
-
-/** The Claude Code events `quest worktree hook` handles, in the order `quest init` installs them. */
-export const HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"] as const;
-
-/** Events whose single hook decides the outcome, so another hook for them conflicts with Quest's. */
-const EXCLUSIVE_EVENTS = new Set<string>(["WorktreeCreate", "WorktreeRemove"]);
 
 /** The quest tree's root, with the project's goal or a placeholder for it. */
 export function questReadme(goal?: string): string {
@@ -76,10 +69,15 @@ export interface Stub {
 	stub: string;
 }
 
-/** One file the plan sets to `content`, or, with null content, a retired stub it deletes along with its directory once empty. */
+/**
+ * One file the plan sets to `content`, or, with null content, deletes along with its directory once
+ * empty: a retired stub, or settings left empty once Quest's hooks are removed.
+ */
 export interface InitChange {
 	path: string;
 	content: string | null;
+	/** The Quest hook entries removed from Claude Code's settings by this change. */
+	hooks?: QuestHook[];
 }
 
 /** Init cannot install because of what sits at `path`; the repository needs a person's judgement. */
@@ -136,12 +134,11 @@ export function planInit(repo: Checkout, stubs: readonly Stub[], options: { goal
 	const instructions = ["AGENTS.md", "CLAUDE.md"].find((name) => repo.stat(name) === "file") ?? "AGENTS.md";
 	checkPath(repo, instructions, "file");
 	checkPath(repo, ".gitattributes", "file");
-	checkPath(repo, CLAUDE_SETTINGS, "file");
-	const settings = installHooks(repo);
+	const settings = repo.stat(CLAUDE_SETTINGS) === "file" ? removeHooks(repo.read(CLAUDE_SETTINGS)) : undefined;
 
 	const changes: InitChange[] = [...written, ...retired.map((dir) => ({ path: `${dir}/SKILL.md`, content: null }))];
 	if (repo.lstat(readme) === null) changes.push({ path: readme, content: questReadme(options.goal) });
-	if (settings !== undefined) changes.push({ path: CLAUDE_SETTINGS, content: settings });
+	if (settings !== undefined) changes.push({ path: CLAUDE_SETTINGS, ...settings });
 	for (const [path, marker, line, old] of [
 		[instructions, REFERENCE_MARKER, REFERENCE_LINE, OLD_REFERENCE_LINES],
 		[".gitattributes", ATTRIBUTES_LINE, ATTRIBUTES_LINE, []],
@@ -241,70 +238,67 @@ function appendLine(content: string, marker: string, line: string, old: readonly
 	return `${content}${line}${eol}`;
 }
 
-/** A settings object as Claude Code reads it: hook groups per event, each with handlers. */
-export type Settings = { hooks?: Record<string, { hooks?: unknown[] }[]> } & Record<string, unknown>;
+/** A hook entry that runs Quest: the event it handles and its command. */
+export interface QuestHook {
+	event: string;
+	command: string;
+}
 
 const record = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
-export function isQuestHook(handler: unknown): boolean {
-	return record(handler) && handler.type === "command" && handler.command === HOOK_COMMAND;
+/**
+ * The command of a hook handler that runs `quest worktree hook`, directly or through a wrapper that names
+ * the `quest` executable, package, or flake attribute as a word, such as
+ * `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`. Another tool's command that merely ends in
+ * `worktree hook` is not Quest's.
+ */
+function questCommand(handler: unknown): string | undefined {
+	if (!record(handler) || handler.type !== "command" || typeof handler.command !== "string") return undefined;
+	const command = handler.command.trim();
+	const runner = /^(.*?)(?:^|\s)worktree hook$/.exec(command)?.[1];
+	return runner !== undefined && /(?:^|[\s/#"'])quest(?=$|[\s"'@])/.test(runner) ? command : undefined;
 }
 
 /**
- * Claude Code's settings file parsed and checked for the shape init edits,
- * with its formatting. Throws an `InitRefused` naming the file when it is not.
+ * Claude Code settings `text` without Quest's hook handlers, nor the groups, events, and hooks object they
+ * leave empty, along with the handlers removed. Its content is null when nothing else remains, and the
+ * result undefined when there is nothing to remove or the settings are malformed, which Claude Code
+ * rejects whole, so their hooks never run.
  */
-export function parseSettings(text: string): { settings: Settings; indent: string; eol: string } {
-	const invalid = (why: string) =>
-		new InitRefused(
-			CLAUDE_SETTINGS,
-			`${CLAUDE_SETTINGS} ${why}; fix it before running \`quest init\` or \`quest uninstall\``,
-		);
+export function removeHooks(text: string): { content: string | null; hooks: QuestHook[] } | undefined {
 	let settings: unknown;
 	try {
 		settings = JSON.parse(text);
 	} catch {
-		throw invalid("is not valid JSON");
+		return undefined;
 	}
-	if (!record(settings)) throw invalid("is not a JSON object");
-	if (settings.hooks !== undefined) {
-		if (!record(settings.hooks)) throw invalid("has hooks that are not an object");
-		for (const [event, groups] of Object.entries(settings.hooks))
-			if (!Array.isArray(groups) || !groups.every((group) => record(group) && Array.isArray(group.hooks ?? [])))
-				throw invalid(`has ${event} hooks that are not a list of hook groups`);
+	if (!record(settings) || !record(settings.hooks)) return undefined;
+	const removed: QuestHook[] = [];
+	const kept: [string, unknown][] = [];
+	for (const [event, groups] of Object.entries(settings.hooks)) {
+		if (!Array.isArray(groups) || !groups.every((group) => record(group) && Array.isArray(group.hooks ?? [])))
+			return undefined;
+		const before = removed.length;
+		const remaining = (groups as { hooks?: unknown[] }[]).flatMap((group) => {
+			const handlers = group.hooks ?? [];
+			const others = handlers.filter((handler) => {
+				const command = questCommand(handler);
+				if (command !== undefined) removed.push({ event, command });
+				return command === undefined;
+			});
+			if (others.length === handlers.length) return [group];
+			return others.length ? [{ ...group, hooks: others }] : [];
+		});
+		if (removed.length === before) kept.push([event, groups]);
+		else if (remaining.length) kept.push([event, remaining]);
 	}
-	return { settings: settings as Settings, indent: /\n([ \t]+)"/.exec(text)?.[1] ?? "  ", eol: newline(text) };
-}
-
-/** The settings file's text, in the formatting `parseSettings` read. */
-export function renderSettings(settings: Settings, indent: string, eol: string): string {
-	return `${JSON.stringify(settings, null, indent).replaceAll("\n", eol)}${eol}`;
-}
-
-/**
- * The settings file with one Quest hook group added for each event that lacks one, or undefined when
- * nothing changes. Another hook for an event whose single hook decides the outcome is a conflict.
- */
-function installHooks(repo: Checkout): string | undefined {
-	const { settings, indent, eol } =
-		repo.stat(CLAUDE_SETTINGS) === "file"
-			? parseSettings(repo.read(CLAUDE_SETTINGS))
-			: { settings: {} as Settings, indent: "  ", eol: "\n" };
-	const hooks = (settings.hooks ??= {});
-	let changed = false;
-	for (const event of HOOK_EVENTS) {
-		const groups = (hooks[event] ??= []);
-		const handlers = groups.flatMap((group) => group.hooks ?? []);
-		if (EXCLUSIVE_EVENTS.has(event) && handlers.some((handler) => !isQuestHook(handler)))
-			throw new InitRefused(
-				CLAUDE_SETTINGS,
-				`${CLAUDE_SETTINGS} already has a ${event} hook, and only one can manage Claude's worktrees; ` +
-					"remove it before running `quest init`",
-			);
-		if (handlers.some(isQuestHook)) continue;
-		groups.push({ hooks: [{ type: "command", command: HOOK_COMMAND }] });
-		changed = true;
-	}
-	return changed ? renderSettings(settings, indent, eol) : undefined;
+	if (!removed.length) return undefined;
+	// Rebuilt rather than edited, so an event named `__proto__` stays an ordinary key.
+	if (kept.length) settings.hooks = Object.fromEntries(kept);
+	else delete settings.hooks;
+	if (Object.keys(settings).length === 0) return { content: null, hooks: removed };
+	const indent = /\n([ \t]+)"/.exec(text)?.[1] ?? "  ";
+	const eol = newline(text);
+	return { content: `${JSON.stringify(settings, null, indent).replaceAll("\n", eol)}${eol}`, hooks: removed };
 }
