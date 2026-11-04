@@ -148,7 +148,7 @@ const PROXIES = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"];
 
 /** A command connecting to the Unix socket at `path`, printing whether it did. */
 function connectCommand(path: string): string {
-	const script = `require("node:net").connect(${JSON.stringify(path)}).on("connect", () => process.exit(console.log("CONNECTED"))).on("error", (e) => console.log(String(e)))`;
+	const script = `const s = require("node:net").connect(${JSON.stringify(path)}).on("connect", () => (console.log("CONNECTED"), s.end())).on("error", (e) => console.log(String(e)))`;
 	return `${quote(bun)} -e ${quote(script)}`;
 }
 
@@ -314,7 +314,10 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 			expect(environment, `a command's environment holds ${secret}`).not.toContain(secret);
 		expect(environment).toContain(`HOME=${join(sandbox.tmp, "home")}`);
 		expect(environment, "srt replaced the attempt's TMPDIR").toContain(`TMPDIR=${sandbox.tmp}\n`);
-		const open = [...descriptors!.matchAll(/^fd (\d+) (.*)$/gm)].map(([, fd, target]) => ({ fd: Number(fd), target }));
+		const open = [...descriptors!.matchAll(/^fd (\d+) (.*)$/gm)].map(([, fd, target]) => ({
+			fd: Number(fd),
+			target,
+		}));
 		expect(
 			open.map(({ fd }) => fd),
 			`no descriptors listed\n${descriptors}`,
@@ -489,10 +492,10 @@ function shell(command: string, cwd: string): Promise<string> {
 	});
 }
 
-/** A Unix socket server at `path` that accepts and drops each connection. */
+/** A Unix socket server at `path` that accepts each connection and ends it once the client does. */
 function listenUnix(path: string): Promise<NetServer> {
 	return new Promise((resolve, reject) => {
-		const created = createNetServer((connection) => connection.destroy());
+		const created = createNetServer(() => {});
 		created.once("error", reject);
 		created.listen(path, () => resolve(created));
 	});

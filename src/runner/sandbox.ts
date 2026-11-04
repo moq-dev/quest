@@ -111,14 +111,11 @@ export function runtimeSettings(sandbox: Sandbox, denyWrite: string[] = []): Rec
 			allowWrite: [sandbox.cwd, sandbox.tmp],
 			// srt binds its own /tmp/claude in whenever it exists, whoever made it, and no
 			// denyRead hides it; this keeps commands from writing there, though not from reading it.
-			denyWrite: [...denyWrite, SRT_OWN_TMP],
+			denyWrite: [...denyWrite, "/tmp/claude"],
 		},
 		enableWeakerNestedSandbox: false,
 	};
 }
-
-/** The shared directory sandbox-runtime keeps open to its commands. */
-export const SRT_OWN_TMP = "/tmp/claude";
 
 /**
  * Why `srt` would let a job's commands make Unix sockets, or null when it
@@ -143,7 +140,11 @@ export function unixSocketRefusal(srt: string, env: NodeJS.ProcessEnv): string |
 			encoding: "utf8",
 			timeout: 30_000,
 		});
-		if (!probe.error && probe.status !== 0 && /\bsocket\(1, \d+, \d+\): Operation not permitted$/m.test(probe.stderr))
+		if (
+			!probe.error &&
+			probe.status !== 0 &&
+			/\bsocket\(1, \d+, \d+\): Operation not permitted$/m.test(probe.stderr)
+		)
 			return null;
 		const said =
 			probe.error?.message ?? (probe.stderr.trim().split("\n").at(-1) || `exit ${probe.status ?? probe.signal}`);

@@ -1168,7 +1168,9 @@ describe("runner adapters", () => {
 			return join(bin, "srt");
 		};
 		// What socat says when no seccomp filter stopped it making the socket.
-		srt(`echo 'socat[9] E connect(, AF=1 "/tmp/quest-probe-x/missing", 31): No such file or directory' >&2\nexit 1\n`);
+		srt(
+			`echo 'socat[9] E connect(, AF=1 "/tmp/quest-probe-x/missing", 31): No such file or directory' >&2\nexit 1\n`,
+		);
 		for (const name of ["opencode", "bwrap", "socat"]) {
 			writeFileSync(join(bin, name), "#!/bin/sh\n");
 			chmodSync(join(bin, name), 0o755);
@@ -1957,7 +1959,10 @@ describe("quest runner", () => {
 				allowRead: [checkout, repository, tmp],
 				allowWrite: [checkout, tmp],
 				// Nor can they write the opencode config the server would load.
-				denyWrite: [...[".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)), "/tmp/claude"],
+				denyWrite: [
+					...[".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
+					"/tmp/claude",
+				],
 			},
 			enableWeakerNestedSandbox: false,
 		});

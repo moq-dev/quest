@@ -1216,14 +1216,14 @@ sandbox, not a VM, and it narrows rather than removes the risk of running
 agent commands on your machine. On Linux, `just runner-sandbox` in this
 repository runs a scripted model through the pinned opencode and
 sandbox-runtime in a checkout that tries to read credentials, write outside its
-sandbox, plant opencode config, and reach the network, and fails if any attempt
-gets through. CI runs it nightly, outside the merge queue.
+sandbox, plant opencode config, reach the network, and connect to the Nix
+daemon's or another Unix socket, and fails if any attempt gets through. CI runs it nightly, outside the merge queue.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
-pins both) and unprivileged user namespaces, including the nested one Claude
-Code's seccomp helper makes inside the sandbox. Before taking jobs, `quest runner`
-runs a trivial command in nested sandbox namespaces and refuses to start if
-bubblewrap cannot make them. On Ubuntu 23.10 and later, AppArmor allows them
+pins both) and unprivileged user namespaces, including the nested one the
+seccomp helpers of Claude Code and sandbox-runtime make inside the sandbox.
+Before taking jobs, `quest runner` runs a trivial command in nested sandbox
+namespaces and refuses to start if bubblewrap cannot make them. On Ubuntu 23.10 and later, AppArmor allows them
 only to programs whose profile grants `userns`, so for the runner package's
 bubblewrap the refusal prints this profile, filled in with its Nix store path,
 and the commands that install it as `/etc/apparmor.d/quest-bwrap`:
@@ -1239,13 +1239,19 @@ profile quest-bwrap /nix/store/HASH-bubblewrap-VERSION/bin/bwrap flags=(unconfin
 
 It is the form Ubuntu gives other programs that sandbox themselves. Ubuntu's
 own `bwrap-userns-restrict` profile for `/usr/bin/bwrap` takes capabilities from
-the commands bubblewrap runs, which breaks Claude Code's seccomp helper, so a
+the commands bubblewrap runs, which breaks the seccomp helpers, so a
 system bwrap there is refused, and a second profile for it would disable both;
 use the runner package instead. The job's commands still get no user namespace
-of their own: Claude Code's seccomp helper refuses them one, and on opencode
-accounts bubblewrap does. The profile names one exact store path, since anyone
+of their own: the seccomp helper refuses them one. The profile names one exact store path, since anyone
 who can build with Nix can add a store path matching a glob, so a runner update
 that changes bubblewrap refuses to start until you install the profile it prints.
+
+For opencode accounts, `quest runner` also checks that sandbox-runtime keeps
+commands from making Unix sockets, which it does only with its seccomp helper,
+and refuses to start without it. nixpkgs' sandbox-runtime leaves the helper
+out, so the runner package builds it from sandbox-runtime's source. sandbox-runtime
+keeps its own `/tmp/claude` open to commands whenever it exists; they cannot
+write it, but can read it.
 
 Merge jobs retain existing PR submodule pointers when merging the base. Their
 `wait` tool wakes on GitHub webhook hints or reconnects and rereads the PR;
