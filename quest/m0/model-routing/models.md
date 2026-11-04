@@ -23,35 +23,25 @@ Decided 2026-11-04 (user, /quest-plan); the evidence is in
 - One model per size, or a ranked list?
   - ✅ A ranked list, so a usage limit falls through to the next entry
     (user, replacing "skip the quest and report the outage")
-- Which models? ✅ Grok for XS, Sol for S, Opus for M and up, each falling
-  back down its list (user). Implementation is coding; reviews may use
-  cheaper models ([Review by size](/quest/m0/model-routing/review-effort.md)).
-- Free models? ✅ Never (user): they are slow, and they may log or train on
-  a private repository's code.
-- A quest with an open decision? ✅ Routes one size up, so it prefers Opus
-  (user). The signal: a `Maintainer:` item under its `## Waiting`. An XL
-  stays XL.
+- Which models? ✅ Opus writes the code from S up, since it does a much
+  better job; Grok takes XS; Sol is the fallback through M; L and XL have
+  no fallback and wait for Opus (user, replacing earlier lists that led S
+  with Sol and listed DeepSeek and free models).
+- A quest with an open decision? ✅ Routes one size up (user). The signal:
+  a `Maintainer:` item under its `## Waiting`. An XL stays XL.
 
-The lists, pinned in a module `src/cli/review.ts` also imports:
+The lists, pinned in a module `src/cli/review.ts` also imports (user):
 
 | Size | Ranked harness, model, effort |
 |---|---|
-| XS | grok `grok-4.7` high → opencode `opencode-go/deepseek-v4-pro` high → codex `gpt-6.1-sol` medium |
-| S | codex `gpt-6.1-sol` high → claude `claude-opus-5-5` medium → grok `grok-4.7` high |
+| XS | grok `grok-4.7` high → codex `gpt-6.1-sol` medium |
+| S | claude `claude-opus-5-5` medium → codex `gpt-6.1-sol` high |
 | M | claude `claude-opus-5-5` high → codex `gpt-6.1-sol` xhigh |
-| L | claude `claude-opus-5-5` xhigh → codex `gpt-6.1-sol` xhigh |
-| XL | claude `claude-opus-5-5` xhigh → codex `gpt-6.1-sol` xhigh |
+| L | claude `claude-opus-5-5` xhigh |
+| XL | claude `claude-opus-5-5` xhigh |
 
-The first entry of each list is the user's, as are the Sol, Opus, and Grok
-efforts: Sol medium for XS, high for S, xhigh above; Opus high for M,
-xhigh for L and XL; Grok high everywhere (user, 2026-11-04). The rest of
-the fallbacks, the S list's Opus effort, DeepSeek's, and the opencode provider (OpenCode Go, the subscription kix
-already supports) are the agent's choice, for the
-[model check](/quest/m0/model-check.md) to retune.
-
-- Each entry also names its model's maker (Anthropic, OpenAI, xAI,
-  DeepSeek), which reviews use to pick a different maker than the
-  implementer.
+- Each entry names its model, so [reviews](/quest/m0/model-routing/review-effort.md)
+  never use the model that wrote the code.
 - `quest unblocked --json` adds the ranked list per quest, after the
   decision bump. An epic whose README carries no size has none; the
   spawner then inherits its own settings.
@@ -60,15 +50,15 @@ already supports) are the agent's choice, for the
   session's as a native sub-agent, and any other through `quest agent` on
   the logged-in account. When `quest agent` cannot start an entry (CLI
   missing, logged out) or the agent exits on a usage limit, move to the
-  next entry, resuming from the claim PR and checkout; report each
-  harness's outage once.
+  next entry, resuming from the claim PR and checkout. With no entry left,
+  skip the quest. Report each harness's outage once.
 - Docs: the README documents the lists, the decision bump, the override,
   and `quest unblocked --json`'s new field. The
   [model check](/quest/m1/model-check.md) audits the lists each milestone.
 
 ## Required
 
-- [More agent harnesses](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok and opencode as well as Claude Code and Codex
+- [Grok agents](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok as well as Claude Code and Codex
 
 ## Related
 

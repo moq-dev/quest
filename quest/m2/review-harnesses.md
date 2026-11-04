@@ -10,9 +10,9 @@ schema. `just review-sandbox`'s planted hostile repository proves both.
 
 ## Plan
 
-Decided 2026-11-04 (user, /quest-plan): reviews rank cheaper models,
-including Grok and DeepSeek through opencode, and `/quest-council` needs
-more reviewers than two.
+Decided 2026-11-04 (user, /quest-plan): `/quest-council` needs a reviewer
+per maker. Planned in m0 for ranked single reviews, it moved to m2 with
+the council once single reviews became Sol only (user, the same day).
 
 - Sandboxing is the work. The reviewer must not run code from the head or
   write anywhere. opencode already runs kix jobs inside srt
@@ -25,7 +25,7 @@ more reviewers than two.
   prompt, then the schema turn.
 - Report a logged-out CLI and a usage limit distinctly, as
   [Reviewer usage limits](/quest/m0/review-quota.md) does for the others,
-  so a ranked review list falls through.
+  so the council can run without that maker.
 - The [model check](/quest/m1/model-check.md)'s sandbox test covers all
   four reviewers from then on; the PR adds them to its Plan.
 

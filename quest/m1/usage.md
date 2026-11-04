@@ -39,11 +39,11 @@ Agent's choices, for the implementer to revisit:
 - A session belongs to a quest or PR by its working directory's checkout
   and branch: a quest branch names its quest, and a PR's head branch names
   the PR. Sessions on no quest or PR branch roll up as unattributed.
-- Accuracy comes from the PR body records: the size, implementers, and
-  each `## Review` round's reviewer, score
+- Accuracy comes from the records: commit trailers and the PR body's
+  size, implementers, and each `## Review` round's reviewer, score
   ([review score](/quest/m0/model-routing/review-score.md)), and findings
-  with their dispositions; follow-up fixes are later PRs that close or
-  cite a merged PR's quest.
+  with their dispositions; follow-up fixes are later PRs that list it under
+  `## Caused by` ([culprits](/quest/m0/model-routing/culprits.md)).
 - Prices are a pinned table beside the model lists, by model and token
   kind; the model check keeps it current with the ids.
 - Output: a table per quest or PR, a rollup by size, role, and model, and
