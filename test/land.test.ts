@@ -3332,16 +3332,21 @@ ${requeueScript}`);
 			expect(fixerPrompt).toContain(text);
 	});
 	test("lets the fixer fetch dependencies and requires it to verify what it reports", () => {
+		const prompt = fixerPrompt.replace(/\s+/g, " ");
 		for (const text of [
 			"from `github.com` and `codeload.github.com` for git",
 			"Do not build with `--offline`",
 			"never call GitHub's API yourself",
 			"or reach any other host",
-			"Before reporting `fixed` or `requeue`, build and test",
-			"name the commands",
+			"Before reporting `fixed` or `requeue`, run the repository's own checks on the head you report merged with `base`",
+			"lint, format, and type checks as well as build and test",
+			"Take the commands from the base's root instructions",
+			"run each touched language's own type check and linter",
+			"A `requeue` of an unchanged head runs the same checks",
+			"Name each command you ran",
 			"quoting the command and the output",
 		])
-			expect(fixerPrompt).toContain(text);
+			expect(prompt).toContain(text);
 	});
 	test("rebuilds a conflicted lockfile from the base's copy", () => {
 		const prompt = fixerPrompt.replace(/\s+/g, " ");
