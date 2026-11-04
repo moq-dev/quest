@@ -85,7 +85,3 @@ What remains:
 - Maintainer: the next time an outside contributor opens a fork PR on
   moq-dev/quest, moq-dev/rind or moq-dev/rust2, check that its workflow runs
   wait for approval.
-
-## Related
-
-- [Gate host](/quest/m0/host-land/host.md) - the host module these runners and daemons share
