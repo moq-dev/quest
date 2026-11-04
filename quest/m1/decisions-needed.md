@@ -12,8 +12,9 @@ Decided 2026-11-02 (maintainer, /quest-plan of the follow-ups from the
 [moq-dev/quest#390](https://github.com/moq-dev/quest/pull/390)): ✅ plan it,
 m1.
 
-- Remove the old heading from `src/core/claim.ts`'s regex, `handedBack`, and
-  every doc and skill that names both.
+- Remove the old heading from `src/core/claim.ts` (its regex, `handedBack`,
+  and `handBackWaits`, which makes every `Decisions needed` item the
+  maintainer's) and every doc and skill that names both.
 
 ## Waiting
 

@@ -37,23 +37,24 @@ test("unblocked accepts a filesystem path", () => {
 	expect(tree.run("unblocked", `${tree.path}/quest/m0/epic/two.md`).stdout).toBe("quest/m0/epic/one.md\n");
 });
 
-test("waiting lists the maintainer's items first, one per line", () => {
+test("waiting lists the maintainer's items first, one per line, and says drafts were skipped offline", async () => {
 	const tree = Tree.baseline()
 		.append("quest/m0/epic/one.md", "\n## Waiting\n\n- moq-dev/moq: a release carries the fix.\n")
 		.append("quest/m0/epic/two.md", "\n## Waiting\n\n- Maintainer: pick a name.\n");
-	expect(tree.run("waiting")).toEqual({
+	expect(await tree.exec("waiting")).toEqual({
 		code: 0,
 		stdout:
 			"0\tblocked\tquest/m0/epic/two.md\tMaintainer: pick a name.\n" +
 			"1\tready\tquest/m0/epic/one.md\tmoq-dev/moq: a release carries the fix.\n",
-		stderr: "",
+		stderr: "quest: no origin remote, so draft PRs were skipped\n",
 	});
-	expect(tree.run("waiting", "--maintainer").stdout).toBe(
+	expect((await tree.exec("waiting", "--maintainer")).stdout).toBe(
 		"0\tblocked\tquest/m0/epic/two.md\tMaintainer: pick a name.\n",
 	);
-	expect(JSON.parse(tree.run("waiting", "--json", "--limit", "1").stdout)).toEqual([
+	expect(JSON.parse((await tree.exec("waiting", "--json", "--limit", "1")).stdout)).toEqual([
 		{
 			path: "quest/m0/epic/two.md",
+			pr: null,
 			dependents: 0,
 			ready: false,
 			waits: [{ line: expect.any(Number), party: "Maintainer", text: "pick a name." }],

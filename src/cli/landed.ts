@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 
 import { type Finding, branchQuest } from "../core";
+import { discoveryEnv } from "./git";
 
 /**
  * A finding when `branch` (default: the current branch) is a quest's branch
@@ -52,7 +53,11 @@ function currentBranch(root: string): string {
 }
 
 function git(root: string, args: string[]): { status: number | null; stdout: string; stderr: string } {
-	const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	const result = spawnSync("git", ["-C", root, ...args], {
+		encoding: "utf8",
+		env: discoveryEnv(),
+		stdio: ["ignore", "pipe", "pipe"],
+	});
 	if (result.error) throw new Error(`running git: ${result.error.message}`);
 	return result;
 }

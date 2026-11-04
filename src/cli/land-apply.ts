@@ -12,6 +12,7 @@ import {
 	requireRemote,
 	string,
 } from "./github";
+import { discoveryEnv } from "./git";
 import { contains, git, gitEnvironment, tryGit } from "./land";
 import { Refusal } from "./start";
 
@@ -180,6 +181,7 @@ function userGit(root: string, args: string[], input?: string): string {
 		cwd: root,
 		input,
 		encoding: "utf8",
+		env: discoveryEnv(),
 	});
 	if (result.error) throw result.error;
 	if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
