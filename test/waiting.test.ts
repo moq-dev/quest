@@ -144,6 +144,9 @@ test("a draft's hand-back without items is one maintainer item holding its prose
 	expect(handBackWaits("Work.\r\n\r\nWaiting\r\n-------\r\n\r\nPick a name\r\nfor it.\r\n")).toEqual([
 		{ line: 3, party: "Maintainer", text: "Pick a name for it." },
 	]);
+	expect(
+		handBackWaits("## Waiting\n\n<details>\n<summary>Why</summary>\nPick one.\n</details>\nThen merge.\n"),
+	).toEqual([{ line: 1, party: "Maintainer", text: "Why Pick one. Then merge." }]);
 	expect(handBackWaits("## Waiting\n")).toEqual([
 		{ line: 1, party: "Maintainer", text: "the draft hands back without saying what it waits on" },
 	]);
