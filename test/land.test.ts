@@ -30,10 +30,11 @@ import {
 	validateFix,
 	fixerMarkdown,
 	fixerText,
-	FLAKY_LIMIT,
+	REQUEUE_LIMIT,
 	history,
 	redactTokens,
 	type Round,
+	stopReason,
 	stopRule,
 } from "../src/cli/land-fixer";
 import { importFixer } from "../src/cli/land-fixer-repository";
@@ -2587,7 +2588,7 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 			await finished;
 		};
 		// The fixer blamed no PR and the base passed alone each time: flaky rounds, re-enqueued unchanged.
-		for (let round = 2; round < FLAKY_LIMIT; round++) {
+		for (let round = 2; round < REQUEUE_LIMIT; round++) {
 			await fail();
 			expect(await fixture.collect()).toEqual(["requeued 1"]);
 		}
@@ -2599,8 +2600,8 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		expect(fixture.forge.comment(1)).toContain("<!-- quest land: failed_checks -->");
 		const rounds = history(fixture.state.state, 1)!.rounds;
 		expect(rounds.map(({ outcome, rule }) => [outcome, rule])).toEqual([
-			...Array.from({ length: FLAKY_LIMIT - 1 }, () => ["flaky", undefined]),
-			["handback", "flaky"],
+			...Array.from({ length: REQUEUE_LIMIT - 1 }, () => ["flaky", undefined]),
+			["handback", "requeued"],
 		]);
 		expect(rounds[0]).toMatchObject({
 			before: fixture.pull.head,
@@ -3651,13 +3652,46 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 			parseBaseFix(JSON.stringify({ action: "fixed", head: "a".repeat(40), reason: "fine", failure: "x" })),
 		).toThrow();
 	});
-	test("accepts a disabling commit only on a requeue", () => {
+	test("compares failure signatures without quoting or repeated whitespace", () => {
+		const [result] = parseFixResult(
+			JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure: ` cargo  test: "\`render\`'" ` }]),
+			[1],
+		);
+		expect(result.failure).toBe("cargo test: render");
+		expect(() =>
+			parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure: "``" }]), [1]),
+		).toThrow("invalid fixer failure");
+	});
+	test("accepts a cause only on a requeue, as one of the known causes", () => {
+		for (const cause of ["flaky", "base", "environment"]) {
+			const accepted = { number: 1, action: "requeue", reason: "fine", cause };
+			expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		}
+		for (const value of [
+			{ number: 1, action: "requeue", reason: "fine", cause: "runner" },
+			{ number: 1, action: "requeue", reason: "fine", cause: 7 },
+			{ number: 1, action: "fixed", head: "a".repeat(40), reason: "fine", cause: "base" },
+			{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", cause: "flaky" },
+		])
+			expect(() => parseFixResult(JSON.stringify([value]), [1])).toThrow("invalid fixer cause");
+	});
+	test("accepts a disabling commit only on a flaky requeue", () => {
 		const disable = "d".repeat(40);
-		const accepted = { number: 1, action: "requeue", reason: "flaky", failure: "cargo test: render", disable };
+		const accepted = {
+			number: 1,
+			action: "requeue",
+			reason: "flaky",
+			cause: "flaky",
+			failure: "cargo test: render",
+			disable,
+		};
 		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
 		for (const value of [
-			{ number: 1, action: "requeue", reason: "flaky", disable: "short" },
-			{ number: 1, action: "requeue", reason: "flaky", disable: 7 },
+			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", disable: "short" },
+			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", disable: 7 },
+			{ number: 1, action: "requeue", reason: "flaky", disable },
+			{ number: 1, action: "requeue", reason: "on the base", cause: "base", disable },
+			{ number: 1, action: "requeue", reason: "runner", cause: "environment", disable },
 			{ number: 1, action: "fixed", head: disable, reason: "fine", disable },
 			{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", disable },
 		])
@@ -4033,10 +4067,19 @@ describe("land fixer stop rules", () => {
 	});
 	test("hands back the third flaky round in a row, which a fix in between resets", () => {
 		const flaky = (count: number) => Array.from({ length: count }, (_, index) => round("flaky", `test ${index}`));
-		expect(stopRule(flaky(FLAKY_LIMIT - 2), round("flaky", "test x"))).toBeUndefined();
-		expect(stopRule(flaky(FLAKY_LIMIT - 1), round("flaky", "test x"))).toBe("flaky");
+		expect(stopRule(flaky(REQUEUE_LIMIT - 2), round("flaky", "test x"))).toBeUndefined();
+		expect(stopRule(flaky(REQUEUE_LIMIT - 1), round("flaky", "test x"))).toBe("requeued");
 		expect(
-			stopRule([...flaky(FLAKY_LIMIT - 1), round("fixed", "test y")], round("flaky", "test x")),
+			stopRule([...flaky(REQUEUE_LIMIT - 1), round("fixed", "test y")], round("flaky", "test x")),
 		).toBeUndefined();
+	});
+	test("counts every unchanged re-enqueue toward the limit, and names the last round's cause", () => {
+		const rounds = [round("base"), round("environment")];
+		expect(stopRule(rounds.slice(1), round("base"))).toBeUndefined();
+		expect(stopRule(rounds, round("flaky"))).toBe("requeued");
+		expect(stopRule([round("fixed"), round("base")], round("fixed"))).toBe("repeated");
+		expect(stopReason("requeued", round("base"))).toContain("the base fails it too");
+		expect(stopReason("requeued", round("environment"))).toContain("the runner's environment fails it");
+		expect(stopReason("requeued", round("flaky"))).toContain("stop rule (flaky limit)");
 	});
 });

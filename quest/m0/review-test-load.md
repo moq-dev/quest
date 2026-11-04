@@ -11,7 +11,9 @@ under full-suite load, because each rejected-login variant is its own test.
 Decided 2026-11-03 (coordinator, /quest-complete follow-ups, under the
 user's 2026-11-02 instruction to decide follow-ups from evidence): plan it,
 [XS], m0, since a test that times out under load can be judged flaky and
-disabled by the land watcher ([Genuine flakes only](/quest/m0/queue-watcher/flaky-verdicts.md)).
+disabled by the land watcher, even after
+[moq-dev/quest#468](https://github.com/moq-dev/quest/pull/468) kept base and
+runner failures from counting.
 
 Evidence, gathered 2026-11-03:
 

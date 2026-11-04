@@ -29,7 +29,15 @@ import {
 	type Reason,
 } from "./land";
 import { COMMENT_LIMIT, resolution, resolutionSection, type Resolution } from "./land-apply";
-import { readFixResult, parseBaseFix, parseFixResult, type BaseFix, type FixResult } from "./land-fix";
+import {
+	CAUSES,
+	type Cause,
+	readFixResult,
+	parseBaseFix,
+	parseFixResult,
+	type BaseFix,
+	type FixResult,
+} from "./land-fix";
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
 import { isPrepared, push, remoteHead } from "./land-head";
@@ -151,10 +159,10 @@ interface Job extends Process {
 }
 /**
  * How a round ended: a fixer commit (`fixed`), a clean base merge with no fixer edit (`merged`), no new
- * commit for a failure the fixer did not judge flaky (`unchanged`), an unchanged re-enqueue of a failure
- * it judged flaky (`flaky`), or a handback.
+ * commit for a failure the fixer found no cause of outside the PR (`unchanged`), an unchanged re-enqueue
+ * for the cause it named (`flaky`, `base`, or `environment`), or a handback.
  */
-export type Outcome = "fixed" | "merged" | "unchanged" | "flaky" | "handback";
+export type Outcome = "fixed" | "merged" | "unchanged" | Cause | "handback";
 
 /** One failure a pick was blamed for, and what came of it. */
 export interface Round {
@@ -207,38 +215,50 @@ function samePick(record: History | undefined, entry: Pick<Entry, "enabledAt">):
 
 /**
  * Why a pick stops being fixed while each round still changes something: a round with no new commit
- * for a failure that isn't flaky (`unchanged`), the failure a fix addressed recurring right after it
- * (`repeated`), or `FLAKY_LIMIT` flaky rounds in a row (`flaky`).
+ * for a failure with no cause outside the PR (`unchanged`), the failure a fix addressed recurring right
+ * after it (`repeated`), or `REQUEUE_LIMIT` unchanged re-enqueues in a row, whatever their causes
+ * (`requeued`).
  */
-export type StopRule = "unchanged" | "repeated" | "flaky";
-/** The flaky rounds in a row that hand a PR back, so a real nondeterministic bug in it reaches a person. */
-export const FLAKY_LIMIT = 3;
+export type StopRule = "unchanged" | "repeated" | "requeued";
+/**
+ * The unchanged re-enqueues in a row that hand a PR back, so a real nondeterministic bug in it, or a
+ * base or runner that keeps failing it, reaches a person.
+ */
+export const REQUEUE_LIMIT = 3;
+const requeue = (outcome: Outcome): outcome is Cause => (CAUSES as readonly string[]).includes(outcome);
 
 /**
- * The stop rule `round` fires after `rounds`, the pick's earlier rounds, if any. A flaky round resets
+ * The stop rule `round` fires after `rounds`, the pick's earlier rounds, if any. A re-enqueue resets
  * neither of the other rules: the failure a fix addressed recurring after flaky rounds is still a
  * repeat. A fixer's own handback needs no rule.
  */
 export function stopRule(rounds: Round[], round: Pick<Round, "outcome" | "failure">): StopRule | undefined {
 	if (round.outcome === "handback") return undefined;
 	if (round.outcome === "unchanged") return "unchanged";
-	const last = rounds.filter((item) => item.outcome !== "flaky").at(-1);
+	const last = rounds.filter((item) => !requeue(item.outcome)).at(-1);
 	if ((last?.outcome === "fixed" || last?.outcome === "merged") && last.failure === round.failure) return "repeated";
-	if (round.outcome !== "flaky") return undefined;
+	if (!requeue(round.outcome)) return undefined;
 	let streak = 1;
-	for (let index = rounds.length - 1; index >= 0 && rounds[index].outcome === "flaky"; index--) streak++;
-	return streak >= FLAKY_LIMIT ? "flaky" : undefined;
+	for (let index = rounds.length - 1; index >= 0 && requeue(rounds[index].outcome); index--) streak++;
+	return streak >= REQUEUE_LIMIT ? "requeued" : undefined;
 }
 
-/** A handback's reason, naming the stop rule that fired; worded so `fixerText` quotes it unchanged. */
-export function stopReason(rule: StopRule, failure: string): string {
+/**
+ * A handback's reason, naming the stop rule `round` fired; a requeue limit names the last round's cause.
+ * Worded so `fixerText` quotes it unchanged.
+ */
+export function stopReason(rule: StopRule, round: Pick<Round, "outcome" | "failure">): string {
 	switch (rule) {
 		case "unchanged":
-			return "stop rule (no new commit): the fixer's round produced no new commit and the failure isn't flaky";
+			return "stop rule (no new commit): the fixer's round produced no new commit and named no cause outside the pull request";
 		case "repeated":
-			return `stop rule (repeated failure): ${failure} failed again right after the round that addressed it`;
-		case "flaky":
-			return `stop rule (flaky limit): the failure was judged flaky ${FLAKY_LIMIT} times in a row; it may be a real nondeterministic bug`;
+			return `stop rule (repeated failure): ${round.failure} failed again right after the round that addressed it`;
+		case "requeued":
+			return round.outcome === "base"
+				? `stop rule (requeue limit): the failure was requeued unchanged ${REQUEUE_LIMIT} times in a row, last because the base fails it too; the base needs a fix`
+				: round.outcome === "environment"
+					? `stop rule (requeue limit): the failure was requeued unchanged ${REQUEUE_LIMIT} times in a row, last because the runner's environment fails it; the runner needs a fix`
+					: `stop rule (flaky limit): the failure was judged flaky ${REQUEUE_LIMIT} times in a row; it may be a real nondeterministic bug`;
 	}
 }
 
@@ -1029,21 +1049,22 @@ async function collectJob(
 				job.reason === "merge_conflict"
 					? conflictFailure(job.plan.base.sha)
 					: (result?.failure ?? job.reason ?? "failed_checks");
-			// A PR requeued unchanged is flaky by the fixer's judgment, unless the gate itself blamed it, as for a
-			// conflict that is still there: a blamed PR the fixer named is never requeued.
+			// A PR requeued unchanged fails for the cause the fixer named, flaky when it named none, unless the
+			// gate itself blamed it, as for a conflict that is still there: a blamed PR the fixer named is never
+			// requeued.
 			const outcome: Outcome =
 				result?.action === "fixed"
 					? "fixed"
 					: result?.action === "requeue"
 						? job.blame
 							? "unchanged"
-							: "flaky"
+							: (result.cause ?? "flaky")
 						: "handback";
 			const rule = stopRule(
 				previous.rounds.filter((item) => item.job !== name),
 				{ outcome, failure },
 			);
-			if (rule) error = stopReason(rule, failure);
+			if (rule) error = stopReason(rule, { outcome, failure });
 			round = rule
 				? { job: name, outcome: "handback", before: standing, failure, rule }
 				: { job: name, outcome, before: standing, failure, ...(outcome === "handback" ? {} : { after: head }) };
