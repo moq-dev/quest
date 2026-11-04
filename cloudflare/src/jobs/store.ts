@@ -15,6 +15,8 @@ export type Workflow = "plan" | "start" | "iterate" | "merge" | "bootstrap";
 export function onPull(workflow: Workflow) {
 	return workflow === "iterate" || workflow === "merge";
 }
+/** `onPull` as a SQL condition on a jobs row. */
+const ON_PULL = "workflow IN ('iterate','merge')";
 export type JobState = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 export type Outcome = "completed" | "failed" | "cancelled" | "limited";
 export type Platform = "linux" | "darwin";
@@ -39,7 +41,11 @@ export type Job = {
 	branch: string;
 	actor: string;
 	trusted: number;
-	/** Whether `trusted` is stale. Every statement that queues the job or moves its head sets it; a classification clears it. */
+	/**
+	 * Whether `trusted` may not reflect the current head. A statement that queues the job or moves its head sets it,
+	 * unless it records a fresh, head-guarded trust read in the same write, as the delivery recheck does; that read
+	 * clears it, as a classification does. Only PR jobs carry trust, so only theirs is read.
+	 */
 	recheck: number;
 	pinRunner: string | null;
 	pinAccount: string | null;
@@ -318,10 +324,10 @@ export async function recheck(db: D1Database, job: string) {
 	await db.prepare("UPDATE jobs SET recheck=1 WHERE id=? AND state='queued'").bind(job).run();
 }
 
-/** Whether the owner's queued job awaits a trust recheck. */
+/** Whether the owner's queued PR job awaits a trust recheck. */
 export async function stale(db: D1Database, owner: string, job: string) {
 	return !!(await db
-		.prepare("SELECT 1 FROM jobs WHERE id=? AND actor=? AND state='queued' AND recheck=1")
+		.prepare(`SELECT 1 FROM jobs WHERE id=? AND actor=? AND state='queued' AND recheck=1 AND ${ON_PULL}`)
 		.bind(job, owner)
 		.first());
 }
@@ -369,7 +375,9 @@ export async function dispatch(
 			)
 			.bind(now, owner, now),
 		// The inbox shows every queued PR job's trust, paused projects' included.
-		db.prepare("SELECT * FROM jobs WHERE actor=? AND state='queued' AND cancel=0 AND recheck=1").bind(owner),
+		db
+			.prepare(`SELECT * FROM jobs WHERE actor=? AND state='queued' AND cancel=0 AND recheck=1 AND ${ON_PULL}`)
+			.bind(owner),
 		// A paused project starts and continues nothing new, and a merge job starts once it holds its pull request.
 		db
 			.prepare(
@@ -406,8 +414,7 @@ export async function dispatch(
 	const revoked: (Attempt & { runner: string })[] = [];
 	// Stale trust is reread without waiting for a free slot, so the inbox shows an untrusted head's decision at once.
 	const rechecked = new Map<string, number>();
-	for (const job of stale!.results as Job[])
-		if (onPull(job.workflow)) rechecked.set(job.id, await classify(db, job, verify));
+	for (const job of stale!.results as Job[]) rechecked.set(job.id, await classify(db, job, verify));
 	// Every queued job is considered, so unroutable older ones cannot starve newer ones.
 	for (const job of candidates!.results as Job[]) {
 		if (![...free.values()].some((n) => n > 0)) break;
@@ -464,7 +471,7 @@ export async function dispatch(
 			const eligible = trusted || (machine?.platform === "linux" && machine.vm);
 			const update = await db
 				.prepare(
-					"UPDATE jobs SET trusted=?,state=? WHERE id=? AND attempt=? AND head IS ? AND cancel=0 AND state='running' AND delivered=0",
+					"UPDATE jobs SET trusted=?,recheck=0,state=? WHERE id=? AND attempt=? AND head IS ? AND cancel=0 AND state='running' AND delivered=0",
 				)
 				.bind(trusted, eligible ? "running" : "queued", job.id, job.attempt, job.head)
 				.run();

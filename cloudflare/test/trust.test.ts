@@ -265,7 +265,8 @@ describe("authenticated PR provenance", () => {
 		const pass = await store.dispatch(racing, "owner", new Map([[mac.id, 1]]), store.GRACE + 4, verify(testEnv));
 		expect(pass.assign).toEqual([]);
 		expect(pass.cancel).toEqual([{ runner: mac.id, job: id, attempt: 2 }]);
-		expect(await store.readJob(db, id)).toMatchObject({ head: published, trusted: 0, state: "queued" });
+		// The delivery recheck's head-guarded read leaves nothing stale to reread.
+		expect(await store.readJob(db, id)).toMatchObject({ head: published, trusted: 0, recheck: 0, state: "queued" });
 	});
 
 	it("leaves a head kix published to VM-only, even after a lost response", async () => {
@@ -375,6 +376,27 @@ describe("trust recheck on queue", () => {
 		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: next, trusted: 0, recheck: 1 });
 		await busy(store.GRACE + 6);
 		expect(await store.readJob(db, id)).toMatchObject({ head: next, trusted: 1, recheck: 0 });
+	});
+
+	it("never rereads a job that opens its pull request rather than working on one", async () => {
+		reads = 0;
+		const { id } = await store.createJob(
+			db,
+			{
+				repository: repo.id,
+				actor: "owner",
+				workflow: "start",
+				target: "quest/first.md",
+				revision: base,
+				branch: "quest/first",
+				trusted: true,
+			},
+			0,
+		);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", recheck: 1 });
+		expect(await store.stale(db, "owner", id)).toBe(false);
+		await busy(1);
+		expect(reads).toBe(0);
 	});
 });
 
