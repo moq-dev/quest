@@ -46,14 +46,21 @@ Work:
   runs prunes every log family either daemon writes, since they share the
   directory: `serve`'s logs left behind by a repository that moved to the
   watcher, and every repository's once `serve` is retired. Judge "in use"
-  from every job record in the directory (`fix-job-*`, `fix-base-*` and
-  `watch-job-*.json`), whichever daemon wrote it.
-- Match exact names, not a `.log` suffix: `base-`, `check-` and
-  `batch-<time>-<n>.log`, `removal-<pr>-<time>.log`,
+  from every record in the directory that a later pass reads a log from,
+  whichever daemon wrote it: the job records (`fix-job-*`, `fix-base-*` and
+  `watch-job-*.json`), a removal still waiting for a fixer slot
+  (`removal-<pr>.json` with `failure` set and `taken` unset, which keeps its
+  `log` and its `conflict-<pr>-<unmerged>.log`), and `serve`'s
+  `failure.json`, which a restart replays.
+- Match whole names of regular files, never a prefix or a `.log` suffix:
+  `base-<time>-<sha>.log`, `check-<time>-<pr>.log`,
+  `batch-<time>-<pr>.log`, `removal-<pr>-<time>.log`,
   `conflict-<pr>-<sha>.log`, `fixer-input-<pr>-<time>.log`, and the job
   logs `fix-job-*.json.log`, `fix-base-*.json.log` and
   `watch-job-*.json.log`. Only the state directory's top level, never its
-  subdirectories or any other file.
-- Test that a cited or in-use log survives, an old finished one goes, an
-  expired `serve` log in a watcher's directory goes, and an unrelated
-  `.log` file survives.
+  subdirectories or any other file: live checkouts such as `serve`'s
+  `check-XXXXXX` and the fixers' `fix-XXXXXX` share those prefixes.
+- Test that a cited or in-use log survives, including the log of a removal
+  still waiting for a fixer slot across a restart; an old finished one
+  goes, an expired `serve` log in a watcher's directory goes, and an
+  unrelated `.log` file and a live `check-` or `fix-` checkout survive.
