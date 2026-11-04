@@ -33,6 +33,7 @@ import {
 	CAUSES,
 	type Cause,
 	readFixResult,
+	signature,
 	parseBaseFix,
 	parseFixResult,
 	type BaseFix,
@@ -236,7 +237,11 @@ export function stopRule(rounds: Round[], round: Pick<Round, "outcome" | "failur
 	if (round.outcome === "handback") return undefined;
 	if (round.outcome === "unchanged") return "unchanged";
 	const last = rounds.filter((item) => !requeue(item.outcome)).at(-1);
-	if ((last?.outcome === "fixed" || last?.outcome === "merged") && last.failure === round.failure) return "repeated";
+	if (
+		(last?.outcome === "fixed" || last?.outcome === "merged") &&
+		signature(last.failure) === signature(round.failure)
+	)
+		return "repeated";
 	if (!requeue(round.outcome)) return undefined;
 	let streak = 1;
 	for (let index = rounds.length - 1; index >= 0 && requeue(rounds[index].outcome); index--) streak++;
@@ -254,11 +259,13 @@ export function stopReason(rule: StopRule, round: Pick<Round, "outcome" | "failu
 		case "repeated":
 			return `stop rule (repeated failure): ${round.failure} failed again right after the round that addressed it`;
 		case "requeued":
-			return round.outcome === "base"
-				? `stop rule (requeue limit): the failure was requeued unchanged ${REQUEUE_LIMIT} times in a row, last because the base fails it too; the base needs a fix`
-				: round.outcome === "environment"
-					? `stop rule (requeue limit): the failure was requeued unchanged ${REQUEUE_LIMIT} times in a row, last because the runner's environment fails it; the runner needs a fix`
-					: `stop rule (flaky limit): the failure was judged flaky ${REQUEUE_LIMIT} times in a row; it may be a real nondeterministic bug`;
+			return `stop rule (requeue limit): the failure was requeued unchanged ${REQUEUE_LIMIT} times in a row, last ${
+				round.outcome === "base"
+					? "because the base fails it too; the base may need a fix"
+					: round.outcome === "environment"
+						? "because the runner's environment fails it; the runner may need a fix"
+						: "judged flaky; it may be a real nondeterministic bug"
+			}`;
 	}
 }
 

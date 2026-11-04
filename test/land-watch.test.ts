@@ -1331,7 +1331,7 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 			]);
 		}
 		expect(github.mutations).toEqual([`enqueuePullRequest 7 ${head}`, `enqueuePullRequest 7 ${head}`]);
-		expect(github.comments[7].at(-1)!.body).toContain("stop rule (flaky limit)");
+		expect(github.comments[7].at(-1)!.body).toContain("stop rule (requeue limit)");
 		expect(history(state, 7)!.rounds.map((round) => round.outcome)).toEqual(["flaky", "flaky", "handback"]);
 
 		// The handback ended the pick: the workflow's next enqueue, even of the same head, is a new one.

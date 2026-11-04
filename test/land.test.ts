@@ -2596,7 +2596,7 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		expect(await fixture.collect()).toEqual(["handback 1"]);
 		expect(fixture.jobs()).toEqual([]);
 		expect(fixture.pull.landing).toBe(false);
-		expect(fixture.forge.comment(1)).toContain("stop rule (flaky limit)");
+		expect(fixture.forge.comment(1)).toContain("stop rule (requeue limit)");
 		expect(fixture.forge.comment(1)).toContain("<!-- quest land: failed_checks -->");
 		const rounds = history(fixture.state.state, 1)!.rounds;
 		expect(rounds.map(({ outcome, rule }) => [outcome, rule])).toEqual([
@@ -4064,6 +4064,8 @@ describe("land fixer stop rules", () => {
 		expect(stopRule([round("merged", "conflict with b1")], round("fixed", "conflict with b1"))).toBe("repeated");
 		expect(stopRule([round("fixed"), round("flaky", "test b")], round("fixed"))).toBe("repeated");
 		expect(stopRule([round("fixed")], round("flaky"))).toBe("repeated");
+		// A signature recorded with quoting, as before results were normalized, still matches.
+		expect(stopRule([round("fixed", "just  test: `a`")], round("fixed", "just test: a"))).toBe("repeated");
 	});
 	test("hands back the third flaky round in a row, which a fix in between resets", () => {
 		const flaky = (count: number) => Array.from({ length: count }, (_, index) => round("flaky", `test ${index}`));
@@ -4080,6 +4082,6 @@ describe("land fixer stop rules", () => {
 		expect(stopRule([round("fixed"), round("base")], round("fixed"))).toBe("repeated");
 		expect(stopReason("requeued", round("base"))).toContain("the base fails it too");
 		expect(stopReason("requeued", round("environment"))).toContain("the runner's environment fails it");
-		expect(stopReason("requeued", round("flaky"))).toContain("stop rule (flaky limit)");
+		expect(stopReason("requeued", round("flaky"))).toContain("last judged flaky");
 	});
 });
