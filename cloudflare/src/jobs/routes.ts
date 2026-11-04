@@ -13,7 +13,6 @@ import { HeadMoved, LIMITS, parsePublication, publish, pullOf, restart, validate
 import { parseReview, recordReview } from "./review";
 import * as store from "./store";
 import { JobError } from "./store";
-import { verify } from "./trust";
 
 type Bindings = { Bindings: Env };
 export const jobs = new Hono<Bindings>();
@@ -115,6 +114,12 @@ jobs.get("/api/runner/connect", async (c) => {
 	});
 });
 
+// A publication can move the head of a job whose attempt was requeued meanwhile,
+// and only a dispatch rereads the trust it made stale.
+async function dispatchStale(env: Env, owner: string, job: string) {
+	if (await store.stale(env.DB, owner, job)) await hub(env, owner).dispatch(owner);
+}
+
 // A running attempt publishes its work over HTTPS rather than its connection,
 // so slow GitHub writes never hold up the hub's other runner messages.
 jobs.post("/api/runner/publish", async (c) => {
@@ -128,11 +133,15 @@ jobs.post("/api/runner/publish", async (c) => {
 	try {
 		result = await publish(c.env, runner, input);
 	} catch (error) {
+		await dispatchStale(c.env, runner.owner, input.job);
 		// The runner reconciles with the branch's head rather than failing its attempt.
 		if (error instanceof HeadMoved) return c.json({ error: error.message, head: error.head }, 409);
 		throw error;
 	}
-	if (!("decision" in result)) return c.json(result);
+	if (!("decision" in result)) {
+		await dispatchStale(c.env, runner.owner, input.job);
+		return c.json(result);
+	}
 	await hub(c.env, runner.owner).dispatch(runner.owner);
 	if (result.asked && !result.cancel) c.executionCtx.waitUntil(push.job(c.env, input.job, "publication"));
 	const { decision, cancel } = result;
@@ -465,12 +474,8 @@ jobs.post("/projects/github/:owner/:repository/pulls/:number/approve", async (c)
 	if (!/^[1-9]\d{0,14}$/.test(number) || typeof body.head !== "string")
 		throw new JobError("Pull request and head required");
 	await github.approveHead(repo, user, Number(number), body.head);
-	// Reclassify a waiting job now, rather than when its requester's runner next has a free slot.
 	const queued = await store.queuedOn(c.env.DB, repo.id, `pulls/${number}`);
-	if (queued && store.onPull(queued.workflow)) {
-		await store.classify(c.env.DB, queued, verify(c.env));
-		await hub(c.env, queued.actor).dispatch(queued.actor);
-	}
+	if (queued && store.onPull(queued.workflow)) await hub(c.env, queued.actor).recheck(queued.actor, queued.id);
 	return reply(c, form, "trust", null);
 });
 

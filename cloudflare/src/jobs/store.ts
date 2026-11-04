@@ -304,13 +304,26 @@ export function route(job: Job, offers: Offer[]): Offer | null {
 export type Verify = (job: Pick<Job, "repository" | "target" | "revision" | "head" | "trusted">) => Promise<boolean>;
 
 /** Verify a queued PR job's current head and record the answer while the job is unchanged. */
-export async function classify(db: D1Database, job: Job, verify: Verify) {
+async function classify(db: D1Database, job: Job, verify: Verify) {
 	const trusted = (await verify(job)) ? 1 : 0;
 	await db
 		.prepare("UPDATE jobs SET trusted=?,recheck=0 WHERE id=? AND state='queued' AND attempt=? AND head IS ?")
 		.bind(trusted, job.id, job.attempt, job.head)
 		.run();
 	return trusted;
+}
+
+/** Mark a queued job's trust stale after a change outside the job, such as a head approval. */
+export async function recheck(db: D1Database, job: string) {
+	await db.prepare("UPDATE jobs SET recheck=1 WHERE id=? AND state='queued'").bind(job).run();
+}
+
+/** Whether the owner's queued job awaits a trust recheck. */
+export async function stale(db: D1Database, owner: string, job: string) {
+	return !!(await db
+		.prepare("SELECT 1 FROM jobs WHERE id=? AND actor=? AND state='queued' AND recheck=1")
+		.bind(job, owner)
+		.first());
 }
 
 export type Claimed = NonNullable<Awaited<ReturnType<typeof readJob>>> & { owner: string; name: string };
