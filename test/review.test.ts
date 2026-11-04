@@ -427,7 +427,6 @@ fakes.each([
 	vi.stubEnv("ANTHROPIC_MODEL", "parent-model");
 	vi.stubEnv("CODEX_API_KEY", "other-provider-key");
 	vi.stubEnv("OPENAI_API_KEY", "other-provider-key");
-	vi.stubEnv("QUEST_API_KEYS", "other-agent-key");
 	vi.stubEnv("OP_SERVICE_ACCOUNT_TOKEN", "secret-manager-token");
 	vi.stubEnv("FAKE_REPLY", JSON.stringify({ findings: [] }));
 	const first = await quest("--root", s.repo, "review", "--json");

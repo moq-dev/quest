@@ -12,7 +12,7 @@ import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
 
 import { streamReader } from "../runner/claude";
-import { type HarnessName, LINE_LIMIT, boundedLines, strippedEnvironment } from "./agent";
+import { type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
 import { programEnvironment, requireProgram } from "./program";
@@ -259,7 +259,7 @@ const CLAUDE_PROVIDERS = ["BEDROCK", "VERTEX", "FOUNDRY", "MANTLE", "ANTHROPIC_A
  */
 const claude: Reviewer = {
 	status: ["claude", "auth", "status"],
-	login: "claude auth login",
+	login: LOGINS.claude.command,
 	profile: "CLAUDE_CONFIG_DIR",
 	credentials: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
 	// Claude Code lists these with its credentials, and reads them only while a provider's switch is on.
@@ -293,8 +293,7 @@ const claude: Reviewer = {
 			/^\s*(1|true|yes|on)\s*$/i.test(env[name] ?? ""),
 		),
 	],
-	// Such as "Failed to authenticate. API Error: 401 ...", "Invalid API key · ...", or "Login expired · Please run /login".
-	unauthorized: /API Error: 401|Failed to authenticate|Invalid API key|Please run \/login/,
+	unauthorized: LOGINS.claude.unauthorized,
 	// The command's level sets its own effort, overriding `--effort`, so it is given the same one.
 	review: (context, session) => ({
 		argv: [...claudeFlags(context), "--session-id", session],
@@ -387,7 +386,7 @@ const claudeEnv = () => ({ CLAUDE_CODE_PROMPT_CACHE_TTL: "1h" });
  */
 const codex: Reviewer = {
 	status: ["codex", "login", "status"],
-	login: "codex login",
+	login: LOGINS.codex.command,
 	profile: "CODEX_HOME",
 	// `codex exec` reads CODEX_API_KEY, though `codex login status` does not count it; it ignores OPENAI_API_KEY.
 	// CODEX_ACCESS_TOKEN is an agent identity token, which both read.
@@ -396,9 +395,7 @@ const codex: Reviewer = {
 	// A gateway that intercepts TLS needs its CA. OPENAI_BASE_URL is never stripped.
 	connection: ["CODEX_CA_CERTIFICATE"],
 	routes: () => [],
-	// Such as "unexpected status 401 Unauthorized: ..." or "Your access token could not be refreshed
-	// because your refresh token was revoked. Please log out and sign in again."
-	unauthorized: /\b401 Unauthorized\b|sign in again/,
+	unauthorized: LOGINS.codex.unauthorized,
 	// Given a commit, Codex's merge base with HEAD is that commit, which its prompt then names.
 	review: (context) => ({
 		argv: ["codex", "exec", "review", "--base", context.mergeBase, "--json", ...codexFlags(context)],
