@@ -12,10 +12,12 @@ when another worktree holds the PR branch.
 
 Decided 2026-11-04 (user, /quest-complete follow-up of
 [moq-dev/quest#474](https://github.com/moq-dev/quest/pull/474)). That day,
-iterate agents on #464, #469, #472, and #474 found the PR branch checked out
-in another worktree. Each reviewed from a temporary local branch, so
-`quest review`, which keys sessions by the checked-out branch name
-(`sessionBranch` and `sessionFile` in `src/cli/review.ts`), started a new
+iterate agents on [moq-dev/quest#464](https://github.com/moq-dev/quest/pull/464),
+[moq-dev/quest#469](https://github.com/moq-dev/quest/pull/469),
+[moq-dev/quest#472](https://github.com/moq-dev/quest/pull/472), and #474 found
+the PR branch checked out in another worktree. Each reviewed from a temporary
+local branch, so `quest review`, which keys sessions by the checked-out branch
+name (`sessionBranch` and `sessionFile` in `src/cli/review.ts`), started a new
 session that resets the round-4 design checkpoint, or later resumed the wrong
 one.
 
@@ -33,5 +35,12 @@ Implementation guidance:
 
 - The upstream's branch name, without the remote, is what matters, so a
   fork's tracking branch keys the same session as the PR's head branch.
+- An upstream that is the review's base branch (`--base`, or origin's default
+  branch) names no PR, so such a branch keys by its own name. Branches made
+  with `git switch -c <name> origin/main` track the base by default (23 local
+  branches in the maintainer's clone did on 2026-11-04, this plan's own
+  included); keying them by upstream would merge every one into a single
+  `main` session. `review` names the session before it resolves the default
+  base today, so the base's branch has to be known first.
 - Nothing is in production, so sessions already stored under temporary names
   need no migration.
