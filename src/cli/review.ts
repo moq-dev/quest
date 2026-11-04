@@ -69,7 +69,7 @@ export interface Round {
 /** A reply's verdict on the reviewed head. */
 export type Verdict = Pick<Round, "score" | "rationale" | "findings">;
 
-/** The reply every round's last turn must match; both CLIs enforce it, and `findings` checks it again. */
+/** The reply every round's last turn must match; both CLIs enforce it, and `verdict` checks it again. */
 export const SCHEMA = {
 	type: "object",
 	additionalProperties: false,
