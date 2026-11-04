@@ -28,7 +28,16 @@ import {
 	save,
 	startDaemon,
 } from "./land-serve";
-import { advanceFixes, endPick, type FixContext, readPull, readRemoval, requeuedHeads } from "./land-watch-fix";
+import {
+	advanceFixes,
+	endPick,
+	type FixContext,
+	HELD,
+	isHeld,
+	readPull,
+	readRemoval,
+	requeuedHeads,
+} from "./land-watch-fix";
 import { enabledHead, headBefore } from "./status";
 
 export { readRemoval } from "./land-watch-fix";
@@ -49,9 +58,10 @@ export interface WatchOptions {
 /**
  * What a removal means for its pick: the fixer's to take (`fix`), or the end of the pick, left alone
  * until a writer enqueues the PR again: a push since the queue dropped it (`pushed`), a person's
- * removal (`removed`), or a reason the watcher does not know (`unrecognized`).
+ * removal (`removed`), a hold label another session keeps on it (`held`), or a reason the watcher
+ * does not know (`unrecognized`).
  */
-export type Verdict = "fix" | "pushed" | "removed" | "unrecognized" | "unknown";
+export type Verdict = "fix" | "pushed" | "removed" | "held" | "unrecognized" | "unknown";
 
 /** A `merge_group` job that failed, or was still running when its checks timed out. */
 export interface FailedJob {
@@ -139,6 +149,7 @@ const OPEN = `query($owner: String!, $name: String!, $base: String!, $qualified:
 			nodes {
 				id number url title headRefOid headRefName maintainerCanModify mergeStateStatus
 				headRepository { nameWithOwner }
+				labels(first: 100) { nodes { name } }
 				mergeQueueEntry { id }
 				autoMergeRequest { enabledAt commitBody }
 				removals: timelineItems(since: $since, first: 20, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { ${REMOVALS} }
@@ -227,7 +238,7 @@ async function pickOf(
  * `expectedHeadOid` bound to it: GitHub keeps auto-merge across a writer's push, but that push ends the
  * pick, and a head `enabledHead` cannot tell yet waits for the next pass. The PR is read again just
  * before the enqueue, so a request disabled or a PR retargeted since the pass read it is not enqueued,
- * which `expectedHeadOid` alone would not catch. An armed pick whose required
+ * which `expectedHeadOid` alone would not catch, and neither is a PR another session holds. An armed pick whose required
  * checks fail, or that conflicts, is not ready and is left alone. A refusal is reported once per pick
  * and retried each pass; one because GitHub queued the PR first says nothing.
  */
@@ -260,7 +271,9 @@ async function enqueueArmed(
 			string(now.headRefOid) !== head ||
 			now.mergeQueueEntry != null ||
 			request === null ||
-			string(request.enabledAt) !== armed
+			string(request.enabledAt) !== armed ||
+			// Another session holds it: leave the pick armed, for the next pass once the hold clears.
+			isHeld(now)
 		)
 			continue;
 		try {
@@ -389,6 +402,7 @@ const AFTER: Record<Verdict, (current: string, fixing: boolean) => string> = {
 		`\n\nIts head has moved to ${current} since, and a push by anyone but the land fixer ends the pick: the watcher leaves this pull request alone until a maintainer enqueues it again.`,
 	removed: () =>
 		"\n\nA person's removal ends the pick: the watcher leaves this pull request alone until a maintainer enqueues it again.",
+	held: () => `\n\n${HELD}`,
 	unrecognized: () =>
 		"\n\nThe watcher does not recognize this reason, so it leaves this pull request alone until a maintainer enqueues it again.",
 	unknown: () =>
@@ -434,6 +448,9 @@ async function handle(
 	// An unknown head never authorizes the fixer: wait for GitHub to list the push, then end the pick.
 	if (known === null && now - Date.parse(at) < UNLISTED) return null;
 	const head = known ?? current;
+	// A hold recorded for this removal, as before a crash, ends the pick even once it clears.
+	const prior = readRemoval(state, number);
+	const held = (prior?.event === string(event.id) && prior.verdict === "held") || isHeld(pull);
 	const { pick, queued } = head === current ? first : await pickOf(github, string(pull.id), event, head, app, own);
 	const verdict: Verdict =
 		known === null
@@ -442,9 +459,11 @@ async function handle(
 				? "pushed"
 				: reason === "manual"
 					? "removed"
-					: FIXABLE.includes(reason)
-						? "fix"
-						: "unrecognized";
+					: !FIXABLE.includes(reason)
+						? "unrecognized"
+						: held
+							? "held"
+							: "fix";
 	const build =
 		reason === "failed_checks" || reason === "checks_timed_out"
 			? await failedBuild(
@@ -483,17 +502,6 @@ async function handle(
 		build.jobs.length === 0 && reason !== "merge_conflict" && FIXABLE.includes(reason)
 			? `\n\nThe watcher found no failing \`merge_group\` job for it before ${at}.`
 			: "";
-	await post(
-		github,
-		{ repository },
-		{ number, enabledAt: pick.at },
-		`quest land watch: the merge queue removed this pull request at ${head} because ${because(reason, actor, base.ref)} (\`${reason.replace(/[^a-z_]/g, "")}\`).${AFTER[verdict](current, fixing)}${missing}`,
-		`removed ${string(event.id)}`,
-		"quest land watch",
-		undefined,
-		(room) => jobsSection(blocks, room),
-	);
-
 	const entry: Entry = {
 		id: string(pull.id),
 		number,
@@ -533,12 +541,29 @@ async function handle(
 				}
 			: {}),
 	};
-	// A removal GitHub showed late never replaces the record of a newer one.
-	if ((readRemoval(state, number)?.at ?? "") <= at) {
+	// Recorded before its comment, so a hold ends the pick whatever becomes of the comment. A removal
+	// GitHub showed late never replaces the record of a newer one.
+	if ((prior?.at ?? "") <= at) {
 		save(join(state, `removal-${number}.json`), removal);
 		// Any other verdict ends the pick: its fixer history goes, so a later enqueue starts afresh.
 		if (verdict !== "fix") endPick(state, number, pick.at);
 	}
+	const said = post(
+		github,
+		{ repository },
+		{ number, enabledAt: pick.at },
+		`quest land watch: the merge queue removed this pull request at ${head} because ${because(reason, actor, base.ref)} (\`${reason.replace(/[^a-z_]/g, "")}\`).${AFTER[verdict](current, fixing)}${missing}`,
+		`removed ${string(event.id)}`,
+		"quest land watch",
+		undefined,
+		(room) => jobsSection(blocks, room),
+	);
+	// A held removal's comment is the hold's, so it is best-effort: a refusal fails no pass and is not retried.
+	if (verdict === "held")
+		await said.catch((error: unknown) =>
+			note(`quest land watch: hold comment on ${number} not posted: ${String(error)}`),
+		);
+	else await said;
 	return `removed ${number} ${reason} ${verdict}`;
 }
 

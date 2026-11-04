@@ -24,3 +24,7 @@ kixelated user may enroll too. This quest undoes both for the launch.
 - Keep the D1 database and secrets; only the origin changes. Existing
   sessions may be dropped.
 - Comes before the landing page and launch material, which link kix.quest.
+
+## Required
+
+- [User state in their RunnerHub](/quest/m1/user-state.md) - its fresh start drops users' runners and jobs, which is safe only while enrollment is limited to the operator's own allowlisted owners

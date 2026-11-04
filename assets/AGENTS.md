@@ -60,7 +60,9 @@ Current decisions, open questions, or implementation guidance.
 
 The `Goal` section is required; everything else is optional. Use these exact headings.
 
-Size the title `[XS]` to `[XL]` for implementation, verification, and landing.
+Size the title `[XS]` to `[XL]` by the agent's effort to implement, verify, and land it, judgment included.
+Much code that is mechanical stays small, such as applying one rename the same way across the tree, sized XS.
+Little code that is mostly judgment is larger, such as a 30-line rewording of a skill, sized M rather than XS.
 An epic carries no size until its last child is removed; its README is then the epic's remaining work.
 
 `Waiting` lists what the work waits on outside the tree; each item opens with who acts, `Maintainer:` or the outside party, before a colon.
