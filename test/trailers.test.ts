@@ -20,3 +20,11 @@ test("starts a trailer block under a lone subject, and writes unknown for a valu
 		"subject\n\nAgent-Harness: codex\nAgent-Model: unknown\nAgent-Effort: high\n",
 	);
 });
+
+test("finds the trailer block as Git does, leaving lookalike lines in the body alone", () => {
+	expect(withTrailers("fix: x\r\n\r\nAgent-Model: old\r\n", by)).toBe(`fix: x\n\n${trailers}`);
+	expect(withTrailers("fix: x\n\nAgent-Model: old\n\n# comment\n", by)).toContain("\n\n# comment\n");
+	expect(withTrailers("fix: x\n\nAgent-Model: old\n\n# comment\n", by)).not.toContain("old");
+	const body = "fix: x\n\nThe example configuration is:\nAgent-Model: old\nThis value identifies the model.";
+	expect(withTrailers(body, by)).toBe(`${body}\n\n${trailers}`);
+});
