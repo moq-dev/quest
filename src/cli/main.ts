@@ -40,7 +40,7 @@ import {
 	runRunner,
 } from "../runner/cli";
 import type { AdapterName } from "../runner/adapter";
-import { held, reach, target, upstream, upstreamRefs } from "./claims";
+import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { gate, QUICK_MS } from "./gate";
 import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, readRemote, remoteRepository } from "./github";
 import { type Hold, finish, land, release, take } from "./hold";
@@ -318,40 +318,54 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("waiting")
-		.summary("List quests waiting on the maintainer or an outside party")
+		.summary("List quests and draft PRs waiting on the maintainer or an outside party")
 		.description(
-			"List every quest with a ## Waiting section: those waiting on the maintainer first, then milestone " +
-				"priority, distinct transitive dependents as quest unblocked counts them, ready before blocked, then " +
-				"tree order. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
-				"followed by the condition and how to check or advance it.\n\n" +
-				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the path, " +
-				"and the item. --json prints an ordered array of {path, dependents, ready, waits: [{line, party, text}]} " +
-				"objects. --maintainer keeps only the items the maintainer settles. Invalid trees fail before printing. " +
-				"Outside conditions are never checked. Draft PRs hand back with the same heading; this reads only the " +
-				"quest tree.",
+			"List every quest with a ## Waiting section and every open draft PR handed back with one (or the " +
+				"older ## Decisions needed): those waiting on the maintainer first, then milestone priority, distinct " +
+				"transitive dependents as quest unblocked counts them, ready before blocked, then tree order, with " +
+				"drafts after quests by PR number. A draft ranks as the quest its branch carries, or last when it " +
+				"carries none. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
+				"followed by the condition and how to check or advance it. A draft's item without a party, and every " +
+				"Decisions needed item, is the maintainer's; a draft's section without items is one maintainer item " +
+				"holding its prose.\n\n" +
+				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the quest's " +
+				"path or the draft's URL, and the item. --json prints an ordered array of {path, pr, dependents, " +
+				"ready, waits: [{line, party, text}]} objects, where pr is the draft's URL or null and path is the " +
+				"quest, the quest a draft carries, or null. --maintainer keeps only the items the maintainer settles. " +
+				"Invalid trees fail before printing. Outside conditions are never checked, nor whether another " +
+				"session holds a draft.\n\n" +
+				"Drafts are read from the open PRs of the remote's upstream, found as for quest unblocked " +
+				"--unclaimed, using GH_TOKEN, GITHUB_TOKEN, or gh auth token. Without the remote, off GitHub, or " +
+				"when GitHub cannot be read, it lists the quest tree's items alone and warns that drafts were skipped.",
 		)
 		.option("--json", "Print a deterministic JSON array")
 		.option("--maintainer", "Only items waiting on the maintainer")
-		.option("--limit <count>", "Maximum number of quests to print", positiveInteger("limit"))
-		.action((options: { json?: boolean; maintainer?: boolean; limit?: number }) => {
+		.option("--limit <count>", "Maximum number of entries to print", positiveInteger("limit"))
+		.option("--remote <name>", "Remote whose upstream holds the draft PRs", "origin")
+		.action((options: { json?: boolean; maintainer?: boolean; limit?: number; remote: string }) => {
 			const tree = checkout(root(), warn);
 			if (!valid(tree)) return;
-			const quests = waiting(tree.docs)
-				.map((quest) => (options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest))
-				.filter((quest) => quest.waits.length > 0)
-				.slice(0, options.limit);
-			if (options.json) {
-				print(JSON.stringify(quests));
-				return;
-			}
-			if (theme) print("Quests waiting, the maintainer's first, by milestone and downstream impact:");
-			for (const quest of quests) {
-				for (const wait of quest.waits) {
-					print(
-						`${quest.dependents}\t${quest.ready ? "ready" : "blocked"}\t${quest.path}\t${wait.party}: ${wait.text}`,
-					);
+			settle(openDrafts(root(), options.remote, { github: () => gitHubDependencies(warn), warn }), (drafts) => {
+				const found = waiting(tree.docs, drafts)
+					.map((quest) =>
+						options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest,
+					)
+					.filter((quest) => quest.waits.length > 0)
+					.slice(0, options.limit);
+				if (options.json) {
+					print(JSON.stringify(found));
+					return;
 				}
-			}
+				if (theme)
+					print("Quests and drafts waiting, the maintainer's first, by milestone and downstream impact:");
+				for (const quest of found) {
+					for (const wait of quest.waits) {
+						print(
+							`${quest.dependents}\t${quest.ready ? "ready" : "blocked"}\t${quest.pr ?? quest.path}\t${wait.party}: ${wait.text}`,
+						);
+					}
+				}
+			});
 		});
 
 	program
@@ -763,7 +777,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("run")
 		.summary("Run a command in a checkout, then release it once every process stops")
 		.description(
-			"Run a command in the checkout, restoring it first when released. The command and its descendants " +
+			"Run a command in the checkout, restoring it first when released, without the repository-location " +
+				"variables, such as GIT_DIR, that a Git hook exports. The command and its descendants " +
 				"run in a new, delegated systemd user scope; once the command exits, descendants still in the scope " +
 				"are killed. A `quest gate` inside it owns its command through a child cgroup of the scope. " +
 				"When no other supervised run remains, the scratch declared at creation is pruned. Put the whole job, " +
@@ -831,10 +846,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("hook")
 		.summary("Handle a Claude Code worktree or subagent hook event read on stdin")
 		.description(
-			"Handle the Claude Code hook event whose JSON input arrives on stdin; `quest init` installs it in " +
-				".claude/settings.json for " +
+			"Handle the Claude Code hook event whose JSON input arrives on stdin, for " +
 				HOOK_EVENTS.join(", ") +
-				".\n\n" +
+				". Add it to your own Claude Code settings for those events to opt in, as the README describes.\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
 				"initializes its submodules recursively, and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
@@ -1217,9 +1231,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("init")
-		.description(
-			"Install skill stubs, a quest root, agent pointers, Claude Code worktree hooks, and the merge driver for this repository",
-		)
+		.description("Install skill stubs, a quest root, agent pointers, and the merge driver for this repository")
 		.action(() => {
 			const changes = init(root());
 			for (const line of theme ? theme.init(changes) : changes) print(line);
@@ -1227,7 +1239,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("uninstall")
-		.description("Remove Quest stubs, markers, hooks, and the merge driver installed by `quest init`")
+		.description("Remove Quest stubs, markers, and the merge driver installed by `quest init`")
 		.action(() => {
 			const changes = uninstall(root());
 			for (const line of theme ? theme.uninstall(changes) : changes) print(line);

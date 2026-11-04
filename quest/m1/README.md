@@ -24,7 +24,6 @@ earlier "Later work" milestone became m2.
 
 - [Open kix.quest](/quest/m1/open.md) - the Worker moves to kix.quest and any owner may enroll
 - [Release with worktree hooks](/quest/m1/release.md) - tag a release that has `quest worktree hook`, so SETUP.md's release routes work
-- [Git location variables](/quest/m1/git-env.md) - every Git call on an explicit path ignores a hook's inherited `GIT_DIR` and index
 - [Kix for any repository](/quest/m1/kix/README.md) - onboarding, read-only CI checks, contributor sandboxing, and the maintainer guide
 - [Quest log theme](/quest/m1/theme/README.md) - an MMO-style identity, copy, board, landing page, and CLI output for the demo and launch
 - [Launch material](/quest/m1/launch.md) - README, quickstart, demo, comparison, and launch-post drafts

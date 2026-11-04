@@ -171,12 +171,19 @@ action only the maintainer can take, or the outside party, such as
 - moq-dev/moq: a release carries the VA-API bindings
 ```
 
-`quest waiting` lists every item, the maintainer's first, then by milestone and
-the same downstream impact `quest unblocked` counts. Each line gives the
-dependents, whether the quest is otherwise ready or still blocked, its path,
-and the item; `--maintainer` keeps only the maintainer's, and `--json` prints
-`{path, dependents, ready, waits}` objects. A draft PR hands itself back to
-the maintainer with the same heading. `/quest-unblock` walks you through both.
+A draft PR hands itself back to the maintainer with the same heading in its
+body, or the older `## Decisions needed`.
+
+`quest waiting` lists every item from both, the maintainer's first, then by
+milestone and the same downstream impact `quest unblocked` counts; a draft
+ranks as the quest its branch carries. Each line gives the dependents, whether
+the quest is otherwise ready or still blocked, its path or the draft's URL, and
+the item; `--maintainer` keeps only the maintainer's, and `--json` prints
+`{path, pr, dependents, ready, waits}` objects. A draft's item that names no
+party, and every `Decisions needed` item, is the maintainer's. Drafts come from
+the upstream's open PRs, found as for `unblocked --unclaimed`; without the
+remote, off GitHub, or when GitHub cannot be read, it lists the tree's items
+and warns that drafts were skipped. `/quest-unblock` walks you through them.
 
 ## Claim a quest
 
@@ -1328,7 +1335,7 @@ The experimental `quest worktree` commands share one disk budget across this
 user's repositories and release a checkout's disk by deleting its declared
 scratch in place. They only operate on Git worktrees they create; use the
 owning application for Codex or other managed checkouts. Claude Code's
-checkouts are Quest's own once `quest init` installs its hooks (see
+checkouts are Quest's own once you opt into its hooks (see
 [Claude Code checkouts](#claude-code-checkouts)).
 
 Set a shared capacity and an explicit reservation in bytes, covering the
@@ -1350,7 +1357,9 @@ Creation prints JSON with the ID and the detached, locked checkout path under
 `.worktrees/`, and records the `--scratch` paths. Names are unique per
 repository; where several repositories use one, the other commands take the ID. `run` restores a released
 checkout, runs the command there, and once it exits kills any descendants it
-left behind. When no other run remains in the checkout, it releases it: the
+left behind. The command gets Quest's environment without Git's
+repository-location variables, such as `GIT_DIR` and `GIT_INDEX_FILE`, which a
+Git hook would otherwise point at the repository it ran in; `-c` config is kept. When no other run remains in the checkout, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
 job, such as an agent session or a script that installs, builds, and tests, in
 one run, since the next run starts without scratch.
@@ -1427,9 +1436,24 @@ stolen. This initial interface refuses unknown or changed checkout ownership.
 
 ### Claude Code checkouts
 
-`quest init` adds hook entries to the repository's `.claude/settings.json` that
-run `quest worktree hook` for Claude Code's `WorktreeCreate`, `WorktreeRemove`,
-`SubagentStart`, and `SubagentStop` events, so `quest` must be on the `PATH`
+Quest's hooks for Claude Code are an opt-in each user adds to their own
+settings, `~/.claude/settings.json`, so they apply in every repository that
+user opens and no repository forces them on its contributors. Merge these
+entries into the file's `hooks`:
+
+```json
+{
+  "hooks": {
+    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
+    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }]
+  }
+}
+```
+
+Only one hook can manage Claude's worktrees, so remove any other
+`WorktreeCreate` or `WorktreeRemove` hook first. `quest` must be on the `PATH`
 Claude Code runs hooks with. For `claude --bg` and agent view, that is the
 environment of the shell that started the session. The hook then creates every worktree Claude makes
 in the repository: for `--worktree`, `EnterWorktree`, isolated subagents and
