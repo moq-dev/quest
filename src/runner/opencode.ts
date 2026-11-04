@@ -18,11 +18,10 @@
 // servers, and no language servers or formatters. Before each turn the runner
 // checks that opencode loaded no config but its own and the account's, and that
 // its plugin is active, since opencode would only log a plugin it could not load.
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { promisify } from "node:util";
 
 import {
 	type LocationRef,
@@ -45,8 +44,6 @@ import {
 	STOP_GRACE_MS,
 } from "./adapter";
 import { keptEnvironment, quote, runtimeSettings, type Sandbox } from "./sandbox";
-
-const run = promisify(execFile);
 
 /** The XDG base directories opencode keeps its config, credentials, sessions, and caches in, with their defaults. */
 const XDG = {
@@ -271,9 +268,13 @@ exec /usr/bin/env -i ${kept.join(" ")} "QUEST_COMMAND=$2" ${quote(srt)} --settin
 `;
 }
 
-/** The directory opencode saves truncated tool output in, which its read tool may read. */
-function toolOutput(home: string): string {
-	return join(accountDirectories(home).XDG_DATA_HOME, "opencode", "tool-output");
+/**
+ * Where opencode saves the full output it truncates: a tool's, and a shell
+ * command's, under a directory per project. The read-only file tools may read them.
+ */
+function savedOutput(home: string): string[] {
+	const data = join(accountDirectories(home).XDG_DATA_HOME, "opencode");
+	return [join(data, "tool-output"), join(data, "shell")];
 }
 
 /**
@@ -281,8 +282,9 @@ function toolOutput(home: string): string {
  * permission mode allows its own, except: questions, which go through kix;
  * WebFetch, web search, and the desktop browser, which would run in the
  * unconfined server; Code Mode's `execute`, which carries opencode's own
- * tools, such as moving the session to another directory; and the file tools' paths outside the checkout
- * and the attempt's directory. A tool whose last matching rule denies it
+ * tools, such as moving the session to another directory; and the file tools'
+ * paths outside the checkout, the attempt's directory, and opencode's saved
+ * output, which the plugin keeps read-only. A tool whose last matching rule denies it
  * everywhere is not offered at all. The kix tools stay direct tools rather than
  * Code Mode's. `instructions` is the file holding the launch's system prompt.
  */
@@ -306,7 +308,11 @@ export function jobConfig(options: {
 			deny("execute"),
 			deny("browser"),
 			deny("external_directory"),
-			{ action: "external_directory", resource: join(launch.sandbox.tmp, "*"), effect: "allow" },
+			...[launch.sandbox.tmp, ...savedOutput(launch.home)].map((dir) => ({
+				action: "external_directory",
+				resource: join(dir, "*"),
+				effect: "allow",
+			})),
 		],
 		// Both would run the repository's own tools in the server.
 		lsp: false,
@@ -329,7 +335,7 @@ export function jobConfig(options: {
 				options: {
 					cwd: launch.cwd,
 					writes: [launch.cwd, launch.sandbox.tmp],
-					reads: [toolOutput(launch.home)],
+					reads: savedOutput(launch.home),
 					config: PROJECT_CONFIG.map((name) => join(launch.cwd, name)),
 				},
 			},
@@ -338,15 +344,15 @@ export function jobConfig(options: {
 }
 
 export interface Credential {
-	/** opencode's provider ID, such as openai or opencode-go. */
+	/** opencode's integration ID, such as openai or opencode-go. */
 	provider: string;
 	/** How it signed in: oauth for a plan login, key for an API key, external for a credential managed elsewhere. */
 	type: string;
 }
 
-/** The stored credentials in `opencode auth list --format json` output, without the credentials themselves. */
+/** The credentials stored among opencode's integrations, without the credentials themselves. */
 export function credentials(list: unknown): Credential[] {
-	if (!Array.isArray(list)) throw new Error("opencode auth list printed no list");
+	if (!Array.isArray(list)) throw new Error("opencode listed no integrations");
 	return list.flatMap((integration: { id?: unknown; connections?: unknown }) =>
 		typeof integration?.id === "string" && Array.isArray(integration.connections)
 			? integration.connections.flatMap((connection: { type?: unknown; method?: unknown }) =>
@@ -356,6 +362,19 @@ export function credentials(list: unknown): Credential[] {
 				)
 			: [],
 	);
+}
+
+/**
+ * The providers an account's stored credentials enable, which are all its jobs
+ * may use. An integration may enable providers of other IDs, as OpenCode
+ * Console does, and providers that need no sign-in belong to no stored credential.
+ */
+export function signedInProviders(
+	integrations: unknown,
+	providers: { id: string; integrationID?: string }[],
+): string[] {
+	const stored = new Set(credentials(integrations).map((c) => c.provider));
+	return providers.flatMap((p) => (stored.has(p.integrationID ?? p.id) ? [p.id] : []));
 }
 
 /** What kix shows for a credential, and whether it is a plan rather than a metered key. */
@@ -475,6 +494,84 @@ async function reply(
 const unbounded = ((request: Parameters<typeof fetch>[0], init?: RequestInit) =>
 	fetch(request, { ...init, timeout: false } as RequestInit)) as typeof fetch;
 
+/** A client for the server at `url` behind `password`. */
+function connect(url: string, password: string): OpenCodeClient {
+	return OpenCode.make({
+		baseUrl: url,
+		headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` },
+		fetch: unbounded,
+	});
+}
+
+/** A running `opencode serve --stdio`. */
+interface Server {
+	child: ReturnType<typeof spawn>;
+	/** Its address, or null if it exited first. */
+	url: Promise<string | null>;
+	closed: Promise<void>;
+	/** The end of its stderr, which explains a failure. */
+	tail(): string;
+	/** Stop it, its process group, and every tool it started, killing them after a grace period. */
+	stop(): void;
+}
+
+/**
+ * Start opencode's server on localhost in `cwd`, passing each chunk of its
+ * output to `output`. With --stdio it prints its address as JSON, drops the
+ * password from its environment, and exits when its stdin closes, so it ends
+ * with the runner however the runner ends. `env` carries the password, which
+ * stays out of the command line other users can read.
+ */
+function serve(binary: string, cwd: string, env: NodeJS.ProcessEnv, output: (chunk: string) => void): Server {
+	const child = spawn(binary, ["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"], {
+		cwd,
+		env,
+		stdio: ["pipe", "pipe", "pipe"],
+		// Its own process group, so stopping it also stops every tool it started.
+		detached: true,
+	});
+	let stderr = "";
+	let listening: (url: string | null) => void = () => {};
+	const url = new Promise<string | null>((resolve) => (listening = resolve));
+	const lines = boundedLines(LINE_LIMIT, (line) => {
+		try {
+			const { url } = JSON.parse(line) as { url?: unknown };
+			if (typeof url === "string") listening(url);
+		} catch {}
+	});
+	child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+		lines.data(chunk);
+		output(chunk);
+	});
+	child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+		stderr = (stderr + chunk).slice(-64 * 1024);
+		output(chunk);
+	});
+	let killer: ReturnType<typeof setTimeout> | undefined;
+	const closed = new Promise<void>((resolve) => {
+		child.once("error", (error) => {
+			stderr += `could not start ${binary}: ${error.message}\n`;
+			resolve();
+		});
+		child.once("close", () => resolve());
+	}).then(() => {
+		clearTimeout(killer);
+		lines.end();
+		listening(null);
+	});
+	return {
+		child,
+		url,
+		closed,
+		tail: () => stderr.trim().split("\n").slice(-20).join("\n"),
+		stop() {
+			child.stdin.end();
+			signalGroup(child.pid, "SIGTERM");
+			killer ??= setTimeout(() => signalGroup(child.pid, "SIGKILL"), STOP_GRACE_MS);
+		},
+	};
+}
+
 export class Opencode implements Adapter {
 	readonly name = "opencode";
 
@@ -503,22 +600,43 @@ export class Opencode implements Adapter {
 				code === 0 ? resolve() : reject(new Error(`opencode auth login exited ${code}`)),
 			);
 		});
-		const providers = [...new Set((await this.credentials(home)).map((c) => c.provider))];
+		const providers = await this.ask(home, async (client, location) =>
+			signedInProviders(
+				(await client.integration.list({ location })).data,
+				(await client.provider.list({ location })).data,
+			),
+		);
+		if (!providers.length) throw new Error("the sign-in enabled no opencode provider");
 		writeAccountSettings(home, { ...readAccountSettings(home), providers });
 	}
 
 	async status(home: string): Promise<SignedIn | null> {
-		return signedIn(await this.credentials(home));
+		return signedIn(
+			credentials(
+				await this.ask(home, async (client, location) => (await client.integration.list({ location })).data),
+			),
+		);
 	}
 
-	/** The account's stored credentials, from opencode's own listing in a private server. */
-	async credentials(home: string): Promise<Credential[]> {
-		const { stdout } = await run(this.binary, ["auth", "list", "--standalone", "--format", "json"], {
-			env: accountEnvironment(this.env, home),
-			cwd: home,
-			encoding: "utf8",
-		});
-		return credentials(JSON.parse(stdout));
+	/** Ask a private server in the account's home, as opencode's own CLI commands do, once it has loaded. */
+	private async ask<T>(
+		home: string,
+		question: (client: OpenCodeClient, location: LocationRef) => Promise<T>,
+	): Promise<T> {
+		const password = randomBytes(32).toString("base64url");
+		const env = { ...accountEnvironment(this.env, home), OPENCODE_SERVER_PASSWORD: password };
+		const server = serve(this.binary, home, env, () => {});
+		try {
+			const url = await server.url;
+			if (!url) throw new Error(`opencode serve failed: ${server.tail()}`);
+			const client = connect(url, password);
+			const location = { directory: home };
+			await client.model.default({ location });
+			return await question(client, location);
+		} finally {
+			server.stop();
+			await server.closed;
+		}
 	}
 
 	/** Pick the account's model in its own opencode config, which applies to every job it runs. */
@@ -561,71 +679,30 @@ export class Opencode implements Adapter {
 		writeFileSync(shell, shellScript(this.srt, settings, launch.sandbox, launch.env), { mode: 0o700 });
 		const config = jobConfig({ launch, shell, plugin, instructions });
 		// The server runs outside the devShell, whose shellHook the job's revision controls, and with a
-		// HOME commands cannot write, since opencode loads plugins and instructions from it. The password
-		// and the tools' bearer token stay out of the command line, which other users can read. With
-		// --stdio it prints its address as JSON, drops the password from its environment, and exits
-		// when its stdin closes, so it ends with the runner however the runner ends.
-		const child = spawn(this.binary, ["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"], {
-			cwd: launch.cwd,
-			env: {
+		// HOME commands cannot write, since opencode loads plugins and instructions from it.
+		const server = serve(
+			this.binary,
+			launch.cwd,
+			{
 				...accountEnvironment(launch.env, launch.home),
 				TMPDIR: join(dir, "tmp"),
 				OPENCODE_DISABLE_PROJECT_CONFIG: "1",
 				OPENCODE_SERVER_PASSWORD: password,
 				OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
 			},
-			stdio: ["pipe", "pipe", "pipe"],
-			// Its own process group, so stopping it also stops every tool it started.
-			detached: true,
-		});
-
-		let stderr = "";
-		let listening: (url: string | null) => void = () => {};
-		const url = new Promise<string | null>((resolve) => (listening = resolve));
-		const lines = boundedLines(LINE_LIMIT, (line) => {
-			try {
-				const { url } = JSON.parse(line) as { url?: unknown };
-				if (typeof url === "string") listening(url);
-			} catch {}
-		});
-		child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-			lines.data(chunk);
-			launch.output(chunk);
-		});
-		child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-			stderr = (stderr + chunk).slice(-64 * 1024);
-			launch.output(chunk);
-		});
-		const closed = new Promise<void>((resolve) => {
-			child.once("error", (error) => {
-				stderr += `could not start ${this.binary}: ${error.message}\n`;
-				resolve();
-			});
-			child.once("close", () => resolve());
-		});
-		void closed.then(() => listening(null));
+			launch.output,
+		);
 
 		let stopping = false;
-		let killer: ReturnType<typeof setTimeout> | undefined;
 		let abort: () => Promise<unknown> = async () => {};
 		const events = new AbortController();
 		let watched: Promise<void> = Promise.resolve();
-		const tail = () => stderr.trim().split("\n").slice(-20).join("\n");
 		const failure = (reply: string): Exit => ({ limited: null, failed: true, reply: reply || undefined });
-		const terminate = () => {
-			child.stdin.end();
-			signalGroup(child.pid, "SIGTERM");
-			killer ??= setTimeout(() => signalGroup(child.pid, "SIGKILL"), STOP_GRACE_MS);
-		};
 
 		const turn = async (): Promise<Exit> => {
-			const base = await url;
-			if (!base) return failure(tail());
-			const client = OpenCode.make({
-				baseUrl: base,
-				headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` },
-				fetch: unbounded,
-			});
+			const url = await server.url;
+			if (!url) return failure(server.tail());
+			const client = connect(url, password);
 			const location = { directory: launch.cwd };
 			const refused = await refusal(client, location, launch.home);
 			if (refused) return failure(refused);
@@ -651,7 +728,7 @@ export class Opencode implements Adapter {
 			const stream = client.event.subscribe({ signal: events.signal })[Symbol.asyncIterator]();
 			// The first event confirms the subscription, so nothing the prompt causes is missed.
 			const connected = await stream.next();
-			if (connected.done) return failure(tail() || "opencode's event stream closed");
+			if (connected.done) return failure(server.tail() || "opencode's event stream closed");
 			watched = (async () => {
 				for (let next = await stream.next(); !next.done; next = await stream.next()) {
 					const event: OpenCodeEvent = next.value;
@@ -685,14 +762,14 @@ export class Opencode implements Adapter {
 
 		const done = turn()
 			// The server's own last words explain a lost connection better than the client's error.
-			.catch((error: unknown) => failure(tail() || (error instanceof Error ? error.message : String(error))))
+			.catch((error: unknown) =>
+				failure(server.tail() || (error instanceof Error ? error.message : String(error))),
+			)
 			.then(async (exit) => {
 				events.abort();
-				terminate();
-				await closed;
+				server.stop();
+				await server.closed;
 				await watched;
-				clearTimeout(killer);
-				lines.end();
 				rmSync(dir, { recursive: true, force: true });
 				return exit;
 			});
@@ -703,8 +780,10 @@ export class Opencode implements Adapter {
 				// Interrupt the turn so opencode records it, then stop the server whether or not it answered.
 				abort()
 					.catch(() => {})
-					.finally(terminate);
-				killer ??= setTimeout(() => signalGroup(child.pid, "SIGKILL"), STOP_GRACE_MS);
+					.finally(() => server.stop());
+				// A server too stuck to answer is stopped anyway.
+				const stuck = setTimeout(() => server.stop(), STOP_GRACE_MS);
+				void server.closed.then(() => clearTimeout(stuck));
 			},
 		};
 	}

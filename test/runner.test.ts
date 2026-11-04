@@ -30,6 +30,7 @@ import {
 	PLUGIN,
 	projectConfig,
 	signedIn,
+	signedInProviders,
 	turnExit,
 } from "../src/runner/opencode";
 import { FLUSH_BYTES, OutputUploader, split } from "../src/runner/output";
@@ -816,7 +817,18 @@ describe("opencode", () => {
 			label: "wafer.ai API key (opencode)",
 		});
 		expect(signedIn(credentials([]))).toBeNull();
-		expect(() => credentials({})).toThrow(/no list/);
+		expect(() => credentials({})).toThrow(/no integrations/);
+		// OpenCode Console's providers keep their own IDs; a provider needing no sign-in is no account's.
+		expect(
+			signedInProviders(
+				[{ id: "opencode", connections: [{ type: "credential", id: "c", label: "Console", method: "oauth" }] }],
+				[
+					{ id: "acme-gpt", integrationID: "opencode" },
+					{ id: "opencode", integrationID: "opencode" },
+					{ id: "ollama" },
+				],
+			),
+		).toEqual(["acme-gpt", "opencode"]);
 	});
 
 	test("keeps the user's provider credentials and opencode settings from the account", () => {
@@ -1121,15 +1133,22 @@ describe("account add", () => {
 		const dir = tempDir();
 		const bin = join(dir, "bin");
 		mkdirSync(bin);
-		// opencode's sign-in stores the credential in its own store, which `auth list` reports.
-		const list = JSON.stringify([
-			{ id: "opencode-go", connections: [{ type: "credential", id: "c", label: "API key", method: "key" }] },
-		]);
-		writeFileSync(
-			join(bin, "opencode"),
-			`#!/bin/sh\necho "$*" >> "${join(dir, "calls")}"\ncase "$1 $2" in "auth list") echo '${list}' ;; esac\n`,
-		);
+		// opencode's sign-in stores the credential in its own store, which its server reports.
+		writeFileSync(join(bin, "opencode"), `#!${process.execPath}\n${FAKE_OPENCODE}`);
 		chmodSync(join(bin, "opencode"), 0o755);
+		writeFileSync(
+			join(dir, "signed-in.json"),
+			JSON.stringify({
+				integrations: [
+					{
+						id: "opencode-go",
+						connections: [{ type: "credential", id: "c", label: "API key", method: "key" }],
+					},
+					{ id: "openai", connections: [] },
+				],
+				providers: [{ id: "opencode-go", integrationID: "opencode-go" }, { id: "openai" }],
+			}),
+		);
 		const out: string[] = [];
 		const io = {
 			stdout: (text: string) => out.push(text),
@@ -1168,10 +1187,17 @@ describe("account add", () => {
 				{ action: "provider.use", resource: "opencode-go", effect: "allow" },
 			],
 		});
-		// In a private server each time, not opencode's background service.
-		expect(readFileSync(join(dir, "calls"), "utf8")).toBe(
-			"auth login --standalone\nauth list --standalone --format json\nauth list --standalone --format json\n",
-		);
+		// Each in a private server in the account's home, not opencode's background service.
+		const calls = readFileSync(join(dir, "calls.log"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(calls.map((c) => c.argv)).toEqual([
+			["auth", "login", "--standalone"],
+			["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"],
+			["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"],
+		]);
+		expect(new Set(calls.map((c) => c.cwd))).toEqual(new Set([home.accountHome(account!.id)]));
 	});
 });
 
@@ -1392,9 +1418,16 @@ const { pathToFileURL } = require("node:url");
 const argv = process.argv.slice(2);
 const logFile = join(__dirname, "..", "calls.log");
 const log = (value) => fs.appendFileSync(logFile, JSON.stringify(value) + "\\n");
-const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
+if (argv[0] === "auth") {
+	log({ argv, cwd: process.cwd() });
+	process.exit(0);
+}
+// A job's server carries the runner's config; a server answering about the account carries none.
+const config = process.env.OPENCODE_CONFIG_CONTENT ? JSON.parse(process.env.OPENCODE_CONFIG_CONTENT) : undefined;
+if (!config) log({ argv, cwd: process.cwd() });
+const signedIn = () => JSON.parse(fs.readFileSync(join(__dirname, "..", "signed-in.json"), "utf8"));
 const auth = "Basic " + Buffer.from("opencode:" + process.env.OPENCODE_SERVER_PASSWORD).toString("base64");
-const kix = config.mcp.servers.kix;
+const kix = config?.mcp.servers.kix;
 const streams = [];
 const send = (event) => { for (const s of streams) s.write("data: " + JSON.stringify(event) + "\\n\\n"); };
 const messages = {};
@@ -1411,7 +1444,7 @@ async function rpc(method, params) {
 	return (await response.json()).result;
 }
 // opencode loads a local plugin from its directory and fails it rather than the server.
-const plugin = (async () => {
+const plugin = config && (async () => {
 	const { package: dir, options } = config.plugins[0];
 	const { default: definition } = await import(pathToFileURL(join(dir, "server.js")).href);
 	let hooked = false;
@@ -1458,6 +1491,8 @@ const server = http.createServer(async (request, response) => {
 		return response.write("data: " + JSON.stringify({ type: "server.connected", data: {} }) + "\\n\\n");
 	}
 	if (path === "/api/model/default") return json(response, { data: { id: "gpt-5.5", providerID: "openai" } });
+	if (path === "/api/integration") return json(response, { location: {}, data: signedIn().integrations });
+	if (path === "/api/provider") return json(response, { location: {}, data: signedIn().providers });
 	// The runner's config, and the account's config directory.
 	// The runner's config, the account's config directory, and any the steps add, such as a machine's.
 	if (path === "/api/config")
@@ -2042,7 +2077,9 @@ describe("quest runner", () => {
 					resource: "*",
 					effect: "deny",
 				})),
-				{ action: "external_directory", resource: `${tmp}/*`, effect: "allow" },
+				...[tmp, join(home, "data", "opencode", "tool-output"), join(home, "data", "opencode", "shell")].map(
+					(dir) => ({ action: "external_directory", resource: `${dir}/*`, effect: "allow" }),
+				),
 			],
 			lsp: false,
 			formatter: false,
@@ -2059,7 +2096,7 @@ describe("quest runner", () => {
 		expect(first.config.plugins[0].options).toEqual({
 			cwd: checkout,
 			writes: [checkout, tmp],
-			reads: [join(home, "data", "opencode", "tool-output")],
+			reads: [join(home, "data", "opencode", "tool-output"), join(home, "data", "opencode", "shell")],
 			config: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
 		});
 		// The launch's shell, plugin, and settings are gone once it ends.
