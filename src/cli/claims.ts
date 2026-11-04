@@ -32,6 +32,7 @@ export interface OpenPull {
 	updated: number;
 	/** Its body has a `## Waiting` section (or the older `## Decisions needed`), so it waits on the maintainer. */
 	handedBack: boolean;
+	body: string;
 }
 
 /** A held quest branch, and the open PR from it if there is one. */
@@ -185,6 +186,7 @@ export async function openPullRequests(github: GitHub, repository: Repository): 
 			created: Date.parse(string(row.created_at)),
 			updated: Date.parse(string(row.updated_at)),
 			handedBack: typeof row.body === "string" && handedBack(row.body),
+			body: typeof row.body === "string" ? row.body : "",
 		};
 	});
 }
@@ -222,6 +224,32 @@ export async function reach(root: string, name: string, deps: ClaimDependencies)
 	const up = await upstream(root, remote, deps);
 	if (up.github === null) deps.warn(`${name} is not on GitHub, so only its branches were checked for claims`);
 	return up;
+}
+
+/**
+ * The open drafts in the upstream of the remote `name`, from any head
+ * repository. Reading them needs GitHub, so without the remote, off GitHub,
+ * or when GitHub cannot be reached or refuses, it warns that they were
+ * skipped and returns none, leaving the caller the quest tree.
+ */
+export async function openDrafts(root: string, name: string, deps: ClaimDependencies): Promise<OpenPull[]> {
+	const remote = readRemote(root, name);
+	if (remote === null) {
+		deps.warn(`no ${name} remote, so draft PRs were skipped`);
+		return [];
+	}
+	try {
+		const up = await upstream(root, remote, deps);
+		if (up.github === null) {
+			deps.warn(`${name} is not on GitHub, so draft PRs were skipped`);
+			return [];
+		}
+		const pulls = await openPullRequests(up.github.client, up.github.repository);
+		return pulls.filter((pull) => pull.draft).sort((a, b) => a.number - b.number);
+	} catch (error) {
+		deps.warn(`draft PRs were skipped: ${error instanceof Error ? error.message : String(error)}`);
+		return [];
+	}
 }
 
 /** Which branches someone holds, and which landed branches a new claim replaces. */

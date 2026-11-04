@@ -171,12 +171,19 @@ action only the maintainer can take, or the outside party, such as
 - moq-dev/moq: a release carries the VA-API bindings
 ```
 
-`quest waiting` lists every item, the maintainer's first, then by milestone and
-the same downstream impact `quest unblocked` counts. Each line gives the
-dependents, whether the quest is otherwise ready or still blocked, its path,
-and the item; `--maintainer` keeps only the maintainer's, and `--json` prints
-`{path, dependents, ready, waits}` objects. A draft PR hands itself back to
-the maintainer with the same heading. `/quest-unblock` walks you through both.
+A draft PR hands itself back to the maintainer with the same heading in its
+body, or the older `## Decisions needed`.
+
+`quest waiting` lists every item from both, the maintainer's first, then by
+milestone and the same downstream impact `quest unblocked` counts; a draft
+ranks as the quest its branch carries. Each line gives the dependents, whether
+the quest is otherwise ready or still blocked, its path or the draft's URL, and
+the item; `--maintainer` keeps only the maintainer's, and `--json` prints
+`{path, pr, dependents, ready, waits}` objects. A draft's item that names no
+party, and every `Decisions needed` item, is the maintainer's. Drafts come from
+the upstream's open PRs, found as for `unblocked --unclaimed`; without the
+remote, off GitHub, or when GitHub cannot be read, it lists the tree's items
+and warns that drafts were skipped. `/quest-unblock` walks you through them.
 
 ## Claim a quest
 
