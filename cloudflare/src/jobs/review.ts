@@ -35,11 +35,24 @@ export type ReviewReport = {
 	findings: Finding[];
 };
 
-/** Bounds a report: GitHub keeps at most 65,535 characters of a check run's text. */
-export const REVIEW_LIMITS = { findings: 100, title: 300, body: 8000, rationale: 8000 };
+/**
+ * Bounds a report: GitHub keeps at most 65,535 characters of a check run's
+ * text. Only that text shows a report's prose, so prose past its bound is cut
+ * to fit rather than refused, which would leave a head `quest review` accepted
+ * unrecorded.
+ */
+export const REVIEW_LIMITS = { findings: 100, file: 1024, title: 300, body: 8000, rationale: 8000 };
 
 const count = (value: unknown, min: number) =>
 	typeof value === "number" && Number.isSafeInteger(value) && value >= min ? value : null;
+
+/** A string cut to at most `max` characters, ending in an ellipsis when cut, or null for any other value. */
+function clip(value: unknown, max: number) {
+	if (typeof value !== "string") return null;
+	if (value.length <= max) return value;
+	// Never leave half of a surrogate pair at the cut.
+	return `${value.slice(0, max - 1).replace(/[\ud800-\udbff]$/, "")}…`;
+}
 
 /** Parse a runner's review report, or throw a JobError the runner can read. */
 export function parseReview(body: Record<string, unknown>): ReviewReport {
@@ -55,18 +68,18 @@ export function parseReview(body: Record<string, unknown>): ReviewReport {
 	const round = count(body.round, 1);
 	if (!model || !effort || !round) throw new JobError("The reviewer's model, effort, and round are required");
 	const score = count(body.score, 0);
-	const rationale = text(body.rationale, REVIEW_LIMITS.rationale);
-	if (score === null || score > 10 || !rationale)
+	const rationale = clip(body.rationale, REVIEW_LIMITS.rationale);
+	if (score === null || score > 10 || rationale === null || !(body.rationale as string).trim())
 		throw new JobError("A review needs a score from 0 to 10 and a rationale");
 	if (!Array.isArray(body.findings) || body.findings.length > REVIEW_LIMITS.findings)
 		throw new JobError(`At most ${REVIEW_LIMITS.findings} findings per review`);
 	const findings = body.findings.map((item: Record<string, unknown> | null): Finding => {
-		const file = text(item?.file, 1024);
-		const title = text(item?.title, REVIEW_LIMITS.title);
-		const detail = typeof item?.body === "string" && item.body.length <= REVIEW_LIMITS.body ? item.body : null;
+		const file = clip(item?.file, REVIEW_LIMITS.file);
+		const title = clip(item?.title, REVIEW_LIMITS.title);
+		const detail = clip(item?.body, REVIEW_LIMITS.body);
 		const line = item?.line === null ? null : count(item?.line, 1);
 		const severity = SEVERITIES.find((s) => s === item?.severity);
-		if (!file || !title || detail === null || (item?.line !== null && line === null) || !severity)
+		if (file === null || title === null || detail === null || (item?.line !== null && line === null) || !severity)
 			throw new JobError("Each finding needs a file, line or null, severity, title, and body");
 		return { file, line, severity, title, body: detail };
 	});

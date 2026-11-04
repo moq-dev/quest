@@ -376,17 +376,17 @@ reports the round over `POST /api/runner/review`. The agent never touches the
 report, so it can neither skip nor fake the review. A merge job publishes its
 fixes, has them reviewed, and lands only a head whose review found nothing.
 
-kix records the round as the App's `quest review` check run on the commit,
-with the reviewer, model, effort, and round as its summary, the round's score
-out of 10 in its title, and the score's rationale and each finding as plain
-text: `success` when the round found nothing, `failure` otherwise, whatever the
-score. The agent fixes or refutes each finding and delivers again; the next
-round resumes the reviewer's session with its responses. kix records a report
-only from the job's current attempt, only on the head kix itself last published
-for the job and GitHub attributes to a bot, not one a merge job continued onto,
-and only from another vendor's model than the job's account runs, and writes it
-with `checks: write` on behalf of the job's requester, after rechecking their
-maintainer authority.
+kix records the round as the App's `quest review` check run on the commit, with
+the reviewer, model, effort, and round as its summary, the round's score out of
+10 in its title, and the score's rationale and each finding as plain text,
+cutting any too long to fit rather than refusing the report: `success` when the
+round found nothing, `failure` otherwise, whatever the score. The agent fixes or
+refutes each finding and delivers again; the next round resumes the reviewer's
+session with its responses. kix records a report only from the job's current
+attempt, only on the head kix itself last published for the job and GitHub
+attributes to a bot, not one a merge job continued onto, and only from another
+vendor's model than the job's account runs, and writes it with `checks: write`
+on behalf of the job's requester, after rechecking their maintainer authority.
 
 Claude Code reviews with one of the runner's Claude Code accounts that is not
 limited. Runners hold no Codex accounts, so Codex reviews with the login of

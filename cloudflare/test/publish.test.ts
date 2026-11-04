@@ -5,6 +5,7 @@ import { GitHubService } from "../src/github/service";
 import { app } from "../src/index";
 import * as landing from "../src/jobs/landing";
 import { refusal, restart, validPath, validateContinuation } from "../src/jobs/publish";
+import { REVIEW_LIMITS } from "../src/jobs/review";
 import * as store from "../src/jobs/store";
 import { type Repo, type World, blob, commitOf, fakeGitHub, intercept as around } from "../dev/github";
 import { privateKey } from "./github-key";
@@ -1904,6 +1905,35 @@ describe("merge jobs", () => {
 				});
 				expect(await land(id, head)).toBeNull();
 				expect(lands().map((l) => l.variables.sha)).toEqual([head]);
+			});
+
+			it("cuts prose too long for the check's text instead of refusing the report", async () => {
+				const id = await merging(false);
+				const head = await fix(id);
+				const long = (n: number) => "x".repeat(n + 1);
+				const cut = (n: number) => `${"x".repeat(n - 1)}…`;
+				const failed = await report({
+					job: id,
+					head,
+					score: 2,
+					rationale: long(REVIEW_LIMITS.rationale),
+					findings: [
+						{
+							...finding,
+							file: long(REVIEW_LIMITS.file),
+							line: null,
+							title: long(REVIEW_LIMITS.title),
+							body: "",
+						},
+						{ ...finding, title: "", body: long(REVIEW_LIMITS.body) },
+					],
+				});
+				expect(await failed.json()).toEqual({ conclusion: "failure" });
+				expect(project.checkRuns!.at(-1)!.output.text).toBe(
+					`\`\`\`text\nscore 2/10: ${cut(REVIEW_LIMITS.rationale)}\n\`\`\`\n\n` +
+						`\`\`\`text\nhigh ${cut(REVIEW_LIMITS.file)} ${cut(REVIEW_LIMITS.title)}\n\n\n\`\`\`\n\n` +
+						`\`\`\`text\nhigh a:1 \n\n${cut(REVIEW_LIMITS.body)}\n\`\`\``,
+				);
 			});
 
 			it("refuses a head the job did not publish, a stale attempt, its own vendor, and malformed findings", async () => {
