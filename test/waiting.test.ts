@@ -127,16 +127,18 @@ test("a draft's hand-back items are the maintainer's unless a Waiting item names
 	]);
 });
 
-test("a draft's hand-back item keeps nested headings and the body's reference definitions", () => {
+test("a draft's hand-back item keeps nested headings and the body's reference definitions, and drops raw HTML", () => {
 	expect(
 		handBackWaits(
 			"[m]: https://example.com\n\n## Waiting\n\n- Maintainer: choose a provider.\n\n  ## Options\n\n  Hetzner or OVH.\n" +
-				"- [Maintainer][m]: approve the **account**.\n- <strong>Codex</strong>: out of <!-- c -->quota.\n",
+				"- [Maintainer][m]: approve the **account**.\n- <strong>Codex</strong>: out of <!-- c -->quota.\n" +
+				'- <span title="a > b">Maintainer</span>: approve.\n',
 		),
 	).toEqual([
 		{ line: 5, party: "Maintainer", text: "choose a provider. Options Hetzner or OVH." },
 		{ line: 10, party: "Maintainer", text: "approve the account." },
 		{ line: 11, party: "Codex", text: "out of quota." },
+		{ line: 12, party: "Maintainer", text: "approve." },
 	]);
 });
 
@@ -144,9 +146,12 @@ test("a draft's hand-back without items is one maintainer item holding its prose
 	expect(handBackWaits("Work.\r\n\r\nWaiting\r\n-------\r\n\r\nPick a name\r\nfor it.\r\n")).toEqual([
 		{ line: 3, party: "Maintainer", text: "Pick a name for it." },
 	]);
-	expect(
-		handBackWaits("## Waiting\n\n<details>\n<summary>Why</summary>\nPick one.\n</details>\nThen merge.\n"),
-	).toEqual([{ line: 1, party: "Maintainer", text: "Why Pick one. Then merge." }]);
+	expect(handBackWaits("## Waiting\n\n<details>\n<summary>Why</summary>\nPick one.\n</details>\n")).toEqual([
+		{ line: 1, party: "Maintainer", text: "the draft hands back without saying what it waits on" },
+	]);
+	expect(handBackWaits("## Waiting\n\n<details>\n<summary>Why</summary>\n</details>\n\nThen merge.\n")).toEqual([
+		{ line: 1, party: "Maintainer", text: "Then merge." },
+	]);
 	expect(handBackWaits("## Waiting\n")).toEqual([
 		{ line: 1, party: "Maintainer", text: "the draft hands back without saying what it waits on" },
 	]);

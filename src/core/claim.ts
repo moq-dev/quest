@@ -19,9 +19,9 @@ const BLOCKS = new Set(["blockquote", "code", "heading", "list", "listItem", "pa
 function text(node: Nodes): string {
 	const gap = BLOCKS.has(node.type) ? " " : "";
 	if (node.type === "break") return " ";
-	// Tags and comments render as nothing, so `<strong>Maintainer</strong>:` names the maintainer, as the quest
-	// parser reads it, while a block such as `<p>Approve it.</p>` keeps the text a reader sees.
-	if (node.type === "html") return node.value.replace(/<!--[\s\S]*?-->|<[^>]*>/g, "");
+	// Raw HTML renders as nothing, as the quest parser reads it, so `<strong>Maintainer</strong>:` names the
+	// maintainer and a section written only in block HTML reads as one that says nothing.
+	if (node.type === "html") return "";
 	if (node.type === "image" || node.type === "imageReference") return node.alt ?? "";
 	if ("value" in node) return node.value + gap;
 	return "children" in node ? node.children.map(text).join("") + gap : "";
