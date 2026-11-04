@@ -1,7 +1,6 @@
 // `quest start`: claim a ready quest by pushing an empty claim commit to its
 // branch and opening a draft PR from it right away, and release that claim
 // while nothing but the claim commit is on the branch.
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { questBranch } from "../core";
@@ -11,7 +10,6 @@ import {
 	type Target,
 	type Upstream,
 	ensure,
-	gitOutput,
 	held,
 	mergedPull,
 	openPullRequests,
@@ -21,6 +19,7 @@ import {
 	upstream,
 	upstreamRefs,
 } from "./claims";
+import { GitError, git } from "./git";
 import { object, requireRemote, string } from "./github";
 
 /** Someone else holds the quest, or the claim cannot be released; distinct from a failure. */
@@ -58,7 +57,7 @@ export async function startQuest(
 	if (claim) throw new Refusal(`${path} is held by ${describe(claim.branch, claim.pull, Date.now())}`);
 	// A nonce keeps two claimers on the same base, identity, and second from building the same commit.
 	const nonce = randomBytes(8).toString("hex");
-	const sha = gitOutput(root, [
+	const sha = git(root, [
 		"commit-tree",
 		`${base}^{tree}`,
 		"-p",
@@ -109,7 +108,7 @@ async function obstructed(
 	const patterns = parts.slice(1).map((_, i) => `refs/heads/${parts.slice(0, i + 1).join("/")}`);
 	let listing: string;
 	try {
-		listing = gitOutput(root, ["ls-remote", up.push, ...patterns, `refs/heads/${branch}/*`]);
+		listing = git(root, ["ls-remote", up.push, ...patterns, `refs/heads/${branch}/*`]);
 	} catch {
 		return null;
 	}
@@ -147,7 +146,7 @@ function checkout(root: string, branch: string, sha: string, warn: (message: str
 	const ref = `refs/heads/${branch}`;
 	let current = "";
 	try {
-		current = gitOutput(root, ["symbolic-ref", "-q", "HEAD"]);
+		current = git(root, ["symbolic-ref", "-q", "HEAD"]);
 	} catch {
 		// Detached HEAD.
 	}
@@ -162,7 +161,7 @@ function checkout(root: string, branch: string, sha: string, warn: (message: str
 				`switch to it, merge the claim commit ${sha} into it, and resume that work before pushing`,
 		);
 	} else if (!succeeds(root, ["switch", "--quiet", "-c", branch, sha])) {
-		gitOutput(root, ["update-ref", ref, sha, ""]);
+		git(root, ["update-ref", ref, sha, ""]);
 		warn(`created ${branch} but could not switch to it; run git switch ${branch}`);
 	}
 }
@@ -182,6 +181,7 @@ async function openDraft(
 	const fork = github.head.owner !== owner || github.head.repo !== repo;
 	// The quest's path in the repository, which differs from `path` when the tree sits below the top level.
 	const file = encodeURI(github.prefix + path);
+	const body = `Claims [${path}](https://github.com/${owner}/${repo}/blob/${github.defaultBranch}/${file}).`;
 	let created: OpenPull;
 	try {
 		const response = await github.client.request(`${repositoryPath(github.repository)}/pulls`, {
@@ -190,7 +190,7 @@ async function openDraft(
 				head: fork ? `${github.head.owner}:${branch}` : branch,
 				base: github.defaultBranch,
 				draft: true,
-				body: `Claims [${path}](https://github.com/${owner}/${repo}/blob/${github.defaultBranch}/${file}).`,
+				body,
 			},
 		});
 		const row = object(await response.json());
@@ -203,6 +203,7 @@ async function openDraft(
 			created: Date.parse(string(row.created_at)),
 			updated: Date.parse(string(row.created_at)),
 			handedBack: false,
+			body,
 		};
 	} catch (error) {
 		// Without its PR the claim is invisible on GitHub, so take the branch back.
@@ -243,11 +244,11 @@ export async function releaseQuest(
 	if (!tip) throw new Error(`${remote} has no branch ${branch} to release`);
 	ensure(root, up.push, tip);
 	const { base } = upstreamRefs(root, up.git);
-	const parents = gitOutput(root, ["rev-list", "--parents", "-n", "1", tip]).split(" ").slice(1);
+	const parents = git(root, ["rev-list", "--parents", "-n", "1", tip]).split(" ").slice(1);
 	// Only the claim itself: one empty commit straight on the default branch, not one following pushed work.
 	const claim =
 		parents.length === 1 &&
-		gitOutput(root, ["rev-parse", `${tip}^{tree}`]) === gitOutput(root, ["rev-parse", `${parents[0]}^{tree}`]) &&
+		git(root, ["rev-parse", `${tip}^{tree}`]) === git(root, ["rev-parse", `${parents[0]}^{tree}`]) &&
 		succeeds(root, ["merge-base", "--is-ancestor", parents[0], base]);
 	if (!claim) {
 		throw new Refusal(
@@ -312,18 +313,15 @@ function deleteBranch(root: string, remote: string, branch: string, sha: string)
  */
 function push(root: string, remote: string, args: string[], rejected: string): void {
 	try {
-		execFileSync("git", ["-C", root, "push", "--porcelain", remote, ...args], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
-			env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-		});
+		git(root, ["push", "--porcelain", remote, ...args]);
 	} catch (error) {
-		const { stdout, stderr } = error as { stdout?: string; stderr?: string };
+		if (!(error instanceof GitError)) throw error;
+		const { stdout, stderr } = error;
 		// --porcelain reports each ref on stdout: `!` and `[rejected]` for a ref that is not as expected.
-		if (/^!\t.*\t\[rejected\]/m.test(stdout ?? "")) throw new Refusal(rejected);
+		if (/^!\t.*\t\[rejected\]/m.test(stdout)) throw new Refusal(rejected);
 		// stderr may hold only the remote's chatter, so add each refused ref's reason from stdout.
-		const refused = (stdout ?? "").split("\n").filter((line) => line.startsWith("!"));
-		const detail = [(stderr ?? "").trim(), ...refused].filter((line) => line !== "").join("\n");
+		const refused = stdout.split("\n").filter((line) => line.startsWith("!"));
+		const detail = [stderr.trim(), ...refused].filter((line) => line !== "").join("\n");
 		throw new Error(`git push to ${remote} failed: ${detail}`);
 	}
 }
@@ -331,7 +329,7 @@ function push(root: string, remote: string, args: string[], rejected: string): v
 /** Whether a git command exits zero. */
 function succeeds(root: string, args: string[]): boolean {
 	try {
-		gitOutput(root, args);
+		git(root, args);
 		return true;
 	} catch {
 		return false;

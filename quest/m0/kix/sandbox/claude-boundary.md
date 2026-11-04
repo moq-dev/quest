@@ -23,16 +23,19 @@ Evidence, gathered 2026-11-02:
   ("verified live on Linux with Claude Code 2.1.291 and 2.1.305"), and
   [moq-dev/quest#242](https://github.com/moq-dev/quest/pull/242) bumped the
   pin without a rerun although 2.1.305 added `allowNestedUserNamespaces`.
-- The opencode test found a real hole (the missing seccomp helper, see
-  [Unix sockets](/quest/m0/kix/sandbox/seccomp.md)), so these tests pay off.
+- The opencode test, once it probed Unix sockets, found a real hole (srt
+  ran without its seccomp helper, fixed in
+  [moq-dev/quest#465](https://github.com/moq-dev/quest/pull/465)), so these
+  tests pay off.
 
 Work:
 
 - Reuse the attempts and layout of opencode's test,
   `test/live/runner-sandbox.test.ts`: denied reads by path and symlink,
   writes outside the checkout and job temp directory, planted project
-  settings and hooks, the network directly and through the proxy, and the
-  Unix-socket probe from the seccomp quest.
+  settings and hooks, the network directly and through the proxy, the Nix
+  daemon's and a host Unix socket, and the check that a command inherits no
+  socket beyond its stdio.
 - Assert that `TMPDIR` inside a command is the job's private directory and
   is writable. Reading Claude Code 2.1.305 says its strict policy exports
   `TMPDIR=<CLAUDE_CODE_TMPDIR or os.tmpdir()>/claude-<uid>`, which the
@@ -57,7 +60,3 @@ Work:
   `just test` and the merge queue. Decided 2026-11-03 (user,
   /quest-complete) for opencode's test: its own CI, nightly, so landing
   never blocks on it.
-
-## Required
-
-- [No Unix sockets in opencode jobs](/quest/m0/kix/sandbox/seccomp.md) - the Unix-socket probe this test reuses
