@@ -526,13 +526,15 @@ async function collect(
 				: queued(pull, job.dropped) && !ours && job.requeuing === undefined
 					? "a maintainer enqueued it again while the fixer ran, and that pick stands"
 					: undefined;
-	// Leave a held PR to its session, unapplied: its own comment replaces the fixer's note.
+	// Whether the PR's head is this round's fix, so the holding session hears its branch moved.
+	let pushed = ours;
+	// Leave a held PR to its session: its own comment replaces the fixer's note.
 	const leave = async (hold: string): Promise<string[]> => {
 		await post(
 			github,
 			plan,
 			marked,
-			`quest land watch: the land fixer's result for ${entry.head} was not applied. ${heldText(hold)}`,
+			`quest land watch: the land fixer's result for ${entry.head} ${pushed ? `was pushed as ${head}, but not re-enqueued` : "was not applied"}. ${heldText(hold)}`,
 			"held",
 			MERGER,
 		);
@@ -630,6 +632,7 @@ async function collect(
 					reason: result.reason,
 					attribution,
 				});
+				pushed = true;
 			}
 			if (job.requeuing === undefined) {
 				job.requeuing = head;

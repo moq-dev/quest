@@ -819,8 +819,8 @@ instead, until a handback ends it: the watcher's re-enqueue, GitHub's
 auto-merge of it, or such a workflow picking the fixer's push. A failed build
 or a conflict is recorded for the land fixer in `removal-<n>.json`, with the
 full log beside it. A push since the removal, a person's removal, a hold, or a
-reason the watcher does not know ends the pick, and the comment says the PR waits for
-a maintainer to enqueue it again. The state directory remembers each removal
+reason the watcher does not know ends the pick, and the comment says the PR
+waits for a maintainer to enqueue it again. The state directory remembers each removal
 handled, so a restart neither misses nor repeats one; a crash between
 commenting and recording finds its own comment's marker and posts nothing. The
 first pass reads the ten minutes before it.
@@ -836,7 +836,8 @@ it: GitHub keeps auto-merge across a push, but a push by anyone but the land
 fixer ends the pick, and a head it cannot tell yet waits for the next pass. An
 armed PR whose required checks fail, or that conflicts, is left alone for
 `/quest-iterate` and a new pick. One another session holds waits, armed, until
-its hold clears. The watcher's own re-enqueues are among these picks. A refusal is logged once per pick and retried each pass.
+its hold clears. The watcher's own re-enqueues are among these picks. A refusal
+is logged once per pick and retried each pass.
 
 With `--fixer`, the watcher takes each recorded removal, oldest first, while
 its PR still waits as the queue dropped it:
@@ -881,8 +882,8 @@ label, such as the `quest:active` that `/quest-iterate` takes. It reads the
 PR's labels when it handles the removal, before it starts the fixer, and again
 before it pushes a result or re-enqueues the PR, so a hold taken while the
 fixer runs counts too. A hold ends the pick, as a person's removal does: the
-PR gets one comment saying so, and a maintainer enqueues it again once its
-session is done.
+PR gets one comment saying so, naming the fixer's head if it was already pushed,
+and a maintainer enqueues it again once its session is done.
 A round whose collection fails three passes in a row, as when GitHub refuses its
 handback comment, is set aside with a logged warning, freeing its fixer slot.
 

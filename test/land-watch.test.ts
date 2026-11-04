@@ -1704,10 +1704,10 @@ git commit -qm 'disable render_timeout'`;
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 12 ${head}`]);
 	});
 	test("a held PR is neither fixed nor re-enqueued, whenever the hold is taken", async () => {
-		const { repo, state, fix, context } = setup();
+		const { repo, state, fix, context } = setup(3);
 		const base = repo.main();
 		const heads = new Map(
-			[5, 6, 7, 8].map((number) => [number, repo.pull(number, { [`f-${number}.txt`]: "new\n" })]),
+			[5, 6, 7, 8, 9].map((number) => [number, repo.pull(number, { [`f-${number}.txt`]: "new\n" })]),
 		);
 		const removed = (number: number, labels?: string[]): Pull => ({
 			number,
@@ -1725,7 +1725,7 @@ git commit -qm 'disable render_timeout'`;
 			],
 		});
 		// 5 is held when the queue drops it; `quest:merge`, an older pin's leftover, holds nothing.
-		const pulls = [removed(5, ["quest:active"]), removed(6, ["quest:merge"]), removed(7), removed(8)];
+		const pulls = [removed(5, ["quest:active"]), removed(6, ["quest:merge"]), removed(7), removed(8), removed(9)];
 		const github = {
 			...world(
 				pulls,
@@ -1735,33 +1735,46 @@ git commit -qm 'disable render_timeout'`;
 		};
 		github.now = Date.parse(at(6));
 		fix.round(6, fixScript("fixed.txt"));
-		fix.round(7, flakyScript);
-		// Two fixer slots: 8 waits.
+		fix.round(7, fixScript("fixed.txt"));
+		fix.round(8, flakyScript);
+		// Three fixer slots: 9 waits.
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
 			"removed 5 failed_checks held",
 			"removed 6 failed_checks fix",
 			"removed 7 failed_checks fix",
 			"removed 8 failed_checks fix",
+			"removed 9 failed_checks fix",
 			"fixing 6",
 			"fixing 7",
+			"fixing 8",
 		]);
-		await exited(state, 2);
-		// A session takes 6 while the watcher validates its fix, 7 while its fixer runs, and 8 while it waits.
-		let reads = 0;
+		await exited(state, 3);
+		// A session takes 6 while the watcher validates its fix, 7 right after the watcher pushes its fix,
+		// 8 while its fixer runs, and 9 while it waits.
+		const reads = new Map<number, number>();
+		const takeAt = new Map([
+			[6, 2],
+			[7, 3],
+		]);
 		github.onPull = (pull) => {
-			if (pull.number === 6 && ++reads === 2) pull.labels = ["quest:merge", "quest:active"];
+			const read = (reads.get(pull.number) ?? 0) + 1;
+			reads.set(pull.number, read);
+			if (takeAt.get(pull.number) === read) pull.labels = [...(pull.labels ?? []), "quest:active"];
 		};
-		pulls[2].labels = ["quest:iterate"];
-		pulls[3].labels = ["quest:active"];
+		pulls[3].labels = ["quest:iterate"];
+		pulls[4].labels = ["quest:active"];
 		github.now = Date.parse(at(7));
 		expect((await watchPass(REPOSITORY, { state }, deps(github), context)).sort()).toEqual([
 			"dropped 6 held",
 			"dropped 7 held",
 			"dropped 8 held",
+			"dropped 9 held",
 		]);
 		expect(github.mutations).toEqual([]);
 		expect(git(repo.origin, "rev-parse", "refs/heads/branch-6")).toBe(heads.get(6));
-		expect(fix.calls().map((call) => call.split(" ").at(-1))).toEqual(["6", "7"]);
+		const pushed = git(repo.origin, "rev-parse", "refs/heads/branch-7");
+		expect(pushed).not.toBe(heads.get(7));
+		expect(fix.calls().map((call) => call.split(" ").at(-1))).toEqual(["6", "7", "8"]);
 		for (const pull of pulls) {
 			const held = github.comments[pull.number].filter((comment) =>
 				comment.body.includes("It is held by `quest:"),
@@ -1769,10 +1782,13 @@ git commit -qm 'disable render_timeout'`;
 			expect(held).toHaveLength(1);
 			expect(history(state, pull.number)).toBeUndefined();
 		}
-		// The fixer's note on 7 is not posted: the held comment is the only one after the removal's.
-		expect(github.comments[7]).toHaveLength(2);
+		// Only 7's branch moved, and its session hears where to.
+		expect(github.comments[6].at(-1)!.body).toContain("was not applied");
+		expect(github.comments[7].at(-1)!.body).toContain(`was pushed as ${pushed}, but not re-enqueued`);
+		// The fixer's note on 8 is not posted: the held comment is the only one after the removal's.
+		expect(github.comments[8]).toHaveLength(2);
 		expect(readRemoval(state, 5)!.verdict).toBe("held");
-		expect(readRemoval(state, 8)!.taken).toBe("held");
+		expect(readRemoval(state, 9)!.taken).toBe("held");
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 	});
 });
