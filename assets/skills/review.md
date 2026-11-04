@@ -1,5 +1,5 @@
 ---
-description: Review a PR's branch locally with the other vendor's model, then mark it ready for review.
+description: Review a PR's branch locally with a model that wrote none of it, then mark it ready for review.
 ---
 
 Before you begin, run `quest guide` and `quest skill merge`, and read their output completely.

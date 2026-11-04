@@ -44,16 +44,17 @@ their size, implementer, and reviewer beside `## Review`:
   it unasked. Replacing a stale model id with the same vendor's newer one,
   below, needs no decision, as this check always did.
 
-- Compare both tables' models (in the module `src/cli/review.ts` and the
-  spawn routing share) with each vendor's current models: the newest
+- Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   general model. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
   tier were dropped in
   [moq-dev/quest#361](https://github.com/moq-dev/quest/pull/361).
-  - The review efforts were Codex `xhigh` and Claude `high` (maintainer,
-    2026-11-03), until [review effort by size](/quest/m0/model-routing/review-effort.md)
-    replaces them with its table.
-    Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
+  - The review efforts follow the PR's size since
+    [moq-dev/quest#493](https://github.com/moq-dev/quest/pull/493) (user,
+    2026-11-04): Sol low, medium, high, xhigh, and xhigh for XS to XL, and
+    Opus low, low, medium, high, and high when Sol wrote the code (agent's
+    choice). They replaced Codex `xhigh` and Claude `high` (maintainer,
+    2026-11-03), for which Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
     `/code-review high`, and codex-cli 0.166.0 ran `gpt-6.1-sol` with
     `model_reasoning_effort="xhigh"`, both with `quest review`'s flags.
   - m0 found, with Claude Code 2.1.316 and codex-cli 0.166.0:

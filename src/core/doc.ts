@@ -121,6 +121,20 @@ export function questBranch(path: string): string {
 	return path.replace(/\.md$/, "");
 }
 
+/** The t-shirt sizes a quest's title gives it, smallest first. */
+export const SIZES = ["XS", "S", "M", "L", "XL"] as const;
+export type Size = (typeof SIZES)[number];
+
+/**
+ * A quest's size from its literal title, `# [XS|S|M|L|XL] Title`, or null when
+ * it has none, as an epic with children does.
+ */
+export function size(doc: Doc): Size | null {
+	const title = doc.title;
+	const match = title?.literal ? /^\[([^\]]*?)\] ./s.exec(title.text) : null;
+	return match && (SIZES as readonly string[]).includes(match[1]) ? (match[1] as Size) : null;
+}
+
 /** The quest file a branch names, whether or not it exists: the branch plus `.md`. */
 export function branchQuest(branch: string): string {
 	return `${branch}.md`;

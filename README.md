@@ -1065,12 +1065,30 @@ forward, kills at the second. There is no fairness guarantee, and no timeout exc
 
 ## Review locally
 
-`quest review` has the other vendor's model review the checkout's committed
-branch before it is pushed for review: Codex when run from Claude Code, and
-Claude Code when run from Codex. `--harness` names the reviewer instead; an
-unknown harness, or a missing or logged-out CLI, is an error rather than a
-same-model review, as is a login the API rejects mid-round, such as an expired
-or revoked token. The reviewer reaches its model as the user's own CLI does:
+`quest review` has a model that wrote none of the code review the checkout's
+committed branch before it is pushed for review, at an effort set by the PR's
+size. Each size ranks its reviewers, the same for every repository:
+
+| PR size | Reviewer | When Sol wrote the code |
+|---|---|---|
+| XS | Codex `gpt-6.1-sol` low | Claude Code `claude-opus-5-5` low |
+| S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
+| M, or none | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` medium |
+| L | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
+| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
+
+A quest branch takes its quest's size, read from the base branch's tip so a
+change cannot lower its own review; `--size` sizes any other PR, such as a
+skill's own, and a PR with neither gets M's reviewers. The first reviewer
+whose model wrote none of the code reviews: `--exclude-model` names each model
+that did, from the PR's record, and without it the harness running the command
+is taken to have written it, so Codex reviews from Claude Code and Claude Code
+from Codex. `--harness` names the reviewer instead, at its entry's model and
+effort, and `--model` and `--effort` override those, as a repository whose
+`AGENTS.md` names other reviewers needs. An unknown harness, a size whose
+every reviewer wrote the code, or a missing or logged-out CLI, is an error
+rather than a same-model review, as is a login the API rejects mid-round, such
+as an expired or revoked token. The reviewer reaches its model as the user's own CLI does:
 Claude Code keeps `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, and its
 cloud providers' `CLAUDE_CODE_USE_*` switches and settings, so a gateway such
 as CLIProxyAPI, Bedrock, Vertex, or Foundry works, and Codex keeps
@@ -1084,13 +1102,11 @@ gateway or provider is set. Variables that would change the reviewer's plugins,
 permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME`, or the default when unset, and any gateway or provider.
-Every review runs with a pinned model and effort that `quest review --help`
-lists; `--model` and `--effort` override them.
-
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
+quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, reviewed by Opus
 quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
 ```
 
@@ -1133,7 +1149,7 @@ root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
 given every round, and chooses the review's stance, such as adversarial.
 
-It prints the reviewer, model, and effort, session, round, base, head, a
+It prints the reviewer, model, and effort, the size and its source, session, round, base, head, a
 `usage` line per turn (input tokens, the part read from the prompt cache, and output), the
 finding count, then each finding as severity, `path:line`, and title over its
 indented body. `--json` prints the same as one object. It exits 0 once the round
@@ -1517,7 +1533,7 @@ the version you pin decides what your agents follow:
 | `quest-start` | Claim a ready quest, complete it, and open a PR. |
 | `quest-spawn` | Triage ready quests and send several agents out in parallel. |
 | `quest-iterate` | Iterate on an open PR to settle its open decisions, fix CI and review findings, and push. |
-| `quest-review` | Review a PR's branch locally with the other vendor's model, then mark it ready for review. |
+| `quest-review` | Review a PR's branch locally with a model that wrote none of it, then mark it ready for review. |
 | `quest-merge` | Queue a PR to land, running `quest-iterate` first when it needs work. |
 | `quest-complete` | Decide which open PRs to merge, then queue them. |
 | `quest-afk` | Keep starting agreed work while you are away, leaving every decision for your return. |

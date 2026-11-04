@@ -2498,6 +2498,8 @@ describe("runner reviews", () => {
 			reviewer: request.reviewer.harness,
 			model: "gpt-6.1-sol",
 			effort: "medium",
+			size: "M",
+			sizeFrom: "default",
 			session: "s",
 			round: ++round,
 			base: { ref: "origin/main", sha: "b".repeat(40) },

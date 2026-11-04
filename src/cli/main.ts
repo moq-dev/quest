@@ -16,6 +16,8 @@ import {
 	lookup,
 	questBranch,
 	renderBlocker,
+	SIZES,
+	type Size,
 	unblocked,
 	onMaintainer,
 	waiting,
@@ -52,7 +54,8 @@ import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
-import { MODELS, ReviewInputError, processDependencies as reviewDependencies, review, roundLines } from "./review";
+import { DEFAULT_SIZE, REVIEWERS } from "./models";
+import { ReviewInputError, processDependencies as reviewDependencies, review, roundLines } from "./review";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
@@ -968,22 +971,30 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			);
 		});
 
-	const models = HARNESSES.map((h) => `${MODELS[h].model} at ${MODELS[h].effort} effort for ${h}`).join(" and ");
+	const reviewers = SIZES.map(
+		(size) => `${size} ${REVIEWERS[size].map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}`,
+	).join("; ");
 	program
 		.command("review")
-		.summary("Have the other vendor's model review the committed branch, read-only")
+		.summary("Have a model that wrote none of the code review the committed branch, read-only")
 		.description(
-			"Review the checkout's committed branch against its base with the other harness: Codex when run from " +
-				"Claude Code, Claude Code when run from Codex, detected from the variables each sets. --harness names " +
-				"the reviewer instead; there is no other fallback. The reviewer reaches its model as the user's own CLI " +
+			"Review the checkout's committed branch against its base with a reviewer its size picks, never a model " +
+				`that wrote the code. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The first ` +
+				"whose model wrote none of the code reviews. --exclude-model names the models that wrote it, such as " +
+				"from the PR's record; without it, the harness running this command is taken to have written it, " +
+				"detected from the variables each sets, so Codex reviews from Claude Code and Claude Code from Codex. " +
+				"--harness names the reviewer instead, at its entry's model and effort, and --model and --effort " +
+				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. The " +
+				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
+				`change cannot lower its own review, else ${DEFAULT_SIZE}. ` +
+				"The reviewer reaches its model as the user's own CLI " +
 				"does: Claude Code keeps ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, and its cloud providers' " +
 				"CLAUDE_CODE_USE_* switches and settings, and Codex keeps CODEX_CA_CERTIFICATE. It uses the CLI's own " +
 				"stored login; the credential the CLI reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, " +
 				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
 				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
 				"(ANTHROPIC_AWS_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN) only while one is set. A logged-out error names the profile it checked, " +
-				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider. It runs " +
-				`with ${models}. --model and --effort override them.\n\n` +
+				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider.\n\n" +
 				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
 				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
 				"reviewer's own review (`codex exec review --base <merge-base>`, or Claude Code's " +
@@ -999,7 +1010,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
 				"reviewer. The base is fetched first, since the sandbox has no network.\n\n" +
-				"Prints the reviewer, model, and effort, session, round, base, head, a usage line per turn (input tokens, the " +
+				"Prints the reviewer, model, and effort, the size and where it came from, session, round, base, head, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), the finding count, then each finding. --json prints " +
 				"the same as one object. Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, and 1 for other failures.",
@@ -1008,6 +1019,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.addOption(new Option("--harness <name>", "Reviewer to run instead of the other harness").choices(HARNESSES))
 		.option("--model <model>", "Model the reviewer runs instead")
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
+		.option(
+			"--exclude-model <model>",
+			"A model that wrote the code, never picked to review it; repeat for each",
+			(value: string, previous: string[] = []) => [...previous, value],
+		)
+		.addOption(new Option("--size <size>", "The PR's size, instead of its quest's or the default").choices(SIZES))
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
 		.option("--branch <name>", "Branch whose review session to continue, instead of the checked-out one")
@@ -1019,6 +1036,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				harness?: HarnessName;
 				model?: string;
 				effort?: string;
+				excludeModel?: string[];
+				size?: Size;
 				responses?: string;
 				new?: boolean;
 				json?: boolean;
@@ -1027,7 +1046,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					options.responses === undefined
 						? undefined
 						: readFileSync(options.responses === "-" ? 0 : options.responses, "utf8");
-				const run = review({ ...options, root: root(), responses, fresh: options.new }, reviewDependencies());
+				const run = review(
+					{ ...options, root: root(), exclude: options.excludeModel, responses, fresh: options.new },
+					reviewDependencies(),
+				);
 				pending = run.then(
 					(round) => {
 						if (options.json) print(JSON.stringify(round));

@@ -27,7 +27,11 @@ import { createInterface } from "node:readline";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { type HarnessName, strippedEnvironment } from "../../src/cli/agent";
-import { MODELS, ReviewInputError, claudeFlags, review, reviewerEnvironment } from "../../src/cli/review";
+import { DEFAULT_SIZE, REVIEWERS } from "../../src/cli/models";
+import { ReviewInputError, claudeFlags, review, reviewerEnvironment } from "../../src/cli/review";
+
+/** The model a sizeless review runs on `harness`. */
+const modelOf = (harness: HarnessName) => REVIEWERS[DEFAULT_SIZE].find((entry) => entry.harness === harness)!.model;
 
 /** The cheapest effort both CLIs accept; the isolation under test does not depend on it. */
 const EFFORT = "low";
@@ -314,7 +318,7 @@ function clearMarkers() {
  * blocks, so it carries its own bound for a hung CLI.
  */
 async function control(home: Home) {
-	const { model } = MODELS[home.harness];
+	const model = modelOf(home.harness);
 	const env = await reviewerIn(home);
 	const argv =
 		home.harness === "codex"
@@ -371,7 +375,7 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 			const context = {
 				mergeBase: "origin/main",
 				instructions: "Do what the user asks.",
-				model: MODELS.claude.model,
+				model: modelOf("claude"),
 				effort: EFFORT,
 				schemaFile: "",
 			};
