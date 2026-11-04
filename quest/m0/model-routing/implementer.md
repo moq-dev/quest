@@ -5,7 +5,7 @@
 Each PR's body names the PR's size and the harness, model, and effort of
 every session that pushed commits to it, beside `## Review`, which already
 names the reviewer's harness, model, and effort. Each PR then reads as its
-size, who wrote it, and who reviewed it at what effort, so `MODELS.md` can
+size, who wrote it, and who reviewed it at what effort, so `quest`'s size tables can
 be retuned from outcomes such as review rounds per model and size.
 
 ## Plan

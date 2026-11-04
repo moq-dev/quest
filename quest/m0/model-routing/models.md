@@ -1,57 +1,53 @@
-# [M] /quest-spawn routes each quest by MODELS.md
+# [M] /quest-spawn routes each quest by size
 
 ## Goal
 
-A repository's optional `MODELS.md` maps each quest size to a harness,
-model, and effort. `quest unblocked --json` reports the mapped harness,
-model, and effort for each ready quest, and `/quest-spawn` starts each quest
-on them. Without the file, or for a size it leaves out, spawns behave as
-today. moq-dev/quest gets its own `MODELS.md`.
-[Review effort by size](/quest/m0/model-routing/review-effort.md) adds its
-reviewers.
+The `quest` binary maps each quest size to a harness, model, and effort.
+`quest unblocked --json` reports them for each ready quest, and
+`/quest-spawn` starts each quest on them, unless the repository's
+`AGENTS.md` overrides the mapping. Every repository gets the same mapping.
 
 ## Plan
 
-Decided 2026-11-04 (user, /quest-plan); the evidence and the mapping are in
+Decided 2026-11-04 (user, /quest-plan); the evidence is in
 [the epic](/quest/m0/model-routing/README.md).
 
-- Where is `MODELS.md` parsed?
-  - ✅ In quest's code: `quest unblocked --json` adds `harness`, `model`,
-    and `effort` (null when unmapped) per quest, and `quest check` reports
-    a malformed file
-  - Skill prose only, read by the coordinator
-- Should `MODELS.md` also set the reviewers?
-  - ✅ Yes, and by PR size (refined later on 2026-11-04);
-    [Review effort by size](/quest/m0/model-routing/review-effort.md) owns it
-  - No, keep only the code pins
+- Where does each quest's model come from?
+  - ✅ A table built into `quest`, the same for every repository; a
+    repository's `AGENTS.md` overrides it in prose (user, later on
+    2026-11-04, replacing a `MODELS.md` file per repository)
+  - A `MODELS.md` in each repository, parsed by `quest`
+  - Per quest, in its plan
 - When the mapped harness cannot run (its CLI missing, logged out, or at a
   usage limit), what happens to the quest?
   - ✅ Skip it and report the outage once in the spawn's summary
   - Start it on the session's own harness
 
-Format (agent's choice): a file at the repository root, beside
-`REVIEW.md`, whose implementation table has columns
-`Size | Harness | Model | Effort`, leaving room for the review table
-[Review effort by size](/quest/m0/model-routing/review-effort.md) adds.
-Prose around the tables is free, so the file can explain its choices.
-`quest check` reports an unknown harness or size, a duplicate row, and a
-model or effort that is not a plain word (the rule `codexFlags` in
-`src/cli/agent.ts` already applies). It does not check that a CLI accepts
-the model.
+The table, pinned beside `MODELS` in `src/cli/review.ts` in a module both
+it and [Review effort by size](/quest/m0/model-routing/review-effort.md)
+import:
 
-This repository's file maps XS Codex `gpt-6.1-sol` high, S Codex
-`gpt-6.1-sol` xhigh, M Claude `claude-opus-5-5` medium, L Claude
-`claude-opus-5-5` high, XL Claude `claude-opus-5-5` xhigh.
+| Size | Harness | Model | Effort |
+|---|---|---|---|
+| XS | codex | `gpt-6.1-sol` | high |
+| S | codex | `gpt-6.1-sol` | xhigh |
+| M | claude | `claude-opus-5-5` | medium |
+| L | claude | `claude-opus-5-5` | high |
+| XL | claude | `claude-opus-5-5` | xhigh |
 
-- `quest unblocked` reads `MODELS.md` from the same upstream tree it ranks.
-- `/quest-spawn`: start a quest whose harness matches the session's as a
-  native sub-agent with the mapped model and effort, and one on the other
-  vendor through `quest agent` on the logged-in account. An unmapped quest
-  inherits the session's settings. Skip a quest whose harness cannot run
-  (`quest agent` fails to start it, or exits on a usage limit) and report
-  that harness's outage once, with the quests it held back.
-- Docs: the README documents `MODELS.md` and `quest unblocked --json`'s
-  new fields.
+- `quest unblocked --json` adds `harness`, `model`, and `effort` per quest.
+  An epic whose README carries no size has none and reports null; the
+  spawner then inherits its own settings.
+- `/quest-spawn`: follow the repository's `AGENTS.md` where it names other
+  models or efforts, and otherwise `quest unblocked`'s. Start a quest whose
+  harness matches the session's as a native sub-agent with that model and
+  effort, and one on the other vendor through `quest agent` on the
+  logged-in account. Skip a quest whose harness cannot run (`quest agent`
+  fails to start it, or exits on a usage limit) and report that harness's
+  outage once, with the quests it held back.
+- Docs: the README documents the table, the override, and `quest unblocked
+  --json`'s new fields. The [model check](/quest/m1/model-check.md) audits
+  this table each milestone.
 
 ## Required
 

@@ -2,17 +2,20 @@
 
 ## Goal
 
-`quest review` runs the reviewer at the model and effort `MODELS.md` gives
-the PR's size: smaller PRs get cheaper reviews, larger ones deeper. A quest
-PR's size is its quest's; any other PR, such as a `/quest-plan` PR, is sized
-by the skill that opens it. Without a size, or without the file, a review
-runs at M's tier, which becomes quest's built-in default.
+`quest review` runs the reviewer at the model and effort its built-in table
+gives the PR's size: smaller PRs get cheaper reviews, larger ones deeper. A
+quest PR's size is its quest's; any other PR, such as a `/quest-plan` PR,
+is sized by the skill that opens it. Without a size, a review runs at M's
+tier. A repository's `AGENTS.md` may override the table in prose, which the
+reviewing session passes as `--model` and `--effort`. Every repository gets
+the same table.
 
 ## Plan
 
 Decided 2026-11-04 (user, /quest-plan follow-up of
 [moq-dev/quest#487](https://github.com/moq-dev/quest/pull/487)): reviews
-drop one tier, scaled by size.
+drop one tier, scaled by size, from a table built into `quest` (user,
+replacing a `MODELS.md` file per repository).
 
 | PR size | Codex reviews Claude's work | Claude reviews Codex's work |
 |---|---|---|
@@ -24,24 +27,18 @@ drop one tier, scaled by size.
   - ✅ Both one tier above M, today's pins
   - Graduated, XL a tier above L
 - What do PRs without a quest size get?
-  - ✅ M's tier, and quest PRs from skills such as `/quest-plan` carry a
-    size of their own (user)
+  - ✅ M's tier, and PRs from skills such as `/quest-plan` carry a size of
+    their own (user)
   - Today's pins
   - The small tier
 
   Claude has no effort below low, so XS and S share a tier.
 
-- `MODELS.md` gains a review table: size, reviewer harness, model, effort
-  (format is the implementer's choice, parsed and checked with the
-  implementation table from
-  [Route by MODELS.md](/quest/m0/model-routing/models.md)). This
-  repository's file holds the table above.
-- `MODELS` in `src/cli/review.ts` becomes M's tier, Codex high and Claude
-  medium, as the default for a size `MODELS.md` leaves out or a repository
-  without one. This replaces the 2026-11-03 efforts (Codex xhigh, Claude
-  high) in the [review harness check](/quest/m1/review-harness.md), whose
-  next run compares the pins and this repository's review table with each
-  vendor's current models.
+- `MODELS` in `src/cli/review.ts` becomes this table, in the module
+  [Route by size](/quest/m0/model-routing/models.md) shares; whichever
+  lands first creates it. This replaces the 2026-11-03 efforts (Codex
+  xhigh, Claude high) recorded in the [model check](/quest/m1/model-check.md),
+  which audits this table each milestone; the PR updates its Plan.
 - Where the size comes from, read by the reviewing session, never from the
   head's files, so a change cannot lower its own review:
   - A quest branch: its quest's size, read from the base branch's tip, as
@@ -50,13 +47,10 @@ drop one tier, scaled by size.
     `/quest-audit`, and every other skill that opens its own PR size it as
     a quest is sized and pass it.
   - Otherwise M.
-- `--effort` and `--model` still override.
+- `--effort` and `--model` still override, and the guide's Reviews section
+  says to pass them when the repository's `AGENTS.md` names other reviewer
+  settings.
 - The PR body's record, beside `## Review`, names the PR's size with its
-  implementer and reviewer, so each PR reads as size, who wrote it, and who
-  reviewed it at what effort.
+  implementer and reviewer.
   [PRs record their implementer](/quest/m0/model-routing/implementer.md)
   writes that record.
-
-## Required
-
-- [Route by MODELS.md](/quest/m0/model-routing/models.md) - the `MODELS.md` format and parser the review table extends

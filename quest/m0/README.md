@@ -96,7 +96,8 @@ ownership-manifest design:
 - [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` exits distinctly on a reviewer's quota and prints the reset time
 - [Drafts in quest waiting](/quest/m0/waiting-drafts.md) - `quest waiting` lists open draft PRs' `## Waiting` items beside the tree's
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
-- [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the harness, model, and effort `MODELS.md` maps its size to, and PRs record their implementer
+- [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the harness, model, and effort `quest`'s built-in table maps its size to, and PRs record their implementer
+- [Model check](/quest/m0/model-check.md) - recurring: the first audit of the routed PRs retunes the built-in size tables
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host

@@ -1,22 +1,54 @@
-# [S] Review harness check
+# [M] Model check
 
 ## Goal
 
-Each milestone, `quest review`'s pinned models are each vendor's newest for
-their tier, and the reviewers still run nothing from a reviewed head.
+Each milestone, `quest`'s built-in model tables, which harness, model, and
+effort implement each quest size and review each PR size, use each
+vendor's newest models at efforts retuned from how the last milestone's PRs
+went, and the reviewers still run nothing from a reviewed head.
 
 ## Plan
 
 Recurring, decided 2026-10-28 (user, /quest-plan of the follow-ups from
-[moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)). The m0 run
-was [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426).
+[moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271)) as the
+review harness check. The m0 run was
+[moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426). Extended on
+2026-11-04 (user, /quest-plan follow-up of
+[moq-dev/quest#487](https://github.com/moq-dev/quest/pull/487)) to audit
+the size tables of [model routing](/quest/m0/model-routing/README.md):
 
-- Compare `MODELS` in `src/cli/review.ts` with each vendor's current models:
-  the newest general model. Bump any that are stale, and check that both CLIs
+- Should the routing audit be its own recurring quest?
+  - ✅ Merge it into this check, so one quest owns the tables
+  - A separate audit owning the tables
+  - A separate audit of efforts only
+- When does it run? ✅ First in m0 once routing lands
+  ([m0's run](/quest/m0/model-check.md)), then each milestone (rejected:
+  each milestone only)
+
+Audit the routing from the PRs merged since the last run, which record
+their size, implementer, and reviewer beside `## Review`:
+
+- Tally by size and by implementing harness, model, and effort: review
+  rounds, findings fixed versus refuted, design checkpoints reached, PRs
+  handed back as drafts, and follow-up fixes of the PR's own work. Tally
+  outages that skipped quests by harness.
+- Move a size to a stronger model or effort where its PRs needed clearly
+  more rounds or fixes than the size above, and to a cheaper one where its
+  reviews come back clean. Do the same for the review table from what later
+  reviews and follow-ups found that a review missed. Record the tallies in
+  the next run's Plan as its baseline.
+- Recommend each table change to the maintainer with its tally, as a
+  decision in the PR, rather than changing the tables unasked.
+
+- Compare both tables' models (in the module `src/cli/review.ts` and the
+  spawn routing share) with each vendor's current models: the newest
+  general model. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
   tier were dropped in
   [moq-dev/quest#361](https://github.com/moq-dev/quest/pull/361).
-  - The efforts are Codex `xhigh` and Claude `high` (maintainer, 2026-11-03).
+  - The review efforts were Codex `xhigh` and Claude `high` (maintainer,
+    2026-11-03), until [review effort by size](/quest/m0/model-routing/review-effort.md)
+    replaces them with its table.
     Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
     `/code-review high`, and codex-cli 0.166.0 ran `gpt-6.1-sol` with
     `model_reasoning_effort="xhigh"`, both with `quest review`'s flags.
@@ -53,8 +85,8 @@ was [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426).
     and `quest init` installs none. Recheck if either starts to.
 - The PR that finishes this run creates the next milestone's run the same
   way: listed in that milestone's `Required`, requiring this milestone's
-  README, carrying forward the model ids and efforts it found and anything to
-  check first.
+  README, carrying forward the model ids and efforts it found, the routing
+  tallies as a baseline, and anything to check first.
 
 ## Required
 

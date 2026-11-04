@@ -3,11 +3,11 @@
 ## Goal
 
 `/quest-spawn` starts each ready quest on the harness, model, and effort
-that the repository's `MODELS.md` gives the quest's size, so Codex takes
+that `quest`'s built-in table gives the quest's size, the same for every
+repository unless its `AGENTS.md` overrides it, so Codex takes
 the easy quests and Claude the hard ones, and each PR records which model
 did the work so the table can be retuned from outcomes. This epic's own
-work is one live mixed-vendor spawn: in moq-dev/quest, with this
-repository's `MODELS.md`, a `/quest-spawn` from Claude Code starts at least
+work is one live mixed-vendor spawn: in moq-dev/quest, a `/quest-spawn` from Claude Code starts at least
 one XS or S quest on Codex and one M or larger on Claude, each PR records
 its size and implementer, and each is reviewed by the other vendor at its
 size's effort.
@@ -26,9 +26,10 @@ some 24 to 31 line skill and guide rewordings were sized M because they
 are mostly judgment.
 
 - Where does each quest's model come from?
-  - ✅ A `MODELS.md` in the repository, by size; a size it does not map
-    starts on the spawning session's own harness, model, and effort
-  - A pinned table in quest's code
+  - ✅ A table built into `quest`, the same for every repository, which a
+    repository's `AGENTS.md` overrides in prose (user, later on 2026-11-04,
+    replacing the first answer: a `MODELS.md` in each repository)
+  - A `MODELS.md` in each repository, parsed by `quest`
   - Per quest, in its plan
   - A per-user config file
 
@@ -38,7 +39,7 @@ are mostly judgment.
   - ✅ Fold judgment into size: a size measures the agent's effort,
     judgment included
   - A separate difficulty marker
-- This repository's mapping: XS Codex `gpt-6.1-sol` high, S Codex
+- The mapping: XS Codex `gpt-6.1-sol` high, S Codex
   `gpt-6.1-sol` xhigh, M Claude `claude-opus-5-5` medium, L Claude
   `claude-opus-5-5` high, XL Claude `claude-opus-5-5` xhigh (user). Codex
   moves up a rung of effort from its default and Opus down one.
@@ -49,12 +50,18 @@ are mostly judgment.
   reviews run Codex medium and Claude low, M and sizeless PRs Codex high and
   Claude medium, L and XL Codex xhigh and Claude high. Skills' own PRs, such
   as `/quest-plan`'s, carry a size too.
+- moq-dev/moq and moq-dev/moq.pro pick the routing up through a pin bump,
+  with nothing else changed in them (user).
+- A recurring [model check](/quest/m0/model-check.md) audits the tables
+  from the routed PRs, first in m0 once this epic lands, then each
+  milestone (user).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
 
 ## Required
 
-- [Route by MODELS.md](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the harness, model, and effort `MODELS.md` maps its size to
-- [Review effort by size](/quest/m0/model-routing/review-effort.md) - `quest review` runs cheaper reviews on small PRs and deeper ones on large PRs, from `MODELS.md`, with M's tier as the default
+- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the harness, model, and effort `quest`'s built-in table maps its size to
+- [Review effort by size](/quest/m0/model-routing/review-effort.md) - `quest review` runs cheaper reviews on small PRs and deeper ones on large PRs, with M's tier as the default
 - [Sizes include judgment](/quest/m0/model-routing/size-judgment.md) - the guide and `/quest-plan` size a quest by the agent's effort, judgment included
 - [PRs record their implementer](/quest/m0/model-routing/implementer.md) - each PR names its size and the harness, model, and effort that wrote it, beside its reviewer's
+- [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing
