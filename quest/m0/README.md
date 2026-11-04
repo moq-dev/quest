@@ -72,13 +72,13 @@ ownership-manifest design:
 
 - The binary carries the skills, the quest contract, and all hook logic.
   `quest init` installs only static stubs into a repository: one-line skill
-  stubs, one reference line in its root instructions, one `.gitattributes`
-  line, and Claude hook entries in `.claude/settings.json` that only call a
-  `quest` subcommand. Upgrading never rewrites repository files. (Amended
-  2026-10-26 (user), replacing "Nothing is vendored", so `quest init` can
-  install the agent lifecycle hooks. Amended 2026-11-01 (user, /quest-plan):
-  `quest init` also rewrites a Quest-written stub nobody edited when its
-  text is out of date.)
+  stubs, one reference line in its root instructions, and one
+  `.gitattributes` line. Upgrading never rewrites repository files. (Amended
+  2026-11-01 (user, /quest-plan): `quest init` also rewrites a Quest-written
+  stub nobody edited when its text is out of date. Amended 2026-11-03
+  (maintainer, /quest-unblock): `quest init` writes no Claude hook entries;
+  Quest's worktree hooks are a user-level opt-in, see
+  [user-dev-shell](/quest/m0/user-dev-shell/README.md).)
 - The repository's own tool manager pins the version: mise (release binaries)
   or a nix flake input (any rev, built from source). Quest ships no launcher
   and no pin file; an install outside either is simply unpinned.
