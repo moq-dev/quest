@@ -942,8 +942,8 @@ have room, commands start one at a time, 5 seconds after the previous admission.
 The load limit applies only while a gated command is still running. Otherwise
 the load comes from work the gate cannot wait out, so commands start one at a
 time as if the raw load had room. A freshly booted hosted macOS runner is one
-such host: Spotlight's first index holds its load at several times its CPU
-count for the whole job. Available memory is still required.
+such host: work outside the job holds its load above its CPU count for the
+whole job. Available memory is still required.
 
 A user's admissions on one host are recorded under
 `~/.cache/quest/admissions/<hostname>`, whatever the caller's environment or
