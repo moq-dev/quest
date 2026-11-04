@@ -15,7 +15,7 @@ import { CHECK_LOG } from "../src/cli/land-checks";
 import { COLLECTION_ATTEMPTS, REQUEUE_LIMIT, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
-import type { FixContext } from "../src/cli/land-watch-fix";
+import { type FixContext, HELD } from "../src/cli/land-watch-fix";
 import { type FlakyTest, RECENT, readFlaky, saveFlaky, writeKnownFlaky } from "../src/cli/land-watch-flaky";
 import { FLAKY_INPUT, type KnownFlaky } from "../src/cli/land-fix";
 import { configure, GIT_SETTINGS, initRepository, tempDir } from "./fixture";
@@ -66,6 +66,7 @@ interface Pull {
 	branch?: string;
 	/** Its head branch's pushes, oldest first, in place of those its removals imply. */
 	pushes?: { sha: string; at: string }[];
+	labels?: string[];
 }
 interface Job {
 	id: number;
@@ -95,8 +96,8 @@ interface World {
 	now: number;
 	/** The upstream repository that holds each PR's branch, `branch-<number>`. */
 	origin?: string;
-	/** A comment GitHub refuses to post, once. */
-	refuse?: (body: string) => boolean;
+	/** Texts whose comment GitHub refuses to post, each once, found in `#<number> <body>`. */
+	refuse?: string[];
 	/** A read of a PR's queue state that fails, once. */
 	unreadable?: (pull: Pull) => boolean;
 	/** PRs whose push activity GitHub has not listed yet. */
@@ -108,6 +109,8 @@ interface World {
 	onActivity?: (pull: Pull) => void;
 	/** GitHub's refusal of an enqueue of `pull`, if it refuses one. */
 	refuseEnqueue?: (pull: Pull) => string | undefined;
+	/** Called on each read of a PR's queue state, as a change GitHub makes while the watcher reads it. */
+	onPull?: (pull: Pull) => void;
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -122,6 +125,7 @@ function headOf(world: World, pull: Pull): string {
 }
 
 const branchOf = (pull: Pull) => pull.branch ?? `branch-${pull.number}`;
+const labelsOf = (pull: Pull) => ({ nodes: (pull.labels ?? []).map((name) => ({ name })) });
 
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -226,6 +230,7 @@ function deps(world: World): GitHubDependencies {
 				}
 				if (query.includes("mergeStateStatus") && !query.includes("pullRequests(states: OPEN")) {
 					const pull = pullOf();
+					world.onPull?.(pull);
 					if (world.unreadable?.(pull)) {
 						world.unreadable = undefined;
 						return Response.json({ errors: [{ type: "INTERNAL", message: "unavailable" }] });
@@ -239,6 +244,7 @@ function deps(world: World): GitHubDependencies {
 								mergeStateStatus: pull.mergeState ?? "CLEAN",
 								mergeQueueEntry: pull.queued ? { enqueuedAt: pull.queued } : null,
 								autoMergeRequest: pull.armed ? { enabledAt: pull.armed } : null,
+								labels: labelsOf(pull),
 							},
 						},
 					});
@@ -281,6 +287,7 @@ function deps(world: World): GitHubDependencies {
 										mergeStateStatus: pull.mergeState ?? "CLEAN",
 										mergeQueueEntry: pull.queued ? { id: `MQE_${pull.number}` } : null,
 										autoMergeRequest: pull.armed ? { enabledAt: pull.armed, commitBody: "" } : null,
+										labels: labelsOf(pull),
 										removals: removalPage(pull, variables.since, null),
 									})),
 									pageInfo: { hasNextPage: false, endCursor: null },
@@ -361,8 +368,10 @@ function deps(world: World): GitHubDependencies {
 				const list = (world.comments[Number(comments[1])] ??= []);
 				if (init?.method === "POST") {
 					const comment = { user: { login: `${APP}[bot]` }, body: JSON.parse(String(init.body)).body };
-					if (world.refuse?.(comment.body)) {
-						world.refuse = undefined;
+					const refused =
+						world.refuse?.findIndex((text) => `#${comments[1]} ${comment.body}`.includes(text)) ?? -1;
+					if (refused >= 0) {
+						world.refuse!.splice(refused, 1);
 						return Response.json({ message: "refused" }, { status: 422 });
 					}
 					list.push(comment);
@@ -757,12 +766,15 @@ test("a refused enqueue of an armed pick is reported once and retried, and says 
 	expect(JSON.parse(readFileSync(join(state, "watch.json"), "utf8")).refused).toEqual({});
 });
 
-test("an armed pick withdrawn or retargeted while the pass reads it is not enqueued", async () => {
+test("an armed pick withdrawn, retargeted, or held while the pass reads it is not enqueued", async () => {
 	const state = tempDir();
 	const github = world([
 		{ number: 32, head: HEAD, enqueues: [], removals: [], armed: at(2) },
 		{ number: 33, head: HEAD, enqueues: [], removals: [], armed: at(2) },
 		{ number: 34, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		// Held when the pass reads it, or once it does.
+		{ number: 35, head: HEAD, enqueues: [], removals: [], armed: at(2), labels: ["quest:active"] },
+		{ number: 36, head: HEAD, enqueues: [], removals: [], armed: at(2) },
 	]);
 	github.now = Date.parse(at(4));
 	github.onActivity = (pull) => {
@@ -770,9 +782,19 @@ test("an armed pick withdrawn or retargeted while the pass reads it is not enque
 		if (pull.number === 33) pull.base = "release";
 		// Disabled and armed again: a new pick, which the next pass weighs on its own.
 		if (pull.number === 34) pull.armed = at(3);
+		if (pull.number === 36) pull.labels = ["quest:iterate"];
 	};
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
 	expect(github.mutations).toEqual([]);
+
+	// The holds clear with the pick still armed at its head: the next pass enqueues it, with 34's new pick.
+	github.onActivity = undefined;
+	for (const pull of github.pulls.slice(3)) pull.labels = [];
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
+		`enqueued 34 ${HEAD}`,
+		`enqueued 35 ${HEAD}`,
+		`enqueued 36 ${HEAD}`,
+	]);
 });
 
 test("the watcher's tokens ask for writes only with a fixer, and pushes for workflows only when they carry one", () => {
@@ -1091,12 +1113,15 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		// retried rather than handed back, and finds its own enqueue.
 		github.unreadable = (pull) => pull.queued !== undefined;
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
+		// A session takes it now: the head GitHub already took back stays queued.
+		pull.labels = ["quest:active"];
 		// Then GitHub refuses the outcome comment once: the round stays requeued, and only its comment is retried.
-		github.refuse = (body) => body.includes("re-enqueued this pull request");
+		github.refuse = ["re-enqueued this pull request"];
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 		const [line] = await watchPass(REPOSITORY, { state }, deps(github), context);
 		const fixed = git(repo.origin, "rev-parse", "refs/heads/branch-5");
 		expect(line).toBe(`requeued 5 ${fixed}`);
+		pull.labels = undefined;
 		expect(git(repo.origin, "rev-parse", `${fixed}^`)).toBe(head);
 		expect(github.mutations).toEqual([`enqueuePullRequest 5 ${fixed}`]);
 		expect(pull.body).toContain(`mechanical fix by Codex: \`add the missing file\` (head ${fixed})`);
@@ -1412,17 +1437,19 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(readFlaky(state)[0].verdicts).toHaveLength(1);
 	});
 
-	test("a test seen flaking twice is disabled in its own pull request, which the watcher enqueues", async () => {
-		const { repo, state, fix, context } = setup();
-		const base = repo.main();
-		const heads = [5, 6, 7].map((number) => repo.pull(number, { [`feature-${number}.txt`]: "new\n" }));
-		const github = { ...world([], []), origin: repo.origin };
-		/** A flaky requeue naming render_timeout, disabling it at the checkout's HEAD after `script`. */
-		const flaky = (script: string) => `${script}
+	test.each([false, true])(
+		"a test seen flaking twice is disabled in its own pull request, which the watcher enqueues unless it is held (held: %s)",
+		async (held) => {
+			const { repo, state, fix, context } = setup();
+			const base = repo.main();
+			const heads = [5, 6, 7].map((number) => repo.pull(number, { [`feature-${number}.txt`]: "new\n" }));
+			const github = { ...world([], []), origin: repo.origin };
+			/** A flaky requeue naming render_timeout, disabling it at the checkout's HEAD after `script`. */
+			const flaky = (script: string) => `${script}
 printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","cause":"flaky","failure":"%s","disable":"%s"}]' "$2" "$FAILURE" "$(git rev-parse HEAD)" > quest-land-result.json
 `;
-		/** A disabling commit on base that skips the test, adds its follow-up quest, and writes `extra`. */
-		const disabling = (extra: string) => `grep -q 'just test: render_timeout' .git/quest-land-flaky.json
+			/** A disabling commit on base that skips the test, adds its follow-up quest, and writes `extra`. */
+			const disabling = (extra: string) => `grep -q 'just test: render_timeout' .git/quest-land-flaky.json
 git checkout -q -b disable base
 mkdir -p quest/m0/flaky
 printf '# [S] Fix or delete render_timeout\\n\\n## Goal\\n\\nFix the flaky test or delete it.\\n' > quest/m0/flaky/render-timeout.md
@@ -1431,82 +1458,105 @@ printf 'skip render_timeout\\n' > skip.txt
 ${extra}
 git add quest skip.txt ${extra ? "flake.nix" : ""}
 git commit -qm 'disable render_timeout'`;
-		// The first verdict's disable is ignored: one judgment alone never disables a test. The second's edits a
-		// protected path and is refused, and the third's is opened as its own pull request.
-		// Each names the test with different quoting and spacing, which still makes one test.
-		fix.round(5, flaky("[ ! -e .git/quest-land-flaky.json ]\nFAILURE='just test: `render_timeout`'"));
-		fix.round(
-			6,
-			flaky(`${disabling("printf 'changed\\n' > flake.nix")}\nFAILURE='just  test: \\"render_timeout\\"'`),
-		);
-		fix.round(7, flaky(`${disabling("")}\nFAILURE='just test: render_timeout'`));
-		const said: string[][] = [];
-		for (const [index, number] of [5, 6, 7].entries()) {
-			const minute = (index + 1) * 10;
-			github.pulls.push({
-				number,
-				head: heads[index],
-				enqueues: [{ createdAt: at(minute - 5), actor: "maintainer" }],
-				removals: [
-					{
-						id: `R${number}`,
-						createdAt: at(minute),
-						reason: "failed_checks",
-						actor: "github-merge-queue",
-						before: heads[index],
-					},
+			// The first verdict's disable is ignored: one judgment alone never disables a test. The second's edits a
+			// protected path and is refused, and the third's is opened as its own pull request.
+			// Each names the test with different quoting and spacing, which still makes one test.
+			fix.round(5, flaky("[ ! -e .git/quest-land-flaky.json ]\nFAILURE='just test: `render_timeout`'"));
+			fix.round(
+				6,
+				flaky(`${disabling("printf 'changed\\n' > flake.nix")}\nFAILURE='just  test: \\"render_timeout\\"'`),
+			);
+			fix.round(7, flaky(`${disabling("")}\nFAILURE='just test: render_timeout'`));
+			const said: string[][] = [];
+			for (const [index, number] of [5, 6, 7].entries()) {
+				const minute = (index + 1) * 10;
+				github.pulls.push({
+					number,
+					head: heads[index],
+					enqueues: [{ createdAt: at(minute - 5), actor: "maintainer" }],
+					removals: [
+						{
+							id: `R${number}`,
+							createdAt: at(minute),
+							reason: "failed_checks",
+							actor: "github-merge-queue",
+							before: heads[index],
+						},
+					],
+				});
+				github.runs.push({ ...failedRun(number, at(minute - 2), base), id: number * 10 });
+				github.now = Date.parse(at(minute + 1));
+				expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+					`removed ${number} failed_checks fix`,
+					`fixing ${number}`,
+				]);
+				await exited(state);
+				github.now = Date.parse(at(minute + 2));
+				// A session takes the disable's pull request as soon as it opens.
+				if (held && number === 7)
+					github.onPull = (pull) => {
+						if (pull.number === 8) pull.labels = ["quest:active"];
+					};
+				said.push(await watchPass(REPOSITORY, { state }, deps(github), context));
+			}
+			const branch = github.pulls.find((pull) => pull.number === 8)?.branch;
+			expect(branch).toMatch(/^quest-land\/flaky-[0-9a-f]{12}$/);
+			const head = git(repo.origin, "rev-parse", `refs/heads/${branch}`);
+			expect(said).toEqual([
+				["disable ignored 5: first flaky verdict", `requeued 5 ${heads[0]}`],
+				[expect.stringMatching(/^disable refused 6: Error: off-limits fixer edit/), `requeued 6 ${heads[1]}`],
+				[
+					`disable 7 ${head}`,
+					`requeued 7 ${heads[2]}`,
+					held ? "disable held render-timeout 8" : "disabled render-timeout 8",
 				],
-			});
-			github.runs.push({ ...failedRun(number, at(minute - 2), base), id: number * 10 });
-			github.now = Date.parse(at(minute + 1));
-			expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
-				`removed ${number} failed_checks fix`,
-				`fixing ${number}`,
 			]);
-			await exited(state);
-			github.now = Date.parse(at(minute + 2));
-			said.push(await watchPass(REPOSITORY, { state }, deps(github), context));
-		}
-		const branch = github.pulls.find((pull) => pull.number === 8)?.branch;
-		expect(branch).toMatch(/^quest-land\/flaky-[0-9a-f]{12}$/);
-		const head = git(repo.origin, "rev-parse", `refs/heads/${branch}`);
-		expect(said).toEqual([
-			["disable ignored 5: first flaky verdict", `requeued 5 ${heads[0]}`],
-			[expect.stringMatching(/^disable refused 6: Error: off-limits fixer edit/), `requeued 6 ${heads[1]}`],
-			[`disable 7 ${head}`, `requeued 7 ${heads[2]}`, "disabled render-timeout 8"],
-		]);
-		// The disable is the fixer's commit on the base, enqueued like any other pull request with no pick.
-		expect(git(repo.origin, "rev-parse", `${head}^`)).toBe(base);
-		expect(git(repo.origin, "show", `${head}:quest/m0/flaky/render-timeout.md`)).toContain("Fix the flaky test");
-		expect(github.mutations).toEqual([
-			`enqueuePullRequest 5 ${heads[0]}`,
-			`enqueuePullRequest 6 ${heads[1]}`,
-			`enqueuePullRequest 7 ${heads[2]}`,
-			`enqueuePullRequest 8 ${head}`,
-		]);
-		const opened = github.pulls.find((pull) => pull.number === 8)!;
-		expect(opened.title).toBe("quest land: disable the flaky test render-timeout");
-		expect(opened.body).toContain(
-			"The land fixer judged `just test: render_timeout` flaky 3 times, most recently in",
-		);
-		expect(opened.body).toContain(
-			"#5 ([job 1](https://github.com/upstream/project/actions/runs/50/job/71)), #6 ([job 1](https://github.com/upstream/project/actions/runs/60/job/71))",
-		);
-		expect(opened.body).toContain("adds its follow-up quest, `quest/m0/flaky/render-timeout.md`");
-		expect(opened.body).toContain(`## Review\n\nmechanical fix by Codex: \``);
-		expect(opened.body).toContain(`(head ${head})`);
-		expect(readFlaky(state)).toMatchObject([
-			{
-				failure: "just test: render_timeout",
-				verdicts: [{ number: 5 }, { number: 6 }, { number: 7 }],
-				disable: { head, quest: "quest/m0/flaky/render-timeout.md", number: 8, done: "enqueued" },
-			},
-		]);
+			if (held) {
+				// Left for a maintainer, even once the hold clears.
+				github.onPull = undefined;
+				github.pulls.find((pull) => pull.number === 8)!.labels = [];
+				expect(github.comments[8].map((comment) => comment.body)).toEqual([expect.stringContaining(HELD)]);
+			}
+			// The disable is the fixer's commit on the base, enqueued like any other pull request with no pick.
+			expect(git(repo.origin, "rev-parse", `${head}^`)).toBe(base);
+			expect(git(repo.origin, "show", `${head}:quest/m0/flaky/render-timeout.md`)).toContain(
+				"Fix the flaky test",
+			);
+			expect(github.mutations).toEqual([
+				`enqueuePullRequest 5 ${heads[0]}`,
+				`enqueuePullRequest 6 ${heads[1]}`,
+				`enqueuePullRequest 7 ${heads[2]}`,
+				...(held ? [] : [`enqueuePullRequest 8 ${head}`]),
+			]);
+			const opened = github.pulls.find((pull) => pull.number === 8)!;
+			expect(opened.title).toBe("quest land: disable the flaky test render-timeout");
+			expect(opened.body).toContain(
+				"The land fixer judged `just test: render_timeout` flaky 3 times, most recently in",
+			);
+			expect(opened.body).toContain(
+				"#5 ([job 1](https://github.com/upstream/project/actions/runs/50/job/71)), #6 ([job 1](https://github.com/upstream/project/actions/runs/60/job/71))",
+			);
+			expect(opened.body).toContain("adds its follow-up quest, `quest/m0/flaky/render-timeout.md`");
+			expect(opened.body).toContain(`## Review\n\nmechanical fix by Codex: \``);
+			expect(opened.body).toContain(`(head ${head})`);
+			expect(readFlaky(state)).toMatchObject([
+				{
+					failure: "just test: render_timeout",
+					verdicts: [{ number: 5 }, { number: 6 }, { number: 7 }],
+					disable: {
+						head,
+						quest: "quest/m0/flaky/render-timeout.md",
+						number: 8,
+						done: held ? "held" : "enqueued",
+					},
+				},
+			]);
 
-		// A restart neither opens nor enqueues it again, and the disabled test is no longer offered as known.
-		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
-		expect(github.mutations).toHaveLength(4);
-	});
+			// A restart neither opens nor enqueues it again, and the disabled test is no longer offered as known.
+			expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
+			expect(github.mutations).toHaveLength(held ? 3 : 4);
+		},
+	);
 
 	test("a pick that ends while the fixer runs is left alone, and every handback ends the pick", async () => {
 		const { repo, state, fix, context } = setup(5);
@@ -1748,5 +1798,107 @@ git commit -qm 'disable render_timeout'`;
 		await exited(state);
 		github.now = Date.parse(at(27));
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 12 ${head}`]);
+	});
+	test("a held PR is neither fixed nor re-enqueued, whenever the hold is taken", async () => {
+		const { repo, state, fix, context } = setup(3);
+		const base = repo.main();
+		const heads = new Map(
+			[5, 6, 7, 8, 9].map((number) => [number, repo.pull(number, { [`f-${number}.txt`]: "new\n" })]),
+		);
+		const removed = (number: number, labels?: string[]): Pull => ({
+			number,
+			head: heads.get(number)!,
+			labels,
+			enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+			removals: [
+				{
+					id: `R${number}`,
+					createdAt: at(5),
+					reason: "failed_checks",
+					actor: "github-merge-queue",
+					before: heads.get(number),
+				},
+			],
+		});
+		// 5 is held when the queue drops it; `quest:merge`, an older pin's leftover, holds nothing.
+		const pulls = [removed(5, ["quest:active"]), removed(6, ["quest:merge"]), removed(7), removed(8), removed(9)];
+		const github = {
+			...world(
+				pulls,
+				pulls.map((pull) => ({ ...failedRun(pull.number, at(3), base), id: pull.number })),
+			),
+			origin: repo.origin,
+		};
+		github.now = Date.parse(at(6));
+		fix.round(6, fixScript("fixed.txt"));
+		fix.round(7, fixScript("fixed.txt"));
+		fix.round(8, flakyScript);
+		// Each hold the watcher sees ends the pick, and its comment is best-effort: GitHub refuses 5's here,
+		// and 7's below, and neither is retried once the hold clears.
+		github.refuse = ["Another session holds"];
+		// Three fixer slots: 9 waits.
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			expect.stringMatching(/^quest land watch: hold comment on 5 not posted: /),
+			"removed 5 failed_checks held",
+			"removed 6 failed_checks fix",
+			"removed 7 failed_checks fix",
+			"removed 8 failed_checks fix",
+			"removed 9 failed_checks fix",
+			"fixing 6",
+			"fixing 7",
+			"fixing 8",
+		]);
+		// A crash before the pass marked 5's removal handled: its recorded hold still ends the pick once it
+		// clears, and the pass that handles it again posts the removal's comment.
+		pulls[0].labels = [];
+		const progress = join(state, "watch.json");
+		const { handled, ...rest } = JSON.parse(readFileSync(progress, "utf8"));
+		writeFileSync(progress, JSON.stringify({ ...rest, handled: { ...handled, 5: {} } }));
+		await exited(state, 3);
+		// A session takes 6 while the watcher validates its fix, 7 right after the watcher pushes its fix,
+		// 8 while its fixer runs, and 9 while it waits.
+		const reads = new Map<number, number>();
+		const takeAt = new Map([
+			[6, 2],
+			[7, 3],
+		]);
+		github.onPull = (pull) => {
+			const read = (reads.get(pull.number) ?? 0) + 1;
+			reads.set(pull.number, read);
+			if (takeAt.get(pull.number) === read) pull.labels = [...(pull.labels ?? []), "quest:active"];
+		};
+		pulls[3].labels = ["quest:iterate"];
+		pulls[4].labels = ["quest:active"];
+		github.refuse = ["#7 quest land watch: Another session holds"];
+		github.now = Date.parse(at(7));
+		expect((await watchPass(REPOSITORY, { state }, deps(github), context)).sort()).toEqual([
+			"dropped 6 held",
+			"dropped 7 held",
+			"dropped 8 held",
+			"dropped 9 held",
+			"removed 5 failed_checks held",
+		]);
+		expect(github.mutations).toEqual([]);
+		expect(git(repo.origin, "rev-parse", "refs/heads/branch-6")).toBe(heads.get(6));
+		expect(git(repo.origin, "rev-parse", "refs/heads/branch-7")).not.toBe(heads.get(7));
+		expect(fix.calls().map((call) => call.split(" ").at(-1))).toEqual(["6", "7", "8"]);
+		for (const pull of pulls) expect(history(state, pull.number)).toBeUndefined();
+		expect(readRemoval(state, 5)!.verdict).toBe("held");
+		expect(readRemoval(state, 9)!.taken).toBe("held");
+
+		// The holds clear: nothing is fixed, re-enqueued, or commented again.
+		github.onPull = undefined;
+		for (const pull of pulls) pull.labels = [];
+		github.now = Date.parse(at(8));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
+		expect(github.mutations).toEqual([]);
+		const held = (number: number) =>
+			(github.comments[number] ?? []).filter((comment) => comment.body.includes(HELD)).length;
+		expect([5, 6, 7, 8, 9].map(held)).toEqual([1, 1, 0, 1, 1]);
+		// 8's round is not applied, as one whose pick ended is not: its flaky verdict does not count, and its
+		// fixer's note is not posted, so the hold's comment is the only one after the removal's.
+		expect(readFlaky(state)).toEqual([]);
+		expect(github.comments[8]).toHaveLength(2);
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 	});
 });
