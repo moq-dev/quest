@@ -127,6 +127,19 @@ test("a draft's hand-back items are the maintainer's unless a Waiting item names
 	]);
 });
 
+test("a draft's hand-back item keeps nested headings and the body's reference definitions", () => {
+	expect(
+		handBackWaits(
+			"[m]: https://example.com\n\n## Waiting\n\n- Maintainer: choose a provider.\n\n  ## Options\n\n  Hetzner or OVH.\n" +
+				"- [Maintainer][m]: approve the **account**.\n- Codex: out of quota.\n",
+		),
+	).toEqual([
+		{ line: 5, party: "Maintainer", text: "choose a provider. Options Hetzner or OVH." },
+		{ line: 10, party: "Maintainer", text: "approve the account." },
+		{ line: 11, party: "Codex", text: "out of quota." },
+	]);
+});
+
 test("a draft's hand-back without items is one maintainer item holding its prose", () => {
 	expect(handBackWaits("Work.\r\n\r\nWaiting\r\n-------\r\n\r\nPick a name\r\nfor it.\r\n")).toEqual([
 		{ line: 3, party: "Maintainer", text: "Pick a name for it." },
