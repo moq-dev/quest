@@ -248,12 +248,16 @@ const record = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
- * A command that runs `quest worktree hook`: the word before `worktree hook`, past an optional `--`, is
- * the `quest` executable, package, or flake attribute, as in `/usr/local/bin/quest worktree hook`,
- * `npx @moq-dev/quest@latest worktree hook`, or `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`.
- * Another tool's command that merely ends in `worktree hook` is not Quest's.
+ * A command that runs `quest worktree hook`: the `quest` executable, package, or flake attribute, past an
+ * optional `--`, runs `worktree hook` either as the command itself, at the start of a shell segment after
+ * any variable assignments, or as what a launcher runs (`nix run`, `nix develop -c`, `bun run`, `npx`,
+ * `bunx`, `exec`, ...) with only flags between. That covers `/usr/local/bin/quest worktree hook`,
+ * `npx @moq-dev/quest@latest worktree hook`, and `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`,
+ * while another tool given `quest` as an argument, as in `othertool --project quest worktree hook`, is
+ * not Quest's.
  */
-const QUEST_COMMAND = /(?:^|\s)["']?(?:[^\s=]*[/#])?quest(?:[@?][^\s"']*)?["']?(?:\s+--)?\s+worktree hook$/;
+const QUEST_COMMAND =
+	/(?:(?:^|[;&|(]\s*)(?:\w+=\S*\s+)*|(?:^|\s)(?:run|exec|x|dlx|npx|bunx|pnpx|-c|--command)(?:\s+--?[\w-]+)*\s+)["']?(?:[^\s=]*[/#])?quest(?:[@?][^\s"']*)?["']?(?:\s+--)?\s+worktree hook$/;
 
 /** The trimmed command of a hook handler that runs Quest, or undefined for any other handler. */
 function questCommand(handler: unknown): string | undefined {

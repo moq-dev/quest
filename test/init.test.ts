@@ -411,6 +411,8 @@ test("init removes the hooks an earlier version wrote, plain or wrapped, and the
 				group("/usr/local/bin/quest   worktree hook "),
 				group("nix run github:moq-dev/quest -- worktree hook"),
 				group("bun run --silent quest worktree hook"),
+				group("nix develop --impure -c quest worktree hook"),
+				group("command -v quest >/dev/null || exit 2; QUEST_X=1 quest worktree hook"),
 			],
 		},
 	});
@@ -422,6 +424,8 @@ test("init removes the hooks an earlier version wrote, plain or wrapped, and the
 		{ event: "SubagentStop", command: "/usr/local/bin/quest   worktree hook" },
 		{ event: "SubagentStop", command: "nix run github:moq-dev/quest -- worktree hook" },
 		{ event: "SubagentStop", command: "bun run --silent quest worktree hook" },
+		{ event: "SubagentStop", command: "nix develop --impure -c quest worktree hook" },
+		{ event: "SubagentStop", command: "command -v quest >/dev/null || exit 2; QUEST_X=1 quest worktree hook" },
 	]);
 	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
 	expect(isFile(dir, ".claude/skills/quest-start/SKILL.md")).toBe(true);
@@ -439,6 +443,8 @@ test("init and uninstall keep other hooks and settings, and the file's formattin
 			group("tool --quest-mode worktree hook"),
 			group("cd quest && othertool worktree hook"),
 			group("othertool --dir=/quest worktree hook"),
+			group("othertool --dir /quest worktree hook"),
+			group("othertool --project quest worktree hook"),
 		],
 		SubagentStop: [SESSION, { matcher: "", hooks: [handler("quest-like worktree hook")] }],
 	};
@@ -456,6 +462,8 @@ test("init and uninstall keep other hooks and settings, and the file's formattin
 					group("tool --quest-mode worktree hook"),
 					group("cd quest && othertool worktree hook"),
 					group("othertool --dir=/quest worktree hook"),
+					group("othertool --dir /quest worktree hook"),
+					group("othertool --project quest worktree hook"),
 				],
 				SubagentStart: [group(WRAPPED)],
 				SubagentStop: [SESSION, { matcher: "", hooks: [handler(QUEST), handler("quest-like worktree hook")] }],
