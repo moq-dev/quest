@@ -27,4 +27,4 @@ kixelated user may enroll too. This quest undoes both for the launch.
 
 ## Required
 
-- [Owner state in its RunnerHub](/quest/m1/owner-state.md) - its fresh start drops the moved tables, which is safe only while enrollment is limited to the operator's own allowlisted owners
+- [User state in their RunnerHub](/quest/m1/user-state.md) - its fresh start drops users' runners and jobs, which is safe only while enrollment is limited to the operator's own allowlisted owners
