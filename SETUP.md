@@ -49,9 +49,11 @@ starting with `Quests: ` to the root `AGENTS.md`, or `CLAUDE.md` when only that
 exists. It also appends `quest/** merge=quest` to `.gitattributes` and sets
 `merge.quest.driver` in the clone's git config, so local merges resolve
 concurrent edits to quest link lists. It writes no hooks: it removes the
-entries earlier versions added to `.claude/settings.json` that run
-`quest worktree hook`, directly or through a wrapper, keeping the file's other
-settings, and names each on stderr. It
+`quest worktree hook` entries earlier versions added to
+`.claude/settings.json`, keeping the file's other settings, and names each on
+stderr. It also warns about, but leaves, any other hook whose command ends in
+`worktree hook`; if one runs Quest through a wrapper, tell the user and, with
+their consent, remove it. It
 prints each path it changed and is safe to rerun. Rerun after an upgrade, it
 also rewrites the unmodified stubs whose description or setup link changed and
 removes the unmodified stubs of skills the new version no longer ships.
@@ -115,8 +117,10 @@ work or `/quest-import` to bring in open GitHub issues.
 1. Run `quest skill export` and follow it, so active quests become GitHub
    issues. Skip this only if the user says so.
 2. Run `quest uninstall`. It removes only unmodified stubs of any version, the
-   `Quests: ` line, Quest's hook entries in `.claude/settings.json`, and the
-   merge driver, and never deletes the quest tree.
+   `Quests: ` line, Quest's `quest worktree hook` entries in
+   `.claude/settings.json`, and the merge driver, and never deletes the quest
+   tree. It warns about, but leaves, other hooks ending in `worktree hook`, as
+   init does.
 3. Remove the pin added above: the mise entry, or the flake input and dev
    shell package. For an unpinned install, delete the `quest` binary the
    installer placed (`~/.local/bin/quest` by default, or `quest.exe` in the

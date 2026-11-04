@@ -77,7 +77,7 @@ export interface InitChange {
 	path: string;
 	content: string | null;
 	/** The Quest hook entries removed from Claude Code's settings by this change. */
-	hooks?: QuestHook[];
+	hooks?: HookEntry[];
 }
 
 /** Init cannot install because of what sits at `path`; the repository needs a person's judgement. */
@@ -238,8 +238,11 @@ function appendLine(content: string, marker: string, line: string, old: readonly
 	return `${content}${line}${eol}`;
 }
 
-/** A hook entry that runs Quest: the event it handles and its command. */
-export interface QuestHook {
+/** The command of the hook entries earlier versions wrote, the only one init and uninstall remove. */
+const HOOK_COMMAND = "quest worktree hook";
+
+/** A command hook entry in Claude Code's settings: the event it handles and its command. */
+export interface HookEntry {
 	event: string;
 	command: string;
 }
@@ -247,45 +250,13 @@ export interface QuestHook {
 const record = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
-/**
- * A command that runs `quest worktree hook`. A shell segment, past any variable assignments and an `exec`
- * or `env`, starts the `quest` executable directly or through a launcher that names it: `nix run` of a
- * flake attribute or reference ending in `quest`, `nix develop` or `nix shell` with `-c quest`, a package
- * runner such as `npx @moq-dev/quest@latest`, `bun run quest`, or `mise exec` or `direnv exec` running
- * `quest`. Another tool given `quest` as an argument, as in `othertool --project quest worktree hook`,
- * is not Quest's.
- */
-const QUEST_COMMAND = (() => {
-	const quoted = (body: string) => String.raw`["']?${body}["']?`;
-	const executable = quoted(String.raw`(?:[^\s"'=;&|]*/)?quest`);
-	const flags = String.raw`(?:\s+-\S*)*`;
-	const args = String.raw`(?:\s+[^\s;&|]+)*?`;
-	const launch = [
-		executable,
-		String.raw`nix${flags}\s+run${flags}\s+${quoted(String.raw`[^\s"']*[#/]quest(?:\?[^\s"']*)?`)}`,
-		String.raw`nix${flags}\s+(?:develop|shell)${args}\s+(?:-c|--command)\s+${executable}`,
-		String.raw`(?:npx|bunx|pnpx|bun\s+x|pnpm\s+dlx|(?:npm|pnpm)\s+exec)${flags}\s+${quoted(String.raw`(?:[^\s"'=;&|]*/)?quest(?:@[^\s"']*)?`)}`,
-		String.raw`bun\s+run${flags}\s+${executable}`,
-		String.raw`(?:mise\s+(?:exec|x)|direnv\s+exec)${args}\s+${executable}`,
-	].join("|");
-	const prefix = String.raw`(?:^|[;&|(]\s*)(?:\w+=\S*\s+)*(?:(?:exec|env)\s+(?:\w+=\S*\s+)*)?`;
-	return new RegExp(String.raw`${prefix}(?:${launch})\s+(?:--\s+)?worktree hook$`);
-})();
-
-/** The trimmed command of a hook handler that runs Quest, or undefined for any other handler. */
-function questCommand(handler: unknown): string | undefined {
-	if (!record(handler) || handler.type !== "command" || typeof handler.command !== "string") return undefined;
-	const command = handler.command.trim();
-	return QUEST_COMMAND.test(command) ? command : undefined;
-}
+type Groups = { hooks?: unknown[] }[];
 
 /**
- * Claude Code settings `text` without Quest's hook handlers, nor the groups, events, and hooks object they
- * leave empty, along with the handlers removed. Its content is null when nothing else remains, and the
- * result undefined when there is nothing to remove or the settings are malformed, which Claude Code
- * rejects whole, so their hooks never run.
+ * Claude Code settings `text` with its hook groups by event, or undefined when it holds no hooks or is
+ * malformed, which Claude Code rejects whole, so its hooks never run.
  */
-export function removeHooks(text: string): { content: string | null; hooks: QuestHook[] } | undefined {
+function parseHooks(text: string): { settings: Record<string, unknown>; events: [string, Groups][] } | undefined {
 	let settings: unknown;
 	try {
 		settings = JSON.parse(text);
@@ -293,18 +264,40 @@ export function removeHooks(text: string): { content: string | null; hooks: Ques
 		return undefined;
 	}
 	if (!record(settings) || !record(settings.hooks)) return undefined;
-	const removed: QuestHook[] = [];
+	const events = Object.entries(settings.hooks);
+	const valid = (groups: unknown) =>
+		Array.isArray(groups) && groups.every((group) => record(group) && Array.isArray(group.hooks ?? []));
+	if (!events.every(([, groups]) => valid(groups))) return undefined;
+	return { settings, events: events as [string, Groups][] };
+}
+
+/** The command a hook handler runs, or undefined when it is not a command hook. */
+function command(handler: unknown): string | undefined {
+	return record(handler) && handler.type === "command" && typeof handler.command === "string"
+		? handler.command
+		: undefined;
+}
+
+/**
+ * Claude Code settings `text` without the hook handlers whose command is exactly `quest worktree hook`,
+ * nor the groups, events, and hooks object they leave empty, along with the handlers removed. Its content
+ * is null when nothing else remains, and the result undefined when there is nothing to remove or the
+ * settings are malformed.
+ */
+export function removeHooks(text: string): { content: string | null; hooks: HookEntry[] } | undefined {
+	const parsed = parseHooks(text);
+	if (parsed === undefined) return undefined;
+	const { settings, events } = parsed;
+	const removed: HookEntry[] = [];
 	const kept: [string, unknown][] = [];
-	for (const [event, groups] of Object.entries(settings.hooks)) {
-		if (!Array.isArray(groups) || !groups.every((group) => record(group) && Array.isArray(group.hooks ?? [])))
-			return undefined;
+	for (const [event, groups] of events) {
 		const before = removed.length;
-		const remaining = (groups as { hooks?: unknown[] }[]).flatMap((group) => {
+		const remaining = groups.flatMap((group) => {
 			const handlers = group.hooks ?? [];
 			const others = handlers.filter((handler) => {
-				const command = questCommand(handler);
-				if (command !== undefined) removed.push({ event, command });
-				return command === undefined;
+				const quest = command(handler) === HOOK_COMMAND;
+				if (quest) removed.push({ event, command: HOOK_COMMAND });
+				return !quest;
 			});
 			if (others.length === handlers.length) return [group];
 			return others.length ? [{ ...group, hooks: others }] : [];
@@ -320,4 +313,24 @@ export function removeHooks(text: string): { content: string | null; hooks: Ques
 	const indent = /\n([ \t]+)"/.exec(text)?.[1] ?? "  ";
 	const eol = newline(text);
 	return { content: `${JSON.stringify(settings, null, indent).replaceAll("\n", eol)}${eol}`, hooks: removed };
+}
+
+/**
+ * The command hooks in `repo`'s Claude Code settings, other than Quest's own, whose command ends in
+ * `worktree hook`. One may run Quest through a wrapper, such as moq-dev/moq's
+ * `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`, or may be another tool's, which no match can
+ * tell apart, so init and uninstall leave them and warn instead.
+ */
+export function lookalikeHooks(repo: Checkout): HookEntry[] {
+	const parsed = repo.stat(CLAUDE_SETTINGS) === "file" ? parseHooks(repo.read(CLAUDE_SETTINGS)) : undefined;
+	return (parsed?.events ?? []).flatMap(([event, groups]) =>
+		groups.flatMap((group) =>
+			(group.hooks ?? []).flatMap((handler) => {
+				const found = command(handler);
+				return found !== undefined && found !== HOOK_COMMAND && found.trimEnd().endsWith("worktree hook")
+					? [{ event, command: found }]
+					: [];
+			}),
+		),
+	);
 }

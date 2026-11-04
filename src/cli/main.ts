@@ -7,6 +7,7 @@ import { Argument, Command, CommanderError, InvalidArgumentError, Option } from 
 
 import { description, version } from "../../package.json";
 import {
+	CLAUDE_SETTINGS,
 	type Doc,
 	type RankedQuest,
 	blockers,
@@ -53,7 +54,7 @@ import { landed } from "./landed";
 import { type Report, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { MODELS, ReviewInputError, processDependencies as reviewDependencies, review, roundLines } from "./review";
-import { heal, init, uninstall } from "./setup";
+import { heal, init, lookalikes, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
@@ -73,6 +74,10 @@ export interface Output {
 
 /** A failure the user caused rather than the command, reported as a usage error. */
 class UsageError extends Error {}
+
+/** Where `init` and `uninstall` point a user whose repository settings held Quest's worktree hooks. */
+const OPT_IN =
+	'Quest\'s worktree hooks are now an opt-in in your own Claude settings (see "Claude Code checkouts" in the README)';
 
 /** Run the CLI with `argv` (arguments only, no executable). Returns the exit code. */
 export function main(argv: string[], out: Output): number | Promise<number> {
@@ -1207,6 +1212,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			out.stdout(options.stub ? found.stub : found.body);
 		});
 
+	/** Name each hook init and uninstall leave because it only looks like Quest's. */
+	const warnLookalikes = (): void => {
+		for (const hook of lookalikes(root()))
+			warn(
+				`left the ${hook.event} hook \`${hook.command}\` in ${CLAUDE_SETTINGS}; if it runs Quest, remove it, ` +
+					`since ${OPT_IN}`,
+			);
+	};
+
 	program
 		.command("init")
 		.description(
@@ -1217,10 +1231,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const changes = init(root());
 			for (const { hooks = [] } of changes)
 				for (const hook of hooks)
-					warn(
-						`removed the ${hook.event} hook \`${hook.command}\` from .claude/settings.json; ` +
-							"Quest's worktree hooks are now opt-in in your own Claude settings (see the README)",
-					);
+					warn(`removed the ${hook.event} hook \`${hook.command}\` from ${CLAUDE_SETTINGS}; ${OPT_IN}`);
+			warnLookalikes();
 			const paths = changes.map((change) => change.path);
 			for (const line of theme ? theme.init(paths) : paths) print(line);
 		});
@@ -1230,6 +1242,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description("Remove Quest stubs, markers, worktree hooks, and the merge driver from this repository")
 		.action(() => {
 			const changes = uninstall(root());
+			warnLookalikes();
 			for (const line of theme ? theme.uninstall(changes) : changes) print(line);
 		});
 

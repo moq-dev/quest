@@ -94,18 +94,29 @@ test("init and uninstall print each changed path and nothing else", () => {
 	expect(run("--root", root, "uninstall").stdout).toBe("");
 });
 
-test("init names each hook entry it removes on stderr", () => {
+test("init and uninstall name on stderr each hook entry they remove or leave", () => {
 	const root = tempDir();
 	mkdirSync(join(root, ".claude"));
-	const hook = { hooks: [{ type: "command", command: 'nix run ".#quest" -- worktree hook' }] };
-	writeFileSync(join(root, ".claude/settings.json"), JSON.stringify({ hooks: { WorktreeCreate: [hook] } }));
+	const group = (command: string) => ({ hooks: [{ type: "command", command }] });
+	const wrapped = 'nix run ".#quest" -- worktree hook';
+	writeFileSync(
+		join(root, ".claude/settings.json"),
+		JSON.stringify({ hooks: { WorktreeCreate: [group("quest worktree hook"), group(wrapped)] } }),
+	);
+	const optIn =
+		"Quest's worktree hooks are now an opt-in in your own Claude settings " +
+		'(see "Claude Code checkouts" in the README)';
+	const left = `quest: left the WorktreeCreate hook \`${wrapped}\` in .claude/settings.json; if it runs Quest, remove it, since ${optIn}\n`;
 	const init = run("--root", root, "init");
 	expect(init.code).toBe(0);
 	expect(init.stdout).toContain(".claude/settings.json\n");
 	expect(init.stderr).toBe(
-		'quest: removed the WorktreeCreate hook `nix run ".#quest" -- worktree hook` from .claude/settings.json; ' +
-			"Quest's worktree hooks are now opt-in in your own Claude settings (see the README)\n",
+		`quest: removed the WorktreeCreate hook \`quest worktree hook\` from .claude/settings.json; ${optIn}\n${left}`,
 	);
+	const uninstall = run("--root", root, "uninstall");
+	expect(uninstall.code).toBe(0);
+	expect(uninstall.stdout).not.toContain(".claude/settings.json");
+	expect(uninstall.stderr).toBe(left);
 });
 
 test("version", () => {

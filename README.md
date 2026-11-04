@@ -1416,8 +1416,11 @@ Only one hook can manage Claude's worktrees, so remove any other
 Claude Code runs hooks with. For `claude --bg` and agent view, that is the
 environment of the shell that started the session. Earlier versions of
 `quest init` wrote these entries to a repository's `.claude/settings.json`;
-`quest init` and `quest uninstall` now remove them there, along with wrappers
-that run Quest, such as `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`.
+`quest init` and `quest uninstall` now remove those whose command is exactly
+`quest worktree hook`. They leave any other command ending in `worktree hook`,
+such as a wrapper like `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`,
+since it may be another tool's, and warn on stderr naming it. Remove such an
+entry yourself if it runs Quest.
 
 The hook then creates every worktree Claude makes
 in the repository: for `--worktree`, `EnterWorktree`, isolated subagents and

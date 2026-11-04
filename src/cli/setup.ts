@@ -22,12 +22,14 @@ import {
 	ATTRIBUTES_LINE,
 	CLAUDE_SETTINGS,
 	type Checkout,
+	type HookEntry,
 	type InitChange,
 	type Kind,
 	REFERENCE_MARKER,
 	SKILL_DIRS,
 	installedStubs,
 	lines,
+	lookalikeHooks,
 	newline,
 	planInit,
 	removeHooks,
@@ -56,6 +58,14 @@ export function init(root: string): InitChange[] {
 	}
 	register(root);
 	return changes;
+}
+
+/**
+ * The command hooks in `root`'s Claude Code settings that end in `worktree hook` without being exactly
+ * Quest's, which init and uninstall leave in place, since they may be another tool's.
+ */
+export function lookalikes(root: string): HookEntry[] {
+	return lookalikeHooks(checkout(root));
 }
 
 /** The checkout under `root`, as the core's file plan reads it. */

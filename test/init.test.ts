@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { REFERENCE_LINE, init as apply, uninstall } from "../src/cli/setup";
+import { REFERENCE_LINE, init as apply, lookalikes, uninstall } from "../src/cli/setup";
 import { SKILLS } from "../src/cli/skills";
 import { tempDir } from "./fixture";
 
@@ -400,84 +400,66 @@ test("init writes no hooks", () => {
 	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
 });
 
-test("init removes the hooks an earlier version wrote, plain or wrapped, and the file they leave empty", () => {
+test("init removes the hooks an earlier version wrote, on any event, and the file they leave empty", () => {
 	const dir = tempDir();
 	settings(dir, {
 		hooks: {
 			WorktreeCreate: [group(QUEST)],
-			WorktreeRemove: [group(WRAPPED)],
-			SubagentStart: [group("npx @moq-dev/quest@latest worktree hook")],
-			SubagentStop: [
-				group("/usr/local/bin/quest   worktree hook "),
-				group("nix run github:moq-dev/quest -- worktree hook"),
-				group("bun run --silent quest worktree hook"),
-				group("nix develop --impure -c quest worktree hook"),
-				group("mise exec -- quest worktree hook"),
-				group("command -v quest >/dev/null || exit 2; QUEST_X=1 quest worktree hook"),
-			],
+			WorktreeRemove: [group(QUEST)],
+			SubagentStart: [group(QUEST)],
+			SubagentStop: [{ hooks: [handler(QUEST), handler(QUEST)] }],
+			SessionEnd: [group(QUEST)],
 		},
 	});
 	const change = apply(dir).find((change) => change.path === ".claude/settings.json");
-	expect(change?.hooks).toEqual([
-		{ event: "WorktreeCreate", command: QUEST },
-		{ event: "WorktreeRemove", command: WRAPPED },
-		{ event: "SubagentStart", command: "npx @moq-dev/quest@latest worktree hook" },
-		{ event: "SubagentStop", command: "/usr/local/bin/quest   worktree hook" },
-		{ event: "SubagentStop", command: "nix run github:moq-dev/quest -- worktree hook" },
-		{ event: "SubagentStop", command: "bun run --silent quest worktree hook" },
-		{ event: "SubagentStop", command: "nix develop --impure -c quest worktree hook" },
-		{ event: "SubagentStop", command: "mise exec -- quest worktree hook" },
-		{ event: "SubagentStop", command: "command -v quest >/dev/null || exit 2; QUEST_X=1 quest worktree hook" },
-	]);
+	expect(change?.hooks).toEqual(
+		["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop", "SubagentStop", "SessionEnd"].map(
+			(event) => ({ event, command: QUEST }),
+		),
+	);
 	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
 	expect(isFile(dir, ".claude/skills/quest-start/SKILL.md")).toBe(true);
 	expect(init(dir)).toEqual([]);
+	expect(lookalikes(dir)).toEqual([]);
 });
 
-test("init and uninstall keep other hooks and settings, and the file's formatting", () => {
+test("init and uninstall keep every other hook, reporting those that end in worktree hook", () => {
+	// Commands that may wrap Quest's hook, or may be another tool's: neither is removed.
+	const similar = {
+		WorktreeCreate: [group(WRAPPED), group("othertool worktree hook")],
+		WorktreeRemove: [group(" quest worktree hook"), group("cd quest && othertool worktree hook  ")],
+		SubagentStop: [SESSION, { matcher: "", hooks: [handler("quest-like worktree hook")] }],
+	};
 	const others = {
 		SessionStart: [SESSION],
 		PreCompact: [],
-		// Another tool's commands that end in `worktree hook` without running Quest.
-		WorktreeCreate: [group("othertool worktree hook")],
-		WorktreeRemove: [
-			group("my-quest worktree hook"),
-			group("tool --quest-mode worktree hook"),
-			group("cd quest && othertool worktree hook"),
-			group("othertool --dir=/quest worktree hook"),
-			group("othertool --dir /quest worktree hook"),
-			group("othertool --project quest worktree hook"),
-			group("othertool -c /quest worktree hook"),
-			group("echo run quest worktree hook"),
-		],
-		SubagentStop: [SESSION, { matcher: "", hooks: [handler("quest-like worktree hook")] }],
+		Stop: [group("quest worktree hook --verbose"), { hooks: [{ type: "prompt", prompt: "quest worktree hook" }] }],
 	};
-	const kept = { $schema: "https://json.schemastore.org/claude-code-settings.json", hooks: others };
+	const kept = {
+		$schema: "https://json.schemastore.org/claude-code-settings.json",
+		hooks: { ...others, ...similar },
+	};
+	const reported = [
+		{ event: "WorktreeCreate", command: WRAPPED },
+		{ event: "WorktreeCreate", command: "othertool worktree hook" },
+		{ event: "WorktreeRemove", command: " quest worktree hook" },
+		{ event: "WorktreeRemove", command: "cd quest && othertool worktree hook  " },
+		{ event: "SubagentStop", command: "quest-like worktree hook" },
+	];
 	for (const remove of [init, uninstall]) {
 		const dir = tempDir();
 		settings(dir, {
 			$schema: kept.$schema,
 			hooks: {
-				SessionStart: [SESSION],
-				PreCompact: [],
-				WorktreeCreate: [group("othertool worktree hook")],
-				WorktreeRemove: [
-					group("my-quest worktree hook"),
-					group("tool --quest-mode worktree hook"),
-					group("cd quest && othertool worktree hook"),
-					group("othertool --dir=/quest worktree hook"),
-					group("othertool --dir /quest worktree hook"),
-					group("othertool --project quest worktree hook"),
-					group("othertool -c /quest worktree hook"),
-					group("echo run quest worktree hook"),
-				],
-				SubagentStart: [group(WRAPPED)],
+				...others,
+				...similar,
+				SubagentStart: [group(QUEST)],
 				SubagentStop: [SESSION, { matcher: "", hooks: [handler(QUEST), handler("quest-like worktree hook")] }],
 			},
 		});
 		expect(remove(dir)).toContain(".claude/settings.json");
-		const text = read(dir, ".claude/settings.json");
-		expect(text).toBe(`${JSON.stringify(kept, null, "\t")}\n`);
+		expect(read(dir, ".claude/settings.json")).toBe(`${JSON.stringify(kept, null, "\t")}\n`);
+		expect(lookalikes(dir)).toEqual(reported);
 		expect(remove(dir)).not.toContain(".claude/settings.json");
 	}
 });
