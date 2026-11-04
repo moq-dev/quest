@@ -465,6 +465,26 @@ it("publishes jobs' work end to end, through the upstream branch to the pull req
 	// Finished work marks it ready for review.
 	await publish({ job: "seed-start-offline", head: first.head, pull: { ...pull, draft: false } });
 	expect(rocket.pulls.at(-1)!.draft).toBe(false);
+	// A later session's body keeps the sessions that delivered before it in its `## Models` record.
+	const models = (lines: string) => ({
+		...pull,
+		draft: false,
+		body: `Done.\n\n## Models\n\n${lines}\n\n## Review\n\nNone`,
+	});
+	await publish({
+		job: "seed-start-offline",
+		head: first.head,
+		pull: models("- Implementer: claude, first, high effort"),
+	});
+	await publish({
+		job: "seed-start-offline",
+		head: first.head,
+		pull: models("- Size: S\n- Implementer: opencode, second, high effort"),
+	});
+	expect(rocket.pulls.at(-1)!.body).toBe(
+		models("- Size: S\n- Implementer: opencode, second, high effort\n- Implementer: claude, first, high effort")
+			.body,
+	);
 
 	const continued = await latest("quest/m0/import.md");
 	expect(continued).toMatchObject({ id: retry.id, state: "running", head: rocket.branches["quest/m0/import"] });

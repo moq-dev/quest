@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 
 import { type Round, ResponsesError } from "../cli/review";
+import { withModels } from "../github/models";
 
 import type { Adapter, Exit, Running } from "./adapter";
 import { Refused } from "./connection";
@@ -92,19 +93,6 @@ function subject(summary: string): string {
 
 /** `value` when it fits in a `## Models` line, otherwise `unknown`. */
 const field = (value: string) => (/^[\w.:/@+-]{1,100}$/.test(value) ? value : "unknown");
-
-/** `body` with `line` as an item of its `## Models` section, which it gains when it has none. */
-function withModels(body: string, line: string): string {
-	const item = `- ${line}`;
-	if (body.split(/\r?\n/).some((each) => each.trim() === item)) return body;
-	const section = /^## Models[ \t]*\r?$/m.exec(body);
-	if (!section) return `${body.trimEnd()}\n\n## Models\n\n${item}\n`;
-	const start = section.index + section[0].length;
-	const next = /^## /m.exec(body.slice(start));
-	const end = next ? start + next.index : body.length;
-	const gap = body.slice(start, end).trim() ? "\n" : "\n\n";
-	return `${body.slice(0, end).trimEnd()}${gap}${item}\n${next ? "\n" : ""}${body.slice(end)}`;
-}
 
 function string(value: unknown, name: string, max: number): string {
 	if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`);
