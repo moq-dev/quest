@@ -1143,20 +1143,20 @@ records them in the PR body's `## Review` section, and marks the PR ready.
 
 ## Headless agents
 
-`quest agent` runs one headless agent turn per call, billed to one of the keys
-in `QUEST_API_KEYS`, so `/quest-spawn api` launches every agent with one command
-whose arguments name the whole launch:
+`quest agent` runs one headless agent turn per call on the agent CLI's own
+login, so a session can start the other vendor's agents, which its own
+sub-agents cannot run, with one command whose arguments name the whole launch:
 
 ```sh
-quest agent start --harness claude --key 1 --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo "/quest-start quest/m0/foo.md"
-quest agent resume --harness claude --key 2 --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo <session> "Take the recommendation."
+quest agent start --harness claude --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo "/quest-start quest/m0/foo.md"
+quest agent resume --harness claude --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo <session> "Take the recommendation."
 quest agent stop .worktrees/foo
 quest agent stop --all
 ```
 
 Codex starts and resumes only in a checkout registered by `quest worktree create`,
 on Linux with the `quest worktree run` supervisor available.
-Ownership and host support are checked before keys are resolved. Each turn uses
+Ownership and host support are checked before any agent state is written. Each turn uses
 the same lifecycle as `quest worktree run`: restore the reservation before the
 turn, then release it and prune declared scratch after the agent and its
 remaining descendants exit. Source changes and the session remain available
@@ -1166,28 +1166,28 @@ directly in the supplied checkout. Codex desktop threads use the desktop app's
 native archival instead.
 
 Options go before the worktree, and the prompt or message follows it, so text
-starting with `-` is never read as an option. `--key` names a key by its
-1-based position. The first launch resolves every 1Password `op://` entry in
-one `op inject` and keeps the keys in a user-only
-store under `$XDG_RUNTIME_DIR` (or the temporary directory), shared by the
-repository's worktrees until `quest agent stop --all` deletes it. The agent
-runs in the worktree with the user's environment minus the coordinating
-session's harness variables (keeping `CLAUDE_CONFIG_DIR` and `CODEX_HOME`),
-other keys, secret-manager tokens, and any `quest gate` admission or priority, plus its one
-key. `--permission-mode` is Claude Code's permission mode, or Codex's sandbox
-mode; the agent cannot prompt.
+starting with `-` is never read as an option. The agent runs in the worktree
+with the user's environment minus the coordinating session's harness variables
+and credentials (keeping `CLAUDE_CONFIG_DIR` and `CODEX_HOME`), secret-manager
+tokens, and any `quest gate` admission or priority, so it uses the CLI's stored
+login rather than the session's. `--permission-mode` is Claude Code's
+permission mode, or Codex's sandbox mode; the agent cannot prompt. Each
+repository's running agents are recorded in a user-only directory under
+`$XDG_RUNTIME_DIR` (or the temporary directory), which `quest agent stop --all`
+deletes after stopping them.
 
-It prints `session <id>` as soon as the id is known, then `cost <dollars>` when
-the agent reports it, `outcome finished|failed|exhausted|stopped`, a blank line,
-and the agent's final reply. It never prints a key. It exits 0 when the agent
-finished, 3 when the provider refused the key for lack of credit, 2 for invalid
-arguments, 128 plus the signal number when interrupted, and 1 otherwise. `stop`
-signals the agent and waits until its `start` or `resume` has reported.
+It prints `session <id>` as soon as the id is known, then
+`outcome finished|failed|limited|logged-out|stopped`, a blank line, and the
+agent's final reply. It exits 0 when the agent finished, 3 when its account hit
+a usage limit or ran out of credit, 4 when the CLI is logged out (printing its
+login command), 2 for invalid arguments, 128 plus the signal number when
+interrupted, and 1 otherwise, so a spawn can skip a harness that cannot run.
+`stop` signals the agent and waits until its `start` or `resume` has reported.
 
-The agent CLI and `op` run from their absolute paths on `PATH`, skipping
-relative entries, so a worktree can never supply its own `claude` and receive
-a key. They also run with only `PATH`'s absolute entries, so neither finds a
-program it starts by name, such as `node`, in the worktree. On native Windows
+The agent CLI runs from its absolute path on `PATH`, skipping relative entries,
+so a worktree can never supply its own `claude`. It also runs with only
+`PATH`'s absolute entries, so it never finds a program it starts by name, such
+as `node`, in the worktree. On native Windows
 the lookup tries `PATHEXT`'s program and batch extensions, a batch shim such as
 npm's `claude.cmd` runs through System32's `cmd.exe` with its arguments
 escaped, `NoDefaultCurrentDirectoryInExePath` stops Windows' implicit search of
@@ -1527,18 +1527,6 @@ the version you pin decides what your agents follow:
 Use `/quest-plan` in Claude Code or `$quest-plan` in Codex. Skills coordinate
 within your agent session. A started quest stops at a pull request; merging is
 a separate invocation, so you review every change.
-
-To bill spawned agents to API keys instead of your agent's account, export
-`QUEST_API_KEYS` with one or more whitespace-separated keys and run
-`/quest-spawn api`. Entries may be secret references such as 1Password `op://`
-URIs, resolved in one `op inject` when the first agent starts; a 1Password
-service account token (`OP_SERVICE_ACCOUNT_TOKEN`) avoids even that prompt. Each
-quest runs through [`quest agent`](#headless-agents) as a headless `claude -p`
-or `codex exec` process on one key; a key whose credit runs out is dropped, and
-spawning stops once every key is exhausted.
-Disable auto-reload or set a spend limit in each provider console so draining a
-key cannot charge a card. Agents run as your user, so they are not isolated from
-the other keys.
 
 To use Quest in your own repository, paste this into your agent:
 

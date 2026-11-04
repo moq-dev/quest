@@ -21,6 +21,3 @@ opencode left the lists (user), so `quest agent` does not drive it.
   Grok's own configuration directory so its login works.
 - Extend `quest agent`'s tests with a stub Grok CLI, as for the existing two.
 
-## Required
-
-- [Headless agents](/quest/m0/helpers/headless-agents.md) - `quest agent` first moves to the logged-in account and drops API keys

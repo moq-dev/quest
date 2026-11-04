@@ -884,32 +884,25 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("agent")
 		// Options come before <worktree>, so a prompt or answer starting with "-" is never read as one.
 		.enablePositionalOptions()
-		.summary("Start, resume, and stop headless agents billed to API keys")
+		.summary("Start, resume, and stop headless agents on the logged-in account")
 		.description(
-			"Run one headless agent turn per call in the foreground, billed to one of the keys in QUEST_API_KEYS, " +
-				"so a spawn launches every agent with one legible command.\n\n" +
-				"Codex requires a registered Quest checkout and Linux worktree supervision; these are checked before resolving keys. " +
+			"Run one headless agent turn per call in the foreground, on the agent CLI's own login, so a spawn " +
+				"starts any harness's agent with one legible command.\n\n" +
+				"Codex requires a registered Quest checkout and Linux worktree supervision; these are checked before any agent state is written. " +
 				"It uses the quest worktree run lifecycle: restore before each turn and release declared scratch after exit. Claude runs directly in the given checkout.\n\n" +
-				"QUEST_API_KEYS lists keys separated by whitespace; --key names one by its 1-based position. An " +
-				"entry may be a 1Password op:// reference: the first launch resolves every reference in one " +
-				"`op inject` and keeps the keys in a user-only store under $XDG_RUNTIME_DIR (or the temporary " +
-				"directory) shared by the repository's worktrees, until `quest agent stop --all`.\n\n" +
-				"The agent CLI and op run from their absolute paths on PATH, never from the worktree; on native Windows " +
+				"The agent CLI runs from its absolute path on PATH, never from the worktree; on native Windows " +
 				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
-				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_API_KEYS, and QUEST_GATE_ADMITTED variable, plus " +
-				"its one key as " +
-				"ANTHROPIC_API_KEY (claude -p) or CODEX_API_KEY (codex exec). It never prints a key; any the agent " +
-				"repeats is shown as <key N>.\n\n" +
-				"Prints `session <id>` as soon as the id is known, then `cost <dollars>` when the agent reports it, " +
-				"`outcome finished|failed|exhausted|stopped`, a blank line, and the agent's final reply. Exits 0 " +
-				"when the agent finished, 3 when the provider refused the key for lack of credit, 2 for invalid " +
-				"arguments, 128 plus the signal number when interrupted, and 1 otherwise.",
+				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_GATE_ADMITTED, QUEST_GATE_PRIORITY, " +
+				"and QUEST_LAND_BASE variable, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"Prints `session <id>` as soon as the id is known, then `outcome finished|failed|limited|logged-out|stopped`, " +
+				"a blank line, and the agent's final reply. Exits 0 when the agent finished, 3 when its account hit a " +
+				"usage limit or ran out of credit, 4 when the CLI is logged out (after printing its login command), 2 for " +
+				"invalid arguments, 128 plus the signal number when interrupted, and 1 otherwise.",
 		);
 	const launchOptions = (command: Command) =>
 		command
 			.addOption(new Option("--harness <name>", "Agent CLI to run").choices(HARNESSES).makeOptionMandatory())
-			.requiredOption("--key <position>", "1-based position of the key in QUEST_API_KEYS", positiveInteger("key"))
 			.requiredOption("--model <model>", "Model the agent runs")
 			.requiredOption("--effort <level>", "Reasoning effort the agent runs at")
 			.requiredOption(
@@ -955,10 +948,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Stop the agent in a worktree, or end the spawn with --all")
 		.description(
 			"Stop the agent running in a worktree and wait until its start or resume has reported. With --all, " +
-				"end the spawn: stop every agent in this repository's worktrees and delete the resolved keys.",
+				"end the spawn: stop every agent in this repository's worktrees and delete their records.",
 		)
 		.argument("[worktree]", "Checkout whose agent to stop")
-		.option("--all", "Stop every agent and delete the resolved keys")
+		.option("--all", "Stop every agent in this repository's worktrees")
 		.action((worktree: string | undefined, options: { all?: boolean }) => {
 			if ((worktree === undefined) === !options.all) throw new UsageError("give a worktree or --all");
 			const deps = agentDependencies();
