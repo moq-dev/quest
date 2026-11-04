@@ -1,6 +1,7 @@
 # nixpkgs' sandbox-runtime (`srt`) with its seccomp helper, which nixpkgs leaves out. Without it
-# srt runs commands with Unix sockets open, the Nix daemon's included, and lets them make user
-# namespaces. The helper is built from srt's own source by its own build script.
+# srt runs commands with Unix sockets open, the Nix daemon's included. (User namespaces stay
+# refused either way: with no helper, srt passes the bwrap 0.8+ on its PATH `--disable-userns`.)
+# The helper is built from srt's own source by its own build script.
 {
   lib,
   stdenv,
