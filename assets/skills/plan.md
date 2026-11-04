@@ -24,6 +24,7 @@ Show that structure as a recommendation; of the structure, ask the user only whi
 When the user has stated a milestone rule earlier in this session, such as "CI and flakes join m0", apply it to each quest it covers without asking, and still show the milestone it picked and the rule behind it.
 Once complete, create, update, or delete the relevant quests and epics.
 Record each settled decision and its reason in the quest's Plan, so later sessions don't ask it again, and the decision prompts in the PR.
+A fix quest's Plan names the PR that caused the problem when it is known, so its implementer lists it under `## Caused by` without searching again.
 When the PR deletes the quest, record its decisions in the PR body's `## Decisions` section instead, since the deletion takes the Plan with it.
 New work joins the milestone the user picked, at its rank; an epic groups related quests, and its README holds the work no child owns (the end-to-end test, the docs page).
 

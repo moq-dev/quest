@@ -35,5 +35,5 @@ model and effort for every commit and PR, to audit the rankings.
   expose their model and effort to the agent, and name them in the rule.
   When an agent cannot find its effort, it writes `unknown` rather than
   leaving the record out.
-- Linking the PRs that caused later fixes is
-  [its own quest](/quest/m0/model-routing/culprits.md).
+- Fixes link the PR that caused them under `## Caused by`, per
+  `quest context`'s Pull requests section.
