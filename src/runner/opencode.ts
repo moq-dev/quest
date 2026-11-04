@@ -169,7 +169,8 @@ const PLUGIN_ID = "quest-runner";
  * existing directory. A dangling symlink is refused, since a write would
  * follow it. `patch` names its files in the patch's headers. Nothing writes
  * the checkout's own opencode config. A tool's input may arrive as a JSON
- * string, which opencode repairs into its object. The tool opens the path
+ * string, which opencode repairs into its object; one that is not an object
+ * either way is refused, since its paths cannot be checked. The tool opens the path
  * after this check, so a command running alongside it could still swap the
  * path for a symlink in between: the check narrows that window rather than
  * closing it.
@@ -224,12 +225,14 @@ export default {
 		await ctx.tool.hook("execute.before", ({ tool, input }) => {
 			if (!Object.hasOwn(TOOLS, tool)) return;
 			const args = parsed(input);
+			if (args === null || typeof args !== "object")
+				throw new Error(\`the \${tool} tool's input is not an object, so the runner cannot check its paths\`);
 			const paths =
 				tool === "patch"
-					? String(args?.patchText ?? "")
+					? String(args.patchText ?? "")
 							.split(/\\r\\n|\\r|\\n/)
 							.flatMap((line) => HEADER.exec(line)?.[1]?.trim() || [])
-					: [args?.path].filter((path) => typeof path === "string" && path);
+					: [args.path].filter((path) => typeof path === "string" && path);
 			for (const path of paths) {
 				const target = real(resolve(options.cwd, path));
 				if (!inside(target, TOOLS[tool] ? reads : writes))

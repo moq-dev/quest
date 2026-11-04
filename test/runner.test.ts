@@ -896,6 +896,9 @@ describe("opencode", () => {
 			["patch", patch("*** Update File: a.txt", "*** Move to: /etc/x")],
 		] as const)
 			await expect(call(tool, input), `${tool} ${JSON.stringify(input)}`).rejects.toThrow(/outside the checkout/);
+		// Input that is not an object, even after opencode's repair, has no paths to check.
+		for (const input of ["{path: 'auth.json'}", "auth.json", null, 1])
+			await expect(call("read", input), JSON.stringify(input)).rejects.toThrow(/not an object/);
 		// A write would follow a symlink to nothing out of the checkout.
 		await expect(call("write", { path: "dangling" })).rejects.toThrow(/symlink to nothing/);
 		// opencode would load its own config from the checkout, outside the sandbox.
@@ -1493,7 +1496,6 @@ const server = http.createServer(async (request, response) => {
 	if (path === "/api/model/default") return json(response, { data: { id: "gpt-5.5", providerID: "openai" } });
 	if (path === "/api/integration") return json(response, { location: {}, data: signedIn().integrations });
 	if (path === "/api/provider") return json(response, { location: {}, data: signedIn().providers });
-	// The runner's config, and the account's config directory.
 	// The runner's config, the account's config directory, and any the steps add, such as a machine's.
 	if (path === "/api/config")
 		return json(response, [
