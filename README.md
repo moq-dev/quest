@@ -1361,7 +1361,9 @@ Creation prints JSON with the ID and the detached, locked checkout path under
 `.worktrees/`, and records the `--scratch` paths. Names are unique per
 repository; where several repositories use one, the other commands take the ID. `run` restores a released
 checkout, runs the command there, and once it exits kills any descendants it
-left behind. When no other run remains in the checkout, it releases it: the
+left behind. The command gets Quest's environment without Git's
+repository-location variables, such as `GIT_DIR` and `GIT_INDEX_FILE`, which a
+Git hook would otherwise point at the repository it ran in; `-c` config is kept. When no other run remains in the checkout, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
 job, such as an agent session or a script that installs, builds, and tests, in
 one run, since the next run starts without scratch.

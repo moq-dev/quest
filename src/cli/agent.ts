@@ -6,13 +6,7 @@
 // variables, and reads the agent's session, reply, and cost. Its own arguments
 // name the harness, worktree, key, model, effort, and permission mode, so a
 // permission classifier reading the call sees the whole launch.
-import {
-	type ChildProcess,
-	type ChildProcessWithoutNullStreams,
-	execFileSync,
-	spawn,
-	spawnSync,
-} from "node:child_process";
+import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	chmodSync,
@@ -31,6 +25,7 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { discoveryEnv, git } from "./git";
 import { EXHAUSTED } from "./limit";
 import { alive, programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
@@ -289,10 +284,7 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 export function spawnDirectory(base: string, worktree: string): string {
 	let common: string;
 	try {
-		common = execFileSync("git", ["-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
-		}).trim();
+		common = git(worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
 	} catch {
 		throw new AgentInputError(`${worktree} is not inside a Git repository`);
 	}
@@ -675,7 +667,8 @@ export async function runAgent(
 						}),
 					);
 				};
-				const env = programEnvironment(launchEnvironment(deps.env, harness.keyVariable, key));
+				// The agent works in its own checkout, so a location inherited from a Git hook would name the wrong one.
+				const env = discoveryEnv(programEnvironment(launchEnvironment(deps.env, harness.keyVariable, key)));
 				if (command === undefined) {
 					supervised = checkouts!.run(checkout!, [program, ...args], { env, spawned: connect });
 					supervised.catch(reject);

@@ -784,7 +784,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("run")
 		.summary("Run a command in a checkout, then release it once every process stops")
 		.description(
-			"Run a command in the checkout, restoring it first when released. The command and its descendants " +
+			"Run a command in the checkout, restoring it first when released, without the repository-location " +
+				"variables, such as GIT_DIR, that a Git hook exports. The command and its descendants " +
 				"run in a new, delegated systemd user scope; once the command exits, descendants still in the scope " +
 				"are killed. A `quest gate` inside it owns its command through a child cgroup of the scope. " +
 				"When no other supervised run remains, the scratch declared at creation is pruned. Put the whole job, " +

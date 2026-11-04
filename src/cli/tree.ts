@@ -6,6 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { type Doc, type Source, comparePaths, isQuest, parse } from "../core";
+import { discoveryEnv } from "./git";
 
 /**
  * `<root>/<path>` as a user would name it in an error: `./quest`, not the
@@ -318,7 +319,12 @@ function gitmodules(repo: Repo, source: string[]): Map<string, string> {
 function git(repo: Repo, args: string[], input = ""): Buffer {
 	const where = "dir" in repo ? ["-C", repo.dir] : [`--git-dir=${repo.gitdir}`];
 	try {
-		return execFileSync("git", [...where, ...args], { input, maxBuffer: 1 << 30, stdio: "pipe" });
+		return execFileSync("git", [...where, ...args], {
+			env: discoveryEnv(),
+			input,
+			maxBuffer: 1 << 30,
+			stdio: "pipe",
+		});
 	} catch (error) {
 		const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
 		throw new Error(`git ${args[0]} failed${stderr ? `: ${stderr}` : ""}`);
