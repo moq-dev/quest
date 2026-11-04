@@ -171,12 +171,19 @@ action only the maintainer can take, or the outside party, such as
 - moq-dev/moq: a release carries the VA-API bindings
 ```
 
-`quest waiting` lists every item, the maintainer's first, then by milestone and
-the same downstream impact `quest unblocked` counts. Each line gives the
-dependents, whether the quest is otherwise ready or still blocked, its path,
-and the item; `--maintainer` keeps only the maintainer's, and `--json` prints
-`{path, dependents, ready, waits}` objects. A draft PR hands itself back to
-the maintainer with the same heading. `/quest-unblock` walks you through both.
+A draft PR hands itself back to the maintainer with the same heading in its
+body, or the older `## Decisions needed`.
+
+`quest waiting` lists every item from both, the maintainer's first, then by
+milestone and the same downstream impact `quest unblocked` counts; a draft
+ranks as the quest its branch carries. Each line gives the dependents, whether
+the quest is otherwise ready or still blocked, its path or the draft's URL, and
+the item; `--maintainer` keeps only the maintainer's, and `--json` prints
+`{path, pr, dependents, ready, waits}` objects. A draft's item that names no
+party, and every `Decisions needed` item, is the maintainer's. Drafts come from
+the upstream's open PRs, found as for `unblocked --unclaimed`; without the
+remote, off GitHub, or when GitHub cannot be read, it lists the tree's items
+and warns that drafts were skipped. `/quest-unblock` walks you through them.
 
 ## Claim a quest
 
@@ -1359,7 +1366,9 @@ Creation prints JSON with the ID and the detached, locked checkout path under
 `.worktrees/`, and records the `--scratch` paths. Names are unique per
 repository; where several repositories use one, the other commands take the ID. `run` restores a released
 checkout, runs the command there, and once it exits kills any descendants it
-left behind. When no other run remains in the checkout, it releases it: the
+left behind. The command gets Quest's environment without Git's
+repository-location variables, such as `GIT_DIR` and `GIT_INDEX_FILE`, which a
+Git hook would otherwise point at the repository it ran in; `-c` config is kept. When no other run remains in the checkout, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
 job, such as an agent session or a script that installs, builds, and tests, in
 one run, since the next run starts without scratch.

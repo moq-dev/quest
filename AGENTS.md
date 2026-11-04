@@ -17,8 +17,9 @@ Do not edit `CONTRIBUTING.md`, `assets/CONTEXT.md`, `assets/AGENTS.md`, or
 - Run `just install` in a fresh checkout to install the locked dependencies.
 - Run `just check` and `just test` before handing off changes; `just fix` applies
   formatting. Missing tools are failures, not checks to silently skip.
-- Prefer simplification and refactoring over compatibility layers for unpublished
-  interfaces.
+- Nothing is in production yet, so skip backwards compatibility: change
+  formats, schemas, flags, and on-disk state directly, with no migrations,
+  shims, or cleanup of what earlier versions wrote.
 - Starting or spawning quests stops at PR creation. It merges only when the user
   picks /quest-merge, and only after repository checks and reviews pass.
 - Pull requests land as squash merges.

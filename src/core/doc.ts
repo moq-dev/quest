@@ -222,14 +222,19 @@ const CONTAINERS = new Set(["root", "blockquote", "listItem"]);
 /** Block-level nodes, which separate the words of an entry that spans more than one. */
 const BLOCKS = new Set(["paragraph", "heading", "blockquote", "list", "listItem", "code", "table", "thematicBreak"]);
 
-/** Parse already-loaded Markdown. `path` stays repository-relative. */
-export function parse(path: string, text: string): Doc {
+/** Markdown's tree as GitHub renders it, for quests and PR bodies alike. */
+export function markdown(text: string): Root {
 	// GitHub renders strikethrough and tables, and the Rust parser this replaced
 	// enabled both. It enabled no other GFM syntax.
-	const tree = fromMarkdown(text, {
+	return fromMarkdown(text, {
 		extensions: [gfmStrikethrough(), gfmTable()],
 		mdastExtensions: [gfmStrikethroughFromMarkdown(), gfmTableFromMarkdown()],
 	});
+}
+
+/** Parse already-loaded Markdown. `path` stays repository-relative. */
+export function parse(path: string, text: string): Doc {
+	const tree = markdown(text);
 	// Lines as grep sees them: a bare `\r` does not end one, so a CR-only file is
 	// one line and none of its headings are literal, which is what grep finds.
 	const lines = text.split("\n").map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
