@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
+import * as fs from "node:fs/promises";
 import {
 	chmodSync,
 	existsSync,
@@ -11,7 +12,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 
@@ -2515,9 +2516,20 @@ describe("runner reviews", () => {
 	const home = (a: Account) => `/runner/accounts/${a.id}`;
 
 	test("pick the other vendor: Codex on the user's own login, or one of the runner's free Claude Code accounts", () => {
-		const env = { PATH: "/usr/bin", QUEST_RUNNER_CLAUDE: "/nix/store/claude/bin/claude" };
+		const env = {
+			PATH: "/usr/bin",
+			QUEST_RUNNER_CLAUDE: "/nix/store/claude/bin/claude",
+			QUEST_RUNNER_CODEX: "/nix/store/codex/bin/codex",
+		};
 		const claude = account({ id: "claude" });
-		expect(reviewerFor(claude, [claude], home, env)).toEqual({ harness: "codex", env });
+		expect(reviewerFor(claude, [claude], home, env)).toEqual({
+			harness: "codex",
+			env: { ...env, PATH: "/nix/store/codex/bin:/usr/bin" },
+		});
+		expect(reviewerFor(claude, [claude], home, { PATH: "/usr/bin" })).toEqual({
+			harness: "codex",
+			env: { PATH: "/usr/bin" },
+		});
 		const openai = account({ id: "gpt", adapter: "opencode", provider: "openai" });
 		const limited = account({ id: "busy", limitedUntil: 2000 });
 		expect(reviewerFor(openai, [openai, limited, claude], home, env, 1000)).toEqual({
@@ -2525,7 +2537,7 @@ describe("runner reviews", () => {
 			env: {
 				...env,
 				CLAUDE_CONFIG_DIR: "/runner/accounts/claude",
-				PATH: "/nix/store/claude/bin:/usr/bin",
+				PATH: ["/nix/store/claude/bin", "/usr/bin"].join(delimiter),
 			},
 		});
 		expect(() => reviewerFor(openai, [openai, limited], home, env, 1000)).toThrow(Unreviewable);
@@ -2542,18 +2554,75 @@ describe("runner reviews", () => {
 		git(dir, "add", ".");
 		git(dir, "commit", "-q", "-m", "published");
 		const first = git(dir, "rev-parse", "HEAD");
-		const checkout = await workspace.reviewCheckout(first);
+		const { root: checkout, base } = await workspace.reviewCheckout(first);
 		expect(checkout).toBe(`${workspace.dir}.review`);
+		// The review's base is fetched with it, so the review itself needs no network.
+		expect(base).toBe("origin/main");
+		expect(git(checkout, "rev-parse", "origin/main")).toBe(first);
 		expect(git(checkout, "symbolic-ref", "--short", "HEAD")).toBe("kix-review/job1");
 		expect(git(checkout, "rev-parse", "HEAD")).toBe(first);
 		writeFileSync(join(dir, "published.txt"), "two\n");
 		git(dir, "commit", "-qam", "again");
 		const second = git(dir, "rev-parse", "HEAD");
-		expect(git(await workspace.reviewCheckout(second), "rev-parse", "HEAD")).toBe(second);
+		expect(git((await workspace.reviewCheckout(second)).root, "rev-parse", "HEAD")).toBe(second);
 		expect(readFileSync(join(checkout, "published.txt"), "utf8")).toBe("two\n");
 		await workspace.remove();
 		expect(existsSync(checkout)).toBe(false);
 		expect(git(workspace.repository, "branch", "--list", "kix-review/*")).toBe("");
+	});
+
+	posix("fetch a review's base without blocking the runner", async () => {
+		const { dir, commit } = upstream();
+		const workspace = await Workspace.prepare(tempDir(), job(commit), dir);
+		writeFileSync(join(dir, "published.txt"), "one\n");
+		git(dir, "add", ".");
+		git(dir, "commit", "-q", "-m", "published");
+		const head = git(dir, "rev-parse", "HEAD");
+		// The head is already here, so the connection that holds is the review's base lookup.
+		git(workspace.repository, "fetch", "-q", "origin", head);
+		// A transport whose first connection holds until the test opens `gate`, after
+		// telling the test through `started` that it is holding.
+		const bin = tempDir();
+		const started = join(bin, "started");
+		const gate = join(bin, "gate");
+		execFileSync("mkfifo", [started, gate]);
+		const ssh = join(bin, "ssh");
+		writeFileSync(
+			ssh,
+			[
+				"#!/bin/sh",
+				"for arg; do command=$arg; done",
+				`if [ ! -e '${bin}/released' ]; then`,
+				// A runner that blocks never opens the gate; fail rather than hang the suite.
+				"  (sleep 20; kill $$) </dev/null >/dev/null 2>&1 & guard=$!",
+				`  echo > '${started}'; read _ < '${gate}'; kill $guard; touch '${bin}/released'`,
+				"fi",
+				'exec sh -c "$command"',
+				"",
+			].join("\n"),
+		);
+		chmodSync(ssh, 0o755);
+		git(workspace.repository, "remote", "set-url", "origin", `ssh://upstream${dir}`);
+		const saved = { command: process.env.GIT_SSH_COMMAND, variant: process.env.GIT_SSH_VARIANT };
+		process.env.GIT_SSH_COMMAND = ssh;
+		process.env.GIT_SSH_VARIANT = "simple";
+		try {
+			const checkout = workspace.reviewCheckout(head);
+			// Reading `started` needs the event loop, which a blocking fetch would hold until the guard fires.
+			await fs.readFile(started);
+			await fs.writeFile(gate, "\n");
+			const { root, base } = await checkout;
+			expect(git(root, "rev-parse", "HEAD")).toBe(head);
+			expect(git(root, "rev-parse", base)).toBe(head);
+		} finally {
+			for (const [key, value] of [
+				["GIT_SSH_COMMAND", saved.command],
+				["GIT_SSH_VARIANT", saved.variant],
+			] as const) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
 	});
 
 	const finding = { file: "new.txt", line: 1, severity: "high", title: "Wrong value", body: "It says new." };

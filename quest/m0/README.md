@@ -102,7 +102,6 @@ ownership-manifest design:
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
-- [Gate load wording](/quest/m0/gate-load-wording.md) - stop naming Spotlight as the cause of a fresh macOS runner's load
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
 - [Agents get the dev shell from user settings](/quest/m0/user-dev-shell/README.md) - maintainers' own Claude and Codex settings load the dev shell; repositories drop dev-shell hooks, Quest worktree hooks, and `nix develop` instructions, and `quest init` writes no hooks
 - [Remote control worktrees](/quest/m0/worktree-routes.md) - live-check `claude remote-control --spawn worktree` against the hooks, from a session spawned on claude.ai
