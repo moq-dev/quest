@@ -1,17 +1,16 @@
-// `quest agent`: start, resume, and stop headless agents billed to API keys.
+// `quest agent`: start, resume, and stop headless agents on the user's logged-in account.
 //
 // One command owns what a spawn would otherwise script again each time: it
-// resolves `QUEST_API_KEYS` once into a user-only store, gives each agent only
-// the key its position names, strips the coordinating session's harness
-// variables, and reads the agent's session, reply, and cost. Its own arguments
-// name the harness, worktree, key, model, effort, and permission mode, so a
-// permission classifier reading the call sees the whole launch.
-import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+// strips the coordinating session's harness variables and credentials, so the
+// agent runs on its CLI's own login, and reads the agent's session, reply, and
+// outcome. Its own arguments name the harness, worktree, model, effort, and
+// permission mode, so a permission classifier reading the call sees the whole
+// launch.
+import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	chmodSync,
 	existsSync,
-	linkSync,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
@@ -26,7 +25,6 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { discoveryEnv, git } from "./git";
-import { EXHAUSTED } from "./limit";
 import { alive, programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
 import { Worktrees, save } from "./worktree";
@@ -37,8 +35,6 @@ export type HarnessName = (typeof HARNESSES)[number];
 /** Everything a launch names on its command line. */
 export interface Launch {
 	harness: HarnessName;
-	/** The key's 1-based position in `QUEST_API_KEYS`. */
-	key: number;
 	model: string;
 	effort: string;
 	/** Claude Code's `--permission-mode`, or Codex's sandbox mode. */
@@ -50,23 +46,65 @@ export interface Launch {
 export interface Result {
 	session?: string;
 	reply?: string;
-	/** Dollars, when the agent reports them. */
-	cost?: number;
-	/** The provider refused the key for lack of credit. */
-	exhausted: boolean;
+	/** The CLI reported its account's usage limit or credit spent. */
+	limited: boolean;
+	/** The CLI reported its login or credential missing or rejected. */
+	unauthorized: boolean;
 	/** The agent reported an error, whatever its exit status. */
 	failed: boolean;
 }
 
-export type Outcome = "finished" | "failed" | "exhausted" | "stopped";
+export type Outcome = "finished" | "failed" | "limited" | "logged-out" | "stopped";
 
-/** Exit statuses: a finished agent exits 0, an exhausted key 3, and anything else 1. */
-const EXIT: Record<Outcome, number> = { finished: 0, failed: 1, exhausted: 3, stopped: 1 };
+/**
+ * Exit statuses: a finished agent exits 0, one at its account's usage limit 3,
+ * a logged-out CLI 4, and anything else 1, so a spawn can skip a harness that
+ * cannot run.
+ */
+const EXIT: Record<Outcome, number> = { finished: 0, failed: 1, limited: 3, "logged-out": 4, stopped: 1 };
+
+/** How a CLI's login is restored, and the errors it fails a turn with once the login is gone. */
+export interface Login {
+	/** The command the user logs in with. */
+	command: string;
+	/** Matches the CLI's error for a login or credential the API rejected: missing, expired, revoked, or invalid. */
+	unauthorized: RegExp;
+}
+
+export const LOGINS = {
+	// Such as "Not logged in · Please run /login", "Failed to authenticate. API Error: 401 ...",
+	// "Invalid API key · ...", or "Login expired · Please run /login".
+	claude: {
+		command: "claude auth login",
+		unauthorized: /API Error: 401|Failed to authenticate|Invalid API key|Please run \/login/,
+	},
+	// Such as "unexpected status 401 Unauthorized: ..." or "Your access token could not be refreshed
+	// because your refresh token was revoked. Please log out and sign in again."
+	codex: { command: "codex login", unauthorized: /\b401 Unauthorized\b|sign in again/ },
+} as const satisfies Record<HarnessName, Login>;
+
+/**
+ * Messages for an account's spent usage limit or credit, as opposed to a brief
+ * rate limit, a context or budget limit, or another failure: Claude Code's
+ * "You've hit your weekly limit" or "5-hour limit reached", Codex's "You've hit
+ * your usage limit" or "Quota exceeded", and a provider's spent balance.
+ * Claude Code's server throttle says "(not your usage limit)", so the bare
+ * "usage limit" skips that negation.
+ */
+const LIMIT = new RegExp(
+	[
+		"(?<!not your )usage (?:credit )?limit",
+		"usage_limit_reached",
+		"(?:hit|reached) your (?:[\\w'-]+ )*(?:limit|spend cap|budget)",
+		"(?:hour|weekly|opus|sonnet|fable) limit reached",
+		"out of (?:extra usage|usage credits|credits)",
+		"credit balance is too low|insufficient_quota|exceeded your current quota|quota exceeded",
+	].join("|"),
+	"i",
+);
 
 /** How one agent CLI is launched and read. The prompt always arrives on stdin. */
 interface Harness {
-	/** The variable the agent CLI reads its API key from. */
-	keyVariable: string;
 	/** Argv for a new session, given a session id to assign where the CLI accepts one. */
 	start(launch: Launch, session: string): string[];
 	resume(launch: Launch, session: string): string[];
@@ -94,7 +132,6 @@ const text = (value: unknown) => (typeof value === "string" ? value : undefined)
 
 /** `claude -p --output-format json` prints one result object when the turn ends. */
 const claude: Harness = {
-	keyVariable: "ANTHROPIC_API_KEY",
 	start: (launch, session) => [...claudeFlags(launch), "--session-id", session],
 	resume: (launch, session) => [...claudeFlags(launch), "--resume", session],
 	reader() {
@@ -108,12 +145,12 @@ const claude: Harness = {
 			},
 			result(stderr) {
 				const reply = text(result?.result);
-				const cost = result?.total_cost_usd;
+				const failure = `${reply ?? ""}\n${stderr}`;
 				return {
 					session: text(result?.session_id),
 					reply,
-					cost: typeof cost === "number" ? cost : undefined,
-					exhausted: EXHAUSTED.test(`${reply ?? ""}\n${stderr}`),
+					limited: LIMIT.test(failure),
+					unauthorized: result?.api_error_status === 401 || LOGINS.claude.unauthorized.test(failure),
 					failed: result === undefined || result.is_error === true,
 				};
 			},
@@ -138,7 +175,6 @@ function claudeFlags(launch: Launch): string[] {
 
 /** `codex exec --json` streams JSONL events: the thread id first, the reply in the last agent message. */
 const codex: Harness = {
-	keyVariable: "CODEX_API_KEY",
 	start: (launch) => ["codex", "exec", "--json", ...codexFlags(launch), "-"],
 	resume: (launch, session) => ["codex", "exec", "resume", "--json", ...codexFlags(launch), session, "-"],
 	reader() {
@@ -146,7 +182,8 @@ const codex: Harness = {
 		let reply: string | undefined;
 		let error: string | undefined;
 		let turnFailed = false;
-		let exhausted = false;
+		let limited = false;
+		let unauthorized = false;
 		return {
 			line(line) {
 				const event = json(line);
@@ -158,7 +195,8 @@ const codex: Harness = {
 				if (event.type === "turn.failed" || event.type === "error") {
 					const failure = event.error as Record<string, unknown> | undefined;
 					error = text(failure?.message) ?? text(event.message) ?? "";
-					exhausted ||= EXHAUSTED.test(error);
+					limited ||= LIMIT.test(error);
+					unauthorized ||= LOGINS.codex.unauthorized.test(error);
 					turnFailed ||= event.type === "turn.failed";
 				}
 				if (event.type !== "thread.started") return undefined;
@@ -169,7 +207,8 @@ const codex: Harness = {
 				session,
 				// A turn that failed before replying reports why, as `claude -p` does.
 				reply: reply ?? error,
-				exhausted: exhausted || EXHAUSTED.test(stderr),
+				limited: limited || LIMIT.test(stderr),
+				unauthorized: unauthorized || LOGINS.codex.unauthorized.test(stderr),
 				failed: turnFailed || reply === undefined,
 			}),
 		};
@@ -203,8 +242,8 @@ export class AgentInputError extends Error {}
 
 /**
  * Variables an agent must not inherit: the coordinating session's harness
- * state and credentials, other keys, and secret-manager tokens. Without them
- * the agent neither reuses the session's account nor acts as its sub-session.
+ * state and credentials, and secret-manager tokens. Without them the agent
+ * runs on its CLI's own login rather than as the session's sub-session.
  * A launch from inside a `quest gate` command does not admit the agent's own
  * expensive commands or give them a land check's priority, so the gate's marks
  * are dropped too, as is the base a land check runs against. Each CLI keeps the
@@ -216,24 +255,13 @@ const STRIPPED = [
 	/^CODEX_(?!HOME$)/,
 	/^OPENAI_API_KEY$/,
 	/^OP_/,
-	/^QUEST_API_KEYS$/,
 	/^QUEST_GATE_(ADMITTED|PRIORITY)$/,
 	/^QUEST_LAND_BASE$/,
 ];
 
-/** The agent's environment: the user's, minus `STRIPPED`, plus its one key. */
-export function launchEnvironment(
-	env: NodeJS.ProcessEnv,
-	variable: string,
-	key: string,
-	platform: NodeJS.Platform = process.platform,
-): NodeJS.ProcessEnv {
-	return { ...strippedEnvironment(env, platform), [variable]: key };
-}
-
 /**
- * The user's environment minus `STRIPPED`, for an agent that brings its own
- * credentials. Windows matches variable names case-insensitively, so there
+ * The user's environment minus `STRIPPED`, for an agent on its CLI's own
+ * login. Windows matches variable names case-insensitively, so there
  * `Op_Service_Account_Token` is stripped too.
  */
 export function strippedEnvironment(
@@ -277,9 +305,9 @@ export function privateDirectory(dir: string): string {
 const digest = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
 
 /**
- * One spawn's state: every worktree of a repository shares its key store and
- * agent records. Every command reaches it through here, so each one checks
- * that the state is private before trusting the records in it.
+ * One spawn's state: every worktree of a repository shares its agent records.
+ * Every command reaches it through here, so each one checks that the state is
+ * private before trusting the records in it.
  */
 export function spawnDirectory(base: string, worktree: string): string {
 	let common: string;
@@ -300,97 +328,6 @@ function load<T>(path: string): T | undefined {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
-}
-
-interface KeyStore {
-	/** Which `QUEST_API_KEYS` value the keys were resolved from. */
-	fingerprint: string;
-	keys: string[];
-}
-
-/** Resolves secret references to keys in order, in one secret-manager invocation. */
-export type Resolver = (references: string[], env: NodeJS.ProcessEnv) => string[];
-
-/**
- * 1Password resolves every `op://` reference in one `op inject`, so the user
- * approves at most one prompt; a service account token makes it promptless.
- */
-export const onePassword: Resolver = (references, env) => {
-	const template = references.map((reference) => `{{ ${reference} }}`).join("\n");
-	const op = programCommand(requireProgram("op", env), ["inject"], env);
-	const injected = spawnSync(op.file, op.args, {
-		encoding: "utf8",
-		env: programEnvironment(env),
-		input: `${template}\n`,
-		stdio: ["pipe", "pipe", "inherit"],
-		windowsVerbatimArguments: op.windowsVerbatimArguments,
-	});
-	if (injected.error !== undefined || injected.status !== 0) {
-		throw new Error("op inject failed to resolve QUEST_API_KEYS");
-	}
-	const output = injected.stdout;
-	const keys = output.split("\n").slice(0, references.length);
-	if (keys.length !== references.length || keys.some((key) => !/^\S+$/.test(key))) {
-		throw new Error("op inject did not resolve every QUEST_API_KEYS reference to one key");
-	}
-	return keys;
-};
-
-/**
- * The keys `QUEST_API_KEYS` names, resolved on first use and kept in the
- * spawn's store until `stop --all`. Concurrent launches wait for one resolver.
- */
-export async function spawnKeys(dir: string, env: NodeJS.ProcessEnv, resolve: Resolver): Promise<string[]> {
-	const entries = (env.QUEST_API_KEYS ?? "").split(/\s+/).filter((entry) => entry !== "");
-	if (entries.length === 0) throw new AgentInputError("QUEST_API_KEYS is unset or empty");
-	for (const entry of entries) {
-		const scheme = /^([a-z][\w+.-]*):\/\//i.exec(entry)?.[1];
-		if (scheme !== undefined && scheme !== "op") {
-			throw new AgentInputError(`QUEST_API_KEYS has a ${scheme}:// reference; only op:// is supported`);
-		}
-	}
-	const fingerprint = createHash("sha256").update(entries.join("\n")).digest("hex");
-	const file = join(dir, "keys.json");
-	const lock = join(dir, "resolving");
-	for (;;) {
-		const stored = load<KeyStore>(file);
-		if (stored?.fingerprint === fingerprint) return stored.keys;
-		if (!(await lockWithPid(lock))) continue;
-		try {
-			const references = entries.filter((entry) => entry.startsWith("op://"));
-			const resolved = references.length > 0 ? resolve(references, env) : [];
-			const keys = entries.map((entry) => (entry.startsWith("op://") ? resolved.shift()! : entry));
-			save(file, { fingerprint, keys } satisfies KeyStore);
-			return keys;
-		} finally {
-			rmSync(lock, { force: true });
-		}
-	}
-}
-
-/**
- * Take `lock`, a file holding its owner's pid. Linking a staged file creates
- * it with that pid in one step, so no lock ever lacks an owner. Returns false
- * after waiting on a live owner or clearing a dead one's lock, to recheck.
- * Clearing is not atomic: at worst two launches both resolve, and each writes
- * the same keys.
- */
-async function lockWithPid(lock: string): Promise<boolean> {
-	const staged = `${lock}.${randomUUID()}.tmp`;
-	writeFileSync(staged, String(process.pid), { mode: 0o600 });
-	try {
-		linkSync(staged, lock);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-	} finally {
-		rmSync(staged, { force: true });
-	}
-	// Another launch is resolving; its secret-manager prompt may take a while.
-	const owner = load<number>(lock);
-	if (owner !== undefined && !alive(owner)) rmSync(lock, { force: true });
-	else if (owner !== undefined) await sleep(250);
-	return false;
 }
 
 /** A live agent, recorded so `stop` can find it by worktree. */
@@ -462,7 +399,6 @@ export interface AgentDependencies {
 	env: NodeJS.ProcessEnv;
 	/** The state directory, normally `agentDirectory()`. */
 	base: string;
-	resolve: Resolver;
 	stdout(text: string): void;
 	stderr(text: string): void;
 }
@@ -470,40 +406,12 @@ export interface AgentDependencies {
 export const processDependencies = (out: Pick<AgentDependencies, "stdout" | "stderr">): AgentDependencies => ({
 	env: process.env,
 	base: agentDirectory(),
-	resolve: onePassword,
 	...out,
 });
 
 /** How much of an agent's output is kept for diagnostics; the rest is read as it streams. */
 const TAIL = 64 * 1024;
 const tail = (value: string) => (value.length > TAIL ? value.slice(-TAIL) : value);
-
-/**
- * Forward a stream redacted, by whole lines: a key never spans a newline, so
- * one split across chunks is still redacted. A line longer than `TAIL` is
- * forwarded early, keeping only `overlap` characters to finish a split key.
- */
-export function redactedLines(redact: (value: string) => string, overlap: number, write: (text: string) => void) {
-	let partial = "";
-	return {
-		data(chunk: string) {
-			const buffered = partial + chunk;
-			const end = buffered.lastIndexOf("\n") + 1;
-			if (end > 0) write(redact(buffered.slice(0, end)));
-			partial = buffered.slice(end);
-			if (partial.length > TAIL) {
-				// Whole keys are redacted first, so only a key's unfinished start can remain raw.
-				const redacted = redact(partial);
-				const cut = redacted.length - overlap;
-				write(redacted.slice(0, cut));
-				partial = redacted.slice(cut);
-			}
-		},
-		end() {
-			if (partial !== "") write(redact(partial));
-		},
-	};
-}
 
 /** The longest line of agent output read; a longer one is dropped rather than held. */
 export const LINE_LIMIT = 16 * 1024 * 1024;
@@ -541,7 +449,7 @@ export function boundedLines(limit: number, read: (line: string) => void) {
 /**
  * Run one agent turn in the foreground: a new session with `prompt`, or
  * `session` resumed with it. Prints the session id as soon as it is known,
- * then the cost, outcome, and final reply. Returns the exit status.
+ * then the outcome and final reply. Returns the exit status.
  */
 export async function runAgent(
 	launch: Launch,
@@ -556,7 +464,7 @@ export async function runAgent(
 	} catch {
 		throw new AgentInputError(`${launch.worktree} is not a directory`);
 	}
-	// Validate ownership and supervision before any secret-manager or key-store access.
+	// Validate ownership and supervision before any agent state is written.
 	const checkouts = launch.harness === "codex" ? new Worktrees() : undefined;
 	let checkout: string | undefined;
 	if (checkouts) {
@@ -570,18 +478,10 @@ export async function runAgent(
 	const harness = HARNESS[launch.harness];
 	const id = session ?? randomUUID();
 	const [name, ...args] = session === undefined ? harness.start(launch, id) : harness.resume(launch, id);
-	// The CLI is found on PATH, never in the worktree, before any key is resolved.
+	// The CLI is found on PATH, never in the worktree.
 	const program = requireProgram(name, deps.env);
 	const command = checkouts ? undefined : programCommand(program, args, deps.env);
 	const dir = spawnDirectory(deps.base, worktree);
-	const keys = await spawnKeys(dir, deps.env, deps.resolve);
-	const key = keys[launch.key - 1];
-	if (key === undefined) {
-		throw new AgentInputError(`--key ${launch.key} is past the ${keys.length} entries in QUEST_API_KEYS`);
-	}
-	// Agent output never repeats a key; any that leaks is shown by position.
-	const redact = (value: string) =>
-		keys.reduce((result, k, index) => result.replaceAll(k, `<key ${index + 1}>`), value);
 
 	const reader = harness.reader();
 	// Claude Code takes the id this command assigns; Codex announces its own.
@@ -637,23 +537,20 @@ export async function runAgent(
 					state.child = agent.pid;
 					update();
 					announce(known);
-					// The kept tails are redacted before they are cut, so a cut never splits a key.
 					let out = "";
 					let err = "";
 					const lines = boundedLines(LINE_LIMIT, (line) => announce(reader.line(line)));
-					const forwarded = redactedLines(redact, Math.max(...keys.map((k) => k.length)) - 1, deps.stderr);
 					agent.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-						out = tail(redact(out + chunk));
+						out = tail(out + chunk);
 						lines.data(chunk);
 					});
 					agent.stdout.once("end", () => {
 						dropped = lines.end();
 					});
 					agent.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-						err = tail(redact(err + chunk));
-						forwarded.data(chunk);
+						err = tail(err + chunk);
+						deps.stderr(chunk);
 					});
-					agent.stderr.once("end", () => forwarded.end());
 					agent.stdin.on("error", () => {}); // An agent that exits early closes its stdin.
 					agent.stdin.end(prompt);
 					agent.once("error", (error: NodeJS.ErrnoException) =>
@@ -668,7 +565,7 @@ export async function runAgent(
 					);
 				};
 				// The agent works in its own checkout, so a location inherited from a Git hook would name the wrong one.
-				const env = discoveryEnv(programEnvironment(launchEnvironment(deps.env, harness.keyVariable, key)));
+				const env = discoveryEnv(programEnvironment(strippedEnvironment(deps.env)));
 				if (command === undefined) {
 					supervised = checkouts!.run(checkout!, [program, ...args], { env, spawned: connect });
 					supervised.catch(reject);
@@ -690,24 +587,27 @@ export async function runAgent(
 		const exitCode = released?.code ?? code;
 		const result = reader.result(stderr);
 		announce(result.session);
-		// A finished turn is never exhausted, even if its reply mentions credit.
+		// A finished turn is never limited or logged out, even if its reply mentions either.
 		const outcome: Outcome =
 			interrupted || existsSync(stopPath(record))
 				? "stopped"
 				: exitCode === 0 && !result.failed
 					? "finished"
-					: result.exhausted
-						? "exhausted"
-						: "failed";
+					: result.unauthorized
+						? "logged-out"
+						: result.limited
+							? "limited"
+							: "failed";
 		if (dropped > 0) {
 			deps.stderr(`quest: dropped ${dropped} line(s) of ${name} output over ${LINE_LIMIT} characters\n`);
 		}
 		if (outcome === "failed" && result.reply === undefined && stdout.trim() !== "") {
 			deps.stderr(`quest: ${name} printed no result; its output ended with:\n${stdout}\n`);
 		}
-		if (result.cost !== undefined) deps.stdout(`cost ${result.cost}\n`);
+		if (outcome === "logged-out")
+			deps.stderr(`quest: ${name} is logged out; run \`${LOGINS[launch.harness].command}\`\n`);
 		deps.stdout(`outcome ${outcome}\n`);
-		if (result.reply !== undefined) deps.stdout(`\n${redact(result.reply)}\n`);
+		if (result.reply !== undefined) deps.stdout(`\n${result.reply}\n`);
 		return interrupted || EXIT[outcome];
 	} finally {
 		for (const [name, handler] of handlers) process.off(name, handler);
@@ -765,11 +665,12 @@ async function stopRecord(record: string, deps: AgentDependencies): Promise<bool
 	return true;
 }
 
-/** End the spawn for the repository holding `root`: stop every agent, then delete the resolved keys. */
+/** End the spawn for the repository holding `root`: stop every agent, then delete its state. */
 export async function stopAll(root: string, deps: AgentDependencies): Promise<void> {
 	const dir = spawnDirectory(deps.base, root);
 	save(endingPath(dir), process.pid);
-	for (const record of records(dir)) await stopRecord(record, deps);
+	let stopped = false;
+	for (const record of records(dir)) stopped = (await stopRecord(record, deps)) || stopped;
 	rmSync(dir, { recursive: true, force: true });
-	deps.stdout("deleted the resolved keys\n");
+	if (!stopped) deps.stdout("no agent running\n");
 }

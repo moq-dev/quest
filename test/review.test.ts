@@ -4,7 +4,16 @@ import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { type Output, main } from "../src/cli/main";
-import { baseInstructions, review, runningHarness, sessionFile, verdict } from "../src/cli/review";
+import { REVIEWERS } from "../src/cli/models";
+import {
+	authored,
+	baseInstructions,
+	pickReviewer,
+	review,
+	runningHarness,
+	sessionFile,
+	verdict,
+} from "../src/cli/review";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -250,6 +259,113 @@ test("the reviewer is the harness this command is not running under", () => {
 	expect(() => runningHarness({ CLAUDECODE: "1", CODEX_THREAD_ID: "t" })).toThrow("both");
 });
 
+test("each size's reviewer is the first whose model wrote none of the code", () => {
+	const claude = authored({}, { CLAUDECODE: "1" });
+	const codex = authored({}, { CODEX_THREAD_ID: "t" });
+	const at = (size: keyof typeof REVIEWERS, wrote: typeof claude) => {
+		const { harness, model, effort } = pickReviewer(size, {}, wrote);
+		return `${harness} ${model} ${effort}`;
+	};
+	expect(at("XS", claude)).toBe("codex gpt-6.1-sol low");
+	expect(at("S", claude)).toBe("codex gpt-6.1-sol medium");
+	expect(at("M", claude)).toBe("codex gpt-6.1-sol high");
+	expect(at("L", claude)).toBe("codex gpt-6.1-sol xhigh");
+	expect(at("XL", claude)).toBe("codex gpt-6.1-sol xhigh");
+	// Opus reviews what Sol wrote.
+	expect(at("XS", codex)).toBe("claude claude-opus-5-5 low");
+	expect(at("S", codex)).toBe("claude claude-opus-5-5 low");
+	expect(at("M", codex)).toBe("claude claude-opus-5-5 medium");
+	expect(at("L", codex)).toBe("claude claude-opus-5-5 high");
+	expect(at("XL", codex)).toBe("claude claude-opus-5-5 high");
+
+	// The PR's recorded implementers replace the running harness: Sol reviews Opus's code from Claude Code.
+	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
+	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
+	// No harness need be detected once the implementers are named.
+	expect(at("M", authored({ exclude: ["grok-4.7"] }, {}))).toBe("codex gpt-6.1-sol high");
+	const both = authored({ exclude: ["gpt-6.1-sol", "claude-opus-5-5"] }, {});
+	expect(() => pickReviewer("M", {}, both)).toThrow("wrote the code; pass --harness and --model");
+
+	// --harness names the reviewer at its entry, unless that entry's model wrote the code.
+	expect(pickReviewer("L", { harness: "claude" }, authored({ harness: "claude" }, { CLAUDECODE: "1" }))).toEqual({
+		harness: "claude",
+		model: "claude-opus-5-5",
+		effort: "high",
+	});
+	const sol = authored({ harness: "codex", exclude: ["gpt-6.1-sol"] }, {});
+	expect(() => pickReviewer("M", { harness: "codex" }, sol)).toThrow("gpt-6.1-sol wrote the code; pass --model");
+	expect(pickReviewer("M", { harness: "codex", model: "gpt-6-astra" }, sol).model).toBe("gpt-6-astra");
+	// Nor does --model bring back a model that wrote the code.
+	expect(() => pickReviewer("M", { harness: "codex", model: "gpt-6.1-sol" }, sol)).toThrow(
+		"gpt-6.1-sol wrote the code",
+	);
+	const opusWrote = authored({ exclude: ["claude-opus-5-5"] }, {});
+	expect(() => pickReviewer("M", { model: "claude-opus-5-5" }, opusWrote)).toThrow("claude-opus-5-5 wrote the code");
+	// --model and --effort override the picked entry.
+	expect(pickReviewer("XS", { effort: "high" }, claude)).toEqual({
+		harness: "codex",
+		model: "gpt-6.1-sol",
+		effort: "high",
+	});
+});
+
+fakes("a quest branch is reviewed at its quest's size on the base, which its own change cannot lower", async () => {
+	const s = setup();
+	git(s.repo, "checkout", "-q", "main");
+	write(s.repo, "quest/m0/big.md", "# [L] Big\n\n## Goal\n\nBig.\n");
+	git(s.repo, "add", ".");
+	git(s.repo, "commit", "-qm", "plan");
+	git(s.repo, "push", "-q", "origin", "main");
+	git(s.repo, "checkout", "-qb", "quest/m0/big");
+	write(s.repo, "quest/m0/big.md", "# [XS] Big\n\n## Goal\n\nBig.\n");
+	git(s.repo, "commit", "-qam", "shrink");
+
+	const result = await quest("--root", s.repo, "review");
+	expect(result.stderr).toBe("");
+	expect(result.stdout).toContain("reviewer codex gpt-6.1-sol xhigh\nsize L quest/m0/big.md\n");
+
+	// --size overrides the quest's.
+	const sized = await quest("--root", s.repo, "review", "--size", "S", "--new");
+	expect(sized.stdout).toContain("reviewer codex gpt-6.1-sol medium\nsize S --size\n");
+	// A checkout on another branch, as the runner's review checkout is, takes the size of the branch it names.
+	git(s.repo, "checkout", "-qb", "kix-review/job1");
+	const runner = await review(
+		{ root: s.repo, base: "origin/main", sizeBranch: "quest/m0/big" },
+		{ env: { ...process.env, CLAUDECODE: "1" } },
+	);
+	expect([runner.size, runner.sizeFrom, runner.effort]).toEqual(["L", "quest/m0/big.md", "xhigh"]);
+	git(s.repo, "checkout", "-q", "quest/m0/big");
+	const invalid = await quest("--root", s.repo, "review", "--size", "XXL", "--new");
+	expect(invalid.code).not.toBe(0);
+	expect(invalid.stderr).toContain("Allowed choices are XS, S, M, L, XL");
+
+	// A quest branch whose quest the base lacks, such as one planned on the branch, takes the default.
+	git(s.repo, "checkout", "-qb", "quest/m0/new", "main");
+	write(s.repo, "quest/m0/new.md", "# [XS] New\n\n## Goal\n\nNew.\n");
+	git(s.repo, "add", ".");
+	git(s.repo, "commit", "-qm", "new");
+	expect((await quest("--root", s.repo, "review")).stdout).toContain("size M default\n");
+});
+
+fakes("--exclude-model picks the reviewer from the PR's implementers instead of the running harness", async () => {
+	const s = setup(null);
+	const result = await quest("--root", s.repo, "review", "--exclude-model", "gpt-6.1-sol", "--json");
+	expect(result.stderr).toBe("");
+	const round = JSON.parse(result.stdout);
+	expect([round.reviewer, round.model, round.effort, round.size, round.sizeFrom]).toEqual([
+		"claude",
+		"claude-opus-5-5",
+		"medium",
+		"M",
+		"default",
+	]);
+
+	const both = ["--exclude-model", "gpt-6.1-sol", "--exclude-model", "claude-opus-5-5"];
+	const none = await quest("--root", s.repo, "review", ...both, "--new");
+	expect(none.code).toBe(2);
+	expect(none.stderr).toContain("every M reviewer (gpt-6.1-sol, claude-opus-5-5) wrote the code");
+});
+
 fakes("an unknown harness is an error, never a same-model review", async () => {
 	const s = setup(null);
 	const result = await quest("--root", s.repo, "review");
@@ -427,7 +543,6 @@ fakes.each([
 	vi.stubEnv("ANTHROPIC_MODEL", "parent-model");
 	vi.stubEnv("CODEX_API_KEY", "other-provider-key");
 	vi.stubEnv("OPENAI_API_KEY", "other-provider-key");
-	vi.stubEnv("QUEST_API_KEYS", "other-agent-key");
 	vi.stubEnv("OP_SERVICE_ACCOUNT_TOKEN", "secret-manager-token");
 	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	const first = await quest("--root", s.repo, "review", "--json");
@@ -656,8 +771,8 @@ fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
 		if (host === "CLAUDECODE") {
 			expect(first.argv.slice(0, 5)).toEqual(["exec", "review", "--base", mergeBase, "--json"]);
 		} else {
-			expect(first.stdin).toBe(`/code-review high ${mergeBase}...HEAD`);
-			expect(first.argv[first.argv.indexOf("--effort") + 1]).toBe("high");
+			expect(first.stdin).toBe(`/code-review medium ${mergeBase}...HEAD`);
+			expect(first.argv[first.argv.indexOf("--effort") + 1]).toBe("medium");
 		}
 		expect(second.stdin).toContain(`\`git diff ${mergeBase}..${head}\``);
 		// Only the change's own directories bring their instructions.
@@ -674,7 +789,8 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	const base = git(s.repo, "rev-parse", "origin/main");
 	expect(result.stdout).toBe(
 		[
-			"reviewer codex gpt-6.1-sol xhigh",
+			"reviewer codex gpt-6.1-sol high",
+			"size M default",
 			"session thread-1",
 			"round 1",
 			`base ${base} origin/main`,
@@ -700,7 +816,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 		expect(call.argv).toContain("--ignore-rules");
 		expect(call.argv).toContain("--ignore-user-config");
 		expect(call.argv[call.argv.indexOf("-m") + 1]).toBe("gpt-6.1-sol");
-		expect(call.argv).toContain('model_reasoning_effort="xhigh"');
+		expect(call.argv).toContain('model_reasoning_effort="high"');
 		expect(call.argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
 		// The session's own variables never reach the reviewer.
 		expect(call.env.CLAUDECODE).toBeUndefined();

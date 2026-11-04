@@ -16,6 +16,8 @@ import {
 	lookup,
 	questBranch,
 	renderBlocker,
+	SIZES,
+	type Size,
 	unblocked,
 	onMaintainer,
 	waiting,
@@ -52,8 +54,8 @@ import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
+import { DEFAULT_SIZE, REVIEWERS } from "./models";
 import {
-	MODELS,
 	ReviewInputError,
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
@@ -891,32 +893,25 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("agent")
 		// Options come before <worktree>, so a prompt or answer starting with "-" is never read as one.
 		.enablePositionalOptions()
-		.summary("Start, resume, and stop headless agents billed to API keys")
+		.summary("Start, resume, and stop headless agents on the logged-in account")
 		.description(
-			"Run one headless agent turn per call in the foreground, billed to one of the keys in QUEST_API_KEYS, " +
-				"so a spawn launches every agent with one legible command.\n\n" +
-				"Codex requires a registered Quest checkout and Linux worktree supervision; these are checked before resolving keys. " +
+			"Run one headless agent turn per call in the foreground, on the agent CLI's own login, so a spawn " +
+				"starts any harness's agent with one legible command.\n\n" +
+				"Codex requires a registered Quest checkout and Linux worktree supervision; these are checked before any agent state is written. " +
 				"It uses the quest worktree run lifecycle: restore before each turn and release declared scratch after exit. Claude runs directly in the given checkout.\n\n" +
-				"QUEST_API_KEYS lists keys separated by whitespace; --key names one by its 1-based position. An " +
-				"entry may be a 1Password op:// reference: the first launch resolves every reference in one " +
-				"`op inject` and keeps the keys in a user-only store under $XDG_RUNTIME_DIR (or the temporary " +
-				"directory) shared by the repository's worktrees, until `quest agent stop --all`.\n\n" +
-				"The agent CLI and op run from their absolute paths on PATH, never from the worktree; on native Windows " +
+				"The agent CLI runs from its absolute path on PATH, never from the worktree; on native Windows " +
 				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
-				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_API_KEYS, and QUEST_GATE_ADMITTED variable, plus " +
-				"its one key as " +
-				"ANTHROPIC_API_KEY (claude -p) or CODEX_API_KEY (codex exec). It never prints a key; any the agent " +
-				"repeats is shown as <key N>.\n\n" +
-				"Prints `session <id>` as soon as the id is known, then `cost <dollars>` when the agent reports it, " +
-				"`outcome finished|failed|exhausted|stopped`, a blank line, and the agent's final reply. Exits 0 " +
-				"when the agent finished, 3 when the provider refused the key for lack of credit, 2 for invalid " +
-				"arguments, 128 plus the signal number when interrupted, and 1 otherwise.",
+				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_GATE_ADMITTED, QUEST_GATE_PRIORITY, " +
+				"and QUEST_LAND_BASE variable, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"Prints `session <id>` as soon as the id is known, then `outcome finished|failed|limited|logged-out|stopped`, " +
+				"a blank line, and the agent's final reply. Exits 0 when the agent finished, 3 when its account hit a " +
+				"usage limit or ran out of credit, 4 when the CLI is logged out (after printing its login command), 2 for " +
+				"invalid arguments, 128 plus the signal number when interrupted, and 1 otherwise.",
 		);
 	const launchOptions = (command: Command) =>
 		command
 			.addOption(new Option("--harness <name>", "Agent CLI to run").choices(HARNESSES).makeOptionMandatory())
-			.requiredOption("--key <position>", "1-based position of the key in QUEST_API_KEYS", positiveInteger("key"))
 			.requiredOption("--model <model>", "Model the agent runs")
 			.requiredOption("--effort <level>", "Reasoning effort the agent runs at")
 			.requiredOption(
@@ -962,10 +957,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Stop the agent in a worktree, or end the spawn with --all")
 		.description(
 			"Stop the agent running in a worktree and wait until its start or resume has reported. With --all, " +
-				"end the spawn: stop every agent in this repository's worktrees and delete the resolved keys.",
+				"end the spawn: stop every agent in this repository's worktrees and delete their records.",
 		)
 		.argument("[worktree]", "Checkout whose agent to stop")
-		.option("--all", "Stop every agent and delete the resolved keys")
+		.option("--all", "Stop every agent in this repository's worktrees")
 		.action((worktree: string | undefined, options: { all?: boolean }) => {
 			if ((worktree === undefined) === !options.all) throw new UsageError("give a worktree or --all");
 			const deps = agentDependencies();
@@ -975,22 +970,30 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			);
 		});
 
-	const models = HARNESSES.map((h) => `${MODELS[h].model} at ${MODELS[h].effort} effort for ${h}`).join(" and ");
+	const reviewers = SIZES.map(
+		(size) => `${size} ${REVIEWERS[size].map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}`,
+	).join("; ");
 	program
 		.command("review")
-		.summary("Have the other vendor's model review the committed branch, read-only")
+		.summary("Have a model that wrote none of the code review the committed branch, read-only")
 		.description(
-			"Review the checkout's committed branch against its base with the other harness: Codex when run from " +
-				"Claude Code, Claude Code when run from Codex, detected from the variables each sets. --harness names " +
-				"the reviewer instead; there is no other fallback. The reviewer reaches its model as the user's own CLI " +
+			"Review the checkout's committed branch against its base with a reviewer its size picks, never a model " +
+				`that wrote the code. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The first ` +
+				"whose model wrote none of the code reviews. --exclude-model names the models that wrote it, such as " +
+				"from the PR's record; without it, the harness running this command is taken to have written it, " +
+				"detected from the variables each sets, so Codex reviews from Claude Code and Claude Code from Codex. " +
+				"--harness names the reviewer instead, at its entry's model and effort, and --model and --effort " +
+				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. The " +
+				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
+				`change cannot lower its own review, else ${DEFAULT_SIZE}. ` +
+				"The reviewer reaches its model as the user's own CLI " +
 				"does: Claude Code keeps ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, and its cloud providers' " +
 				"CLAUDE_CODE_USE_* switches and settings, and Codex keeps CODEX_CA_CERTIFICATE. It uses the CLI's own " +
 				"stored login; the credential the CLI reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, " +
 				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
 				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
 				"(ANTHROPIC_AWS_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN) only while one is set. A logged-out error names the profile it checked, " +
-				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider. It runs " +
-				`with ${models}. --model and --effort override them.\n\n` +
+				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider.\n\n" +
 				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
 				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
 				"reviewer's own review (`codex exec review --base <merge-base>`, or Claude Code's " +
@@ -1006,7 +1009,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
 				"reviewer. The base is fetched first, since the sandbox has no network.\n\n" +
-				"Prints the reviewer, model, and effort, session, round, base, head, a usage line per turn (input tokens, the " +
+				"Prints the reviewer, model, and effort, the size and where it came from, session, round, base, head, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
 				"its one-sentence rationale, the finding count, then each finding. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
@@ -1017,9 +1020,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"timestamp, or `unknown` when the CLI named none.",
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
-		.addOption(new Option("--harness <name>", "Reviewer to run instead of the other harness").choices(HARNESSES))
+		.addOption(new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(HARNESSES))
 		.option("--model <model>", "Model the reviewer runs instead")
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
+		.option(
+			"--exclude-model <model>",
+			"A model that wrote the code, never picked to review it; repeat for each",
+			(value: string, previous: string[] = []) => [...previous, value],
+		)
+		.addOption(new Option("--size <size>", "The PR's size, instead of its quest's or the default").choices(SIZES))
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
 		.option("--branch <name>", "Branch whose review session to continue, instead of the checked-out one")
@@ -1031,6 +1040,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				harness?: HarnessName;
 				model?: string;
 				effort?: string;
+				excludeModel?: string[];
+				size?: Size;
 				responses?: string;
 				new?: boolean;
 				json?: boolean;
@@ -1039,7 +1050,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					options.responses === undefined
 						? undefined
 						: readFileSync(options.responses === "-" ? 0 : options.responses, "utf8");
-				const run = review({ ...options, root: root(), responses, fresh: options.new }, reviewDependencies());
+				const run = review(
+					{ ...options, root: root(), exclude: options.excludeModel, responses, fresh: options.new },
+					reviewDependencies(),
+				);
 				pending = run.then(
 					(round) => {
 						if (options.json) print(JSON.stringify(round));

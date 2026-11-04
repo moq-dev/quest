@@ -24,6 +24,9 @@ export {
 	questBranch,
 	resolve,
 	rooted,
+	SIZES,
+	type Size,
+	size,
 } from "./doc";
 export { type ClosedPull, handBackWaits, handedBack, landed, withoutHandBack } from "./claim";
 export { type Missed, type Moved, type Source, move, relocate, remove } from "./edit";
