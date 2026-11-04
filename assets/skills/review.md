@@ -30,7 +30,7 @@ Push, then flip the PR to "Ready for Review" with `quest ready <pr> <token>`, wh
 For your own draft, mark it ready for review yourself.
 Do not wait for online reviewers.
 
-Summarize the review and CI from `quest status <pr>`, naming any decisions it raised without answering them, then interactively prompt the user with your recommended action:
+Summarize the review, with the last round's score and rationale, and CI from `quest status <pr>`, naming any decisions it raised without answering them, then interactively prompt the user with your recommended action:
 - `/quest-merge`: If the PR is landable as `/quest-merge` defines it, or will be once fixed with no decision left for the user, such as failing checks or unaddressed automated review findings; `/quest-merge` runs `/quest-iterate` on it first.
 - `/quest-iterate`: If it raised significant issues or decisions, which it settles with the grill skill's interview.
 - skip: If the PR should not be merged yet.

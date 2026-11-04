@@ -1000,7 +1000,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
 				"reviewer. The base is fetched first, since the sandbox has no network.\n\n" +
 				"Prints the reviewer, model, and effort, session, round, base, head, a usage line per turn (input tokens, the " +
-				"part read from the prompt cache, and output), the finding count, then each finding. --json prints " +
+				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
+				"its one-sentence rationale, the finding count, then each finding. A reply without a valid score " +
+				"fails as any malformed reply does. --json prints " +
 				"the same as one object. Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, and 1 for other failures.",
 		)

@@ -124,7 +124,8 @@ A reviewer that is out of quota or logged out is an outage, not a skip: keep the
 Give the reset time when the error names one; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
 Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
 
-The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
+The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, the round's score out of 10 with its rationale, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
+Never block on a score: the findings and their refutations decide when the review is done.
 Rewrite it after each round.
 A review counts for the head whose SHA it names.
 
