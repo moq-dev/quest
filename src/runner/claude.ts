@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { boundedLines, LINE_LIMIT } from "../cli/agent";
+import { LIMIT } from "../cli/limit";
 import {
 	type Adapter,
 	baseEnvironment,
@@ -90,9 +91,6 @@ function json(line: string): Record<string, unknown> | undefined {
 		return undefined;
 	}
 }
-
-/** Messages Claude Code ends a turn with when the plan or key cannot pay for it. */
-const LIMIT = /usage limit|limit reached|hit your (?:usage )?limit|out of extra usage|credit balance is too low/i;
 
 /**
  * Reads one session's stream-json output. Limits show up as a rejected

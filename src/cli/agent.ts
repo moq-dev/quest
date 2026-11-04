@@ -31,6 +31,7 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { EXHAUSTED } from "./limit";
 import { alive, programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
 import { Worktrees, save } from "./worktree";
@@ -84,9 +85,6 @@ interface Reader {
 	/** The run's result, given the tail of its stderr. */
 	result(stderr: string): Result;
 }
-
-/** Provider messages for a key whose balance cannot pay for the request. */
-const EXHAUSTED = /credit balance is too low|insufficient_quota|exceeded your current quota/i;
 
 function json(line: string): Record<string, unknown> | undefined {
 	try {

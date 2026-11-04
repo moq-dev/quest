@@ -32,6 +32,7 @@ import {
 } from "@opencode-ai/sdk/v2/client";
 
 import { boundedLines, LINE_LIMIT } from "../cli/agent";
+import { LIMIT } from "../cli/limit";
 import {
 	type Adapter,
 	baseEnvironment,
@@ -320,10 +321,6 @@ export function signedIn(found: Credential[]): SignedIn | null {
 		label: `${described.map((d) => d.name).join(", ")} (opencode)`,
 	};
 }
-
-/** Messages a provider sends when the plan or key cannot pay for more, as opposed to a brief rate limit. */
-const LIMIT =
-	/usage limit|usage_limit_reached|insufficient_quota|quota exceeded|exceeded your current quota|free usage exceeded/i;
 
 /**
  * Whether a retry opencode is waiting on is an account limit: an OpenCode Go

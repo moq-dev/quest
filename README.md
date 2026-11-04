@@ -1107,7 +1107,11 @@ It prints the reviewer, model, and effort, session, round, base, head, a
 finding count, then each finding as severity, `path:line`, and title over its
 indented body. `--json` prints the same as one object. It exits 0 once the round
 finishes, whatever it found, 2 for invalid arguments or a checkout or CLI that
-cannot be reviewed, and 1 for other failures. `/quest-review` runs the rounds,
+cannot be reviewed, including a login the API rejects, 3 when the reviewer's
+account hit its usage limit, and 1 for other failures. A usage limit prints one
+line, `error: <harness> hit its usage limit; resets <time>`, where `<time>` is
+the reset as an ISO 8601 UTC timestamp, or `unknown` when the CLI named none.
+`/quest-review` runs the rounds,
 records them in the PR body's `## Review` section, and marks the PR ready.
 
 ## Headless agents
