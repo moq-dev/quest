@@ -29,14 +29,30 @@ export type ReviewReport = {
 	model: string;
 	effort: string;
 	round: number;
+	/** How ready the head is to land, from 0 to 10, and why. */
+	score: number;
+	rationale: string;
 	findings: Finding[];
 };
 
-/** Bounds a report: GitHub keeps at most 65,535 characters of a check run's text. */
-export const REVIEW_LIMITS = { findings: 100, title: 300, body: 8000 };
+/**
+ * Bounds a report: GitHub keeps at most 65,535 characters of a check run's
+ * text. Only that text shows a report's prose, so prose past its bound is cut
+ * to fit rather than refused, which would leave a head `quest review` accepted
+ * unrecorded.
+ */
+export const REVIEW_LIMITS = { findings: 100, file: 1024, title: 300, body: 8000, rationale: 8000 };
 
 const count = (value: unknown, min: number) =>
 	typeof value === "number" && Number.isSafeInteger(value) && value >= min ? value : null;
+
+/** A string cut to at most `max` characters, ending in an ellipsis when cut, or null for any other value. */
+function clip(value: unknown, max: number) {
+	if (typeof value !== "string") return null;
+	if (value.length <= max) return value;
+	// Never leave half of a surrogate pair at the cut.
+	return `${value.slice(0, max - 1).replace(/[\ud800-\udbff]$/, "")}…`;
+}
 
 /** Parse a runner's review report, or throw a JobError the runner can read. */
 export function parseReview(body: Record<string, unknown>): ReviewReport {
@@ -51,19 +67,23 @@ export function parseReview(body: Record<string, unknown>): ReviewReport {
 	const effort = text(body.effort, 50);
 	const round = count(body.round, 1);
 	if (!model || !effort || !round) throw new JobError("The reviewer's model, effort, and round are required");
+	const score = count(body.score, 0);
+	const rationale = clip(body.rationale, REVIEW_LIMITS.rationale);
+	if (score === null || score > 10 || rationale === null || !(body.rationale as string).trim())
+		throw new JobError("A review needs a score from 0 to 10 and a rationale");
 	if (!Array.isArray(body.findings) || body.findings.length > REVIEW_LIMITS.findings)
 		throw new JobError(`At most ${REVIEW_LIMITS.findings} findings per review`);
 	const findings = body.findings.map((item: Record<string, unknown> | null): Finding => {
-		const file = text(item?.file, 1024);
-		const title = text(item?.title, REVIEW_LIMITS.title);
-		const detail = typeof item?.body === "string" && item.body.length <= REVIEW_LIMITS.body ? item.body : null;
+		const file = clip(item?.file, REVIEW_LIMITS.file);
+		const title = clip(item?.title, REVIEW_LIMITS.title);
+		const detail = clip(item?.body, REVIEW_LIMITS.body);
 		const line = item?.line === null ? null : count(item?.line, 1);
 		const severity = SEVERITIES.find((s) => s === item?.severity);
-		if (!file || !title || detail === null || (item?.line !== null && line === null) || !severity)
+		if (file === null || title === null || detail === null || (item?.line !== null && line === null) || !severity)
 			throw new JobError("Each finding needs a file, line or null, severity, title, and body");
 		return { file, line, severity, title, body: detail };
 	});
-	return { job, attempt, head: body.head, reviewer, model, effort, round, findings };
+	return { job, attempt, head: body.head, reviewer, model, effort, round, score, rationale, findings };
 }
 
 /** Untrusted text inside a fence no run of backticks in it can close. */
@@ -73,17 +93,21 @@ function fenced(value: string) {
 	return `${fence}text\n${value.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")}\n${fence}`;
 }
 
-/** The check run's output: a title, a summary naming the reviewer, and the findings as plain text. */
+/**
+ * The check run's output: a title with the findings count and score, a
+ * summary naming the reviewer, and the score's rationale and the findings as
+ * plain text.
+ */
 export function checkOutput(report: ReviewReport) {
 	const n = report.findings.length;
-	const title = n ? `${n} finding${n === 1 ? "" : "s"}` : "No findings";
+	const title = `${n ? `${n} finding${n === 1 ? "" : "s"}` : "No findings"}, scored ${report.score}/10`;
 	const summary = `A kix runner reviewed this commit with \`quest review\`: ${report.reviewer}, ${report.model} at ${report.effort} effort, round ${report.round}.`;
 	const findings = report.findings.map((f) =>
 		fenced(`${f.severity} ${f.line === null ? f.file : `${f.file}:${f.line}`} ${f.title}\n\n${f.body}`),
 	);
-	let text = "";
+	let text = fenced(`score ${report.score}/10: ${report.rationale}`);
 	for (const [i, finding] of findings.entries()) {
-		const next = `${text}${text ? "\n\n" : ""}${finding}`;
+		const next = `${text}\n\n${finding}`;
 		// GitHub refuses a check run's text past 65,535 characters.
 		if (next.length > 60_000) {
 			text += `\n\n${findings.length - i} more not shown.`;
@@ -91,7 +115,7 @@ export function checkOutput(report: ReviewReport) {
 		}
 		text = next;
 	}
-	return { title, summary, ...(text && { text }) };
+	return { title, summary, text };
 }
 
 /**

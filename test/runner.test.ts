@@ -2698,6 +2698,8 @@ describe("runner reviews", () => {
 			base: { ref: "origin/main", sha: "b".repeat(40) },
 			head: request.head,
 			usage: [],
+			score: found[round - 1]?.length ? 8 : 10,
+			rationale: "Scored.",
 			findings: (found[round - 1] ?? []) as Round["findings"],
 		});
 	}
@@ -2732,15 +2734,21 @@ describe("runner reviews", () => {
 					model: "gpt-6.1-sol",
 					effort: "medium",
 					round: 1,
+					score: 8,
+					rationale: "Scored.",
 					findings: [finding],
 				},
-				expect.objectContaining({ head: "2".padStart(40, "0"), round: 2, findings: [] }),
+				expect.objectContaining({ head: "2".padStart(40, "0"), round: 2, score: 10, findings: [] }),
 			]);
 			const [found, passed] = tools(r).map((call) => call.reply.content[0].text as string);
 			expect(found).toContain("before you end your turn");
-			expect(found).toContain("found 1 finding. kix recorded it as a failing `quest review` check.");
+			expect(found).toContain(
+				"found 1 finding. It scored 8/10: Scored. kix recorded it as a failing `quest review` check.",
+			);
 			expect(found).toContain("1. [high] new.txt:1: Wrong value\nIt says new.");
-			expect(passed).toContain("found nothing. kix recorded it as the passing `quest review` check.");
+			expect(passed).toContain(
+				"found nothing. It scored 10/10: Scored. kix recorded it as the passing `quest review` check.",
+			);
 		} finally {
 			await r.runner.shutdown();
 		}

@@ -8,11 +8,11 @@ import { REVIEWERS } from "../src/cli/models";
 import {
 	authored,
 	baseInstructions,
-	findings,
 	pickReviewer,
 	review,
 	runningHarness,
 	sessionFile,
+	verdict,
 } from "../src/cli/review";
 import { tempDir } from "./fixture";
 
@@ -86,7 +86,7 @@ if (argv.includes("--session-id")) {
 		},
 	});
 } else {
-	const reply = process.env.FAKE_REPLY ?? JSON.stringify({ findings: [${JSON.stringify(FINDING)}] });
+	const reply = process.env.FAKE_REPLY ?? JSON.stringify({ score: 8, rationale: "Lands once the off-by-one is fixed.", findings: [${JSON.stringify(FINDING)}] });
 	result({
 		session_id: at("--resume"),
 		result: reply,
@@ -142,7 +142,7 @@ if (argv[1] === "review") {
 } else {
 	event({ type: "thread.started", thread_id: argv[argv.length - 2] });
 	message("Checking the findings.");
-	message(process.env.FAKE_REPLY ?? JSON.stringify({ findings: [${JSON.stringify(FINDING)}] }));
+	message(process.env.FAKE_REPLY ?? JSON.stringify({ score: 8, rationale: "Lands once the off-by-one is fixed.", findings: [${JSON.stringify(FINDING)}] }));
 	event({ type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 80, output_tokens: 7 } });
 }
 `,
@@ -544,7 +544,7 @@ fakes.each([
 	vi.stubEnv("CODEX_API_KEY", "other-provider-key");
 	vi.stubEnv("OPENAI_API_KEY", "other-provider-key");
 	vi.stubEnv("OP_SERVICE_ACCOUNT_TOKEN", "secret-manager-token");
-	vi.stubEnv("FAKE_REPLY", JSON.stringify({ findings: [] }));
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	const first = await quest("--root", s.repo, "review", "--json");
 	expect(first.code, first.stderr).toBe(0);
 	const resumed = await quest("--root", s.repo, "review", "--json");
@@ -796,6 +796,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 			`base ${base} origin/main`,
 			`head ${head}`,
 			"usage findings input 100 cached 80 output 7",
+			"score 8 Lands once the off-by-one is fixed.",
 			"findings 1",
 			"",
 			"high src/lib.ts:2 Off by one",
@@ -828,7 +829,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	expect(second.stdin).toContain("BASE-REVIEW rule");
 	expect(second.stdin).toContain(head);
 	const schema = second.argv[second.argv.indexOf("--output-schema") + 1];
-	expect(JSON.parse(readFileSync(schema, "utf8")).required).toEqual(["findings"]);
+	expect(JSON.parse(readFileSync(schema, "utf8")).required).toEqual(["score", "rationale", "findings"]);
 });
 
 fakes("--base reviews against another branch, fetched first, with that branch's instructions", async () => {
@@ -869,6 +870,8 @@ fakes("claude reviews read-only with the base's instructions, then reports in th
 		{ turn: "review", input: 101, cached: 0, output: 51 },
 		{ turn: "findings", input: 100, cached: 80, output: 7 },
 	]);
+	expect(round.score).toBe(8);
+	expect(round.rationale).toBe("Lands once the off-by-one is fixed.");
 	expect(round.findings).toEqual([FINDING]);
 
 	const [status, first, second] = s.calls();
@@ -902,7 +905,7 @@ fakes("a later round resumes the session with the new head and the author's resp
 	git(s.repo, "commit", "-qam", "fix");
 	const responses = join(s.repo, ".tmp", "responses.md");
 	write(s.repo, ".tmp/responses.md", "Fixed at src/lib.ts:1.\n");
-	vi.stubEnv("FAKE_REPLY", JSON.stringify({ findings: [] }));
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	const later = await quest("--root", s.repo, "review", "--responses", responses);
 	expect(later.code).toBe(0);
 	expect(later.stdout).toContain("round 2\n");
@@ -933,7 +936,7 @@ fakes("--new starts over, and a first round takes no responses", async () => {
 
 fakes("a later round revokes REVIEW.md rules the base removed", async () => {
 	const s = setup();
-	vi.stubEnv("FAKE_REPLY", JSON.stringify({ findings: [] }));
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	expect((await quest("--root", s.repo, "review")).code).toBe(0);
 	const base = moveBase(s.repo, (dir) => git(dir, "rm", "-q", "REVIEW.md"));
 
@@ -977,16 +980,32 @@ fakes("a reply that does not match the schema fails rather than reads as clean",
 	expect(prose.code).toBe(1);
 	expect(prose.stderr).toContain("not JSON");
 
-	vi.stubEnv("FAKE_REPLY", JSON.stringify({ findings: [{ ...FINDING, severity: "critical" }] }));
+	vi.stubEnv(
+		"FAKE_REPLY",
+		JSON.stringify({ score: 8, rationale: "Fix it.", findings: [{ ...FINDING, severity: "critical" }] }),
+	);
 	const wrong = await quest("--root", s.repo, "review");
 	expect(wrong.code).toBe(1);
 	expect(wrong.stderr).toContain("finding 1 does not match the schema");
+
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ findings: [] }));
+	const unscored = await quest("--root", s.repo, "review");
+	expect(unscored.code).toBe(1);
+	expect(unscored.stderr).toContain("no score from 0 to 10");
 });
 
-test("findings are checked field by field", () => {
-	expect(findings({ structured: { findings: [{ ...FINDING, line: null }] } })).toEqual([{ ...FINDING, line: null }]);
-	expect(() => findings({ structured: { findings: [{ ...FINDING, line: 0 }] } })).toThrow("does not match");
-	expect(() => findings({ text: '{"verdict":"approve"}' })).toThrow("no findings list");
+test("the verdict is checked field by field", () => {
+	const scored = { score: 7, rationale: "Fix the finding." };
+	expect(verdict({ structured: { ...scored, findings: [{ ...FINDING, line: null }] } })).toEqual({
+		...scored,
+		findings: [{ ...FINDING, line: null }],
+	});
+	expect(() => verdict({ structured: { ...scored, findings: [{ ...FINDING, line: 0 }] } })).toThrow("does not match");
+	expect(() => verdict({ text: '{"verdict":"approve"}' })).toThrow("no findings list");
+	for (const score of [-1, 11, 7.5, "7", undefined]) {
+		expect(() => verdict({ structured: { ...scored, score, findings: [] } })).toThrow("no score from 0 to 10");
+	}
+	expect(() => verdict({ structured: { score: 7, rationale: " ", findings: [] } })).toThrow("no rationale");
 });
 
 test("each changed directory keeps its own instructions, and a directory's symlink is given once", () => {

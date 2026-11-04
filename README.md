@@ -1126,7 +1126,12 @@ base gained since, which a diff against its tip shows as reverted.
 The first round runs the reviewer's own review, `codex exec review --base
 <merge-base>` or Claude Code's `/code-review <effort> <merge-base>...HEAD`, then resumes that session for
 one turn that applies the base's `REVIEW.md`, if any, and reports the findings
-in one JSON schema. Later rounds resume the same session with the new head and
+in one JSON schema, with a score from 0 to 10 for how ready the head is to land
+and one sentence on why: 10 lands as is, 7 to 9 lands after the findings are
+fixed, 4 to 6 needs rework, and 0 to 3 is the wrong approach. A head with no
+findings can still score below 10. A reply without a valid score fails like any
+malformed reply. The score informs; the findings and their refutations still
+decide when the loop ends. Later rounds resume the same session with the new head and
 `--responses`, the author's free-text fixes and refutations, which a round that
 reported findings requires. A refutation stands only when it cites evidence the
 reviewer can check. A resumed session keeps the instructions it started with,

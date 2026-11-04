@@ -477,6 +477,7 @@ export class Attempt {
 		}
 		if (round.head !== head) return unreviewed(`its review checked out ${round.head} instead`);
 		const by = `${round.reviewer} (${round.model}, ${round.effort} effort, round ${round.round})`;
+		const scored = ` It scored ${round.score}/10: ${round.rationale}`;
 		let recorded = "";
 		try {
 			const { status, body } = await ctx.reviewed({
@@ -487,6 +488,8 @@ export class Attempt {
 				model: round.model,
 				effort: round.effort,
 				round: round.round,
+				score: round.score,
+				rationale: round.rationale,
 				findings: round.findings,
 			});
 			if (status !== 200) throw new Error(typeof body.error === "string" ? body.error : `kix answered ${status}`);
@@ -498,12 +501,12 @@ export class Attempt {
 			if (!recorded) this.#passed.add(head);
 			return {
 				passed: recorded ? null : true,
-				note: `The runner's review of ${short} by ${by} found nothing.${recorded || " kix recorded it as the passing `quest review` check."}`,
+				note: `The runner's review of ${short} by ${by} found nothing.${scored}${recorded || " kix recorded it as the passing `quest review` check."}`,
 			};
 		}
 		return {
 			passed: false,
-			note: `The runner's review of ${short} by ${by} found ${round.findings.length} finding${round.findings.length === 1 ? "" : "s"}.${recorded || " kix recorded it as a failing `quest review` check."} Fix each one or refute it with evidence the reviewer cannot rebut (a path:line, a command's output, or a recorded maintainer decision), then call \`deliver\` again with \`responses\` saying what you did for each. Follow the guide's review rules, including its design checkpoint every third round.\n\n${formatFindings(round.findings)}`,
+			note: `The runner's review of ${short} by ${by} found ${round.findings.length} finding${round.findings.length === 1 ? "" : "s"}.${scored}${recorded || " kix recorded it as a failing `quest review` check."} Fix each one or refute it with evidence the reviewer cannot rebut (a path:line, a command's output, or a recorded maintainer decision), then call \`deliver\` again with \`responses\` saying what you did for each. Follow the guide's review rules, including its design checkpoint every third round.\n\n${formatFindings(round.findings)}`,
 		};
 	}
 

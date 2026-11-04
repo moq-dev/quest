@@ -133,7 +133,8 @@ Once the reset passes or the login is restored, the item has cleared: whoever fi
 
 The PR body's `## Models` section records the PR's size and each implementing session's harness, model, and effort.
 A quest PR's size is its quest's; a skill that opens its own PR, such as `/quest-plan`, sizes it as a quest is sized.
-The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
+The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, the round's score out of 10 with its rationale, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
+Never block on a score: the findings and their refutations decide when the review is done.
 Rewrite it after each round.
 A review counts for the head whose SHA it names.
 
