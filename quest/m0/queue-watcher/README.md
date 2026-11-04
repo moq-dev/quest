@@ -138,6 +138,7 @@ Shared shape, for the children to follow:
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
 - [Genuine flakes only](/quest/m0/queue-watcher/flaky-verdicts.md) - a failure on the base or from the runner never counts toward disabling a test
+- [Daemons prune their logs](/quest/m0/queue-watcher/log-retention.md) - the watcher and gate delete their finished logs after a window, so state stays bounded (4.1 GiB on nixos on 2026-11-04)
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 
 ## Related
