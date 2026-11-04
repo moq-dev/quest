@@ -1283,10 +1283,12 @@ only once you approve it in the inbox. opencode runs as `opencode serve` on
 localhost behind a password made for each turn.
 
 The flake's `runner` package pins Claude Code 2.1.305 from its official release
-manifest; opencode, sandbox-runtime (and on Linux, bubblewrap and socat) follow
+manifest; opencode, Codex, sandbox-runtime (and on Linux, bubblewrap and socat) follow
 this repository's lock (`nix run github:moq-dev/quest#runner -- runner`);
-otherwise `claude`, `opencode`, and `srt` come from `QUEST_RUNNER_CLAUDE`,
-`QUEST_RUNNER_OPENCODE`, and `QUEST_RUNNER_SRT`, or `PATH`. State lives in `$QUEST_RUNNER_HOME`, by default
+otherwise `claude`, `opencode`, `codex`, and `srt` come from `QUEST_RUNNER_CLAUDE`,
+`QUEST_RUNNER_OPENCODE`, `QUEST_RUNNER_CODEX`, and `QUEST_RUNNER_SRT`, or `PATH`.
+Codex reviews the heads that jobs on Anthropic's models publish, with the
+login of the user running the runner, so run `codex login` as that user. State lives in `$QUEST_RUNNER_HOME`, by default
 `$XDG_DATA_HOME/quest/runner`; one `quest runner` runs in a home at a time. To keep a runner up, run `quest runner` as a user
 service, such as a systemd user unit with `Restart=on-failure`.
 
