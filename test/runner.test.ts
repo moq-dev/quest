@@ -679,7 +679,7 @@ describe("sandbox", () => {
 });
 
 describe("Claude Code output", () => {
-	test("reads limits from rate limit events, assistant errors, and results", () => {
+	test("reads limits from rate limit events, billing errors, and results, but not a throttle", () => {
 		const event = streamReader();
 		event.line(
 			JSON.stringify({
@@ -691,8 +691,19 @@ describe("Claude Code output", () => {
 		expect(event.exit(1, "")).toMatchObject({ limited: { until: 1_900_000_000_000 }, failed: true });
 
 		const flagged = streamReader();
-		flagged.line(JSON.stringify({ type: "assistant", error: "rate_limit" }));
+		flagged.line(JSON.stringify({ type: "assistant", error: "billing_error" }));
 		expect(flagged.exit(1, "").limited).toEqual({ until: null });
+
+		const throttled = streamReader();
+		throttled.line(JSON.stringify({ type: "assistant", error: "rate_limit" }));
+		throttled.line(
+			JSON.stringify({
+				type: "result",
+				is_error: true,
+				result: "API Error: Server is temporarily limiting requests (not your usage limit)",
+			}),
+		);
+		expect(throttled.exit(1, "").limited).toBeNull();
 
 		const legacy = streamReader();
 		legacy.line(
@@ -1128,7 +1139,7 @@ describe("prompts", () => {
 		expect(merge).toContain("Where the workflow says to run `quest wait`, call `wait`");
 		expect(merge).toContain("# The merge workflow");
 		// The skill's design checkpoint still reaches the maintainer.
-		expect(merge).toContain("Every fourth round");
+		expect(merge).toContain("Every third round");
 	});
 
 	test("carry earlier summaries and the latest answer", () => {

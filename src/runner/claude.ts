@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { boundedLines, LINE_LIMIT } from "../cli/agent";
+import { LIMIT } from "../cli/limit";
 import {
 	type Adapter,
 	baseEnvironment,
@@ -91,13 +92,11 @@ function json(line: string): Record<string, unknown> | undefined {
 	}
 }
 
-/** Messages Claude Code ends a turn with when the plan or key cannot pay for it. */
-const LIMIT = /usage limit|limit reached|hit your (?:usage )?limit|out of extra usage|credit balance is too low/i;
-
 /**
  * Reads one session's stream-json output. Limits show up as a rejected
- * `rate_limit_event`, an assistant message flagged `rate_limit` or
- * `billing_error`, or a limit message in the result.
+ * `rate_limit_event`, an assistant message flagged `billing_error`, or a limit
+ * message in the result. A `rate_limit` flag alone is no limit: it also marks
+ * a brief throttle, which fails with its own message.
  */
 export function streamReader() {
 	let result: Record<string, unknown> | undefined;
@@ -112,8 +111,7 @@ export function streamReader() {
 				const resets = typeof info?.resetsAt === "number" ? info.resetsAt * 1000 : null;
 				if (info?.status === "rejected") limited = { until: resets };
 			}
-			if (event.type === "assistant" && (event.error === "rate_limit" || event.error === "billing_error"))
-				limited ??= { until: null };
+			if (event.type === "assistant" && event.error === "billing_error") limited ??= { until: null };
 		},
 		exit(code: number, stderr: string): Exit {
 			const reply = typeof result?.result === "string" ? result.result : undefined;
