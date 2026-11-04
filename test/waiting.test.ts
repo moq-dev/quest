@@ -145,6 +145,16 @@ test("a draft's hand-back item keeps nested headings and the body's reference de
 	]);
 });
 
+test("a draft's hand-back renders strikethrough and tables as GitHub does", () => {
+	expect(handBackWaits("## Waiting\n\n- ~~Maintainer~~: pick.\n- Codex: ~~soon~~ later.\n")).toEqual([
+		{ line: 3, party: "Maintainer", text: "pick." },
+		{ line: 4, party: "Codex", text: "soon later." },
+	]);
+	expect(handBackWaits("## Waiting\n\n| when | check |\n| --- | --- |\n| 15:00 | quota |\n")).toEqual([
+		{ line: 1, party: "Maintainer", text: "when check 15:00 quota" },
+	]);
+});
+
 test("a draft's hand-back without items is one maintainer item holding its prose", () => {
 	expect(handBackWaits("Work.\r\n\r\nWaiting\r\n-------\r\n\r\nPick a name\r\nfor it.\r\n")).toEqual([
 		{ line: 3, party: "Maintainer", text: "Pick a name for it." },

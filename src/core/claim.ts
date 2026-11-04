@@ -4,8 +4,8 @@
 // the Worker read both the same way.
 
 import type { Nodes, RootContent } from "mdast";
-import { fromMarkdown } from "mdast-util-from-markdown";
 
+import { markdown } from "./doc";
 import { MAINTAINER, type Wait, parseWait } from "./waiting";
 
 // `Decisions needed` is the heading `Waiting` replaced; drafts opened before it
@@ -16,7 +16,17 @@ const HAND_BACK = /^(?:Waiting|Decisions needed)$/i;
 const TASK = /^\[[ xX]\] /;
 
 // Nodes whose rendered text a reader sees as separate from the next.
-const BLOCKS = new Set(["blockquote", "code", "heading", "list", "listItem", "paragraph", "table", "tableRow"]);
+const BLOCKS = new Set([
+	"blockquote",
+	"code",
+	"heading",
+	"list",
+	"listItem",
+	"paragraph",
+	"table",
+	"tableCell",
+	"tableRow",
+]);
 
 /** A node's rendered text, as a reader sees it, before whitespace is collapsed. */
 function text(node: Nodes): string {
@@ -51,7 +61,7 @@ interface HandBack {
 function handBacks(body: string): HandBack[] {
 	const sections: HandBack[] = [];
 	let open: Omit<HandBack, "end"> | undefined;
-	for (const node of fromMarkdown(body).children) {
+	for (const node of markdown(body).children) {
 		if (node.type !== "heading" || node.depth > 2) {
 			open?.nodes.push(node);
 			continue;
