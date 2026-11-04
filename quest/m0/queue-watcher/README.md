@@ -82,7 +82,7 @@ Decision prompts, selected options marked ✅:
     (#375) is dropped. Done in [moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406).
     Refined 2026-11-03 (coordinator, /quest-complete follow-ups): a failure
     that reproduces on the base or comes from the runner is not a flaky
-    verdict ([Genuine flakes only](/quest/m0/queue-watcher/flaky-verdicts.md)).
+    verdict. Done in [moq-dev/quest#468](https://github.com/moq-dev/quest/pull/468).
     The end-to-end run covers the first disable PR, and the host gate gets
     no flaky record, since its work is frozen until it is retired.
 - Pick record (decided 2026-11-02, replacing "Picks GitHub refuses to
@@ -137,7 +137,6 @@ Shared shape, for the children to follow:
 
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
-- [Genuine flakes only](/quest/m0/queue-watcher/flaky-verdicts.md) - a failure on the base or from the runner never counts toward disabling a test
 - [Daemons prune their logs](/quest/m0/queue-watcher/log-retention.md) - the watcher and gate delete their finished logs after a window, so state stays bounded (4.1 GiB on nixos on 2026-11-04)
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 

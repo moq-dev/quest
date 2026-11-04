@@ -87,6 +87,7 @@ Search the tree and git history first before making a new quest.
 Split independently completable work into separate quests.
 A suggested follow-up becomes a quest only through `/quest-plan`, never as an agent-session task or a GitHub issue.
 Suggest a follow-up only when it is worth a quest; drop one you would call optional or worth doing only if it matters.
+Give each suggested follow-up a recommendation, to plan it or to drop it with the reason, so whoever plans them never has to ask which to take.
 Only `/quest-merge` and `/quest-complete` plan follow-ups, once they queue the PR that suggests them: run `/quest-plan` on each recommended one in turn without offering first, one follow-up per run; its interview lets the user drop it.
 `/quest-complete` plans them while its other agents keep running, but after any pick or decision question still waiting to be asked.
 Every other skill and background agent leaves its follow-ups in its PR body for them.

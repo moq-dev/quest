@@ -106,6 +106,20 @@ can hand off instead.
   mismatch comment, and gate priority for batch checks, all host-gate
   improvements the freeze stops.
 
+Decided 2026-11-04 (maintainer, /quest-plan): an exception to the freeze, for
+a long-lived branch such as a release branch that must land through the gate
+with merge commits, so it keeps the ancestry of what merges into it and lands
+exactly the tested tree.
+
+- How to reconcile the freeze with merge-commit landing:
+  - ✅ A narrow exception: the gate gains configurable merge-commit queueing
+    and landing (`quest land serve --method merge`), with squash still the
+    default
+  - Defer it, leaving that branch on its existing landing
+  - Move that branch to GitHub's merge queue instead
+
+  The exception covers only that work; the rest of the freeze stands.
+
 ## Required
 
 - [Gate host](/quest/m0/host-land/host.md) - kixelated/nixos runs the daemon as its own user, checks in nspawn containers, and retires the Actions runner
