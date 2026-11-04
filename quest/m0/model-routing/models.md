@@ -36,14 +36,16 @@ The lists, pinned in a module `src/cli/review.ts` also imports:
 
 | Size | Ranked harness, model, effort |
 |---|---|
-| XS | grok `grok-4.7` high → opencode `opencode-go/deepseek-v4-pro` high → codex `gpt-6.1-sol` high |
-| S | codex `gpt-6.1-sol` xhigh → claude `claude-opus-5-5` medium → grok `grok-4.7` xhigh |
-| M | claude `claude-opus-5-5` medium → codex `gpt-6.1-sol` xhigh |
-| L | claude `claude-opus-5-5` high → codex `gpt-6.1-sol` xhigh |
-| XL | claude `claude-opus-5-5` xhigh → codex `gpt-6.1-sol` max |
+| XS | grok `grok-4.7` high → opencode `opencode-go/deepseek-v4-pro` high → codex `gpt-6.1-sol` medium |
+| S | codex `gpt-6.1-sol` high → claude `claude-opus-5-5` medium → grok `grok-4.7` high |
+| M | claude `claude-opus-5-5` high → codex `gpt-6.1-sol` xhigh |
+| L | claude `claude-opus-5-5` xhigh → codex `gpt-6.1-sol` xhigh |
+| XL | claude `claude-opus-5-5` xhigh → codex `gpt-6.1-sol` xhigh |
 
-The first entry of each list is the user's; the fallbacks after it, the
-efforts, and the opencode provider (OpenCode Go, the subscription kix
+The first entry of each list is the user's, as are the Sol, Opus, and Grok
+efforts: Sol medium for XS, high for S, xhigh above; Opus high for M,
+xhigh for L and XL; Grok high everywhere (user, 2026-11-04). The rest of
+the fallbacks, the S list's Opus effort, DeepSeek's, and the opencode provider (OpenCode Go, the subscription kix
 already supports) are the agent's choice, for the
 [model check](/quest/m0/model-check.md) to retune.
 

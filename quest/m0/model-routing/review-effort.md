@@ -39,11 +39,11 @@ shares, whichever lands first creating it:
 | PR size | Ranked reviewer harness, model, effort |
 |---|---|
 | XS, S | opencode `opencode-go/deepseek-v4-pro` high → grok `grok-4.7` high → codex `gpt-6.1-sol` medium → claude `claude-opus-5-5` low |
-| M, or none | grok `grok-4.7` xhigh → opencode `opencode-go/deepseek-v4-pro` high → codex `gpt-6.1-sol` high → claude `claude-opus-5-5` medium |
-| L, XL | codex `gpt-6.1-sol` xhigh → claude `claude-opus-5-5` high → grok `grok-4.7` xhigh → opencode `opencode-go/deepseek-v4-pro` high |
+| M, or none | grok `grok-4.7` high → opencode `opencode-go/deepseek-v4-pro` high → codex `gpt-6.1-sol` high → claude `claude-opus-5-5` medium |
+| L, XL | codex `gpt-6.1-sol` xhigh → claude `claude-opus-5-5` high → grok `grok-4.7` high → opencode `opencode-go/deepseek-v4-pro` high |
 
-The Codex and Claude efforts are the user's; the order and the Grok and
-DeepSeek entries are the agent's choice, for the
+The Codex and Claude efforts are the user's, and Grok runs at high everywhere
+(user); the order and the DeepSeek entries are the agent's choice, for the
 [model check](/quest/m1/model-check.md) to retune. Online reviewers add
 cheap opinions on every PR already: Pullfrog reviewed
 [moq-dev/quest#488](https://github.com/moq-dev/quest/pull/488) with
