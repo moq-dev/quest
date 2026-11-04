@@ -14,7 +14,7 @@ import { Opencode } from "./opencode";
 import { type Account, type Login, RunnerHome, defaultHome } from "./home";
 import type { Job } from "./protocol";
 import { Runner } from "./runner";
-import { sandboxRefusal } from "./sandbox";
+import { sandboxRefusal, unixSocketRefusal } from "./sandbox";
 import { which } from "../cli/program";
 
 export const DEFAULT_URL = "https://quest.moq.dev";
@@ -72,7 +72,7 @@ export function adapterFor(name: AdapterName, env: NodeJS.ProcessEnv): Adapter {
  * first time an account needs it. On Linux the sandbox needs bubblewrap and
  * socat, and bubblewrap must be able to make its namespaces, so they are
  * checked then; macOS has Seatbelt built in. Claude Code runs them itself, and
- * sandbox-runtime for opencode.
+ * sandbox-runtime for opencode, which on Linux must also refuse Unix sockets.
  */
 export function runnerAdapters(env: NodeJS.ProcessEnv): (name: AdapterName) => Adapter {
 	const adapters = new Map<AdapterName, Adapter>();
@@ -91,7 +91,12 @@ export function runnerAdapters(env: NodeJS.ProcessEnv): (name: AdapterName) => A
 			if (refusal) throw new RunnerInputError(refusal);
 			sandboxed = true;
 		}
-		adapters.set(name, (adapter = adapterFor(name, env)));
+		adapter = adapterFor(name, env);
+		if (adapter instanceof Opencode && process.platform === "linux") {
+			const refusal = unixSocketRefusal(adapter.srt, env);
+			if (refusal) throw new RunnerInputError(refusal);
+		}
+		adapters.set(name, adapter);
 		return adapter;
 	};
 }
