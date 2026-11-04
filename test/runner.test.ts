@@ -35,8 +35,18 @@ import {
 import { FLUSH_BYTES, OutputUploader, split } from "../src/runner/output";
 import { formatAnswer, resumePrompt, startPrompt, systemPrompt } from "../src/runner/prompt";
 import type { Job } from "../src/runner/protocol";
+import type { Round } from "../src/cli/review";
+import { type ReviewRequest, reviewerFor, Unreviewable } from "../src/runner/review";
 import { Runner } from "../src/runner/runner";
-import { REGISTRIES, type Sandbox, closeSandbox, openSandbox } from "../src/runner/sandbox";
+import {
+	REGISTRIES,
+	type Sandbox,
+	bwrapProfile,
+	closeSandbox,
+	openSandbox,
+	refusalReason,
+	sandboxRefusal,
+} from "../src/runner/sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "../src/runner/wait";
 import { Workspace } from "../src/runner/workspace";
 import { initRepository, template, tempDir } from "./fixture";
@@ -999,6 +1009,7 @@ describe("prompts", () => {
 		expect(prompt).toContain("kix adds for this job: Extra rule.");
 		expect(prompt).toContain("Use tabs.");
 		expect(prompt).toContain("# The start workflow");
+		expect(prompt).toContain("# Engineering context");
 		expect(prompt).toContain("# Quest guide");
 	});
 
@@ -1095,6 +1106,7 @@ describe("account add", () => {
 				...process.env,
 				PATH: `${bin}:${process.env.PATH}`,
 				QUEST_RUNNER_HOME: join(dir, "home"),
+				QUEST_RUNNER_OPENCODE: join(bin, "opencode"),
 				QUEST_RUNNER_SRT: join(bin, "srt"),
 			},
 		};
@@ -1140,6 +1152,46 @@ describe("runner adapters", () => {
 		expect(() => adapter("opencode")).toThrow(/srt is not installed/);
 		install("srt");
 		expect(adapter("opencode")).toBeInstanceOf(Opencode);
+	});
+
+	test.skipIf(process.platform !== "linux")("refuse to start when bubblewrap cannot make the sandbox", () => {
+		const bin = join(tempDir(), "bin");
+		mkdirSync(bin);
+		for (const [name, script] of [
+			["claude", ""],
+			["socat", ""],
+			// What the Nix-pinned bwrap says under Ubuntu's restriction on unprivileged user namespaces.
+			["bwrap", "echo 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' >&2\nexit 1\n"],
+		] as const) {
+			writeFileSync(join(bin, name), `#!/bin/sh\n${script}`);
+			chmodSync(join(bin, name), 0o755);
+		}
+		const bwrap = join(realpathSync(bin), "bwrap");
+		expect(() => runnerAdapters({ PATH: bin })("claude")).toThrow(
+			`${bwrap} cannot make the sandbox's namespaces (bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted)`,
+		);
+		expect(sandboxRefusal(join(bin, "claude"))).toBeNull();
+		// Under AppArmor's restriction, the refusal carries the profile for the runner package's exact bwrap.
+		const said = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
+		const pinned = "/nix/store/mvj6y8k3xs35cj7kq937xi44q4hl3r93-bubblewrap-0.12.0/bin/bwrap";
+		const restricted = refusalReason(pinned, said, true);
+		expect(restricted).toContain(
+			`sudo tee /etc/apparmor.d/quest-bwrap >/dev/null <<'EOF'\n${bwrapProfile(pinned)}EOF\n`,
+		);
+		expect(restricted).toMatch(/\nsudo apparmor_parser -r \/etc\/apparmor.d\/quest-bwrap$/);
+		expect(bwrapProfile(pinned)).toContain(`profile quest-bwrap ${pinned} flags=(unconfined) {\n  userns,\n}`);
+		// A system bwrap may have the distribution's profile, which a second one would disable.
+		const system = refusalReason("/usr/bin/bwrap", said, true);
+		expect(system).toContain("nix run github:moq-dev/quest#runner -- runner");
+		expect(system).not.toContain("apparmor_parser");
+		const unrestricted = refusalReason(pinned, said, false);
+		expect(unrestricted).toContain("needs unprivileged user namespaces");
+		expect(unrestricted).not.toContain("AppArmor");
+	});
+
+	test("document the AppArmor profile the runner prints", () => {
+		const readme = readFileSync(resolve(import.meta.dirname, "../README.md"), "utf8");
+		expect(readme).toContain(bwrapProfile("/nix/store/HASH-bubblewrap-VERSION/bin/bwrap"));
 	});
 });
 
@@ -1396,6 +1448,10 @@ interface Rig {
 	runner: Runner;
 	home: RunnerHome;
 	publishes: Sent[];
+	/** The review rounds the runner reported to kix. */
+	reviews: Sent[];
+	/** The reviews the runner asked for. */
+	reviewed: ReviewRequest[];
 	/** The context URLs the runner read. */
 	contexts: string[];
 	upstream: { dir: string; commit: string };
@@ -1413,6 +1469,15 @@ function rig(
 		upstream: { dir: string; commit: string },
 	) => { status: number; body: unknown } | undefined,
 	cli: AdapterName = "claude",
+	/** Each review round, which by default no reviewer can run. */
+	reviewRound: (request: ReviewRequest) => Promise<Round> = async () => {
+		throw new Unreviewable("the test runs no reviewer");
+	},
+	/** kix's answer to a reported review round. */
+	reviewReply: (body: Sent) => { status: number; body: unknown } = () => ({
+		status: 200,
+		body: { conclusion: "success" },
+	}),
 ): Rig {
 	const dir = tempDir();
 	const bin = join(dir, "bin");
@@ -1445,6 +1510,8 @@ function rig(
 	}
 	const hub = new FakeHub();
 	const publishes: Sent[] = [];
+	const reviews: Sent[] = [];
+	const reviewed: ReviewRequest[] = [];
 	const contexts: string[] = [];
 	let heads = 0;
 	const env = {
@@ -1465,6 +1532,10 @@ function rig(
 				: new Opencode(join(bin, "opencode"), join(bin, "srt"), env),
 		devShell: (job, repository, signal) => devShell(job, repository, env, signal),
 		remote: () => source.dir,
+		review: (request) => {
+			reviewed.push(request);
+			return reviewRound(request);
+		},
 		env,
 		dial: hub.dial,
 		fetch: (async (url: string, init: RequestInit) => {
@@ -1473,6 +1544,11 @@ function rig(
 				return Response.json({ kind: "issue", number: 4, title: "Parser breaks", body: "On empty input" });
 			}
 			const body = JSON.parse(init.body as string);
+			if (url.endsWith("/api/runner/review")) {
+				reviews.push(body);
+				const reply = reviewReply(body);
+				return Response.json(reply.body, { status: reply.status });
+			}
 			publishes.push(body);
 			const custom = publishReply?.(body, source);
 			if (custom) return Response.json(custom.body, { status: custom.status });
@@ -1492,6 +1568,8 @@ function rig(
 		runner,
 		home,
 		publishes,
+		reviews,
+		reviewed,
 		contexts,
 		upstream: source,
 		logs,
@@ -1599,13 +1677,24 @@ describe("quest runner", () => {
 			await idle(r.runner);
 			expect(r.hub.of("question")).toHaveLength(1);
 			expect(r.calls().find((call) => call.stdin)!.stdin).toContain("Resolve conflicts");
-			expect(r.publishes).toHaveLength(1);
+			// The fixes publish first, and land in a second publication once reviewed.
+			expect(r.publishes).toHaveLength(2);
 			expect(r.publishes[0]).toMatchObject({
 				head,
 				changes: expect.arrayContaining([
 					{ path: paths[0], content: Buffer.from("resolved both versions\n").toString("base64") },
 				]),
 			});
+			expect(r.publishes[0]!.land).toBeUndefined();
+			expect(r.publishes[1]).toEqual({
+				job: "job1",
+				attempt: 3,
+				head: "1".padStart(40, "0"),
+				session: expect.any(String),
+				changes: [],
+				land: {},
+			});
+			expect(r.reviews).toEqual([]);
 		} finally {
 			await r.runner.shutdown();
 		}
@@ -1852,6 +1941,8 @@ describe("quest runner", () => {
 		expect(srt.env).not.toContain("OPENCODE_CONFIG_CONTENT");
 		expect(srt.env).not.toContain("AWS_SECRET_ACCESS_KEY");
 		expect(srt.env).not.toContain("XDG_DATA_HOME");
+		// srt hands commands this as their TMPDIR.
+		expect(srt.env).toContain("CLAUDE_CODE_TMPDIR");
 		expect(shell.shell).toBe(`1|${tmp}/home|none|none|${tmp}`);
 		expect(first.stdin).toContain("kix adds for this job: Extra rule.");
 		expect(first.system).toContain("checkpoint");
@@ -2238,6 +2329,243 @@ describe("quest runner", () => {
 		} finally {
 			set.mockRestore();
 			clear.mockRestore();
+		}
+	});
+});
+
+describe("runner reviews", () => {
+	const account = (extra: Partial<Account>): Account => ({
+		id: "a",
+		adapter: "claude",
+		provider: "anthropic",
+		kind: "subscription",
+		label: "a",
+		...extra,
+	});
+	const home = (a: Account) => `/runner/accounts/${a.id}`;
+
+	test("pick the other vendor: Codex on the user's own login, or one of the runner's free Claude Code accounts", () => {
+		const env = { PATH: "/usr/bin", QUEST_RUNNER_CLAUDE: "/nix/store/claude/bin/claude" };
+		const claude = account({ id: "claude" });
+		expect(reviewerFor(claude, [claude], home, env)).toEqual({ harness: "codex", env });
+		const openai = account({ id: "gpt", adapter: "opencode", provider: "openai" });
+		const limited = account({ id: "busy", limitedUntil: 2000 });
+		expect(reviewerFor(openai, [openai, limited, claude], home, env, 1000)).toEqual({
+			harness: "claude",
+			env: {
+				...env,
+				CLAUDE_CONFIG_DIR: "/runner/accounts/claude",
+				PATH: "/nix/store/claude/bin:/usr/bin",
+			},
+		});
+		expect(() => reviewerFor(openai, [openai, limited], home, env, 1000)).toThrow(Unreviewable);
+		expect(reviewerFor(openai, [openai, limited], home, env, 3000).env.CLAUDE_CONFIG_DIR).toBe(
+			"/runner/accounts/busy",
+		);
+	});
+
+	posix("check out each published head on the job's review branch, beside the agent's checkout", async () => {
+		const { dir, commit } = upstream();
+		const root = tempDir();
+		const workspace = await Workspace.prepare(root, job(commit), dir);
+		writeFileSync(join(dir, "published.txt"), "one\n");
+		git(dir, "add", ".");
+		git(dir, "commit", "-q", "-m", "published");
+		const first = git(dir, "rev-parse", "HEAD");
+		const checkout = await workspace.reviewCheckout(first);
+		expect(checkout).toBe(`${workspace.dir}.review`);
+		expect(git(checkout, "symbolic-ref", "--short", "HEAD")).toBe("kix-review/job1");
+		expect(git(checkout, "rev-parse", "HEAD")).toBe(first);
+		writeFileSync(join(dir, "published.txt"), "two\n");
+		git(dir, "commit", "-qam", "again");
+		const second = git(dir, "rev-parse", "HEAD");
+		expect(git(await workspace.reviewCheckout(second), "rev-parse", "HEAD")).toBe(second);
+		expect(readFileSync(join(checkout, "published.txt"), "utf8")).toBe("two\n");
+		await workspace.remove();
+		expect(existsSync(checkout)).toBe(false);
+		expect(git(workspace.repository, "branch", "--list", "kix-review/*")).toBe("");
+	});
+
+	const finding = { file: "new.txt", line: 1, severity: "high", title: "Wrong value", body: "It says new." };
+	/** A reviewer whose rounds report `found`'s findings in turn, then none. */
+	function rounds(...found: (typeof finding)[][]) {
+		let round = 0;
+		return async (request: ReviewRequest): Promise<Round> => ({
+			reviewer: request.reviewer.harness,
+			model: "gpt-6.1-sol",
+			effort: "medium",
+			session: "s",
+			round: ++round,
+			base: { ref: "origin/main", sha: "b".repeat(40) },
+			head: request.head,
+			usage: [],
+			findings: (found[round - 1] ?? []) as Round["findings"],
+		});
+	}
+	const tools = (r: Rig) => r.calls().filter((call) => call.tool);
+	const pull = { title: "feat: new", body: "Body", draft: false };
+
+	posix("review a delivered head, hand the findings to the agent, and review its answer", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+					{ tool: "deliver", args: { summary: "Refuted", ...pull, responses: "1: it should say new." } },
+				],
+			});
+			r.assign(job(r.upstream.commit));
+			expect(await r.result()).toMatchObject({ outcome: "completed", summary: "Refuted" });
+			const [first, second] = r.publishes.map((p) => (p.head === null ? "" : p.head));
+			expect([first, second]).toEqual(["", "1".padStart(40, "0")]);
+			// The Anthropic job is reviewed by Codex, and each round goes to kix as it is.
+			expect(r.reviewed.map((q) => [q.head, q.reviewer.harness, q.responses])).toEqual([
+				["1".padStart(40, "0"), "codex", undefined],
+				["2".padStart(40, "0"), "codex", "1: it should say new."],
+			]);
+			expect(r.reviews).toEqual([
+				{
+					job: "job1",
+					attempt: 1,
+					head: "1".padStart(40, "0"),
+					reviewer: "codex",
+					model: "gpt-6.1-sol",
+					effort: "medium",
+					round: 1,
+					findings: [finding],
+				},
+				expect.objectContaining({ head: "2".padStart(40, "0"), round: 2, findings: [] }),
+			]);
+			const [found, passed] = tools(r).map((call) => call.reply.content[0].text as string);
+			expect(found).toContain("before you end your turn");
+			expect(found).toContain("found 1 finding. kix recorded it as a failing `quest review` check.");
+			expect(found).toContain("1. [high] new.txt:1: Wrong value\nIt says new.");
+			expect(passed).toContain("found nothing. kix recorded it as the passing `quest review` check.");
+		} finally {
+			await r.runner.shutdown();
+		}
+	});
+
+	posix("fail a job whose agent ends before answering its review, and stop a review when the job stops", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+				],
+			});
+			r.assign(job(r.upstream.commit));
+			expect(await r.result()).toMatchObject({
+				outcome: "failed",
+				summary: "The agent published 0000000, but ended before answering its review's findings: done",
+			});
+		} finally {
+			await r.runner.shutdown();
+		}
+		let started!: () => void;
+		const reviewing = new Promise<void>((resolve) => (started = resolve));
+		let aborted = false;
+		const stopped = rig(undefined, "claude", (request) => {
+			started();
+			return new Promise((_, reject) =>
+				request.signal!.addEventListener("abort", () => {
+					aborted = true;
+					reject(request.signal!.reason);
+				}),
+			);
+		});
+		try {
+			stopped.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+				],
+			});
+			stopped.assign(job(stopped.upstream.commit));
+			await reviewing;
+			stopped.hub.socket.deliver({ type: "cancel", job: "job1", attempt: 1 });
+			expect(await stopped.result()).toMatchObject({ outcome: "cancelled" });
+			expect(aborted).toBe(true);
+			expect(stopped.reviews).toEqual([]);
+		} finally {
+			await stopped.runner.shutdown();
+		}
+	});
+
+	posix("lands a merge job's head only once its review passes", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Fixed" } },
+				],
+			});
+			const head = r.upstream.commit;
+			r.assign(job(head, { workflow: "merge", target: "pulls/2", branch: "feature", head }));
+			expect(await r.result()).toMatchObject({ outcome: "failed" });
+			// The fix published, but nothing landed past the findings.
+			expect(r.publishes.map((p) => p.land)).toEqual([undefined]);
+			expect(tools(r)[0].reply.content[0].text).toMatch(/^Not landed, but the review needs your fixes/);
+		} finally {
+			await r.runner.shutdown();
+		}
+		const clean = rig(undefined, "claude", rounds());
+		try {
+			clean.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Fixed", method: "squash" } },
+				],
+			});
+			const head = clean.upstream.commit;
+			clean.assign(job(head, { workflow: "merge", target: "pulls/2", branch: "feature", head }));
+			expect(await clean.result()).toMatchObject({ outcome: "completed" });
+			expect(clean.publishes.map((p) => [p.head, p.land])).toEqual([
+				[head, undefined],
+				["1".padStart(40, "0"), { method: "squash" }],
+			]);
+			expect(clean.reviews.map((p) => p.head)).toEqual(["1".padStart(40, "0")]);
+		} finally {
+			await clean.runner.shutdown();
+		}
+	});
+
+	posix("reviews no draft, and lands a head it cannot review only through kix's own gate", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Draft", ...pull, draft: true } },
+				],
+			});
+			r.assign(job(r.upstream.commit));
+			expect(await r.result()).toMatchObject({ outcome: "completed" });
+			expect(r.reviewed).toEqual([]);
+		} finally {
+			await r.runner.shutdown();
+		}
+		const unreviewed = rig();
+		try {
+			unreviewed.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Fixed" } },
+				],
+			});
+			const head = unreviewed.upstream.commit;
+			unreviewed.assign(job(head, { workflow: "merge", target: "pulls/2", branch: "feature", head }));
+			expect(await unreviewed.result()).toMatchObject({ outcome: "completed" });
+			expect(unreviewed.publishes.map((p) => p.land)).toEqual([undefined, {}]);
+			expect(unreviewed.reviews).toEqual([]);
+			expect(tools(unreviewed)[0].reply.content[0].text).toContain(
+				"The runner did not review 0000000: the test runs no reviewer. Landing it needs a maintainer's approval on GitHub instead.",
+			);
+		} finally {
+			await unreviewed.runner.shutdown();
 		}
 	});
 });

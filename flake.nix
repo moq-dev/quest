@@ -10,8 +10,9 @@
     flake-utils.url = "github:numtide/flake-utils";
     # A reviewed quest for the dev shell's merge driver, so local merges resolve
     # link lists without running the checkout's own, possibly unreviewed, code.
-    # Only its source is pinned, so the lock never chains older pins. Bump with
-    # `nix flake update quest-pinned`.
+    # Only its source is pinned, so the lock never chains older pins. Dependabot's
+    # weekly nix update bumps it in its own PR, without the cooldown; bump it by
+    # hand with `nix flake update quest-pinned`.
     quest-pinned = {
       url = "github:moq-dev/quest";
       flake = false;
@@ -98,10 +99,19 @@
                 shellcheck
                 shfmt
                 nixfmt
+                # GNU time, which the gate's cancellation tests put between Bash and their leaf.
+                time
               ]
               # `flock` (the land daemon's repository lock) and `script` (the tests' terminal), which
               # self-hosted NixOS runners don't otherwise provide.
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux ];
+            # The runner package's opencode and sandbox-runtime, for the sandbox boundary test
+            # (test/live/runner-sandbox.test.ts), which runs where srt does. Named as the runner
+            # finds them rather than put on PATH, where they would shadow the user's own opencode.
+            env = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              QUEST_RUNNER_OPENCODE = pkgs.lib.getExe opencode;
+              QUEST_RUNNER_SRT = pkgs.lib.getExe pkgs.sandbox-runtime;
+            };
           };
           formatter = pkgs.nixfmt;
           checks = {

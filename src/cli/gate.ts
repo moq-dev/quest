@@ -6,9 +6,11 @@ import { randomUUID } from "node:crypto";
 import { linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, userInfo } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, requested } from "./interrupt";
-import { systemdScopes } from "./supervise";
+import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
+import { stubbed } from "./job";
+import { delegated, nest, questScope, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
@@ -442,48 +444,100 @@ export const PRIORITY = "QUEST_GATE_PRIORITY";
 
 /**
  * Runs an admitted command with inherited streams and resolves with its exact exit status.
- * Asking to cancel forwards the requested signal unless the command already has it (see
- * `forwards`), so the command's own handling of it runs; killing stops it outright.
+ * Asking to cancel delivers the requested signal to every process the owner holds, unless they
+ * already have it (see `forwards`), so each one's own handling of it runs; killing stops them
+ * outright.
  */
 export type Owner = (command: string[], env: NodeJS.ProcessEnv, cancel: Cancellation) => Promise<number>;
 
-/** Run the command as a plain child, for a caller whose own owner already holds its descendants. */
-export const direct: Owner = (command, env, cancel) =>
-	new Promise((resolve, reject) => {
-		const child = spawn(command[0], command.slice(1), { env, stdio: "inherit" });
-		const stop = () => {
-			if (forwards(cancel.signal)) child.kill(requested(cancel.signal));
-		};
-		const cleanup = follow(cancel, stop, () => child.kill("SIGKILL"));
-		child.once("error", (error) => {
-			cleanup();
-			reject(error);
+/**
+ * Run the command as a plain child. `held` says whether an enclosing owner that signals everything
+ * it holds, Quest's group owner (see `GROUP`) or a Quest scope, also holds the child. Its signal
+ * then already reached the child, and it also kills everything at its second one, so this leaves
+ * both to it: a repeated signal, such as the SIGTERM Just forwards to its own child on top of the
+ * owner's, is no kill here.
+ */
+function plain(held: boolean): Owner {
+	return (command, env, cancel) =>
+		new Promise((resolve, reject) => {
+			const child = spawn(command[0], command.slice(1), { env, stdio: "inherit" });
+			const stop = () => {
+				if (forwards(cancel.signal, held)) child.kill(requested(cancel.signal));
+			};
+			const terminate = () => {
+				if (!(held && received(cancel.signal))) child.kill("SIGKILL");
+			};
+			const cleanup = follow(cancel, stop, terminate);
+			child.once("error", (error) => {
+				cleanup();
+				reject(error);
+			});
+			child.once("close", (code, killed) => {
+				cleanup();
+				resolve(code ?? (killed ? 128 + constants.signals[killed] : 1));
+			});
 		});
-		child.once("close", (code, killed) => {
-			cleanup();
-			resolve(code ?? (killed ? 128 + constants.signals[killed] : 1));
-		});
-	});
+}
 
-/** Run the command in its own systemd scope, whose cgroup holds every descendant (see supervise.ts). */
+/** Run the command as a plain child, for a caller whose own owner already holds its descendants. */
+export const direct: Owner = plain(false);
+
+/** Run the command as a plain child of an enclosing owner that signals everything it holds. */
+export const inside: Owner = plain(true);
+
+/**
+ * Run the command in its own systemd scope, whose cgroup holds every descendant (see supervise.ts).
+ * `owner` never picks it inside another Quest scope.
+ */
 export const scope: Owner = (command, env, cancel) =>
-	systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, { env, cancel });
+	systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, { env, cancel, within: null });
+
+/**
+ * Inside a delegated Quest scope, run the command in a new child of `parent`, this process's cgroup,
+ * which holds every descendant like a scope of its own and stays within the enclosing scope's reach.
+ * That scope's owner signals every process in it, so this leaves a received signal and the kill at
+ * its second one to that owner, as `inside` does, and lets the child's processes finish their own
+ * cleanup before it kills what is left.
+ */
+export const nested =
+	(parent: string): Owner =>
+	(command, env, cancel) =>
+		nest(parent, `quest-gate-${randomUUID()}`, process.cwd(), command, { env, cancel });
+
+/**
+ * On Windows, run the command under a stub in a kill-on-close Job Object that forbids breakaway
+ * (see job.ts), so every descendant stops once the command exits or the gate stops the stub.
+ */
+export const job: Owner = (command, env, cancel) => direct(...stubbed(command, env), cancel);
 
 /**
  * Run the command as the leader of a new session, whose process group holds every descendant that
  * does not move to another group or session. Once the command exits, the rest of its group is
  * killed. The session has no controlling terminal: the command keeps its inherited streams, but a
- * terminal's signals reach it only through Quest, which stands in for the terminal: every SIGINT
- * Quest receives goes to the whole group, as a terminal's Ctrl-C would, and Quest inside the group
- * leaves it there (see `GROUP`).
+ * terminal's signals reach it only through Quest, which stands in for the terminal: every SIGINT,
+ * SIGTERM, and SIGHUP Quest receives goes to the whole group, as a terminal's Ctrl-C would, and
+ * Quest inside the group leaves it there (see `GROUP`).
+ *
+ * No event reports that a process group emptied, so a cancelled run instead waits on a token: the
+ * write end of a pipe on the command's descriptor 3 (`TOKEN`), which every descendant holds unless
+ * it or a parent closes it, as Bun and Node do for what they start. Its read end ends once every
+ * holder has exited, so each one, such as a leaf that outlives the wrappers around it, finishes its
+ * own cleanup before the rest of the group is killed, unless a second signal kills it first.
  */
 export const group: Owner = (command, env, cancel) =>
 	new Promise((resolve, reject) => {
 		const child = spawn(command[0], command.slice(1), {
 			env: { ...env, [GROUP]: "1" },
-			stdio: "inherit",
+			stdio: ["inherit", "inherit", "inherit", "pipe"],
 			detached: true,
 		});
+		const token = child.stdio[TOKEN] as Readable;
+		const released = new Promise<void>((resolve) => {
+			token.once("end", resolve);
+			token.once("close", resolve);
+			token.once("error", () => resolve());
+		});
+		token.resume(); // Holders' writes are discarded; only the end matters.
 		const signal = (name: NodeJS.Signals) => {
 			try {
 				process.kill(-child.pid!, name);
@@ -491,45 +545,54 @@ export const group: Owner = (command, env, cancel) =>
 				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
 			}
 		};
+		let signalled = false;
 		const stop = () => {
-			const name = requested(cancel.signal);
-			if (name === "SIGINT") signal(name);
-			else child.kill(name);
+			signalled = true;
+			signal(requested(cancel.signal));
 		};
 		const terminate = () => signal("SIGKILL");
 		child.once("error", reject);
 		if (child.pid === undefined) return; // It never started.
 		const cleanup = follow(cancel, stop, terminate);
-		child.once("exit", (code, killed) => {
+		const killed = new Promise<void>((resolve) => {
+			if (cancel.kill.aborted) resolve();
+			else cancel.kill.addEventListener("abort", () => resolve(), { once: true });
+		});
+		child.once("exit", async (code, name) => {
+			// Every process in the group got the signal, so let each holder finish its own cleanup.
+			if (signalled) await Promise.race([released, killed]);
 			cleanup();
+			token.destroy();
 			try {
-				// The group outlives its leader while any member remains, so its ID is not reused yet.
+				// The group outlives its leader while any member remains, so its ID is not reused yet. A
+				// group that emptied during the drain could only be mistaken once the host cycled through
+				// every process ID.
 				terminate();
 			} catch (error) {
 				return reject(error);
 			}
-			resolve(code ?? 128 + constants.signals[killed!]);
+			resolve(code ?? 128 + constants.signals[name!]);
 		});
 	});
 
-/** Whether this process already runs in a Quest scope, which then holds whatever it starts. */
-export function scoped(self = "/proc/self/cgroup"): boolean {
-	const unified = readFileSync(self, "utf8")
-		.split("\n")
-		.find((line) => line.startsWith("0::"));
-	return unified !== undefined && /\/quest-[a-z]+-[0-9a-f-]+\.scope$/.test(unified);
-}
+/** The descriptor on which the group owner hands its command the token (see `group`). */
+const TOKEN = 3;
 
 /**
- * The strongest owner this host offers. A nested call runs inside its admitted command, and a call
- * inside a Quest scope inside that scope: moving into an owner of its own would take its command out
- * of reach of the enclosing one. Linux owns descendants through a systemd scope, and settles for a
- * process group, like macOS, without a systemd user manager. Windows owns only the command.
+ * The strongest owner this host offers. A nested call runs inside its admitted command, which an
+ * enclosing Quest owner also signals when it is Quest's group or a Quest scope (see `inside`). A
+ * call inside a Quest scope owns a child cgroup of its own there once the scope is delegated, and
+ * otherwise runs inside the scope: a scope of its own would take its command out of reach of the
+ * enclosing one. Linux owns descendants through a systemd scope, and settles for a process group,
+ * like macOS, without a systemd user manager. Windows owns them through a Job Object.
  */
-export function owner(env = process.env): Owner {
-	if (env[ADMITTED] === "1" || process.platform === "win32") return direct;
+export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
+	// A Quest scope around this process holds the command too, since it shares the cgroup or an ancestor.
+	const enclosing = process.platform === "linux" ? questScope(cgroup) : undefined;
+	if (env[ADMITTED] === "1") return env[GROUP] === "1" || enclosing ? inside : direct;
+	if (process.platform === "win32") return job;
+	if (enclosing) return delegated(enclosing.unit) ? nested(enclosing.group) : inside;
 	if (process.platform !== "linux") return group;
-	if (scoped()) return direct;
 	try {
 		systemdScopes.check();
 		return scope;

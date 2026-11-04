@@ -7,7 +7,8 @@ the [queue watcher](/quest/m0/queue-watcher/README.md), and keeps landing the
 repositories not yet on GitHub's merge queue (moq-dev/quest, moq.pro, rust2
 and rind) through the host gate until they
 [follow](/quest/m0/queue-watcher/follow.md). The gate is frozen: it gets only
-fixes the switch needs, and is
+fixes the switch needs, plus
+[merge-commit landing](/quest/m0/host-land/merge-commits.md), and is
 [retired](/quest/m0/queue-watcher/retire.md) once nothing lands through it.
 
 `/quest-merge` queues a pick inline only when a counted review names its head,
@@ -106,8 +107,22 @@ can hand off instead.
   mismatch comment, and gate priority for batch checks, all host-gate
   improvements the freeze stops.
 
+Decided 2026-11-04 (maintainer, /quest-plan): an exception to the freeze, for
+a long-lived branch such as a release branch that must land through the gate
+with merge commits, so it keeps the ancestry of what merges into it and lands
+exactly the tested tree.
+
+- How to reconcile the freeze with merge-commit landing:
+  - ✅ A narrow exception: the gate gains configurable merge-commit queueing
+    and landing ([merge-commits](/quest/m0/host-land/merge-commits.md)), with
+    squash still the default
+  - Defer it, leaving that branch on its existing landing
+  - Move that branch to GitHub's merge queue instead
+
+  The exception covers only that work; the rest of the freeze stands.
+
 ## Required
 
 - [Gate host](/quest/m0/host-land/host.md) - kixelated/nixos runs the daemon as its own user, checks in nspawn containers, and retires the Actions runner
-- [Fixer proxy access](/quest/m0/host-land/fixer.md) - connect the nixos fixer container to CLIProxyAPI with the gate client key and maintainer login
 - [Fixer TLS](/quest/m0/host-land/fixer-tls.md) - the fixer's container trusts public certificates, so workerd and the Worker tests run there
+- [Merge commits](/quest/m0/host-land/merge-commits.md) - an instance can land with merge commits, keeping the merged branch's ancestry and the tested tree; squash stays the default

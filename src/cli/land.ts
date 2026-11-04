@@ -16,6 +16,7 @@ import {
 	requirements,
 	string,
 } from "./github";
+import { appOf, latestContexts } from "../github/checks";
 import { classifyCheck } from "./status";
 import { committedSources, snapshot } from "./tree";
 
@@ -132,8 +133,8 @@ export interface Waiting {
 const CONTEXTS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		__typename
-		... on CheckRun { name status conclusion detailsUrl checkSuite { app { databaseId } } }
-		... on StatusContext { context state targetUrl }
+		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { app { databaseId } } }
+		... on StatusContext { context state createdAt targetUrl }
 	}`;
 
 const QUEUE = `query($owner: String!, $name: String!, $base: String!, $qualified: String!, $after: String) {
@@ -436,17 +437,22 @@ async function contexts(github: GitHub, repository: Repository, node: ObjectValu
 	}
 }
 
-/** The required checks a head failed, and those pending or not yet reported, each from its app. */
+/**
+ * The required checks a head failed, and those pending or not yet reported, each from its app. Only
+ * each check's latest run counts, as for GitHub's mergeability, so a rerun supersedes a cancelled or
+ * failed run.
+ */
 function checks(contexts: ObjectValue[], required: RequiredCheck[]): { failing: string[]; pending: string[] } {
 	const failing: string[] = [];
 	const pending: string[] = [];
+	const latest = latestContexts(contexts);
 	for (const need of required) {
 		let result: "passed" | "failing" | "pending" = "pending";
 		let reported = false;
-		for (const context of contexts) {
+		for (const context of latest) {
 			const { check, outcome } = classifyCheck(context);
 			if (check.name !== need.name || (need.app !== null && appOf(context) !== need.app)) continue;
-			// A name reported twice, as by a rerun, counts only once every report passes.
+			// A name reported by more than one app, or as both a run and a status, counts only once every report passes.
 			if (!reported || result === "passed") result = outcome;
 			reported = true;
 		}
@@ -455,13 +461,6 @@ function checks(contexts: ObjectValue[], required: RequiredCheck[]): { failing: 
 		else if (result === "pending") pending.push(name);
 	}
 	return { failing: failing.sort(), pending: pending.sort() };
-}
-
-/** The GitHub App behind a check run; a commit status has none the gate can verify. */
-function appOf(context: ObjectValue): number | null {
-	if (context.__typename !== "CheckRun" || context.checkSuite == null) return null;
-	const app = object(context.checkSuite).app;
-	return app == null ? null : Number(object(app).databaseId);
 }
 
 /** A queued PR's squash commit on the chain. */
@@ -612,7 +611,7 @@ function prune(dir: string, head: string): string[] {
 	if (finished.size === 0) return [];
 	let tree: ReturnType<typeof committedSources>;
 	try {
-		tree = committedSources(dir, git(dir, ["write-tree"]), false);
+		tree = committedSources(dir, git(dir, ["write-tree"]), null);
 	} catch {
 		// A tree `quest check` cannot read is its finding to report, not this edit's.
 		return [];
@@ -681,7 +680,7 @@ function screener(dir: string, driver: string, plan: Plan) {
  */
 function questCheck(dir: string, commit: string): Finding[] {
 	try {
-		const tree = snapshot(dir, commit, false);
+		const tree = snapshot(dir, commit, null);
 		return check(tree.docs, tree.exists);
 	} catch (error) {
 		// Its messages name the scratch worktree, a host path the PR comment need not show.

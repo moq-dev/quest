@@ -1,6 +1,7 @@
 import { createScheduledController, runDurableObjectAlarm } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Pull, type Repo, fakeGitHub, intercept } from "../dev/github";
 import worker, { app } from "../src/index";
 import * as landing from "../src/jobs/landing";
 import * as output from "../src/jobs/output";
@@ -12,8 +13,8 @@ import { refName } from "../src/github/service";
 import { formAnswer, parseAnswer, parsePrompt } from "../src/jobs/prompt";
 import { resume } from "../src/jobs/routes";
 import { privateKey } from "./github-key";
-import { identity, oauth, origin } from "./login-fixtures";
-import { commit, delivery, head, maintainerOf, project } from "./project-fixtures";
+import { origin } from "./login-fixtures";
+import { commit, delivery, failing, graphql, head, maintainerOf, project, rewrite, world } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
 const db = env.DB;
@@ -509,6 +510,7 @@ describe("runner connections", () => {
 	it("notifies the project's maintainer when a job asks a question or fails, once each", async () => {
 		// The project's maintainer is a member of it, with a device.
 		const maintainer = await maintainerOf();
+		const { github } = maintainer;
 		const pair = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, [
 			"deriveBits",
 		])) as CryptoKeyPair;
@@ -523,8 +525,8 @@ describe("runner connections", () => {
 			.run();
 		const sent: string[] = [];
 		// Push services answer here; GitHub answers the recipient's authority check.
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-			if (!String(input).startsWith("https://fcm.googleapis.com/")) return maintainer.mock(input);
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+			if (!String(input).startsWith("https://fcm.googleapis.com/")) return github(input, init);
 			sent.push(String(input));
 			return new Response(null, { status: 201 });
 		});
@@ -915,12 +917,25 @@ describe("job routes", () => {
 	const base = `${origin}/projects/github/upstream/project/jobs`;
 	let maintainer = "";
 	let cookie = "";
-	let github: Awaited<ReturnType<typeof maintainerOf>>["github"];
-	let mock: Awaited<ReturnType<typeof maintainerOf>>["mock"];
+	let login = "";
+	let repo: Repo;
+	let pr: Pull;
+	let github: typeof fetch;
+	let other: Awaited<ReturnType<typeof maintainerOf>>["other"];
 
 	beforeEach(async () => {
-		({ user: maintainer, cookie, github, mock } = await maintainerOf());
+		({ user: maintainer, cookie, login, repo, pr, github, other } = await maintainerOf());
 	});
+	/** GitHub adding #2's label. */
+	const labeling = (url: URL, method: string) => url.pathname.endsWith("/issues/2/labels") && method === "POST";
+	/** The maintainer stops the queued merge job before GitHub answers `next`. */
+	async function stopping(next: () => Promise<Response>) {
+		const queued = await db
+			.prepare("SELECT id FROM jobs WHERE workflow='merge' AND state='queued'")
+			.first<{ id: string }>();
+		expect((await post(`/${queued!.id}/cancel`, {})).status).toBe(204);
+		return next();
+	}
 
 	function post(path: string, body: unknown, headers: Record<string, string> = { Cookie: cookie, Origin: origin }) {
 		return app.request(
@@ -997,13 +1012,13 @@ describe("job routes", () => {
 			.bind(maintainer)
 			.first<{ accountId: string }>();
 		const databaseId = Number(identity!.accountId);
-		github.signature = { isValid: true, signer: { databaseId, login: `person${databaseId}` } };
+		repo.commits[head]!.signature = { isValid: true, signer: { databaseId, login } };
 		const response = await post("", { workflow: "iterate", target: "pulls/2" });
 		expect(response.status).toBe(201);
 		const { id } = (await response.json()) as { id: string };
 		expect(await state(id)).toMatchObject({ trusted: 1, state: "queued" });
 		// A role revoked after creation must not execute on an ordinary runner.
-		github.role = "read";
+		repo.roles![login] = "read";
 		const machine = await runner(maintainer, "machine");
 		const live = await connect(machine.token);
 		live.send(status(1, "main"));
@@ -1139,7 +1154,11 @@ describe("job routes", () => {
 			repository: { id: 10 },
 			pull_request: { id: 21, number: 2 },
 		};
+		// A contributor pushes, and GitHub cannot answer the read the webhook asks for.
+		repo.branches["contributor/fix"] = "e".repeat(40);
+		vi.mocked(globalThis.fetch).mockImplementation(failing(github, graphql, 502));
 		expect((await delivery("pull_request", pushed)).status).toBe(202);
+		vi.mocked(globalThis.fetch).mockImplementation(github);
 		const stale = await post("", { workflow: "iterate", target: "pulls/2" });
 		expect(stale.status).toBe(403);
 		expect(await stale.json()).toMatchObject({ error: "Refresh project activity before starting work" });
@@ -1148,21 +1167,21 @@ describe("job routes", () => {
 	it("refuses an issue or pull request that closed or moved since it was read", async () => {
 		// Closing or commenting leaves availability known, and history has not reread the target.
 		const changed = "This changed on GitHub since it was read; refresh and review it again";
-		github.issue = "closed";
+		repo.issues[0]!.closed = true;
 		const closed = await post("", { workflow: "plan", target: "issues/1" });
 		expect(closed.status).toBe(403);
 		expect(await closed.json()).toEqual({ error: changed });
-		github.pull = "closed";
+		pr.closed = true;
 		expect(await (await post("", { workflow: "iterate", target: "pulls/2" })).json()).toEqual({ error: changed });
-		github.pull = "open";
-		github.head = "e".repeat(40);
+		pr.closed = false;
+		repo.branches["contributor/fix"] = "e".repeat(40);
 		expect(await (await post("", { workflow: "iterate", target: "pulls/2" })).json()).toEqual({ error: changed });
 		// Work that targets no issue or pull request still starts.
 		expect((await post("", { workflow: "start", target: "quest/first.md" })).status).toBe(201);
 	});
 
 	it("offers a devShell bootstrap job instead of starting without a flake", async () => {
-		github.flake = false;
+		rewrite(repo, commit, [{ path: "flake.nix", sha: null }]);
 		const refused = await post("", { workflow: "start", target: "quest/first.md" });
 		expect(refused.status).toBe(409);
 		expect(await refused.json()).toMatchObject({ bootstrap: true });
@@ -1180,9 +1199,9 @@ describe("job routes", () => {
 			await store.dispatch(db, maintainer, new Map([[machine.id, 1]]), Date.now());
 			await store.finish(db, machine, id, 1, { outcome, summary: "Ended", result: undefined }, Date.now());
 			// No event-driven release is called: the schedule is the backstop.
-			expect(github.labels).toEqual(["quest:kix"]);
+			expect(pr.labels).toEqual(["quest:kix"]);
 			await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-			expect(github.labels).toEqual([]);
+			expect(pr.labels).toEqual([]);
 			expect(await state(id)).toMatchObject({ hold: null });
 		},
 	);
@@ -1191,23 +1210,23 @@ describe("job routes", () => {
 		const { id } = (await (await post("", { workflow: "merge", target: "pulls/2" })).json()) as { id: string };
 		await db.prepare("UPDATE jobs SET state=? WHERE id=?").bind(state, id).run();
 		await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-		expect(github.labels).toEqual(["quest:kix"]);
+		expect(pr.labels).toEqual(["quest:kix"]);
 		expect(await store.readJob(db, id)).toMatchObject({ hold: "LE_1", state });
 	});
 
 	it("preserves a landing and a replacement hold while sweeping ended jobs", async () => {
 		const { id } = (await (await post("", { workflow: "merge", target: "pulls/2" })).json()) as { id: string };
 		await db.prepare("UPDATE jobs SET state='completed' WHERE id=?").bind(id).run();
-		github.landing = true;
-		github.events.push({ id: "AUTO", label: null });
+		pr.landing = true;
+		pr.timeline!.push({ id: "AUTO", label: null });
 		await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-		expect(github.labels).toEqual(["quest:kix"]);
+		expect(pr.labels).toEqual(["quest:kix"]);
 		expect(await state(id)).toMatchObject({ hold: "LE_1" });
-		github.landing = false;
+		pr.landing = false;
 		// Another session removed and re-added the label. The old token may be cleared, never its label.
-		github.events.push({ id: "REPLACEMENT", label: "quest:kix" });
+		pr.timeline!.push({ id: "REPLACEMENT", label: "quest:kix" });
 		await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-		expect(github.labels).toEqual(["quest:kix"]);
+		expect(pr.labels).toEqual(["quest:kix"]);
 		expect(await state(id)).toMatchObject({ hold: null });
 	});
 
@@ -1225,49 +1244,49 @@ describe("job routes", () => {
 				await store.dispatch(db, maintainer, new Map(), now);
 				expect((await store.dispatch(db, maintainer, new Map(), now + 2 * GRACE)).ended).toEqual([id]);
 			} else expect((await store.report(db, machine, [account("main")], [], now)).ended).toEqual([id]);
-			expect(github.labels).toEqual(["quest:kix"]);
+			expect(pr.labels).toEqual(["quest:kix"]);
 			await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-			expect(github.labels).toEqual([]);
+			expect(pr.labels).toEqual([]);
 			expect(await state(id)).toMatchObject({ hold: null, state: "cancelled" });
 		},
 	);
 
 	it("retains a token acquired after cancellation so the sweep can retry its failed immediate release", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
-		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-			const path = new URL(String(input)).pathname;
-			if (path.endsWith("/issues/2/labels") && init?.method === "POST") {
-				const queued = await db
-					.prepare("SELECT id FROM jobs WHERE workflow='merge' AND state='queued'")
-					.first<{ id: string }>();
-				await post(`/${queued!.id}/cancel`, {});
-			}
-			if (path.includes("/issues/2/labels/") && init?.method === "DELETE")
-				return new Response(null, { status: 503 });
-			return mock(input, init);
-		});
+		// The job is stopped while GitHub adds its label, and GitHub fails the release that follows.
+		const unlabeling = (url: URL, method: string) =>
+			url.pathname.includes("/issues/2/labels/") && method === "DELETE";
+		vi.mocked(globalThis.fetch).mockImplementation(
+			intercept(
+				intercept(github, labeling, stopping),
+				unlabeling,
+				async () => new Response(null, { status: 503 }),
+			),
+		);
 		const response = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(response.status).toBe(403);
 		const { id } = (await db.prepare("SELECT id FROM jobs WHERE workflow='merge'").first<{ id: string }>())!;
 		expect(await state(id)).toMatchObject({ hold: "LE_1", state: "cancelled" });
-		expect(github.labels).toEqual(["quest:kix"]);
-		vi.mocked(globalThis.fetch).mockImplementation(mock);
+		expect(pr.labels).toEqual(["quest:kix"]);
+		vi.mocked(globalThis.fetch).mockImplementation(github);
 		await worker.scheduled(createScheduledController({ cron: landing.SWEEP_CRON }), testEnv);
-		expect(github.labels).toEqual([]);
+		expect(pr.labels).toEqual([]);
 		expect(await state(id)).toMatchObject({ hold: null });
 	});
 
 	it("directly releases an acquired token when disconnect removed the project and job", async () => {
-		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-			if (new URL(String(input)).pathname.endsWith("/issues/2/labels") && init?.method === "POST")
+		// The maintainer disconnects the project while GitHub adds the label.
+		vi.mocked(globalThis.fetch).mockImplementation(
+			intercept(github, labeling, async (next) => {
 				await db.prepare("DELETE FROM github_projects WHERE id=10").run();
-			return mock(input, init);
-		});
+				return next();
+			}),
+		);
 		const response = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(response.status).toBe(201);
 		const { id } = (await response.json()) as { id: string };
 		expect(await store.readJob(db, id)).toBeNull();
-		expect(github.labels).toEqual([]);
+		expect(pr.labels).toEqual([]);
 	});
 
 	it("keeps daily output retention separate from the frequent hold sweep", async () => {
@@ -1283,7 +1302,7 @@ describe("job routes", () => {
 		const created = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(created.status).toBe(201);
 		const { id } = (await created.json()) as { id: string };
-		expect(github.labels).toEqual(["quest:kix"]);
+		expect(pr.labels).toEqual(["quest:kix"]);
 		expect(await state(id)).toMatchObject({
 			workflow: "merge",
 			state: "queued",
@@ -1295,34 +1314,36 @@ describe("job routes", () => {
 		});
 		// Picking it again finds the same job, which already holds the pull request.
 		expect(await (await post("", { workflow: "merge", target: "pulls/2" })).json()).toEqual({ id, created: false });
-		expect(github.events).toHaveLength(1);
+		expect(pr.timeline).toHaveLength(1);
 		// Stopping the job gives the pull request back.
 		expect((await post(`/${id}/cancel`, {})).status).toBe(204);
-		expect(github.labels).toEqual([]);
+		expect(pr.labels).toEqual([]);
 		expect(await state(id)).toMatchObject({ state: "cancelled", hold: null });
 
 		// A local session's hold refuses the pick and leaves no job behind.
-		github.labels = ["quest:active"];
-		github.events.push({ id: "LOCAL", label: "quest:active" });
+		pr.labels = ["quest:active"];
+		pr.timeline!.push({ id: "LOCAL", label: "quest:active" });
 		const refused = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(refused.status).toBe(403);
 		expect(await refused.json()).toEqual({
 			error: "Another session holds this pull request with quest:active; pick it again once it is released",
 		});
-		expect(github.labels).toEqual(["quest:active"]);
+		expect(pr.labels).toEqual(["quest:active"]);
 		expect(await store.active(db, 10, "pulls/2")).toBe(false);
 
 		// The quest:merge label older quest versions left on queued PRs holds nothing.
-		github.labels = ["quest:merge"];
-		github.events = [
+		pr.labels = ["quest:merge"];
+		pr.timeline = [
 			{ id: "QUEUED", label: "quest:merge" },
 			{ id: "AUTO", label: null },
 		];
 		const again = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(again.status).toBe(201);
 		const { id: next } = (await again.json()) as { id: string };
-		expect(await state(next)).toMatchObject({ hold: "LE_3" });
-		expect(github.labels).toEqual(["quest:merge", "quest:kix"]);
+		// The hold is the label event GitHub just recorded.
+		expect(pr.timeline!.at(-1)).toMatchObject({ label: "quest:kix" });
+		expect(await state(next)).toMatchObject({ hold: pr.timeline!.at(-1)!.id });
+		expect(pr.labels).toEqual(["quest:merge", "quest:kix"]);
 	});
 
 	it("gives a merge job's pull request back once its landing ends unmerged", async () => {
@@ -1338,10 +1359,10 @@ describe("job routes", () => {
 		};
 		// A running job keeps its hold whatever GitHub says.
 		await delivery("pull_request", dequeued, undefined, {}, testEnv);
-		expect(github.labels).toEqual(["quest:kix"]);
+		expect(pr.labels).toEqual(["quest:kix"]);
 		// The job started a landing, which keeps the hold while it is queued.
-		github.landing = true;
-		github.events.push({ id: "AUTO", label: null });
+		pr.landing = true;
+		pr.timeline!.push({ id: "AUTO", label: null });
 		await store.finish(
 			db,
 			machine,
@@ -1351,31 +1372,22 @@ describe("job routes", () => {
 			Date.now(),
 		);
 		await delivery("pull_request", { ...dequeued, action: "auto_merge_enabled" }, undefined, {}, testEnv);
-		expect(github.labels).toEqual(["quest:kix"]);
+		expect(pr.labels).toEqual(["quest:kix"]);
 		expect(await state(id)).toMatchObject({ hold: "LE_1" });
 		// It left the queue unmerged: the bot removes the label.
-		github.landing = false;
+		pr.landing = false;
 		await delivery("pull_request", dequeued, undefined, {}, testEnv);
-		expect(github.labels).toEqual([]);
+		expect(pr.labels).toEqual([]);
 		expect(await state(id)).toMatchObject({ hold: null });
 	});
 
 	it("gives the label back when a merge pick is stopped while it takes the pull request", async () => {
-		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-			// The maintainer stops the queued job while GitHub adds its label.
-			if (new URL(String(input)).pathname.endsWith("/issues/2/labels") && init?.method === "POST") {
-				const queued = await db
-					.prepare("SELECT id FROM jobs WHERE workflow='merge' AND state='queued'")
-					.first<{ id: string }>();
-				expect((await post(`/${queued!.id}/cancel`, {})).status).toBe(204);
-			}
-			return mock(input, init);
-		});
+		vi.mocked(globalThis.fetch).mockImplementation(intercept(github, labeling, stopping));
 		const created = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(created.status).toBe(201);
 		const { id } = (await created.json()) as { id: string };
 		expect(await state(id)).toMatchObject({ state: "cancelled", hold: null });
-		expect(github.labels).toEqual([]);
+		expect(pr.labels).toEqual([]);
 	});
 
 	it("starts a merge job only once it holds its pull request", async () => {
@@ -1412,11 +1424,11 @@ describe("job routes", () => {
 		await store.dispatch(db, maintainer, new Map([[machine.id, 1]]), now);
 		await store.report(db, machine, [account("main")], [{ job: lost, attempt: 1 }], now);
 		expect((await post(`/${lost}/cancel`, {})).status).toBe(204);
-		expect(github.labels).toEqual(["quest:kix"]);
+		expect(pr.labels).toEqual(["quest:kix"]);
 		await store.dispatch(db, maintainer, new Map(), now);
 		expect((await store.dispatch(db, maintainer, new Map(), now + 2 * GRACE)).ended).toEqual([lost]);
 		await landing.ended(testEnv, lost);
-		expect(github.labels).toEqual([]);
+		expect(pr.labels).toEqual([]);
 		expect(await state(lost)).toMatchObject({ state: "cancelled", hold: null });
 
 		// A status that omits an acknowledged attempt asked to stop cancels it too.
@@ -1426,7 +1438,7 @@ describe("job routes", () => {
 		expect((await post(`/${omitted}/cancel`, {})).status).toBe(204);
 		expect((await store.report(db, machine, [account("main")], [], now)).ended).toEqual([omitted]);
 		await landing.ended(testEnv, omitted);
-		expect(github.labels).toEqual([]);
+		expect(pr.labels).toEqual([]);
 	});
 
 	it("refuses to merge a draft", async () => {
@@ -1436,11 +1448,11 @@ describe("job routes", () => {
 		const refused = await post("", { workflow: "merge", target: "pulls/2" });
 		expect(refused.status).toBe(409);
 		expect(await refused.json()).toEqual({ error: "Mark the draft ready for review before merging it" });
-		expect(github.labels).toEqual([]);
+		expect(pr.labels).toEqual([]);
 	});
 
 	it("refuses to iterate on a pull request head without a flake", async () => {
-		github.pullFlake = false;
+		rewrite(repo, head, [{ path: "flake.nix", sha: null }]);
 		const refused = await post("", { workflow: "iterate", target: "pulls/2" });
 		expect(refused.status).toBe(409);
 		expect(await refused.json()).toEqual({ error: "The pull request's head has no flake devShell" });
@@ -1451,9 +1463,9 @@ describe("job routes", () => {
 			403,
 		);
 		expect((await post("", { workflow: "plan" }, { Origin: origin })).status).toBe(403);
-		github.role = "write";
+		repo.roles![login] = "write";
 		expect((await post("", { workflow: "plan" })).status).toBe(403);
-		github.role = "maintain";
+		repo.roles![login] = "maintain";
 		await project(10, maintainer, "paused");
 		expect((await post("", { workflow: "plan" })).status).toBe(409);
 	});
@@ -1493,17 +1505,16 @@ describe("job routes", () => {
 		expect((await page("?after=x")).status).toBe(409);
 		// Signed-out visitors and other signed-in users never see raw output.
 		expect((await app.request(`${base}/${id}/output`, {}, testEnv)).status).toBe(403);
-		const stranger = (await oauth(identity("github"))).session!;
-		vi.spyOn(globalThis, "fetch").mockImplementation(mock);
+		const stranger = (await other()).session;
 		const refused = await app.request(`${base}/${id}/output`, { headers: { Cookie: stranger } }, testEnv);
 		expect(refused.status).toBe(403);
 		expect(await refused.json()).toEqual({ error: "Current GitHub maintainer authority required" });
 		// A maintainer whose role was revoked is refused on the next request.
-		github.role = "write";
+		repo.roles![login] = "write";
 		expect((await page()).status).toBe(403);
 		const a = { answers: [{ choices: ["A"] }] };
 		expect((await post(`/${id}/answer`, { question, answer: a })).status).toBe(403);
-		github.role = "maintain";
+		repo.roles![login] = "maintain";
 		// An answer must fit the prompt it answers.
 		expect((await post(`/${id}/answer`, { question, answer: "A" })).status).toBe(409);
 		expect((await post(`/${id}/answer`, { question, answer: { answers: [{ choices: ["Z"] }] } })).status).toBe(409);
@@ -1545,13 +1556,8 @@ describe("job routes", () => {
 
 describe("merge wait webhook wakeups", () => {
 	it("wakes only the current merge attempt for the enrolled repository and matching head or PR", async () => {
-		// GitHub cannot verify the head here, so the merge job routes as untrusted to a VM runner.
-		const real = globalThis.fetch;
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) =>
-			new URL(input instanceof Request ? input.url : input).hostname === "api.github.com"
-				? new Response(null, { status: 503 })
-				: real(input, init),
-		);
+		// No maintainer signed the head, so the merge job routes as untrusted to a VM runner.
+		vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(world()));
 		const machine = await runner("owner", "webhooks", "linux", true);
 		await connected(machine, [account("main")]);
 		const id = await job(10, "owner", { workflow: "merge", target: "pulls/2", branch: "feature", revision: head });

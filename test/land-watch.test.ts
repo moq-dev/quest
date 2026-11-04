@@ -10,10 +10,14 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { GitHubDependencies } from "../src/cli/github";
 import { readRemote } from "../src/cli/land";
-import { FLAKY_LIMIT, history } from "../src/cli/land-fixer";
+import { parseResolution } from "../src/cli/land-apply";
+import { CHECK_LOG } from "../src/cli/land-checks";
+import { COLLECTION_ATTEMPTS, FLAKY_LIMIT, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
 import type { FixContext } from "../src/cli/land-watch-fix";
+import { type FlakyTest, RECENT, readFlaky, saveFlaky, writeKnownFlaky } from "../src/cli/land-watch-flaky";
+import { FLAKY_INPUT, type KnownFlaky } from "../src/cli/land-fix";
 import { configure, GIT_SETTINGS, initRepository, tempDir } from "./fixture";
 
 // The fixer tests merge with the quest driver and run fixer wrappers, which take longer than vitest's default.
@@ -57,6 +61,11 @@ interface Pull {
 	/** When auto-merge was armed, while it is. */
 	armed?: string;
 	body?: string;
+	title?: string;
+	/** Its head branch, `branch-<number>` by default. */
+	branch?: string;
+	/** Its head branch's pushes, oldest first, in place of those its removals imply. */
+	pushes?: { sha: string; at: string }[];
 }
 interface Job {
 	id: number;
@@ -92,6 +101,13 @@ interface World {
 	unreadable?: (pull: Pull) => boolean;
 	/** PRs whose push activity GitHub has not listed yet. */
 	unlisted?: number[];
+	/** The checks each head reported from the PR's own CI, as `statusCheckRollup` contexts, with each job's log by ID. */
+	checks?: Record<string, Record<string, unknown>[]>;
+	checkLogs?: Record<number, string>;
+	/** Called on each read of a PR's push activity, as a change GitHub makes while the watcher reads it. */
+	onActivity?: (pull: Pull) => void;
+	/** GitHub's refusal of an enqueue of `pull`, if it refuses one. */
+	refuseEnqueue?: (pull: Pull) => string | undefined;
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -102,8 +118,10 @@ function world(pulls: Pull[], runs: Run[] = []): World {
 
 /** A PR's head: its branch in the upstream repository, when the world has one. */
 function headOf(world: World, pull: Pull): string {
-	return world.origin ? git(world.origin, "rev-parse", `refs/heads/branch-${pull.number}`) : pull.head;
+	return world.origin ? git(world.origin, "rev-parse", `refs/heads/${branchOf(pull)}`) : pull.head;
 }
+
+const branchOf = (pull: Pull) => pull.branch ?? `branch-${pull.number}`;
 
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -129,6 +147,8 @@ function removalNode(event: Removed) {
 function pushes(world: World, pull: Pull) {
 	const rows: { activity_type: string; after: string; timestamp: string }[] = [];
 	const stamp = (time: number) => new Date(time).toISOString().replace(".000", "");
+	if (pull.pushes)
+		return pull.pushes.map((push) => ({ activity_type: "push", after: push.sha, timestamp: push.at })).reverse();
 	for (const event of pull.removals) {
 		const enqueued = pull.enqueues.filter((added) => added.createdAt <= event.createdAt).at(-1)?.createdAt;
 		const time = Date.parse(enqueued ?? event.createdAt) - 1000;
@@ -169,12 +189,33 @@ function deps(world: World): GitHubDependencies {
 				if (query.includes("defaultBranchRef"))
 					return Response.json({ data: { repository: { defaultBranchRef: { name: "main" } } } });
 				const pullOf = () => world.pulls.find((item) => `PR_${item.number}` === variables.id)!;
+				if (query.includes("statusCheckRollup")) {
+					expect(variables.id).toMatch(/^PR_\d+$/);
+					const contexts = world.checks?.[variables.sha];
+					// One context a page, so a second page is read by its cursor.
+					const start = variables.after === null ? 0 : Number(variables.after);
+					const rollup =
+						contexts === undefined
+							? null
+							: {
+									contexts: {
+										nodes: contexts.slice(start, start + 1),
+										pageInfo: {
+											hasNextPage: start + 1 < contexts.length,
+											endCursor: String(start + 1),
+										},
+									},
+								};
+					return Response.json({ data: { repository: { object: { statusCheckRollup: rollup } } } });
+				}
 				const mutation = /^\s*mutation[^{]*\{\s*(\w+)/.exec(query)?.[1];
 				if (mutation === "enqueuePullRequest" || mutation === "enablePullRequestAutoMerge") {
 					const pull = pullOf();
 					world.mutations.push(`${mutation} ${pull.number} ${variables.sha}`);
 					if (variables.sha !== headOf(world, pull))
 						return Response.json({ errors: [{ type: "UNPROCESSABLE", message: "head moved" }] });
+					const refusal = mutation === "enqueuePullRequest" ? world.refuseEnqueue?.(pull) : undefined;
+					if (refusal) return Response.json({ errors: [{ type: "UNPROCESSABLE", message: refusal }] });
 					const now = new Date(world.now).toISOString().replace(".000", "");
 					if (mutation === "enablePullRequestAutoMerge") pull.armed = now;
 					else {
@@ -183,7 +224,7 @@ function deps(world: World): GitHubDependencies {
 					}
 					return Response.json({ data: { [mutation]: { clientMutationId: null } } });
 				}
-				if (query.includes("mergeStateStatus")) {
+				if (query.includes("mergeStateStatus") && !query.includes("pullRequests(states: OPEN")) {
 					const pull = pullOf();
 					if (world.unreadable?.(pull)) {
 						world.unreadable = undefined;
@@ -234,9 +275,12 @@ function deps(world: World): GitHubDependencies {
 										url: `https://github.com/upstream/project/pull/${pull.number}`,
 										title: `PR ${pull.number}`,
 										headRefOid: headOf(world, pull),
-										headRefName: `branch-${pull.number}`,
+										headRefName: branchOf(pull),
 										maintainerCanModify: false,
 										headRepository: { nameWithOwner: "upstream/project" },
+										mergeStateStatus: pull.mergeState ?? "CLEAN",
+										mergeQueueEntry: pull.queued ? { id: `MQE_${pull.number}` } : null,
+										autoMergeRequest: pull.armed ? { enabledAt: pull.armed, commitBody: "" } : null,
 										removals: removalPage(pull, variables.since, null),
 									})),
 									pageInfo: { hasNextPage: false, endCursor: null },
@@ -275,7 +319,32 @@ function deps(world: World): GitHubDependencies {
 			const logs = /^\/repos\/upstream\/project\/actions\/jobs\/(\d+)\/logs$/.exec(path);
 			if (logs) {
 				const job = world.runs.flatMap((run) => run.jobs).find((item) => item.id === Number(logs[1]));
-				return job?.log === undefined ? new Response("missing", { status: 404 }) : new Response(job.log);
+				const log = job?.log ?? world.checkLogs?.[Number(logs[1])];
+				return log === undefined ? new Response("missing", { status: 404 }) : new Response(log);
+			}
+			if (path === "/repos/upstream/project/pulls") {
+				if (init?.method === "POST") {
+					const { title, head, base, body } = JSON.parse(String(init.body));
+					expect(base).toBe("main");
+					const number = Math.max(...world.pulls.map((item) => item.number)) + 1;
+					const branch = head.replace(/^upstream:/, "");
+					world.pulls.push({
+						number,
+						head: headOf(world, { number, branch } as Pull),
+						branch,
+						title,
+						body,
+						removals: [],
+						enqueues: [],
+					});
+					return Response.json({ number, node_id: `PR_${number}` }, { status: 201 });
+				}
+				const head = url.searchParams.get("head");
+				return Response.json(
+					world.pulls
+						.filter((item) => `upstream:${branchOf(item)}` === head && (item.state ?? "OPEN") === "OPEN")
+						.map((item) => ({ number: item.number, node_id: `PR_${item.number}` })),
+				);
 			}
 			const pullPath = /^\/repos\/upstream\/project\/pulls\/(\d+)$/.exec(path);
 			if (pullPath) {
@@ -303,7 +372,8 @@ function deps(world: World): GitHubDependencies {
 			}
 			const activity = /^\/repos\/upstream\/project\/activity$/.exec(path);
 			if (activity) {
-				const pull = world.pulls.find((item) => `branch-${item.number}` === url.searchParams.get("ref"))!;
+				const pull = world.pulls.find((item) => branchOf(item) === url.searchParams.get("ref"))!;
+				world.onActivity?.(pull);
 				return Response.json(world.unlisted?.includes(pull.number) ? [] : pushes(world, pull));
 			}
 			throw new Error(`unexpected request: ${path}`);
@@ -608,10 +678,116 @@ test("the first pass reads removals from SETTLE before it, and forgets closed PR
 	expect(JSON.parse(readFileSync(join(state, "watch.json"), "utf8")).handled).toEqual({});
 });
 
+test("an armed pick GitHub never queued is enqueued once ready, only at the head it was armed on", async () => {
+	const state = tempDir();
+	const armed = (number: number, extra: Partial<Pull> = {}): Pull => ({
+		number,
+		head: HEAD,
+		enqueues: [],
+		removals: [],
+		armed: at(2),
+		...extra,
+	});
+	const github = world([
+		// Its required checks still run: auto-merge waits for them.
+		armed(20, { mergeState: "BLOCKED" }),
+		// A writer pushed since auto-merge was armed, which ends the pick.
+		armed(21, {
+			head: PUSHED,
+			pushes: [
+				{ sha: HEAD, at: at(1) },
+				{ sha: PUSHED, at: at(3) },
+			],
+		}),
+		// GitHub queued it once armed; the queue's removal of it is the removal handler's.
+		armed(22, { mergeState: "UNSTABLE", enqueues: [{ createdAt: at(2), actor: "maintainer" }] }),
+		// Its required checks failed, or it conflicts: it needs /quest-iterate and a new pick.
+		armed(23, { mergeState: "BLOCKED" }),
+		armed(24, { mergeState: "DIRTY" }),
+		// GitHub has not listed the push of its head yet.
+		armed(25),
+		// In the queue already, or never armed.
+		armed(26, { queued: at(3) }),
+		{ number: 27, head: HEAD, enqueues: [], removals: [] },
+	]);
+	github.unlisted = [25];
+	github.now = Date.parse(at(4));
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toEqual([]);
+
+	github.pulls[0].mergeState = "HAS_HOOKS";
+	github.unlisted = [];
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
+		`enqueued 20 ${HEAD}`,
+		`enqueued 25 ${HEAD}`,
+	]);
+	expect(github.mutations).toEqual([`enqueuePullRequest 20 ${HEAD}`, `enqueuePullRequest 25 ${HEAD}`]);
+	// Queued now: nothing more to do.
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toHaveLength(2);
+});
+
+test("a refused enqueue of an armed pick is reported once and retried, and says nothing when GitHub queued it first", async () => {
+	const state = tempDir();
+	const github = world([
+		{ number: 30, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		{ number: 31, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+	]);
+	github.now = Date.parse(at(4));
+	let refusing = true;
+	github.refuseEnqueue = (pull) => {
+		if (pull.number === 31) {
+			// GitHub moved it first, between the pass's read and its enqueue.
+			pull.queued = at(4);
+			return "Pull request is already in the merge queue";
+		}
+		return refusing ? "Pull request is not mergeable" : undefined;
+	};
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
+		`refused 30 ${HEAD}: GitHub GraphQL error: Pull request is not mergeable`,
+	]);
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toEqual([
+		`enqueuePullRequest 30 ${HEAD}`,
+		`enqueuePullRequest 31 ${HEAD}`,
+		`enqueuePullRequest 30 ${HEAD}`,
+	]);
+	refusing = false;
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([`enqueued 30 ${HEAD}`]);
+	expect(JSON.parse(readFileSync(join(state, "watch.json"), "utf8")).refused).toEqual({});
+});
+
+test("an armed pick withdrawn or retargeted while the pass reads it is not enqueued", async () => {
+	const state = tempDir();
+	const github = world([
+		{ number: 32, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		{ number: 33, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		{ number: 34, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+	]);
+	github.now = Date.parse(at(4));
+	github.onActivity = (pull) => {
+		if (pull.number === 32) pull.armed = undefined;
+		if (pull.number === 33) pull.base = "release";
+		// Disabled and armed again: a new pick, which the next pass weighs on its own.
+		if (pull.number === 34) pull.armed = at(3);
+	};
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toEqual([]);
+});
+
 test("the watcher's tokens ask for writes only with a fixer, and pushes for workflows only when they carry one", () => {
-	expect(watchPermissions(false)).toEqual({ api: { contents: "read", pull_requests: "write", actions: "read" } });
+	expect(watchPermissions(false)).toEqual({
+		api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" },
+	});
 	expect(watchPermissions(true)).toEqual({
-		api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" },
+		api: {
+			contents: "write",
+			pull_requests: "write",
+			actions: "read",
+			merge_queues: "write",
+			checks: "read",
+			statuses: "read",
+		},
 		push: { contents: "write", pull_requests: "write" },
 		pushWorkflows: { contents: "write", pull_requests: "write", workflows: "write" },
 		read: { contents: "read" },
@@ -623,6 +799,36 @@ test("failing jobs that do not fit the comment are counted instead", () => {
 	const cut = jobsSection(["a".repeat(500), "b".repeat(500), "c"], 800);
 	expect(cut).toBe(`${"a".repeat(500)}\n\n2 more failing jobs do not fit in this comment.`);
 	expect(cut.length).toBeLessThanOrEqual(800);
+});
+
+test("a round is told the most recently seen flaky tests not yet disabled, within what the fixer reads", () => {
+	const state = tempDir();
+	const checkout = tempDir();
+	mkdirSync(join(checkout, ".git"));
+	// Long-lived flakes that never got a valid disable keep collecting verdicts.
+	const tests: FlakyTest[] = Array.from({ length: 200 }, (_, index) => ({
+		failure: `just test: flaky_${index}`,
+		verdicts: Array.from({ length: 30 }, (_, round) => ({
+			job: `watch-job-${index}-${round}.json`,
+			number: round + 1,
+			at: at(index),
+			jobs: [`https://github.com/upstream/project/actions/runs/${index}/job/${round}`],
+		})),
+	}));
+	tests[0].disable = {
+		head: HEAD,
+		base: { ref: "main", sha: BASE },
+		quest: "quest/m0/flaky/x.md",
+		attribution: "Codex",
+	};
+	saveFlaky(state, tests);
+	writeKnownFlaky(state, checkout);
+	const text = readFileSync(join(checkout, ".git", FLAKY_INPUT), "utf8");
+	expect(text.length).toBeLessThan(100_000);
+	const known = JSON.parse(text) as KnownFlaky[];
+	expect(known[0].failure).toBe("just test: flaky_199");
+	expect(known.every((item) => item.jobs.length === RECENT)).toBe(true);
+	expect(known.some((item) => item.failure === "just test: flaky_0")).toBe(false);
 });
 
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
@@ -794,6 +1000,56 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		};
 		const github = { ...world([pull], [failedRun(5, at(3), base)]), origin: repo.origin };
 		github.now = Date.parse(at(6));
+		// The PR's own CI on its head: a failing optional job, a passing required check, a failing status, one still running.
+		const actions = (workflow: string) => ({
+			app: { slug: "github-actions" },
+			workflowRun: { workflow: { name: workflow } },
+		});
+		github.checks = {
+			[head]: [
+				{
+					__typename: "CheckRun",
+					name: "test",
+					status: "COMPLETED",
+					conclusion: "FAILURE",
+					detailsUrl: "https://github.com/upstream/project/actions/runs/9/job/90",
+					databaseId: 90,
+					isRequired: false,
+					checkSuite: actions("Check"),
+				},
+				{
+					__typename: "CheckRun",
+					name: "Queue",
+					status: "COMPLETED",
+					conclusion: "SKIPPED",
+					detailsUrl: "https://github.com/upstream/project/actions/runs/9/job/91",
+					databaseId: 91,
+					isRequired: true,
+					checkSuite: actions("Queue"),
+				},
+				{
+					__typename: "StatusContext",
+					context: "ci/external",
+					state: "FAILURE",
+					targetUrl: "https://ci.example/5",
+					description: "2 tests failed",
+					isRequired: false,
+				},
+				{
+					__typename: "CheckRun",
+					name: "bench",
+					status: "IN_PROGRESS",
+					conclusion: null,
+					detailsUrl: null,
+					databaseId: 92,
+					isRequired: false,
+					checkSuite: { app: { slug: "other-ci" }, workflowRun: null },
+				},
+			],
+		};
+		github.checkLogs = {
+			90: `\uFEFF2026-11-01T12:02:00.1234567Z ${"x".repeat(30_000)}\n2026-11-01T12:02:01.1234567Z FAIL pr.test.ts\n`,
+		};
 		fix.round(5, fixScript("fixed.txt"));
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
 			"removed 5 failed_checks fix",
@@ -801,8 +1057,31 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		]);
 		expect(github.comments[5][0].body).toContain("The land fixer works on it in the background");
 		await exited(state);
-		// The wrapper got the removal's full log, the PR, and the effort.
-		expect(fix.calls()).toEqual([`high ${readRemoval(state, 5)!.log} 5`]);
+		// The wrapper got the removal's full log followed by the PR's own checks, the PR, and the effort.
+		const [call] = fix.calls();
+		const [effort, input, number] = call.split(" ");
+		expect([effort, number]).toEqual(["high", "5"]);
+		expect(input).not.toBe(readRemoval(state, 5)!.log);
+		const text = readFileSync(input, "utf8");
+		expect(text.startsWith(readFileSync(readRemoval(state, 5)!.log, "utf8").trimEnd())).toBe(true);
+		expect(text).toContain("FAIL queue.test.ts");
+		const own = text.slice(text.indexOf(`== The pull request's own checks on ${head} ==`));
+		expect(own.split("\n").slice(2, 6)).toEqual([
+			"failure optional Check / test (https://github.com/upstream/project/actions/runs/9/job/90)",
+			"skipped required Queue / Queue (https://github.com/upstream/project/actions/runs/9/job/91)",
+			"failure optional ci/external (https://ci.example/5): 2 tests failed",
+			"in_progress optional bench (no URL)",
+		]);
+		// Only the failing Actions job's log is read, cleaned and cut to its end.
+		expect(own).toContain(
+			"== Check / test: failure (https://github.com/upstream/project/actions/runs/9/job/90), the end of its log ==\n…",
+		);
+		expect(own.trimEnd().endsWith("\nFAIL pr.test.ts")).toBe(true);
+		expect(own).not.toContain("2026-11-01T12:02");
+		expect(own.length).toBeLessThan(CHECK_LOG + 1_000);
+		expect(github.requests.filter((request) => request.includes("/actions/jobs/9"))).toEqual([
+			"GET /repos/upstream/project/actions/jobs/90/logs",
+		]);
 
 		github.now = Date.parse(at(10));
 		// GitHub takes the head back, then fails the read that follows: the round may be in the queue, so it is
@@ -856,6 +1135,36 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(handback).toContain("<!-- quest land: failed_checks -->");
 		expect(history(state, 5)!.rounds.map((round) => round.outcome)).toEqual(["fixed", "handback"]);
 		expect(history(state, 5)!.rounds[1].rule).toBe("repeated");
+	});
+
+	test("a fix that edits a protected path is handed back unpushed, as a ready commit", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const head = repo.pull(5, { "feature.txt": "new\n" });
+		const pull: Pull = {
+			number: 5,
+			head,
+			enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+			removals: [
+				{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue", before: head },
+			],
+		};
+		const github = { ...world([pull], [failedRun(5, at(3), base)]), origin: repo.origin };
+		github.now = Date.parse(at(6));
+		fix.round(5, fixScript("flake.nix"));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 5 failed_checks fix",
+			"fixing 5",
+		]);
+		await exited(state);
+		github.now = Date.parse(at(10));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["handback 5"]);
+		expect(git(repo.origin, "rev-parse", "refs/heads/branch-5")).toBe(head);
+		expect(github.mutations).toEqual([]);
+		const handback = github.comments[5].at(-1)!.body;
+		expect(handback).toContain("off-limits fixer edit");
+		expect(handback).toContain("`quest land apply 5`");
+		expect(parseResolution(handback)).toMatchObject({ head, base: head });
 	});
 
 	test("a quest-file conflict is merged with the quest driver, and a code conflict goes to the fixer", async () => {
@@ -950,8 +1259,12 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		await exited(state);
 		// The code conflict's fixer got the current base and the merge's conflict, never the build's base.
 		const [call] = fix.calls();
-		expect(call).toMatch(new RegExp(`^high .*/conflict-4-${base.slice(0, 12)}\\.log 4$`));
-		expect(readFileSync(call.split(" ")[1], "utf8")).toContain("CONFLICT (content): Merge conflict in code.txt");
+		expect(call).toMatch(/^high .*\/fixer-input-4-\w+\.log 4$/);
+		const input = readFileSync(call.split(" ")[1], "utf8");
+		expect(input).toContain(`conflicts with main at ${base}`);
+		expect(input).toContain("CONFLICT (content): Merge conflict in code.txt");
+		expect(input).toContain("== The pull request's own checks on ");
+		expect(input).toContain("It reported no checks.");
 
 		github.now = Date.parse(at(8));
 		const resolved = () => git(repo.origin, "rev-parse", "refs/heads/branch-4");
@@ -961,7 +1274,11 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		]);
 		expect(git(repo.origin, "show", `${resolved()}:code.txt`)).toBe("one\nII and 2\nthree");
 		await exited(state);
-		expect(fix.calls()[1]).toBe(`high ${readRemoval(state, 6)!.log} 6`);
+		// A failed build's fixer reads that build's log first.
+		const [, input6] = fix.calls()[1].split(" ");
+		expect(
+			readFileSync(input6, "utf8").startsWith(readFileSync(readRemoval(state, 6)!.log, "utf8").trimEnd()),
+		).toBe(true);
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 6 ${failing}`]);
 		expect(github.mutations.slice(1)).toEqual([
 			`enablePullRequestAutoMerge 4 ${resolved()}`,
@@ -972,6 +1289,11 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(requeued).toContain(
 			"unchanged, since the land fixer judged the failure flaky: `just test: render_timeout`",
 		);
+
+		// The merge's checks passed, but GitHub left the armed pick out of the queue: the watcher enqueues it.
+		github.pulls.find((pull) => pull.number === 3)!.mergeState = "CLEAN";
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`enqueued 3 ${merged()}`]);
+		expect(github.mutations.at(-1)).toBe(`enqueuePullRequest 3 ${merged()}`);
 	});
 
 	test("a Dependabot pick by the App is fixed like any other, until it is flaky three times in a row", async () => {
@@ -1026,6 +1348,98 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(readRemoval(state, 7)!.pick).toEqual({ by: `${APP}[bot]`, at: at(50) });
 		expect(history(state, 7)).toEqual({ pick: at(50), rounds: [] });
 		await exited(state);
+	});
+
+	test("a test seen flaking twice is disabled in its own pull request, which the watcher enqueues", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const heads = [5, 6, 7].map((number) => repo.pull(number, { [`feature-${number}.txt`]: "new\n" }));
+		const github = { ...world([], []), origin: repo.origin };
+		/** A flaky requeue naming render_timeout, disabling it at the checkout's HEAD after `script`. */
+		const flaky = (script: string) => `${script}
+printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","failure":"just test: render_timeout","disable":"%s"}]' "$2" "$(git rev-parse HEAD)" > quest-land-result.json
+`;
+		/** A disabling commit on base that skips the test, adds its follow-up quest, and writes `extra`. */
+		const disabling = (extra: string) => `grep -q 'just test: render_timeout' .git/quest-land-flaky.json
+git checkout -q -b disable base
+mkdir -p quest/m0/flaky
+printf '# [S] Fix or delete render_timeout\\n\\n## Goal\\n\\nFix the flaky test or delete it.\\n' > quest/m0/flaky/render-timeout.md
+printf '# Flaky tests\\n\\n## Goal\\n\\nFix or delete each disabled test.\\n\\n## Required\\n\\n- [Render timeout](/quest/m0/flaky/render-timeout.md)\\n' > quest/m0/flaky/README.md
+printf 'skip render_timeout\\n' > skip.txt
+${extra}
+git add quest skip.txt ${extra ? "flake.nix" : ""}
+git commit -qm 'disable render_timeout'`;
+		// The first verdict's disable is ignored: one judgment alone never disables a test. The second's edits a
+		// protected path and is refused, and the third's is opened as its own pull request.
+		fix.round(5, flaky("[ ! -e .git/quest-land-flaky.json ]"));
+		fix.round(6, flaky(disabling("printf 'changed\\n' > flake.nix")));
+		fix.round(7, flaky(disabling("")));
+		const said: string[][] = [];
+		for (const [index, number] of [5, 6, 7].entries()) {
+			const minute = (index + 1) * 10;
+			github.pulls.push({
+				number,
+				head: heads[index],
+				enqueues: [{ createdAt: at(minute - 5), actor: "maintainer" }],
+				removals: [
+					{
+						id: `R${number}`,
+						createdAt: at(minute),
+						reason: "failed_checks",
+						actor: "github-merge-queue",
+						before: heads[index],
+					},
+				],
+			});
+			github.runs.push({ ...failedRun(number, at(minute - 2), base), id: number * 10 });
+			github.now = Date.parse(at(minute + 1));
+			expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+				`removed ${number} failed_checks fix`,
+				`fixing ${number}`,
+			]);
+			await exited(state);
+			github.now = Date.parse(at(minute + 2));
+			said.push(await watchPass(REPOSITORY, { state }, deps(github), context));
+		}
+		const branch = github.pulls.find((pull) => pull.number === 8)?.branch;
+		expect(branch).toMatch(/^quest-land\/flaky-[0-9a-f]{12}$/);
+		const head = git(repo.origin, "rev-parse", `refs/heads/${branch}`);
+		expect(said).toEqual([
+			["disable ignored 5: first flaky verdict", `requeued 5 ${heads[0]}`],
+			[expect.stringMatching(/^disable refused 6: Error: off-limits fixer edit/), `requeued 6 ${heads[1]}`],
+			[`disable 7 ${head}`, `requeued 7 ${heads[2]}`, "disabled render-timeout 8"],
+		]);
+		// The disable is the fixer's commit on the base, enqueued like any other pull request with no pick.
+		expect(git(repo.origin, "rev-parse", `${head}^`)).toBe(base);
+		expect(git(repo.origin, "show", `${head}:quest/m0/flaky/render-timeout.md`)).toContain("Fix the flaky test");
+		expect(github.mutations).toEqual([
+			`enqueuePullRequest 5 ${heads[0]}`,
+			`enqueuePullRequest 6 ${heads[1]}`,
+			`enqueuePullRequest 7 ${heads[2]}`,
+			`enqueuePullRequest 8 ${head}`,
+		]);
+		const opened = github.pulls.find((pull) => pull.number === 8)!;
+		expect(opened.title).toBe("quest land: disable the flaky test render-timeout");
+		expect(opened.body).toContain(
+			"The land fixer judged `just test: render_timeout` flaky 3 times, most recently in",
+		);
+		expect(opened.body).toContain(
+			"#5 ([job 1](https://github.com/upstream/project/actions/runs/50/job/71)), #6 ([job 1](https://github.com/upstream/project/actions/runs/60/job/71))",
+		);
+		expect(opened.body).toContain("adds its follow-up quest, `quest/m0/flaky/render-timeout.md`");
+		expect(opened.body).toContain(`## Review\n\nmechanical fix by Codex: \``);
+		expect(opened.body).toContain(`(head ${head})`);
+		expect(readFlaky(state)).toMatchObject([
+			{
+				failure: "just test: render_timeout",
+				verdicts: [{ number: 5 }, { number: 6 }, { number: 7 }],
+				disable: { head, quest: "quest/m0/flaky/render-timeout.md", number: 8, done: "enqueued" },
+			},
+		]);
+
+		// A restart neither opens nor enqueues it again, and the disabled test is no longer offered as known.
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
+		expect(github.mutations).toHaveLength(4);
 	});
 
 	test("a pick that ends while the fixer runs is left alone, and every handback ends the pick", async () => {
@@ -1144,6 +1558,69 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 	});
 
+	test("a round whose handback GitHub keeps refusing is set aside, and frees its fixer slot", async () => {
+		const { repo, state, fix, context } = setup(1);
+		const base = repo.main();
+		const removed = (number: number, minute: number): Pull => {
+			const head = repo.pull(number, { [`feature-${number}.txt`]: "new\n" });
+			return {
+				number,
+				head,
+				enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+				removals: [
+					{
+						id: `R${number}`,
+						createdAt: at(minute),
+						reason: "failed_checks",
+						actor: "github-merge-queue",
+						before: head,
+					},
+				],
+			};
+		};
+		const github = {
+			...world(
+				[removed(5, 4), removed(6, 5)],
+				[failedRun(5, at(3), base), { ...failedRun(6, at(3), base), id: 8 }],
+			),
+			origin: repo.origin,
+		};
+		github.now = Date.parse(at(6));
+		fix.round(
+			5,
+			`printf '[{"number":%s,"action":"handback","diagnosis":"the test asserts the old behavior","recommendation":"decide which behavior is right"}]' "$2" > quest-land-result.json\n`,
+		);
+		fix.round(6, flakyScript);
+		// One fixer slot: 6 waits for 5's.
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 5 failed_checks fix",
+			"removed 6 failed_checks fix",
+			"fixing 5",
+		]);
+		await exited(state);
+		// GitHub refuses every comment on 5, so its handback never posts.
+		const refusing = () => {
+			const dependencies = deps(github);
+			const original = dependencies.fetch;
+			dependencies.fetch = (async (input, init) => {
+				if (init?.method === "POST" && new URL(String(input)).pathname.endsWith("/issues/5/comments"))
+					return Response.json({ message: "refused" }, { status: 422 });
+				return original(input, init);
+			}) as typeof fetch;
+			return dependencies;
+		};
+		for (let pass = 1; pass < COLLECTION_ATTEMPTS; pass++)
+			expect(await watchPass(REPOSITORY, { state }, refusing(), context)).toEqual([]);
+		expect(fix.calls()).toHaveLength(1);
+		expect(await watchPass(REPOSITORY, { state }, refusing(), context)).toEqual(["set aside 5", "fixing 6"]);
+		expect(
+			readdirSync(state).filter((name) => name.startsWith("watch-job-") && name.endsWith(".json")),
+		).toHaveLength(1);
+		await exited(state);
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			`requeued 6 ${github.pulls[1].head}`,
+		]);
+	});
 	test("a person's removal ends the pick, even of a round re-enqueued just before a restart", async () => {
 		const { repo, state, fix, context } = setup();
 		const base = repo.main();

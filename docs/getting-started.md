@@ -4,7 +4,7 @@ Give your repository a quest log that you and your agents share: plans as
 Markdown files, dependencies that `quest check` keeps honest, and work that
 arrives as pull requests you review.
 
-The binary carries the skills and the quest guide, so your repository only pins a
+The binary carries the skills, the quest guide, and the engineering context, so your repository only pins a
 version and installs small stubs that call it.
 
 ## Set it up
@@ -66,8 +66,9 @@ can become ready.
 ## Update or remove it
 
 Upgrade by changing the pin, then rerun `quest init` to add stubs for new
-skills and remove the unmodified stubs of retired ones; existing stubs stay as
-they are. To remove Quest, ask
+skills, refresh the unmodified stubs whose description or setup link changed,
+and remove the unmodified stubs of retired ones; a stub you edited stays as it
+is. To remove Quest, ask
 your agent to follow SETUP.md to remove Quest. It exports active quests to
 GitHub issues, runs `quest uninstall`, and drops the pin. Uninstall never
 deletes your quest tree, and completed plans remain in Git history.

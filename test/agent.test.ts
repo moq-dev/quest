@@ -184,7 +184,7 @@ function setup(keys = "sk-literal op://vault/item/second"): Setup {
 }
 
 /** Real registry and release/restore lifecycle; only the process-ownership backend and CLI are fake. */
-function managed() {
+async function managed() {
 	const s = setup();
 	const home = join(s.runtime, "worktrees");
 	vi.stubEnv("QUEST_WORKTREE_HOME", home);
@@ -218,7 +218,7 @@ function managed() {
 	]);
 	const worktrees = new Worktrees(home);
 	worktrees.configure(100_000_000);
-	const record = worktrees.create(s.worktree, "agent", 10_000_000, "HEAD", ["cache"]);
+	const record = await worktrees.create(s.worktree, "agent", 10_000_000, "HEAD", ["cache"]);
 	s.worktree = record.path;
 	return { ...s, worktrees, record };
 }
@@ -413,7 +413,7 @@ test("a key with no credit exits 3 so the spawn resumes on the next key", async 
 });
 
 posix("codex runs with its key variable and reports its thread and last message", async () => {
-	const s = managed();
+	const s = await managed();
 	const started = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
 	expect(started).toEqual({ code: 0, stdout: "session thread-1\noutcome finished\n\nfinal reply\n", stderr: "" });
 	expect(s.calls()[0].argv).toEqual([
@@ -510,7 +510,7 @@ test("a finished turn whose reply mentions credit is not an exhausted key", asyn
 });
 
 posix("a retried codex stream error does not fail a completed turn", async () => {
-	const s = managed();
+	const s = await managed();
 	vi.stubEnv("FAKE_MODE", "reconnect");
 	const result = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
 	expect(result).toEqual({ code: 0, stdout: "session thread-1\noutcome finished\n\nfinal reply\n", stderr: "" });
@@ -552,7 +552,7 @@ test("a launch refuses while stop --all is ending the spawn", async () => {
 });
 
 posix("an agent whose record is lost is killed rather than left running untracked", async () => {
-	const s = managed();
+	const s = await managed();
 	vi.stubEnv("FAKE_MODE", "late-thread");
 	const running = quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
 	await vi.waitFor(() => expect(s.calls()).toHaveLength(1));
@@ -728,7 +728,7 @@ test("missing keys, positions past the list, and unknown references are usage er
 
 for (const mode of ["finished", "decision", "crash"]) {
 	posix(`Codex ${mode} releases scratch and resume restores the registered checkout`, async () => {
-		const s = managed();
+		const s = await managed();
 		vi.stubEnv("FAKE_MODE", mode);
 		mkdirSync(join(s.worktree, "cache"));
 		writeFileSync(join(s.worktree, "cache", "build"), "scratch");
@@ -768,7 +768,7 @@ posix("Codex refuses an unmanaged checkout before resolving credentials or writi
 });
 
 posix("Codex refuses unsupported supervision before resolving credentials", async () => {
-	const s = managed();
+	const s = await managed();
 	vi.mocked(systemdScopes.check).mockImplementation(() => {
 		throw new Error("unsupported host");
 	});
@@ -781,7 +781,7 @@ posix("Codex refuses unsupported supervision before resolving credentials", asyn
 });
 
 posix("Codex rejects a registered path whose Git ownership was replaced before credentials", async () => {
-	const s = managed();
+	const s = await managed();
 	rmSync(join(s.worktree, ".git"));
 	execFileSync("git", ["-C", s.worktree, "init", "-q"]);
 	const result = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
@@ -792,7 +792,7 @@ posix("Codex rejects a registered path whose Git ownership was replaced before c
 });
 
 posix("a Codex release failure is reported instead of a finished outcome", async () => {
-	const s = managed();
+	const s = await managed();
 	mkdirSync(join(s.worktree, "cache"));
 	writeFileSync(join(s.worktree, "cache", "tracked"), "keep");
 	execFileSync("git", ["-C", s.worktree, "add", "-f", "cache/tracked"]);

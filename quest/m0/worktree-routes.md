@@ -1,27 +1,36 @@
-# [S] Live-check Claude's other worktree routes
+# [XS] Live-check remote control's worktrees
 
 ## Goal
 
-Every way Claude Code creates a worktree works with `quest worktree
-hook`, or the README's "Claude Code checkouts" section says what doesn't:
-`--worktree '#123'` and PR URLs, background sessions in agent view,
-`claude remote-control` worktree mode, and workflow agents. Each route's
-checkout is created, released when its agent stops, and removed.
+`claude remote-control --spawn worktree` works with `quest worktree hook`, or
+the README's "Claude Code checkouts" section says what doesn't: a session
+spawned from claude.ai or the Claude app gets a hook-created checkout, and
+ending the session removes it when it has no changes and keeps it otherwise.
 
 ## Plan
 
-Decided 2026-11-01 (user, /quest-plan of the follow-ups from the
-2026-11-01 `/quest-complete` sessions): ✅ plan it, [S], m0, from
-[moq-dev/quest#350](https://github.com/moq-dev/quest/pull/350)'s suggested
-follow-ups.
+[moq-dev/quest#425](https://github.com/moq-dev/quest/pull/425) live-checked
+the other routes with Claude Code 2.1.316 and documented them. Remote control
+needs a session spawned from claude.ai or the Claude app, which a headless
+agent can't do, so its README description comes from Claude Code's own code:
 
-- #350 verified subagents, `EnterWorktree`/`ExitWorktree`, a suspended
-  decision, a restored session, and a crash with Claude Code 2.1.316.
-- PR routes: does Claude still fetch the PR's head when a hook creates the
-  worktree, since `WorktreeCreate` starts from `origin/HEAD`?
-- Workflow agents: `SubagentStop` releases only a checkout named
-  `agent-<agent_id>`. If a workflow agent's worktree is named otherwise, it
-  is never released.
-- Run from a session that is not itself worktree-isolated, in a scratch
-  repository with `QUEST_WORKTREE_HOME` isolated, as #350 did. Fix what
-  fails, or plan a quest for it.
+- The bridge creates a spawned session's worktree through `WorktreeCreate`,
+  named `bridge-<session ID>`, and no `SubagentStart` or `SubagentStop` fires
+  for it, so it is never released.
+- When the session ends, or `claude remote-control` shuts down, it compares
+  the checkout with the commit it started at. A checkout without changes is
+  removed through `WorktreeRemove`, and one with changes is kept.
+- The bridge never runs `git worktree unlock` on a hook-created checkout,
+  since it records no Git root for one, so quest's lock stays in place.
+
+Check it from a scratch repository with the worktree hooks configured (the
+opt-in user-level setup once
+[quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md) lands), with
+`QUEST_WORKTREE_HOME` isolated: start `claude remote-control --spawn worktree`,
+spawn a session from claude.ai, end it once without changes and once with an
+untracked file, and watch `quest worktree status`. Fix the README if it
+differs.
+
+## Waiting
+
+- Maintainer: spawn a remote-control session from claude.ai or the Claude app against a scratch repository, as the Plan says; done once the README matches what happened.

@@ -12,9 +12,10 @@ batching host gate (`quest land serve`) is then retired.
 
 The epic finishes with an end-to-end run on moq-dev/moq: a PR the queue drops
 for a failing build is fixed and re-enqueued, a PR dropped for a conflict is
-resolved and re-enqueued, a flaky failure is re-enqueued unchanged, and a
-design conflict is handed back. The README's landing section describes the
-watcher.
+resolved and re-enqueued, a flaky failure is re-enqueued unchanged, a test
+seen flaking twice is disabled by a PR that lands through moq's queue with its
+`quest/m0/flaky/` epic passing `quest check`, and a design conflict is handed
+back. The README's landing section describes the watcher.
 
 Non-goals: moq's own switch (its ruleset, its `merge_group` workflow, the
 runner label, and retiring its `quest land` requirement). moq-dev/moq plans
@@ -78,14 +79,19 @@ Decision prompts, selected options marked ✅:
 - Flaky failures:
   - ✅ The fixer re-enqueues them unchanged, and a test seen flaking twice is
     disabled in a separate PR with a follow-up quest; the rerun before blame
-    (#375) is dropped. See [Flaky failures](/quest/m0/queue-watcher/flaky.md).
+    (#375) is dropped. Done in [moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406).
+    Refined 2026-11-03 (coordinator, /quest-complete follow-ups): a failure
+    that reproduces on the base or comes from the runner is not a flaky
+    verdict ([Genuine flakes only](/quest/m0/queue-watcher/flaky-verdicts.md)).
+    The end-to-end run covers the first disable PR, and the host gate gets
+    no flaky record, since its work is frozen until it is retired.
 - Pick record (decided 2026-11-02, replacing "Picks GitHub refuses to
   enqueue: ✅ The watcher fixes them"):
   - ✅ GitHub's records only. Drop the comment and `pick.ts`. The watcher
     reads queue events and auto-merge state. A pick GitHub refuses fails the
     command, and /quest-merge recommends /quest-iterate as it does today.
-    `bad-picks.md` shrinks to enqueueing PRs with auto-merge armed that
-    GitHub never queued
+    Bad picks shrinks to enqueueing PRs with auto-merge armed that GitHub
+    never queued, which `quest land watch` now does
     ([community#209348](https://github.com/orgs/community/discussions/209348)).
   - Comment only on refusal
   - Keep the comment on every pick
@@ -101,8 +107,7 @@ Decision prompts, selected options marked ✅:
   [community#50327](https://github.com/orgs/community/discussions/50327)).
   /quest-merge already refuses heads with failing checks or conflicts, so a
   refusal only happens if the base moves between that check and the enqueue.
-  See `quest land watch` (`src/cli/land-watch.ts`) and
-  [Bad picks](/quest/m0/queue-watcher/bad-picks.md).
+  See `quest land watch` (`src/cli/land-watch.ts`, `enqueueArmed`).
 - Milestone:
   - ✅ m0, at the top
 
@@ -130,11 +135,9 @@ Shared shape, for the children to follow:
 
 ## Required
 
-- [Bad picks](/quest/m0/queue-watcher/bad-picks.md) - a pick whose auto-merge is armed on a ready PR GitHub never queued is enqueued at the head it was armed on
-- [Flaky failures](/quest/m0/queue-watcher/flaky.md) - a flaky failure is re-enqueued unchanged, and a test seen flaking twice is disabled in a separate PR with a follow-up quest
-- [Watcher on the host](/quest/m0/queue-watcher/host.md) - kixelated/nixos runs the watcher for moq-dev/moq beside its fixer container
-- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - condition: quest, rind and rust2 are cut over; rind and rust2 each land a PR, and a fork PR lands
+- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
+- [Genuine flakes only](/quest/m0/queue-watcher/flaky-verdicts.md) - a failure on the base or from the runner never counts toward disabling a test
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 
 ## Related

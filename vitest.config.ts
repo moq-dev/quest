@@ -1,8 +1,9 @@
 import { configDefaults, defineConfig } from "vitest/config";
 
-// `test/live` runs the real agent CLIs on the user's logins, so it runs only
-// with QUEST_LIVE=1, as `just review-sandbox` sets, and alone. A reviewer turn
-// takes minutes; its timeout only bounds a hung CLI.
+// `test/live` runs the real agent CLIs, so it runs only with QUEST_LIVE=1, and
+// alone: `just review-sandbox` on the user's logins, and `just runner-sandbox`
+// with a scripted model, nightly in CI. A reviewer turn takes minutes; its
+// timeout only bounds a hung CLI.
 const live = process.env.QUEST_LIVE === "1";
 
 export default defineConfig({

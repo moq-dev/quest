@@ -21,6 +21,12 @@ bounded test PR verify the integration before contributors are invited.
   upstream under its branch rules, GitHub's signature on the App's API
   commits, a same-repository pull request opened by the App, and an
   iteration pushing an upstream pull request head under branch rules.
+- Check a runner's review against the real checks API, which
+  [moq-dev/quest#417](https://github.com/moq-dev/quest/pull/417) tests only
+  against the fake: a merge job's delivered head gets the App's
+  `quest review` check run, a failing round followed by a passing one leaves
+  the passing run as the latest, and kix lands the head with no human
+  approval. The installation needs **Checks: write** for it.
 - Install the PWA and receive a push notification on real Android, iOS, and
   desktop devices (from
   [moq-dev/quest#165](https://github.com/moq-dev/quest/pull/165), whose
@@ -34,6 +40,17 @@ bounded test PR verify the integration before contributors are invited.
   [moq-dev/quest#190](https://github.com/moq-dev/quest/pull/190) handles
   either way (adopt it if open, open a new one if closed) but tests only
   against the fake. Added 2026-10-22 (user).
+- Each pilot's setup page shows no Pull-request CI warning before
+  contributors are invited (Read-only pull-request CI in
+  `cloudflare/GITHUB.md`; moved from the read-only CI quest on 2026-11-02).
+  Read with `gh api` that day: both default workflow tokens are read-only,
+  but the moq-dev organization shares its `DISCORD_WEBHOOK` secret with both
+  pilots, and moq-dev/moq keeps 18 repository secrets, including the
+  `MBX_R2_*` pair its `check.yml` passes to `pull_request` checks; moq-dev/moq
+  tracks moving them in
+  [read-only secrets](https://github.com/moq-dev/moq/blob/main/quest/m0/ci/read-only-secrets.md).
+  Its environments name only protected branches, its merge queue's, and tags.
+  Accept the App's new CI-check permissions on both installations first.
 - Rehearse on the operator's own runner and an explicitly selected
   operator account.
 - Record nonsecret setup/run instructions and deployment identifiers.
@@ -42,4 +59,3 @@ bounded test PR verify the integration before contributors are invited.
 ## Required
 
 - [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the live origin and registered App
-- [Owner allowlist](/quest/m0/kix/owners.md) - only moq-dev can enroll before contributors are invited

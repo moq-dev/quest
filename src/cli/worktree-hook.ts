@@ -11,11 +11,18 @@ import {
 	Worktrees,
 	canonical,
 	derivedDefaults,
+	discoveryEnv,
 	mainCheckout,
 } from "./worktree";
 
-/** The Claude Code events `quest worktree hook` handles, in the order `quest init` installs them. */
-export const HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"] as const;
+// The events this handles are the core's HOOK_EVENTS, which `quest init` installs.
+export { HOOK_EVENTS } from "../core";
+
+/**
+ * The guide's workspace, which holds an agent's reports and logs. Its parent reads them after it stops,
+ * so a subagent's automatic release keeps it; removing the checkout deletes it with the other scratch.
+ */
+const WORKSPACE = ".tmp";
 
 /** The fields of a Claude Code hook's JSON input that these events read. */
 interface HookInput {
@@ -55,7 +62,11 @@ async function waiting<T>(action: () => T | Promise<T>): Promise<T> {
 }
 
 function git(path: string, ...args: string[]): string {
-	return execFileSync("git", ["-C", path, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	return execFileSync("git", ["-C", path, ...args], {
+		encoding: "utf8",
+		env: discoveryEnv(),
+		stdio: ["ignore", "pipe", "pipe"],
+	}).trim();
 }
 
 /** The top of the checkout holding `cwd`, or undefined outside any. */
@@ -80,32 +91,108 @@ function base(cwd: string): string {
 }
 
 /**
+ * The head of the pull or merge request a checkout named `pr-<number>` is for, or undefined when origin
+ * has none. Claude names the worktree for `--worktree '#<number>'` or a request's URL `pr-<number>` and
+ * passes the hook only that name, so a literal `pr-<number>` gets the request's head too. Like Claude,
+ * it reads origin's `refs/pull/<number>/head` (GitHub) and `refs/merge-requests/<number>/head` (GitLab),
+ * refusing the request when origin has both at different commits. The head is fetched into
+ * `origin/pr/<number>` or `origin/mr/<number>`, so removing the checkout counts its commits as preserved.
+ */
+function pullRequest(cwd: string, name: string): string | undefined {
+	const number = /^pr-([1-9][0-9]*)$/.exec(name)?.[1];
+	if (number === undefined) return undefined;
+	try {
+		git(cwd, "remote", "get-url", "origin");
+	} catch {
+		return undefined;
+	}
+	const tracking = new Map([
+		[`refs/pull/${number}/head`, `refs/remotes/origin/pr/${number}`],
+		[`refs/merge-requests/${number}/head`, `refs/remotes/origin/mr/${number}`],
+	]);
+	const heads = new Map<string, string>();
+	for (const line of git(cwd, "ls-remote", "origin", ...tracking.keys()).split("\n")) {
+		const [sha, ref] = line.split("\t");
+		if (sha && ref && tracking.has(ref)) heads.set(ref, sha);
+	}
+	if (new Set(heads.values()).size > 1)
+		throw new Error(
+			`origin has both ${[...tracking.keys()].join(" and ")} at different commits, so it is unclear which is #${number}; ` +
+				"delete the one your forge does not create",
+		);
+	const [ref] = heads.keys();
+	if (ref === undefined) return undefined;
+	const local = tracking.get(ref)!;
+	git(cwd, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", `+${ref}:${local}`);
+	return git(cwd, "rev-parse", "--verify", "--quiet", `${local}^{commit}`);
+}
+
+/** Claude's name for a workflow agent's worktree, `<run ID>-<agent number>`, which carries no agent ID. */
+const WORKFLOW_CHECKOUT = /^wf_[0-9a-f]{8}-[0-9a-f]{3}-[0-9]+$/;
+
+/**
  * The checkout Claude created for this subagent. Claude names a subagent's worktree `agent-<agent_id>`,
- * so a subagent that runs without isolation in another agent's checkout never matches it.
+ * so a subagent that runs without isolation in another agent's checkout never matches it. A workflow
+ * agent's worktree is named for its run instead, so it is bound to the first subagent that starts in
+ * it, which is the workflow agent itself; one that later runs there without isolation never matches.
  */
 async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise<WorktreeRecord | undefined> {
-	const path = toplevel(input.cwd);
-	const record = path === undefined ? undefined : await waiting(() => worktrees.registered(path));
-	return record?.name === `agent-${field(input, "agent_id")}` ? record : undefined;
+	let path = toplevel(input.cwd);
+	let record: WorktreeRecord | undefined;
+	while (path && !record) {
+		const checkout = path;
+		record = await waiting(() => worktrees.registered(checkout));
+		path = git(checkout, "rev-parse", "--show-superproject-working-tree") || undefined;
+	}
+	const agent = field(input, "agent_id");
+	if (record?.name === `agent-${agent}`) return record;
+	if (record === undefined || !WORKFLOW_CHECKOUT.test(record.name)) return undefined;
+	const { id } = record;
+	const bound = input.hook_event_name === "SubagentStart" ? await waiting(() => worktrees.bind(id, agent)) : record;
+	return bound.agent === agent ? bound : undefined;
 }
 
 /**
  * Handle one hook event and return what it prints on stdout, if anything. WorktreeCreate checks
- * out Claude's default base under the main checkout's `.worktrees/`, with derived defaults, and
- * prints its path; an existing checkout of that name in the repository is restored instead.
- * WorktreeRemove removes the checkout, never forcing. SubagentStop releases the subagent's own
+ * out Claude's default base, or a pull request's head for `pr-<number>`, under the main checkout's
+ * `.worktrees/`, with derived defaults, and prints its path; an existing checkout of that name in the
+ * repository is restored instead.
+ * WorktreeRemove removes the checkout after recursive safety checks. SubagentStop releases the subagent's own
  * checkout, and SubagentStart restores it, telling the subagent when its scratch was deleted.
  */
-export async function claudeHook(input: unknown, worktrees: Worktrees, merged: Merged): Promise<string | undefined> {
+export async function claudeHook(
+	input: unknown,
+	worktrees: Worktrees,
+	merged: Merged,
+	project?: string,
+): Promise<string | undefined> {
 	const hook = parse(input);
 	switch (hook.hook_event_name) {
 		case "WorktreeCreate": {
 			const name = field(hook, "name");
-			const main = mainCheckout(hook.cwd);
+			let cwd = toplevel(hook.cwd);
+			if (!cwd) throw new Error(`hook cwd is not in a Git checkout: ${hook.cwd}`);
+			// The hook's project anchors ownership when cwd is inside a submodule, without
+			// changing which repository a session opened directly in a vendored project owns.
+			if (project && toplevel(project)) {
+				const main = mainCheckout(project);
+				let enclosing = cwd;
+				while (mainCheckout(enclosing) !== main) {
+					const parent = git(enclosing, "rev-parse", "--show-superproject-working-tree");
+					if (!parent) break;
+					enclosing = parent;
+				}
+				if (mainCheckout(enclosing) === main) cwd = enclosing;
+			}
+			const main = mainCheckout(cwd);
 			const existing = await waiting(() => worktrees.registered(join(main, ".worktrees", name)));
-			if (existing?.name === name) return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;
+			if (existing?.name === name) {
+				// Claude reuses a name, such as a resumed workflow run's, for an agent that binds afresh.
+				await waiting(() => worktrees.bind(existing.id));
+				return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;
+			}
 			const { reserve, scratch } = derivedDefaults(main);
-			const ref = base(hook.cwd);
+			const ref = pullRequest(cwd, name) ?? base(cwd);
 			return `${(await waiting(() => worktrees.create(main, name, reserve, ref, scratch))).path}\n`;
 		}
 		case "WorktreeRemove": {
@@ -120,17 +207,17 @@ export async function claudeHook(input: unknown, worktrees: Worktrees, merged: M
 		case "SubagentStart": {
 			const record = await subagentCheckout(worktrees, hook);
 			if (!record) return undefined;
-			const released = record.phase === "released" && record.scratch.length > 0;
+			const deleted = record.phase === "released" ? record.scratch.filter((path) => path !== WORKSPACE) : [];
 			await waiting(() => worktrees.restore(record.id));
-			if (!released) return undefined;
+			if (!deleted.length) return undefined;
 			const additionalContext =
-				`Quest released this checkout while you were stopped, deleting its ignored scratch (${record.scratch.join(", ")}). ` +
+				`Quest released this checkout while you were stopped, deleting its ignored scratch (${deleted.join(", ")}). ` +
 				"Reinstall or rebuild what you need before using it.";
 			return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext } })}\n`;
 		}
 		case "SubagentStop": {
 			const record = await subagentCheckout(worktrees, hook);
-			if (record) await waiting(() => worktrees.release(record.id));
+			if (record) await waiting(() => worktrees.release(record.id, [WORKSPACE]));
 			return undefined;
 		}
 		default:

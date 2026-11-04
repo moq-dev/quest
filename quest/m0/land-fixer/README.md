@@ -39,10 +39,10 @@ moq-dev/rust2, moq-dev/rind and moq-dev/quest.
 | 98 | "already used its mechanical fix attempt" after a collateral requeue or an earlier conflict fix; each needed a manual re-pick | stop rules ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)), batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | ~75 | "requeued unchanged": collateral of a batch another PR broke | batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) |
 | 36 | picked again while fixing; the newer pick is kept, so nothing is lost | not planned |
-| 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | blocked by design; fixer-written protected edits become a ready commit ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)) |
+| 17 | conflicts in protected paths (`flake.nix`, `.github/`), mostly mechanical; resolved by hand on moq-dev/moq#7344, #7315, #7318 | kept blocked; a fixer-written protected edit is handed back with a ready commit for `quest land apply` by [moq-dev/quest#409](https://github.com/moq-dev/quest/pull/409) |
 | 17 of the last 40 jobs | `cargo` fails offline ("failed to get `uniffi`"), so Rust fixes were requeued uncompiled: moq-dev/moq#7357 sank three batches, and #6985's lockfile could not be regenerated | fixed by [moq-dev/quest#356](https://github.com/moq-dev/quest/pull/356): the prompt allows dependency fetches and requires a build and test |
 | 2 | GitHub refused the push to a fork because the merge touches workflows: moq-dev/moq#7439, #7467 | handed back with a ready commit for `quest land apply` by [moq-dev/quest#358](https://github.com/moq-dev/quest/pull/358) |
-| several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | [Flaky failures](/quest/m0/queue-watcher/flaky.md) |
+| several batches | a flaky ffmpeg timeout ([moq-dev/moq#7480](https://github.com/moq-dev/moq/pull/7480)) ejected whole batches | the watcher re-enqueues flaky failures and disables a test seen flaking twice ([moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406)) |
 | ~15 | design conflicts, correctly handed back | none |
 
 Decision prompts, selected options marked ✅:
@@ -51,8 +51,8 @@ Decision prompts, selected options marked ✅:
   - Yes, as stated (triage and local mergeability stay separate)
   - Narrower: only the attempt budget and offline builds
   - ✅ Broader: also fold batch triage ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355))
-    and [Local mergeability](/quest/m0/queue-watcher/bad-picks.md) into
-    this epic
+    and Local mergeability (later Bad picks, finished by `quest land watch`
+    enqueueing armed picks GitHub never queued) into this epic
 - How attempts count: unlimited while progressing, with three stop rules
   ([moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)).
 - How the fixer gets dependencies:
@@ -66,7 +66,7 @@ Decision prompts, selected options marked ✅:
 - Protected paths: the fixer first could edit them (moq-dev/quest#357), then not; see the 2026-11-01 audit below.
 - Fork pushes GitHub refuses: ✅ hand back a ready commit, which `quest land apply` rebuilds
   for a maintainer to push (Grant moq-bot the `workflows` permission · Leave it manual).
-- Flaky tests: see [Flaky failures](/quest/m0/queue-watcher/flaky.md).
+- Flaky tests: the watcher re-enqueues them, and disables a test seen flaking twice in a separate PR ([moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406)).
 - Milestone for the new quests: ✅ m0 · m1
 - Restated 2026-11-01 (user, a second /quest-plan): "the merge queue can
   autonomously fix most issues. The fixer inspects the batch and tries to
@@ -102,8 +102,7 @@ Decision prompts, selected options marked ✅:
   disables auto-merge. Batch triage
   ([moq-dev/quest#355](https://github.com/moq-dev/quest/pull/355)) built this parking:
   a PR is parked while a fixer job holds it (`src/cli/land-park.ts`), and
-  [Local mergeability](/quest/m0/queue-watcher/bad-picks.md) follows the same
-  rule.
+  Local mergeability was to follow the same rule.
 - Audit of the merge-queue plan, 2026-11-01 (an independent read-only
   agent; the maintainer then decided each point). On moq over 24 hours: 128
   landed and 390 ejected; 66 of 138 sandbox checks failed; batches stayed at
@@ -111,7 +110,7 @@ Decision prompts, selected options marked ✅:
   PRs broken against the current base, and not fixer capability. Decisions:
   - Protected paths: ✅ keep `validateFix`'s block and route fixer-written
     protected edits through moq-dev/quest#358's ready commit
-    ([Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md)); moq-dev/quest#357 closed · keep #357 · #357 minus workflows
+    ([moq-dev/quest#409](https://github.com/moq-dev/quest/pull/409)); moq-dev/quest#357 closed · keep #357 · #357 minus workflows
   - Fixer comments: ✅ the daemon posts them from the fixer's result, no
     token in the container (moq-bot comments carry trust: `quest land apply`,
     the daemon's markers, `quest status`) · keep the token
@@ -125,8 +124,11 @@ Decision prompts, selected options marked ✅:
     closed unmerged by the merge-queue switch below.
 - Amended 2026-11-01 (maintainer, /quest-plan in moq-dev/moq): a fixer merge
   on [moq-dev/moq#7318](https://github.com/moq-dev/moq/pull/7318) rebuilt
-  `bun.lock` from the PR's side and undid the base's advisory fix; see
-  [Lockfile merges](/quest/m0/land-fixer/lockfile.md).
+  `bun.lock` from the PR's side and undid the base's advisory fix.
+  [moq-dev/quest#410](https://github.com/moq-dev/quest/pull/410) gave
+  `assets/land-fix.md` a Lockfiles procedure: rebuild from the base's copy with
+  the package manager's minimal resolve, and hand back any change that does not
+  trace to the PR.
 
 - Superseded 2026-11-01 (maintainer, /quest-plan; see the
   [queue watcher](/quest/m0/queue-watcher/README.md)): repositories land
@@ -136,9 +138,9 @@ Decision prompts, selected options marked ✅:
   the attempt budget (now the stop rules,
   [moq-dev/quest#384](https://github.com/moq-dev/quest/pull/384)),
   local mergeability and CI-failure parking (then
-  [Bad picks](/quest/m0/queue-watcher/bad-picks.md), dropped 2026-11-02: a
-  pick GitHub refuses fails `quest merge` instead), and flaky tests (now
-  [Flaky failures](/quest/m0/queue-watcher/flaky.md), without the rerun).
+  Bad picks, dropped 2026-11-02: a pick GitHub refuses fails `quest merge`
+  instead, and the watcher only enqueues armed picks GitHub never queued), and flaky tests (done
+  without the rerun in [moq-dev/quest#406](https://github.com/moq-dev/quest/pull/406)).
   Deleted: the batch quest check, pre-checks, and throughput tuning, which
   only served batches (the fixer cap and reasoning effort moved to the
   watcher, as `quest land watch --fixer-jobs` and `--fixer-effort`); and queue status in
@@ -151,10 +153,9 @@ work, done once the Required quests below have merged.
 
 ## Required
 
+- [Leave held PRs alone](/quest/m0/land-fixer/holds.md) - the watcher never fixes, pushes to, or re-enqueues a PR another session holds
+- [Run the repository's checks](/quest/m0/land-fixer/checks.md) - the fixer runs the repository's own lint, type, build, and test checks before it requeues
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
-- [Lockfile merges](/quest/m0/land-fixer/lockfile.md) - a conflicted lockfile is rebuilt from the base's copy, so a fix never reverts the base's dependency changes
-- [Protected edits as ready commits](/quest/m0/land-fixer/protected-commit.md) - a fixer edit `validateFix` rejects for touching protected paths comes back as a commit the maintainer applies
-- [PR CI as a signal](/quest/m0/land-fixer/pr-signal.md) - `/quest-merge` and the fixer read a PR's own CI without gating on it; public repos may run it, private ones need not
 
 ## Related
 

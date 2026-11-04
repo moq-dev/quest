@@ -86,6 +86,8 @@ interface CheckFixture {
 	/** The workflow file a job runs in, and whether its run is still going, so it may yet create jobs. */
 	workflow?: string;
 	running?: boolean;
+	/** A check run's ID, which grows with each run; its place in the page by default. */
+	id?: number;
 }
 
 /** The head's checks; `null` means the head has no checks at all. */
@@ -96,7 +98,7 @@ function checks(
 	listed = head,
 	extra: Record<string, unknown> = {},
 ) {
-	const node = (entry: CheckFixture) =>
+	const node = (entry: CheckFixture, index: number) =>
 		entry.status
 			? {
 					__typename: "StatusContext",
@@ -108,6 +110,7 @@ function checks(
 				}
 			: {
 					__typename: "CheckRun",
+					databaseId: entry.id ?? index + 1,
 					name: entry.name,
 					status: entry.result ? "COMPLETED" : "IN_PROGRESS",
 					conclusion: entry.result ?? null,
@@ -689,6 +692,53 @@ test("unresolvable pushed SHA fails with a timestamp recommendation", async () =
 	await expect(waitForActivity(pr, { since: B }, fixture.deps)).rejects.toThrow("pass a timestamp with --since");
 });
 
+test("a SHA a merge into the branch made resolves to the merge's time, and the merge never prints as a push", async () => {
+	for (const type of ["pr_merge", "merge_queue_merge"]) {
+		const fixture = setup(
+			[
+				pull(),
+				response([pushed(A, POINT, type), pushed(B, "2026-10-07T11:00:00Z")]),
+				response([
+					committed(B),
+					committed(A),
+					reviewed(1, "2026-10-07T11:30:00Z"),
+					reviewed(2, "2026-10-07T12:05:00Z"),
+				]),
+			],
+			[B, A],
+		);
+		const lines = await waitForActivity(pr, { since: A }, fixture.deps);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("pullrequestreview-2 q1.");
+	}
+});
+
+test("the current head a merge into the branch made is the default point", async () => {
+	const fixture = setup([pull(), response([pushed(A, POINT, "pr_merge")]), response([committed(A), reviewed()])]);
+	const lines = await waitForActivity(pr, {}, fixture.deps);
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toContain("pullrequestreview-1 q1.");
+});
+
+test("a merge into the branch after the point is reported as its new commit, not as a push", async () => {
+	const fixture = setup(
+		[
+			pull(undefined, B),
+			response([pushed(B, "2026-10-07T12:05:00Z", "pr_merge"), pushed()]),
+			response([committed(A), committed(B)]),
+		],
+		[A, B],
+	);
+	const lines = await waitForActivity(pr, { since: A }, fixture.deps);
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toMatch(new RegExp(`^${B} committed `));
+});
+
+test("a branch update that is not a move never resolves the point", async () => {
+	const fixture = setup([pull(), response([pushed(), pushed(B, POINT, "branch_deletion")])]);
+	await expect(waitForActivity(pr, { since: B }, fixture.deps)).rejects.toThrow("cannot resolve push time");
+});
+
 test("SHA lookup paginates repository activity", async () => {
 	const fixture = setup(
 		[
@@ -1007,6 +1057,51 @@ test("a gated base's quest land check, which no head carries, never holds back c
 	expect(lines[0]).toMatch(/^2026-10-07T12:05:00Z checks:passed check /);
 });
 
+test("a rerun supersedes a cancelled run of a required check, which never wakes the wait as failed", async () => {
+	const fixture = setup([pull(), response([pushed()]), response([committed(A)]), response([committed(A)])], [A], {
+		checks: [
+			checks([
+				{ name: "check", required: true, result: "CANCELLED", time: LATER },
+				{ name: "check", required: true },
+			]),
+			checks([
+				{ name: "check", required: true, result: "SUCCESS", time: LATEST, id: 2 },
+				{ name: "check", required: true, result: "CANCELLED", time: LATER, id: 1 },
+			]),
+		],
+		protected: ["check"],
+	});
+	const lines = await waitForActivity(pr, {}, fixture.deps);
+	expect(fixture.sleeps).toEqual([300_000]);
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toMatch(/^2026-10-07T12:08:00Z checks:passed check /);
+	const query = (fixture.checkCalls[0].body as { query: string }).query.replace(/\s+/g, " ");
+	expect(query).toContain("... on CheckRun { databaseId name");
+	expect(query).toContain("checkSuite { status app { databaseId }");
+});
+
+test("a superseded workflow run's failed gate never wakes the wait, as on moq-dev/moq#7325", async () => {
+	// Concurrency cancelled the older run, whose gate then failed on purpose; the newer run passed.
+	const older: CheckFixture[] = [
+		{ name: "Scope", result: "CANCELLED", time: LATER, id: 1 },
+		{ name: "Release gate", required: true, result: "FAILURE", time: LATER, id: 2 },
+	];
+	const fixture = setup([pull(), response([pushed()]), response([committed(A)]), response([committed(A)])], [A], {
+		checks: [
+			checks([...older, { name: "Scope", id: 3 }, { name: "Release gate", required: true, id: 4 }]),
+			checks([
+				...older,
+				{ name: "Scope", result: "SUCCESS", time: LATEST, id: 3 },
+				{ name: "Release gate", required: true, result: "SUCCESS", time: LATEST, id: 4 },
+			]),
+		],
+		protected: ["Release gate"],
+	});
+	const lines = await waitForActivity(pr, {}, fixture.deps);
+	expect(fixture.sleeps).toEqual([300_000]);
+	expect(lines).toEqual([expect.stringMatching(/^2026-10-07T12:08:00Z checks:passed Release_gate /)]);
+});
+
 test("optional checks never stand in for required checks that have not started", async () => {
 	const fixture = setup(
 		[pull(), response([pushed()]), response([committed(A)]), response([committed(A)]), response([committed(A)])],
@@ -1122,6 +1217,9 @@ test("checks:passed is dated when the head goes idle, after required checks fini
 	expect(fixture.sleeps).toEqual([300_000]);
 	expect(lines).toHaveLength(1);
 	expect(lines[0]).toMatch(/^2026-10-07T12:08:00Z checks:passed check /);
+	const query = (fixture.checkCalls[0].body as { query: string }).query.replace(/\s+/g, " ");
+	expect(query).toContain("... on CheckRun { databaseId name");
+	expect(query).toContain("checkSuite { status app { databaseId }");
 });
 
 test("with no required checks, an unfinished workflow run holds back checks:passed", async () => {

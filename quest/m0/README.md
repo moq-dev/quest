@@ -9,12 +9,20 @@ web app with push notifications, and their own Linux and macOS runners do
 the work through Claude Code and opencode inside each project's Nix
 devShell. The GitHub App bot publishes ordinary PRs. The standalone CLI
 (v0.1.0 shipped on 2026-10-07) keeps serving the same repositories locally on
-macOS, Linux, and native Windows.
+macOS and Linux.
 
-Work that only third-party repositories need, and the public launch, belong
-to [m1](/quest/m1/README.md).
+Work that only third-party repositories need, native Windows, and the public
+launch belong to [m1](/quest/m1/README.md).
 
 ## Plan
+
+Decided 2026-11-03 (user, /quest-complete, on
+[moq-dev/quest#455](https://github.com/moq-dev/quest/pull/455)), after the
+native Windows suite moved to m1 with nightly-only coverage:
+
+- Should m0's Goal drop native Windows?
+  - ✅ Narrow m0's Goal (recommended)
+  - Leave it
 
 Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
 
@@ -70,7 +78,7 @@ ownership-manifest design:
   2026-10-26 (user), replacing "Nothing is vendored", so `quest init` can
   install the agent lifecycle hooks. Amended 2026-11-01 (user, /quest-plan):
   `quest init` also rewrites a Quest-written stub nobody edited when its
-  text is out of date; see [Skill stub cleanup](/quest/m0/skill-stubs.md).)
+  text is out of date.)
 - The repository's own tool manager pins the version: mise (release binaries)
   or a nix flake input (any rev, built from source). Quest ships no launcher
   and no pin file; an install outside either is simply unpinned.
@@ -83,28 +91,21 @@ ownership-manifest design:
 ## Required
 
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
-- [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
-- [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - lockfile merges, protected edits as ready commits, workflow pushes, and the PR's own CI as context
-- [Checks are judged by their latest run](/quest/m0/latest-check-runs.md) - `quest status`, `quest wait`, and the gate count each check's latest run on the head, as GitHub does, so a superseded cancelled or failed run stops failing them or refusing release-plz PRs GitHub would merge
-- [Current landing status](/quest/m0/status-landing.md) - `quest status` clears a stale `landing-stopped` reason once the PR is queued again
-- [Agents don't stall](/quest/m0/agent-stalls.md) - long waits block in the same turn, pre-existing failures don't stop review, and reviewer outages become waits
-- [Follow-ups as agents report](/quest/m0/follow-ups-as-reports.md) - coordinators plan follow-ups as reports arrive, fewer of them, with standing milestone rules
-- [Context before decision prompts](/quest/m0/prompt-context.md) - every prompt explains the work first, and maintainer steps say why an agent can't take them
-- [Coordinator control](/quest/m0/coordinator-control.md) - finish up, pause, and status are defined, and dead agents are resumed
-- [Spawn keeps finding work](/quest/m0/spawn-refill.md) - recompute ready quests per report, resume leftover local branches, and check open PRs before claiming
+- [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched, with merge-commit landing as its one exception
+- [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
+- [Split the rejected-login review test](/quest/m0/review-test-load.md) - each rejected-login variant is its own test, within the default limit under load
+- [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` exits distinctly on a reviewer's quota and prints the reset time
+- [Drafts in quest waiting](/quest/m0/waiting-drafts.md) - `quest waiting` lists open draft PRs' `## Waiting` items beside the tree's
+- [Decision records](/quest/m0/decision-records.md) - grill and plan label rejected options, and record a decision in the PR when the PR deletes the quest
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
+- [Per-PR picks in /quest-complete](/quest/m0/complete-per-pr.md) - one question per PR, with no grouped or blanket option offered
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
-- [Bun EFAULT report](/quest/m0/bun-efault.md) - condition: Bun fixes concurrent `rmSync` on Windows; report it, then drop the workaround
-- [Codex project-config skip](/quest/m0/codex-project-config.md) - condition: Codex keeps a supported way to skip a project's `.codex/` layer; then reviews keep the user's config
+- [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host
+- [Gate load wording](/quest/m0/gate-load-wording.md) - stop naming Spotlight as the cause of a fresh macOS runner's load
 - [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
-- [Review the branch's own change](/quest/m0/review-merge-base.md) - `quest review` diffs against the merge base and accepts a detached `HEAD`
-- [Skill stub cleanup](/quest/m0/skill-stubs.md) - stray skill copies deleted, and `quest init` refreshes unedited outdated stubs
-- [Merge driver upkeep](/quest/m0/merge-driver-upkeep.md) - local merges drop links to finished quests, old drivers upgrade, and `quest-pinned` stays current
-- [Worktree hooks here](/quest/m0/worktree-hooks.md) - `quest` reaches Claude Code's hooks and the merge driver in this repository, then `quest init` installs the hooks
-- [Other worktree routes](/quest/m0/worktree-routes.md) - live-check PR worktrees, agent view, remote-control, and workflow agents against the hooks
-- [Spotlight off in macOS CI](/quest/m0/ci-spotlight.md) - this repository's macOS jobs turn off Spotlight indexing first
-- [Review through a gateway](/quest/m0/review-gateway.md) - `quest review` keeps gateway, cloud-provider, and Codex connection variables
+- [Agents get the dev shell from user settings](/quest/m0/user-dev-shell/README.md) - maintainers' own Claude and Codex settings load the dev shell; repositories drop dev-shell hooks, Quest worktree hooks, and `nix develop` instructions, and `quest init` writes no hooks
+- [Remote control worktrees](/quest/m0/worktree-routes.md) - live-check `claude remote-control --spawn worktree` against the hooks, from a session spawned on claude.ai
+- [Session checkouts released](/quest/m0/session-checkouts.md) - a Claude session's own checkout is released when the session ends and reclaimed on resume
+- [claude rm upstream report](/quest/m0/claude-rm-upstream.md) - waiting on approval: ask Claude Code to run `WorktreeRemove` instead of advising an unlock
 - [opencode 2.x](/quest/m0/opencode-sdk.md) - the runner drives the opencode 2.x binary through `@opencode/client`, removing the interim 1.19.0 pin
-- [Waiting sections](/quest/m0/waiting-sections.md) - this repository's waiting quests move from prose to `## Waiting`
-- [Review harness check](/quest/m0/review-harness.md) - recurring each milestone: newest pinned review models, and the live sandbox test passes

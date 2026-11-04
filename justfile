@@ -44,7 +44,13 @@ _test:
 # Codex and Claude Code CLIs. Uses each CLI's login and spends its usage; run it
 # after upgrading either CLI. Arguments go to vitest, such as `-t codex`.
 review-sandbox *args:
-    QUEST_LIVE=1 bun run vitest run {{args}}
+    QUEST_LIVE=1 bun run vitest run test/live/review-sandbox {{args}}
+
+# Check that a runner job's commands cannot escape its sandbox, with the pinned
+# opencode and sandbox-runtime and a scripted model, on Linux. Needs no login;
+# CI runs it nightly (.github/workflows/sandbox.yml). Run it after bumping either.
+runner-sandbox *args:
+    QUEST_LIVE=1 bun run vitest run test/live/runner-sandbox {{args}}
 
 # Apply formatters without changing program behavior.
 fix:
@@ -78,6 +84,15 @@ worker-test:
 
 _worker-test:
     bun run --cwd cloudflare test
+
+# Run each Worker test case in its own process, as the scheduled Isolated job does.
+# Pass `--jobs N` or file filters, for example `just worker-test-isolated inbox`.
+worker-test-isolated *args:
+    {{gate}} _worker-test-isolated {{args}}
+
+_worker-test-isolated *args:
+    bun run --cwd cloudflare build
+    bun cloudflare/scripts/isolated.ts {{args}}
 
 # Serve the Worker on localhost with seeded data and a fake GitHub, for checking UI.
 worker-seeded *args:
