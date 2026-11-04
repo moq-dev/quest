@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { checkout, snapshot } from "../src/cli/tree";
 import { check, formatFinding } from "../src/core";
@@ -137,6 +137,10 @@ describe("committed submodule links", { timeout: 20_000 }, () => {
 });
 
 describe("checkout submodule links", { timeout: 20_000 }, () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
 	test("reads a checked-out submodule from disk", () => {
 		const { tree, module } = fixture();
 		writeFileSync(join(module, "dirty.md"), "# Local only\n");
@@ -178,6 +182,30 @@ describe("checkout submodule links", { timeout: 20_000 }, () => {
 		expect(at.exists("dependency/nested/README.md")).toBe(true);
 		expect(at.exists("dependency/nested/missing.md")).toBe(false);
 		expect(seen).toEqual([]);
+	});
+
+	test("ignores the repository location a Git hook exports", () => {
+		const { tree, module } = fixture();
+		const nested = initRepository();
+		writeFileSync(join(nested, "README.md"), "# Nested\n");
+		commit(nested);
+		git(module, "-c", "protocol.file.allow=always", "submodule", "add", "-q", nested, "nested");
+		commit(module);
+		git(module, "submodule", "deinit", "-q", "-f", "nested");
+		tree.append(
+			"quest/m0/epic/one.md",
+			"\n[Nested](../../../dependency/nested/README.md) and [missing](../../../dependency/nested/missing.md).\n",
+		);
+		commit(tree.path);
+		// A pre-commit hook in the superproject runs `quest check` with these set.
+		const store = join(tree.path, ".git");
+		vi.stubEnv("GIT_DIR", store);
+		vi.stubEnv("GIT_WORK_TREE", tree.path);
+		vi.stubEnv("GIT_INDEX_FILE", join(store, "index"));
+		const result = run("--root", tree.path, "check");
+		expect(result.stderr).toBe(
+			"quest: quest/m0/epic/one.md:11: link does not resolve: ../../../dependency/nested/missing.md\n",
+		);
 	});
 
 	test("finds a deinitialized submodule's git directory by its name", () => {

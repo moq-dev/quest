@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import prompt from "../../assets/land-fix.md";
+import { discoveryEnv } from "./git";
 import { programEnvironment, requireProgram } from "./program";
 
 export class FixerAgentError extends Error {
@@ -248,6 +249,7 @@ export async function fix(
 		const head = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${ref}^{commit}`], {
 			cwd: root,
 			encoding: "utf8",
+			env: discoveryEnv(),
 		}).stdout.trim();
 		if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error(`fix needs a ${ref} branch`);
 		return `- #${number}: branch ${ref} at ${head}`;
