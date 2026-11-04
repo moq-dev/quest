@@ -806,22 +806,26 @@ async function openDisable(
 		disable.id = string(pull.node_id);
 		record();
 	}
-	try {
-		disable.done = await requeue(github, disable.id, disable.head, disable.base.ref, "");
-	} catch (error) {
-		if (!(error instanceof FixerRefusal || error instanceof Held)) throw error;
-		await post(
-			github,
-			{ repository },
-			{ number: disable.number!, enabledAt: disable.head },
-			`quest land watch: ${fixerText(error.message)}, so this pull request waits for a maintainer to enqueue it.`,
-			"refused",
-			MERGER,
-		);
-		disable.done = error.message;
-		record();
-		return `disable refused ${name}: ${error.message}`;
+	if (disable.refused === undefined) {
+		try {
+			disable.done = await requeue(github, disable.id, disable.head, disable.base.ref, "");
+			record();
+			return `disabled ${name} ${disable.number}`;
+		} catch (error) {
+			if (!(error instanceof FixerRefusal || error instanceof Held)) throw error;
+			disable.refused = error.message;
+			record();
+		}
 	}
+	await post(
+		github,
+		{ repository },
+		{ number: disable.number!, enabledAt: disable.head },
+		`quest land watch: ${fixerText(disable.refused)}, so this pull request waits for a maintainer to enqueue it.`,
+		"refused",
+		MERGER,
+	);
+	disable.done = disable.refused;
 	record();
-	return `disabled ${name} ${disable.number}`;
+	return `disable refused ${name}: ${disable.refused}`;
 }
