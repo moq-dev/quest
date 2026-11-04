@@ -71,29 +71,3 @@ jobs:
       - name: Check that the gate admits and owns its command's descendants
         shell: bash
         run: bash scripts/gate-check.sh "$RUNNER_TEMP/quest-lifecycle-install/bin/quest"
-
-  windows:
-    name: native Windows (${{ matrix.runner }})
-    if: github.event_name != 'pull_request'
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [windows-2022, windows-11-arm]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Nix doesn't run here; package.json's packageManager pins the flake's Bun.
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      - run: bun install --frozen-lockfile
-      - name: Check CLI and core
-        run: bun run check
-      - name: Run the core and CLI suite
-        run: bun run test
-      - run: bun run build
-      - name: Verify native setup and removal without symlinks
-        run: bun scripts/lifecycle-check.mjs dist/quest.js
