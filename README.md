@@ -667,8 +667,9 @@ reads. Each failure a fixer job blames a PR for is a round of its maintainer pic
 that only shared a broken batch has none. The fixer keeps going while each round
 changes something, and a handback names the stop rule that ended it: a round with no
 new commit for a failure that isn't flaky, such as a conflict requeued unchanged; the
-failure a fix addressed recurring right after it; or three flaky rounds in a row,
-where the fixer requeued a PR unchanged and the base passed alone. The fixer names
+failure a fix addressed recurring right after it; or three unchanged re-enqueues in
+a row, where the fixer requeued a PR unchanged, as flaky unless it named another
+cause, and the base passed alone. The fixer names
 each failure's test or step, else the round counts the gate's check as one; a
 conflict names the base it conflicts with, so one after the base moved is new. A new
 maintainer pick starts a fresh history. Host provisioning and isolation
@@ -858,15 +859,17 @@ its PR still waits as the queue dropped it:
 
 Each finished round is recorded in its pick's history, as the host gate
 records its rounds: `fixed` for a fixer commit, `merged` for a clean merge,
-`flaky` for a failed build the fixer requeued unchanged, and `unchanged` for a
-conflict it requeued unchanged. Its failure signature is the test or step the
-fixer names, falling back to the failing job and step, or, for a conflict, the
-base it conflicted with. The pick keeps going while each round makes progress:
-a round with no new commit for a failure that isn't flaky, the failure a fix
-addressed recurring right after it, or three flaky rounds in a row hand it
-back. A fix is validated, lease-pushed, and recorded in Review as for the host
+the cause the fixer named for a failed build it requeued unchanged (`flaky`,
+`base` when the base fails it too, or `environment` when the runner does), and
+`unchanged` for a conflict it requeued unchanged or a requeue that names no
+cause. Its failure signature is the test or step the fixer names, compared
+without quoting or repeated whitespace, falling back to the failing job and
+step, or, for a conflict, the base it conflicted with. The pick keeps going
+while each round makes progress: an `unchanged` round, the failure a fix
+addressed recurring right after it, or three unchanged re-enqueues in a row,
+whatever their causes, hand it back. A fix is validated, lease-pushed, and recorded in Review as for the host
 gate, and a push GitHub refuses, or a fix that edits protected paths, is handed
-back with its resolution for `quest land apply`. The watcher then puts the fixed, merged, or flaky head back
+back with its resolution for `quest land apply`. The watcher then puts the fixed, merged, or requeued head back
 in the queue with `expectedHeadOid` bound to it: it enqueues a head whose
 required checks have passed, and arms auto-merge on one whose checks still
 run, so GitHub enqueues it once they pass. Either joins the back of the queue.
@@ -887,7 +890,9 @@ on the merge queue's build on the host alone.
 
 The watcher also keeps the repository's flaky tests in `flaky.json` in its
 state directory: each flaky verdict, across every PR, by the failure signature
-the fixer named, with the `merge_group` jobs that showed it. Each failed
+the fixer named, with the `merge_group` jobs that showed it. Only a `flaky`
+requeue is a verdict: a failure on the base or from the runner never counts
+toward disabling a test. Each failed
 build's round is told the tests that flaked before and are not yet disabled, in
 `.git/quest-land-flaky.json` in its checkout, which `quest land fix` passes to
 the agent. One verdict alone only re-enqueues the PR, since one judgment could
