@@ -22,8 +22,8 @@ a token cost the user chooses per PR:
   - Independent only
 - How are findings combined?
   - ✅ Merged, duplicates folded, each tagged with its agreement count
-    (user); every review also scores the change out of 10
-    ([review score](/quest/m0/model-routing/review-score.md))
+    (user); every review also scores the change out of 10, as
+    `quest review` already does
   - Merged, then a blind vote that drops findings most members reject
 - Who sits on it?
   - ✅ One reviewer per maker, minus the implementers' makers: Sol and
@@ -63,7 +63,6 @@ Agent's choices, for the implementer to revisit:
 
 - [Grok and opencode reviewers](/quest/m2/review-harnesses.md) - the council's xAI and DeepSeek members
 - [Review by size](/quest/m0/model-routing/review-effort.md) - the Sol and Opus review efforts the council's members use
-- [Review score](/quest/m0/model-routing/review-score.md) - the score each member reports
 
 ## Related
 
