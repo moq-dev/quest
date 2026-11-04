@@ -346,7 +346,7 @@ export async function dispatch(
 	verify: Verify = async () => false,
 ) {
 	const connected = JSON.stringify([...slots.keys()]);
-	const [, , cancelled, , candidates, offers, cancels, pending] = await db.batch([
+	const [, , cancelled, , stale, candidates, offers, cancels, pending] = await db.batch([
 		db
 			.prepare(
 				"UPDATE jobs SET lease=NULL WHERE actor=? AND state='running' AND lease IS NOT NULL AND runner IN (SELECT value FROM json_each(?))",
@@ -368,6 +368,8 @@ export async function dispatch(
 				"UPDATE jobs SET state='queued',recheck=1,lease=NULL,updatedAt=? WHERE actor=? AND state='running' AND lease<=?",
 			)
 			.bind(now, owner, now),
+		// The inbox shows every queued PR job's trust, paused projects' included.
+		db.prepare("SELECT * FROM jobs WHERE actor=? AND state='queued' AND cancel=0 AND recheck=1").bind(owner),
 		// A paused project starts and continues nothing new, and a merge job starts once it holds its pull request.
 		db
 			.prepare(
@@ -402,12 +404,14 @@ export async function dispatch(
 	// head after the claim, so the read below checks any other head again.
 	const verified = new Map<string, { attempt: number; head: string | null }>();
 	const revoked: (Attempt & { runner: string })[] = [];
+	// Stale trust is reread without waiting for a free slot, so the inbox shows an untrusted head's decision at once.
+	const rechecked = new Map<string, number>();
+	for (const job of stale!.results as Job[])
+		if (onPull(job.workflow)) rechecked.set(job.id, await classify(db, job, verify));
 	// Every queued job is considered, so unroutable older ones cannot starve newer ones.
 	for (const job of candidates!.results as Job[]) {
-		const routable = [...free.values()].some((n) => n > 0);
-		// A stale classification is reread without a free slot, so the inbox shows an untrusted head's decision at once.
-		if (onPull(job.workflow) && (routable || job.recheck)) job.trusted = await classify(db, job, verify);
-		if (!routable) continue;
+		if (![...free.values()].some((n) => n > 0)) break;
+		if (onPull(job.workflow)) job.trusted = rechecked.get(job.id) ?? (await classify(db, job, verify));
 		const chosen = route(
 			job,
 			accounts.map((o) => ({ ...o, free: (free.get(o.runner) ?? 0) > 0, limited: !!o.limited })),

@@ -348,6 +348,18 @@ describe("trust recheck on queue", () => {
 		expect(reads).toBe(1);
 	});
 
+	it("rereads a paused project's stale trust, which the inbox still shows", async () => {
+		const { id } = await publishedJob();
+		await busy(3);
+		await busy(store.GRACE + 3);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", trusted: 0 });
+		await db.prepare("UPDATE github_projects SET state='paused' WHERE id=10").run();
+		await service().approveHead(repository, "owner", 2, published);
+		await store.recheck(db, id);
+		await busy(store.GRACE + 4);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", trusted: 1, recheck: 0 });
+	});
+
 	it("rechecks a head that settles while the job is queued", async () => {
 		const { id, mac } = await publishedJob();
 		const next = "e".repeat(40);
