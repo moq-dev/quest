@@ -608,10 +608,7 @@ Submitting it opens the App's setup pull request, with no runner involved
 the skill stubs this deployment's `quest` ships (rendered into
 `build/stubs.json` at build time), `quest/README.md` with the answer as its
 Goal, the `Quests: ` line in the root agent instructions, and the
-`.gitattributes` line. Like `quest init`, it removes the
-`quest worktree hook` entries from `.claude/settings.json`, naming each in the
-body, and lists under "Left out" any other hook there whose command ends in
-`worktree hook`, which it leaves since it may be another tool's. Heading
+`.gitattributes` line. Heading
 syntax in the answer is escaped, and the planned `quest/README.md` must pass
 `quest check`, so a goal that would fail it, such as one linking a missing
 quest, is refused before anything is written instead of when enabling. A path init would refuse, such as a skill

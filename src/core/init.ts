@@ -5,10 +5,9 @@
 //
 // The plan touches only skill stubs (writing missing or outdated ones and
 // removing those of retired skills), one reference line in the root agent
-// instructions, one `.gitattributes` line, `quest/README.md` when missing, and
-// the hook entries earlier versions wrote to `.claude/settings.json`, which it
-// removes: Quest's worktree hooks are a user-level opt-in, since a
-// repository's settings would force them on every contributor.
+// instructions, one `.gitattributes` line, and `quest/README.md` when missing.
+// It writes no Claude Code hooks: Quest's worktree hooks are a user-level
+// opt-in, since a repository's settings would force them on every contributor.
 
 /** Installed skills carry this prefix so they don't collide with a repository's own. */
 export const PREFIX = "quest-";
@@ -33,9 +32,6 @@ export const SKILL_DIRS = [".claude/skills", ".agents/skills"] as const;
 
 /** Routes quest files through the `quest` merge driver; uninstall removes lines starting with it. */
 export const ATTRIBUTES_LINE = "quest/** merge=quest";
-
-/** Claude Code's shared project settings, where earlier versions installed the worktree hooks. */
-export const CLAUDE_SETTINGS = ".claude/settings.json";
 
 /** The quest tree's root, with the project's goal or a placeholder for it. */
 export function questReadme(goal?: string): string {
@@ -69,15 +65,10 @@ export interface Stub {
 	stub: string;
 }
 
-/**
- * One file the plan sets to `content`, or, with null content, deletes along with its directory once
- * empty: a retired stub, or settings left empty once Quest's hooks are removed.
- */
+/** One file the plan sets to `content`, or, with null content, a retired stub it deletes along with its directory once empty. */
 export interface InitChange {
 	path: string;
 	content: string | null;
-	/** The Quest hook entries removed from Claude Code's settings by this change. */
-	hooks?: HookEntry[];
 }
 
 /** Init cannot install because of what sits at `path`; the repository needs a person's judgement. */
@@ -134,11 +125,9 @@ export function planInit(repo: Checkout, stubs: readonly Stub[], options: { goal
 	const instructions = ["AGENTS.md", "CLAUDE.md"].find((name) => repo.stat(name) === "file") ?? "AGENTS.md";
 	checkPath(repo, instructions, "file");
 	checkPath(repo, ".gitattributes", "file");
-	const settings = repo.stat(CLAUDE_SETTINGS) === "file" ? removeHooks(repo.read(CLAUDE_SETTINGS)) : undefined;
 
 	const changes: InitChange[] = [...written, ...retired.map((dir) => ({ path: `${dir}/SKILL.md`, content: null }))];
 	if (repo.lstat(readme) === null) changes.push({ path: readme, content: questReadme(options.goal) });
-	if (settings !== undefined) changes.push({ path: CLAUDE_SETTINGS, ...settings });
 	for (const [path, marker, line, old] of [
 		[instructions, REFERENCE_MARKER, REFERENCE_LINE, OLD_REFERENCE_LINES],
 		[".gitattributes", ATTRIBUTES_LINE, ATTRIBUTES_LINE, []],
@@ -236,101 +225,4 @@ function appendLine(content: string, marker: string, line: string, old: readonly
 		content += eol;
 	}
 	return `${content}${line}${eol}`;
-}
-
-/** The command of the hook entries earlier versions wrote, the only one init and uninstall remove. */
-const HOOK_COMMAND = "quest worktree hook";
-
-/** A command hook entry in Claude Code's settings: the event it handles and its command. */
-export interface HookEntry {
-	event: string;
-	command: string;
-}
-
-const record = (value: unknown): value is Record<string, unknown> =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-
-type Groups = { hooks?: unknown[] }[];
-
-/**
- * Claude Code settings `text` with its hook groups by event, or undefined when it holds no hooks or is
- * malformed, which Claude Code rejects whole, so its hooks never run.
- */
-function parseHooks(text: string): { settings: Record<string, unknown>; events: [string, Groups][] } | undefined {
-	let settings: unknown;
-	try {
-		settings = JSON.parse(text);
-	} catch {
-		return undefined;
-	}
-	if (!record(settings) || !record(settings.hooks)) return undefined;
-	const events = Object.entries(settings.hooks);
-	const valid = (groups: unknown) =>
-		Array.isArray(groups) && groups.every((group) => record(group) && Array.isArray(group.hooks ?? []));
-	if (!events.every(([, groups]) => valid(groups))) return undefined;
-	return { settings, events: events as [string, Groups][] };
-}
-
-/** The command a hook handler runs, or undefined when it is not a command hook. */
-function command(handler: unknown): string | undefined {
-	return record(handler) && handler.type === "command" && typeof handler.command === "string"
-		? handler.command
-		: undefined;
-}
-
-/**
- * Claude Code settings `text` without the hook handlers whose command is exactly `quest worktree hook`,
- * nor the groups, events, and hooks object they leave empty, along with the handlers removed. Its content
- * is null when nothing else remains, and the result undefined when there is nothing to remove or the
- * settings are malformed.
- */
-export function removeHooks(text: string): { content: string | null; hooks: HookEntry[] } | undefined {
-	const parsed = parseHooks(text);
-	if (parsed === undefined) return undefined;
-	const { settings, events } = parsed;
-	const removed: HookEntry[] = [];
-	const kept: [string, unknown][] = [];
-	for (const [event, groups] of events) {
-		const before = removed.length;
-		const remaining = groups.flatMap((group) => {
-			const handlers = group.hooks ?? [];
-			const others = handlers.filter((handler) => {
-				const quest = command(handler) === HOOK_COMMAND;
-				if (quest) removed.push({ event, command: HOOK_COMMAND });
-				return !quest;
-			});
-			if (others.length === handlers.length) return [group];
-			return others.length ? [{ ...group, hooks: others }] : [];
-		});
-		if (removed.length === before) kept.push([event, groups]);
-		else if (remaining.length) kept.push([event, remaining]);
-	}
-	if (!removed.length) return undefined;
-	// Rebuilt rather than edited, so an event named `__proto__` stays an ordinary key.
-	if (kept.length) settings.hooks = Object.fromEntries(kept);
-	else delete settings.hooks;
-	if (Object.keys(settings).length === 0) return { content: null, hooks: removed };
-	const indent = /\n([ \t]+)"/.exec(text)?.[1] ?? "  ";
-	const eol = newline(text);
-	return { content: `${JSON.stringify(settings, null, indent).replaceAll("\n", eol)}${eol}`, hooks: removed };
-}
-
-/**
- * The command hooks in `repo`'s Claude Code settings, other than Quest's own, whose command ends in
- * `worktree hook`. One may run Quest through a wrapper, such as moq-dev/moq's
- * `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`, or may be another tool's, which no match can
- * tell apart, so init and uninstall leave them and warn instead.
- */
-export function lookalikeHooks(repo: Checkout): HookEntry[] {
-	const parsed = repo.stat(CLAUDE_SETTINGS) === "file" ? parseHooks(repo.read(CLAUDE_SETTINGS)) : undefined;
-	return (parsed?.events ?? []).flatMap(([event, groups]) =>
-		groups.flatMap((group) =>
-			(group.hooks ?? []).flatMap((handler) => {
-				const found = command(handler);
-				return found !== undefined && found !== HOOK_COMMAND && found.trimEnd().endsWith("worktree hook")
-					? [{ event, command: found }]
-					: [];
-			}),
-		),
-	);
 }

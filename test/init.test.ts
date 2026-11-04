@@ -14,12 +14,10 @@ import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { REFERENCE_LINE, init as apply, lookalikes, uninstall } from "../src/cli/setup";
+import { REFERENCE_LINE, init, uninstall } from "../src/cli/setup";
 import { SKILLS } from "../src/cli/skills";
 import { tempDir } from "./fixture";
 
-/** The paths `quest init` changed under `dir`. */
-const init = (dir: string) => apply(dir).map((change) => change.path);
 const read = (dir: string, path: string) => readFileSync(join(dir, path), "utf8");
 const isFile = (dir: string, path: string) => existsSync(join(dir, path)) && lstatSync(join(dir, path)).isFile();
 const isSymlink = (dir: string, path: string) => {
@@ -381,125 +379,13 @@ test("uninstall removes stubs that older versions installed", () => {
 	expect(existsSync(join(dir, ".agents"))).toBe(false);
 });
 
-const handler = (command: string) => ({ type: "command", command });
-const group = (command: string) => ({ hooks: [handler(command)] });
-const QUEST = "quest worktree hook";
-const WRAPPED = 'nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook';
-const SESSION = group("bash .claude/hooks/direnv.sh");
-
-function settings(dir: string, value: unknown, indent: string | number = "\t"): string {
-	mkdirSync(join(dir, ".claude"), { recursive: true });
-	const text = `${JSON.stringify(value, null, indent)}\n`;
-	writeFileSync(join(dir, ".claude/settings.json"), text);
-	return text;
-}
-
-test("init writes no hooks", () => {
+test("init and uninstall leave Claude Code's project settings alone", () => {
 	const dir = tempDir();
-	expect(init(dir)).not.toContain(".claude/settings.json");
-	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
-});
-
-test("init removes the hooks an earlier version wrote, on any event, and the file they leave empty", () => {
-	const dir = tempDir();
-	settings(dir, {
-		hooks: {
-			WorktreeCreate: [group(QUEST)],
-			WorktreeRemove: [group(QUEST)],
-			SubagentStart: [group(QUEST)],
-			SubagentStop: [{ hooks: [handler(QUEST), handler(QUEST)] }],
-			SessionEnd: [group(QUEST)],
-		},
-	});
-	const change = apply(dir).find((change) => change.path === ".claude/settings.json");
-	expect(change?.hooks).toEqual(
-		["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop", "SubagentStop", "SessionEnd"].map(
-			(event) => ({ event, command: QUEST }),
-		),
-	);
-	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
-	expect(isFile(dir, ".claude/skills/quest-start/SKILL.md")).toBe(true);
-	expect(init(dir)).toEqual([]);
-	expect(lookalikes(dir)).toEqual([]);
-});
-
-test("init and uninstall keep every other hook, reporting those that end in worktree hook", () => {
-	// Commands that may wrap Quest's hook, or may be another tool's: neither is removed.
-	const similar = {
-		WorktreeCreate: [group(WRAPPED), group("othertool worktree hook")],
-		WorktreeRemove: [group(" quest worktree hook"), group("cd quest && othertool worktree hook  ")],
-		SubagentStop: [SESSION, { matcher: "", hooks: [handler("quest-like worktree hook")] }],
-	};
-	const others = {
-		SessionStart: [SESSION],
-		PreCompact: [],
-		Stop: [group("quest worktree hook --verbose"), { hooks: [{ type: "prompt", prompt: "quest worktree hook" }] }],
-	};
-	const kept = {
-		$schema: "https://json.schemastore.org/claude-code-settings.json",
-		hooks: { ...others, ...similar },
-	};
-	const reported = [
-		{ event: "WorktreeCreate", command: WRAPPED },
-		{ event: "WorktreeCreate", command: "othertool worktree hook" },
-		{ event: "WorktreeRemove", command: " quest worktree hook" },
-		{ event: "WorktreeRemove", command: "cd quest && othertool worktree hook  " },
-		{ event: "SubagentStop", command: "quest-like worktree hook" },
-	];
-	for (const remove of [init, uninstall]) {
-		const dir = tempDir();
-		settings(dir, {
-			$schema: kept.$schema,
-			hooks: {
-				...others,
-				...similar,
-				SubagentStart: [group(QUEST)],
-				SubagentStop: [SESSION, { matcher: "", hooks: [handler(QUEST), handler("quest-like worktree hook")] }],
-			},
-		});
-		expect(remove(dir)).toContain(".claude/settings.json");
-		expect(read(dir, ".claude/settings.json")).toBe(`${JSON.stringify(kept, null, "\t")}\n`);
-		expect(lookalikes(dir)).toEqual(reported);
-		expect(remove(dir)).not.toContain(".claude/settings.json");
-	}
-});
-
-test("init and uninstall leave settings without Quest's hooks untouched", () => {
-	for (const content of [
-		"{",
-		"[]",
-		JSON.stringify({ hooks: { SubagentStop: {} } }),
-		JSON.stringify({ hooks: { SubagentStop: [group(QUEST)], SessionStart: "x" } }),
-		'{ "hooks": { "SessionStart": [] } }\r\n',
-	]) {
-		for (const remove of [init, uninstall]) {
-			const dir = tempDir();
-			mkdirSync(join(dir, ".claude"));
-			writeFileSync(join(dir, ".claude/settings.json"), content);
-			expect(remove(dir)).not.toContain(".claude/settings.json");
-			expect(read(dir, ".claude/settings.json")).toBe(content);
-		}
-	}
-});
-
-test("removing hooks keeps an event named __proto__ as an ordinary key", () => {
-	const dir = tempDir();
-	mkdirSync(join(dir, ".claude"));
-	const proto = `"__proto__": [${JSON.stringify(SESSION)}]`;
-	writeFileSync(
-		join(dir, ".claude/settings.json"),
-		`{"hooks": {${proto}, "WorktreeCreate": [${JSON.stringify(group(QUEST))}]}}`,
-	);
-	uninstall(dir);
-	const hooks = JSON.parse(read(dir, ".claude/settings.json")).hooks;
-	expect(Object.keys(hooks)).toEqual(["__proto__"]);
-	expect(Object.getOwnPropertyDescriptor(hooks, "__proto__")?.value).toEqual([SESSION]);
-});
-
-test("removing hooks keeps CRLF line endings and indentation", () => {
-	const dir = tempDir();
-	const text = settings(dir, { model: "x", hooks: { WorktreeCreate: [group(QUEST)] } }, 4).replaceAll("\n", "\r\n");
-	writeFileSync(join(dir, ".claude/settings.json"), text);
 	init(dir);
-	expect(read(dir, ".claude/settings.json")).toBe('{\r\n    "model": "x"\r\n}\r\n');
+	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
+	const text = `${JSON.stringify({ hooks: { WorktreeCreate: [{ hooks: [{ type: "command", command: "quest worktree hook" }] }] } })}\n`;
+	write(dir, ".claude/settings.json", text);
+	init(dir);
+	uninstall(dir);
+	expect(read(dir, ".claude/settings.json")).toBe(text);
 });

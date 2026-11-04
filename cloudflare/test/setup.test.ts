@@ -4,7 +4,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REFERENCE_LINE } from "quest/core";
 import { app } from "../src/index";
-import { STUBS, planCheck, setupGoal, setupPull, treeCheckout } from "../src/github/setup";
+import { STUBS, planCheck, setupGoal, treeCheckout } from "../src/github/setup";
 import { type Pull, type Repo, type World, fakeGitHub, intercept } from "../dev/github";
 import { privateKey } from "./github-key";
 import { owner } from "./owners";
@@ -133,24 +133,6 @@ describe("the setup pull request", () => {
 			user,
 		});
 		expect(await (await view()).text()).toContain("Contributions enabled");
-	});
-
-	it("removes Quest's own hooks and names the lookalikes it leaves", async () => {
-		const group = (command: string) => ({ hooks: [{ type: "command", command }] });
-		const wrapped = 'nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook';
-		project.files.push({
-			path: ".claude/settings.json",
-			content: JSON.stringify({
-				hooks: { WorktreeCreate: [group("quest worktree hook")], WorktreeRemove: [group(wrapped)] },
-			}),
-		});
-		expect((await post("/setup", { id: "10" })).status).toBe(303);
-		const [pull] = opened();
-		expect(pull!.body).toContain("removes Quest's worktree hooks (` quest worktree hook ` for ` WorktreeCreate `)");
-		expect(pull!.body).toContain(`\` ${wrapped} \` for \` WorktreeRemove \`. If one runs Quest`);
-		expect(JSON.parse((await published()).get(".claude/settings.json")!)).toEqual({
-			hooks: { WorktreeRemove: [group(wrapped)] },
-		});
 	});
 
 	it("names the path init refuses, and writes nothing", async () => {
@@ -313,22 +295,6 @@ describe("the setup plan on GitHub", () => {
 		});
 		expect(planCheck([readme("AGENTS.md")], ["AGENTS.md"])).toEqual([]);
 		expect(planCheck([readme(retired), { path: retired, content: null }], [retired])).not.toEqual([]);
-	});
-
-	it("names each Quest hook it removes and each lookalike it leaves", () => {
-		const hooks = [{ event: "WorktreeCreate", command: "quest worktree hook" }];
-		const lookalikes = [{ event: "WorktreeRemove", command: "nix run `.#quest`\n\n@someone -- worktree hook" }];
-		const { body } = setupPull([{ path: ".claude/settings.json", content: null, hooks }], {
-			flake: true,
-			lookalikes,
-		});
-		expect(body).toContain(
-			"- `.claude/settings.json`: removes Quest's worktree hooks (` quest worktree hook ` for ` WorktreeCreate `)",
-		);
-		expect(body).toContain(
-			"aren't Quest's own `quest worktree hook`: `` nix run `.#quest`  @someone -- worktree hook `` for ` WorktreeRemove `. If one runs Quest",
-		);
-		expect(setupPull([], { flake: true }).body).not.toContain("worktree hook");
 	});
 
 	it("refuses to follow a symlink", () => {

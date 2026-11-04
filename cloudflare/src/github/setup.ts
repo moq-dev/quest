@@ -3,7 +3,6 @@
 // maintainer enrolling a repository that has no Quest files yet.
 import {
 	type Checkout,
-	type HookEntry,
 	type InitChange,
 	InitRefused,
 	type Kind,
@@ -14,7 +13,6 @@ import {
 	parse,
 } from "quest/core";
 import stubs from "../../build/stubs.json";
-import { code } from "../jobs/trail";
 
 /** The branch the App publishes the setup on, outside the quest claim namespace. */
 export const SETUP_BRANCH = "kix/setup";
@@ -29,7 +27,7 @@ export type TreeEntry = { path: string; type: string; mode: string; sha: string 
 
 /** Whether the plan may read the file at `path`, so the service fetches it with the tree. */
 export function planned(path: string): boolean {
-	if (["AGENTS.md", "CLAUDE.md", ".gitattributes", ".claude/settings.json"].includes(path)) return true;
+	if (["AGENTS.md", "CLAUDE.md", ".gitattributes"].includes(path)) return true;
 	return SKILL_DIRS.some((dir) => {
 		const rest = path.startsWith(`${dir}/`) ? path.slice(dir.length + 1).split("/") : [];
 		return rest.length === 2 && rest[0]!.startsWith("quest-") && rest[1] === "SKILL.md";
@@ -119,16 +117,9 @@ export function planCheck(changes: InitChange[], paths: Iterable<string>): strin
 	return check(documents, (path) => exists.has(path)).map((finding) => finding.message);
 }
 
-/** Hook entries from a repository's settings, as untrusted text, for the pull request body. */
-function hookList(hooks: HookEntry[]): string {
-	return hooks.map((hook) => `${code(hook.command)} for ${code(hook.event)}`).join(", ");
-}
-
 /** What each planned change is for, in the pull request body. */
 function purpose(change: InitChange): string {
 	const path = change.path;
-	if (change.hooks?.length)
-		return `removes Quest's worktree hooks (${hookList(change.hooks)}), which each user now opts into in their own Claude settings`;
 	if (change.content === null) return "removes the stub of a skill Quest no longer ships";
 	if (path.endsWith("/SKILL.md")) return "a skill stub";
 	if (path === "quest/README.md") return "the quest tree's root, with the project's goal";
@@ -136,12 +127,8 @@ function purpose(change: InitChange): string {
 	return "points agents at `quest context`";
 }
 
-/**
- * The setup pull request's title and body for `changes`, in a repository with a `flake.nix` when `flake`,
- * whose Claude Code settings keep `lookalikes`: hooks that may run Quest's through a wrapper.
- */
-export function setupPull(changes: InitChange[], options: { flake: boolean; lookalikes?: HookEntry[] }) {
-	const lookalikes = options.lookalikes ?? [];
+/** The setup pull request's title and body for `changes`. */
+export function setupPull(changes: InitChange[], options: { flake: boolean }) {
 	const stubs = changes.filter((change) => change.content !== null && change.path.endsWith("/SKILL.md"));
 	const others = changes.filter((change) => !stubs.includes(change));
 	const lines = [
@@ -162,11 +149,6 @@ export function setupPull(changes: InitChange[], options: { flake: boolean; look
 		"",
 		"- Pinning `quest` in the repository's tool manager, so local agents run the version these stubs expect. kix's runners bring their own `quest`, so its jobs don't need it.",
 		"- Adapting existing agent instructions to Quest beyond the one line added. kix's jobs don't need that either.",
-		...(lookalikes.length
-			? [
-					`- Hooks in \`.claude/settings.json\` that end in \`worktree hook\` but aren't Quest's own \`quest worktree hook\`: ${hookList(lookalikes)}. If one runs Quest through a wrapper, remove it, since each user now opts into Quest's worktree hooks in their own Claude settings ([Claude Code checkouts](https://github.com/moq-dev/quest#claude-code-checkouts)).`,
-				]
-			: []),
 		...(options.flake
 			? []
 			: [

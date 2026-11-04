@@ -7,7 +7,6 @@ import {
 	heldToken,
 	check,
 	isQuest,
-	lookalikeHooks,
 	parse,
 	planInit,
 	ready,
@@ -1427,11 +1426,10 @@ export class GitHubService {
 					throw new GitHubError(
 						"The default branch already has Quest files, so contributions can be enabled directly",
 					);
-				let changes, lookalikes;
+				let changes;
 				try {
 					const checkout = treeCheckout(root.tree, await this.#planFiles(token, repo, root.tree));
 					changes = planInit(checkout, STUBS, { goal: setupGoal(goal) });
-					lookalikes = lookalikeHooks(checkout);
 				} catch (error) {
 					if (error instanceof InitRefused) throw new GitHubError(error.message);
 					throw error;
@@ -1444,10 +1442,7 @@ export class GitHubService {
 					throw new GitHubError(
 						`The goal would not pass \`quest check\` in quest/README.md (${problems.join("; ")}); reword it and try again.`,
 					);
-				const pull = setupPull(changes, {
-					flake: root.tree.some((entry) => entry.path === "flake.nix"),
-					lookalikes,
-				});
+				const pull = setupPull(changes, { flake: root.tree.some((entry) => entry.path === "flake.nix") });
 
 				const branch = this.#disarming(
 					token,

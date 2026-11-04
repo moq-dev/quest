@@ -19,10 +19,7 @@ Decided 2026-11-04 (maintainer, /quest-plan).
   with that message.
 - The entries are a user-level opt-in whose JSON the README's "Claude Code
   checkouts" section gives and SETUP.md points to, so the guarded entry is the
-  documented one. It lives only in user settings: `quest init` and
-  `quest uninstall` remove only the exact `quest worktree hook` from a
-  repository's settings and warn on any other command ending in
-  `worktree hook`, so a guarded entry pasted there draws that warning.
+  documented one.
 - The test runs the documented entry with a `PATH` that lacks `quest` and
   checks the exit status and message, and with `quest` present checks that
   the hook runs.

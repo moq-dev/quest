@@ -34,9 +34,7 @@ export { type RankedQuest, type Ranking, type WaitingQuest, ranking, unblocked, 
 export { MAINTAINER, WAITING, type Wait, onMaintainer, parseWait, waits } from "./waiting";
 export {
 	ATTRIBUTES_LINE,
-	CLAUDE_SETTINGS,
 	type Checkout,
-	type HookEntry,
 	type InitChange,
 	InitRefused,
 	type Kind,
@@ -47,11 +45,9 @@ export {
 	type Stub,
 	installedStubs,
 	lines,
-	lookalikeHooks,
 	newline,
 	planInit,
 	questReadme,
-	removeHooks,
 } from "./init";
 export { type Chunk, type Clean, type Conflict, LABELS, chunks, render, resolveLists } from "./merge";
 

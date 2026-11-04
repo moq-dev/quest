@@ -1,6 +1,6 @@
 // The command line's own contract: output streams, exit codes, and arguments.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, test } from "vitest";
@@ -88,35 +88,9 @@ test("init and uninstall print each changed path and nothing else", () => {
 	expect(init.code).toBe(0);
 	expect(init.stdout).toMatch(/^(\S+\n)+$/);
 	expect(init.stdout).toContain("quest/README.md\nAGENTS.md\n");
-	expect(init.stderr).toBe("");
 	expect(run("--root", root, "init").stdout).toBe("");
 	expect(run("--root", root, "uninstall").stdout).toMatch(/^(\S+\n)+$/);
 	expect(run("--root", root, "uninstall").stdout).toBe("");
-});
-
-test("init and uninstall name on stderr each hook entry they remove or leave", () => {
-	const root = tempDir();
-	mkdirSync(join(root, ".claude"));
-	const group = (command: string) => ({ hooks: [{ type: "command", command }] });
-	const wrapped = 'nix run ".#quest" -- worktree hook';
-	writeFileSync(
-		join(root, ".claude/settings.json"),
-		JSON.stringify({ hooks: { WorktreeCreate: [group("quest worktree hook"), group(wrapped)] } }),
-	);
-	const optIn =
-		"Quest's worktree hooks are now an opt-in in your own Claude settings " +
-		'(see "Claude Code checkouts" in the README)';
-	const left = `quest: left the WorktreeCreate hook \`${wrapped}\` in .claude/settings.json; if it runs Quest, remove it, since ${optIn}\n`;
-	const init = run("--root", root, "init");
-	expect(init.code).toBe(0);
-	expect(init.stdout).toContain(".claude/settings.json\n");
-	expect(init.stderr).toBe(
-		`quest: removed the WorktreeCreate hook \`quest worktree hook\` from .claude/settings.json; ${optIn}\n${left}`,
-	);
-	const uninstall = run("--root", root, "uninstall");
-	expect(uninstall.code).toBe(0);
-	expect(uninstall.stdout).not.toContain(".claude/settings.json");
-	expect(uninstall.stderr).toBe(left);
 });
 
 test("version", () => {

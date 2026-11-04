@@ -20,19 +20,14 @@ import { dirname, join, resolve } from "node:path";
 
 import {
 	ATTRIBUTES_LINE,
-	CLAUDE_SETTINGS,
 	type Checkout,
-	type HookEntry,
-	type InitChange,
 	type Kind,
 	REFERENCE_MARKER,
 	SKILL_DIRS,
 	installedStubs,
 	lines,
-	lookalikeHooks,
 	newline,
 	planInit,
-	removeHooks,
 } from "../core";
 import { gitOutput } from "./claims";
 import { DRIVER, OLD_DRIVERS } from "./resolve";
@@ -41,11 +36,10 @@ import { SKILLS } from "./skills";
 export { ATTRIBUTES_LINE, REFERENCE_LINE } from "../core";
 
 /**
- * Install Quest stubs and markers under `root`, and remove the hook entries earlier versions wrote.
- * Returns the changes it made. A conflict throws before anything is written, so a refused init leaves
- * the repository as it was.
+ * Install Quest stubs and markers under `root`. Returns the paths it changed, relative to `root`.
+ * A conflict throws before anything is written, so a refused init leaves the repository as it was.
  */
-export function init(root: string): InitChange[] {
+export function init(root: string): string[] {
 	const changes = planInit(checkout(root), SKILLS);
 	for (const { path, content } of changes) {
 		if (content === null) {
@@ -57,15 +51,7 @@ export function init(root: string): InitChange[] {
 		}
 	}
 	register(root);
-	return changes;
-}
-
-/**
- * The command hooks in `root`'s Claude Code settings that end in `worktree hook` without being exactly
- * Quest's, which init and uninstall leave in place, since they may be another tool's.
- */
-export function lookalikes(root: string): HookEntry[] {
-	return lookalikeHooks(checkout(root));
+	return changes.map((change) => change.path);
 }
 
 /** The checkout under `root`, as the core's file plan reads it. */
@@ -132,12 +118,6 @@ function unregister(root: string): void {
 /** Remove Quest stubs and markers under `root`. Returns the paths it changed, relative to `root`. */
 export function uninstall(root: string): string[] {
 	const changes: string[] = [];
-	const settings = isFile(join(root, CLAUDE_SETTINGS)) ? removeHooks(read(root, CLAUDE_SETTINGS)) : undefined;
-	if (settings !== undefined) {
-		if (settings.content === null) rmSync(join(root, CLAUDE_SETTINGS));
-		else writeFileSync(join(root, CLAUDE_SETTINGS), settings.content);
-		changes.push(CLAUDE_SETTINGS);
-	}
 	for (const skills of SKILL_DIRS) {
 		if (!isRealDir(join(root, skills))) continue;
 		for (const dir of installedStubs(checkout(root), skills)) changes.push(removeStub(root, dir));
