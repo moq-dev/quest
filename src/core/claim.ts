@@ -13,12 +13,14 @@ import { MAINTAINER, type Wait, parseWait } from "./waiting";
 const HAND_BACK = /^(?:Waiting|Decisions needed)$/i;
 
 // Nodes whose rendered text a reader sees as separate from the next.
-const BLOCKS = new Set(["blockquote", "code", "heading", "html", "list", "listItem", "paragraph", "table", "tableRow"]);
+const BLOCKS = new Set(["blockquote", "code", "heading", "list", "listItem", "paragraph", "table", "tableRow"]);
 
 /** A node's rendered text, as a reader sees it, before whitespace is collapsed. */
 function text(node: Nodes): string {
 	const gap = BLOCKS.has(node.type) ? " " : "";
 	if (node.type === "break") return " ";
+	// Markup renders as nothing, so `<strong>Maintainer</strong>:` names the maintainer, as the quest parser reads it.
+	if (node.type === "html") return "";
 	if (node.type === "image" || node.type === "imageReference") return node.alt ?? "";
 	if ("value" in node) return node.value + gap;
 	return "children" in node ? node.children.map(text).join("") + gap : "";

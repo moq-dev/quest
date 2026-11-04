@@ -131,7 +131,7 @@ test("a draft's hand-back item keeps nested headings and the body's reference de
 	expect(
 		handBackWaits(
 			"[m]: https://example.com\n\n## Waiting\n\n- Maintainer: choose a provider.\n\n  ## Options\n\n  Hetzner or OVH.\n" +
-				"- [Maintainer][m]: approve the **account**.\n- Codex: out of quota.\n",
+				"- [Maintainer][m]: approve the **account**.\n- <strong>Codex</strong>: out of <!-- c -->quota.\n",
 		),
 	).toEqual([
 		{ line: 5, party: "Maintainer", text: "choose a provider. Options Hetzner or OVH." },
