@@ -28,7 +28,7 @@ removed the credential steps the classifier flagged.
   in isolated worktrees), since stub text is part of the user turn the
   classifier reads. That changes the stub body once: `init` and `uninstall`
   recognize a stub of any version by its body (`STUB` in
-  `src/cli/setup.ts`), so it must accept both the old and the new body.
+  `src/core/init.ts`), so it must accept both the old and the new body.
 
 ## Waiting
 
