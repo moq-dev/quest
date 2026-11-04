@@ -16,7 +16,7 @@ Judge the approach before touching anything: would you take a different one?
 Follow `quest context`'s Reviews section for the shared design checkpoint across review rounds.
 
 Settle every decision this PR needs with the grill skill's interview, starting from the user's feedback: those its `## Waiting` section lists, those your judgment of the approach or the review findings raise, and any you find along the way.
-Record the settled decisions in this PR's description as the paper trail, then implement them.
+Record the settled decisions in this PR description's `## Decisions` section as the paper trail, then implement them.
 A sub-agent that cannot prompt leaves each in `## Waiting` with a recommendation.
 
 Fix merge conflicts and failing CI checks.

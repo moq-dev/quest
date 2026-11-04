@@ -600,8 +600,9 @@ It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses
 endpoint, including `/v1`) and `OPENAI_API_KEY` (the gate's proxy client key).
 The daemon never supplies these or any Git/GitHub credential, and the wrapper
 must keep every other credential out of the container. Its network must reach the
-model proxy and, so the fixer can build and test its fix, the package registries
-and `github.com`/`codeload.github.com` that the repository's dependencies come from.
+model proxy and, so the fixer can run the repository's checks on its fix, the
+package registries and `github.com`/`codeload.github.com` that the repository's
+dependencies come from.
 The prompt allows only those dependency fetches: no GitHub API, no push, no other
 host. Codex login stays on CLIProxyAPI.
 The wrapper waits for the payload, returns its exit status, and tears down its
@@ -949,8 +950,8 @@ have room, commands start one at a time, 5 seconds after the previous admission.
 The load limit applies only while a gated command is still running. Otherwise
 the load comes from work the gate cannot wait out, so commands start one at a
 time as if the raw load had room. A freshly booted hosted macOS runner is one
-such host: Spotlight's first index holds its load at several times its CPU
-count for the whole job. Available memory is still required.
+such host: work outside the job holds its load above its CPU count for the
+whole job. Available memory is still required.
 
 A user's admissions on one host are recorded under
 `~/.cache/quest/admissions/<hostname>`, whatever the caller's environment or
@@ -1290,10 +1291,12 @@ only once you approve it in the inbox. opencode runs as `opencode serve` on
 localhost behind a password made for each turn.
 
 The flake's `runner` package pins Claude Code 2.1.305 from its official release
-manifest; opencode, sandbox-runtime (and on Linux, bubblewrap and socat) follow
+manifest; opencode, Codex, sandbox-runtime (and on Linux, bubblewrap and socat) follow
 this repository's lock (`nix run github:moq-dev/quest#runner -- runner`);
-otherwise `claude`, `opencode`, and `srt` come from `QUEST_RUNNER_CLAUDE`,
-`QUEST_RUNNER_OPENCODE`, and `QUEST_RUNNER_SRT`, or `PATH`. State lives in `$QUEST_RUNNER_HOME`, by default
+otherwise `claude`, `opencode`, `codex`, and `srt` come from `QUEST_RUNNER_CLAUDE`,
+`QUEST_RUNNER_OPENCODE`, `QUEST_RUNNER_CODEX`, and `QUEST_RUNNER_SRT`, or `PATH`.
+Codex reviews the heads that jobs on Anthropic's models publish, with the
+login of the user running the runner, so run `codex login` as that user. State lives in `$QUEST_RUNNER_HOME`, by default
 `$XDG_DATA_HOME/quest/runner`; one `quest runner` runs in a home at a time. To keep a runner up, run `quest runner` as a user
 service, such as a systemd user unit with `Restart=on-failure`.
 

@@ -351,7 +351,8 @@ describe("quest check --fix", () => {
 
 	/**
 	 * A feature branch that adds quest three linking one and two, while main makes `change`;
-	 * returns the tree checked out on the feature branch, before any merge.
+	 * returns the tree checked out on the feature branch, before any merge. Checking out the
+	 * feature branch writes quest three with CRLF where core.autocrlf is set, as on Windows runners.
 	 */
 	async function diverged(change: (tree: Tree) => Promise<void> | void): Promise<Tree> {
 		const tree = Tree.committed();
@@ -379,7 +380,7 @@ describe("quest check --fix", () => {
 
 			const out = await quest(tree, "check", "--fix");
 			expect(out).toEqual({ code: 0, stdout: "M quest/m0/epic/three.md\nquest: 5 documents ok\n", stderr: "" });
-			expect(tree.read("quest/m0/epic/three.md")).toBe(
+			expect(tree.read("quest/m0/epic/three.md").replaceAll("\r\n", "\n")).toBe(
 				"# [S] Three\n\n## Goal\n\nMore.\n\n## Related\n\n- [Two](/quest/m0/epic/two.md) - similar\n",
 			);
 			// The edit is left for the merge's author to stage.
@@ -407,7 +408,7 @@ describe("quest check --fix", () => {
 		const out = await quest(tree, "check", "--fix");
 		expect(out.code).toBe(1);
 		expect(out.stdout).toBe("M quest/m0/epic/README.md\nM quest/m0/epic/second.md\nM quest/m0/epic/three.md\n");
-		expect(tree.read("quest/m0/epic/three.md")).toBe(
+		expect(tree.read("quest/m0/epic/three.md").replaceAll("\r\n", "\n")).toBe(
 			"# [S] Three\n\n## Goal\n\nMore.\n\n## Related\n\n- [Two](/quest/m0/epic/two.md) - similar\n" +
 				"- [Nope](/quest/m0/epic/nope.md)\n\n## Plan\n\nAfter [one](/quest/m0/epic/one.md).\n",
 		);

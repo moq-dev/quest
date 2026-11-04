@@ -61,6 +61,7 @@
               wrapProgram $out/bin/quest \
                 --set-default QUEST_RUNNER_CLAUDE ${pkgs.lib.getExe claudeCode} \
                 --set-default QUEST_RUNNER_OPENCODE ${pkgs.lib.getExe opencode} \
+                --set-default QUEST_RUNNER_CODEX ${pkgs.lib.getExe pkgs.codex} \
                 --set-default QUEST_RUNNER_SRT ${pkgs.lib.getExe pkgs.sandbox-runtime} ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "--prefix PATH : ${
                   pkgs.lib.makeBinPath [
                     pkgs.bubblewrap
