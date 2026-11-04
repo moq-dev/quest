@@ -14,8 +14,9 @@ Decided 2026-11-04 (user, /quest-complete follow-up of
 [moq-dev/quest#474](https://github.com/moq-dev/quest/pull/474)). That day,
 iterate agents on [moq-dev/quest#464](https://github.com/moq-dev/quest/pull/464),
 [moq-dev/quest#469](https://github.com/moq-dev/quest/pull/469),
-[moq-dev/quest#472](https://github.com/moq-dev/quest/pull/472), and #474 found
-the PR branch checked out in another worktree. Each reviewed from a temporary
+[moq-dev/quest#472](https://github.com/moq-dev/quest/pull/472), and
+[moq-dev/quest#474](https://github.com/moq-dev/quest/pull/474) found the PR
+branch checked out in another worktree. Each reviewed from a temporary
 local branch, so `quest review`, which keys sessions by the checked-out branch
 name (`sessionBranch` and `sessionFile` in `src/cli/review.ts`), started a new
 session that resets the round-4 design checkpoint, or later resumed the wrong
