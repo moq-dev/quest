@@ -25,7 +25,7 @@ A skip stands for this session; leave that item as it is.
 
 Record each answer where its wait lives:
 
-- **Quest:** record the decision and its reason in the quest's Plan, as `Decided <date> (maintainer, /quest-unblock): ...`, and remove the item. Delete a quest whose only purpose was the wait.
+- **Quest:** record the decision and its reason in the quest's Plan, as `Decided <date> (maintainer, /quest-unblock): ...`, and remove the item. Delete a quest whose only purpose was the wait, and record its decision in this skill's PR body's `## Decisions` section instead.
 - **PR:** dispatch `/quest-iterate` in a sub-agent with its own worktree, with the answers in its brief. It applies them, runs the PR's reviews, and leaves merging to the user's pick through `/quest-merge` or `/quest-complete`.
 
 Make every quest edit in one PR on a `quest-unblock/<slug>` branch, run `quest check`, open it as a draft, and run `/quest-review` on it, which reviews the branch, marks the PR ready, and offers its merge picks; merging it waits on the user's pick, like any PR.

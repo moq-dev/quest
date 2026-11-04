@@ -593,8 +593,9 @@ It supplies a fresh HOME, `OPENAI_BASE_URL` (the OpenAI-compatible Responses
 endpoint, including `/v1`) and `OPENAI_API_KEY` (the gate's proxy client key).
 The daemon never supplies these or any Git/GitHub credential, and the wrapper
 must keep every other credential out of the container. Its network must reach the
-model proxy and, so the fixer can build and test its fix, the package registries
-and `github.com`/`codeload.github.com` that the repository's dependencies come from.
+model proxy and, so the fixer can run the repository's checks on its fix, the
+package registries and `github.com`/`codeload.github.com` that the repository's
+dependencies come from.
 The prompt allows only those dependency fetches: no GitHub API, no push, no other
 host. Codex login stays on CLIProxyAPI.
 The wrapper waits for the payload, returns its exit status, and tears down its
