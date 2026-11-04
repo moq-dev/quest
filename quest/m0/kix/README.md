@@ -58,7 +58,11 @@ operator-paid-hosting decisions:
   each signed in by its own CLI in an isolated home. kix stores opaque
   account IDs and routes by the user's preference order. A job that hits a
   limit pauses with a decision to switch accounts; kix never rotates
-  automatically to dodge provider limits.
+  automatically to dodge provider limits. Superseded for Claude and Codex
+  on 2026-11-04 (user): their accounts pool behind the runner's own
+  CLIProxyAPI, which rotates between them
+  ([Runner account pool](/quest/m0/kix/cliproxy.md)); opencode accounts
+  keep this.
 - **Nix only.** Runners run every job inside the project's `nix develop`
   shell, with no other way to install dependencies, for cache efficiency and
   reproducibility. The runner pins the agent CLIs through Nix as well.
