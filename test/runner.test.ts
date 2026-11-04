@@ -882,6 +882,25 @@ describe("opencode", () => {
 		await expect(call("write", { path: join(output, "tool_1") })).rejects.toThrow(/outside the checkout/);
 		// Commands are the sandbox's to confine.
 		await call("shell", { command: "cat /etc/passwd" });
+		// opencode resolves a leading ~ as its home, here the root holding the saved output.
+		vi.stubEnv("OPENCODE_TEST_HOME", root);
+		await call("read", { path: "~/tool-output/tool_1" });
+		for (const [tool, input] of [
+			["write", { path: "~/tool-output/tool_1" }],
+			["read", { path: "~/outside/auth.json" }],
+			["read", { path: "~" }],
+			["patch", patch("*** Add File: ~/tool-output/x")],
+		] as const)
+			await expect(call(tool, input), `${tool} ${JSON.stringify(input)}`).rejects.toThrow(/outside the checkout/);
+		vi.unstubAllEnvs();
+		// Background work would outlive the turn, and the server with it.
+		await call("shell", { command: "true", background: false });
+		for (const [tool, input] of [
+			["shell", { command: "sleep 60", background: true }],
+			["subagent", { description: "x", prompt: "x", background: "true" }],
+			["shell", JSON.stringify({ command: "sleep 60", background: true })],
+		] as const)
+			await expect(call(tool, input), `${tool} ${JSON.stringify(input)}`).rejects.toThrow(/in the foreground/);
 
 		for (const [tool, input] of [
 			["read", { path: "auth.json" }],

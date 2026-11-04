@@ -164,22 +164,30 @@ const PLUGIN_ID = "quest-runner";
  * opencode's own saved tool output. opencode's `external_directory` check is
  * lexical, so a symlink committed to the checkout would otherwise lead them to
  * any file this user can read: the server, unlike the commands, runs
- * unconfined. Each path is resolved as the tool resolves it, then through
- * every symlink, and a path that does not exist yet through its nearest
- * existing directory. A dangling symlink is refused, since a write would
+ * unconfined. Each path is resolved as the tool resolves it, from the
+ * checkout with a leading `~` as the server's home, then through every
+ * symlink, and a path that does not exist yet through its nearest existing
+ * directory. A dangling symlink is refused, since a write would
  * follow it. `patch` names its files in the patch's headers. Nothing writes
  * the checkout's own opencode config. A tool's input may arrive as a JSON
  * string, which opencode repairs into its object; one that is not an object
- * either way is refused, since its paths cannot be checked. The tool opens the path
+ * either way is refused, since it cannot be checked. The tool opens the path
  * after this check, so a command running alongside it could still swap the
  * path for a symlink in between: the check narrows that window rather than
  * closing it.
+ *
+ * It also refuses `shell` and `subagent` calls in the background. Their
+ * result reaches the session only after the turn ends, when the runner has
+ * already stopped the server and reported the turn.
  */
 export const PLUGIN = `import { lstatSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 // Each file tool, and whether it only reads.
 const TOOLS = { read: true, glob: true, grep: true, write: false, edit: false, patch: false };
+// The tools that can run in the background, past the end of the turn.
+const FOREGROUND = ["shell", "subagent"];
 const HEADER = /^\\s*\\*\\*\\* (?:Add File|Update File|Delete File|Move to):(.*)$/;
 
 function real(path) {
@@ -206,6 +214,12 @@ function inside(path, roots) {
 	});
 }
 
+// As opencode's tools resolve a path: from the checkout, with a leading ~ as the server's home.
+function absolute(cwd, path) {
+	const home = process.env.OPENCODE_TEST_HOME ?? homedir();
+	return resolve(cwd, path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path);
+}
+
 function parsed(input) {
 	if (typeof input !== "string") return input;
 	try {
@@ -223,10 +237,15 @@ export default {
 		const reads = [...writes, ...options.reads.map(real)];
 		const config = options.config.map(real);
 		await ctx.tool.hook("execute.before", ({ tool, input }) => {
-			if (!Object.hasOwn(TOOLS, tool)) return;
+			const files = Object.hasOwn(TOOLS, tool);
+			if (!files && !FOREGROUND.includes(tool)) return;
 			const args = parsed(input);
 			if (args === null || typeof args !== "object")
-				throw new Error(\`the \${tool} tool's input is not an object, so the runner cannot check its paths\`);
+				throw new Error(\`the \${tool} tool's input is not an object, so the runner cannot check it\`);
+			// opencode's input repair, which may run after this hook, turns "true" into true.
+			if (args.background === true || args.background === "true")
+				throw new Error(\`the runner ends the job when this turn ends, so run the \${tool} in the foreground instead\`);
+			if (!files) return;
 			const paths =
 				tool === "patch"
 					? String(args.patchText ?? "")
@@ -234,7 +253,7 @@ export default {
 							.flatMap((line) => HEADER.exec(line)?.[1]?.trim() || [])
 					: [args.path].filter((path) => typeof path === "string" && path);
 			for (const path of paths) {
-				const target = real(resolve(options.cwd, path));
+				const target = real(absolute(options.cwd, path));
 				if (!inside(target, TOOLS[tool] ? reads : writes))
 					throw new Error(\`\${path} is outside the checkout, where the runner keeps the file tools\`);
 				if (!TOOLS[tool] && inside(target, config))
