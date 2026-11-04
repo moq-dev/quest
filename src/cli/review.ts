@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 
 import { type HarnessName, LINE_LIMIT, boundedLines, strippedEnvironment } from "./agent";
-import { gitOutput } from "./claims";
+import { git } from "./git";
 import { programEnvironment, requireProgram } from "./program";
 import { save } from "./worktree";
 
@@ -654,7 +654,7 @@ export function baseInstructions(root: string, base: string, changed: string[]):
 		for (let i = 1; i <= parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
 	}
 	const candidates = [...dirs].sort().flatMap((dir) => INSTRUCTION_FILES.map((name) => posix.join(dir, name)));
-	const listed = gitOutput(root, ["ls-tree", "-z", base, "--", ...candidates]);
+	const listed = git(root, ["ls-tree", "-z", base, "--", ...candidates]);
 	const modes = new Map<string, string>();
 	for (const entry of listed.split("\0").filter((e) => e !== "")) {
 		const [meta, path] = entry.split("\t");
@@ -678,10 +678,10 @@ export function baseInstructions(root: string, base: string, changed: string[]):
 	return given;
 }
 
-const show = (root: string, base: string, path: string) => gitOutput(root, ["show", `${base}:${path}`]);
+const show = (root: string, base: string, path: string) => git(root, ["show", `${base}:${path}`]);
 
 function exists(root: string, base: string, path: string): boolean {
-	return gitOutput(root, ["ls-tree", "--name-only", base, "--", path]) !== "";
+	return git(root, ["ls-tree", "--name-only", base, "--", path]) !== "";
 }
 
 /** The system or developer instructions every turn carries. */
@@ -795,7 +795,7 @@ export function laterPrompt(round: LaterRound): string {
 
 /** `<remote>/<branch>` split at the longest remote name it starts with. */
 function parseBase(root: string, base: string): { remote: string; branch: string } {
-	const remotes = gitOutput(root, ["remote"]).split("\n").filter(Boolean);
+	const remotes = git(root, ["remote"]).split("\n").filter(Boolean);
 	const remote = remotes.filter((name) => base.startsWith(`${name}/`)).sort((a, b) => b.length - a.length)[0];
 	if (remote === undefined || base.length === remote.length + 1) {
 		throw new ReviewInputError(`--base must be <remote>/<branch> with a configured remote: ${base}`);
@@ -804,7 +804,7 @@ function parseBase(root: string, base: string): { remote: string; branch: string
 }
 
 function defaultBranch(root: string, remote: string): string {
-	const line = gitOutput(root, ["ls-remote", "--symref", remote, "HEAD"]).split("\n")[0] ?? "";
+	const line = git(root, ["ls-remote", "--symref", remote, "HEAD"]).split("\n")[0] ?? "";
 	const match = /^ref: refs\/heads\/(\S+)\tHEAD$/.exec(line);
 	if (!match) throw new Error(`could not read ${remote}'s default branch; pass --base`);
 	return match[1];
@@ -834,13 +834,13 @@ function load(path: string): State | undefined {
 function sessionBranch(root: string, name: string | undefined): string {
 	if (name !== undefined) {
 		try {
-			return gitOutput(root, ["check-ref-format", "--branch", name]);
+			return git(root, ["check-ref-format", "--branch", name]);
 		} catch {
 			throw new ReviewInputError(`--branch is not a valid branch name: ${name}`);
 		}
 	}
 	try {
-		return gitOutput(root, ["symbolic-ref", "--short", "HEAD"]);
+		return git(root, ["symbolic-ref", "--short", "HEAD"]);
 	} catch {
 		throw new ReviewInputError(
 			"HEAD is detached; pass --branch to name the branch whose review session this continues",
@@ -853,18 +853,18 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	// Native Windows installs the reviewer CLIs as batch shims, which `run` cannot start without a shell.
 	if (process.platform === "win32")
 		throw new ReviewInputError("quest review does not support native Windows yet; use WSL");
-	const root = gitOutput(options.root, ["rev-parse", "--show-toplevel"]);
+	const root = git(options.root, ["rev-parse", "--show-toplevel"]);
 	const harness = options.harness ?? other(runningHarness(deps.env));
 	const reviewer = REVIEWERS[harness];
 
 	const branch = sessionBranch(root, options.branch);
-	if (gitOutput(root, ["status", "--porcelain"]) !== "") {
+	if (git(root, ["status", "--porcelain"]) !== "") {
 		throw new ReviewInputError(
 			"the checkout has uncommitted changes; commit them, since only the committed branch is reviewed",
 		);
 	}
 
-	const statePath = sessionFile(gitOutput(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
+	const statePath = sessionFile(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
 	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
 	const stored = load(statePath);
@@ -885,17 +885,17 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const baseRef = options.base ?? `origin/${defaultBranch(root, "origin")}`;
 	const { remote, branch: baseBranch } = parseBase(root, baseRef);
 	const tracking = `refs/remotes/${remote}/${baseBranch}`;
-	gitOutput(root, ["fetch", "--quiet", "--no-tags", remote, `+refs/heads/${baseBranch}:${tracking}`]);
-	const baseSha = gitOutput(root, ["rev-parse", "--verify", `${tracking}^{commit}`]);
-	const head = gitOutput(root, ["rev-parse", "HEAD"]);
+	git(root, ["fetch", "--quiet", "--no-tags", remote, `+refs/heads/${baseBranch}:${tracking}`]);
+	const baseSha = git(root, ["rev-parse", "--verify", `${tracking}^{commit}`]);
+	const head = git(root, ["rev-parse", "HEAD"]);
 	let mergeBase: string;
 	try {
-		mergeBase = gitOutput(root, ["merge-base", baseSha, head]);
+		mergeBase = git(root, ["merge-base", baseSha, head]);
 	} catch {
 		throw new ReviewInputError(`HEAD shares no history with ${baseRef}`);
 	}
 	const change: Change = { base: baseRef, mergeBase, head };
-	const changed = gitOutput(root, ["diff", "--name-only", "-z", `${mergeBase}..${head}`])
+	const changed = git(root, ["diff", "--name-only", "-z", `${mergeBase}..${head}`])
 		.split("\0")
 		.filter(Boolean);
 

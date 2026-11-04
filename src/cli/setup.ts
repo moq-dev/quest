@@ -34,7 +34,7 @@ import {
 	planInit,
 	renderSettings,
 } from "../core";
-import { gitOutput } from "./claims";
+import { git } from "./git";
 import { DRIVER, OLD_DRIVERS } from "./resolve";
 import { SKILLS } from "./skills";
 
@@ -100,10 +100,10 @@ export function heal(root: string): void {
  */
 function register(root: string): void {
 	try {
-		const current = gitOutput(root, ["config", "--get", "merge.quest.driver"]);
+		const current = git(root, ["config", "--get", "merge.quest.driver"]);
 		if (current !== "" && !OLD_DRIVERS.includes(current)) return;
-		if (gitOutput(root, ["rev-parse", "--is-inside-work-tree"]) !== "true") return;
-		gitOutput(root, ["config", "--local", "merge.quest.driver", DRIVER]);
+		if (git(root, ["rev-parse", "--is-inside-work-tree"]) !== "true") return;
+		git(root, ["config", "--local", "merge.quest.driver", DRIVER]);
 	} catch {
 		// Not a repository, or its config is not writable.
 	}
@@ -112,9 +112,9 @@ function register(root: string): void {
 /** Remove the merge driver from the clone's config, inside a git work tree. */
 function unregister(root: string): void {
 	try {
-		if (gitOutput(root, ["rev-parse", "--is-inside-work-tree"]) !== "true") return;
-		if (gitOutput(root, ["config", "--local", "--get", "merge.quest.driver"]) === "") return;
-		gitOutput(root, ["config", "--local", "--remove-section", "merge.quest"]);
+		if (git(root, ["rev-parse", "--is-inside-work-tree"]) !== "true") return;
+		if (git(root, ["config", "--local", "--get", "merge.quest.driver"]) === "") return;
+		git(root, ["config", "--local", "--remove-section", "merge.quest"]);
 	} catch {
 		// Not a repository, or its config is not writable.
 	}

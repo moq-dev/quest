@@ -30,8 +30,8 @@ async function fixture() {
 	return { dir, home, worktrees, record };
 }
 
-/** The CLI supervising `script` in the checkout, with its streams piped here. */
-function supervise(home: string, script: string, ...args: string[]) {
+/** The CLI supervising `script` in the checkout, with `env` added to its own and its streams piped here. */
+function supervise(home: string, script: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
 	const child = spawn(
 		"bun",
 		[
@@ -47,7 +47,7 @@ function supervise(home: string, script: string, ...args: string[]) {
 			"sh",
 			...args,
 		],
-		{ env: { ...process.env, QUEST_WORKTREE_HOME: home }, stdio: ["ignore", "pipe", "pipe"] },
+		{ env: { ...process.env, ...env, QUEST_WORKTREE_HOME: home }, stdio: ["ignore", "pipe", "pipe"] },
 	);
 	let stdout = "";
 	let stderr = "";
@@ -83,8 +83,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 		const run = supervise(
 			home,
 			`sleep 1000 & echo $! > ${JSON.stringify(pidFile)}; printf '%s|' "$@"; pwd; echo ready; exit 7`,
-			"a $b",
-			"--flag",
+			["a $b", "--flag"],
 		);
 		const result = await run.exited;
 		expect(result.code, result.stderr).toBe(7);
@@ -92,6 +91,22 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 		expect(stopped(Number(readFileSync(pidFile, "utf8")))).toBe(true);
 		expect(existsSync(join(record.path, "cache"))).toBe(false);
 		expect(worktrees.status().records[0]).toMatchObject({ phase: "released", runs: [] });
+	});
+
+	it("runs the command in the checkout's repository when started from a Git hook, keeping -c config", async () => {
+		const { dir, home, record } = await fixture();
+		const store = join(dir, "repo", ".git");
+		// What a hook in the main checkout exports, run by `git -c quest.probe=kept commit`.
+		const hook = {
+			GIT_DIR: store,
+			GIT_WORK_TREE: join(dir, "repo"),
+			GIT_INDEX_FILE: join(store, "index"),
+			GIT_CONFIG_PARAMETERS: "'quest.probe'='kept'",
+		};
+		const run = supervise(home, "git rev-parse --show-toplevel; git config quest.probe", [], hook);
+		const result = await run.exited;
+		expect(result.code, result.stderr).toBe(0);
+		expect(result.stdout).toBe(`${record.path}\nkept\n`);
 	});
 
 	it("forwards cancellation, stops live descendants, then releases", async () => {
