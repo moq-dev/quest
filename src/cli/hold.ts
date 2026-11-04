@@ -190,6 +190,37 @@ function mergeMethod(repository: ObjectValue, named: Method | undefined, url: st
 }
 
 /**
+ * The method of the auto-merge that queues a PR for `quest land`, which only signals the queue: the
+ * one `named`, else squash, else any method both the repository and the base's rulesets allow.
+ * Settings hidden from the token count as allowed, leaving GitHub to refuse.
+ */
+function signalMethod(
+	repository: ObjectValue,
+	rules: ObjectValue[],
+	named: Method | undefined,
+	url: string,
+	base: string,
+): Method {
+	const ruled = rules.flatMap((rule) => {
+		const methods =
+			rule.type === "pull_request" && rule.parameters != null && object(rule.parameters).allowed_merge_methods;
+		return Array.isArray(methods) ? [methods] : [];
+	});
+	const allows = (method: Method) =>
+		repository[ALLOWS[method]] !== false && ruled.every((methods) => methods.includes(method));
+	if (named !== undefined) {
+		if (allows(named)) return named;
+		throw new Refusal(
+			`${url} cannot land with ${METHOD_NAMES[named]} on ${base}, by its repository settings or rulesets`,
+		);
+	}
+	const method = (["squash", "merge", "rebase"] as const).find(allows);
+	if (method === undefined)
+		throw new Refusal(`${url} has no merge method its repository and ${base}'s rulesets both allow`);
+	return method;
+}
+
+/**
  * Land `sha`, which must still be the head of `pr`, while no session holds it:
  * enable auto-merge bound to it, or merge at once when GitHub would refuse auto-merge because
  * nothing is left to wait for. A base with a merge queue gets {@link pick} instead.
@@ -221,18 +252,12 @@ export async function land(
 			throw new Refusal(`${snapshot.url} was retargeted from ${snapshot.base} to ${fresh.base}; land it again`);
 		}
 	};
-	const gated = (await requirements(labels.github, pr, snapshot.base)).checks.some(
-		(check) => check.name === LAND_CHECK,
-	);
-	if (gated) {
+	const needs = await requirements(labels.github, pr, snapshot.base);
+	if (needs.checks.some((check) => check.name === LAND_CHECK)) {
 		if (named !== undefined)
 			deps.warn(`${snapshot.url} lands through quest land, which applies its own merge method`);
 		const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
-		const method = mergeMethod(
-			repository,
-			named ?? (repository.allow_squash_merge === false ? undefined : "squash"),
-			snapshot.url,
-		);
+		const method = signalMethod(repository, needs.rules, named, snapshot.url, snapshot.base);
 		await unchanged();
 		await enqueue(labels.github, snapshot.id, snapshot.head, method);
 		return;

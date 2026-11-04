@@ -39,6 +39,8 @@ class FakePull {
 	readonly comparisons: string[] = [];
 	/** Check names the base branch's rulesets require. */
 	required: string[] = [];
+	/** The base branch's other ruleset rules. */
+	rules: ObjectValue[] = [];
 	autoMerge: ObjectValue | null = null;
 	queueEntry: ObjectValue | null = null;
 	labels: string[] = [];
@@ -114,12 +116,12 @@ class FakePull {
 		}
 		if (url.pathname === "/repos/example/project/rules/branches/main") {
 			const checks = this.required.map((context) => ({ context }));
-			return json(
-				200,
-				checks.length
+			return json(200, [
+				...(checks.length
 					? [{ type: "required_status_checks", parameters: { required_status_checks: checks } }]
-					: [],
-			);
+					: []),
+				...this.rules,
+			]);
 		}
 		if (url.pathname === "/repos/example/project/pulls/7" && method === "PATCH") {
 			this.body = String(body.body);
@@ -566,17 +568,31 @@ describe("merge --land", () => {
 
 		test("leaves a gated base or a merge queue to its own method", async () => {
 			// The gate's auto-merge only signals the queue: squash where allowed, else a method the base allows.
-			for (const [methods, signal] of [
-				[["merge", "squash"], "SQUASH"],
-				[["merge"], "MERGE"],
+			// A base's rulesets narrow the methods its repository allows.
+			for (const [methods, ruled, signal] of [
+				[["merge", "squash"], null, "SQUASH"],
+				[["merge"], null, "MERGE"],
+				[["merge", "squash", "rebase"], ["rebase", "merge"], "MERGE"],
 			] as const) {
 				const gated = allowing(...methods);
 				gated.required = ["quest land"];
+				if (ruled) gated.rules = [{ type: "pull_request", parameters: { allowed_merge_methods: [...ruled] } }];
 				await land(PR, HEAD, undefined, gated.deps());
 				expect(gated.writes.at(-1)).toBe(
 					`enablePullRequestAutoMerge ${HEAD} ${signal} Quest-Land-Head: ${HEAD}`,
 				);
 			}
+			const refusing = allowing("merge", "squash");
+			refusing.required = ["quest land"];
+			refusing.rules = [{ type: "pull_request", parameters: { allowed_merge_methods: ["merge"] } }];
+			expect(await refused(land(PR, HEAD, "squash", refusing.deps()))).toContain(
+				"cannot land with squash merges on main, by its repository settings or rulesets",
+			);
+			refusing.rules.push({ type: "pull_request", parameters: { allowed_merge_methods: ["squash"] } });
+			expect(await refused(land(PR, HEAD, undefined, refusing.deps()))).toContain(
+				"has no merge method its repository and main's rulesets both allow",
+			);
+			expect(refusing.writes).toEqual([]);
 
 			const queued = allowing("squash");
 			queued.queue = true;

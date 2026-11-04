@@ -183,6 +183,8 @@ export async function finishFallback(
 	const path = join(state, "fallback.json");
 	if (!existsSync(path)) return null;
 	const { plan, entry, commit, parent } = JSON.parse(readFileSync(path, "utf8")) as Fallback;
+	// A fallback saved before the gate had a method squashed.
+	plan.method ??= "squash";
 	const remote = baseRemote(plan);
 	await read(root, ["fetch", "--quiet", remote, plan.base.ref]);
 	if (!contains(root, commit, "FETCH_HEAD")) {

@@ -848,6 +848,8 @@ export async function collectFixers(
 			deps.warn(`quest land fixer: unreadable job ${name}: ${String(error)}`);
 			continue;
 		}
+		// A job saved before the gate had a method squashed.
+		job.plan.method ??= "squash";
 
 		// The first try checks the base if it must; a retry only hands back, so it never checks it.
 		const failed = new Set<number>();

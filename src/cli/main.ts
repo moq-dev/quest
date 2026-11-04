@@ -550,8 +550,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
 				"is, and a head GitHub refuses to enqueue fails, to be fixed and landed again. On a base " +
 				`that requires the \`${LAND_CHECK}\` check, it queues the PR for \`quest land\` instead: auto-merge ` +
-				"whose commit body pins the head, with the method named or else squash when the repository allows " +
-				"it, as only a queue signal, since quest land applies its own method. On an ungated base with auto-merge disabled, it refuses " +
+				"whose commit body pins the head, with the method named, else squash, else any method the " +
+				"repository and the base's rulesets allow, as only a queue signal, since quest land applies its own " +
+				"method. On an ungated base with auto-merge disabled, it refuses " +
 				"unless --direct is passed. Follow the repository landing instructions in CONTRIBUTING.md or " +
 				"AGENTS.md; never retry with --direct unless the user asks. GitHub keeps auto-merge across a " +
 				"writer's push, so disable it before pushing to the PR; quest status and quest wait report a head " +

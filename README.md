@@ -524,8 +524,9 @@ the repository disallows; otherwise it uses the only method the repository
 allows, or else a merge commit, and refuses when merge commits are off and more
 than one method remains. On a base that requires the `quest land` check, it
 queues the PR for [`quest land`](#land-a-batch-with-quest-land) instead, with
-auto-merge in the named method, or else squash where the repository allows it.
-That request only signals the queue; `quest land` applies its own method.
+auto-merge in the named method, or else squash, or else any method the
+repository and the base's rulesets both allow. That request only signals the
+queue; `quest land` applies its own method.
 On a base with GitHub's merge queue, which applies its own method, it enqueues
 that head, or arms auto-merge bound to it while required checks may still be
 pending. The queue builds each PR on the current base, so a head behind it is
