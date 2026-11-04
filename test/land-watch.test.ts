@@ -1763,13 +1763,17 @@ git commit -qm 'disable render_timeout'`;
 		};
 		pulls[3].labels = ["quest:iterate"];
 		pulls[4].labels = ["quest:active"];
+		// GitHub refuses 7's held comment, and its session lets go before the next pass: the hold still ends 7's round.
+		github.refuse = (body) => body.includes("but not re-enqueued");
 		github.now = Date.parse(at(7));
 		expect((await watchPass(REPOSITORY, { state }, deps(github), context)).sort()).toEqual([
 			"dropped 6 held",
-			"dropped 7 held",
 			"dropped 8 held",
 			"dropped 9 held",
 		]);
+		pulls[2].labels = [];
+		github.now = Date.parse(at(8));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["dropped 7 held"]);
 		expect(github.mutations).toEqual([]);
 		expect(git(repo.origin, "rev-parse", "refs/heads/branch-6")).toBe(heads.get(6));
 		const pushed = git(repo.origin, "rev-parse", "refs/heads/branch-7");

@@ -95,6 +95,8 @@ interface WatchJob extends Process {
 	requeued?: Queued;
 	/** Why the round ended in a handback, recorded before posting it, so a restart keeps the reason. */
 	handback?: string;
+	/** The hold that ended the round, recorded before posting it, so a retry never applies the round once it clears. */
+	held?: string;
 	/** A validated fix whose push GitHub refused, handed back for `quest land apply`. */
 	resolution?: Resolution;
 	/** Passes that failed to collect it, so one that keeps failing is set aside rather than holding a fixer slot. */
@@ -530,6 +532,8 @@ async function collect(
 	let pushed = ours;
 	// Leave a held PR to its session: its own comment replaces the fixer's note.
 	const leave = async (hold: string): Promise<string[]> => {
+		job.held = hold;
+		save(path, job);
 		await post(
 			github,
 			plan,
@@ -543,6 +547,7 @@ async function collect(
 		return [`dropped ${number} held`];
 	};
 	// A head this round already asked GitHub to queue, and GitHub took, stays: the hold came after it.
+	if (job.held !== undefined) return leave(job.held);
 	const hold = holdOf(pull);
 	if (hold !== undefined && !(job.requeuing !== undefined && queued(pull, job.dropped))) return leave(hold);
 	if (ended) {
