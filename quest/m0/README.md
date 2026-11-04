@@ -91,7 +91,7 @@ ownership-manifest design:
 ## Required
 
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
-- [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched
+- [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched, with merge-commit landing as its one exception
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
 - [Split the rejected-login review test](/quest/m0/review-test-load.md) - each rejected-login variant is its own test, within the default limit under load
 - [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` exits distinctly on a reviewer's quota and prints the reset time
