@@ -5,7 +5,7 @@
 The guide and `/quest-plan` define a quest's size as the agent's effort to
 implement, verify, and land it, judgment included, so a short but subtle
 change, such as a 30-line rewording of a skill, is sized M rather than XS.
-`MODELS.md` routes by size, so the size has to say how capable a model the
+`quest`'s built-in tables route by size, so the size has to say how capable a model the
 quest needs.
 
 ## Plan
