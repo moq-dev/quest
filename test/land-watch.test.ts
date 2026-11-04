@@ -96,8 +96,8 @@ interface World {
 	now: number;
 	/** The upstream repository that holds each PR's branch, `branch-<number>`. */
 	origin?: string;
-	/** A comment GitHub refuses to post, once. */
-	refuse?: (body: string) => boolean;
+	/** Texts whose comment GitHub refuses to post, each once. */
+	refuse?: string[];
 	/** A read of a PR's queue state that fails, once. */
 	unreadable?: (pull: Pull) => boolean;
 	/** PRs whose push activity GitHub has not listed yet. */
@@ -368,8 +368,9 @@ function deps(world: World): GitHubDependencies {
 				const list = (world.comments[Number(comments[1])] ??= []);
 				if (init?.method === "POST") {
 					const comment = { user: { login: `${APP}[bot]` }, body: JSON.parse(String(init.body)).body };
-					if (world.refuse?.(comment.body)) {
-						world.refuse = undefined;
+					const refused = world.refuse?.findIndex((text) => comment.body.includes(text)) ?? -1;
+					if (refused >= 0) {
+						world.refuse!.splice(refused, 1);
 						return Response.json({ message: "refused" }, { status: 422 });
 					}
 					list.push(comment);
@@ -1109,7 +1110,7 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		github.unreadable = (pull) => pull.queued !== undefined;
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 		// Then GitHub refuses the outcome comment once: the round stays requeued, and only its comment is retried.
-		github.refuse = (body) => body.includes("re-enqueued this pull request");
+		github.refuse = ["re-enqueued this pull request"];
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 		const [line] = await watchPass(REPOSITORY, { state }, deps(github), context);
 		const fixed = git(repo.origin, "rev-parse", "refs/heads/branch-5");
@@ -1737,6 +1738,11 @@ git commit -qm 'disable render_timeout'`;
 		fix.round(6, fixScript("fixed.txt"));
 		fix.round(7, fixScript("fixed.txt"));
 		fix.round(8, flakyScript);
+		// Each hold the watcher sees ends the pick, even when GitHub refuses its comment and the hold clears
+		// before the retry: here 5's at the removal, and below 7's after the push and 9's while it waits.
+		github.refuse = ["It is held by"];
+		await expect(watchPass(REPOSITORY, { state }, deps(github), context)).rejects.toThrow();
+		pulls[0].labels = [];
 		// Three fixer slots: 9 waits.
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
 			"removed 5 failed_checks held",
@@ -1763,17 +1769,16 @@ git commit -qm 'disable render_timeout'`;
 		};
 		pulls[3].labels = ["quest:iterate"];
 		pulls[4].labels = ["quest:active"];
-		// GitHub refuses 7's held comment, and its session lets go before the next pass: the hold still ends 7's round.
-		github.refuse = (body) => body.includes("but not re-enqueued");
+		github.refuse = ["but not re-enqueued", "did not start on"];
 		github.now = Date.parse(at(7));
+		await expect(watchPass(REPOSITORY, { state }, deps(github), context)).rejects.toThrow();
+		pulls[2].labels = [];
+		pulls[4].labels = [];
+		github.now = Date.parse(at(8));
 		expect((await watchPass(REPOSITORY, { state }, deps(github), context)).sort()).toEqual([
-			"dropped 6 held",
-			"dropped 8 held",
+			"dropped 7 held",
 			"dropped 9 held",
 		]);
-		pulls[2].labels = [];
-		github.now = Date.parse(at(8));
-		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["dropped 7 held"]);
 		expect(github.mutations).toEqual([]);
 		expect(git(repo.origin, "rev-parse", "refs/heads/branch-6")).toBe(heads.get(6));
 		const pushed = git(repo.origin, "rev-parse", "refs/heads/branch-7");

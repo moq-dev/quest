@@ -311,8 +311,10 @@ async function take(
 		mark(`${started[1].merged ? "merged" : "fixer"} ${started[0]}`);
 		return undefined;
 	}
-	const hold = holdOf(pull);
+	// A hold recorded before GitHub refused its comment still ends the pick once it clears.
+	const hold = removal.hold ?? holdOf(pull);
 	if (hold !== undefined) {
+		save(removalPath(state, number), { ...removal, hold } satisfies Removal);
 		await post(
 			github,
 			{ repository },

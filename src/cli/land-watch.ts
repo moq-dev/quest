@@ -103,6 +103,8 @@ export interface Removal {
 	failure?: Failure;
 	/** What the fixer step made of a `fix` verdict; unset while it waits for one. */
 	taken?: string;
+	/** The hold label that ends the pick, recorded before its comment, so a retry honors it once it clears. */
+	hold?: string;
 	/** For a conflict: the base the quest merge driver could not merge, retried only once the base moves. */
 	unmerged?: string;
 }
@@ -445,7 +447,9 @@ async function handle(
 	// An unknown head never authorizes the fixer: wait for GitHub to list the push, then end the pick.
 	if (known === null && now - Date.parse(at) < UNLISTED) return null;
 	const head = known ?? current;
-	const hold = holdOf(pull);
+	// A hold recorded for this removal, before GitHub refused its comment, still ends the pick.
+	const prior = readRemoval(state, number);
+	const hold = (prior?.event === string(event.id) ? prior.hold : undefined) ?? holdOf(pull);
 	const { pick, queued } = head === current ? first : await pickOf(github, string(pull.id), event, head, app, own);
 	const verdict: Verdict =
 		known === null
@@ -497,17 +501,6 @@ async function handle(
 		build.jobs.length === 0 && reason !== "merge_conflict" && FIXABLE.includes(reason)
 			? `\n\nThe watcher found no failing \`merge_group\` job for it before ${at}.`
 			: "";
-	await post(
-		github,
-		{ repository },
-		{ number, enabledAt: pick.at },
-		`quest land watch: the merge queue removed this pull request at ${head} because ${because(reason, actor, base.ref)} (\`${reason.replace(/[^a-z_]/g, "")}\`).${AFTER[verdict](current, fixing, hold ?? "")}${missing}`,
-		`removed ${string(event.id)}`,
-		"quest land watch",
-		undefined,
-		(room) => jobsSection(blocks, room),
-	);
-
 	const entry: Entry = {
 		id: string(pull.id),
 		number,
@@ -533,6 +526,7 @@ async function handle(
 		verdict,
 		jobs: build.jobs.map(({ log: _, ...job }) => job),
 		log,
+		...(verdict === "held" ? { hold } : {}),
 		...(verdict === "fix"
 			? {
 					failure: {
@@ -547,12 +541,23 @@ async function handle(
 				}
 			: {}),
 	};
-	// A removal GitHub showed late never replaces the record of a newer one.
-	if ((readRemoval(state, number)?.at ?? "") <= at) {
+	// Recorded before its comment, so a pass retrying a refused comment keeps a hold that cleared since. A
+	// removal GitHub showed late never replaces the record of a newer one.
+	if ((prior?.at ?? "") <= at) {
 		save(join(state, `removal-${number}.json`), removal);
 		// Any other verdict ends the pick: its fixer history goes, so a later enqueue starts afresh.
 		if (verdict !== "fix") endPick(state, number, pick.at);
 	}
+	await post(
+		github,
+		{ repository },
+		{ number, enabledAt: pick.at },
+		`quest land watch: the merge queue removed this pull request at ${head} because ${because(reason, actor, base.ref)} (\`${reason.replace(/[^a-z_]/g, "")}\`).${AFTER[verdict](current, fixing, hold ?? "")}${missing}`,
+		`removed ${string(event.id)}`,
+		"quest land watch",
+		undefined,
+		(room) => jobsSection(blocks, room),
+	);
 	return `removed ${number} ${reason} ${verdict}`;
 }
 
