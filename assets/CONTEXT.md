@@ -130,7 +130,7 @@ A refutation stands only when it cites evidence the reviewer cannot rebut: a `pa
 The authoring model may skip the review of a change too trivial to need one.
 
 A reviewer that is out of quota or logged out is an outage, not a skip: keep the PR a draft, with a `## Waiting` item naming the reviewer, its error, and the check, such as `Codex: out of quota until 2026-11-03 15:00 UTC; check that quest review runs`.
-Give the reset time when the error names one; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
+Give the reset time `quest review` prints when it exits 3 on a usage limit; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
 Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
 
 The PR body's `## Models` section records the PR's size and each implementing session's harness, model, and effort.

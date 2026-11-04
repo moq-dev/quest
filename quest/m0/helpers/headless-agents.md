@@ -22,9 +22,9 @@ stays as the way to start the other vendor.
   exit 3 for an exhausted key. Keep stripping the coordinating session's
   harness variables and credentials (`STRIPPED`), so the agent runs on the
   CLI's own login rather than as the session's sub-session. Report a CLI
-  that is logged out or at its usage limit distinctly, reusing the matcher
-  [Reviewer usage limits](/quest/m0/review-quota.md) shares, so
-  `/quest-spawn` can skip that harness's quests.
+  that is logged out or at its usage limit distinctly, reusing the `LIMIT`
+  matcher in `src/cli/limit.ts` that `quest review` uses for its exit-3
+  `ReviewLimitError`, so `/quest-spawn` can skip that harness's quests.
 - Remove the `## API keys` section and the `api` resume path from
   `assets/skills/spawn.md`, and the billed-spawn text from the README,
   `quest agent --help`, and `docs/windows.md`, with their tests.
@@ -49,7 +49,3 @@ stays as the way to start the other vendor.
   `src/cli/setup.ts`), so it must accept both the old and the new body.
 - The command does no load or CPU admission: the guide routes the agents'
   expensive commands through `quest gate`.
-
-## Related
-
-- [Reviewer usage limits](/quest/m0/review-quota.md) - [moq-dev/quest#471](https://github.com/moq-dev/quest/pull/471) also edits `src/cli/agent.ts`'s usage-limit matcher
