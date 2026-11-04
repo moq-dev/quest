@@ -4,17 +4,18 @@
 
 `/quest-spawn` starts each ready quest on the first harness and model that
 can run from a ranked list `quest` builds in for the quest's size, the same
-for every repository unless its `AGENTS.md` overrides it, so cheaper models
-take the easy quests, Opus the hard ones, and a usage limit falls through
-to the next entry. Reviews rank the same way, from a different maker than
-the implementer, and each PR records its size, implementer, and reviewer
-so the lists can be retuned from outcomes. This epic's own work is one live
-spawn in moq-dev/quest from Claude Code that starts an XS quest on Grok, an
-S on Codex, and an M or larger on Claude, each PR recording its size and
-implementer and reviewed by a different maker from its size's list.
+for every repository unless its `AGENTS.md` overrides it: Grok for XS, Opus
+from S up, with Sol as the fallback through M, and a usage limit falling
+through to the next entry. Sol reviews, at an effort set by size, and Opus
+reviews whatever Sol wrote, so no model reviews its own code. Every commit
+and PR records the models and efforts behind it, and fixes link the PR that
+caused them, so the rankings can be audited and retuned. This epic's own
+work is one live spawn in moq-dev/quest from Claude Code that starts an XS
+quest on Grok and an S or larger on Opus, each recorded and reviewed by Sol.
 
-Non-goals: kix.quest's runner jobs, which pick their own accounts and
-models; billing agents to API keys, which this epic removes.
+Non-goals: routing kix.quest's runner jobs, which pick their own accounts
+and models (their commits still record their models); billing agents to API
+keys, which this epic removes.
 
 ## Plan
 
@@ -57,10 +58,17 @@ are mostly judgment.
   from the routed PRs, first in m0 once this epic lands, then each
   milestone (user).
 - Ranked lists replace one model per size, so a usage limit falls through
-  to the next entry (user): Grok for XS, Sol for S, Opus for M and up, and
-  a quest with an open maintainer decision routes one size up. Reviews rank
-  cheaper models, including Grok and DeepSeek through opencode, from a
-  different maker than the implementer. No free models (user).
+  to the next entry (user), and a quest with an open maintainer decision
+  routes one size up.
+- The lists, settled later the same day (user), replacing earlier ones that
+  led S with Sol, ranked Grok and DeepSeek reviewers, and considered free
+  models: Opus writes the code, since it does a much better job. XS: Grok
+  high, then Sol medium. S: Opus medium, then Sol high. M: Opus high, then
+  Sol xhigh. L and XL: Opus xhigh, no fallback. Reviews: Sol low, medium,
+  high, xhigh, xhigh for XS to XL, never the model that wrote the code;
+  Pullfrog and CodeRabbit add free reviews on top.
+- Every commit and PR records its models and efforts, and every fix links
+  the PR that caused it, so the rankings can be audited (user).
 - Every `/quest-review` scores the change out of 10 (user, while planning
   [the council](/quest/m2/council.md), which joins m2).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
@@ -68,11 +76,11 @@ are mostly judgment.
 
 ## Required
 
-- [More agent harnesses](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok and opencode as well as Claude Code and Codex
+- [Grok agents](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok as well as Claude Code and Codex
 - [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the first entry of its size's ranked list that can run
-- [Grok and opencode reviewers](/quest/m0/model-routing/review-harnesses.md) - `quest review` runs them read-only, as it runs Claude Code and Codex
-- [Review by size](/quest/m0/model-routing/review-effort.md) - `quest review` picks its reviewer from its size's ranked list, from a different maker than the implementer
+- [Review by size](/quest/m0/model-routing/review-effort.md) - Sol reviews at an effort set by size, and Opus reviews what Sol wrote
 - [Review score](/quest/m0/model-routing/review-score.md) - every `quest review` round scores the change out of 10
 - [Sizes include judgment](/quest/m0/model-routing/size-judgment.md) - the guide and `/quest-plan` size a quest by the agent's effort, judgment included
-- [PRs record their implementer](/quest/m0/model-routing/implementer.md) - each PR names its size and the harness, model, and effort that wrote it, beside its reviewer's
+- [Commits and PRs record their models](/quest/m0/model-routing/implementer.md) - commit trailers and PR records name each harness, model, and effort, and the PR's size
+- [Fixes link their culprits](/quest/m0/model-routing/culprits.md) - a fix lists the PR that introduced the problem under `## Caused by`
 - [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing

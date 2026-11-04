@@ -26,9 +26,11 @@ a token cost the user chooses per PR:
     ([review score](/quest/m0/model-routing/review-score.md))
   - Merged, then a blind vote that drops findings most members reject
 - Who sits on it?
-  - ✅ One reviewer per maker, at that maker's entry in the PR size's review
-    list ([Review by size](/quest/m0/model-routing/review-effort.md)),
-    minus the implementers' makers
+  - ✅ One reviewer per maker, minus the implementers' makers: Sol and
+    Opus at the PR size's efforts in
+    [Review by size](/quest/m0/model-routing/review-effort.md), and Grok
+    `grok-4.7` and DeepSeek `opencode-go/deepseek-v4-pro` at high (agent's
+    choice, since single reviews dropped Grok and DeepSeek on 2026-11-04)
   - One per maker, the implementer's included
   - Every ranked model
 - Which milestone? ✅ m2 (rejected: m0 after routing, m1)
@@ -59,8 +61,8 @@ Agent's choices, for the implementer to revisit:
 
 ## Required
 
-- [Grok and opencode reviewers](/quest/m0/model-routing/review-harnesses.md) - the council's xAI and DeepSeek members
-- [Review by size](/quest/m0/model-routing/review-effort.md) - the ranked review lists the council picks its members from
+- [Grok and opencode reviewers](/quest/m2/review-harnesses.md) - the council's xAI and DeepSeek members
+- [Review by size](/quest/m0/model-routing/review-effort.md) - the Sol and Opus review efforts the council's members use
 - [Review score](/quest/m0/model-routing/review-score.md) - the score each member reports
 
 ## Related
