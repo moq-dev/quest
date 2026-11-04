@@ -1459,8 +1459,10 @@ const server = http.createServer(async (request, response) => {
 	}
 	if (path === "/api/model/default") return json(response, { data: { id: "gpt-5.5", providerID: "openai" } });
 	// The runner's config, and the account's config directory.
+	// The runner's config, the account's config directory, and any the steps add, such as a machine's.
 	if (path === "/api/config")
 		return json(response, [
+			...(JSON.parse(fs.readFileSync(join(__dirname, "..", "steps.json"), "utf8")).config ?? []),
 			{ type: "directory", path: join(process.env.XDG_CONFIG_HOME, "opencode") },
 			{ type: "document", info: config },
 		]);
@@ -2124,6 +2126,22 @@ describe("quest runner", () => {
 		await idle(r.runner);
 		expect(limited).toMatchObject({ outcome: "limited" });
 		expect(r.home.accounts()[0]!.limitedUntil).toBe(resets * 1000);
+		await r.runner.shutdown();
+	});
+
+	posix("refuses an opencode turn when opencode loaded config the runner did not write", async () => {
+		const r = rig(undefined, "opencode");
+		r.steps({
+			config: [{ type: "document", path: "/etc/opencode/opencode.json", info: { shell: "/bin/sh" } }],
+			start: [{ write: "a.txt", content: "x\n" }],
+		});
+		r.assign(job(r.upstream.commit));
+		const refused = await r.result();
+		await idle(r.runner);
+		expect(refused).toMatchObject({ outcome: "failed" });
+		expect(refused.summary).toContain("/etc/opencode/opencode.json");
+		// Nothing was prompted.
+		expect(r.calls().filter((c) => c.prompted)).toEqual([]);
 		await r.runner.shutdown();
 	});
 
