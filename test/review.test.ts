@@ -276,6 +276,12 @@ test("each size's reviewer is the first whose model wrote none of the code", () 
 	const sol = authored({ harness: "codex", exclude: ["gpt-6.1-sol"] }, {});
 	expect(() => pickReviewer("M", { harness: "codex" }, sol)).toThrow("gpt-6.1-sol wrote the code; pass --model");
 	expect(pickReviewer("M", { harness: "codex", model: "gpt-6-astra" }, sol).model).toBe("gpt-6-astra");
+	// Nor does --model bring back a model that wrote the code.
+	expect(() => pickReviewer("M", { harness: "codex", model: "gpt-6.1-sol" }, sol)).toThrow(
+		"gpt-6.1-sol wrote the code",
+	);
+	const opusWrote = authored({ exclude: ["claude-opus-5-5"] }, {});
+	expect(() => pickReviewer("M", { model: "claude-opus-5-5" }, opusWrote)).toThrow("claude-opus-5-5 wrote the code");
 	// --model and --effort override the picked entry.
 	expect(pickReviewer("XS", { effort: "high" }, claude)).toEqual({
 		harness: "codex",
@@ -302,6 +308,14 @@ fakes("a quest branch is reviewed at its quest's size on the base, which its own
 	// --size overrides the quest's.
 	const sized = await quest("--root", s.repo, "review", "--size", "S", "--new");
 	expect(sized.stdout).toContain("reviewer codex gpt-6.1-sol medium\nsize S --size\n");
+	// A checkout on another branch, as the runner's review checkout is, takes the size of the branch it names.
+	git(s.repo, "checkout", "-qb", "kix-review/job1");
+	const runner = await review(
+		{ root: s.repo, base: "origin/main", sizeBranch: "quest/m0/big" },
+		{ env: { ...process.env, CLAUDECODE: "1" } },
+	);
+	expect([runner.size, runner.sizeFrom, runner.effort]).toEqual(["L", "quest/m0/big.md", "xhigh"]);
+	git(s.repo, "checkout", "-q", "quest/m0/big");
 	const invalid = await quest("--root", s.repo, "review", "--size", "XXL", "--new");
 	expect(invalid.code).not.toBe(0);
 	expect(invalid.stderr).toContain("Allowed choices are XS, S, M, L, XL");

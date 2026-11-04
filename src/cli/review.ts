@@ -128,28 +128,27 @@ export function authored(choice: Choice, env: NodeJS.ProcessEnv): (entry: Model)
 /**
  * The reviewer for a PR of `size`: the first entry of its list whose model
  * wrote none of the code, or `--harness`'s entry, with `--model` and
- * `--effort` overriding its model and effort.
+ * `--effort` overriding its model and effort. An override never brings back
+ * a model that wrote the code.
  */
 export function pickReviewer(size: Size, choice: Choice, wrote: (entry: Model) => boolean): Model {
 	const list = REVIEWERS[size];
-	if (choice.harness !== undefined) {
-		const entry = list.find((e) => e.harness === choice.harness);
-		const model = choice.model ?? entry?.model;
-		const effort = choice.effort ?? entry?.effort;
-		if (model === undefined || effort === undefined) {
-			throw new ReviewInputError(`no ${choice.harness} reviewer for size ${size}; pass --model and --effort`);
-		}
-		if (choice.model === undefined && entry !== undefined && wrote(entry)) {
-			throw new ReviewInputError(`${model} wrote the code; pass --model to name another ${choice.harness} model`);
-		}
-		return { harness: choice.harness, model, effort };
-	}
-	const entry = list.find((e) => !wrote(e));
-	if (entry === undefined) {
+	const entry =
+		choice.harness === undefined ? list.find((e) => !wrote(e)) : list.find((e) => e.harness === choice.harness);
+	if (entry === undefined && choice.harness === undefined) {
 		const models = [...new Set(list.map((e) => e.model))].join(", ");
 		throw new ReviewInputError(`every ${size} reviewer (${models}) wrote the code; pass --harness and --model`);
 	}
-	return { ...entry, model: choice.model ?? entry.model, effort: choice.effort ?? entry.effort };
+	const harness = choice.harness ?? entry!.harness;
+	const model = choice.model ?? entry?.model;
+	const effort = choice.effort ?? entry?.effort;
+	if (model === undefined || effort === undefined) {
+		throw new ReviewInputError(`no ${harness} reviewer for size ${size}; pass --model and --effort`);
+	}
+	const picked = { harness, model, effort };
+	if (wrote(picked))
+		throw new ReviewInputError(`${model} wrote the code; pass --model to name another ${harness} model`);
+	return picked;
 }
 
 /**
@@ -190,6 +189,11 @@ export type ReviewOptions = BaseOptions & {
 	exclude?: string[];
 	/** The PR's size, instead of its quest's or the default. */
 	size?: Size;
+	/**
+	 * The branch whose quest sizes the round, when the checkout's is not the
+	 * PR's own, as in the runner's review checkout; defaults to the session's branch.
+	 */
+	sizeBranch?: string;
 	/** The author's fixes and refutations of the last round's findings. */
 	responses?: string;
 	/** Start a new session instead of resuming the branch's last one. */
@@ -980,7 +984,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const { remote, branch: baseBranch } = parseBase(root, baseRef);
 	const tracking = `refs/remotes/${remote}/${baseBranch}`;
 	const baseSha = git(root, ["rev-parse", "--verify", `${tracking}^{commit}`]);
-	const sized = reviewSize(root, baseSha, branch, options.size);
+	const sized = reviewSize(root, baseSha, options.sizeBranch ?? branch, options.size);
 	const picked = pickReviewer(sized.size, options, wrote);
 	const harness = picked.harness;
 	const reviewer = CLIS[harness];

@@ -2525,10 +2525,10 @@ describe("runner reviews", () => {
 			expect(await r.result()).toMatchObject({ outcome: "completed", summary: "Refuted" });
 			const [first, second] = r.publishes.map((p) => (p.head === null ? "" : p.head));
 			expect([first, second]).toEqual(["", "1".padStart(40, "0")]);
-			// The Anthropic job is reviewed by Codex, and each round goes to kix as it is.
-			expect(r.reviewed.map((q) => [q.head, q.reviewer.harness, q.responses])).toEqual([
-				["1".padStart(40, "0"), "codex", undefined],
-				["2".padStart(40, "0"), "codex", "1: it should say new."],
+			// The Anthropic job is reviewed by Codex, sized by the job's quest branch, and each round goes to kix as it is.
+			expect(r.reviewed.map((q) => [q.head, q.reviewer.harness, q.branch, q.responses])).toEqual([
+				["1".padStart(40, "0"), "codex", "quest/m0/thing", undefined],
+				["2".padStart(40, "0"), "codex", "quest/m0/thing", "1: it should say new."],
 			]);
 			expect(r.reviews).toEqual([
 				{

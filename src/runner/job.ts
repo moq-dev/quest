@@ -458,6 +458,7 @@ export class Attempt {
 				workspace: this.#workspace!,
 				head,
 				reviewer,
+				branch: job.branch,
 				responses,
 				signal: this.#reviewing.signal,
 			});
