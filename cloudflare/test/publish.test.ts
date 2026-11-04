@@ -1851,7 +1851,13 @@ describe("merge jobs", () => {
 			it("records findings as a failing check, which lands nothing", async () => {
 				const id = await merging(false);
 				const head = await fix(id);
-				const failed = await report({ job: id, head, score: 4, rationale: "Breaks on `null`.", findings: [finding] });
+				const failed = await report({
+					job: id,
+					head,
+					score: 4,
+					rationale: "Breaks on `null`.",
+					findings: [finding],
+				});
 				expect(await failed.json()).toEqual({ conclusion: "failure" });
 				expect(project.checkRuns).toEqual([
 					{
