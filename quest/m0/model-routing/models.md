@@ -1,67 +1,74 @@
-# [M] /quest-spawn routes each quest by MODELS.md
+# [M] /quest-spawn routes each quest down a ranked list
 
 ## Goal
 
-A repository's optional `MODELS.md` maps each quest size to a harness,
-model, and effort, and names each harness's reviewer. `quest unblocked
---json` reports the mapped harness, model, and effort for each ready quest,
-`/quest-spawn` starts each quest on them, and `quest review` takes its
-reviewer's model and effort from the base branch's `MODELS.md`. Without the
-file, or for a size it leaves out, spawns and reviews behave as today.
-moq-dev/quest gets its own `MODELS.md`.
+The `quest` binary ranks harnesses and models for each quest size.
+`quest unblocked --json` reports each ready quest's ranked list, and
+`/quest-spawn` starts the quest on the first entry that can run: its CLI
+installed, logged in, and under its usage limit. A quest is skipped only
+when its whole list is out. A repository's `AGENTS.md` may override the
+lists in prose; otherwise every repository gets the same ones.
 
 ## Plan
 
-Decided 2026-11-04 (user, /quest-plan); the evidence and the mapping are in
+Decided 2026-11-04 (user, /quest-plan); the evidence is in
 [the epic](/quest/m0/model-routing/README.md).
 
-- Where is `MODELS.md` parsed?
-  - ✅ In quest's code: `quest unblocked --json` adds `harness`, `model`,
-    and `effort` (null when unmapped) per quest, and `quest check` reports
-    a malformed file
-  - Skill prose only, read by the coordinator
-- Should `MODELS.md` also set the reviewers?
-  - ✅ Yes: a review row per harness overrides the pins in `MODELS` in
-    `src/cli/review.ts`, which stay the defaults
-  - No, keep only the code pins
-- When the mapped harness cannot run (its CLI missing, logged out, or at a
-  usage limit), what happens to the quest?
-  - ✅ Skip it and report the outage once in the spawn's summary
-  - Start it on the session's own harness
+- Where does each quest's model come from?
+  - ✅ Lists built into `quest`, the same for every repository; a
+    repository's `AGENTS.md` overrides them in prose (user, replacing a
+    `MODELS.md` file per repository)
+  - A `MODELS.md` in each repository, parsed by `quest`
+  - Per quest, in its plan
+- One model per size, or a ranked list?
+  - ✅ A ranked list, so a usage limit falls through to the next entry
+    (user, replacing "skip the quest and report the outage")
+- Which models? ✅ Grok for XS, Sol for S, Opus for M and up, each falling
+  back down its list (user). Implementation is coding; reviews may use
+  cheaper models ([Review by size](/quest/m0/model-routing/review-effort.md)).
+- Free models? ✅ Never (user): they are slow, and they may log or train on
+  a private repository's code.
+- A quest with an open decision? ✅ Routes one size up, so it prefers Opus
+  (user). The signal: a `Maintainer:` item under its `## Waiting`. An XL
+  stays XL.
 
-Format (agent's choice): one table at the repository root, beside
-`REVIEW.md`, with columns `Work | Harness | Model | Effort`. `Work` is a
-size, `XS` to `XL`, or `Review`. A `Review` row's harness is the reviewer's
-own: `Review | claude | ...` reviews Codex's work. Prose around the table
-is free, so the file can explain its choices. `quest check` reports an
-unknown harness or work, a duplicate row, and a model or effort that is not
-a plain word (the rule `codexFlags` in `src/cli/agent.ts` already applies).
-It does not check that a CLI accepts the model.
+The lists, pinned in a module `src/cli/review.ts` also imports:
 
-This repository's file maps XS Codex `gpt-6.1-sol` high, S Codex
-`gpt-6.1-sol` xhigh, M Claude `claude-opus-5-5` medium, L Claude
-`claude-opus-5-5` high, XL Claude `claude-opus-5-5` xhigh, and lists the
-review rows with the current pins (Claude `claude-opus-5-5` high, Codex
-`gpt-6.1-sol` xhigh), so the whole policy reads in one place.
+| Size | Ranked harness, model, effort |
+|---|---|
+| XS | grok `grok-4.7` high → opencode `opencode-go/deepseek-v4-pro` high → codex `gpt-6.1-sol` medium |
+| S | codex `gpt-6.1-sol` high → claude `claude-opus-5-5` medium → grok `grok-4.7` high |
+| M | claude `claude-opus-5-5` high → codex `gpt-6.1-sol` xhigh |
+| L | claude `claude-opus-5-5` xhigh → codex `gpt-6.1-sol` xhigh |
+| XL | claude `claude-opus-5-5` xhigh → codex `gpt-6.1-sol` xhigh |
 
-- `quest unblocked` reads `MODELS.md` from the same upstream tree it ranks.
-  `quest review` reads it from the base branch's tip, as it does
-  `REVIEW.md`, so a PR cannot pick its own reviewer.
-- `/quest-spawn`: start a quest whose harness matches the session's as a
-  native sub-agent with the mapped model and effort, and one on the other
-  vendor through `quest agent` on the logged-in account. An unmapped quest
-  inherits the session's settings. Skip a quest whose harness cannot run
-  (`quest agent` fails to start it, or exits on a usage limit) and report
-  that harness's outage once, with the quests it held back.
-- Docs: the README documents `MODELS.md`, `quest unblocked --json`'s new
-  fields, and the review rows. The
-  [review harness check](/quest/m1/review-harness.md) also compares this
-  repository's `MODELS.md` review rows with the pins, and the next run's
-  quest carries that forward.
+The first entry of each list is the user's, as are the Sol, Opus, and Grok
+efforts: Sol medium for XS, high for S, xhigh above; Opus high for M,
+xhigh for L and XL; Grok high everywhere (user, 2026-11-04). The rest of
+the fallbacks, the S list's Opus effort, DeepSeek's, and the opencode provider (OpenCode Go, the subscription kix
+already supports) are the agent's choice, for the
+[model check](/quest/m0/model-check.md) to retune.
+
+- Each entry also names its model's maker (Anthropic, OpenAI, xAI,
+  DeepSeek), which reviews use to pick a different maker than the
+  implementer.
+- `quest unblocked --json` adds the ranked list per quest, after the
+  decision bump. An epic whose README carries no size has none; the
+  spawner then inherits its own settings.
+- `/quest-spawn`: follow the repository's `AGENTS.md` where it names other
+  models, and otherwise the list. Start a quest on a harness matching the
+  session's as a native sub-agent, and any other through `quest agent` on
+  the logged-in account. When `quest agent` cannot start an entry (CLI
+  missing, logged out) or the agent exits on a usage limit, move to the
+  next entry, resuming from the claim PR and checkout; report each
+  harness's outage once.
+- Docs: the README documents the lists, the decision bump, the override,
+  and `quest unblocked --json`'s new field. The
+  [model check](/quest/m1/model-check.md) audits the lists each milestone.
 
 ## Required
 
-- [Headless agents](/quest/m0/helpers/headless-agents.md) - `quest agent` runs on the logged-in account, so a session can start the other vendor's agents
+- [More agent harnesses](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok and opencode as well as Claude Code and Codex
 
 ## Related
 
