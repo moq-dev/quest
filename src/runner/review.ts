@@ -57,6 +57,8 @@ export interface ReviewRequest {
 	/** The published head to review. */
 	head: string;
 	reviewer: Reviewer;
+	/** The job's branch, whose quest, if any, sizes the review; kix names it, never the head. */
+	branch: string;
 	/** The agent's fixes and refutations of the last round's findings. */
 	responses?: string;
 	/** Stops the review when its attempt stops. */
@@ -73,6 +75,7 @@ export async function reviewHead(request: ReviewRequest): Promise<Round> {
 			base,
 			fetched: true,
 			harness: request.reviewer.harness,
+			sizeBranch: request.branch,
 			responses: request.responses,
 			signal: request.signal,
 		},

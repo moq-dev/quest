@@ -7,7 +7,7 @@
 // Only a terminal sees any of this. Piped output is the plain contract agents
 // and scripts read, and `main.ts` prints it unchanged.
 
-import { type Blocker, type Doc } from "../core";
+import { type Blocker, type Doc, type Size } from "../core";
 
 /** stdout is a terminal. Without `colour` (NO_COLOR) the layout stays and the escape codes go. */
 export interface Terminal {
@@ -18,8 +18,6 @@ export interface Terminal {
 export function detect(isTTY: boolean | undefined, env: Record<string, string | undefined>): Terminal | undefined {
 	return isTTY ? { colour: !env.NO_COLOR } : undefined;
 }
-
-type Size = "XS" | "S" | "M" | "L" | "XL";
 
 /**
  * Size colours as SGR parameters, from `design/theme.md` (Size): named ANSI

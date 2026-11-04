@@ -20,4 +20,3 @@ repository uses the same settings, so nothing in them changes but the pin.
 ## Required
 
 - [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` reads the built-in size table
-- [Review by size](/quest/m0/model-routing/review-effort.md) - `quest review` reads the built-in review table

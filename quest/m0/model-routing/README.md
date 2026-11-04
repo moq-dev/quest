@@ -82,6 +82,5 @@ are mostly judgment.
 
 - [Grok agents](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok as well as Claude Code and Codex
 - [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the first entry of its size's ranked list that can run
-- [Review by size](/quest/m0/model-routing/review-effort.md) - Sol reviews at an effort set by size, and Opus reviews what Sol wrote
 - [Review score](/quest/m0/model-routing/review-score.md) - every `quest review` round scores the change out of 10
 - [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing

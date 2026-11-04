@@ -115,7 +115,9 @@ Review findings fixed in the same PR are not culprits; the record is for problem
 
 ## Reviews
 
-Before a PR is marked ready for review, and before each push to one that is, the other vendor's model reviews the committed branch locally against the PR's base branch with `quest review --base <remote>/<base>`: Claude Code reviews Codex's work, and Codex reviews Claude Code's.
+Before a PR is marked ready for review, and before each push to one that is, a model that wrote none of its code reviews the committed branch locally against the PR's base branch with `quest review --base <remote>/<base>`, which picks the reviewer and effort by the PR's size.
+Pass `--exclude-model` for each implementing model the PR body records, and on a branch that is not a quest's, `--size` with the size it records; a quest branch's size is read from its quest.
+Where the repository's `AGENTS.md` names other reviewers, pass them with `--harness`, `--model`, and `--effort`.
 Commit and pass the repository's checks first.
 A check failure that reproduces unchanged in a checkout of the base branch is pre-existing rather than the PR's: record the command and both failures in the PR body's validation, and go on to review and readiness.
 Never alter the repository's harness to get a pass, such as by disabling a tool, unsetting its environment, or skipping a check, nor report an altered run as its checks.

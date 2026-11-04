@@ -23,6 +23,7 @@ import {
 	questBranch,
 	resolve,
 	rooted,
+	size,
 	withoutFragment,
 } from "./doc";
 import { comparePaths, join } from "./path";
@@ -34,7 +35,6 @@ import { MAINTAINER, WAITING, parseWait } from "./waiting";
  * closed vocabulary is what catches it.
  */
 const HEADINGS = ["Goal", "Plan", "Waiting", "Required", "Closes", "Related"];
-const SIZES = ["XS", "S", "M", "L", "XL"];
 
 /**
  * Sections whose whole content is a list. A heading left standing after its
@@ -117,10 +117,8 @@ function collisions(found: Finding[], known: Set<string>, docs: Doc[]) {
 
 function headings(found: Finding[], doc: Doc) {
 	if (!isEpic(doc)) {
-		const title = doc.title;
-		const match = title ? /^\[([^\]]*?)\] (.*)$/s.exec(title.text) : null;
-		const valid = title !== null && match !== null && title.literal && SIZES.includes(match[1]) && match[2] !== "";
-		if (!valid) found.push({ path: doc.path, line: null, message: "quest title must be '# [XS|S|M|L|XL] Title'" });
+		if (size(doc) === null)
+			found.push({ path: doc.path, line: null, message: "quest title must be '# [XS|S|M|L|XL] Title'" });
 	}
 
 	if (!has(doc, "Goal")) found.push({ path: doc.path, line: null, message: "missing '## Goal'" });

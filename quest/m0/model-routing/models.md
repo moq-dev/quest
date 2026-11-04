@@ -30,7 +30,8 @@ Decided 2026-11-04 (user, /quest-plan); the evidence is in
 - A quest with an open decision? ✅ Routes one size up (user). The signal:
   a `Maintainer:` item under its `## Waiting`. An XL stays XL.
 
-The lists, pinned in a module `src/cli/review.ts` also imports (user):
+The lists, pinned in `src/cli/models.ts` beside the review lists
+`quest review` reads (user):
 
 | Size | Ranked harness, model, effort |
 |---|---|
@@ -40,8 +41,8 @@ The lists, pinned in a module `src/cli/review.ts` also imports (user):
 | L | claude `claude-opus-5-5` xhigh |
 | XL | claude `claude-opus-5-5` xhigh |
 
-- Each entry names its model, so [reviews](/quest/m0/model-routing/review-effort.md)
-  never use the model that wrote the code.
+- Each entry names its model, so a review passes it to `quest review
+  --exclude-model` and never uses the model that wrote the code.
 - `quest unblocked --json` adds the ranked list per quest, after the
   decision bump. An epic whose README carries no size has none; the
   spawner then inherits its own settings.

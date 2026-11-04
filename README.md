@@ -1075,12 +1075,30 @@ forward, kills at the second. There is no fairness guarantee, and no timeout exc
 
 ## Review locally
 
-`quest review` has the other vendor's model review the checkout's committed
-branch before it is pushed for review: Codex when run from Claude Code, and
-Claude Code when run from Codex. `--harness` names the reviewer instead; an
-unknown harness, or a missing or logged-out CLI, is an error rather than a
-same-model review, as is a login the API rejects mid-round, such as an expired
-or revoked token. The reviewer reaches its model as the user's own CLI does:
+`quest review` has a model that wrote none of the code review the checkout's
+committed branch before it is pushed for review, at an effort set by the PR's
+size. Each size ranks its reviewers, the same for every repository:
+
+| PR size | Reviewer | When Sol wrote the code |
+|---|---|---|
+| XS | Codex `gpt-6.1-sol` low | Claude Code `claude-opus-5-5` low |
+| S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
+| M, or none | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` medium |
+| L | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
+| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
+
+A quest branch takes its quest's size, read from the base branch's tip so a
+change cannot lower its own review; `--size` sizes any other PR, such as a
+skill's own, and a PR with neither gets M's reviewers. The first reviewer
+whose model wrote none of the code reviews: `--exclude-model` names each model
+that did, from the PR's record, and without it the harness running the command
+is taken to have written it, so Codex reviews from Claude Code and Claude Code
+from Codex. `--harness` names the reviewer instead, at its entry's model and
+effort, and `--model` and `--effort` override those, as a repository whose
+`AGENTS.md` names other reviewers needs. An unknown harness, a size whose
+every reviewer wrote the code, or a missing or logged-out CLI, is an error
+rather than a same-model review, as is a login the API rejects mid-round, such
+as an expired or revoked token. The reviewer reaches its model as the user's own CLI does:
 Claude Code keeps `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, and its
 cloud providers' `CLAUDE_CODE_USE_*` switches and settings, so a gateway such
 as CLIProxyAPI, Bedrock, Vertex, or Foundry works, and Codex keeps
@@ -1094,13 +1112,11 @@ gateway or provider is set. Variables that would change the reviewer's plugins,
 permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME`, or the default when unset, and any gateway or provider.
-Every review runs with a pinned model and effort that `quest review --help`
-lists; `--model` and `--effort` override them.
-
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
+quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, reviewed by Opus
 quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
 ```
 
@@ -1143,7 +1159,7 @@ root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
 given every round, and chooses the review's stance, such as adversarial.
 
-It prints the reviewer, model, and effort, session, round, base, head, a
+It prints the reviewer, model, and effort, the size and its source, session, round, base, head, a
 `usage` line per turn (input tokens, the part read from the prompt cache, and output), the
 finding count, then each finding as severity, `path:line`, and title over its
 indented body. `--json` prints the same as one object. It exits 0 once the round
@@ -1157,20 +1173,20 @@ records them in the PR body's `## Review` section, and marks the PR ready.
 
 ## Headless agents
 
-`quest agent` runs one headless agent turn per call, billed to one of the keys
-in `QUEST_API_KEYS`, so `/quest-spawn api` launches every agent with one command
-whose arguments name the whole launch:
+`quest agent` runs one headless agent turn per call on the agent CLI's own
+login, so a session can start the other vendor's agents, which its own
+sub-agents cannot run, with one command whose arguments name the whole launch:
 
 ```sh
-quest agent start --harness claude --key 1 --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo "/quest-start quest/m0/foo.md"
-quest agent resume --harness claude --key 2 --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo <session> "Take the recommendation."
+quest agent start --harness claude --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo "/quest-start quest/m0/foo.md"
+quest agent resume --harness claude --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo <session> "Take the recommendation."
 quest agent stop .worktrees/foo
 quest agent stop --all
 ```
 
 Codex starts and resumes only in a checkout registered by `quest worktree create`,
 on Linux with the `quest worktree run` supervisor available.
-Ownership and host support are checked before keys are resolved. Each turn uses
+Ownership and host support are checked before any agent state is written. Each turn uses
 the same lifecycle as `quest worktree run`: restore the reservation before the
 turn, then release it and prune declared scratch after the agent and its
 remaining descendants exit. Source changes and the session remain available
@@ -1180,28 +1196,28 @@ directly in the supplied checkout. Codex desktop threads use the desktop app's
 native archival instead.
 
 Options go before the worktree, and the prompt or message follows it, so text
-starting with `-` is never read as an option. `--key` names a key by its
-1-based position. The first launch resolves every 1Password `op://` entry in
-one `op inject` and keeps the keys in a user-only
-store under `$XDG_RUNTIME_DIR` (or the temporary directory), shared by the
-repository's worktrees until `quest agent stop --all` deletes it. The agent
-runs in the worktree with the user's environment minus the coordinating
-session's harness variables (keeping `CLAUDE_CONFIG_DIR` and `CODEX_HOME`),
-other keys, secret-manager tokens, and any `quest gate` admission or priority, plus its one
-key. `--permission-mode` is Claude Code's permission mode, or Codex's sandbox
-mode; the agent cannot prompt.
+starting with `-` is never read as an option. The agent runs in the worktree
+with the user's environment minus the coordinating session's harness variables
+and credentials (keeping `CLAUDE_CONFIG_DIR` and `CODEX_HOME`), secret-manager
+tokens, and any `quest gate` admission or priority, so it uses the CLI's stored
+login rather than the session's. `--permission-mode` is Claude Code's
+permission mode, or Codex's sandbox mode; the agent cannot prompt. Each
+repository's running agents are recorded in a user-only directory under
+`$XDG_RUNTIME_DIR` (or the temporary directory), which `quest agent stop --all`
+deletes after stopping them.
 
-It prints `session <id>` as soon as the id is known, then `cost <dollars>` when
-the agent reports it, `outcome finished|failed|exhausted|stopped`, a blank line,
-and the agent's final reply. It never prints a key. It exits 0 when the agent
-finished, 3 when the provider refused the key for lack of credit, 2 for invalid
-arguments, 128 plus the signal number when interrupted, and 1 otherwise. `stop`
-signals the agent and waits until its `start` or `resume` has reported.
+It prints `session <id>` as soon as the id is known, then
+`outcome finished|failed|limited|logged-out|stopped`, a blank line, and the
+agent's final reply. It exits 0 when the agent finished, 3 when its account hit
+a usage limit or ran out of credit, 4 when the CLI is logged out (printing its
+login command), 2 for invalid arguments, 128 plus the signal number when
+interrupted, and 1 otherwise, so a spawn can skip a harness that cannot run.
+`stop` signals the agent and waits until its `start` or `resume` has reported.
 
-The agent CLI and `op` run from their absolute paths on `PATH`, skipping
-relative entries, so a worktree can never supply its own `claude` and receive
-a key. They also run with only `PATH`'s absolute entries, so neither finds a
-program it starts by name, such as `node`, in the worktree. On native Windows
+The agent CLI runs from its absolute path on `PATH`, skipping relative entries,
+so a worktree can never supply its own `claude`. It also runs with only
+`PATH`'s absolute entries, so it never finds a program it starts by name, such
+as `node`, in the worktree. On native Windows
 the lookup tries `PATHEXT`'s program and batch extensions, a batch shim such as
 npm's `claude.cmd` runs through System32's `cmd.exe` with its arguments
 escaped, `NoDefaultCurrentDirectoryInExePath` stops Windows' implicit search of
@@ -1531,7 +1547,7 @@ the version you pin decides what your agents follow:
 | `quest-start` | Claim a ready quest, complete it, and open a PR. |
 | `quest-spawn` | Triage ready quests and send several agents out in parallel. |
 | `quest-iterate` | Iterate on an open PR to settle its open decisions, fix CI and review findings, and push. |
-| `quest-review` | Review a PR's branch locally with the other vendor's model, then mark it ready for review. |
+| `quest-review` | Review a PR's branch locally with a model that wrote none of it, then mark it ready for review. |
 | `quest-merge` | Queue a PR to land, running `quest-iterate` first when it needs work. |
 | `quest-complete` | Decide which open PRs to merge, then queue them. |
 | `quest-afk` | Keep starting agreed work while you are away, leaving every decision for your return. |
@@ -1541,18 +1557,6 @@ the version you pin decides what your agents follow:
 Use `/quest-plan` in Claude Code or `$quest-plan` in Codex. Skills coordinate
 within your agent session. A started quest stops at a pull request; merging is
 a separate invocation, so you review every change.
-
-To bill spawned agents to API keys instead of your agent's account, export
-`QUEST_API_KEYS` with one or more whitespace-separated keys and run
-`/quest-spawn api`. Entries may be secret references such as 1Password `op://`
-URIs, resolved in one `op inject` when the first agent starts; a 1Password
-service account token (`OP_SERVICE_ACCOUNT_TOKEN`) avoids even that prompt. Each
-quest runs through [`quest agent`](#headless-agents) as a headless `claude -p`
-or `codex exec` process on one key; a key whose credit runs out is dropped, and
-spawning stops once every key is exhausted.
-Disable auto-reload or set a spend limit in each provider console so draining a
-key cannot charge a card. Agents run as your user, so they are not isolated from
-the other keys.
 
 To use Quest in your own repository, paste this into your agent:
 

@@ -59,28 +59,24 @@ Answer these requests at any point, without stopping running agents:
 - "status": a compact list of each agent with its quest, PR, state, and how long ago it started or last reported.
 
 A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result.
-Resume that agent by messaging it, or with `quest agent resume` under `api`, so it keeps its context and checkout.
+Resume that agent by messaging it, or with `quest agent resume` for a headless agent, so it keeps its context and checkout.
 If it cannot be resumed, start a new agent with the same brief plus its claim PR, its checkout, and the token of any hold it took on the PR, which `quest status <pr>` shows, so the new one continues that work and keeps that hold rather than claiming again.
 While the error persists, such as a rate limit before its reset, resume and start nothing until it clears, and report it once rather than per agent.
 
-## API keys
+## Other harnesses
 
-With an `api` argument, bill agents to API keys instead of this session's account: run each as a headless agent through `quest agent` rather than as a sub-agent.
-`QUEST_API_KEYS` lists the keys, separated by whitespace; refer to each by its 1-based position.
-`quest agent` resolves any 1Password `op://` entries in one `op inject` on first use, keeps the keys in a user-only store, and gives each agent only its own key, so never resolve, read, or show a key yourself.
-A 1Password service account token in `OP_SERVICE_ACCOUNT_TOKEN` makes resolution promptless.
-Stop and report if it says `QUEST_API_KEYS` is unset or the agent CLI is not installed.
+A sub-agent runs only this session's harness.
+To start a quest on another, such as Codex from Claude Code when the user asks for it, run it as a headless agent through `quest agent`, which uses that CLI's own login.
+Stop and report if it says the agent CLI is not installed.
 
 Start each agent as a background command, in its own isolated worktree, so the harness reports its exit as it would a sub-agent's:
-`quest agent start --harness <claude|codex> --key <position> --model <model> --effort <level> --permission-mode <mode> <worktree> <prompt>`.
-Pass this session's model, effort, and permission mode; Codex takes its sandbox mode.
-It prints the session id first, then the cost when the agent reports one, the outcome, and the agent's final reply.
+`quest agent start --harness <claude|codex> --model <model> --effort <level> --permission-mode <mode> <worktree> <prompt>`.
+Pass the model and effort the user named; `--permission-mode` is Claude Code's permission mode, or Codex's sandbox mode.
+It prints the session id first, then the outcome and the agent's final reply.
 Tell the agent that it cannot prompt, so it ends with any decisions and its recommendations in its final reply, and that ending its turn ends the process and kills its background commands, so it waits in the foreground.
 Ask the user, then resume that session in the background with the answer, as you would message a sub-agent: `quest agent resume` with the same options, the worktree, the session id, and the answer.
 Stop one agent with `quest agent stop <worktree>`.
-When the spawn ends, run `quest agent stop --all`, which stops any agent still running and deletes the resolved keys.
+When the spawn ends, run `quest agent stop --all`, which stops any agent still running.
 
-Assign quests to keys round-robin.
-Exit status 3 means the key's credit is exhausted: drop that key for the rest of the spawn and resume the session on the next key.
-Once every key is exhausted, start nothing new and never fall back to this session's account.
-List each interrupted quest with its worktree and session id so the user can resume it later.
+Exit status 3 means the harness's account hit its usage limit, and 4 that its CLI is logged out, printing the login command.
+Start nothing more on that harness, report its outage once, and list each interrupted quest with its worktree and session id so the user can resume it later.
