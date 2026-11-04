@@ -28,9 +28,12 @@ run in every repository the user opens, and a repository that doesn't ignore
 
 Implementation guidance:
 
-- Check with `git check-ignore` whether `.worktrees/` is already ignored,
-  by the repository, a global `core.excludesFile`, or an earlier exclude,
-  before appending.
+- Check with `git check-ignore`, as `ignored()` in `src/cli/worktree.ts`
+  does, whether `.worktrees/` is already ignored, by the repository, a
+  global `core.excludesFile`, or an earlier exclude, before appending.
+  Query it with the trailing slash: until the directory exists,
+  `git check-ignore .worktrees` misses a directory-only rule such as
+  `/.worktrees/`.
 - Test with a repository that has no ignore rule, one whose `.gitignore`
   already lists `/.worktrees/`, and a second checkout, which must not
   append the line again.
