@@ -42,7 +42,7 @@ Agent's choices, for the implementer to revisit:
 - Accuracy comes from the records: commit trailers and the PR body's
   size, implementers, and each `## Review` round's reviewer, score, and findings
   with their dispositions; follow-up fixes are later PRs that list it under
-  `## Caused by` ([culprits](/quest/m0/model-routing/culprits.md)).
+  `## Caused by` (`quest context`'s Pull requests section).
 - Prices are a pinned table beside the model lists, by model and token
   kind; the model check keeps it current with the ids.
 - Output: a table per quest or PR, a rollup by size, role, and model, and

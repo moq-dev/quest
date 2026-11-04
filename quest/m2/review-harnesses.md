@@ -23,12 +23,9 @@ the council once single reviews became Sol only (user, the same day).
 - Each CLI's own review mode where it has one, as Codex's `exec review`
   and Claude Code's `/code-review`; otherwise one turn with the review
   prompt, then the schema turn.
-- Report a logged-out CLI and a usage limit distinctly, as
-  [Reviewer usage limits](/quest/m0/review-quota.md) does for the others,
-  so the council can run without that maker.
+- Report a logged-out CLI and a usage limit distinctly, as `quest review`
+  does for Claude Code and Codex (exit 3 with the reset, through
+  `ReviewLimitError` and `src/cli/limit.ts`), so the council can run
+  without that maker.
 - The [model check](/quest/m1/model-check.md)'s sandbox test covers all
   four reviewers from then on; the PR adds them to its Plan.
-
-## Related
-
-- [Reviewer usage limits](/quest/m0/review-quota.md) - the distinct usage-limit exit each reviewer reports
