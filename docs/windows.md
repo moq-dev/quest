@@ -86,7 +86,7 @@ Quest does not bundle or start an agent. Install the native tools separately:
   native PowerShell and Windows sandboxing. Follow its current device and
   enterprise-policy requirements.
 
-`quest agent` launches Claude Code natively for `/quest-spawn api`, including
+`quest agent` launches Claude Code natively, including
 npm's `claude.cmd` shim, and `quest agent stop` ends the agent's whole process
 tree at once. Its Codex agents need Linux worktree supervision.
 

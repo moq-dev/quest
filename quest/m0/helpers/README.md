@@ -71,4 +71,4 @@ commands from Sep-Oct. Session counts in each child come from that window.
 
 ## Required
 
-- [Headless agents](/quest/m0/helpers/headless-agents.md) - `quest agent` launches, resumes, and stops agents on the logged-in account through one command auto mode allows, and `/quest-spawn api` is removed
+- [Headless agents](/quest/m0/helpers/headless-agents.md) - auto mode allows `quest agent` launches, resumes, and stops with no per-user settings

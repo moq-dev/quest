@@ -96,7 +96,3 @@ Implementation guidance:
   the pool, or say how to re-add them, and update README's runner section,
   the runner's `--help`, kix's account UI, and the epic's rehearsal items
   that assume per-account Claude homes and `resetsAt`.
-
-## Required
-
-- [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` throws `ReviewLimitError` with the reset, which the runner catches
