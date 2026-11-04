@@ -1179,6 +1179,11 @@ describe("runner adapters", () => {
 		// Anything but the filter's own refusal fails closed.
 		expect(unixSocketRefusal(srt("exit 0\n"), { PATH: bin })).toMatch(/^could not check that .* \(exit 0\)$/);
 		expect(unixSocketRefusal(srt(`echo '${REFUSED}' >&2\nexit 1\n`), { PATH: bin })).toBeNull();
+		// srt runs with the jobs' environment, since it looks for its helper through `npm root -g`.
+		const jobs = srt(
+			`[ -z "$NPM_CONFIG_PREFIX" ] && [ "$TMPDIR" = "$PWD" ] && [ "$CLAUDE_CODE_TMPDIR" = "$PWD" ] && echo '${REFUSED}' >&2\nexit 1\n`,
+		);
+		expect(unixSocketRefusal(jobs, { PATH: bin, NPM_CONFIG_PREFIX: tempDir() })).toBeNull();
 	});
 
 	test.skipIf(process.platform !== "linux")("refuse to start when bubblewrap cannot make the sandbox", () => {

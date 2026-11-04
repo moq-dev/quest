@@ -98,6 +98,18 @@ export function keptEnvironment(env: NodeJS.ProcessEnv): Record<string, string> 
 }
 
 /**
+ * The whole environment `srt` runs with for a job's commands: the kept
+ * variables, with TMPDIR and `CLAUDE_CODE_TMPDIR` naming `tmp`, since srt
+ * replaces the command's TMPDIR with its own `CLAUDE_CODE_TMPDIR`, or
+ * `/tmp/claude` without it. srt reads it too: without a helper in its own
+ * package, it looks for one through `npm root -g` and HOME, so the Unix-socket
+ * check runs srt with this same environment.
+ */
+export function srtEnvironment(env: NodeJS.ProcessEnv, tmp: string): Record<string, string> {
+	return { ...keptEnvironment(env), TMPDIR: tmp, CLAUDE_CODE_TMPDIR: tmp };
+}
+
+/**
  * sandbox-runtime (`srt`) settings that confine commands as Claude Code's
  * sandbox settings do, which name the checkout's writes implicitly, and keep
  * them from writing `denyWrite`, even where it does not exist yet.
@@ -123,8 +135,8 @@ export function runtimeSettings(sandbox: Sandbox, denyWrite: string[] = []): Rec
  * commands the Nix daemon and every other socket on the host. On Linux, srt
  * refuses them only through its seccomp helper, `apply-seccomp`, and runs
  * commands without it when its package lacks one, as nixpkgs' does. It runs
- * socat, which srt itself needs, under the jobs' policy, and passes only on
- * the filter's own refusal.
+ * socat, which srt itself needs, under the jobs' policy and environment, and
+ * passes only on the filter's own refusal.
  */
 export function unixSocketRefusal(srt: string, env: NodeJS.ProcessEnv): string | null {
 	const dir = realpathSync(mkdtempSync("/tmp/quest-probe-"));
@@ -135,7 +147,7 @@ export function unixSocketRefusal(srt: string, env: NodeJS.ProcessEnv): string |
 		const command = `exec socat -u OPEN:/dev/null UNIX-CONNECT:${quote(join(dir, "missing"))}`;
 		const probe = spawnSync(srt, ["--settings", settings, "-c", command], {
 			cwd: dir,
-			env,
+			env: srtEnvironment(env, dir),
 			stdio: ["ignore", "ignore", "pipe"],
 			encoding: "utf8",
 			timeout: 30_000,
