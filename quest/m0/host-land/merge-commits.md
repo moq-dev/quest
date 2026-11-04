@@ -35,11 +35,13 @@ merges into it, so a squash loses it.
   how the gate lands. `quest merge --land` arms it with a method the base
   allows, reusing `quest merge`'s existing method choice, so a base that
   allows only merge commits can still be queued.
-- The startup ruleset check (`UPHELD` and `unheld` in `src/cli/land.ts`)
-  follows the configured method: refuse merge-commit mode on a base that
-  requires linear history, and require `allowed_merge_methods` to include the
-  configured method rather than always squash. Update the rules' reasons,
-  which now say the gate lands squash commits.
+- The startup protection checks follow the configured method, for rulesets
+  (`UPHELD` and `unheld` in `src/cli/land.ts`) and classic branch protection
+  (`UPHELD_CLASSIC` and `unheldClassic`) alike: refuse merge-commit mode on a
+  base that requires linear history (the ruleset rule or classic
+  `required_linear_history`), and require `allowed_merge_methods` to include
+  the configured method rather than always squash. Update the rules' reasons,
+  which now say the gate lands squash commits. Test the refusal on both paths.
 - Tests cover a merge-commit batch end to end against the mocked GitHub (chain
   shape, the API's `merge_method`, both parents, and the tree), a wrong second
   parent, and the ruleset refusals. Document the option in the README's
