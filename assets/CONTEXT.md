@@ -128,11 +128,12 @@ A reviewer that is out of quota or logged out is an outage, not a skip: keep the
 Give the reset time when the error names one; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
 Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
 
+The PR body's `## Models` section records the PR's size and each implementing session's harness, model, and effort.
+A quest PR's size is its quest's; a skill that opens its own PR, such as `/quest-plan`, sizes it as a quest is sized.
+List them as `Size: M` and one `Implementer: Codex, gpt-6.1-sol, high effort` line per session, which each session adds when it first pushes.
 The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
 Rewrite it after each round.
 A review counts for the head whose SHA it names.
-Beside it, a `## Models` section names the PR's size, as `Size: M`, and each implementing session on its own line, as `Implementer: Codex, gpt-6.1-sol, high effort`, which the session adds when it first pushes.
-A quest PR's size is its quest's; size any other PR, such as a skill's own, as you would a quest.
 
 Once "Ready to Review", CI and any online reviewers run.
 Address their findings already posted on the head when merging; never wait for or request one.

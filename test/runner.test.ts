@@ -1427,7 +1427,6 @@ async function prompt(session, input) {
 		if (step.shell)
 			log({ shell: require("node:child_process").execFileSync(config.shell, ["-c", step.shell], { encoding: "utf8" }) });
 		if (step.emit) send({ ...step.emit, properties: { ...step.emit.properties, sessionID: session } });
-		if (step.tool) hooks(step.tool);
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
 			await new Promise((resolve) => (aborted = resolve));
@@ -1940,8 +1939,10 @@ describe("quest runner", () => {
 
 	posix("drives opencode serve through a question and a resume in the same session", async () => {
 		const r = rig(undefined, "opencode");
+		const info = { role: "assistant", providerID: "openai", modelID: "gpt-test", variant: "high" };
 		r.steps({
 			start: [
+				{ emit: { type: "message.updated", properties: { info } } },
 				{ write: "a.txt", content: "draft\n" },
 				{
 					shell: 'printf "%s|%s|%s|%s|%s" "$IN_DEVSHELL" "$HOME" "${OPENCODE_SERVER_PASSWORD:-none}" "${QUEST_COMMAND:-none}" "$TMPDIR"',
@@ -1958,6 +1959,10 @@ describe("quest runner", () => {
 		const question = await r.hub.next((m) => m.type === "question");
 		await idle(r.runner);
 		expect(r.hub.of("checkpoint")).toMatchObject([{ summary: "Drafted", session: question.session }]);
+		// The commit names the model and effort opencode's assistant message reported.
+		expect(r.publishes[0]!.message).toBe(
+			"Drafted\n\nAgent-Harness: opencode\nAgent-Model: openai/gpt-test\nAgent-Effort: high\n",
+		);
 		const [nix, first, srt, shell] = r.calls();
 		expect(nix.nix.slice(0, 3)).toEqual(["print-dev-env", "--accept-flake-config", "--no-write-lock-file"]);
 		const home = r.home.accountHome("acct1");
