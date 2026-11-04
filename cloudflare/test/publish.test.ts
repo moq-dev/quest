@@ -1811,6 +1811,8 @@ describe("merge jobs", () => {
 					model: "gpt-6.1-sol",
 					effort: "medium",
 					round: 1,
+					score: 10,
+					rationale: "Lands as is.",
 					findings: [],
 					...body,
 				});
@@ -1892,13 +1894,13 @@ describe("merge jobs", () => {
 				const id = await merging(false);
 				const head = await fix(id);
 				await report({ job: id, head, findings: [finding] });
-				// A runner from before scores existed sends none, and its review still counts.
 				const passed = await report({ job: id, head, round: 2 });
 				expect(await passed.json()).toEqual({ conclusion: "success" });
 				expect(project.checkRuns!.at(-1)!.output).toEqual({
-					title: "No findings",
+					title: "No findings, scored 10/10",
 					summary:
 						"A kix runner reviewed this commit with `quest review`: codex, gpt-6.1-sol at medium effort, round 2.",
+					text: "```text\nscore 10/10: Lands as is.\n```",
 				});
 				expect(await land(id, head)).toBeNull();
 				expect(lands().map((l) => l.variables.sha)).toEqual([head]);
@@ -1926,11 +1928,11 @@ describe("merge jobs", () => {
 					"Each finding needs a file, line or null, severity, title, and body",
 				);
 				await refused({ head, reviewer: "gemini" }, "The reviewer is claude or codex");
-				const unscored = "A score is an integer from 0 to 10 with a rationale";
-				await refused({ head, score: 11, rationale: "Too high." }, unscored);
-				await refused({ head, score: 7.5, rationale: "Not whole." }, unscored);
-				await refused({ head, score: 7 }, unscored);
-				await refused({ head, rationale: "No score." }, unscored);
+				const unscored = "A review needs a score from 0 to 10 and a rationale";
+				await refused({ head, score: 11 }, unscored);
+				await refused({ head, score: 7.5 }, unscored);
+				await refused({ head, score: undefined }, unscored);
+				await refused({ head, rationale: " " }, unscored);
 				// A head someone else committed, which the job's branch holds after a merge job continues onto it.
 				project.commits[head]!.committer = "contributor";
 				const foreign = await report({ job: id, head });
