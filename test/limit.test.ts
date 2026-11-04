@@ -16,6 +16,9 @@ test("usage limits and spent balances match, and other limits do not", () => {
 		"usage_limit_reached",
 		"Quota exceeded. Check your plan and billing details.",
 		"Credit balance is too low",
+		"Your workspace is out of credits. Add credits to continue.",
+		"You hit your spend cap set in your workspace. Increase your spend cap to continue.",
+		"You've hit your team's shared budget. /model to switch models.",
 	]) {
 		expect(LIMIT.test(message), message).toBe(true);
 	}

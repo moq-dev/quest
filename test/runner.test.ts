@@ -676,7 +676,7 @@ describe("sandbox", () => {
 });
 
 describe("Claude Code output", () => {
-	test("reads limits from rate limit events, assistant errors, and results", () => {
+	test("reads limits from rate limit events, billing errors, and results, but not a throttle", () => {
 		const event = streamReader();
 		event.line(
 			JSON.stringify({
@@ -688,8 +688,13 @@ describe("Claude Code output", () => {
 		expect(event.exit(1, "")).toMatchObject({ limited: { until: 1_900_000_000_000 }, failed: true });
 
 		const flagged = streamReader();
-		flagged.line(JSON.stringify({ type: "assistant", error: "rate_limit" }));
+		flagged.line(JSON.stringify({ type: "assistant", error: "billing_error" }));
 		expect(flagged.exit(1, "").limited).toEqual({ until: null });
+
+		const throttled = streamReader();
+		throttled.line(JSON.stringify({ type: "assistant", error: "rate_limit" }));
+		throttled.line(JSON.stringify({ type: "result", is_error: true, result: "API Error: 429 Too Many Requests" }));
+		expect(throttled.exit(1, "").limited).toBeNull();
 
 		const legacy = streamReader();
 		legacy.line(

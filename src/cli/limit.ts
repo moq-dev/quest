@@ -14,9 +14,9 @@ export const LIMIT = new RegExp(
 	[
 		"usage (?:credit )?limit",
 		"usage_limit_reached",
-		"(?:hit|reached) your (?:[\\w'-]+ )*limit",
+		"(?:hit|reached) your (?:[\\w'-]+ )*(?:limit|spend cap|budget)",
 		"(?:hour|weekly|opus|sonnet|fable) limit reached",
-		"out of (?:extra usage|usage credits)",
+		"out of (?:extra usage|usage credits|credits)",
 		"free usage exceeded",
 		EXHAUSTED.source,
 	].join("|"),
