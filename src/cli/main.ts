@@ -52,7 +52,14 @@ import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
-import { MODELS, ReviewInputError, processDependencies as reviewDependencies, review, roundLines } from "./review";
+import {
+	MODELS,
+	ReviewInputError,
+	ReviewLimitError,
+	processDependencies as reviewDependencies,
+	review,
+	roundLines,
+} from "./review";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
@@ -1002,7 +1009,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Prints the reviewer, model, and effort, session, round, base, head, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), the finding count, then each finding. --json prints " +
 				"the same as one object. Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
-				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, and 1 for other failures.",
+				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when the reviewer's " +
+				"account hit its usage limit, and 1 for other failures. A usage limit prints one line, " +
+				"`error: <harness> hit its usage limit; resets <time>`, where <time> is the reset as an ISO 8601 UTC " +
+				"timestamp, or `unknown` when the CLI named none.",
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
 		.addOption(new Option("--harness <name>", "Reviewer to run instead of the other harness").choices(HARNESSES))
@@ -1038,6 +1048,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						if (error instanceof ReviewInputError) {
 							out.stderr(`error: ${error.message}\n`);
 							return 2;
+						}
+						if (error instanceof ReviewLimitError) {
+							out.stderr(`error: ${error.message}\n`);
+							return 3;
 						}
 						warn(error instanceof Error ? error.message : String(error));
 						return 1;

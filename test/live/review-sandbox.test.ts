@@ -390,7 +390,15 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 		}
 		const output = `exit ${run.status}\nstdout:\n${tail(run.stdout)}\nstderr:\n${tail(run.stderr)}`;
 		expect(recorded(), `planted configuration ran\n${output}`).toEqual([]);
-		const result = JSON.parse(run.stdout) as { permission_denials?: { tool_input?: { command?: string } }[] };
+		const result = run.stdout
+			.split("\n")
+			.filter(Boolean)
+			.map(
+				(line) =>
+					JSON.parse(line) as { type?: string; permission_denials?: { tool_input?: { command?: string } }[] },
+			)
+			.filter((event) => event.type === "result")
+			.at(-1)!;
 		const denied = (result.permission_denials ?? []).map((denial) => denial.tool_input?.command);
 		expect(denied, `the reviewer never tried the allowed command, so its denial is unchecked\n${output}`).toContain(
 			allowed(fixture.markers),
