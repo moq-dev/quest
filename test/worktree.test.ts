@@ -80,6 +80,8 @@ afterEach(() => {
 
 // Cases run up to 20 real Git processes. Process creation on the Windows ARM runner
 // costs ~80-250 ms while other test files start, so the 5 s unit-test default is too short.
+// Cases that create checkouts with submodules clone each nested repository, running
+// 100-300 Git processes, so they get 60 s.
 describe("worktrees", { timeout: 20_000 }, () => {
 	it("prunes declared scratch in place and keeps source, Git state, and untracked files", async () => {
 		const { repo, worktrees } = fixture();
@@ -370,7 +372,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		worktrees.restore(record.id);
 		expect(existsSync(join(nested, "cache"))).toBe(false);
 		expect(readFileSync(join(nested, "file"), "utf8")).toBe("local work");
-	});
+	}, 60_000);
 	it("ignores inherited Git location variables that select a submodule", async () => {
 		const { root, repo, worktrees } = fixture();
 		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
@@ -397,7 +399,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		writeFileSync(join(path, "file"), "local work");
 		await expect(worktrees.remove(record.id)).rejects.toThrow("checkout has modified or untracked files:  M file");
 		expect(readFileSync(join(path, "file"), "utf8")).toBe("local work");
-	});
+	}, 60_000);
 	it("charges cloned module stores and keeps one that serves another worktree", async () => {
 		const { root, repo, worktrees } = fixture();
 		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
@@ -419,7 +421,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		git(join(record.path, "sub"), "worktree", "remove", elsewhere);
 		await worktrees.remove(record.id);
 		expect(existsSync(record.path)).toBe(false);
-	});
+	}, 60_000);
 	it("protects a live creation without giving interrupted-checkout removal advice", async () => {
 		const { repo, worktrees } = fixture();
 		const creation = worktrees.create(repo, "live", 10_000_000);
@@ -449,7 +451,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		}
 		await worktrees.remove(record.id);
 		expect(existsSync(record.path)).toBe(false);
-	});
+	}, 60_000);
 	it("keeps a partly initialized creation charged and gives recovery advice for its lock and submodules", async () => {
 		const { root, repo, worktrees } = fixture();
 		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
@@ -467,7 +469,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(() => worktrees.release(record.id)).toThrow("git worktree unlock");
 		expect(() => worktrees.release(record.id)).toThrow("--force for submodules");
 		expect(worktrees.status().allocated).toBe(10_000_000);
-	});
+	}, 60_000);
 	it("keeps nested submodule files and commits, including branches whose HEAD is back at the pin", async () => {
 		const { root, repo, worktrees } = fixture();
 		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
@@ -531,7 +533,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		);
 		await worktrees.remove(record.id);
 		expect(existsSync(record.path)).toBe(false);
-	});
+	}, 60_000);
 	it("serializes reservations across independent repositories and preserves failed allocations", async () => {
 		const { root, repo, home, worktrees } = fixture();
 		const second = repository(join(root, "second"));
