@@ -61,6 +61,8 @@ are mostly judgment.
   a quest with an open maintainer decision routes one size up. Reviews rank
   cheaper models, including Grok and DeepSeek through opencode, from a
   different maker than the implementer. No free models (user).
+- Every `/quest-review` scores the change out of 10 (user, while planning
+  [the council](/quest/m2/council.md), which joins m2).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
 
@@ -70,6 +72,7 @@ are mostly judgment.
 - [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the first entry of its size's ranked list that can run
 - [Grok and opencode reviewers](/quest/m0/model-routing/review-harnesses.md) - `quest review` runs them read-only, as it runs Claude Code and Codex
 - [Review by size](/quest/m0/model-routing/review-effort.md) - `quest review` picks its reviewer from its size's ranked list, from a different maker than the implementer
+- [Review score](/quest/m0/model-routing/review-score.md) - every `quest review` round scores the change out of 10
 - [Sizes include judgment](/quest/m0/model-routing/size-judgment.md) - the guide and `/quest-plan` size a quest by the agent's effort, judgment included
 - [PRs record their implementer](/quest/m0/model-routing/implementer.md) - each PR names its size and the harness, model, and effort that wrote it, beside its reviewer's
 - [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing

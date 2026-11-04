@@ -25,11 +25,12 @@ the size tables of [model routing](/quest/m0/model-routing/README.md):
   ([m0's run](/quest/m0/model-check.md)), then each milestone (rejected:
   each milestone only)
 
-Audit the routing from the PRs merged since the last run, which record
+Audit the routing from the PRs merged since the last run, with
+[`quest usage`](/quest/m1/usage.md) once it lands, which record
 their size, implementer, and reviewer beside `## Review`:
 
 - Tally by size and by implementing harness, model, and effort: review
-  rounds, findings fixed versus refuted, design checkpoints reached, PRs
+  scores, review rounds, findings fixed versus refuted, design checkpoints reached, PRs
   handed back as drafts, and follow-up fixes of the PR's own work. Tally
   outages that skipped quests by harness.
 - Move a size to a stronger model or effort where its PRs needed clearly
