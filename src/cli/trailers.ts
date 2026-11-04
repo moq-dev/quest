@@ -35,37 +35,29 @@ const OWN = /^Agent-(?:Harness|Model|Effort)\s*:/i;
  * own trailer rules so they join an existing block such as `Co-Authored-By`.
  */
 export function withTrailers(message: string, by: Implementer): string {
-	let text = `${message.replace(/\r\n/g, "\n").trimEnd()}\n`;
-	// Git replaces only one of a key's repeats, so drop them all first, folded lines included, from the
-	// block Git reads as trailers: a marker trailer Git appends to that block shows where it ends.
-	const found = interpret(["--only-trailers", "--only-input", "--no-divider"], text);
-	if (found.split("\n").some((line) => OWN.test(line))) {
-		const marker = `Quest-Block-${randomUUID()}: end`;
-		const lines = interpret(["--no-divider", "--trailer", marker], text).split("\n");
-		const end = lines.indexOf(marker);
-		let begin = end;
-		while (begin > 0 && lines[begin - 1]!.trim()) begin--;
-		const block: string[] = [];
-		let dropping = false;
-		for (const line of lines.slice(begin, end)) {
-			dropping = OWN.test(line) || (dropping && /^[ \t]/.test(line));
-			if (!dropping) block.push(line);
-		}
-		// An emptied block takes its separating blank line with it.
-		const before = block.length ? lines.slice(0, begin) : lines.slice(0, Math.max(begin - 1, 0));
-		text = [...before, ...block, ...lines.slice(end + 1)].join("\n");
+	// Git appends a marker trailer to the block it reads as trailers, or starts one. Old agent trailers
+	// leave that block, folded lines included, since Git would replace only one of a key's repeats, and the
+	// current ones take the marker's place, so no paragraph the block hid is ever read as trailers.
+	const marker = `Quest-Block-${randomUUID()}: end`;
+	const lines = interpret(
+		// A `---` line in the message is prose, not the start of a patch.
+		["--no-divider", "--trailer", marker],
+		`${message.replace(/\r\n/g, "\n").trimEnd()}\n`,
+	).split("\n");
+	const end = lines.indexOf(marker);
+	if (end < 0) throw new Error("git interpret-trailers did not place the trailer block's marker");
+	let begin = end;
+	while (begin > 0 && lines[begin - 1]!.trim()) begin--;
+	const block: string[] = [];
+	let dropping = false;
+	for (const line of lines.slice(begin, end)) {
+		dropping = OWN.test(line) || (dropping && /^[ \t]/.test(line));
+		if (!dropping) block.push(line);
 	}
-	return interpret(
-		[
-			// A `---` line in the message is prose, not the start of a patch.
-			"--no-divider",
-			"--trailer",
-			`Agent-Harness: ${field(by.harness)}`,
-			"--trailer",
-			`Agent-Model: ${field(by.model)}`,
-			"--trailer",
-			`Agent-Effort: ${field(by.effort)}`,
-		],
-		text,
-	);
+	const own = [
+		`Agent-Harness: ${field(by.harness)}`,
+		`Agent-Model: ${field(by.model)}`,
+		`Agent-Effort: ${field(by.effort)}`,
+	];
+	return [...lines.slice(0, begin), ...block, ...own, ...lines.slice(end + 1)].join("\n");
 }

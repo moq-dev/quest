@@ -51,3 +51,8 @@ test("drops old agent trailers wherever Git's block ends, with their folded line
 	const folded = withTrailers("fix: x\n\nCo-Authored-By: X <x@y>\nAgent-Model: old\n continuation\n", by);
 	expect(parsed(folded)).toEqual(["Co-Authored-By: X <x@y>", ...own]);
 });
+
+test("never reads a paragraph the old block hid as trailers", () => {
+	const out = withTrailers("fix: document models\n\nAgent-Model: documented-example\n\nAgent-Model: old\n", by);
+	expect(out).toBe(`fix: document models\n\nAgent-Model: documented-example\n\n${trailers}`);
+});
