@@ -2,14 +2,21 @@
 
 ## Goal
 
-Each quest PR's body names the harness, model, and effort of every session
-that pushed commits to it, beside `## Review`, so `MODELS.md` can be
-retuned from outcomes such as review rounds per model and size.
+Each PR's body names the PR's size and the harness, model, and effort of
+every session that pushed commits to it, beside `## Review`, which already
+names the reviewer's harness, model, and effort. Each PR then reads as its
+size, who wrote it, and who reviewed it at what effort, so `MODELS.md` can
+be retuned from outcomes such as review rounds per model and size.
 
 ## Plan
 
 Decided 2026-11-04 (user, /quest-plan): every PR records the implementing
-harness, model, and effort.
+harness, model, and effort, and the reviewer and its effort (user,
+follow-up of [moq-dev/quest#487](https://github.com/moq-dev/quest/pull/487)).
+The guide's Reviews section already requires the latter in `## Review`; keep
+it, and put the size and implementer beside it. A quest PR's size is its
+quest's; a skill's own PR, such as `/quest-plan`'s, is sized by that skill,
+as [Review effort by size](/quest/m0/model-routing/review-effort.md) uses.
 
 - The guide's Execution section (`assets/AGENTS.md`) says what the record
   holds and that each session adds its own line when it pushes, so a quest

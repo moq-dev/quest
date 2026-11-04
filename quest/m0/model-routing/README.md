@@ -9,7 +9,8 @@ did the work so the table can be retuned from outcomes. This epic's own
 work is one live mixed-vendor spawn: in moq-dev/quest, with this
 repository's `MODELS.md`, a `/quest-spawn` from Claude Code starts at least
 one XS or S quest on Codex and one M or larger on Claude, each PR records
-its implementer, and each is reviewed by the other vendor.
+its size and implementer, and each is reviewed by the other vendor at its
+size's effort.
 
 Non-goals: kix.quest's runner jobs, which pick their own accounts and
 models; billing agents to API keys, which this epic removes.
@@ -43,11 +44,17 @@ are mostly judgment.
   moves up a rung of effort from its default and Opus down one.
 - Every PR records the harness, model, and effort that implemented it
   (user).
+- Review effort scales with PR size (user, follow-up of
+  [moq-dev/quest#487](https://github.com/moq-dev/quest/pull/487)): XS and S
+  reviews run Codex medium and Claude low, M and sizeless PRs Codex high and
+  Claude medium, L and XL Codex xhigh and Claude high. Skills' own PRs, such
+  as `/quest-plan`'s, carry a size too.
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
 
 ## Required
 
-- [Route by MODELS.md](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the harness, model, and effort `MODELS.md` maps its size to, and `quest review` takes its reviewers from it
+- [Route by MODELS.md](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the harness, model, and effort `MODELS.md` maps its size to
+- [Review effort by size](/quest/m0/model-routing/review-effort.md) - `quest review` runs cheaper reviews on small PRs and deeper ones on large PRs, from `MODELS.md`, with M's tier as the default
 - [Sizes include judgment](/quest/m0/model-routing/size-judgment.md) - the guide and `/quest-plan` size a quest by the agent's effort, judgment included
-- [PRs record their implementer](/quest/m0/model-routing/implementer.md) - each quest PR names the harness, model, and effort that wrote it
+- [PRs record their implementer](/quest/m0/model-routing/implementer.md) - each PR names its size and the harness, model, and effort that wrote it, beside its reviewer's
