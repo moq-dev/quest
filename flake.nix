@@ -44,6 +44,7 @@
             config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "claude-code";
           };
           opencode = nixpkgs-opencode.legacyPackages.${system}.opencode;
+          sandboxRuntime = pkgs.callPackage ./nix/sandbox-runtime.nix { };
           quest = pkgs.callPackage ./nix/package.nix { };
           questPinned = pkgs.callPackage "${quest-pinned}/nix/package.nix" { };
           # https://downloads.claude.ai/claude-code-releases/2.1.305/manifest.zst.json
@@ -61,7 +62,7 @@
               wrapProgram $out/bin/quest \
                 --set-default QUEST_RUNNER_CLAUDE ${pkgs.lib.getExe claudeCode} \
                 --set-default QUEST_RUNNER_OPENCODE ${pkgs.lib.getExe opencode} \
-                --set-default QUEST_RUNNER_SRT ${pkgs.lib.getExe pkgs.sandbox-runtime} ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "--prefix PATH : ${
+                --set-default QUEST_RUNNER_SRT ${pkgs.lib.getExe sandboxRuntime} ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "--prefix PATH : ${
                   pkgs.lib.makeBinPath [
                     pkgs.bubblewrap
                     pkgs.socat
@@ -110,7 +111,7 @@
             # finds them rather than put on PATH, where they would shadow the user's own opencode.
             env = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
               QUEST_RUNNER_OPENCODE = pkgs.lib.getExe opencode;
-              QUEST_RUNNER_SRT = pkgs.lib.getExe pkgs.sandbox-runtime;
+              QUEST_RUNNER_SRT = pkgs.lib.getExe sandboxRuntime;
             };
           };
           formatter = pkgs.nixfmt;

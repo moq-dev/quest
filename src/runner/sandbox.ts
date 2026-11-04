@@ -109,10 +109,50 @@ export function runtimeSettings(sandbox: Sandbox, denyWrite: string[] = []): Rec
 			denyRead: sandbox.deny,
 			allowRead: [sandbox.cwd, sandbox.repository, sandbox.tmp],
 			allowWrite: [sandbox.cwd, sandbox.tmp],
-			denyWrite,
+			// srt binds its own /tmp/claude in whenever it exists, whoever made it, and no
+			// denyRead hides it; this keeps commands from writing there, though not from reading it.
+			denyWrite: [...denyWrite, SRT_OWN_TMP],
 		},
 		enableWeakerNestedSandbox: false,
 	};
+}
+
+/** The shared directory sandbox-runtime keeps open to its commands. */
+export const SRT_OWN_TMP = "/tmp/claude";
+
+/**
+ * Why `srt` would let a job's commands make Unix sockets, or null when it
+ * refuses them, so a runner refuses opencode accounts rather than leave their
+ * commands the Nix daemon and every other socket on the host. On Linux, srt
+ * refuses them only through its seccomp helper, `apply-seccomp`, and runs
+ * commands without it when its package lacks one, as nixpkgs' does. It runs
+ * socat, which srt itself needs, under the jobs' policy, and passes only on
+ * the filter's own refusal.
+ */
+export function unixSocketRefusal(srt: string, env: NodeJS.ProcessEnv): string | null {
+	const dir = realpathSync(mkdtempSync("/tmp/quest-probe-"));
+	try {
+		const settings = join(dir, "srt.json");
+		const sandbox = { cwd: dir, repository: dir, tmp: dir, env: "", deny: hidden("linux"), domains: [] };
+		writeFileSync(settings, JSON.stringify(runtimeSettings(sandbox)));
+		const command = `exec socat -u OPEN:/dev/null UNIX-CONNECT:${quote(join(dir, "missing"))}`;
+		const probe = spawnSync(srt, ["--settings", settings, "-c", command], {
+			cwd: dir,
+			env,
+			stdio: ["ignore", "ignore", "pipe"],
+			encoding: "utf8",
+			timeout: 30_000,
+		});
+		if (!probe.error && probe.status !== 0 && /\bsocket\(1, \d+, \d+\): Operation not permitted$/m.test(probe.stderr))
+			return null;
+		const said =
+			probe.error?.message ?? (probe.stderr.trim().split("\n").at(-1) || `exit ${probe.status ?? probe.signal}`);
+		if (/\bconnect\(.*\): No such file or directory$/m.test(probe.stderr))
+			return `${srt} lets commands make Unix sockets, so an opencode job's commands could reach the Nix daemon and every other socket on this host: it has no seccomp helper (apply-seccomp, which it looks for in its package's vendor/seccomp/). Use the flake's runner package, whose sandbox-runtime builds it, or sandbox-runtime from npm, which ships it`;
+		return `could not check that ${srt} keeps commands from making Unix sockets (${said})`;
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 }
 
 /**
@@ -120,10 +160,10 @@ export function runtimeSettings(sandbox: Sandbox, denyWrite: string[] = []): Rec
  * namespaces on a system restricting unprivileged ones, as Ubuntu 23.10 and
  * later do: the form Ubuntu gives other programs that sandbox themselves.
  * Ubuntu's own `bwrap-userns-restrict` takes capabilities from the commands
- * bwrap runs, which breaks the seccomp helper Claude Code runs inside it, since
- * that makes a nested user namespace for its capabilities. The job's commands
- * still get none of their own: the helper's filter refuses them one, and
- * bubblewrap does where sandbox-runtime runs no helper. It attaches to one exact
+ * bwrap runs, which breaks the seccomp helpers Claude Code and sandbox-runtime
+ * run inside it, since each makes a nested user namespace for its
+ * capabilities. The job's commands still get none of their own: the helper's
+ * filter refuses them one. It attaches to one exact
  * path rather than a glob, since anyone who can build with Nix can put a
  * matching name in the store.
  */
@@ -162,8 +202,9 @@ function namespaces(command: string[]): string[] {
 /**
  * Why `bwrap` cannot make a sandbox here, or null when it can, so a runner
  * refuses to start rather than fail every job. It runs a trivial command in
- * the sandbox's namespaces, nested in a second bwrap, since Claude Code's
- * seccomp helper makes a nested user namespace inside the sandbox.
+ * the sandbox's namespaces, nested in a second bwrap, since the seccomp
+ * helpers of Claude Code and sandbox-runtime make a nested user namespace
+ * inside the sandbox.
  */
 export function sandboxRefusal(bwrap: string, restricted: boolean = restrictsUserNamespaces()): string | null {
 	const probe = spawnSync(bwrap, namespaces([bwrap, ...namespaces(["true"])]), {
