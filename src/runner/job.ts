@@ -487,6 +487,8 @@ export class Attempt {
 				model: round.model,
 				effort: round.effort,
 				round: round.round,
+				score: round.score,
+				rationale: round.rationale,
 				findings: round.findings,
 			});
 			if (status !== 200) throw new Error(typeof body.error === "string" ? body.error : `kix answered ${status}`);

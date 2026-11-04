@@ -1851,7 +1851,7 @@ describe("merge jobs", () => {
 			it("records findings as a failing check, which lands nothing", async () => {
 				const id = await merging(false);
 				const head = await fix(id);
-				const failed = await report({ job: id, head, findings: [finding] });
+				const failed = await report({ job: id, head, score: 4, rationale: "Breaks on `null`.", findings: [finding] });
 				expect(await failed.json()).toEqual({ conclusion: "failure" });
 				expect(project.checkRuns).toEqual([
 					{
@@ -1860,10 +1860,12 @@ describe("merge jobs", () => {
 						conclusion: "failure",
 						app: Number(env.GITHUB_APP_ID),
 						output: {
-							title: "1 finding",
+							title: "1 finding, scored 4/10",
 							summary:
 								"A kix runner reviewed this commit with `quest review`: codex, gpt-6.1-sol at medium effort, round 1.",
-							text: "````text\nhigh a:1 Breaks on null\n\nEnds a fence: ``` and mentions @maintainer\n````",
+							text:
+								"```text\nscore 4/10: Breaks on `null`.\n```\n\n" +
+								"````text\nhigh a:1 Breaks on null\n\nEnds a fence: ``` and mentions @maintainer\n````",
 						},
 					},
 				]);
@@ -1884,6 +1886,7 @@ describe("merge jobs", () => {
 				const id = await merging(false);
 				const head = await fix(id);
 				await report({ job: id, head, findings: [finding] });
+				// A runner from before scores existed sends none, and its review still counts.
 				const passed = await report({ job: id, head, round: 2 });
 				expect(await passed.json()).toEqual({ conclusion: "success" });
 				expect(project.checkRuns!.at(-1)!.output).toEqual({
@@ -1917,6 +1920,11 @@ describe("merge jobs", () => {
 					"Each finding needs a file, line or null, severity, title, and body",
 				);
 				await refused({ head, reviewer: "gemini" }, "The reviewer is claude or codex");
+				const unscored = "A score is an integer from 0 to 10 with a rationale";
+				await refused({ head, score: 11, rationale: "Too high." }, unscored);
+				await refused({ head, score: 7.5, rationale: "Not whole." }, unscored);
+				await refused({ head, score: 7 }, unscored);
+				await refused({ head, rationale: "No score." }, unscored);
 				// A head someone else committed, which the job's branch holds after a merge job continues onto it.
 				project.commits[head]!.committer = "contributor";
 				const foreign = await report({ job: id, head });

@@ -2539,9 +2539,11 @@ describe("runner reviews", () => {
 					model: "gpt-6.1-sol",
 					effort: "medium",
 					round: 1,
+					score: 8,
+					rationale: "Scored.",
 					findings: [finding],
 				},
-				expect.objectContaining({ head: "2".padStart(40, "0"), round: 2, findings: [] }),
+				expect.objectContaining({ head: "2".padStart(40, "0"), round: 2, score: 10, findings: [] }),
 			]);
 			const [found, passed] = tools(r).map((call) => call.reply.content[0].text as string);
 			expect(found).toContain("before you end your turn");
