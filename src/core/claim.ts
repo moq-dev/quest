@@ -12,6 +12,9 @@ import { MAINTAINER, type Wait, parseWait } from "./waiting";
 // still hand back with it.
 const HAND_BACK = /^(?:Waiting|Decisions needed)$/i;
 
+// The checkbox GitHub renders at the start of a task-list item.
+const TASK = /^\[[ xX]\] /;
+
 // Nodes whose rendered text a reader sees as separate from the next.
 const BLOCKS = new Set(["blockquote", "code", "heading", "list", "listItem", "paragraph", "table", "tableRow"]);
 
@@ -87,7 +90,8 @@ export function handBackWaits(body: string): Wait[] {
 			.filter((node) => node.type === "list")
 			.flatMap((list) => list.children)
 			.map((item): Wait => {
-				const entry = { line: item.position?.start.line ?? 1, text: collapse(text(item)) };
+				// GitHub renders a leading `[ ]` or `[x]` as a task-list checkbox, so the item's text follows it.
+				const entry = { line: item.position?.start.line ?? 1, text: collapse(text(item)).replace(TASK, "") };
 				return (waiting ? parseWait(entry) : null) ?? { ...entry, party: MAINTAINER };
 			});
 		if (items.length === 0)

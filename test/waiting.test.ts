@@ -114,16 +114,19 @@ test("withoutHandBack keeps fenced examples and drops fenced text inside a hand-
 	);
 });
 
-test("a draft's hand-back items are the maintainer's unless a Waiting item names its party", () => {
+test("a draft's hand-back items are the maintainer's unless a Waiting item names its party, after any task checkbox", () => {
 	expect(
 		handBackWaits(
-			"Work.\n\n## Waiting\n\n- Codex: out of quota until 15:00 UTC.\n- pick a name,\n  either one.\n\n" +
+			"Work.\n\n## Waiting\n\n- Codex: out of quota until 15:00 UTC.\n- pick a name,\n  either one.\n" +
+				"- [ ] Maintainer: approve the account.\n* [x] moq-dev/moq: a release.\n\n" +
 				"## Validation\n\n- Passes.\n\n## Decisions needed\n\n1. Naming: foo or bar?\n",
 		),
 	).toEqual([
 		{ line: 5, party: "Codex", text: "out of quota until 15:00 UTC." },
 		{ line: 6, party: "Maintainer", text: "pick a name, either one." },
-		{ line: 15, party: "Maintainer", text: "Naming: foo or bar?" },
+		{ line: 8, party: "Maintainer", text: "approve the account." },
+		{ line: 9, party: "moq-dev/moq", text: "a release." },
+		{ line: 17, party: "Maintainer", text: "Naming: foo or bar?" },
 	]);
 });
 
