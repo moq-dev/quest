@@ -459,7 +459,7 @@ async function collect(
 			? `with ${job.base.ref} at ${job.base.sha} merged in by the quest merge driver`
 			: result.action === "fixed"
 				? `with the land fixer's fix (${fixerText(attribution)}): ${fixerText(result.reason)}`
-				: `unchanged, since the land fixer ${result.action === "requeue" ? JUDGED[result.cause ?? "flaky"] : JUDGED.flaky}: ${fixerText(result.failure ?? ("reason" in result ? result.reason : ""))}`;
+				: `unchanged, since the land fixer ${JUDGED[("cause" in result && result.cause) || "flaky"]}: ${fixerText(result.failure ?? ("reason" in result ? result.reason : ""))}`;
 		const how =
 			requeued === "armed"
 				? `armed auto-merge on this pull request at ${head}, so it joins the back of the merge queue once its required checks pass`
