@@ -28,6 +28,8 @@ test("usage limits and spent balances match, and other limits do not", () => {
 		"Subagent nesting limit reached (depth 3 of 3).",
 		"Rate limit reached for requests",
 		"exceeded retry limit, last status: 429 Too Many Requests",
+		"API Error: Server is temporarily limiting requests (not your usage limit)",
+		"Claude is temporarily limiting requests to the usage page (not your usage limit). Try again in a moment.",
 	]) {
 		expect(LIMIT.test(message), message).toBe(false);
 	}

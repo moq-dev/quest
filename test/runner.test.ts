@@ -693,7 +693,13 @@ describe("Claude Code output", () => {
 
 		const throttled = streamReader();
 		throttled.line(JSON.stringify({ type: "assistant", error: "rate_limit" }));
-		throttled.line(JSON.stringify({ type: "result", is_error: true, result: "API Error: 429 Too Many Requests" }));
+		throttled.line(
+			JSON.stringify({
+				type: "result",
+				is_error: true,
+				result: "API Error: Server is temporarily limiting requests (not your usage limit)",
+			}),
+		);
 		expect(throttled.exit(1, "").limited).toBeNull();
 
 		const legacy = streamReader();

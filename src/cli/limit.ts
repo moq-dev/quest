@@ -1,6 +1,8 @@
 // The messages agent CLIs and their providers fail a turn with once an
 // account's usage limit or a key's balance is spent, as opposed to a brief
 // rate limit, a context or budget limit, or another failure.
+// Claude Code's server throttle says "(not your usage limit)", so the bare
+// "usage limit" skips a negation.
 
 /** Provider messages for an API key whose balance cannot pay for the request. */
 export const EXHAUSTED = /credit balance is too low|insufficient_quota|exceeded your current quota|quota exceeded/i;
@@ -12,7 +14,7 @@ export const EXHAUSTED = /credit balance is too low|insufficient_quota|exceeded 
  */
 export const LIMIT = new RegExp(
 	[
-		"usage (?:credit )?limit",
+		"(?<!not your )usage (?:credit )?limit",
 		"usage_limit_reached",
 		"(?:hit|reached) your (?:[\\w'-]+ )*(?:limit|spend cap|budget)",
 		"(?:hour|weekly|opus|sonnet|fable) limit reached",
