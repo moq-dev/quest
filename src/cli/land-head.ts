@@ -13,9 +13,11 @@ import {
 	type RemoteRead,
 	mergeBase,
 	resolveQueue,
+	SETTLE_RETRIES,
 	tryGit,
 	type Entry,
 	type Plan,
+	type Target,
 } from "./land";
 
 interface Prepared {
@@ -42,10 +44,10 @@ export async function resolvePreparedQueue(
 	root: string,
 	state: string,
 	repository: Repository,
-	base: string | undefined,
+	target: Target,
 	deps: GitHubDependencies,
 ): Promise<Plan> {
-	const plan = await resolveQueue(repository, base, deps, (entry) => isPrepared(root, state, entry));
+	const plan = await resolveQueue(repository, target, deps, (entry) => isPrepared(root, state, entry));
 	const numbers = new Set(
 		readdirSync(state).flatMap((name) => {
 			const match = /^head-(\d+)-.*\.json$/.exec(name);
@@ -182,6 +184,8 @@ export async function finishFallback(
 	const path = join(state, "fallback.json");
 	if (!existsSync(path)) return null;
 	const { plan, entry, commit, parent } = JSON.parse(readFileSync(path, "utf8")) as Fallback;
+	// A fallback saved before the gate had a method squashed.
+	plan.method ??= "squash";
 	const remote = baseRemote(plan);
 	await read(root, ["fetch", "--quiet", remote, plan.base.ref]);
 	if (!contains(root, commit, "FETCH_HEAD")) {
@@ -190,7 +194,13 @@ export async function finishFallback(
 			return null;
 		}
 		const [owner, repo] = plan.repository.split("/");
-		const fresh = await resolvePreparedQueue(root, state, { owner, repo }, plan.base.ref, deps);
+		const fresh = await resolvePreparedQueue(
+			root,
+			state,
+			{ owner, repo },
+			{ base: plan.base.ref, method: plan.method },
+			deps,
+		);
 		const queued = fresh.queue.find(
 			(now) =>
 				now.number === entry.number && now.approved === entry.approved && now.enabledAt === entry.enabledAt,
@@ -214,24 +224,53 @@ export async function finishFallback(
 	}
 	// The commit is on the base. Every step below is safe to repeat, so a restart resumes where it stopped.
 	const github = new GitHub(deps);
+	// A merge commit brings the head into the base, and GitHub marks a PR merged once a push does,
+	// though its documentation names only pushes to the default branch. A close would race that, so
+	// it waits for GitHub first and closes only a PR GitHub has not marked. A squash never marks it.
+	const merged = plan.method === "merge" && (await markedMerged(github, entry));
 	const issue = `/repos/${plan.repository}/issues/${entry.number}`;
 	const marker = `<!-- quest land: landed ${commit} -->`;
 	const comments = await github.all(`${issue}/comments?per_page=100`);
 	if (!comments.some((comment) => string(comment.body).includes(marker))) {
 		const url = `https://github.com/${plan.repository}/commit/${commit}`;
+		const why = merged
+			? ""
+			: plan.method === "squash"
+				? "; GitHub cannot show a fork PR as merged without a push to its branch"
+				: "; GitHub did not mark this PR merged from that push";
 		await github.request(`${issue}/comments`, {
-			body: {
-				body: `landed as [${commit}](${url}) by quest land; GitHub cannot show a fork PR as merged without a push to its branch.\n\n${marker}`,
-			},
+			body: { body: `landed as [${commit}](${url}) by quest land${why}.\n\n${marker}` },
 		});
 	}
+	if (!merged) await closeTested(github, plan, entry);
+	unlinkSync(path);
+	forgetHeads(state, entry.number);
+	return `landed ${entry.number} ${commit}`;
+}
+
+/** Whether GitHub marks the PR merged within its settling time after the base push. */
+async function markedMerged(github: GitHub, entry: Entry): Promise<boolean> {
+	for (let attempt = 0; ; attempt++) {
+		const data = await github.graphql("query($id: ID!) { node(id: $id) { ... on PullRequest { state } } }", {
+			id: entry.id,
+		});
+		const state = object(data.node).state;
+		if (state === "MERGED") return true;
+		if (state !== "OPEN" || attempt >= SETTLE_RETRIES) return false;
+		await github.pause(500 * 2 ** attempt);
+	}
+}
+
+/**
+ * Close the PR as it was tested: the approved head, or the daemon's own prepared head on it, still
+ * queued as it was. A contributor's newer work stays open, and queued, with the landing comment.
+ */
+async function closeTested(github: GitHub, plan: Plan, entry: Entry): Promise<void> {
 	const data = await github.graphql(
 		"query($id: ID!) { node(id: $id) { ... on PullRequest { state headRefOid autoMergeRequest { enabledAt } } } }",
 		{ id: entry.id },
 	);
 	const pull = object(data.node);
-	// Close only the PR as it was tested: the approved head, or the daemon's own prepared head on it,
-	// still queued as it was. A contributor's newer work stays open, and queued, with the comment above.
 	const unchanged =
 		(pull.headRefOid === entry.head || pull.headRefOid === entry.approved) &&
 		pull.autoMergeRequest !== null &&
@@ -242,9 +281,6 @@ export async function finishFallback(
 			body: { state: "closed" },
 		});
 	}
-	unlinkSync(path);
-	forgetHeads(state, entry.number);
-	return `landed ${entry.number} ${commit}`;
 }
 
 export async function landFallback(
@@ -258,14 +294,18 @@ export async function landFallback(
 	token: (workflows: boolean) => Promise<string>,
 	read: RemoteRead = readRemote,
 ): Promise<string | null> {
-	// The local chain parent has a different SHA from an API squash, but the same verified tree.
-	// Reparent without changing the tested tree so the fallback is strictly a fast-forward.
+	// The local chain parent has a different SHA from one GitHub landed, but the same verified tree.
+	// Reparent without changing the tested tree so the fallback is strictly a fast-forward, keeping a
+	// merge commit's second parent, the PR's head.
 	const tree = git(root, ["rev-parse", `${commit}^{tree}`]);
 	const message = git(root, ["show", "-s", "--format=%B", commit]);
+	const [first, ...rest] = git(root, ["show", "-s", "--format=%P", commit]).split(" ");
 	const landed =
-		git(root, ["show", "-s", "--format=%P", commit]) === parent
+		first === parent
 			? commit
-			: git(root, ["commit-tree", tree, "-p", parent], { input: message });
+			: git(root, ["commit-tree", tree, ...[parent, ...rest].flatMap((sha) => ["-p", sha])], {
+					input: message,
+				});
 	save(join(state, "fallback.json"), { plan, entry, commit: landed, parent });
 	return finishFallback(root, state, deps, token, read);
 }

@@ -9,7 +9,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
-import { sessionFile } from "../cli/review";
+import { fetchBase, sessionFile } from "../cli/review";
 import { save } from "../cli/worktree";
 import type { Job } from "./protocol";
 
@@ -366,13 +366,15 @@ export class Workspace {
 	 * A checkout of `head`, a commit the job published, on its own branch for
 	 * `quest review`, which reviews a branch and keeps its session per branch.
 	 * It sits beside the job's checkout, outside what the agent's sandbox can
-	 * reach, and is replaced for each head.
+	 * reach, and is replaced for each head. Its base, origin's default branch,
+	 * is fetched here under the clone's lock, so the review needs no network.
 	 */
-	async reviewCheckout(head: string): Promise<string> {
+	async reviewCheckout(head: string): Promise<{ root: string; base: string }> {
 		if (!/^[0-9a-f]{40}$/.test(head)) throw new Error(`not a commit: ${head}`);
 		const dir = `${this.dir}.review`;
-		await locked(this.#git, async () => {
+		const base = await locked(this.#git, async () => {
 			await fetch(this.#git, head);
+			const base = await fetchBase(this.#git);
 			await remove(this.#git, dir);
 			await run("git", [
 				"-C",
@@ -386,8 +388,9 @@ export class Workspace {
 				dir,
 				head,
 			]);
+			return base;
 		});
-		return dir;
+		return { root: dir, base };
 	}
 
 	/** The branch `reviewCheckout` checks out, one per job. */
