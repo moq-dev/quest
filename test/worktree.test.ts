@@ -316,7 +316,8 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		git(repo, "commit", "-am", "submodule");
 		const record = await worktrees.create(repo, "nested", 10_000_000, "HEAD", ["sub/nested/inner/cache"]);
 		const nested = join(record.path, "sub", "nested", "inner");
-		expect(readFileSync(join(nested, "file"), "utf8")).toBe("original\n");
+		// Git checks text out with CRLF where core.autocrlf is set, as on Windows runners.
+		expect(readFileSync(join(nested, "file"), "utf8").replaceAll("\r\n", "\n")).toBe("original\n");
 		const direct = (await claudeHook(
 			{ hook_event_name: "WorktreeCreate", cwd: nested, name: "direct" },
 			worktrees,
@@ -389,7 +390,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 			repo,
 		))!.trim();
 		expect(path).toBe(join(canonical(repo), ".worktrees", "agent-located"));
-		expect(readFileSync(join(path, "sub", "file"), "utf8")).toBe("original\n");
+		expect(readFileSync(join(path, "sub", "file"), "utf8").replaceAll("\r\n", "\n")).toBe("original\n");
 		const [record] = worktrees.status().records;
 		expect(record.repository).toBe(canonical(repo));
 		// Removal inspects the checkout itself, not the submodule the variables name.
@@ -781,7 +782,12 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 	it.skipIf(process.platform === "linux")("fails explicitly without a supported backend", async () => {
 		const { repo, home } = fixture();
 		vi.stubEnv("QUEST_WORKTREE_HOME", home);
-		expect(run("--root", repo, "worktree", "create", "cli", "--reserve", "10000000").code).toBe(0);
+		expect(
+			await main(["--root", repo, "worktree", "create", "cli", "--reserve", "10000000"], {
+				stdout: () => {},
+				stderr: () => {},
+			}),
+		).toBe(0);
 		let stderr = "";
 		const code = await main(["worktree", "run", "cli", "--", "git", "status"], {
 			stdout: () => {},

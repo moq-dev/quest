@@ -11,7 +11,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 
@@ -2355,7 +2355,7 @@ describe("runner reviews", () => {
 			env: {
 				...env,
 				CLAUDE_CONFIG_DIR: "/runner/accounts/claude",
-				PATH: "/nix/store/claude/bin:/usr/bin",
+				PATH: ["/nix/store/claude/bin", "/usr/bin"].join(delimiter),
 			},
 		});
 		expect(() => reviewerFor(openai, [openai, limited], home, env, 1000)).toThrow(Unreviewable);
