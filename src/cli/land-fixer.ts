@@ -711,14 +711,15 @@ export function fixerText(text: string): string {
 		.replace(/[\r\n\u0000-\u001f\u007f]/g, " ");
 	return `\`${value}\``;
 }
-export function author(result?: Pick<FixResult, "agent" | "model">): string {
+/** The fixer's harness, model, and effort, as a PR's `## Models` record names a session. */
+export function author(result?: Pick<FixResult, "agent" | "model" | "effort">): string {
 	const agent = result?.agent ?? "Codex";
 	const model = result?.model;
 	return (
-		[agent, model && model !== agent ? model : undefined]
+		[agent, model && model !== agent ? model : undefined, result?.effort && `${result.effort} effort`]
 			.filter(Boolean)
-			.join(" / ")
-			.replace(/[^a-zA-Z0-9 ._/-]/g, " ")
+			.join(", ")
+			.replace(/[^a-zA-Z0-9 ,._/-]/g, " ")
 			.slice(0, 100) || "Codex"
 	);
 }

@@ -4,9 +4,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import prompt from "../../assets/land-fix.md";
-import { discoveryEnv, git } from "./git";
+import { discoveryEnv } from "./git";
 import { programEnvironment, requireProgram } from "./program";
-import { type Implementer, withTrailers } from "./trailers";
 
 export class FixerAgentError extends Error {
 	constructor(readonly exitCode: number) {
@@ -88,7 +87,7 @@ export const signature = (failure: string) => failure.replace(/[`'"]/g, "").repl
  * a commit on the base that skips the test and adds its follow-up quest, which the daemon opens as a PR
  * of its own.
  */
-export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string; failure?: string } & (
+export type FixResult = { agent?: string; model?: string; effort?: string; blame?: boolean; comment?: string; failure?: string } & (
 	| { number: number; action: "requeue"; reason: string; cause?: Cause; disable?: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
@@ -98,7 +97,7 @@ export type FixResult = { agent?: string; model?: string; blame?: boolean; comme
  * The fixer's verdict on the base alone, when no PR is supplied: a mechanical fix committed on its
  * `base` branch, which the daemon opens as a PR, or a handback, which halts the queue with an issue.
  */
-export type BaseFix = { agent?: string; model?: string } & (
+export type BaseFix = { agent?: string; model?: string; effort?: string } & (
 	| { action: "fixed"; head: string; reason: string }
 	| { action: "handback"; diagnosis: string; recommendation: string }
 );
@@ -123,7 +122,7 @@ function validate(item: any, pr: boolean): void {
 				: item.action === "handback"
 					? [...named, "action", "diagnosis", "recommendation"]
 					: [];
-	const metadata = ["agent", "model"].filter((key) => key in item);
+	const metadata = ["agent", "model", "effort"].filter((key) => key in item);
 	if (metadata.some((key) => typeof item[key] !== "string" || !/^[a-zA-Z0-9 ._/-]{1,100}$/.test(item[key])))
 		throw new Error("invalid fixer identity");
 	if (pr && "blame" in item) {
@@ -255,9 +254,6 @@ export async function fix(
 		if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error(`fix needs a ${ref} branch`);
 		return `- #${number}: branch ${ref} at ${head}`;
 	});
-	// Every commit reachable from none of these is the agent's.
-	const start = git(root, ["for-each-ref", "--format=%(objectname)", "refs/heads"]).split("\n").filter(Boolean);
-	if (!start.length) throw new Error("fix needs the checkout's branches");
 	// The agent runs in the PRs' checkout, so neither it nor its commands are found there: a name is
 	// looked up in PATH's absolute directories, and a path is resolved here rather than in the checkout.
 	const program = agent.includes("/") ? resolve(agent) : requireProgram(agent, process.env);
@@ -319,84 +315,20 @@ export async function fix(
 		child.once("close", (code) => (code === 0 ? done() : reject(new FixerAgentError(code ?? 1))));
 	});
 	const parse = (text: string) => (numbers.length ? parseFixResult(text, numbers) : parseBaseFix(text));
-	const parsed = parse(readFixResult(root));
+	const results = parse(readFixResult(root));
 	const index = argv.findIndex((arg) => arg === "-m" || arg === "--model");
 	const ranModel =
 		(index >= 0 ? argv[index + 1] : argv.find((arg) => arg.startsWith("--model="))?.slice(8)) ??
 		/^model: ([a-zA-Z0-9._/-]{1,100})$/m.exec(header)?.[1];
-	const results = trailed(root, start, Array.isArray(parsed) ? parsed : [parsed], {
-		harness: basename(agent),
+	const identity = {
+		agent: basename(agent),
 		model: ranModel ?? "unknown",
 		// Replaced arguments may run the agent at any effort.
 		effort: args ? "unknown" : effort,
-	});
-	const identity = { agent: basename(agent), model: ranModel ?? "Codex" };
+	};
 	const result = JSON.stringify(
-		Array.isArray(parsed) ? results.map((item) => ({ ...item, ...identity })) : { ...results[0], ...identity },
+		Array.isArray(results) ? results.map((item) => ({ ...item, ...identity })) : { ...results, ...identity },
 	);
 	parse(result);
 	writeFileSync(join(root, FIX_RESULT), result);
-}
-
-/**
- * `results` once every commit the agent made, reachable from a head it reports but from no branch in
- * `start`, carries `by`'s trailers. Each is rebuilt with its tree, parents, authorship, and dates; the
- * branches that held one move to its replacement, and the results name the replacements, also where their
- * prose abbreviates an old commit.
- */
-function trailed(
-	root: string,
-	start: string[],
-	results: (FixResult | BaseFix)[],
-	by: Implementer,
-): (FixResult | BaseFix)[] {
-	const tips = results.flatMap((item) => [
-		...(item.action === "fixed" ? [item.head] : []),
-		...("disable" in item && item.disable ? [item.disable] : []),
-	]);
-	if (!tips.length) return results;
-	const replaced = new Map<string, string>();
-	const commits = git(root, ["rev-list", "--topo-order", "--reverse", ...tips, "--not", ...start]);
-	for (const commit of commits.split("\n").filter(Boolean)) {
-		const format = ["%T", "%P", "%an", "%ae", "%ad", "%cn", "%ce", "%cd"].join("%x00");
-		const [tree, parents, ...people] = git(root, ["show", "-s", "--date=raw", `--format=${format}`, commit]).split(
-			"\0",
-		);
-		const [authorName, authorEmail, authorDate, committerName, committerEmail, committerDate] = people;
-		const message = withTrailers(git(root, ["show", "-s", "--format=%B", commit]), by);
-		const args = [
-			tree!,
-			...parents!.split(" ").flatMap((parent) => (parent ? ["-p", replaced.get(parent) ?? parent] : [])),
-		];
-		replaced.set(
-			commit,
-			git(root, ["commit-tree", ...args], message, {
-				GIT_AUTHOR_NAME: authorName,
-				GIT_AUTHOR_EMAIL: authorEmail,
-				GIT_AUTHOR_DATE: `@${authorDate}`,
-				GIT_COMMITTER_NAME: committerName,
-				GIT_COMMITTER_EMAIL: committerEmail,
-				GIT_COMMITTER_DATE: `@${committerDate}`,
-			}),
-		);
-	}
-	for (const line of git(root, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads"]).split("\n")) {
-		const [sha, ref] = line.split(" ");
-		const next = sha && replaced.get(sha);
-		if (next) git(root, ["update-ref", ref!, next, sha]);
-	}
-	const commit = (sha: string) => replaced.get(sha) ?? sha;
-	const prose = (text: string) =>
-		text.replace(/\b[0-9a-f]{7,40}\b/g, (short) => {
-			for (const [old, next] of replaced) if (old.startsWith(short)) return next.slice(0, short.length);
-			return short;
-		});
-	return results.map((item) => {
-		const copy: Record<string, unknown> = { ...item };
-		for (const key of ["reason", "comment", "diagnosis", "recommendation"])
-			if (typeof copy[key] === "string") copy[key] = prose(copy[key]);
-		if (item.action === "fixed") copy.head = commit(item.head);
-		if ("disable" in item && item.disable) copy.disable = commit(item.disable);
-		return copy as FixResult | BaseFix;
-	});
 }

@@ -471,7 +471,8 @@ export class Opencode implements Adapter {
 		void closed.then(() => listening(null));
 
 		let stopping = false;
-		let ran = { model: "unknown", effort: "unknown" };
+		const unknown = { model: "unknown", effort: "unknown" };
+		let ran: () => Promise<{ model: string; effort: string }> = async () => unknown;
 		let killer: ReturnType<typeof setTimeout> | undefined;
 		let abort: () => Promise<unknown> = async () => {};
 		let watched: Promise<void> = Promise.resolve();
@@ -502,6 +503,13 @@ export class Opencode implements Adapter {
 				writeFileSync(join(sessions, launch.session), session, { mode: 0o600 });
 			}
 			abort = () => client.session.abort({ sessionID: session });
+			// The assistant message that is calling a kix tool is the session's latest.
+			ran = async () => {
+				const { data } = await client.session.messages({ sessionID: session, limit: 1 });
+				const info = data?.at(-1)?.info;
+				if (info?.role !== "assistant") return unknown;
+				return { model: `${info.providerID}/${info.modelID}`, effort: info.variant ?? "unknown" };
+			};
 			if (stopping) return failure("stopped");
 
 			let limited: Exit["limited"] = null;
@@ -517,10 +525,7 @@ export class Opencode implements Adapter {
 					// Token deltas repeat what the finished parts carry; other sessions' events are not this job's.
 					if (properties.sessionID !== session || event.type.endsWith(".delta")) continue;
 					launch.output(`${JSON.stringify(event)}\n`);
-					if (event.type === "message.updated" && event.properties.info.role === "assistant") {
-						const { providerID, modelID, variant } = event.properties.info;
-						ran = { model: `${providerID}/${modelID}`, effort: variant ?? "unknown" };
-					} else if (event.type === "session.status") {
+					if (event.type === "session.status") {
 						const hit = retryLimit(event.properties.status);
 						if (hit && !limited) {
 							limited = hit;
@@ -562,7 +567,7 @@ export class Opencode implements Adapter {
 			});
 		return {
 			done,
-			ran: () => ran,
+			ran: () => ran().catch(() => unknown),
 			stop() {
 				stopping = true;
 				// Abort the turn so opencode records it, then stop the server whether or not it answered.

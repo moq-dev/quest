@@ -25,9 +25,9 @@ the size tables of [model routing](/quest/m0/model-routing/README.md):
   ([m0's run](/quest/m0/model-check.md)), then each milestone (rejected:
   each milestone only)
 
-Audit the routing from the PRs merged since the last run, with
-[`quest usage`](/quest/m1/usage.md) once it lands, which record
-their size, implementer, and reviewer beside `## Review`:
+Audit the routing from the records of the PRs merged since the last run,
+with [`quest usage`](/quest/m1/usage.md) once it lands: each body's
+`## Models` size and implementers and its `## Review` reviewer:
 
 - Tally by size and by implementing harness, model, and effort: review
   scores, review rounds, findings fixed versus refuted, design checkpoints reached, PRs

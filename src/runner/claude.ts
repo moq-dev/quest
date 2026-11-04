@@ -61,14 +61,12 @@ export function jobEnvironment(env: NodeJS.ProcessEnv, home: string, sandbox: Sa
  * ask), and WebFetch, which would run outside the sandbox, is off.
  */
 export function claudeSettings(sandbox: Sandbox, effort: string): Record<string, unknown> {
-	// Claude Code shows its effort only to hooks and commands, as CLAUDE_EFFORT, and only within a turn.
-	// Hooks run outside the sandbox, so `effort` is in the account's home, which commands cannot reach.
+	// Claude Code shows its effort only to hooks and commands, as CLAUDE_EFFORT, and only within a turn, so
+	// a hook on the kix tools records it before `deliver` reads it. Hooks run outside the sandbox, so
+	// `effort` is in the account's home, which commands cannot reach.
 	const record = { type: "command", command: `printf %s "$CLAUDE_EFFORT" > '${effort.replaceAll("'", "'\\''")}'` };
 	return {
-		hooks: {
-			PreToolUse: [{ matcher: "mcp__kix__.*", hooks: [record] }],
-			Stop: [{ hooks: [record] }],
-		},
+		hooks: { PreToolUse: [{ matcher: "mcp__kix__.*", hooks: [record] }] },
 		sandbox: {
 			enabled: true,
 			failIfUnavailable: true,
@@ -198,15 +196,14 @@ export class Claude implements Adapter {
 		const settings = join(launch.home, `kix-settings-${launch.session}.json`);
 		const effortFile = join(launch.home, `kix-effort-${launch.session}`);
 		writeFileSync(settings, JSON.stringify(claudeSettings(launch.sandbox, effortFile)), { mode: 0o600 });
-		let effort = "unknown";
 		const readEffort = () => {
 			try {
-				effort = readFileSync(effortFile, "utf8").trim() || effort;
-			} catch {}
-			return effort;
+				return readFileSync(effortFile, "utf8").trim() || "unknown";
+			} catch {
+				return "unknown";
+			}
 		};
 		const cleanup = () => {
-			readEffort();
 			rmSync(config, { force: true });
 			rmSync(settings, { force: true });
 			rmSync(effortFile, { force: true });
@@ -268,7 +265,7 @@ export class Claude implements Adapter {
 		});
 		return {
 			done,
-			ran: () => ({ model: reader.model(), effort: readEffort() }),
+			ran: async () => ({ model: reader.model(), effort: readEffort() }),
 			stop() {
 				signal("SIGTERM");
 				killer ??= setTimeout(() => signal("SIGKILL"), STOP_GRACE_MS);

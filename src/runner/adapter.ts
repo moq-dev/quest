@@ -69,8 +69,8 @@ export interface Running {
 	done: Promise<Exit>;
 	/** Ask the CLI to stop, killing it after a grace period. */
 	stop(): void;
-	/** The model and effort the session last ran on, each `unknown` until the CLI shows it. */
-	ran(): { model: string; effort: string };
+	/** The model and effort the session runs on, each `unknown` where the CLI does not show it. */
+	ran(): Promise<{ model: string; effort: string }>;
 }
 
 export interface SignedIn {

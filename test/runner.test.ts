@@ -1407,6 +1407,8 @@ const streams = [];
 const send = (event) => { for (const s of streams) s.write("data: " + JSON.stringify(event) + "\\n\\n"); };
 let aborted = () => {};
 let sessions = 0;
+// The assistant message the turn is on, which the session's latest message reports.
+let latest;
 let id = 0;
 async function rpc(method, params) {
 	const response = await fetch(kix.url, {
@@ -1438,6 +1440,7 @@ async function prompt(session, input) {
 		if (step.shell)
 			log({ shell: require("node:child_process").execFileSync(config.shell, ["-c", step.shell], { encoding: "utf8" }) });
 		if (step.emit) send({ ...step.emit, properties: { ...step.emit.properties, sessionID: session } });
+		if (step.assistant) latest = { info: step.assistant, parts: [] };
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
 			await new Promise((resolve) => (aborted = resolve));
@@ -1457,6 +1460,9 @@ const server = http.createServer(async (request, response) => {
 	}
 	if (path === "/session") return json(response, { id: "ses_" + ++sessions + "_" + process.pid });
 	const message = /^\\/session\\/([^/]+)\\/message$/.exec(path);
+	if (message && request.method === "GET") {
+		return json(response, latest ? [latest] : []);
+	}
 	if (message) return json(response, await prompt(message[1], await body(request)));
 	if (/\\/abort$/.test(path)) {
 		aborted();
@@ -1802,17 +1808,16 @@ describe("quest runner", () => {
 		expect(r.hub.of("status").some((s) => s.attempts.length === 1 && s.slots === 1)).toBe(true);
 		expect(r.hub.of("checkpoint")).toMatchObject([{ summary: "Wrote a.txt", session: expect.any(String) }]);
 		const [checkpoint, delivery] = r.publishes;
-		// The runner names the agent behind each commit from the CLI's own report of its model and effort.
-		expect(checkpoint).toMatchObject({
-			job: "job1",
-			attempt: 1,
-			head: null,
-			message: "Wrote a.txt\n\nAgent-Harness: claude\nAgent-Model: claude-test\nAgent-Effort: high\n",
-		});
+		expect(checkpoint).toMatchObject({ job: "job1", attempt: 1, head: null, message: "Wrote a.txt" });
 		expect(checkpoint!.changes).toEqual([{ path: "a.txt", content: Buffer.from("first\n").toString("base64") }]);
 		expect(delivery).toMatchObject({
 			head: "0".repeat(39) + "1",
-			pull: { title: "feat: thing", body: "Body", draft: false },
+			// The runner names the session in the body's record, from the CLI's own report of its model and effort.
+			pull: {
+				title: "feat: thing",
+				body: "Body\n\n## Models\n\n- Implementer: claude, claude-test, high effort\n",
+				draft: false,
+			},
 		});
 		expect(delivery!.changes.map((c: Sent) => [c.path, c.content === null])).toEqual([
 			["b.txt", false],
@@ -1950,10 +1955,8 @@ describe("quest runner", () => {
 
 	posix("drives opencode serve through a question and a resume in the same session", async () => {
 		const r = rig(undefined, "opencode");
-		const info = { role: "assistant", providerID: "openai", modelID: "gpt-test", variant: "high" };
 		r.steps({
 			start: [
-				{ emit: { type: "message.updated", properties: { info } } },
 				{ write: "a.txt", content: "draft\n" },
 				{
 					shell: 'printf "%s|%s|%s|%s|%s" "$IN_DEVSHELL" "$HOME" "${OPENCODE_SERVER_PASSWORD:-none}" "${QUEST_COMMAND:-none}" "$TMPDIR"',
@@ -1964,16 +1967,18 @@ describe("quest runner", () => {
 					args: { summary: "Need a choice", questions: [{ question: "Which?", options: [{ label: "A" }] }] },
 				},
 			],
-			resume: [{ tool: "deliver", args: { summary: "Went with A", title: "feat: a", body: "Body" } }],
+			resume: [
+				{ assistant: { role: "assistant", providerID: "openai", modelID: "gpt-test", variant: "high" } },
+				{
+					tool: "deliver",
+					args: { summary: "Went with A", title: "feat: a", body: "## Models\n\n- Size: S\n\n## Review\n\nNone" },
+				},
+			],
 		});
 		r.assign(job(r.upstream.commit), "Extra rule.");
 		const question = await r.hub.next((m) => m.type === "question");
 		await idle(r.runner);
 		expect(r.hub.of("checkpoint")).toMatchObject([{ summary: "Drafted", session: question.session }]);
-		// The commit names the model and effort opencode's assistant message reported.
-		expect(r.publishes[0]!.message).toBe(
-			"Drafted\n\nAgent-Harness: opencode\nAgent-Model: openai/gpt-test\nAgent-Effort: high\n",
-		);
 		const [nix, first, srt, shell] = r.calls();
 		expect(nix.nix.slice(0, 3)).toEqual(["print-dev-env", "--accept-flake-config", "--no-write-lock-file"]);
 		const home = r.home.accountHome("acct1");
@@ -2064,6 +2069,10 @@ describe("quest runner", () => {
 		const result = await r.result();
 		await idle(r.runner);
 		expect(result).toMatchObject({ attempt: 2, outcome: "completed", summary: "Went with A" });
+		// The resumed session names itself from its latest assistant message, in the agent's own record.
+		expect(r.publishes.at(-1)!.pull.body).toBe(
+			"## Models\n\n- Size: S\n- Implementer: opencode, openai/gpt-test, high effort\n\n## Review\n\nNone",
+		);
 		const resumed = r.calls().filter((c) => c.prompted);
 		expect(resumed).toHaveLength(2);
 		// The kix session maps to the opencode session that asked.
@@ -2244,7 +2253,7 @@ describe("quest runner", () => {
 	posix("continues from the head kix reports after a publication's reply was lost", async () => {
 		let landed = "";
 		const r = rig((body, source) => {
-			if (body.message.startsWith("First\n")) {
+			if (body.message === "First") {
 				// kix commits the checkpoint, but its reply never arrives.
 				for (const change of body.changes)
 					writeFileSync(join(source.dir, change.path), Buffer.from(change.content, "base64"));
