@@ -1,9 +1,9 @@
 // Claude Code's worktree lifecycle hooks, backed by `quest worktree`. `quest init` installs one
 // static entry per event, each calling `quest worktree hook`, so the logic upgrades with the binary.
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { git } from "./git";
 import {
 	Busy,
 	type Merged,
@@ -11,7 +11,6 @@ import {
 	Worktrees,
 	canonical,
 	derivedDefaults,
-	discoveryEnv,
 	mainCheckout,
 } from "./worktree";
 
@@ -61,18 +60,10 @@ async function waiting<T>(action: () => T | Promise<T>): Promise<T> {
 	}
 }
 
-function git(path: string, ...args: string[]): string {
-	return execFileSync("git", ["-C", path, ...args], {
-		encoding: "utf8",
-		env: discoveryEnv(),
-		stdio: ["ignore", "pipe", "pipe"],
-	}).trim();
-}
-
 /** The top of the checkout holding `cwd`, or undefined outside any. */
 function toplevel(cwd: string): string | undefined {
 	try {
-		return canonical(git(cwd, "rev-parse", "--show-toplevel"));
+		return canonical(git(cwd, ["rev-parse", "--show-toplevel"]));
 	} catch {
 		return undefined;
 	}
@@ -84,9 +75,9 @@ function toplevel(cwd: string): string | undefined {
  */
 function base(cwd: string): string {
 	try {
-		return git(cwd, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD^{commit}");
+		return git(cwd, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD^{commit}"]);
 	} catch {
-		return git(cwd, "rev-parse", "HEAD");
+		return git(cwd, ["rev-parse", "HEAD"]);
 	}
 }
 
@@ -102,7 +93,7 @@ function pullRequest(cwd: string, name: string): string | undefined {
 	const number = /^pr-([1-9][0-9]*)$/.exec(name)?.[1];
 	if (number === undefined) return undefined;
 	try {
-		git(cwd, "remote", "get-url", "origin");
+		git(cwd, ["remote", "get-url", "origin"]);
 	} catch {
 		return undefined;
 	}
@@ -111,7 +102,7 @@ function pullRequest(cwd: string, name: string): string | undefined {
 		[`refs/merge-requests/${number}/head`, `refs/remotes/origin/mr/${number}`],
 	]);
 	const heads = new Map<string, string>();
-	for (const line of git(cwd, "ls-remote", "origin", ...tracking.keys()).split("\n")) {
+	for (const line of git(cwd, ["ls-remote", "origin", ...tracking.keys()]).split("\n")) {
 		const [sha, ref] = line.split("\t");
 		if (sha && ref && tracking.has(ref)) heads.set(ref, sha);
 	}
@@ -123,14 +114,14 @@ function pullRequest(cwd: string, name: string): string | undefined {
 	const [ref] = heads.keys();
 	if (ref === undefined) return undefined;
 	const local = tracking.get(ref)!;
-	git(cwd, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", `+${ref}:${local}`);
-	return git(cwd, "rev-parse", "--verify", "--quiet", `${local}^{commit}`);
+	git(cwd, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", `+${ref}:${local}`]);
+	return git(cwd, ["rev-parse", "--verify", "--quiet", `${local}^{commit}`]);
 }
 
 /** The checkout whose submodule `checkout` is, or undefined for a top-level one. */
 function superproject(checkout: string): string | undefined {
 	// Git prints it with forward slashes on Windows, so canonical paths compare against it.
-	const path = git(checkout, "rev-parse", "--show-superproject-working-tree");
+	const path = git(checkout, ["rev-parse", "--show-superproject-working-tree"]);
 	return path ? canonical(path) : undefined;
 }
 

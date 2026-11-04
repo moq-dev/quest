@@ -64,6 +64,10 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 - opencode jobs' commands run under sandbox-runtime, set as opencode's
   shell, with the same policy
   ([moq-dev/quest#338](https://github.com/moq-dev/quest/pull/338)).
+  Its seccomp helper, which nixpkgs' sandbox-runtime leaves out, is built
+  from source (`nix/sandbox-runtime.nix`), and the runner refuses an opencode
+  account when srt lets commands make Unix sockets
+  ([moq-dev/quest#465](https://github.com/moq-dev/quest/pull/465)).
   opencode 1.19 still imports the plugins a checkout's own `opencode.json`
   or `.opencode/` names, even with project config disabled, so the runner
   keeps the agent from creating them and refuses a checkout that holds them.
@@ -85,7 +89,5 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 
 ## Required
 
-- [No Unix sockets in opencode jobs](/quest/m0/kix/sandbox/seccomp.md) - srt's seccomp helper is packaged, so commands can't reach the Nix daemon, and the runner refuses to start without it
-- [Trust rechecked on queue](/quest/m0/kix/sandbox/trust-on-queue.md) - a job's head trust is reread whenever it queues, so the approval decision shows without a free runner
 - [Per-job opencode saved output](/quest/m0/kix/sandbox/opencode-data.md) - each opencode job saves its tool output and shell captures beside its checkout, so no job reads another's, while sessions and the credential stay in the account's database
 - [Claude Code boundary test](/quest/m0/kix/sandbox/claude-boundary.md) - the same hostile-repository test for Claude Code jobs, with a fake model set in the account's settings

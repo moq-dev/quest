@@ -25,6 +25,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -32,7 +33,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { requireProgram } from "../../src/cli/program";
 import { accountDirectories, Opencode, PROJECT_CONFIG, projectConfig } from "../../src/runner/opencode";
 import { binaryPath } from "../../src/runner/cli";
-import { closeSandbox, openSandbox, quote, type Sandbox } from "../../src/runner/sandbox";
+import { closeSandbox, openSandbox, quote, type Sandbox, unixSocketRefusal } from "../../src/runner/sandbox";
 
 /** What the scripted provider's key is, which no command may read. */
 const KEY = "quest-boundary-provider-key";
@@ -52,6 +53,8 @@ interface Paths {
 	outside: string;
 	/** The scripted model's server, which commands must not reach. */
 	url: string;
+	/** A Unix socket this process listens on where commands can read, so only the seccomp filter stops them reaching it. */
+	socket: string;
 }
 
 /** One escape the checkout tries, as a command for opencode's bash tool, and how to tell it worked. */
@@ -115,6 +118,17 @@ const ATTEMPTS: Attempt[] = [
 		clean: (paths) => rmSync(join(paths.checkout, "opencode.jsonc"), { force: true }),
 	},
 	{
+		// A trusted Nix user's commands could pass the daemon root-level options.
+		name: "connects to the Nix daemon",
+		command: () => connectCommand(process.env.NIX_DAEMON_SOCKET_PATH ?? "/nix/var/nix/daemon-socket/socket"),
+		escaped: (_paths, output) => output.includes("CONNECTED"),
+	},
+	{
+		name: "connects to a Unix socket on the host",
+		command: (paths) => connectCommand(paths.socket),
+		escaped: (_paths, output) => output.includes("CONNECTED"),
+	},
+	{
 		// srt exempts loopback from its proxy, so this one asks the proxy for it.
 		name: "reaches a host off the allowlist through srt's proxy",
 		command: (paths) => `env -u NO_PROXY -u no_proxy ${fetchCommand(paths, "proxy")}`,
@@ -131,6 +145,12 @@ const ATTEMPTS: Attempt[] = [
 ];
 
 const PROXIES = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"];
+
+/** A command connecting to the Unix socket at `path`, printing whether it did. */
+function connectCommand(path: string): string {
+	const script = `const s = require("node:net").connect(${JSON.stringify(path)}).on("connect", () => (console.log("CONNECTED"), s.end())).on("error", (e) => console.log(String(e)))`;
+	return `${quote(bun)} -e ${quote(script)}`;
+}
 
 /** A command fetching the scripted model's `/escape/<path>`, printing how it went. */
 function fetchCommand(paths: Paths, path: string): string {
@@ -174,10 +194,16 @@ const bash = (command: string): Call => ({ tool: "bash", args: { command, descri
 const ALLOWED = bash(`printf allowed > allowed.txt && printf ok > "$TMPDIR/allowed" && echo ALLOWED-$((6 * 7))`);
 /** The command's environment, which must hold none of the server's secrets. */
 const ENVIRONMENT = bash("env");
+/**
+ * The command's open descriptors. The filter refuses making a Unix socket, not
+ * using one a command inherits, so none may reach it beyond its stdio.
+ */
+const DESCRIPTORS = bash(`for fd in /proc/$$/fd/*; do printf 'fd %s %s\\n' "\${fd##*/}" "$(readlink "$fd")"; done`);
 
 let scratch: string;
 let paths: Paths;
 let server: Server;
+let host: NetServer;
 let bun: string;
 /** The paths commands fetched from the scripted model's server. */
 const escapes: string[] = [];
@@ -212,6 +238,8 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 		git(repository, "worktree", "add", "-q", "--detach", checkout, "main");
 
 		server = await listen(model);
+		const socket = join(repository, "host.sock");
+		host = await listenUnix(socket);
 		const address = server.address();
 		if (!address || typeof address === "string") throw new Error("the scripted model has no port");
 		paths = {
@@ -221,12 +249,14 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 			account,
 			outside,
 			url: `http://127.0.0.1:${address.port}`,
+			socket,
 		};
 		signIn(account, `${paths.url}/v1`);
 	});
 
 	afterAll(async () => {
 		if (server) await new Promise((resolve) => server.close(resolve));
+		if (host) await new Promise((resolve) => host.close(resolve));
 		if (scratch) rmSync(scratch, { recursive: true, force: true });
 	});
 
@@ -251,9 +281,11 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 			devShell: null,
 			trusted: false,
 		});
+		expect(unixSocketRefusal(srt, process.env), "the runner would start opencode accounts on this srt").toBeNull();
 		script = [
 			ALLOWED,
 			ENVIRONMENT,
+			DESCRIPTORS,
 			...ATTEMPTS.map((attempt) => bash(attempt.command(paths))),
 			...FILE_ATTEMPTS.map((attempt) => attempt.call),
 		];
@@ -273,7 +305,7 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 			script.length,
 		);
 
-		const [allowed, environment, ...rest] = results;
+		const [allowed, environment, descriptors, ...rest] = results;
 		const attempts = rest.slice(0, ATTEMPTS.length);
 		const files = rest.slice(ATTEMPTS.length);
 		expect(allowed, "a permitted command failed, so every refusal would pass vacuously").toContain("ALLOWED-42");
@@ -282,6 +314,18 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 			expect(environment, `a command's environment holds ${secret}`).not.toContain(secret);
 		expect(environment).toContain(`HOME=${join(sandbox.tmp, "home")}`);
 		expect(environment, "srt replaced the attempt's TMPDIR").toContain(`TMPDIR=${sandbox.tmp}\n`);
+		const open = [...descriptors!.matchAll(/^fd (\d+) (.*)$/gm)].map(([, fd, target]) => ({
+			fd: Number(fd),
+			target,
+		}));
+		expect(
+			open.map(({ fd }) => fd),
+			`no descriptors listed\n${descriptors}`,
+		).toEqual(expect.arrayContaining([0, 1, 2]));
+		expect(
+			open.filter(({ fd, target }) => fd > 2 && target!.startsWith("socket:")),
+			"a command inherits a socket",
+		).toEqual([]);
 		ATTEMPTS.forEach((attempt, index) =>
 			expect(attempt.escaped(paths, attempts[index]!), `${attempt.name}\n${attempts[index]}`).toBe(false),
 		);
@@ -445,6 +489,15 @@ function shell(command: string, cwd: string): Promise<string> {
 		child.stderr.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
 		child.once("error", reject);
 		child.once("close", () => resolve(output));
+	});
+}
+
+/** A Unix socket server at `path` that accepts each connection and ends it once the client does. */
+function listenUnix(path: string): Promise<NetServer> {
+	return new Promise((resolve, reject) => {
+		const created = createNetServer(() => {});
+		created.once("error", reject);
+		created.listen(path, () => resolve(created));
 	});
 }
 

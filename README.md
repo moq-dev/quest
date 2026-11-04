@@ -171,12 +171,19 @@ action only the maintainer can take, or the outside party, such as
 - moq-dev/moq: a release carries the VA-API bindings
 ```
 
-`quest waiting` lists every item, the maintainer's first, then by milestone and
-the same downstream impact `quest unblocked` counts. Each line gives the
-dependents, whether the quest is otherwise ready or still blocked, its path,
-and the item; `--maintainer` keeps only the maintainer's, and `--json` prints
-`{path, dependents, ready, waits}` objects. A draft PR hands itself back to
-the maintainer with the same heading. `/quest-unblock` walks you through both.
+A draft PR hands itself back to the maintainer with the same heading in its
+body, or the older `## Decisions needed`.
+
+`quest waiting` lists every item from both, the maintainer's first, then by
+milestone and the same downstream impact `quest unblocked` counts; a draft
+ranks as the quest its branch carries. Each line gives the dependents, whether
+the quest is otherwise ready or still blocked, its path or the draft's URL, and
+the item; `--maintainer` keeps only the maintainer's, and `--json` prints
+`{path, pr, dependents, ready, waits}` objects. A draft's item that names no
+party, and every `Decisions needed` item, is the maintainer's. Drafts come from
+the upstream's open PRs, found as for `unblocked --unclaimed`; without the
+remote, off GitHub, or when GitHub cannot be read, it lists the tree's items
+and warns that drafts were skipped. `/quest-unblock` walks you through them.
 
 ## Claim a quest
 
@@ -523,7 +530,10 @@ left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
 the repository disallows; otherwise it uses the only method the repository
 allows, or else a merge commit, and refuses when merge commits are off and more
 than one method remains. On a base that requires the `quest land` check, it
-queues the PR for [`quest land`](#land-a-batch-with-quest-land) instead.
+queues the PR for [`quest land`](#land-a-batch-with-quest-land) instead, with
+auto-merge in the named method, or else squash, or else any method the
+repository and the base's rulesets both allow. That request only signals the
+queue; `quest land` applies its own method.
 On a base with GitHub's merge queue, which applies its own method, it enqueues
 that head, or arms auto-merge bound to it while required checks may still be
 pending. The queue builds each PR on the current base, so a head behind it is
@@ -562,6 +572,18 @@ Queue an approved head with `quest merge <pr> --land <sha>`.
 QUEST_LAND_KEY=/run/credentials/quest-land/key quest land serve --app-id 1039466 \
   --sandbox /usr/local/bin/check-sandbox --fixer /usr/local/bin/fix-sandbox
 ```
+
+Each PR lands as a squash commit by default. `--method merge` lands each one
+as a merge commit instead, for a long-lived branch such as a release branch
+that must keep the ancestry of what merges into it. Its first parent is the
+base the batch was tested on, its second parent is the queued head (or the
+daemon's merge of the base into it), and its tree is the tree the sandbox
+checked. The method is fixed at startup and applies to the chain the sandbox
+checks, the commit the fixer starts from, and GitHub's merge API. The daemon
+refuses merge commits on a base whose ruleset or classic protection requires
+linear history, and both the repository's merge settings and a ruleset's
+allowed merge methods must include the configured one. The auto-merge `quest merge --land` enables only signals the
+queue, so its method never decides how the daemon lands.
 
 The sandbox executable receives `<checkout> <base-sha>` as its two arguments,
 with cwd set to the checkout. The SHA is `plan.base.sha`, the commit the tested
@@ -687,7 +709,7 @@ and sits out batches until they pass; only each check's latest run counts, as in
 `quest status`. If any are still pending two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
-bisection: success lands one squash commit per PR. A failure, or a base that
+bisection: success lands one commit per PR, as `--method` says. A failure, or a base that
 conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
 auto-merge and place, get no comment, and sit out batches while its
 job runs, so the rest of the queue keeps landing. The fixer reads the log and blames
@@ -704,28 +726,28 @@ new base. Once a check of a moved base passes, the queue resumes, and the daemon
 closes the issue and any fix it no longer needs. A job collected while the queue is halted releases its PRs without checking its own, possibly older, base. The daemon collects a finished fixer job even while a check runs.
 Without a fixer, a failure ejects the batch instead: ejection disables auto-merge
 and comments with the reason and the failing log, bounded by
-size. When GitHub refuses one PR's squash merge, only that PR stops: a conflict is
+size. When GitHub refuses to merge one PR, only that PR stops: a conflict is
 parked for the fixer, a moved head or refusal is ejected, and the rest of the batch
 stays queued. `quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
 `$STATE_DIRECTORY` or the XDG state home, never inside the checkout. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
-Every squash the daemon builds, and every base it merges into a PR head, drops
+Every chain commit the daemon builds, and every base it merges into a PR head, drops
 each `Required`, `Related`, or `Closes` entry linking to a quest the base
 deleted since the PR branched, as `quest rm` would have. The PR wrote that link
 while the quest was open, so the base finishing it is no fault of the PR's: a
 sibling PR that links a quest another sibling finishes lands in the same batch.
 A quest the base moved is a rename, not a deletion, and a link in prose stays.
 
-As a batch is filled, each PR it reaches is squashed alone onto the current
+As a batch is filled, each PR it reaches is landed alone onto the current
 base, and `quest check` runs on the result; PRs the batch does not reach wait
 for a later round, so a long queue costs only each batch's candidates. A PR with findings the base lacks, such as
 a mistyped link, is parked alone for the fixer, blamed
-for those findings, so it never fails a batch; the fixer starts from that squash.
+for those findings, so it never fails a batch; the fixer starts from that commit.
 Without a fixer it is ejected as `failed_checks` with those findings. This check runs
 in the daemon, never the sandbox: it parses quest files read from git objects
 and executes nothing from the tree. A base without a `quest/` directory skips
-it. A newly queued PR the batch reaches is also squashed onto the four PRs
+it. A newly queued PR the batch reaches is also landed onto the four PRs
 landing soonest ahead of it; if any conflict, the daemon comments once with their numbers and files, so its author
 can resolve the overlap before its turn. It is screened again only once
 requeued.
@@ -738,17 +760,20 @@ and the base. Before landing each PR, the daemon merges the current base into it
 head with `quest resolve` in the private repository if the head does not already
 contain that base. The resulting tree must equal the tested chain link's tree.
 It pushes that merge commit to the PR branch with a lease on the pinned head,
-then calls GitHub's squash-merge API pinned to the prepared head. Up-to-date
-heads need no merge commit. After each API merge, it compares the commit's parent
-and tree before proceeding to the next PR.
+then calls GitHub's merge API with the configured method, pinned to the
+prepared head. Up-to-date heads need no merge commit. After each API merge, it
+compares the commit's first parent and tree, and a merge commit's second parent
+with the prepared head, before proceeding to the next PR.
 
 If the PR branch push is refused for permissions, the daemon instead pushes the
-tested squash to the base as a fast-forward, leased on the expected parent. It
-closes the PR with a comment linking the landed commit.
-Such a fork PR is closed rather than shown as merged by GitHub. A PR branch lease
-failure ejects `head_moved`. A locally prepared or API squash tree mismatch logs
-CRITICAL. A PR whose prepared tree differs ejects alone as `tree_mismatch`; an
-already-squashed one stays merged. Either way, the rest of the batch stays queued
+tested commit to the base as a fast-forward, leased on the expected parent. It
+comments on the PR with a link to the landed commit and closes it, so a squashed
+fork PR shows as closed rather than merged. A merge commit brings the PR's head
+into the base, so the daemon first waits about 15 seconds for GitHub to mark
+that PR merged, and closes it only if GitHub does not. A PR branch lease
+failure ejects `head_moved`. A locally prepared or API tree mismatch, or a merge
+commit with another second parent, logs CRITICAL. A PR whose prepared tree
+differs ejects alone as `tree_mismatch`; an already-landed one stays merged. Either way, the rest of the batch stays queued
 and is rebuilt and checked on the new base.
 
 After an API refusal, the daemon re-reads mergeability and briefly retries
@@ -760,7 +785,7 @@ that merge holds the tested base; if GitHub still does after about 15 seconds,
 the next round rebuilds the queue on the base as it then is.
 A confirmed conflict parks only that PR for the fixer and a moved head ejects
 only that PR; the rest stays queued. A persistent policy refusal ejects as `merge_refused` without the
-fixer. Already-merged PRs are skipped. An unexpected API squash parent means the
+fixer. Already-merged PRs are skipped. An unexpected first parent of an API merge means the
 base moved: the remainder is rebuilt without ejection.
 
 Restart accepts a changed head only if the private state records that exact
@@ -784,7 +809,7 @@ to this repository, with contents and pull requests write.
 Tokens are minted for each push or API merge and passed only to trusted git
 and GitHub clients, never the sandbox or fixer. A PR-branch push also requests
 workflow write when the head-to-merge range carries workflow changes from the base. An API
-merge requests workflow write when that PR's squash changes `.github/workflows`, or
+merge requests workflow write when that PR's landed commit changes `.github/workflows`, or
 when any commit the PR brings does (including a merge of a base that changed one),
 since GitHub refuses an App's merge of a PR whose commits touch workflows. Queue API tokens, which disable auto-merge on ejection and
 so need contents write, stay in the daemon, refresh before expiry, and are
@@ -1222,14 +1247,14 @@ sandbox, not a VM, and it narrows rather than removes the risk of running
 agent commands on your machine. On Linux, `just runner-sandbox` in this
 repository runs a scripted model through the pinned opencode and
 sandbox-runtime in a checkout that tries to read credentials, write outside its
-sandbox, plant opencode config, and reach the network, and fails if any attempt
-gets through. CI runs it nightly, outside the merge queue.
+sandbox, plant opencode config, reach the network, and connect to the Nix
+daemon's or another Unix socket, and fails if any attempt gets through. CI runs it nightly, outside the merge queue.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
-pins both) and unprivileged user namespaces, including the nested one Claude
-Code's seccomp helper makes inside the sandbox. Before taking jobs, `quest runner`
-runs a trivial command in nested sandbox namespaces and refuses to start if
-bubblewrap cannot make them. On Ubuntu 23.10 and later, AppArmor allows them
+pins both) and unprivileged user namespaces, including the nested one the
+seccomp helpers of Claude Code and sandbox-runtime make inside the sandbox.
+Before taking jobs, `quest runner` runs a trivial command in nested sandbox
+namespaces and refuses to start if bubblewrap cannot make them. On Ubuntu 23.10 and later, AppArmor allows them
 only to programs whose profile grants `userns`, so for the runner package's
 bubblewrap the refusal prints this profile, filled in with its Nix store path,
 and the commands that install it as `/etc/apparmor.d/quest-bwrap`:
@@ -1245,13 +1270,19 @@ profile quest-bwrap /nix/store/HASH-bubblewrap-VERSION/bin/bwrap flags=(unconfin
 
 It is the form Ubuntu gives other programs that sandbox themselves. Ubuntu's
 own `bwrap-userns-restrict` profile for `/usr/bin/bwrap` takes capabilities from
-the commands bubblewrap runs, which breaks Claude Code's seccomp helper, so a
+the commands bubblewrap runs, which breaks the seccomp helpers, so a
 system bwrap there is refused, and a second profile for it would disable both;
 use the runner package instead. The job's commands still get no user namespace
-of their own: Claude Code's seccomp helper refuses them one, and on opencode
-accounts bubblewrap does. The profile names one exact store path, since anyone
+of their own: the seccomp helper refuses them one. The profile names one exact store path, since anyone
 who can build with Nix can add a store path matching a glob, so a runner update
 that changes bubblewrap refuses to start until you install the profile it prints.
+
+For opencode accounts, `quest runner` also checks that sandbox-runtime keeps
+commands from making Unix sockets, which it does only with its seccomp helper,
+and refuses to start without it. nixpkgs' sandbox-runtime leaves the helper
+out, so the runner package builds it from sandbox-runtime's source. sandbox-runtime
+keeps its own `/tmp/claude` open to commands whenever it exists; they cannot
+write it, but can read it.
 
 Merge jobs retain existing PR submodule pointers when merging the base. Their
 `wait` tool wakes on GitHub webhook hints or reconnects and rereads the PR;
@@ -1326,7 +1357,9 @@ Creation prints JSON with the ID and the detached, locked checkout path under
 `.worktrees/`, and records the `--scratch` paths. Names are unique per
 repository; where several repositories use one, the other commands take the ID. `run` restores a released
 checkout, runs the command there, and once it exits kills any descendants it
-left behind. When no other run remains in the checkout, it releases it: the
+left behind. The command gets Quest's environment without Git's
+repository-location variables, such as `GIT_DIR` and `GIT_INDEX_FILE`, which a
+Git hook would otherwise point at the repository it ran in; `-c` config is kept. When no other run remains in the checkout, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
 job, such as an agent session or a script that installs, builds, and tests, in
 one run, since the next run starts without scratch.

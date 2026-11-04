@@ -1,12 +1,12 @@
 // `quest mv` and `quest rm`: git moves or deletes the files and stages the
 // change, and the core edits the links in the documents that remain.
 // `quest check --fix` makes `rm`'s link edit for quests the history deleted.
-import { execFileSync } from "node:child_process";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, relative, resolve, sep } from "node:path";
 
 import { check, formatFinding, isQuest, move, normalize, permanent, questBranch, relocate, remove } from "../core";
 import { type ClaimDependencies, claims } from "./claims";
+import { GitError, git } from "./git";
 import { checkout, exists, sources, under } from "./tree";
 
 /** What a command changed, and what it left for the caller to look at. */
@@ -61,7 +61,7 @@ export async function moveQuest(
 
 	const edited = move(docs, from, to);
 	mkdirSync(join(root, posix.dirname(to)), { recursive: true });
-	git(root, "mv", "--", from, to);
+	git(root, ["mv", "--", from, to]);
 	write(root, edited.texts);
 	const warnings = edited.missed.map(
 		(link) =>
@@ -101,7 +101,7 @@ export function removeQuest(root: string, arg: string, recursive: boolean): Repo
 
 	const gone = new Set(doomed.map((doc) => doc.path));
 	const edited = remove(docs, (path) => gone.has(path));
-	git(root, "rm", "-q", ...(whole ? ["-r"] : []), "--", whole ? epic! : target);
+	git(root, ["rm", "-q", ...(whole ? ["-r"] : []), "--", whole ? epic! : target]);
 	write(root, edited);
 	return {
 		changes: [...doomed.map((doc) => `D ${doc.path}`), ...modified(edited)],
@@ -122,7 +122,7 @@ export function removeQuest(root: string, arg: string, recursive: boolean): Repo
  */
 export function fixLinks(root: string): string[] {
 	workTree(root, "quest check --fix reads the deleted quests from git history");
-	const unmerged = git(root, "ls-files", "--unmerged", "-z", "--", "quest")
+	const unmerged = git(root, ["ls-files", "--unmerged", "-z", "--", "quest"])
 		.split("\0")
 		.filter((line) => line !== "")
 		.map((line) => line.slice(line.indexOf("\t") + 1));
@@ -133,8 +133,7 @@ export function fixLinks(root: string): string[] {
 	if (heads.length === 0) return [];
 	const deleted = new Set(
 		// `--relative` names paths from `root`, as the tree's links do, when the tree is nested in its repository.
-		git(
-			root,
+		git(root, [
 			"log",
 			"--relative",
 			"--diff-filter=D",
@@ -145,7 +144,7 @@ export function fixLinks(root: string): string[] {
 			...heads,
 			"--",
 			"quest",
-		)
+		])
 			.split("\0")
 			.filter(isQuest),
 	);
@@ -157,7 +156,7 @@ export function fixLinks(root: string): string[] {
 /** Whether `ref` names a commit, which an unborn `HEAD` or a missing `MERGE_HEAD` does not. */
 function verified(root: string, ref: string): boolean {
 	try {
-		git(root, "rev-parse", "--quiet", "--verify", `${ref}^{commit}`);
+		git(root, ["rev-parse", "--quiet", "--verify", `${ref}^{commit}`]);
 		return true;
 	} catch {
 		return false;
@@ -181,18 +180,9 @@ function treePath(root: string, arg: string): string {
 /** Fail outside a git work tree, saying `why` the command needs one. */
 function workTree(root: string, why = "quest mv and rm stage their change with git") {
 	try {
-		git(root, "rev-parse", "--is-inside-work-tree");
+		git(root, ["rev-parse", "--is-inside-work-tree"]);
 	} catch {
 		throw new Error(`${root} is not in a git work tree; ${why}`);
-	}
-}
-
-function git(root: string, ...args: string[]): string {
-	try {
-		return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-	} catch (error) {
-		const stderr = (error as { stderr?: string }).stderr?.trim();
-		throw new Error(stderr || (error as Error).message);
 	}
 }
 
@@ -200,7 +190,7 @@ function git(root: string, ...args: string[]): string {
 function write(root: string, texts: Map<string, string>) {
 	if (texts.size === 0) return;
 	for (const [path, text] of texts) writeFileSync(join(root, path), text);
-	git(root, "add", "--", ...texts.keys());
+	git(root, ["add", "--", ...texts.keys()]);
 }
 
 function modified(texts: Map<string, string>): string[] {
@@ -217,17 +207,10 @@ function mentions(root: string, path: string): string[] {
 	const pattern = `${path.replace(/[.[\]()*+?{}|^$\\]/g, "\\$&")}\\.*([^A-Za-z0-9_.-]|$)`;
 	let out: string;
 	try {
-		out = execFileSync(
-			"git",
-			["-C", root, "grep", "--untracked", "--exclude-standard", "-n", "-I", "-E", "-e", pattern],
-			{
-				encoding: "utf8",
-				stdio: ["ignore", "pipe", "pipe"],
-			},
-		);
+		out = git(root, ["grep", "--untracked", "--exclude-standard", "-n", "-I", "-E", "-e", pattern]);
 	} catch (error) {
 		// git grep exits 1 when nothing matches.
-		if ((error as { status?: number }).status === 1) return [];
+		if (error instanceof GitError && error.status === 1) return [];
 		throw error;
 	}
 	return out

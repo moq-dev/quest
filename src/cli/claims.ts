@@ -2,9 +2,8 @@
 // PR's head, or an open PR from a branch of that name in any repository.
 // Commands that must not disturb held work look here first, and `quest start`
 // records a claim the same way, judging readiness by the upstream tree.
-import { execFileSync } from "node:child_process";
-
 import { handedBack, landed } from "../core";
+import { git } from "./git";
 import {
 	type GitHubDependencies,
 	type Repository,
@@ -32,6 +31,7 @@ export interface OpenPull {
 	updated: number;
 	/** Its body has a `## Waiting` section (or the older `## Decisions needed`), so it waits on the maintainer. */
 	handedBack: boolean;
+	body: string;
 }
 
 /** A held quest branch, and the open PR from it if there is one. */
@@ -99,7 +99,7 @@ export async function upstream(root: string, remote: Remote, deps: ClaimDependen
 			? self.repository
 			: (await repositoryInfo(client, pushed)).repository;
 	// The README where this checkout's tree sits, which may be below the top level.
-	const prefix = gitOutput(root, ["rev-parse", "--show-prefix"]);
+	const prefix = git(root, ["rev-parse", "--show-prefix"]);
 	let up = self;
 	while (up.parent !== null && (await has(client, up.parent, `${prefix}quest/README.md`)))
 		up = await repositoryInfo(client, up.parent);
@@ -154,7 +154,7 @@ export function remoteBranches(root: string, remote: string): Map<string, string
 /** The refs on `remote` matching `patterns`, by name, with their tips. */
 function listRemote(root: string, remote: string, patterns: string[]): Map<string, string> {
 	const refs = new Map<string, string>();
-	for (const line of gitOutput(root, ["ls-remote", remote, ...patterns]).split("\n")) {
+	for (const line of git(root, ["ls-remote", remote, ...patterns]).split("\n")) {
 		if (line === "") continue;
 		const [sha, ref] = line.split("\t");
 		refs.set(ref, sha);
@@ -185,6 +185,7 @@ export async function openPullRequests(github: GitHub, repository: Repository): 
 			created: Date.parse(string(row.created_at)),
 			updated: Date.parse(string(row.updated_at)),
 			handedBack: typeof row.body === "string" && handedBack(row.body),
+			body: typeof row.body === "string" ? row.body : "",
 		};
 	});
 }
@@ -222,6 +223,32 @@ export async function reach(root: string, name: string, deps: ClaimDependencies)
 	const up = await upstream(root, remote, deps);
 	if (up.github === null) deps.warn(`${name} is not on GitHub, so only its branches were checked for claims`);
 	return up;
+}
+
+/**
+ * The open drafts in the upstream of the remote `name`, from any head
+ * repository. Reading them needs GitHub, so without the remote, off GitHub,
+ * or when GitHub cannot be reached or refuses, it warns that they were
+ * skipped and returns none, leaving the caller the quest tree.
+ */
+export async function openDrafts(root: string, name: string, deps: ClaimDependencies): Promise<OpenPull[]> {
+	const remote = readRemote(root, name);
+	if (remote === null) {
+		deps.warn(`no ${name} remote, so draft PRs were skipped`);
+		return [];
+	}
+	try {
+		const up = await upstream(root, remote, deps);
+		if (up.github === null) {
+			deps.warn(`${name} is not on GitHub, so draft PRs were skipped`);
+			return [];
+		}
+		const pulls = await openPullRequests(up.github.client, up.github.repository);
+		return pulls.filter((pull) => pull.draft).sort((a, b) => a.number - b.number);
+	} catch (error) {
+		deps.warn(`draft PRs were skipped: ${error instanceof Error ? error.message : String(error)}`);
+		return [];
+	}
 }
 
 /** Which branches someone holds, and which landed branches a new claim replaces. */
@@ -341,23 +368,8 @@ export function upstreamRefs(root: string, remote: string): UpstreamRefs {
 /** Make `sha` from `remote` available locally. */
 export function ensure(root: string, remote: string, sha: string): void {
 	try {
-		gitOutput(root, ["cat-file", "-e", `${sha}^{commit}`]);
+		git(root, ["cat-file", "-e", `${sha}^{commit}`]);
 	} catch {
-		gitOutput(root, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, sha]);
-	}
-}
-
-/** Run git in `root` and return its trimmed stdout; an unset config key is empty rather than an error. */
-export function gitOutput(root: string, args: string[]): string {
-	try {
-		return execFileSync("git", ["-C", root, ...args], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
-			env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-		}).trim();
-	} catch (error) {
-		if (args[0] === "config" && (error as { status?: number }).status === 1) return "";
-		const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
-		throw new Error(`git ${args[0]} failed${stderr ? `: ${stderr}` : ""}`);
+		git(root, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, sha]);
 	}
 }

@@ -18,6 +18,9 @@ Decided 2026-11-01 (maintainer, /quest-plan; see the
 batched gate, and gate work is frozen until then. Once nothing uses it, the
 code goes rather than staying as an unmaintained option. Check each
 repository's ruleset for a `quest land` requirement before deleting.
+Keep `serve`'s log names (`base-`, `check-`, `batch-`, `fix-job-` and
+`fix-base-`) in the watcher's log pruning, so the logs `serve` left in the
+shared state directory still expire.
 
 moq, moq-dev/quest, rind and rust2 land through the merge queue (2026-11-03).
 moq.pro is the last: on 2026-11-02 the maintainer kept it on its host gate,
