@@ -321,6 +321,7 @@ async function take(
 	const hold = removal.hold ?? holdOf(pull);
 	if (hold !== undefined) {
 		save(removalPath(state, number), { ...removal, hold } satisfies Removal);
+		endPick(state, number, entry.enabledAt);
 		await post(
 			github,
 			{ repository },
@@ -329,7 +330,6 @@ async function take(
 			"held",
 			MERGER,
 		);
-		endPick(state, number, entry.enabledAt);
 		mark("held");
 		return `dropped ${number} held`;
 	}
@@ -542,6 +542,7 @@ async function collect(
 	const leave = async (hold: string): Promise<string[]> => {
 		job.held = hold;
 		save(path, job);
+		endPick(state, number, entry.enabledAt);
 		await post(
 			github,
 			plan,
@@ -550,12 +551,11 @@ async function collect(
 			"held",
 			MERGER,
 		);
-		endPick(state, number, entry.enabledAt);
 		finish(path, job);
 		return [`dropped ${number} held`];
 	};
-	// A head this round already asked GitHub to queue, and GitHub took, stays: the hold came after it.
 	if (job.held !== undefined) return leave(job.held);
+	// A head this round already asked GitHub to queue, and GitHub took, stays: the hold came after it.
 	const hold = holdOf(pull);
 	if (hold !== undefined && !(job.requeuing !== undefined && queued(pull, job.dropped))) return leave(hold);
 	if (ended) {
@@ -639,9 +639,12 @@ async function collect(
 					job.published = head;
 					save(path, job);
 				}
-				// Validating the fix takes a while, and a session may have taken the PR since.
-				const hold = holdOf(await readPull(github, entry.id));
-				if (hold !== undefined) throw new Held(hold);
+				// Validating the fix takes a while, and a session may have taken the PR since. A head already
+				// pushed needs no push, and `requeue` checks the hold before any enqueue.
+				if (!pushed) {
+					const hold = holdOf(await readPull(github, entry.id));
+					if (hold !== undefined) throw new Held(hold);
+				}
 				await publishHead(github, context.root, job, entry, entry.head, current, head, deps, context.token, {
 					reason: result.reason,
 					attribution,

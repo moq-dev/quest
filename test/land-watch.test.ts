@@ -1112,12 +1112,15 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		// retried rather than handed back, and finds its own enqueue.
 		github.unreadable = (pull) => pull.queued !== undefined;
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
+		// A session takes it now: the head GitHub already took back stays queued.
+		pull.labels = ["quest:active"];
 		// Then GitHub refuses the outcome comment once: the round stays requeued, and only its comment is retried.
 		github.refuse = ["re-enqueued this pull request"];
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 		const [line] = await watchPass(REPOSITORY, { state }, deps(github), context);
 		const fixed = git(repo.origin, "rev-parse", "refs/heads/branch-5");
 		expect(line).toBe(`requeued 5 ${fixed}`);
+		pull.labels = undefined;
 		expect(git(repo.origin, "rev-parse", `${fixed}^`)).toBe(head);
 		expect(github.mutations).toEqual([`enqueuePullRequest 5 ${fixed}`]);
 		expect(pull.body).toContain(`mechanical fix by Codex: \`add the missing file\` (head ${fixed})`);
@@ -1866,6 +1869,9 @@ git commit -qm 'disable render_timeout'`;
 		github.refuse = ["but not re-enqueued", "did not start on"];
 		github.now = Date.parse(at(7));
 		await expect(watchPass(REPOSITORY, { state }, deps(github), context)).rejects.toThrow();
+		// The hold ended 7's pick when it was recorded, so even a round set aside for its refused comment
+		// leaves no pick for a later App enqueue to continue.
+		expect(history(state, 7)).toBeUndefined();
 		pulls[2].labels = [];
 		pulls[4].labels = [];
 		github.now = Date.parse(at(8));
