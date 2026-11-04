@@ -50,8 +50,8 @@ only GitHub contact allowed: never call GitHub's API yourself (`gh`,
 
 Write `quest-land-result.json` in the repository root: a JSON array with exactly
 one entry per supplied PR, no extra fields. Use one of:
-{"number":123,"action":"requeue","reason":"healthy; flaky test"}
-{"number":123,"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason"}
+{"number":123,"action":"requeue","reason":"healthy; flaky test; ran just check and just test on a scratch merge"}
+{"number":123,"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason, naming the commands run"}
 {"number":123,"action":"handback","diagnosis":"one line","recommendation":"one line"}
 
 On each entry, add `"failure"`: the test or step the failure log shows
@@ -166,7 +166,7 @@ repository has it. A disabled test that is another quest's acceptance test
 leaves that quest as it is: the test still counts as its work. Run the
 [repository checks](#repository-checks) on the branch, and add its full SHA to the
 PR's entry:
-{"number":123,"action":"requeue","reason":"healthy; flaky test","failure":"cargo test -p moq-relay: interop::render_timeout","disable":"full 40-character SHA"}
+{"number":123,"action":"requeue","reason":"healthy; flaky test; ran just check and just test on a scratch merge and the disable branch","failure":"cargo test -p moq-relay: interop::render_timeout","disable":"full 40-character SHA"}
 quest land opens the commit as a pull request of its own and enqueues it. Never
 disable a test that is not listed. When the repository keeps no `quest/m0/`, or
 the skip needs a protected path or more than a mechanical edit, requeue
@@ -195,5 +195,5 @@ for a maintainer to merge. If the failure needs a behavior change, a protected p
 or a decision, or you cannot tell why it fails, hand it back.
 Write `quest-land-result.json` as one JSON object, not an array, with no
 `number` and no extra fields:
-{"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason"}
+{"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason, naming the commands run"}
 {"action":"handback","diagnosis":"one line","recommendation":"one line"}

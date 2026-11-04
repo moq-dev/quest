@@ -3344,9 +3344,14 @@ ${requeueScript}`);
 			"run each touched language's own type check and linter",
 			"A `requeue` of an unchanged head runs the same checks",
 			"Name each command you ran",
+			'"reason":"healthy; flaky test; ran just check and just test on a scratch merge"',
+			'"reason":"healthy; flaky test; ran just check and just test on a scratch merge and the disable branch"',
+			'"reason":"one-line mechanical reason, naming the commands run"',
 			"quoting the command and the output",
 		])
 			expect(prompt).toContain(text);
+		for (const text of ['"reason":"healthy; flaky test"', '"reason":"one-line mechanical reason"'])
+			expect(prompt).not.toContain(text);
 	});
 	test("rebuilds a conflicted lockfile from the base's copy", () => {
 		const prompt = fixerPrompt.replace(/\s+/g, " ");
