@@ -637,6 +637,8 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(git(forge.origin, "show", "-s", "--format=%P", "main")).toBe(`${one.squash} ${head}`);
 		expect(git(forge.origin, "rev-parse", "main^{tree}")).toBe(chain.links[1].tree);
 		expect(forge.comment(2)).not.toContain("GitHub cannot show");
+		// GitHub marks it merged from the pushed head, so the gate leaves it open rather than race that.
+		expect(fork.closed).not.toBe(true);
 		expect(forge.merges.map(({ number }) => number)).toEqual([1]);
 	});
 
@@ -1246,6 +1248,19 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			"classic branch protection settings the gate does not uphold, and its merge bypasses them: required_linear_history (with merge commits).",
 		);
 		expect(forge.repo.pulls[0].landing).toBe(true);
+	});
+
+	test("refuses a method the repository's merge settings disallow", async () => {
+		const forge = new Forge();
+		forge.pull("Ready", { "1.txt": "1\n" });
+		forge.repo.mergeMethods = ["squash"];
+		const deps = await forge.deps();
+		expect((await resolveQueue(REPOSITORY, SQUASH, deps)).queue).toHaveLength(1);
+		await expect(resolveQueue(REPOSITORY, MERGE, deps)).rejects.toThrow(
+			"upstream/project does not allow merge commits, so GitHub would refuse every merge the gate checks",
+		);
+		forge.repo.mergeMethods = ["merge"];
+		await expect(resolveQueue(REPOSITORY, SQUASH, deps)).rejects.toThrow("does not allow squash merges");
 	});
 });
 

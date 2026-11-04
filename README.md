@@ -574,8 +574,8 @@ daemon's merge of the base into it), and its tree is the tree the sandbox
 checked. The method is fixed at startup and applies to the chain the sandbox
 checks, the commit the fixer starts from, and GitHub's merge API. The daemon
 refuses merge commits on a base whose ruleset or classic protection requires
-linear history, and a ruleset's allowed merge methods must include the
-configured one. The auto-merge `quest merge --land` enables only signals the
+linear history, and both the repository's merge settings and a ruleset's
+allowed merge methods must include the configured one. The auto-merge `quest merge --land` enables only signals the
 queue, so its method never decides how the daemon lands.
 
 The sandbox executable receives `<checkout> <base-sha>` as its two arguments,

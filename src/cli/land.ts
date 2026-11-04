@@ -35,6 +35,20 @@ export function pin(sha: string): string {
 /** How a `quest land serve` instance lands each PR: as a squash commit, or as a merge commit keeping its ancestry. */
 export type LandMethod = "squash" | "merge";
 
+/** The repository setting that allows each merge method. */
+export const ALLOWS: Record<Method, string> = {
+	merge: "allow_merge_commit",
+	squash: "allow_squash_merge",
+	rebase: "allow_rebase_merge",
+};
+
+/** Each merge method as GitHub's settings name it. */
+export const METHOD_NAMES: Record<Method, string> = {
+	merge: "merge commits",
+	squash: "squash merges",
+	rebase: "rebase merges",
+};
+
 /** Which base a queue is read for, and how its PRs land. */
 export interface Target {
 	/** The base branch; the repository's default when absent. */
@@ -293,20 +307,14 @@ export async function resolveQueue(
 ): Promise<Plan> {
 	const github = new GitHub(deps);
 	const name = `${repository.owner}/${repository.repo}`;
-	const ref =
-		target.base ??
-		string(
-			object(
-				object(
-					(
-						await github.graphql(
-							"query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name } } }",
-							{ owner: repository.owner, name: repository.repo },
-						)
-					).repository,
-				).defaultBranchRef,
-			).name,
+	const settings = object(await (await github.request(repositoryPath(repository))).json());
+	const ref = target.base ?? string(settings.default_branch);
+	// A setting hidden from the token counts as allowed, leaving GitHub to refuse.
+	if (settings[ALLOWS[target.method]] === false) {
+		throw new Error(
+			`${name} does not allow ${METHOD_NAMES[target.method]}, so GitHub would refuse every merge the gate checks`,
 		);
+	}
 	const needs = await requirements(github, repository, ref);
 	if (!needs.checks.some((check) => check.name === LAND_CHECK)) {
 		throw new Error(

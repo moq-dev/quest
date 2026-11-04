@@ -235,13 +235,24 @@ export async function finishFallback(
 			body: { body: `landed as [${commit}](${url}) by quest land${why}.\n\n${marker}` },
 		});
 	}
+	// GitHub marks a PR merged once a push brings its head into the base, as a merge commit's second
+	// parent does; closing it first would race that and leave it closed instead.
+	if (plan.method === "squash") await closeTested(github, plan, entry);
+	unlinkSync(path);
+	forgetHeads(state, entry.number);
+	return `landed ${entry.number} ${commit}`;
+}
+
+/**
+ * Close the PR as it was tested: the approved head, or the daemon's own prepared head on it, still
+ * queued as it was. A contributor's newer work stays open, and queued, with the landing comment.
+ */
+async function closeTested(github: GitHub, plan: Plan, entry: Entry): Promise<void> {
 	const data = await github.graphql(
 		"query($id: ID!) { node(id: $id) { ... on PullRequest { state headRefOid autoMergeRequest { enabledAt } } } }",
 		{ id: entry.id },
 	);
 	const pull = object(data.node);
-	// Close only the PR as it was tested: the approved head, or the daemon's own prepared head on it,
-	// still queued as it was. A contributor's newer work stays open, and queued, with the comment above.
 	const unchanged =
 		(pull.headRefOid === entry.head || pull.headRefOid === entry.approved) &&
 		pull.autoMergeRequest !== null &&
@@ -252,9 +263,6 @@ export async function finishFallback(
 			body: { state: "closed" },
 		});
 	}
-	unlinkSync(path);
-	forgetHeads(state, entry.number);
-	return `landed ${entry.number} ${commit}`;
 }
 
 export async function landFallback(

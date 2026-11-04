@@ -16,7 +16,7 @@ import {
 	requirements,
 	string,
 } from "./github";
-import { LAND_CHECK, enqueue } from "./land";
+import { ALLOWS, LAND_CHECK, METHOD_NAMES, enqueue } from "./land";
 import { Refusal, ago } from "./start";
 
 export type Method = "merge" | "squash" | "rebase";
@@ -153,20 +153,6 @@ export async function finish(pr: PullRequest, token: string, deps: GitHubDepende
 	});
 }
 
-/** The repository setting that allows each merge method. */
-const ALLOWS: Record<Method, string> = {
-	merge: "allow_merge_commit",
-	squash: "allow_squash_merge",
-	rebase: "allow_rebase_merge",
-};
-
-/** Each merge method as GitHub's settings name it. */
-const METHOD_NAMES: Record<Method, string> = {
-	merge: "merge commits",
-	squash: "squash merges",
-	rebase: "rebase merges",
-};
-
 /**
  * The method an ungated landing uses: the one `named`, which the repository must allow, else the
  * only one it allows, else a merge commit. Settings hidden from the token leave GitHub to refuse.
@@ -225,9 +211,9 @@ function signalMethod(
  * enable auto-merge bound to it, or merge at once when GitHub would refuse auto-merge because
  * nothing is left to wait for. A base with a merge queue gets {@link pick} instead.
  * A base that requires the `quest land` check queues it for `quest land` instead:
- * auto-merge whose commit body pins `sha`, with a method the repository allows, squash when it can.
+ * auto-merge whose commit body pins `sha`, with a method {@link signalMethod} picks.
  * That request only signals the queue: `quest land` lands with its own method. It takes no label.
- * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one.
+ * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one on an ungated base.
  */
 export async function land(
 	pr: PullRequest,
