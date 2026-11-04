@@ -24,12 +24,12 @@ model and effort for every commit and PR, to audit the rankings.
   commit messages.
 - The PR record: `quest context`'s Reviews section (`assets/CONTEXT.md`)
   already requires the reviewer's harness, model, and effort in
-  `## Review`. Beside that rule, it says the PR body also names the PR's
-  size and one line per implementing session, added by each session when
-  it pushes, so a quest that `/quest-iterate` finishes on another model
-  lists both. A quest PR's size is its quest's; a skill's own PR is sized
-  by that skill, as [Review by size](/quest/m0/model-routing/review-effort.md)
-  uses.
+  `## Review`, and a `## Models` section naming the PR's size and each
+  implementing session's harness, model, and effort, which `quest review
+  --size` and `--exclude-model` read ([moq-dev/quest#493](https://github.com/moq-dev/quest/pull/493)).
+  Settle the section's line format, and say each session adds its line
+  when it pushes, so a quest that `/quest-iterate` finishes on another
+  model lists both.
 - An agent finds its own settings rather than guessing: Claude Code
   exports `CLAUDE_EFFORT` and knows its model. Find where Codex and Grok
   expose their model and effort to the agent, and name them in the rule.

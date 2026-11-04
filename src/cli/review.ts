@@ -1,4 +1,5 @@
-// `quest review`: the other vendor's model reviews the committed branch, read-only.
+// `quest review`: a model that wrote none of the code reviews the committed branch, read-only,
+// picked by the PR's size from the lists in `models.ts`.
 //
 // A branch's first round runs the reviewer CLI's own review, then resumes that
 // session for one turn that applies the base's REVIEW.md and returns the
@@ -11,10 +12,12 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
 
+import { type Size, branchQuest, parse, size as questSize } from "../core";
 import { streamReader } from "../runner/claude";
 import { type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
+import { DEFAULT_SIZE, type Model, REVIEWERS } from "./models";
 import { programEnvironment, requireProgram } from "./program";
 import { save } from "./worktree";
 
@@ -32,12 +35,6 @@ export class ReviewLimitError extends Error {
 }
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
-
-/** Each reviewer's pinned model and effort; `--model` and `--effort` override them. */
-export const MODELS = {
-	claude: { model: "claude-opus-5-5", effort: "high" },
-	codex: { model: "gpt-6.1-sol", effort: "xhigh" },
-} as const satisfies Record<HarnessName, { model: string; effort: string }>;
 
 export interface Finding {
 	/** Repository-relative path. */
@@ -63,6 +60,10 @@ export interface Round {
 	reviewer: HarnessName;
 	model: string;
 	effort: string;
+	/** The PR size that picked the reviewer. */
+	size: Size;
+	/** Where the size came from: the quest's path on the base, `--size`, or `default`. */
+	sizeFrom: string;
 	session: string;
 	/** 1 for the session's first round. */
 	round: number;
@@ -107,10 +108,78 @@ export function runningHarness(env: NodeJS.ProcessEnv): HarnessName {
 	if (claude && codex) throw new ReviewInputError("both Claude Code and Codex variables are set; pass --harness");
 	if (claude) return "claude";
 	if (codex) return "codex";
-	throw new ReviewInputError("not running under Claude Code or Codex; pass --harness to name the reviewer");
+	throw new ReviewInputError(
+		"not running under Claude Code or Codex; pass --harness to name the reviewer, or --exclude-model for each model that wrote the code",
+	);
 }
 
-const other = (harness: HarnessName): HarnessName => (harness === "claude" ? "codex" : "claude");
+/** What picks a round's reviewer from its size's list. */
+export interface Choice {
+	harness?: HarnessName;
+	model?: string;
+	effort?: string;
+	/** The models that wrote the code; without any, the running harness's are excluded. */
+	exclude?: string[];
+}
+
+/**
+ * Whether an entry's model wrote the code: one of `exclude`, or else, unless
+ * `--harness` names the reviewer, any model of the harness running this
+ * command, since its own model is not known.
+ */
+export function authored(choice: Choice, env: NodeJS.ProcessEnv): (entry: Model) => boolean {
+	const exclude = choice.exclude ?? [];
+	if (exclude.length > 0) return (entry) => exclude.includes(entry.model);
+	if (choice.harness !== undefined) return () => false;
+	const running = runningHarness(env);
+	return (entry) => entry.harness === running;
+}
+
+/**
+ * The reviewer for a PR of `size`: the first entry of its list whose model
+ * wrote none of the code, or `--harness`'s entry, with `--model` and
+ * `--effort` overriding its model and effort. An override never brings back
+ * a model that wrote the code.
+ */
+export function pickReviewer(size: Size, choice: Choice, wrote: (entry: Model) => boolean): Model {
+	const list = REVIEWERS[size];
+	const entry =
+		choice.harness === undefined ? list.find((e) => !wrote(e)) : list.find((e) => e.harness === choice.harness);
+	if (entry === undefined && choice.harness === undefined) {
+		const models = [...new Set(list.map((e) => e.model))].join(", ");
+		throw new ReviewInputError(`every ${size} reviewer (${models}) wrote the code; pass --harness and --model`);
+	}
+	const harness = choice.harness ?? entry!.harness;
+	const model = choice.model ?? entry?.model;
+	const effort = choice.effort ?? entry?.effort;
+	if (model === undefined || effort === undefined) {
+		throw new ReviewInputError(`no ${harness} reviewer for size ${size}; pass --model and --effort`);
+	}
+	const picked = { harness, model, effort };
+	if (wrote(picked))
+		throw new ReviewInputError(`${model} wrote the code; pass --model to name another ${harness} model`);
+	return picked;
+}
+
+/**
+ * The size that picks a round's reviewer: `given`, or else the size of the
+ * quest a `quest/` branch names, read from the base's tip so the change cannot
+ * lower its own review, or else the default.
+ */
+export function reviewSize(
+	root: string,
+	baseSha: string,
+	branch: string,
+	given: Size | undefined,
+): { size: Size; from: string } {
+	if (given !== undefined) return { size: given, from: "--size" };
+	if (branch.startsWith("quest/")) {
+		const path = branchQuest(branch);
+		const sized = exists(root, baseSha, path) ? questSize(parse(path, show(root, baseSha, path))) : null;
+		if (sized !== null) return { size: sized, from: path };
+	}
+	return { size: DEFAULT_SIZE, from: "default" };
+}
 
 /**
  * The base: `<remote>/<branch>`, by default origin's default branch, which the
@@ -122,10 +191,19 @@ type BaseOptions = { base?: string; fetched?: false } | { base: string; fetched:
 export type ReviewOptions = BaseOptions & {
 	/** The checkout to review. */
 	root: string;
-	/** The reviewer; defaults to the harness this command is not running under. */
+	/** The reviewer; defaults to the first of the size's list whose model wrote none of the code. */
 	harness?: HarnessName;
 	model?: string;
 	effort?: string;
+	/** The models that wrote the code; without any, the running harness's are excluded. */
+	exclude?: string[];
+	/** The PR's size, instead of its quest's or the default. */
+	size?: Size;
+	/**
+	 * The branch whose quest sizes the round, when the checkout's is not the
+	 * PR's own, as in the runner's review checkout; defaults to the session's branch.
+	 */
+	sizeBranch?: string;
 	/** The author's fixes and refutations of the last round's findings. */
 	responses?: string;
 	/** Start a new session instead of resuming the branch's last one. */
@@ -470,7 +548,7 @@ function codexFlags(context: Context): string[] {
 	];
 }
 
-const REVIEWERS: Record<HarnessName, Reviewer> = { claude, codex };
+const CLIS: Record<HarnessName, Reviewer> = { claude, codex };
 
 /** Codex's review turn reports all zeros, which is no measurement. */
 const reported = (usage: Omit<Usage, "turn"> | undefined): usage is Omit<Usage, "turn"> =>
@@ -581,7 +659,7 @@ const pick = (env: NodeJS.ProcessEnv, names: string[]) =>
  * billed as the user's own CLI sessions are.
  */
 async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Cli> {
-	const reviewer = REVIEWERS[harness];
+	const reviewer = CLIS[harness];
 	const connected = { ...strippedEnvironment(env), ...pick(env, reviewer.connection) };
 	const routes = reviewer.routes(env);
 	const through = routes.length > 0 ? ` through ${names(routes)}` : "";
@@ -921,8 +999,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	if (process.platform === "win32")
 		throw new ReviewInputError("quest review does not support native Windows yet; use WSL");
 	const root = git(options.root, ["rev-parse", "--show-toplevel"]);
-	const harness = options.harness ?? other(runningHarness(deps.env));
-	const reviewer = REVIEWERS[harness];
+	const wrote = authored(options, deps.env);
 
 	const branch = sessionBranch(root, options.branch);
 	if (git(root, ["status", "--porcelain"]) !== "") {
@@ -930,6 +1007,16 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			"the checkout has uncommitted changes; commit them, since only the committed branch is reviewed",
 		);
 	}
+
+	// The reviewer's sandbox has no network, so the base is fetched first, and the size is read from it.
+	const baseRef = options.fetched ? options.base : await fetchBase(root, options.base);
+	const { remote, branch: baseBranch } = parseBase(root, baseRef);
+	const tracking = `refs/remotes/${remote}/${baseBranch}`;
+	const baseSha = git(root, ["rev-parse", "--verify", `${tracking}^{commit}`]);
+	const sized = reviewSize(root, baseSha, options.sizeBranch ?? branch, options.size);
+	const picked = pickReviewer(sized.size, options, wrote);
+	const harness = picked.harness;
+	const reviewer = CLIS[harness];
 
 	const statePath = sessionFile(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
 	const dir = dirname(statePath);
@@ -948,11 +1035,6 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 
 	const cli = await prepare(harness, root, deps.env, options.signal);
 
-	// The reviewer's sandbox has no network, so the base is fetched first.
-	const baseRef = options.fetched ? options.base : await fetchBase(root, options.base);
-	const { remote, branch: baseBranch } = parseBase(root, baseRef);
-	const tracking = `refs/remotes/${remote}/${baseBranch}`;
-	const baseSha = git(root, ["rev-parse", "--verify", `${tracking}^{commit}`]);
 	const head = git(root, ["rev-parse", "HEAD"]);
 	let mergeBase: string;
 	try {
@@ -968,12 +1050,11 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const schemaFile = join(dir, "schema.json");
 	save(schemaFile, SCHEMA);
 	const files = baseInstructions(root, baseSha, changed);
-	const tier = MODELS[harness];
 	const context: Context = {
 		mergeBase,
 		instructions: instructionsPrompt(baseSha, files),
-		model: options.model ?? tier.model,
-		effort: options.effort ?? tier.effort,
+		model: picked.model,
+		effort: picked.effort,
 		schemaFile,
 	};
 
@@ -1012,6 +1093,8 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		reviewer: harness,
 		model: context.model,
 		effort: context.effort,
+		size: sized.size,
+		sizeFrom: sized.from,
 		session,
 		round: rounds.length,
 		base: { ref: baseRef, sha: baseSha },
@@ -1025,6 +1108,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 export function roundLines(round: Round): string[] {
 	const lines = [
 		`reviewer ${round.reviewer} ${round.model} ${round.effort}`,
+		`size ${round.size} ${round.sizeFrom}`,
 		`session ${round.session}`,
 		`round ${round.round}`,
 		`base ${round.base.sha} ${round.base.ref}`,
