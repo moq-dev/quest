@@ -73,7 +73,8 @@ Implementation guidance:
   runs four cases in one test, each with its own repository and two `quest`
   CLI runs: 3.3s of its 5s on a developer machine.
   [moq-dev/quest#470](https://github.com/moq-dev/quest/pull/470) had just
-  split this file's tests to one `quest review` per variant for that reason. Find such tests by their share of the limit on a
+  split this file's tests to one `quest review` per variant for that reason.
+  Find such tests by their share of the limit on a
   quiet host, not by which one timed out last.
 - The `land.test.ts` run is a stall, not slowness: the test takes 0.4s alone,
   and its 30s timeout fired only at 1221s, so its vitest worker ran no timers
