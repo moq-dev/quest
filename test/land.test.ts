@@ -2771,7 +2771,9 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		expect(fix.branch).toBe(branch);
 		const head = forge.ref("upstream/project", `refs/heads/${branch}`);
 		expect(git(forge.origin, "rev-parse", `${head}^`)).toBe(fixture.base.sha);
-		expect(fix.body).toContain(`mechanical fix by agent, unknown, unknown effort: \`restore the missing file\` (head ${head})`);
+		expect(fix.body).toContain(
+			`mechanical fix by agent, unknown, unknown effort: \`restore the missing file\` (head ${head})`,
+		);
 		expect(fix.body).toContain("Merge it as an administrator");
 		// Collected once, and the queue stays halted on this base.
 		expect(await fixture.collect()).toEqual([]);

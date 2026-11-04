@@ -87,7 +87,14 @@ export const signature = (failure: string) => failure.replace(/[`'"]/g, "").repl
  * a commit on the base that skips the test and adds its follow-up quest, which the daemon opens as a PR
  * of its own.
  */
-export type FixResult = { agent?: string; model?: string; effort?: string; blame?: boolean; comment?: string; failure?: string } & (
+export type FixResult = {
+	agent?: string;
+	model?: string;
+	effort?: string;
+	blame?: boolean;
+	comment?: string;
+	failure?: string;
+} & (
 	| { number: number; action: "requeue"; reason: string; cause?: Cause; disable?: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }

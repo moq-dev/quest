@@ -1971,7 +1971,11 @@ describe("quest runner", () => {
 				{ assistant: { role: "assistant", providerID: "openai", modelID: "gpt-test", variant: "high" } },
 				{
 					tool: "deliver",
-					args: { summary: "Went with A", title: "feat: a", body: "## Models\n\n- Size: S\n\n## Review\n\nNone" },
+					args: {
+						summary: "Went with A",
+						title: "feat: a",
+						body: "## Models\n\n- Size: S\n\n## Review\n\nNone",
+					},
 				},
 			],
 		});
