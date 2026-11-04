@@ -83,6 +83,8 @@ Block on user decisions.
 Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
 Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed the work.
 Then give your recommendation and ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
+Recommend in every prompt, a multiple-choice list included: mark each option you recommend, such as which follow-ups to plan, and give a one-line reason for each you would leave out.
+An answer such as "whatever you recommend" picks your recommendations; act on them without asking again.
 Do not use asynchronous question tools.
 
 If no blocking tool is available, or it returns without an answer, put the question and numbered choices in your final reply and end the turn.
@@ -160,7 +162,7 @@ Suggest only out-of-scope discoveries as follow-ups.
 When the repository has a `quest/` directory, it plans work as quests: Markdown files there, each completed in one PR.
 
 - Before creating, editing, claiming, or finishing a quest, run `quest guide` and follow it. The `/quest-*` skills already do.
-- A follow-up becomes a quest only through `/quest-plan`, never a GitHub issue or an agent-session task. Suggest follow-ups in the PR body.
+- A follow-up becomes a quest only through `/quest-plan`, never a GitHub issue or an agent-session task. Suggest follow-ups in the PR body, each with a recommendation: plan it, or drop it and why.
 
 ## Prompting
 
