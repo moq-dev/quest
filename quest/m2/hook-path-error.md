@@ -17,14 +17,9 @@ Decided 2026-11-04 (maintainer, /quest-plan).
   otherwise prints the message on stderr and exits 2, which Claude Code shows
   and treats as blocking. A `WorktreeCreate` failure then aborts the worktree
   with that message.
-- After [init-hooks](/quest/m0/user-dev-shell/init-hooks.md), the entries are
-  a user-level opt-in that the README and SETUP.md describe, so the guarded
-  entry is the documented one. `quest uninstall`'s match for Quest's own
-  hooks must still recognize it.
+- The entries are a user-level opt-in whose JSON the README's "Claude Code
+  checkouts" section gives and SETUP.md points to, so the guarded entry is the
+  documented one.
 - The test runs the documented entry with a `PATH` that lacks `quest` and
   checks the exit status and message, and with `quest` present checks that
   the hook runs.
-
-## Required
-
-- [quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md) - the documented user-level hook entries this guard changes

@@ -607,12 +607,12 @@ Submitting it opens the App's setup pull request, with no runner involved
 `quest init` applies to a checkout, plans it from the default branch's tree:
 the skill stubs this deployment's `quest` ships (rendered into
 `build/stubs.json` at build time), `quest/README.md` with the answer as its
-Goal, the `Quests: ` line in the root agent instructions, the `.gitattributes`
-line, and Claude Code's hook entries in `.claude/settings.json`. Heading
+Goal, the `Quests: ` line in the root agent instructions, and the
+`.gitattributes` line. Heading
 syntax in the answer is escaped, and the planned `quest/README.md` must pass
 `quest check`, so a goal that would fail it, such as one linking a missing
 quest, is refused before anything is written instead of when enabling. A path init would refuse, such as a skill
-directory that is not a Quest stub or invalid settings JSON, is named on the
+directory that is not a Quest stub, is named on the
 page and nothing is written; kix never deletes or renames a repository's
 files. The plan does not follow symlinks, since a Git tree stores their targets
 as data: one on a planned path is refused the same way, pointing at running

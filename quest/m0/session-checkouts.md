@@ -24,10 +24,11 @@ Evidence, gathered 2026-11-02:
 Work:
 
 - Add `SessionEnd` and `SessionStart` entries to the opt-in user-level hook
-  setup the docs describe. Amended 2026-11-03 (maintainer, /quest-unblock):
-  `quest init` writes no hook entries anymore
-  ([quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md)),
-  so this quest no longer installs them through `init`.
+  setup: the JSON block in the README's "Claude Code checkouts" section, which
+  SETUP.md's "Opt into worktree hooks" step points to, and `HOOK_EVENTS` in
+  `src/cli/worktree-hook.ts`. Amended 2026-11-03 (maintainer, /quest-unblock):
+  `quest init` writes no hook entries anymore, so this quest no longer
+  installs them through `init`.
 - `SessionEnd` releases (never removes) the session's checkout;
   `SessionStart` claims it again on resume. `/clear` also fires
   `SessionEnd`, so release is idempotent and the next `SessionStart`

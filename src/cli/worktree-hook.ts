@@ -1,5 +1,6 @@
-// Claude Code's worktree lifecycle hooks, backed by `quest worktree`. `quest init` installs one
-// static entry per event, each calling `quest worktree hook`, so the logic upgrades with the binary.
+// Claude Code's worktree lifecycle hooks, backed by `quest worktree`. A user opts in with one static
+// entry per event in their own Claude settings, each calling `quest worktree hook`, so the logic
+// upgrades with the binary.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -14,8 +15,8 @@ import {
 	mainCheckout,
 } from "./worktree";
 
-// The events this handles are the core's HOOK_EVENTS, which `quest init` installs.
-export { HOOK_EVENTS } from "../core";
+/** The Claude Code events `quest worktree hook` handles. */
+export const HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"] as const;
 
 /**
  * The guide's workspace, which holds an agent's reports and logs. Its parent reads them after it stops,

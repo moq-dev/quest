@@ -2,7 +2,7 @@
 // the setting-up state, and enabling once it merges, against the fake GitHub.
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HOOK_COMMAND, REFERENCE_LINE } from "quest/core";
+import { REFERENCE_LINE } from "quest/core";
 import { app } from "../src/index";
 import { STUBS, planCheck, setupGoal, treeCheckout } from "../src/github/setup";
 import { type Pull, type Repo, type World, fakeGitHub, intercept } from "../dev/github";
@@ -115,7 +115,7 @@ describe("the setup pull request", () => {
 		expect(files.get("quest/README.md")).toBe("# Quests\n\n## Goal\n\nShip a fast parser.\n\\# Not a heading\n");
 		expect(files.get("AGENTS.md")).toBe(`# Agents\n\nRun the tests.\n\n${REFERENCE_LINE}\n`);
 		expect(files.get(".gitattributes")).toBe("quest/** merge=quest\n");
-		expect(files.get(".claude/settings.json")).toContain(HOOK_COMMAND);
+		expect(files.has(".claude/settings.json")).toBe(false);
 
 		expect(await setup()).toMatchObject({ state: "open", pull: pull!.number, enrolledBy: user, pending: null });
 		expect(await enrolled()).toBeNull();

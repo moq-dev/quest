@@ -5,8 +5,8 @@
 moq-dev/quest, moq, moq.pro, rind, and rust2 carry no dev-shell hooks and no
 instructions to wrap commands in Nix: each drops its direnv `SessionStart`
 hook from `.claude/settings.json` and `.codex/hooks.json` with the scripts
-and tests behind them, moq drops its four Quest worktree hook entries, and
-each AGENTS.md drops its `nix develop` instructions. Agents there still run
+and tests behind them, and each AGENTS.md drops its `nix develop`
+instructions. Agents there still run
 the pinned tools, through the maintainer's user-level hooks. One PR per
 repository.
 
@@ -15,6 +15,10 @@ repository.
 Decided 2026-11-03 (maintainer, /quest-unblock); see the
 [epic](/quest/m0/user-dev-shell/README.md).
 
+- moq's four Quest worktree hook entries are not this quest's: decided
+  2026-11-04 (maintainer, /quest-complete),
+  [moq-dev/moq#7889](https://github.com/moq-dev/moq/pull/7889) removes them
+  on its own.
 - Keep every other hook: moq.pro's `submodule.sh`, `worktree.sh` (its own
   submodule-aware worktrees, not Quest's), and `tofu-secrets.py`.
 - CONTRIBUTING.md's human setup (`nix develop` to match CI) stays; only the

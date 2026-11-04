@@ -27,7 +27,7 @@ export type TreeEntry = { path: string; type: string; mode: string; sha: string 
 
 /** Whether the plan may read the file at `path`, so the service fetches it with the tree. */
 export function planned(path: string): boolean {
-	if (["AGENTS.md", "CLAUDE.md", ".gitattributes", ".claude/settings.json"].includes(path)) return true;
+	if (["AGENTS.md", "CLAUDE.md", ".gitattributes"].includes(path)) return true;
 	return SKILL_DIRS.some((dir) => {
 		const rest = path.startsWith(`${dir}/`) ? path.slice(dir.length + 1).split("/") : [];
 		return rest.length === 2 && rest[0]!.startsWith("quest-") && rest[1] === "SKILL.md";
@@ -124,7 +124,6 @@ function purpose(change: InitChange): string {
 	if (path.endsWith("/SKILL.md")) return "a skill stub";
 	if (path === "quest/README.md") return "the quest tree's root, with the project's goal";
 	if (path === ".gitattributes") return "routes `quest/**` through the `quest` merge driver";
-	if (path === ".claude/settings.json") return "Claude Code's worktree hooks, which run `quest worktree hook`";
 	return "points agents at `quest context`";
 }
 

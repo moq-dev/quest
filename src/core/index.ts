@@ -42,10 +42,7 @@ export {
 export { MAINTAINER, WAITING, type Wait, onMaintainer, parseWait, waits } from "./waiting";
 export {
 	ATTRIBUTES_LINE,
-	CLAUDE_SETTINGS,
 	type Checkout,
-	HOOK_COMMAND,
-	HOOK_EVENTS,
 	type InitChange,
 	InitRefused,
 	type Kind,
@@ -53,16 +50,12 @@ export {
 	REFERENCE_LINE,
 	REFERENCE_MARKER,
 	SKILL_DIRS,
-	type Settings,
 	type Stub,
 	installedStubs,
-	isQuestHook,
 	lines,
 	newline,
-	parseSettings,
 	planInit,
 	questReadme,
-	renderSettings,
 } from "./init";
 export { type Chunk, type Clean, type Conflict, LABELS, chunks, render, resolveLists } from "./merge";
 
