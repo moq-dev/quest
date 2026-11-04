@@ -248,16 +248,29 @@ const record = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
- * A command that runs `quest worktree hook`: the `quest` executable, package, or flake attribute, past an
- * optional `--`, runs `worktree hook` either as the command itself, at the start of a shell segment after
- * any variable assignments, or as what a launcher runs (`nix run`, `nix develop -c`, `bun run`, `npx`,
- * `bunx`, `exec`, ...) with only flags between. That covers `/usr/local/bin/quest worktree hook`,
- * `npx @moq-dev/quest@latest worktree hook`, and `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`,
- * while another tool given `quest` as an argument, as in `othertool --project quest worktree hook`, is
- * not Quest's.
+ * A command that runs `quest worktree hook`. A shell segment, past any variable assignments and an `exec`
+ * or `env`, starts the `quest` executable directly or through a launcher that names it: `nix run` of a
+ * flake attribute or reference ending in `quest`, `nix develop` or `nix shell` with `-c quest`, a package
+ * runner such as `npx @moq-dev/quest@latest`, `bun run quest`, or `mise exec` or `direnv exec` running
+ * `quest`. Another tool given `quest` as an argument, as in `othertool --project quest worktree hook`,
+ * is not Quest's.
  */
-const QUEST_COMMAND =
-	/(?:(?:^|[;&|(]\s*)(?:\w+=\S*\s+)*|(?:^|\s)(?:run|exec|x|dlx|npx|bunx|pnpx|-c|--command)(?:\s+--?[\w-]+)*\s+)["']?(?:[^\s=]*[/#])?quest(?:[@?][^\s"']*)?["']?(?:\s+--)?\s+worktree hook$/;
+const QUEST_COMMAND = (() => {
+	const quoted = (body: string) => String.raw`["']?${body}["']?`;
+	const executable = quoted(String.raw`(?:[^\s"'=;&|]*/)?quest`);
+	const flags = String.raw`(?:\s+-\S*)*`;
+	const args = String.raw`(?:\s+[^\s;&|]+)*?`;
+	const launch = [
+		executable,
+		String.raw`nix${flags}\s+run${flags}\s+${quoted(String.raw`[^\s"']*[#/]quest(?:\?[^\s"']*)?`)}`,
+		String.raw`nix${flags}\s+(?:develop|shell)${args}\s+(?:-c|--command)\s+${executable}`,
+		String.raw`(?:npx|bunx|pnpx|bun\s+x|pnpm\s+dlx|(?:npm|pnpm)\s+exec)${flags}\s+${quoted(String.raw`(?:[^\s"'=;&|]*/)?quest(?:@[^\s"']*)?`)}`,
+		String.raw`bun\s+run${flags}\s+${executable}`,
+		String.raw`(?:mise\s+(?:exec|x)|direnv\s+exec)${args}\s+${executable}`,
+	].join("|");
+	const prefix = String.raw`(?:^|[;&|(]\s*)(?:\w+=\S*\s+)*(?:(?:exec|env)\s+(?:\w+=\S*\s+)*)?`;
+	return new RegExp(String.raw`${prefix}(?:${launch})\s+(?:--\s+)?worktree hook$`);
+})();
 
 /** The trimmed command of a hook handler that runs Quest, or undefined for any other handler. */
 function questCommand(handler: unknown): string | undefined {

@@ -412,6 +412,7 @@ test("init removes the hooks an earlier version wrote, plain or wrapped, and the
 				group("nix run github:moq-dev/quest -- worktree hook"),
 				group("bun run --silent quest worktree hook"),
 				group("nix develop --impure -c quest worktree hook"),
+				group("mise exec -- quest worktree hook"),
 				group("command -v quest >/dev/null || exit 2; QUEST_X=1 quest worktree hook"),
 			],
 		},
@@ -425,6 +426,7 @@ test("init removes the hooks an earlier version wrote, plain or wrapped, and the
 		{ event: "SubagentStop", command: "nix run github:moq-dev/quest -- worktree hook" },
 		{ event: "SubagentStop", command: "bun run --silent quest worktree hook" },
 		{ event: "SubagentStop", command: "nix develop --impure -c quest worktree hook" },
+		{ event: "SubagentStop", command: "mise exec -- quest worktree hook" },
 		{ event: "SubagentStop", command: "command -v quest >/dev/null || exit 2; QUEST_X=1 quest worktree hook" },
 	]);
 	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
@@ -445,6 +447,8 @@ test("init and uninstall keep other hooks and settings, and the file's formattin
 			group("othertool --dir=/quest worktree hook"),
 			group("othertool --dir /quest worktree hook"),
 			group("othertool --project quest worktree hook"),
+			group("othertool -c /quest worktree hook"),
+			group("echo run quest worktree hook"),
 		],
 		SubagentStop: [SESSION, { matcher: "", hooks: [handler("quest-like worktree hook")] }],
 	};
@@ -464,6 +468,8 @@ test("init and uninstall keep other hooks and settings, and the file's formattin
 					group("othertool --dir=/quest worktree hook"),
 					group("othertool --dir /quest worktree hook"),
 					group("othertool --project quest worktree hook"),
+					group("othertool -c /quest worktree hook"),
+					group("echo run quest worktree hook"),
 				],
 				SubagentStart: [group(WRAPPED)],
 				SubagentStop: [SESSION, { matcher: "", hooks: [handler(QUEST), handler("quest-like worktree hook")] }],
