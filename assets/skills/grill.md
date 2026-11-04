@@ -26,5 +26,6 @@ The *decisions* are the user's: put each to them and wait.
 When the frontier conflicts with a settled decision, an existing quest, or the existing design, challenge the user and resolve the conflict.
 
 The interview is done when the frontier is empty and nothing is left silently assumed.
-Record each settled decision and its reason where the calling skill keeps its paper trail, including every decision prompt with a ✅ next to the selected option.
+Record each settled decision and its reason where the calling skill keeps its paper trail, including every decision prompt.
+Mark the chosen option with ✅ and label the rest as rejected, as in `✅ m0 (rejected: m1, m2)`, so no reader takes a rejected option for a qualifier of the chosen one.
 Run on its own, summarize the decisions and get the user's confirmation before acting on them.

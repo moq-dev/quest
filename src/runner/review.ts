@@ -24,10 +24,11 @@ export interface Reviewer {
 
 /**
  * The reviewer for a job on `account`: Codex for a job on Anthropic's models,
- * else Claude Code. Claude Code reviews with one of this runner's Claude Code
- * accounts that is not limited, through the CLI the runner pins. Runners hold
- * no Codex accounts, so Codex reviews with the login of the user running the
- * runner (`CODEX_HOME`, or Codex's default), as `quest review` does locally.
+ * else Claude Code, each through the CLI the runner pins, if any. Claude Code
+ * reviews with one of this runner's Claude Code accounts that is not limited.
+ * Runners hold no Codex accounts, so Codex reviews with the login of the user
+ * running the runner (`CODEX_HOME`, or Codex's default), as `quest review`
+ * does locally.
  */
 export function reviewerFor(
 	account: Account,
@@ -36,20 +37,18 @@ export function reviewerFor(
 	env: NodeJS.ProcessEnv,
 	now = Date.now(),
 ): Reviewer {
-	if (account.provider === VENDOR.claude) return { harness: "codex", env };
+	// `quest review` finds its CLI on PATH, so the pinned one's directory goes first.
+	const pin = (pinned: string | undefined): NodeJS.ProcessEnv =>
+		pinned ? { PATH: [dirname(pinned), env.PATH].filter(Boolean).join(delimiter) } : {};
+	if (account.provider === VENDOR.claude)
+		return { harness: "codex", env: { ...env, ...pin(env.QUEST_RUNNER_CODEX) } };
 	const claude = accounts.find(
 		(a) => a.adapter === "claude" && a.provider === VENDOR.claude && (a.limitedUntil ?? 0) <= now,
 	);
 	if (!claude) throw new Unreviewable("this runner has no Claude Code account free to review with");
-	const pinned = env.QUEST_RUNNER_CLAUDE;
 	return {
 		harness: "claude",
-		env: {
-			...env,
-			CLAUDE_CONFIG_DIR: home(claude),
-			// `quest review` finds its CLI on PATH; the runner's own is the one its adapter pins.
-			...(pinned && { PATH: [dirname(pinned), env.PATH].filter(Boolean).join(delimiter) }),
-		},
+		env: { ...env, CLAUDE_CONFIG_DIR: home(claude), ...pin(env.QUEST_RUNNER_CLAUDE) },
 	};
 }
 
@@ -67,9 +66,16 @@ export interface ReviewRequest {
 /** Review `head` as `quest review` would on its branch, resuming the job's review session. */
 export async function reviewHead(request: ReviewRequest): Promise<Round> {
 	request.signal?.throwIfAborted();
-	const root = await request.workspace.reviewCheckout(request.head);
+	const { root, base } = await request.workspace.reviewCheckout(request.head);
 	return review(
-		{ root, harness: request.reviewer.harness, responses: request.responses, signal: request.signal },
+		{
+			root,
+			base,
+			fetched: true,
+			harness: request.reviewer.harness,
+			responses: request.responses,
+			signal: request.signal,
+		},
 		{ env: request.reviewer.env },
 	);
 }

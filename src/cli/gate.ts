@@ -369,8 +369,8 @@ export function fileHost(directory: string, now = Date.now): Host {
  * 3. Otherwise wait.
  *
  * The load limit applies only while an admitted command still runs. Without
- * one, the load is work the gate cannot wait out, such as a fresh macOS
- * runner's Spotlight index, so the raw load counts as having room.
+ * one, the load is work the gate cannot wait out, as on a freshly booted macOS
+ * runner, so the raw load counts as having room.
  *
  * Each caller decides against the newest ledger and publishes its admission
  * atomically, so concurrent callers never exceed the rule and one always wins

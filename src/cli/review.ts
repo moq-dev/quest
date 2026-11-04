@@ -5,10 +5,11 @@
 // findings in one schema. Later rounds resume the same session with the new
 // head and the author's responses, so the reviewer keeps its context and its
 // prompt cache, and a finding the author refuted with evidence does not recur.
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
+import { promisify } from "node:util";
 
 import { streamReader } from "../runner/claude";
 import { type HarnessName, LINE_LIMIT, boundedLines, strippedEnvironment } from "./agent";
@@ -111,11 +112,16 @@ export function runningHarness(env: NodeJS.ProcessEnv): HarnessName {
 
 const other = (harness: HarnessName): HarnessName => (harness === "claude" ? "codex" : "claude");
 
-export interface ReviewOptions {
+/**
+ * The base: `<remote>/<branch>`, by default origin's default branch, which the
+ * round fetches, or one whose remote-tracking ref `fetchBase` already made
+ * current, which the round reads without the network.
+ */
+type BaseOptions = { base?: string; fetched?: false } | { base: string; fetched: true };
+
+export type ReviewOptions = BaseOptions & {
 	/** The checkout to review. */
 	root: string;
-	/** `<remote>/<branch>`; defaults to origin's default branch. */
-	base?: string;
 	/** The reviewer; defaults to the harness this command is not running under. */
 	harness?: HarnessName;
 	model?: string;
@@ -131,7 +137,7 @@ export interface ReviewOptions {
 	branch?: string;
 	/** Stops the reviewer CLI, failing the round; the session keeps its earlier rounds. */
 	signal?: AbortSignal;
-}
+};
 
 export interface ReviewDependencies {
 	env: NodeJS.ProcessEnv;
@@ -835,11 +841,43 @@ function parseBase(root: string, base: string): { remote: string; branch: string
 	return { remote, branch: base.slice(remote.length + 1) };
 }
 
-function defaultBranch(root: string, remote: string): string {
-	const line = gitOutput(root, ["ls-remote", "--symref", remote, "HEAD"]).split("\n")[0] ?? "";
-	const match = /^ref: refs\/heads\/(\S+)\tHEAD$/.exec(line);
-	if (!match) throw new Error(`could not read ${remote}'s default branch; pass --base`);
-	return match[1];
+const execGit = promisify(execFile);
+
+/** `git` without blocking the event loop, for the calls that reach a remote. */
+async function remoteGit(root: string, args: string[]): Promise<string> {
+	try {
+		const { stdout } = await execGit("git", ["-C", root, ...args], {
+			encoding: "utf8",
+			env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+		});
+		return stdout.trim();
+	} catch (error) {
+		const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
+		throw new Error(`git ${args[0]} failed${stderr ? `: ${stderr}` : ""}`);
+	}
+}
+
+/**
+ * Fetch `base`, or origin's default branch, into its remote-tracking ref in
+ * `root`, which may be a bare clone, and return it as `<remote>/<branch>`.
+ */
+export async function fetchBase(root: string, base?: string): Promise<string> {
+	let ref = base;
+	if (ref === undefined) {
+		const line = (await remoteGit(root, ["ls-remote", "--symref", "origin", "HEAD"])).split("\n")[0] ?? "";
+		const match = /^ref: refs\/heads\/(\S+)\tHEAD$/.exec(line);
+		if (!match) throw new Error("could not read origin's default branch; pass --base");
+		ref = `origin/${match[1]}`;
+	}
+	const { remote, branch } = parseBase(root, ref);
+	await remoteGit(root, [
+		"fetch",
+		"--quiet",
+		"--no-tags",
+		remote,
+		`+refs/heads/${branch}:refs/remotes/${remote}/${branch}`,
+	]);
+	return ref;
 }
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
@@ -914,10 +952,9 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const cli = await prepare(harness, root, deps.env, options.signal);
 
 	// The reviewer's sandbox has no network, so the base is fetched first.
-	const baseRef = options.base ?? `origin/${defaultBranch(root, "origin")}`;
+	const baseRef = options.fetched ? options.base : await fetchBase(root, options.base);
 	const { remote, branch: baseBranch } = parseBase(root, baseRef);
 	const tracking = `refs/remotes/${remote}/${baseBranch}`;
-	gitOutput(root, ["fetch", "--quiet", "--no-tags", remote, `+refs/heads/${baseBranch}:${tracking}`]);
 	const baseSha = gitOutput(root, ["rev-parse", "--verify", `${tracking}^{commit}`]);
 	const head = gitOutput(root, ["rev-parse", "HEAD"]);
 	let mergeBase: string;
