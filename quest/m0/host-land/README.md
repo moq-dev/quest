@@ -123,6 +123,5 @@ exactly the tested tree.
 
 ## Required
 
-- [Gate host](/quest/m0/host-land/host.md) - kixelated/nixos runs the daemon as its own user, checks in nspawn containers, and retires the Actions runner
 - [Fixer TLS](/quest/m0/host-land/fixer-tls.md) - the fixer's container trusts public certificates, so workerd and the Worker tests run there
 - [Merge commits](/quest/m0/host-land/merge-commits.md) - an instance can land with merge commits, keeping the merged branch's ancestry and the tested tree; squash stays the default
