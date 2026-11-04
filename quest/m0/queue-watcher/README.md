@@ -137,7 +137,7 @@ Shared shape, for the children to follow:
 
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
-- [Worker route tests fit their timeout](/quest/m0/queue-watcher/worker-test-timeouts.md) - the Worker's route tests stop timing out in merge-group runs, so the queue stops ejecting PRs for them
+- [Tests fit their timeout on the queue runner](/quest/m0/queue-watcher/queue-test-timeouts.md) - the root and Worker suites stop timing out or stalling in merge-group runs, so the queue stops ejecting PRs for them
 - [Daemons prune their logs](/quest/m0/queue-watcher/log-retention.md) - the watcher and gate delete their finished logs after a window, so state stays bounded (4.1 GiB on nixos on 2026-11-04)
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 
