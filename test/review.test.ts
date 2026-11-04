@@ -16,6 +16,10 @@ const fakes = test.skipIf(process.platform === "win32");
 
 const FINDING = { file: "src/lib.ts", line: 2, severity: "high", title: "Off by one", body: "average([3]) is 0." };
 
+const CODEX_LOGGED_OUT = "codex is not logged in to its default profile (CODEX_HOME is unset); run `codex login`";
+const CLAUDE_LOGGED_OUT =
+	"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`";
+
 /**
  * Fake reviewer CLIs. Each logs its argv, stdin, and the variables it was
  * given, then answers as the FAKE_* variables say. FAKE_LOGGED_OUT removes the
@@ -250,68 +254,49 @@ fakes("a missing or logged-out reviewer CLI is a usage error", async () => {
 	vi.stubEnv("FAKE_LOGGED_OUT", "1");
 	const out = await quest("--root", t.repo, "review");
 	expect(out.code).toBe(2);
-	expect(out.stderr).toContain(
-		"codex is not logged in to its default profile (CODEX_HOME is unset); run `codex login`",
-	);
+	expect(out.stderr).toContain(CODEX_LOGGED_OUT);
 	expect(t.calls().map((c) => c.argv)).toEqual([["login", "status"]]);
 });
 
-fakes("a logged-out error names the profile its status check read", async () => {
-	const codex = "codex is not logged in to the profile CODEX_HOME=/work; run `codex login`";
-	const claude = "claude is not logged in to the profile CLAUDE_CONFIG_DIR=/work; run `claude auth login`";
-	// Signed out at the status check, and rejected by the API after it passed.
-	for (const [host, variable, flag, value, message] of [
-		["CLAUDECODE", "CODEX_HOME", "FAKE_LOGGED_OUT", "1", codex],
-		["CLAUDECODE", "CODEX_HOME", "FAKE_REJECTED", "turn", codex],
-		["CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "FAKE_LOGGED_OUT", "1", claude],
-		["CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "FAKE_REJECTED", "status", claude],
-	] as const) {
+const CODEX_PROFILE = "codex is not logged in to the profile CODEX_HOME=/work; run `codex login`";
+const CLAUDE_PROFILE = "claude is not logged in to the profile CLAUDE_CONFIG_DIR=/work; run `claude auth login`";
+
+// Signed out at the status check, and rejected by the API after it passed.
+fakes.each([
+	["CLAUDECODE", "CODEX_HOME", "FAKE_LOGGED_OUT", "1", CODEX_PROFILE],
+	["CLAUDECODE", "CODEX_HOME", "FAKE_REJECTED", "turn", CODEX_PROFILE],
+	["CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "FAKE_LOGGED_OUT", "1", CLAUDE_PROFILE],
+	["CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "FAKE_REJECTED", "status", CLAUDE_PROFILE],
+] as const)(
+	"a logged-out error names the profile its status check read (host %s, %s, %s=%s)",
+	async (host, variable, flag, value, message) => {
 		const s = setup(host);
 		vi.stubEnv(variable, "/work");
 		vi.stubEnv(flag, value);
 		const result = await quest("--root", s.repo, "review");
 		expect(result.code, result.stderr).toBe(2);
 		expect(result.stderr).toContain(message);
-	}
-});
+	},
+);
 
-fakes("a login the API rejects fails as logged out, whatever the status check said", async () => {
-	for (const [host, variant, message] of [
-		[
-			"CLAUDECODE",
-			"turn",
-			"codex is not logged in to its default profile (CODEX_HOME is unset); run `codex login`",
-		],
-		[
-			"CLAUDECODE",
-			"stderr",
-			"codex is not logged in to its default profile (CODEX_HOME is unset); run `codex login`",
-		],
-		[
-			"CODEX_THREAD_ID",
-			"status",
-			"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`",
-		],
-		[
-			"CODEX_THREAD_ID",
-			"text",
-			"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`",
-		],
-		[
-			"CODEX_THREAD_ID",
-			"stderr",
-			"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`",
-		],
-	] as const) {
+fakes.each([
+	["CLAUDECODE", "turn", CODEX_LOGGED_OUT],
+	["CLAUDECODE", "stderr", CODEX_LOGGED_OUT],
+	["CODEX_THREAD_ID", "status", CLAUDE_LOGGED_OUT],
+	["CODEX_THREAD_ID", "text", CLAUDE_LOGGED_OUT],
+	["CODEX_THREAD_ID", "stderr", CLAUDE_LOGGED_OUT],
+] as const)(
+	"a login the API rejects fails as logged out, whatever the status check said (host %s, rejected in %s)",
+	async (host, variant, message) => {
 		const s = setup(host);
 		vi.stubEnv("FAKE_REJECTED", variant);
 		const result = await quest("--root", s.repo, "review");
-		expect(result.stderr, variant).toContain(message);
-		expect(result.code, variant).toBe(2);
+		expect(result.stderr).toContain(message);
+		expect(result.code).toBe(2);
 		// The status check passed, and the first turn failed.
-		expect(s.calls(), variant).toHaveLength(2);
-	}
-});
+		expect(s.calls()).toHaveLength(2);
+	},
+);
 
 fakes("a reviewer with no stored login reviews with the credential its CLI reads from the environment", async () => {
 	const s = setup();
@@ -382,8 +367,7 @@ fakes("a stored login the API rejects names the credential quest review strips b
 	const result = await quest("--root", s.repo, "review");
 	expect(result.code).toBe(2);
 	expect(result.stderr).toContain(
-		"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`; " +
-			"quest review strips ANTHROPIC_API_KEY while a stored login exists",
+		`${CLAUDE_LOGGED_OUT}; quest review strips ANTHROPIC_API_KEY while a stored login exists`,
 	);
 });
 
@@ -497,29 +481,33 @@ fakes.each([
 	}
 });
 
-fakes("Claude gets a provider's keys only while a gateway or provider is set", async () => {
-	const keys = ["ANTHROPIC_AWS_API_KEY", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN"];
+const PROVIDER_KEYS = ["ANTHROPIC_AWS_API_KEY", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN"];
+
+fakes("Claude gets no provider key over a stored login with no gateway or provider set", async () => {
 	const s = setup("CODEX_THREAD_ID");
-	for (const key of keys) vi.stubEnv(key, "provider-key");
+	for (const key of PROVIDER_KEYS) vi.stubEnv(key, "provider-key");
 	expect((await quest("--root", s.repo, "review")).code).toBe(0);
 	expect(s.calls().length).toBeGreaterThan(1);
-	for (const call of s.calls()) for (const key of keys) expect(call.env[key], key).toBeUndefined();
+	for (const call of s.calls()) for (const key of PROVIDER_KEYS) expect(call.env[key], key).toBeUndefined();
+});
 
-	// With no stored login and no route, they are no login: the review stops before it starts.
-	const t = setup("CODEX_THREAD_ID");
-	for (const key of keys) vi.stubEnv(key, "provider-key");
+fakes("a provider's keys alone are no login, so the review stops before it starts", async () => {
+	const s = setup("CODEX_THREAD_ID");
+	for (const key of PROVIDER_KEYS) vi.stubEnv(key, "provider-key");
 	vi.stubEnv("FAKE_LOGGED_OUT", "1");
-	const loggedOut = await quest("--root", t.repo, "review");
-	expect(loggedOut.code).toBe(2);
-	expect(loggedOut.stderr).toContain("claude is not logged in");
-	expect(t.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain("claude is not logged in");
+	expect(s.calls().map((c) => c.argv)).toEqual([["auth", "status"]]);
+});
 
-	const u = setup("CODEX_THREAD_ID");
-	for (const key of keys) vi.stubEnv(key, "provider-key");
+fakes("Claude gets a provider's keys while the provider is set", async () => {
+	const s = setup("CODEX_THREAD_ID");
+	for (const key of PROVIDER_KEYS) vi.stubEnv(key, "provider-key");
 	vi.stubEnv("CLAUDE_CODE_USE_FOUNDRY", "1");
-	const routed = await quest("--root", u.repo, "review");
-	expect(routed.code, routed.stderr).toBe(0);
-	for (const call of u.calls()) for (const key of keys) expect(call.env[key], key).toBe("provider-key");
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code, result.stderr).toBe(0);
+	for (const call of s.calls()) for (const key of PROVIDER_KEYS) expect(call.env[key], key).toBe("provider-key");
 });
 
 fakes("Codex keeps CODEX_CA_CERTIFICATE always, and CODEX_ACCESS_TOKEN without a stored login", async () => {
@@ -597,12 +585,19 @@ fakes("a detached checkout continues the session of the branch --branch names", 
 	expect(round.stderr).toBe("");
 	expect(round.stdout).toContain("session thread-1\nround 2\n");
 	expect(s.calls().filter((c) => c.argv[1] === "review")).toHaveLength(1);
+});
 
-	// A differently named branch continues it the same way, and without --branch starts its own.
-	git(s.repo, "checkout", "-qb", "merge-fix");
-	const named = await quest("--root", s.repo, "review", "--branch", "feature", "--responses", responses);
-	expect(named.stdout).toContain("round 3\n");
+fakes("a differently named branch continues the session --branch names, and without it has its own", async () => {
+	const s = setup();
 	expect((await quest("--root", s.repo, "review")).stdout).toContain("round 1\n");
+	git(s.repo, "checkout", "-qb", "merge-fix");
+	write(s.repo, ".tmp/responses.md", "Fixed at src/lib.ts:1.\n");
+	const responses = join(s.repo, ".tmp", "responses.md");
+	const named = await quest("--root", s.repo, "review", "--branch", "feature", "--responses", responses);
+	expect(named.stdout).toContain("round 2\n");
+	const own = await quest("--root", s.repo, "review", "--responses", responses);
+	expect(own.code).toBe(2);
+	expect(own.stderr).toContain("has none to resume");
 });
 
 fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
@@ -767,8 +762,13 @@ fakes("a later round resumes the session with the new head and the author's resp
 	const head = git(s.repo, "rev-parse", "HEAD");
 	expect(resumed.stdin).toContain(`\`git diff ${git(s.repo, "rev-parse", "origin/main")}..${head}\``);
 	expect(calls.filter((c) => c.argv[1] === "review")).toHaveLength(1);
+});
 
-	// --new starts over, and a first round takes no responses.
+fakes("--new starts over, and a first round takes no responses", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	write(s.repo, ".tmp/responses.md", "Fixed at src/lib.ts:1.\n");
+	const responses = join(s.repo, ".tmp", "responses.md");
 	const fresh = await quest("--root", s.repo, "review", "--new", "--responses", responses);
 	expect(fresh.code).toBe(2);
 	expect(fresh.stderr).toContain("has none to resume");
