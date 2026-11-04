@@ -39,6 +39,8 @@ export type Job = {
 	branch: string;
 	actor: string;
 	trusted: number;
+	/** Whether `trusted` is stale. Every statement that queues the job or moves its head sets it; a classification clears it. */
+	recheck: number;
 	pinRunner: string | null;
 	pinAccount: string | null;
 	state: JobState;
@@ -254,7 +256,7 @@ export async function report(
 			.bind(runner.id, runner.owner, reported),
 		db
 			.prepare(
-				`UPDATE jobs SET state=CASE WHEN cancel=1 THEN 'cancelled' ELSE 'queued' END,lease=NULL,updatedAt=? WHERE runner=? AND state='running' AND delivered=1 AND NOT ${listed} RETURNING ${ending}`,
+				`UPDATE jobs SET state=CASE WHEN cancel=1 THEN 'cancelled' ELSE 'queued' END,recheck=1,lease=NULL,updatedAt=? WHERE runner=? AND state='running' AND delivered=1 AND NOT ${listed} RETURNING ${ending}`,
 			)
 			.bind(now, runner.id, running),
 		db
@@ -305,7 +307,7 @@ export type Verify = (job: Pick<Job, "repository" | "target" | "revision" | "hea
 export async function classify(db: D1Database, job: Job, verify: Verify) {
 	const trusted = (await verify(job)) ? 1 : 0;
 	await db
-		.prepare("UPDATE jobs SET trusted=? WHERE id=? AND state='queued' AND attempt=? AND head IS ?")
+		.prepare("UPDATE jobs SET trusted=?,recheck=0 WHERE id=? AND state='queued' AND attempt=? AND head IS ?")
 		.bind(trusted, job.id, job.attempt, job.head)
 		.run();
 	return trusted;
@@ -350,7 +352,7 @@ export async function dispatch(
 			.bind(now, owner, now),
 		db
 			.prepare(
-				"UPDATE jobs SET state='queued',lease=NULL,updatedAt=? WHERE actor=? AND state='running' AND lease<=?",
+				"UPDATE jobs SET state='queued',recheck=1,lease=NULL,updatedAt=? WHERE actor=? AND state='running' AND lease<=?",
 			)
 			.bind(now, owner, now),
 		// A paused project starts and continues nothing new, and a merge job starts once it holds its pull request.
@@ -389,8 +391,10 @@ export async function dispatch(
 	const revoked: (Attempt & { runner: string })[] = [];
 	// Every queued job is considered, so unroutable older ones cannot starve newer ones.
 	for (const job of candidates!.results as Job[]) {
-		if (![...free.values()].some((n) => n > 0)) break;
-		if (onPull(job.workflow)) job.trusted = await classify(db, job, verify);
+		const routable = [...free.values()].some((n) => n > 0);
+		// A stale classification is reread without a free slot, so the inbox shows an untrusted head's decision at once.
+		if (onPull(job.workflow) && (routable || job.recheck)) job.trusted = await classify(db, job, verify);
+		if (!routable) continue;
 		const chosen = route(
 			job,
 			accounts.map((o) => ({ ...o, free: (free.get(o.runner) ?? 0) > 0, limited: !!o.limited })),
@@ -634,7 +638,7 @@ export async function publishing(db: D1Database, runner: Runner, job: string, at
 export async function adopt(db: D1Database, job: string, head: string | null, pending: string, now: number) {
 	await db
 		.prepare(
-			"UPDATE jobs SET head=pending,pending=NULL,pendingAt=NULL,updatedAt=? WHERE id=? AND head IS ? AND pending=?",
+			"UPDATE jobs SET head=pending,recheck=1,pending=NULL,pendingAt=NULL,updatedAt=? WHERE id=? AND head IS ? AND pending=?",
 		)
 		.bind(now, job, head, pending)
 		.run();
@@ -669,7 +673,7 @@ export async function settle(db: D1Database, job: string, commit: string, landed
 	await db
 		.prepare(
 			landed
-				? "UPDATE jobs SET head=pending,pending=NULL,pendingAt=NULL,updatedAt=? WHERE id=? AND pending=?"
+				? "UPDATE jobs SET head=pending,recheck=1,pending=NULL,pendingAt=NULL,updatedAt=? WHERE id=? AND pending=?"
 				: "UPDATE jobs SET pending=NULL,pendingAt=NULL,updatedAt=? WHERE id=? AND pending=?",
 		)
 		.bind(now, job, commit)
@@ -1009,7 +1013,7 @@ function resume(
 		return [
 			db
 				.prepare(
-					`UPDATE jobs SET state='queued',head=?,revision=?,trusted=0,updatedAt=? WHERE id=? AND state='waiting' AND head=? AND revision=? AND pending IS NULL AND ${approved}`,
+					`UPDATE jobs SET state='queued',head=?,revision=?,trusted=0,recheck=1,updatedAt=? WHERE id=? AND state='waiting' AND head=? AND revision=? AND pending IS NULL AND ${approved}`,
 				)
 				.bind(
 					continuation.head,
@@ -1025,7 +1029,9 @@ function resume(
 	if (!pin)
 		return [
 			db
-				.prepare(`UPDATE jobs SET state='queued',updatedAt=? WHERE id=? AND state='waiting' AND ${approved}`)
+				.prepare(
+					`UPDATE jobs SET state='queued',recheck=1,updatedAt=? WHERE id=? AND state='waiting' AND ${approved}`,
+				)
 				.bind(now, job, question, now),
 		];
 	return [
@@ -1037,7 +1043,7 @@ function resume(
 			.bind(pin.runner, pin.account, job, question, now),
 		db
 			.prepare(
-				`UPDATE jobs SET state='queued',pinRunner=?,pinAccount=?,session=NULL,updatedAt=? WHERE id=? AND state='waiting' AND ${approved}`,
+				`UPDATE jobs SET state='queued',recheck=1,pinRunner=?,pinAccount=?,session=NULL,updatedAt=? WHERE id=? AND state='waiting' AND ${approved}`,
 			)
 			.bind(pin.runner, pin.account, now, job, question, now),
 	];

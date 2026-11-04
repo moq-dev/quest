@@ -86,5 +86,4 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 ## Required
 
 - [No Unix sockets in opencode jobs](/quest/m0/kix/sandbox/seccomp.md) - srt's seccomp helper is packaged, so commands can't reach the Nix daemon, and the runner refuses to start without it
-- [Trust rechecked on queue](/quest/m0/kix/sandbox/trust-on-queue.md) - a job's head trust is reread whenever it queues, so the approval decision shows without a free runner
 - [Claude Code boundary test](/quest/m0/kix/sandbox/claude-boundary.md) - the same hostile-repository test for Claude Code jobs, with a fake model set in the account's settings

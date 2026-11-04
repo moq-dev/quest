@@ -295,6 +295,77 @@ describe("authenticated PR provenance", () => {
 	});
 });
 
+describe("trust recheck on queue", () => {
+	// kix's commits are signed for the App, never a maintainer.
+	const published = "d".repeat(40);
+	let reads: number;
+	const counted: store.Verify = (job) => {
+		reads++;
+		return verify(testEnv)(job);
+	};
+	// No runner has a free slot.
+	const busy = (now: number) => store.dispatch(db, "owner", new Map(), now, counted);
+
+	// A trusted job runs on a runner, whose attempt kix publishes an unsigned commit for.
+	async function publishedJob() {
+		const id = await queued();
+		const mac = await runner("mac", "darwin");
+		expect((await dispatch([mac])).assign).toMatchObject([{ job: { id, trusted: 1 } }]);
+		await store.report(
+			db,
+			mac,
+			[{ id: "account", provider: "anthropic", kind: "subscription", label: "mac", limited: false }],
+			[{ job: id, attempt: 1 }],
+			1,
+		);
+		repo.commits[published] = { ...commit([head]), signature: { isValid: true, signer: null } };
+		await store.claim(db, mac, id, 1, head, published, 2);
+		repo.branches.fix = published;
+		await store.settle(db, id, published, true, 2);
+		reads = 0;
+		return { id, mac };
+	}
+
+	it("shows a resumed job's unsigned head for approval without a free runner slot", async () => {
+		const { id, mac } = await publishedJob();
+		const { question } = await store.ask(db, mac, id, 1, { summary: "?", session: "s", prompt: {} }, 3);
+		expect(await store.answer(db, id, question, "owner", "A", 4)).toEqual({ resumed: true });
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", trusted: 1, recheck: 1 });
+		await busy(5);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: published, trusted: 0, recheck: 0 });
+		// Another pass without a free slot rereads nothing until the job queues again.
+		await busy(6);
+		expect(reads).toBe(1);
+	});
+
+	it("shows an expired lease's unsigned head for approval without a free runner slot", async () => {
+		const { id } = await publishedJob();
+		// The runner disconnects, and its lease expires with no other runner free.
+		await busy(3);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "running", trusted: 1 });
+		await busy(store.GRACE + 3);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: published, trusted: 0, recheck: 0 });
+		expect(reads).toBe(1);
+	});
+
+	it("rechecks a head that settles while the job is queued", async () => {
+		const { id, mac } = await publishedJob();
+		const next = "e".repeat(40);
+		repo.commits[next] = { ...commit([published]), signature: { isValid: true, signer: null } };
+		await store.claim(db, mac, id, 1, published, next, 3);
+		await busy(4);
+		await busy(store.GRACE + 4);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: published, recheck: 0 });
+		// The lost publication lands after the job queued, and a maintainer approves it.
+		repo.branches.fix = next;
+		await service().approveHead(repository, "owner", 2, next);
+		await store.settle(db, id, next, true, store.GRACE + 5);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: next, trusted: 0, recheck: 1 });
+		await busy(store.GRACE + 6);
+		expect(await store.readJob(db, id)).toMatchObject({ head: next, trusted: 1, recheck: 0 });
+	});
+});
+
 describe("head approval", () => {
 	// kix's own commits are signed for the App, never a maintainer.
 	const pushed = "d".repeat(40);
