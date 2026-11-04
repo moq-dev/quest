@@ -9,7 +9,7 @@
 // runner's settings apply: the checkout's own settings could add hooks that
 // run outside the sandbox, so neither they nor its CLAUDE.md are loaded.
 import { execFile, spawn } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -59,8 +59,15 @@ export function jobEnvironment(env: NodeJS.ProcessEnv, home: string, sandbox: Sa
  * only the checkout and read only the checkout (outside it Claude Code would
  * ask), and WebFetch, which would run outside the sandbox, is off.
  */
-export function claudeSettings(sandbox: Sandbox): Record<string, unknown> {
+export function claudeSettings(sandbox: Sandbox, effort: string): Record<string, unknown> {
+	// Claude Code shows its effort only to hooks and commands, as CLAUDE_EFFORT, and only within a turn.
+	// Hooks run outside the sandbox, so `effort` is in the account's home, which commands cannot reach.
+	const record = { type: "command", command: `printf %s "$CLAUDE_EFFORT" > '${effort.replaceAll("'", "'\\''")}'` };
 	return {
+		hooks: {
+			PreToolUse: [{ matcher: "mcp__kix__.*", hooks: [record] }],
+			Stop: [{ hooks: [record] }],
+		},
 		sandbox: {
 			enabled: true,
 			failIfUnavailable: true,
@@ -102,11 +109,16 @@ const LIMIT = /usage limit|limit reached|hit your (?:usage )?limit|out of extra 
 export function streamReader() {
 	let result: Record<string, unknown> | undefined;
 	let limited: { until: number | null } | null = null;
+	let model = "unknown";
 	return {
+		/** The model the session started on. */
+		model: () => model,
 		line(line: string) {
 			const event = json(line);
 			if (!event) return;
 			if (event.type === "result") result = event;
+			if (event.type === "system" && event.subtype === "init" && typeof event.model === "string")
+				model = event.model;
 			if (event.type === "rate_limit_event") {
 				const info = event.rate_limit_info as Record<string, unknown> | undefined;
 				const resets = typeof info?.resetsAt === "number" ? info.resetsAt * 1000 : null;
@@ -186,10 +198,20 @@ export class Claude implements Adapter {
 		const config = join(launch.home, `kix-tools-${launch.session}.json`);
 		writeFileSync(config, JSON.stringify(mcp), { mode: 0o600 });
 		const settings = join(launch.home, `kix-settings-${launch.session}.json`);
-		writeFileSync(settings, JSON.stringify(claudeSettings(launch.sandbox)), { mode: 0o600 });
+		const effortFile = join(launch.home, `kix-effort-${launch.session}`);
+		writeFileSync(settings, JSON.stringify(claudeSettings(launch.sandbox, effortFile)), { mode: 0o600 });
+		let effort = "unknown";
+		const readEffort = () => {
+			try {
+				effort = readFileSync(effortFile, "utf8").trim() || effort;
+			} catch {}
+			return effort;
+		};
 		const cleanup = () => {
+			readEffort();
 			rmSync(config, { force: true });
 			rmSync(settings, { force: true });
+			rmSync(effortFile, { force: true });
 		};
 		const argv = [
 			"-p",
@@ -248,6 +270,7 @@ export class Claude implements Adapter {
 		});
 		return {
 			done,
+			ran: () => ({ model: reader.model(), effort: readEffort() }),
 			stop() {
 				signal("SIGTERM");
 				killer ??= setTimeout(() => signal("SIGKILL"), STOP_GRACE_MS);

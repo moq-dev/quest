@@ -1334,7 +1334,14 @@ log({
 	timeout: kix.timeout,
 });
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-out({ type: "system", subtype: "init", session_id: session });
+out({ type: "system", subtype: "init", session_id: session, model: "claude-test" });
+// Claude Code runs the settings' hooks for a tool, with the turn's effort, before calling it.
+const hooks = (tool) => {
+	for (const entry of JSON.parse(fs.readFileSync(at("--settings"), "utf8")).hooks?.PreToolUse ?? [])
+		if (new RegExp("^(?:" + entry.matcher + ")$").test("mcp__kix__" + tool))
+			for (const hook of entry.hooks)
+				require("node:child_process").execSync(hook.command, { env: { ...process.env, CLAUDE_EFFORT: "high" } });
+};
 let id = 0;
 async function rpc(method, params) {
 	const response = await fetch(kix.url, {
@@ -1357,6 +1364,7 @@ async function rpc(method, params) {
 			await rpc("tools/call", { name: "context", arguments: {} });
 			log({ backgroundWaitPid: process.pid });
 		}
+		if (step.tool) hooks(step.tool);
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
 			process.on("SIGTERM", () => { log({ terminated: true }); process.exit(143); });
@@ -1419,6 +1427,7 @@ async function prompt(session, input) {
 		if (step.shell)
 			log({ shell: require("node:child_process").execFileSync(config.shell, ["-c", step.shell], { encoding: "utf8" }) });
 		if (step.emit) send({ ...step.emit, properties: { ...step.emit.properties, sessionID: session } });
+		if (step.tool) hooks(step.tool);
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
 			await new Promise((resolve) => (aborted = resolve));
@@ -1783,7 +1792,13 @@ describe("quest runner", () => {
 		expect(r.hub.of("status").some((s) => s.attempts.length === 1 && s.slots === 1)).toBe(true);
 		expect(r.hub.of("checkpoint")).toMatchObject([{ summary: "Wrote a.txt", session: expect.any(String) }]);
 		const [checkpoint, delivery] = r.publishes;
-		expect(checkpoint).toMatchObject({ job: "job1", attempt: 1, head: null, message: "Wrote a.txt" });
+		// The runner names the agent behind each commit from the CLI's own report of its model and effort.
+		expect(checkpoint).toMatchObject({
+			job: "job1",
+			attempt: 1,
+			head: null,
+			message: "Wrote a.txt\n\nAgent-Harness: claude\nAgent-Model: claude-test\nAgent-Effort: high\n",
+		});
 		expect(checkpoint!.changes).toEqual([{ path: "a.txt", content: Buffer.from("first\n").toString("base64") }]);
 		expect(delivery).toMatchObject({
 			head: "0".repeat(39) + "1",
@@ -2213,7 +2228,7 @@ describe("quest runner", () => {
 	posix("continues from the head kix reports after a publication's reply was lost", async () => {
 		let landed = "";
 		const r = rig((body, source) => {
-			if (body.message === "First") {
+			if (body.message.startsWith("First\n")) {
 				// kix commits the checkpoint, but its reply never arrives.
 				for (const change of body.changes)
 					writeFileSync(join(source.dir, change.path), Buffer.from(change.content, "base64"));

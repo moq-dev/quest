@@ -33,10 +33,10 @@ export class GitError extends Error {
  * Git run in the repository at `root`, without prompting, returning its output without trailing newlines.
  * A `config` lookup that matches nothing is empty rather than an error.
  */
-export function git(root: string, args: string[], input?: string): string {
+export function git(root: string, args: string[], input?: string, env?: NodeJS.ProcessEnv): string {
 	const result = spawnSync("git", ["-C", root, ...args], {
 		encoding: "utf8",
-		env: { ...discoveryEnv(), GIT_TERMINAL_PROMPT: "0" },
+		env: { ...discoveryEnv(), GIT_TERMINAL_PROMPT: "0", ...env },
 		input,
 		maxBuffer: 1 << 30,
 		stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],

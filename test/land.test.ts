@@ -3687,6 +3687,46 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		expect(result.model).toBe("actual-model");
 	});
 
+	test("gives the agent's new commits its trailers, moving their branches and the SHAs its result names", async () => {
+		const dir = fixRepository();
+		const start = git(dir, "rev-parse", "pr-1");
+		const log = join(dir, "failure");
+		writeFileSync(log, "failure");
+		const agent = join(dir, "codex");
+		// Codex prints its model in the header on stderr; the agent's own trailers stay beside quest's.
+		writeFileSync(
+			agent,
+			`#!/bin/sh
+set -eu
+cat >/dev/null
+printf 'model: header-model\\nreasoning effort: xhigh\\n' >&2
+git checkout -q pr-1
+printf 'fixed\\n' > code.txt
+git add code.txt
+git -c user.name=Agent -c user.email=a@a -c commit.gpgsign=false commit -qm 'fix: thing' -m 'Co-Authored-By: Someone <s@s>'
+head=$(git rev-parse HEAD)
+short=$(git rev-parse --short=10 HEAD)
+printf '[{"number":1,"action":"fixed","head":"%s","reason":"committed %s"}]' "$head" "$short" > quest-land-result.json
+`,
+			{ mode: 0o755 },
+		);
+		await fix(dir, log, [1], agent, ["-"]);
+		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1]);
+		const head = git(dir, "rev-parse", "pr-1");
+		expect(result).toMatchObject({
+			action: "fixed",
+			head,
+			reason: `committed ${head.slice(0, 10)}`,
+			model: "header-model",
+		});
+		expect(git(dir, "rev-parse", `${head}^`)).toBe(start);
+		expect(git(dir, "show", "-s", "--format=%an %B", head)).toBe(
+			"Agent fix: thing\n\nCo-Authored-By: Someone <s@s>\nAgent-Harness: codex\nAgent-Model: header-model\nAgent-Effort: unknown",
+		);
+		// The branch tips the agent started from keep their commits.
+		expect(git(dir, "show", "-s", "--format=%B", start)).toBe("head");
+	});
+
 	test("rejects mixing individually approved protected files", async () => {
 		const forge = new Forge();
 		forge.advance({ "flake.nix": "old", "shell.nix": "old" });

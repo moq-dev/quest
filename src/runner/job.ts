@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 
 import { type Round, ResponsesError } from "../cli/review";
+import { withTrailers } from "../cli/trailers";
 
 import type { Adapter, Exit, Running } from "./adapter";
 import { Refused } from "./connection";
@@ -115,6 +116,8 @@ export class Attempt {
 	/** Settles once no review runs, so the attempt never removes a checkout a review still uses. */
 	#reviewRun: Promise<unknown> = Promise.resolve();
 	#agent: Running | undefined;
+	/** The CLI the attempt's account runs, which its commits name. */
+	#harness = "unknown";
 	/** Aborts the devShell build, which runs before there is an agent to stop. */
 	#preparing = new AbortController();
 	#publishing: Promise<unknown> = Promise.resolve();
@@ -209,6 +212,7 @@ export class Attempt {
 				return await this.#finish("failed", `The account ${job.account} is no longer on this runner.`);
 			// Before any checkout: an account added while the runner runs may lack its CLI or sandbox.
 			const adapter = ctx.adapter(account);
+			this.#harness = adapter.name;
 			this.#account = account;
 			this.#workspace = await Workspace.prepare(ctx.root, job, ctx.remote(job));
 			if (this.#workspace.preserved)
@@ -382,13 +386,15 @@ export class Attempt {
 
 			const idle = () => !snapshot.changes.length && !snapshot.merge && !pull && !land;
 			if (idle()) return { head: workspace.head };
+			const ran = this.#agent?.ran() ?? { model: "unknown", effort: "unknown" };
+			const commit = withTrailers(message, { harness: this.#harness, ...ran });
 			const send = () =>
 				this.ctx.publish({
 					job: this.job.id,
 					attempt: this.job.attempt,
 					head: workspace.head,
 					session: this.#session,
-					...((snapshot.changes.length || snapshot.merge) && { message }),
+					...((snapshot.changes.length || snapshot.merge) && { message: commit }),
 					changes: snapshot.changes,
 					...(snapshot.merge && { merge: snapshot.merge }),
 					// kix verifies these pointers against the existing head before carrying them into the merge tree.

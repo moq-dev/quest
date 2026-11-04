@@ -108,6 +108,10 @@ A PR that another session pushed to in the last hour is theirs: report its event
 Before each push to a branch that already has a PR, confirm the PR is still open: a push after it merges brings the deleted branch back.
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
 
+End every commit message with `Agent-Harness`, `Agent-Model`, and `Agent-Effort` trailers beside any `Co-Authored-By`: your harness (`claude`, `codex`, `grok`, or `opencode`), its model id, and its effort.
+Read them rather than guess: Claude Code knows its model and exports `CLAUDE_EFFORT`; Codex records `model` and `effort` in the last `turn_context` of `~/.codex/sessions/*/*/*/rollout-*-$CODEX_THREAD_ID.jsonl`; Grok records `model_id` and `reasoning_effort` in `~/.grok/sessions/*/$GROK_SESSION_ID/chat_history.jsonl`.
+Write `unknown` for any you cannot find.
+
 ## Reviews
 
 Before a PR is marked ready for review, and before each push to one that is, the other vendor's model reviews the committed branch locally against the PR's base branch with `quest review --base <remote>/<base>`: Claude Code reviews Codex's work, and Codex reviews Claude Code's.
@@ -127,6 +131,8 @@ Once the reset passes or the login is restored, the item has cleared: whoever fi
 The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
 Rewrite it after each round.
 A review counts for the head whose SHA it names.
+Beside it, a `## Models` section names the PR's size, as `Size: M`, and each implementing session on its own line, as `Implementer: Codex, gpt-6.1-sol, high effort`, which the session adds when it first pushes.
+A quest PR's size is its quest's; size any other PR, such as a skill's own, as you would a quest.
 
 Once "Ready to Review", CI and any online reviewers run.
 Address their findings already posted on the head when merging; never wait for or request one.

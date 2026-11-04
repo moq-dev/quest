@@ -474,6 +474,7 @@ export class Opencode implements Adapter {
 		void closed.then(() => listening(null));
 
 		let stopping = false;
+		let ran = { model: "unknown", effort: "unknown" };
 		let killer: ReturnType<typeof setTimeout> | undefined;
 		let abort: () => Promise<unknown> = async () => {};
 		let watched: Promise<void> = Promise.resolve();
@@ -519,7 +520,10 @@ export class Opencode implements Adapter {
 					// Token deltas repeat what the finished parts carry; other sessions' events are not this job's.
 					if (properties.sessionID !== session || event.type.endsWith(".delta")) continue;
 					launch.output(`${JSON.stringify(event)}\n`);
-					if (event.type === "session.status") {
+					if (event.type === "message.updated" && event.properties.info.role === "assistant") {
+						const { providerID, modelID, variant } = event.properties.info;
+						ran = { model: `${providerID}/${modelID}`, effort: variant ?? "unknown" };
+					} else if (event.type === "session.status") {
 						const hit = retryLimit(event.properties.status);
 						if (hit && !limited) {
 							limited = hit;
@@ -561,6 +565,7 @@ export class Opencode implements Adapter {
 			});
 		return {
 			done,
+			ran: () => ran,
 			stop() {
 				stopping = true;
 				// Abort the turn so opencode records it, then stop the server whether or not it answered.

@@ -41,11 +41,10 @@ earlier ranked lists of Grok, DeepSeek, Sol, and Opus reviewers:
   first creating it. This replaces the 2026-11-03 efforts (Codex xhigh,
   Claude high) recorded in the [model check](/quest/m1/model-check.md),
   which audits the list each milestone; the PR updates its Plan.
-- The implementers' models come from the PR body's record
-  ([PRs record their models](/quest/m0/model-routing/implementer.md)),
-  passed by the reviewing session as `--exclude-model`; without a record,
-  the reviewing session's own model is excluded, as "the other vendor" is
-  today.
+- The implementers' models come from the PR body's `## Models` record,
+  which `quest context`'s Reviews section defines, passed by the reviewing
+  session as `--exclude-model`; without a record, the reviewing session's
+  own model is excluded, as "the other vendor" is today.
 - Where the size comes from, read by the reviewing session, never from the
   head's files, so a change cannot lower its own review:
   - A quest branch: its quest's size, read from the base branch's tip, as
