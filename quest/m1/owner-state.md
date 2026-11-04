@@ -64,16 +64,47 @@ Implementation guidance:
   hub (`env.RUNNERS.idFromName(owner)`), including the web pages, the
   inbox, the setup PR flow, and the webhook handlers once they resolve
   the owner from D1.
-- Remove the `#serial` promise chain and similar guards in
-  `cloudflare/src/jobs/hub.ts` that exist only because handlers
-  interleave at D1 awaits, and the tests that pin those races, once the
-  state they guard is synchronous.
+- Remove guards in `cloudflare/src/jobs/hub.ts` that exist only because
+  handlers interleave at D1 awaits, and the tests that pin only those
+  races. Keep the `#serial` promise chain, or an equivalent, while a
+  dispatch pass still awaits anything outside the object's SQLite, such
+  as `classify`'s GitHub trust read inside `store.dispatch` or a D1 read
+  of an installation: a Durable Object's input gate does not hold across
+  an outgoing `fetch`, so runner messages and approvals still interleave
+  there.
 - Cross-owner reads, such as an operator overview, fan out to the hubs or
   are dropped; none may move owner state back into D1.
 - Update `quest/m0/kix/deploy.md` and `cloudflare/README.md` for the
   start-fresh deploy, and keep the dev and test fixtures working.
 
+## Waiting
+
+- Maintainer: pick what one hub's "owner" is, since it decides which
+  tables can move. `RunnerHub` is keyed by a kix user ID today: a runner's
+  `owner` and a job's `actor` both reference `user(id)`, and every route
+  calls `hub(env, job.actor)` or `hub(env, runner.owner)`
+  (`cloudflare/src/jobs/routes.ts`). Projects, setups, activity, and head
+  approvals instead belong to a repository under a GitHub account
+  (`github_projects.owner` is its login), several users maintain one
+  (`github_project_members`), and `jobs_active` allows one active job per
+  repository target across all actors. Options:
+  (a) keep the hub per kix user: runners, runner accounts, jobs, their
+  events, output, and questions, the inbox, and push subscriptions move;
+  repository facts (projects and their state, members, setups, activity,
+  head approvals, and the active-target index) count as cross-owner and
+  stay in D1, which the hub re-checks under the one-authority rule;
+  (b) re-key the object by GitHub account, so repository facts and jobs
+  move too, but a user's runners, which serve every account they
+  maintain, must connect to or be fed by several objects;
+  (c) a per-repository object for repository facts beside the per-user
+  hub. Recommend (a): it matches every current hub route, the races
+  [moq-dev/quest#464](https://github.com/moq-dev/quest/pull/464) fixed
+  were all inside one actor's hub, and it fits the decision that
+  cross-owner lookups stay in D1. It narrows the Goal's list of moved
+  tables, a recorded decision, so an agent cannot pick it. Done when the
+  Goal names the key and its list matches it.
+
 ## Related
 
-- [Open kix.quest](/quest/m1/open.md) - comes after this, so the fresh start
-  touches only moq-dev's own data
+- [Open kix.quest](/quest/m1/open.md) - requires this, so the fresh start
+  touches only the allowlisted owners' own data
