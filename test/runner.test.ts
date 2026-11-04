@@ -956,6 +956,18 @@ describe("opencode", () => {
 		expect(() => Opencode.setModel(launch.home, "openai/gpt-5.5")).toThrow(/not signed in/);
 	});
 
+	test("leaves no kill timer behind a server that could not start", async () => {
+		vi.useFakeTimers();
+		try {
+			await expect(new Opencode(join(tempDir(), "opencode"), "/srt").status(tempDir())).rejects.toThrow(
+				/could not start/,
+			);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("reads account limits from errors, not brief rate limits", () => {
 		const now = 1_000_000;
 		const error = (type: string, message: string, body?: string) => ({

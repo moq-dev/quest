@@ -565,6 +565,7 @@ function serve(binary: string, cwd: string, env: NodeJS.ProcessEnv, output: (chu
 		output(chunk);
 	});
 	let killer: ReturnType<typeof setTimeout> | undefined;
+	let exited = false;
 	const closed = new Promise<void>((resolve) => {
 		child.once("error", (error) => {
 			stderr += `could not start ${binary}: ${error.message}\n`;
@@ -572,6 +573,7 @@ function serve(binary: string, cwd: string, env: NodeJS.ProcessEnv, output: (chu
 		});
 		child.once("close", () => resolve());
 	}).then(() => {
+		exited = true;
 		clearTimeout(killer);
 		lines.end();
 		listening(null);
@@ -584,7 +586,8 @@ function serve(binary: string, cwd: string, env: NodeJS.ProcessEnv, output: (chu
 		stop() {
 			child.stdin.end();
 			signalGroup(child.pid, "SIGTERM");
-			killer ??= setTimeout(() => signalGroup(child.pid, "SIGKILL"), STOP_GRACE_MS);
+			// Armed after the server closed, nothing would clear it, and it would hold the process open.
+			if (!exited) killer ??= setTimeout(() => signalGroup(child.pid, "SIGKILL"), STOP_GRACE_MS);
 		},
 	};
 }
