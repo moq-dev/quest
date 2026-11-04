@@ -128,7 +128,7 @@ test("load and memory pressure wait whatever the ledger holds", async () => {
 });
 
 test("load from outside the gate admits one command at a time while none runs", async () => {
-	// A fresh macOS runner's Spotlight index holds the load above its CPUs for the whole job.
+	// Work outside the job holds a fresh macOS runner's load above its CPUs for the whole job.
 	const directory = tempDir();
 	const state = { now: 0, load: 12, memory: Infinity };
 	const limits = { load: 3, memory: GiB };

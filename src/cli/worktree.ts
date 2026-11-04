@@ -230,12 +230,26 @@ function changes(root: string, ignored: boolean): string[] {
 		.split("\0")
 		.filter(Boolean);
 }
-/** Initialized submodule checkouts, including nested ones. NULs preserve spaces and newlines. */
-function submodules(root: string): string[] {
-	return git(root, "submodule", "foreach", "--quiet", "--recursive", 'printf "%s\\0" "$toplevel/$sm_path"')
+/** The repository's submodule paths from its index, initialized or not. */
+function gitlinks(repository: string): string[] {
+	const paths = git(repository, "ls-files", "--stage", "-z")
 		.split("\0")
-		.filter(Boolean)
-		.map(canonical);
+		.filter((record) => record.startsWith("160000 "))
+		.map((record) => join(repository, record.slice(record.indexOf("\t") + 1)));
+	// A conflicted gitlink has an entry per stage.
+	return [...new Set(paths)];
+}
+/**
+ * Initialized submodule checkouts, each followed by its own nested ones. Read from the index, since
+ * `git submodule` is a shell script that costs seconds on Windows.
+ */
+function submodules(root: string): string[] {
+	return gitlinks(root)
+		.filter((path) => existsSync(join(path, ".git")))
+		.flatMap((path) => {
+			const module = canonical(path);
+			return [module, ...submodules(module)];
+		});
 }
 
 /** Module stores survive deinit; removing this worktree deletes their refs too. */
@@ -257,9 +271,7 @@ function clean(root: string): { modules: string[]; stores: Set<string> } {
 	const found = changes(root, false);
 	if (found.length) throw new Error(`checkout has modified or untracked files: ${found.slice(0, 20).join(", ")}`);
 	for (const repository of [root, ...modules]) {
-		for (const record of git(repository, "ls-files", "--stage", "-z").split("\0")) {
-			if (!record.startsWith("160000 ")) continue;
-			const path = join(repository, record.slice(record.indexOf("\t") + 1));
+		for (const path of gitlinks(repository)) {
 			if (entry(path)?.isDirectory() && !existsSync(join(path, ".git")) && readdirSync(path).length)
 				throw new Error(`uninitialized submodule contains files: ${path}`);
 		}
@@ -637,7 +649,8 @@ export class Worktrees {
 		});
 		try {
 			// Cloning can need the network; the reservation stays charged without holding the shared lock.
-			await gitAsync(record.path, "submodule", "update", "--init", "--recursive");
+			if (gitlinks(record.path).length)
+				await gitAsync(record.path, "submodule", "update", "--init", "--recursive");
 			for (const module of submodules(record.path)) {
 				const untracked = (ref: string) => git(module, "rev-list", "-n1", ref, "--not", "--remotes").trim();
 				const fetch = (refs: string[]) =>
