@@ -118,6 +118,13 @@ function pullRequest(cwd: string, name: string): string | undefined {
 	return git(cwd, ["rev-parse", "--verify", "--quiet", `${local}^{commit}`]);
 }
 
+/** The checkout whose submodule `checkout` is, or undefined for a top-level one. */
+function superproject(checkout: string): string | undefined {
+	// Git prints it with forward slashes on Windows, so canonical paths compare against it.
+	const path = git(checkout, ["rev-parse", "--show-superproject-working-tree"]);
+	return path ? canonical(path) : undefined;
+}
+
 /** Claude's name for a workflow agent's worktree, `<run ID>-<agent number>`, which carries no agent ID. */
 const WORKFLOW_CHECKOUT = /^wf_[0-9a-f]{8}-[0-9a-f]{3}-[0-9]+$/;
 
@@ -133,7 +140,7 @@ async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise
 	while (path && !record) {
 		const checkout = path;
 		record = await waiting(() => worktrees.registered(checkout));
-		path = git(checkout, ["rev-parse", "--show-superproject-working-tree"]) || undefined;
+		path = superproject(checkout);
 	}
 	const agent = field(input, "agent_id");
 	if (record?.name === `agent-${agent}`) return record;
@@ -169,7 +176,7 @@ export async function claudeHook(
 				const main = mainCheckout(project);
 				let enclosing = cwd;
 				while (mainCheckout(enclosing) !== main) {
-					const parent = git(enclosing, ["rev-parse", "--show-superproject-working-tree"]);
+					const parent = superproject(enclosing);
 					if (!parent) break;
 					enclosing = parent;
 				}
