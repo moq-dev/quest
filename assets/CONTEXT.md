@@ -108,6 +108,11 @@ A PR that another session pushed to in the last hour is theirs: report its event
 Before each push to a branch that already has a PR, confirm the PR is still open: a push after it merges brings the deleted branch back.
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
 
+A PR that fixes a bug, or redoes work an earlier PR did not do properly, lists that PR under `## Caused by` as `- [owner/repo#N](url) - what it got wrong`.
+Find it before opening the fix: `git blame` the lines the fix changes to the commit that added them, then that commit to its PR.
+When no single PR caused it, such as an upstream change or a bug as old as the code, say so in one line instead of leaving the section out.
+Review findings fixed in the same PR are not culprits; the record is for problems that reached the base branch.
+
 ## Reviews
 
 Before a PR is marked ready for review, and before each push to one that is, the other vendor's model reviews the committed branch locally against the PR's base branch with `quest review --base <remote>/<base>`: Claude Code reviews Codex's work, and Codex reviews Claude Code's.
@@ -121,7 +126,7 @@ A refutation stands only when it cites evidence the reviewer cannot rebut: a `pa
 The authoring model may skip the review of a change too trivial to need one.
 
 A reviewer that is out of quota or logged out is an outage, not a skip: keep the PR a draft, with a `## Waiting` item naming the reviewer, its error, and the check, such as `Codex: out of quota until 2026-11-03 15:00 UTC; check that quest review runs`.
-Give the reset time when the error names one; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
+Give the reset time `quest review` prints when it exits 3 on a usage limit; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
 Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
 
 The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
@@ -149,8 +154,9 @@ Where it says nothing, only a record on a PR whose author has write access count
 
 Checkpoint the design across review rounds.
 A review round is one `quest review` round, numbered within the branch's review session.
-Every fourth round, stop before fixing more findings and reconsider the approach.
-Report that judgment and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
+Every third round, stop before fixing more findings and reconsider the approach.
+Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.
+Report the alternatives and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide; a background agent leaves this under `## Waiting` rather than deciding it.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
 Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.

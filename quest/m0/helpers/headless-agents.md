@@ -29,6 +29,8 @@ removed the credential steps the classifier flagged.
   classifier reads. That changes the stub body once: `init` and `uninstall`
   recognize a stub of any version by its body (`STUB` in
   `src/core/init.ts`), so it must accept both the old and the new body.
+- The command does no load or CPU admission: the guide routes the agents'
+  expensive commands through `quest gate`.
 
 ## Waiting
 

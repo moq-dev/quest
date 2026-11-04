@@ -11,8 +11,10 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
 
+import { streamReader } from "../runner/claude";
 import { type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
+import { LIMIT, codexReset } from "./limit";
 import { programEnvironment, requireProgram } from "./program";
 import { save } from "./worktree";
 
@@ -20,6 +22,14 @@ import { save } from "./worktree";
 export class ReviewInputError extends Error {}
 /** `--responses` is missing after a round with findings, or given with no round to answer. */
 export class ResponsesError extends ReviewInputError {}
+
+/** The reviewer's account hit its usage limit, which resets at `until` (epoch milliseconds) if the CLI named it. */
+export class ReviewLimitError extends Error {
+	constructor(harness: HarnessName, until: number | null) {
+		const resets = until === null ? "unknown" : new Date(until).toISOString().replace(/\.\d{3}Z$/, "Z");
+		super(`${harness} hit its usage limit; resets ${resets}`);
+	}
+}
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
 
@@ -180,11 +190,14 @@ interface Reply {
 	error?: string;
 	/** The API's HTTP status when the turn failed on an API error, if the CLI reports one. */
 	status?: number;
+	/** The CLI reported the account's usage limit, which resets at `until` if it named it; read only on a failed turn. */
+	limited?: { until: number | null };
 }
 
 interface Reader {
 	line(line: string): void;
-	reply(): Reply;
+	/** The turn's reply once the CLI exited with `code`, given the tail of its stderr. */
+	reply(code: number, stderr: string): Reply;
 }
 
 interface Reviewer {
@@ -292,15 +305,19 @@ const claude: Reviewer = {
 		stdin: prompt,
 		env: claudeEnv(),
 	}),
+	// The runner's reader of the same stream-json output finds a usage limit and its reset.
 	reader() {
 		let result: Record<string, unknown> | undefined;
+		const stream = streamReader();
 		return {
 			line(line) {
+				stream.line(line);
 				const value = json(line);
 				if (value?.type === "result") result = value;
 			},
-			reply() {
-				if (result === undefined) return { error: "claude printed no result" };
+			reply(code, stderr) {
+				const limited = stream.exit(code, stderr).limited ?? undefined;
+				if (result === undefined) return { error: "claude printed no result", limited };
 				const usage = record(result.usage) ?? {};
 				let input = count(usage.input_tokens) + count(usage.cache_read_input_tokens);
 				input += count(usage.cache_creation_input_tokens);
@@ -324,6 +341,7 @@ const claude: Reviewer = {
 					usage: { input, cached, output },
 					error: result.is_error === true ? (text(result.result) ?? "claude reported an error") : undefined,
 					status: typeof result.api_error_status === "number" ? result.api_error_status : undefined,
+					limited,
 				};
 			},
 		};
@@ -334,8 +352,10 @@ export function claudeFlags(context: Context): string[] {
 	return [
 		"claude",
 		"-p",
+		// Only the stream reports a usage limit's reset.
 		"--output-format",
-		"json",
+		"stream-json",
+		"--verbose",
 		"--permission-mode",
 		"dontAsk",
 		"--setting-sources",
@@ -421,7 +441,11 @@ const codex: Reviewer = {
 				// Codex reports retryable stream errors as `error` events and keeps going.
 				if (event.type === "turn.failed") error = text(record(event.error)?.message) ?? "the turn failed";
 			},
-			reply: () => ({ session, text: reply, usage, error }),
+			reply(_code, stderr) {
+				const failure = `${error ?? ""}\n${stderr}`;
+				const limited = LIMIT.test(failure) ? { until: codexReset(failure, new Date()) } : undefined;
+				return { session, text: reply, usage, error, limited };
+			},
 		};
 	},
 };
@@ -526,6 +550,7 @@ const ABORT_GRACE_MS = 10_000;
 
 /** The reviewer CLI with the environment it runs in and the error for a login the API rejects. */
 interface Cli {
+	harness: HarnessName;
 	reviewer: Reviewer;
 	env: NodeJS.ProcessEnv;
 	/** Thrown when a turn fails on authentication, as a logged-out status check fails. */
@@ -570,15 +595,21 @@ async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv
 		if ((await run(reviewer.status, cwd, withCredentials, "", undefined, signal)).code !== 0) {
 			throw new ReviewInputError(loggedOut);
 		}
-		return { reviewer, env: withCredentials, unauthorized: credentials.length > 0 ? rejected : loggedOut, signal };
+		return {
+			harness,
+			reviewer,
+			env: withCredentials,
+			unauthorized: credentials.length > 0 ? rejected : loggedOut,
+			signal,
+		};
 	}
 	if ((await run(reviewer.status, cwd, connected, "", undefined, signal)).code === 0) {
 		const ignored =
 			credentials.length > 0 ? `; quest review strips ${names(credentials)} while a stored login exists` : "";
-		return { reviewer, env: connected, unauthorized: `${loggedOut}${ignored}`, signal };
+		return { harness, reviewer, env: connected, unauthorized: `${loggedOut}${ignored}`, signal };
 	}
 	if (credentials.length === 0) throw new ReviewInputError(loggedOut);
-	return { reviewer, env: withCredentials, unauthorized: rejected, signal };
+	return { harness, reviewer, env: withCredentials, unauthorized: rejected, signal };
 }
 
 /** The environment `quest review` runs `harness`'s CLI in, for a caller that runs it with the same login. */
@@ -594,13 +625,14 @@ export async function reviewerEnvironment(
 async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 	const reader = cli.reviewer.reader();
 	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader, cli.signal);
-	const reply = reader.reply();
+	const reply = reader.reply(code, stderr);
 	if (code !== 0 || reply.error !== undefined) {
 		// A login can expire or be revoked while the status check still passes. A CLI may report it
 		// only on stderr, behind a reader's fallback error such as "claude printed no result".
 		if (reply.status === 401 || cli.reviewer.unauthorized.test(`${reply.error ?? ""}\n${stderr}`)) {
 			throw new ReviewInputError(cli.unauthorized);
 		}
+		if (reply.limited) throw new ReviewLimitError(cli.harness, reply.limited.until);
 		const detail = reply.error ?? stderr.trim().split("\n").slice(-5).join("\n");
 		throw new Error(`${call.argv[0]} failed${detail ? `: ${detail}` : ` with exit status ${code}`}`);
 	}
