@@ -1,11 +1,13 @@
-# [M] /quest-spawn routes each quest by size
+# [M] /quest-spawn routes each quest down a ranked list
 
 ## Goal
 
-The `quest` binary maps each quest size to a harness, model, and effort.
-`quest unblocked --json` reports them for each ready quest, and
-`/quest-spawn` starts each quest on them, unless the repository's
-`AGENTS.md` overrides the mapping. Every repository gets the same mapping.
+The `quest` binary ranks harnesses and models for each quest size.
+`quest unblocked --json` reports each ready quest's ranked list, and
+`/quest-spawn` starts the quest on the first entry that can run: its CLI
+installed, logged in, and under its usage limit. A quest is skipped only
+when its whole list is out. A repository's `AGENTS.md` may override the
+lists in prose; otherwise every repository gets the same ones.
 
 ## Plan
 
@@ -13,45 +15,58 @@ Decided 2026-11-04 (user, /quest-plan); the evidence is in
 [the epic](/quest/m0/model-routing/README.md).
 
 - Where does each quest's model come from?
-  - ✅ A table built into `quest`, the same for every repository; a
-    repository's `AGENTS.md` overrides it in prose (user, later on
-    2026-11-04, replacing a `MODELS.md` file per repository)
+  - ✅ Lists built into `quest`, the same for every repository; a
+    repository's `AGENTS.md` overrides them in prose (user, replacing a
+    `MODELS.md` file per repository)
   - A `MODELS.md` in each repository, parsed by `quest`
   - Per quest, in its plan
-- When the mapped harness cannot run (its CLI missing, logged out, or at a
-  usage limit), what happens to the quest?
-  - ✅ Skip it and report the outage once in the spawn's summary
-  - Start it on the session's own harness
+- One model per size, or a ranked list?
+  - ✅ A ranked list, so a usage limit falls through to the next entry
+    (user, replacing "skip the quest and report the outage")
+- Which models? ✅ Grok for XS, Sol for S, Opus for M and up, each falling
+  back down its list (user). Implementation is coding; reviews may use
+  cheaper models ([Review by size](/quest/m0/model-routing/review-effort.md)).
+- Free models? ✅ Never (user): they are slow, and they may log or train on
+  a private repository's code.
+- A quest with an open decision? ✅ Routes one size up, so it prefers Opus
+  (user). The signal: a `Maintainer:` item under its `## Waiting`. An XL
+  stays XL.
 
-The table, pinned beside `MODELS` in `src/cli/review.ts` in a module both
-it and [Review effort by size](/quest/m0/model-routing/review-effort.md)
-import:
+The lists, pinned in a module `src/cli/review.ts` also imports:
 
-| Size | Harness | Model | Effort |
-|---|---|---|---|
-| XS | codex | `gpt-6.1-sol` | high |
-| S | codex | `gpt-6.1-sol` | xhigh |
-| M | claude | `claude-opus-5-5` | medium |
-| L | claude | `claude-opus-5-5` | high |
-| XL | claude | `claude-opus-5-5` | xhigh |
+| Size | Ranked harness, model, effort |
+|---|---|
+| XS | grok `grok-4.7` high → opencode `opencode-go/deepseek-v4-pro` high → codex `gpt-6.1-sol` high |
+| S | codex `gpt-6.1-sol` xhigh → claude `claude-opus-5-5` medium → grok `grok-4.7` xhigh |
+| M | claude `claude-opus-5-5` medium → codex `gpt-6.1-sol` xhigh |
+| L | claude `claude-opus-5-5` high → codex `gpt-6.1-sol` xhigh |
+| XL | claude `claude-opus-5-5` xhigh → codex `gpt-6.1-sol` max |
 
-- `quest unblocked --json` adds `harness`, `model`, and `effort` per quest.
-  An epic whose README carries no size has none and reports null; the
+The first entry of each list is the user's; the fallbacks after it, the
+efforts, and the opencode provider (OpenCode Go, the subscription kix
+already supports) are the agent's choice, for the
+[model check](/quest/m0/model-check.md) to retune.
+
+- Each entry also names its model's maker (Anthropic, OpenAI, xAI,
+  DeepSeek), which reviews use to pick a different maker than the
+  implementer.
+- `quest unblocked --json` adds the ranked list per quest, after the
+  decision bump. An epic whose README carries no size has none; the
   spawner then inherits its own settings.
 - `/quest-spawn`: follow the repository's `AGENTS.md` where it names other
-  models or efforts, and otherwise `quest unblocked`'s. Start a quest whose
-  harness matches the session's as a native sub-agent with that model and
-  effort, and one on the other vendor through `quest agent` on the
-  logged-in account. Skip a quest whose harness cannot run (`quest agent`
-  fails to start it, or exits on a usage limit) and report that harness's
-  outage once, with the quests it held back.
-- Docs: the README documents the table, the override, and `quest unblocked
-  --json`'s new fields. The [model check](/quest/m1/model-check.md) audits
-  this table each milestone.
+  models, and otherwise the list. Start a quest on a harness matching the
+  session's as a native sub-agent, and any other through `quest agent` on
+  the logged-in account. When `quest agent` cannot start an entry (CLI
+  missing, logged out) or the agent exits on a usage limit, move to the
+  next entry, resuming from the claim PR and checkout; report each
+  harness's outage once.
+- Docs: the README documents the lists, the decision bump, the override,
+  and `quest unblocked --json`'s new field. The
+  [model check](/quest/m1/model-check.md) audits the lists each milestone.
 
 ## Required
 
-- [Headless agents](/quest/m0/helpers/headless-agents.md) - `quest agent` runs on the logged-in account, so a session can start the other vendor's agents
+- [More agent harnesses](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok and opencode as well as Claude Code and Codex
 
 ## Related
 

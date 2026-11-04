@@ -2,15 +2,16 @@
 
 ## Goal
 
-`/quest-spawn` starts each ready quest on the harness, model, and effort
-that `quest`'s built-in table gives the quest's size, the same for every
-repository unless its `AGENTS.md` overrides it, so Codex takes
-the easy quests and Claude the hard ones, and each PR records which model
-did the work so the table can be retuned from outcomes. This epic's own
-work is one live mixed-vendor spawn: in moq-dev/quest, a `/quest-spawn` from Claude Code starts at least
-one XS or S quest on Codex and one M or larger on Claude, each PR records
-its size and implementer, and each is reviewed by the other vendor at its
-size's effort.
+`/quest-spawn` starts each ready quest on the first harness and model that
+can run from a ranked list `quest` builds in for the quest's size, the same
+for every repository unless its `AGENTS.md` overrides it, so cheaper models
+take the easy quests, Opus the hard ones, and a usage limit falls through
+to the next entry. Reviews rank the same way, from a different maker than
+the implementer, and each PR records its size, implementer, and reviewer
+so the lists can be retuned from outcomes. This epic's own work is one live
+spawn in moq-dev/quest from Claude Code that starts an XS quest on Grok, an
+S on Codex, and an M or larger on Claude, each PR recording its size and
+implementer and reviewed by a different maker from its size's list.
 
 Non-goals: kix.quest's runner jobs, which pick their own accounts and
 models; billing agents to API keys, which this epic removes.
@@ -39,7 +40,7 @@ are mostly judgment.
   - ✅ Fold judgment into size: a size measures the agent's effort,
     judgment included
   - A separate difficulty marker
-- The mapping: XS Codex `gpt-6.1-sol` high, S Codex
+- The first mapping, since replaced by ranked lists: XS Codex `gpt-6.1-sol` high, S Codex
   `gpt-6.1-sol` xhigh, M Claude `claude-opus-5-5` medium, L Claude
   `claude-opus-5-5` high, XL Claude `claude-opus-5-5` xhigh (user). Codex
   moves up a rung of effort from its default and Opus down one.
@@ -55,13 +56,20 @@ are mostly judgment.
 - A recurring [model check](/quest/m0/model-check.md) audits the tables
   from the routed PRs, first in m0 once this epic lands, then each
   milestone (user).
+- Ranked lists replace one model per size, so a usage limit falls through
+  to the next entry (user): Grok for XS, Sol for S, Opus for M and up, and
+  a quest with an open maintainer decision routes one size up. Reviews rank
+  cheaper models, including Grok and DeepSeek through opencode, from a
+  different maker than the implementer. No free models (user).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
 
 ## Required
 
-- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the harness, model, and effort `quest`'s built-in table maps its size to
-- [Review effort by size](/quest/m0/model-routing/review-effort.md) - `quest review` runs cheaper reviews on small PRs and deeper ones on large PRs, with M's tier as the default
+- [More agent harnesses](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok and opencode as well as Claude Code and Codex
+- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the first entry of its size's ranked list that can run
+- [Grok and opencode reviewers](/quest/m0/model-routing/review-harnesses.md) - `quest review` runs them read-only, as it runs Claude Code and Codex
+- [Review by size](/quest/m0/model-routing/review-effort.md) - `quest review` picks its reviewer from its size's ranked list, from a different maker than the implementer
 - [Sizes include judgment](/quest/m0/model-routing/size-judgment.md) - the guide and `/quest-plan` size a quest by the agent's effort, judgment included
 - [PRs record their implementer](/quest/m0/model-routing/implementer.md) - each PR names its size and the harness, model, and effort that wrote it, beside its reviewer's
 - [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing

@@ -3,7 +3,7 @@
 ## Goal
 
 Each milestone, `quest`'s built-in model tables, which harness, model, and
-effort implement each quest size and review each PR size, use each
+effort each quest size and each PR size's review rank, in order, use each
 vendor's newest models at efforts retuned from how the last milestone's PRs
 went, and the reviewers still run nothing from a reviewed head.
 
@@ -37,8 +37,10 @@ their size, implementer, and reviewer beside `## Review`:
   reviews come back clean. Do the same for the review table from what later
   reviews and follow-ups found that a review missed. Record the tallies in
   the next run's Plan as its baseline.
-- Recommend each table change to the maintainer with its tally, as a
-  decision in the PR, rather than changing the tables unasked.
+- Recommend each change to a list's order, harness, or effort to the
+  maintainer with its tally, as a decision in the PR, rather than changing
+  it unasked. Replacing a stale model id with the same vendor's newer one,
+  below, needs no decision, as this check always did.
 
 - Compare both tables' models (in the module `src/cli/review.ts` and the
   spawn routing share) with each vendor's current models: the newest
