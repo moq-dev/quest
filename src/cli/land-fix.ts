@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import prompt from "../../assets/land-fix.md";
+import { discoveryEnv } from "./git";
 import { programEnvironment, requireProgram } from "./program";
 
 export class FixerAgentError extends Error {
@@ -65,15 +66,29 @@ export const COMMENT_LIMIT = 4000;
 const FAILURE_LIMIT = 200;
 
 /**
+ * Why a PR requeued unchanged failed with no fault of its own: a test that comes and goes (`flaky`), a
+ * failure the base shows alone (`base`), or the runner's environment, such as a missing tool or a full disk.
+ */
+export const CAUSES = ["flaky", "base", "environment"] as const;
+export type Cause = (typeof CAUSES)[number];
+
+/**
+ * `failure` as signatures are compared: without backticks or quotes, with whitespace collapsed, so one
+ * test named with and without quoting is still one test.
+ */
+export const signature = (failure: string) => failure.replace(/[`'"]/g, "").replace(/\s+/g, " ").trim();
+
+/**
  * The fixer's verdict on one PR. `blame` names a PR whose own change caused the failure; a blamed PR
  * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
  * to last, that show the failure, which its comment quotes. `failure` names the failing test or step,
- * the signature the stop rules compare across a pick's rounds. A requeue of a known flaky test's
- * failure may carry `disable`: the tip of the fixer's `disable` branch, a commit on the base that skips
- * the test and adds its follow-up quest, which the daemon opens as a PR of its own.
+ * the signature the stop rules compare across a pick's rounds. A requeue of the PR's own failure names
+ * its `cause`; one of a known flaky test's may carry `disable`: the tip of the fixer's `disable` branch,
+ * a commit on the base that skips the test and adds its follow-up quest, which the daemon opens as a PR
+ * of its own.
  */
 export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string; failure?: string } & (
-	| { number: number; action: "requeue"; reason: string; disable?: string }
+	| { number: number; action: "requeue"; reason: string; cause?: Cause; disable?: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
 );
@@ -130,15 +145,19 @@ function validate(item: any, pr: boolean): void {
 	if (pr && "failure" in item) {
 		if (
 			typeof item.failure !== "string" ||
-			!item.failure.trim() ||
+			!signature(item.failure) ||
 			item.failure.length > FAILURE_LIMIT ||
 			/[\u0000-\u001f\u007f]/.test(item.failure)
 		)
 			throw new Error("invalid fixer failure");
 		metadata.push("failure");
 	}
+	if (pr && "cause" in item) {
+		if (item.action !== "requeue" || !CAUSES.includes(item.cause)) throw new Error("invalid fixer cause");
+		metadata.push("cause");
+	}
 	if (pr && "disable" in item) {
-		if (item.action !== "requeue" || typeof item.disable !== "string" || !/^[a-f0-9]{40}$/.test(item.disable))
+		if (item.cause !== "flaky" || typeof item.disable !== "string" || !/^[a-f0-9]{40}$/.test(item.disable))
 			throw new Error("invalid fixer disable");
 		metadata.push("disable");
 	}
@@ -182,6 +201,7 @@ export function parseFixResult(text: string, numbers: number[]): FixResult[] {
 			throw new Error("invalid or duplicate fixer PR");
 		seen.add(item.number);
 		validate(item, true);
+		if ("failure" in item) item.failure = signature(item.failure);
 	}
 	return value as FixResult[];
 }
@@ -229,6 +249,7 @@ export async function fix(
 		const head = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${ref}^{commit}`], {
 			cwd: root,
 			encoding: "utf8",
+			env: discoveryEnv(),
 		}).stdout.trim();
 		if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error(`fix needs a ${ref} branch`);
 		return `- #${number}: branch ${ref} at ${head}`;
