@@ -32,7 +32,7 @@ their size, implementer, and reviewer beside `## Review`:
 - Tally by size and by implementing harness, model, and effort: review
   scores, review rounds, findings fixed versus refuted, design checkpoints reached, PRs
   handed back as drafts, and later PRs that name it under `## Caused by`
-  ([culprits](/quest/m0/model-routing/culprits.md)). Tally
+  (`quest context`'s Pull requests section). Tally
   outages that skipped quests by harness.
 - Move a size to a stronger model or effort where its PRs needed clearly
   more rounds or fixes than the size above, and to a cheaper one where its
