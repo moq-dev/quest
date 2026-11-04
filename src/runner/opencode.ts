@@ -169,9 +169,11 @@ const PLUGIN_ID = "quest-runner";
  * symlink, and a path that does not exist yet through its nearest existing
  * directory. A dangling symlink is refused, since a write would
  * follow it. `patch` names its files in the patch's headers. Nothing writes
- * the checkout's own opencode config. A tool's input may arrive as a JSON
- * string, which opencode repairs into its object; one that is not an object
- * either way is refused, since it cannot be checked. The tool opens the path
+ * the checkout's own opencode config. opencode's input repair runs before
+ * this hook, turning a JSON-string input into its object and `"true"` into
+ * true; the plugin repeats both, so a release that reorders or drops repair
+ * cannot slip a call past it. Input that is not an object either way is
+ * refused, since it cannot be checked. The tool opens the path
  * after this check, so a command running alongside it could still swap the
  * path for a symlink in between: the check narrows that window rather than
  * closing it.
@@ -242,7 +244,6 @@ export default {
 			const args = parsed(input);
 			if (args === null || typeof args !== "object")
 				throw new Error(\`the \${tool} tool's input is not an object, so the runner cannot check it\`);
-			// opencode's input repair, which may run after this hook, turns "true" into true.
 			if (args.background === true || args.background === "true")
 				throw new Error(\`the runner ends the job when this turn ends, so run the \${tool} in the foreground instead\`);
 			if (!files) return;
