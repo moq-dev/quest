@@ -875,6 +875,8 @@ export async function collectFixers(
 			deps.warn(`quest land fixer: unreadable job ${name}: ${String(error)}`);
 			continue;
 		}
+		// A job saved before the gate had a method squashed.
+		job.plan.method ??= "squash";
 
 		// The first try checks the base if it must; a retry only hands back, so it never checks it.
 		const failed = new Set<number>();
@@ -1111,7 +1113,7 @@ async function collectJob(
 				if (queuedAs !== entry.enabledAt || head !== entry.head) {
 					// Save intent before enabling, so a lost response can be reconciled after restart.
 					save(historyPath(state, number), { ...previous, ...actor, head });
-					await enqueue(github, entry.id, head);
+					await enqueue(github, entry.id, head, job.plan.method);
 					const enabled = await github.graphql(
 						"query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }",
 						{ id: entry.id },
