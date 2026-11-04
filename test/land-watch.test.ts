@@ -66,6 +66,7 @@ interface Pull {
 	branch?: string;
 	/** Its head branch's pushes, oldest first, in place of those its removals imply. */
 	pushes?: { sha: string; at: string }[];
+	labels?: string[];
 }
 interface Job {
 	id: number;
@@ -108,6 +109,8 @@ interface World {
 	onActivity?: (pull: Pull) => void;
 	/** GitHub's refusal of an enqueue of `pull`, if it refuses one. */
 	refuseEnqueue?: (pull: Pull) => string | undefined;
+	/** Called on each read of a PR's queue state, as a change GitHub makes while the watcher reads it. */
+	onPull?: (pull: Pull) => void;
 }
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 10, 1, 12, minutes)).toISOString().replace(".000", "");
@@ -122,6 +125,7 @@ function headOf(world: World, pull: Pull): string {
 }
 
 const branchOf = (pull: Pull) => pull.branch ?? `branch-${pull.number}`;
+const labelsOf = (pull: Pull) => ({ nodes: (pull.labels ?? []).map((name) => ({ name })) });
 
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -226,6 +230,7 @@ function deps(world: World): GitHubDependencies {
 				}
 				if (query.includes("mergeStateStatus") && !query.includes("pullRequests(states: OPEN")) {
 					const pull = pullOf();
+					world.onPull?.(pull);
 					if (world.unreadable?.(pull)) {
 						world.unreadable = undefined;
 						return Response.json({ errors: [{ type: "INTERNAL", message: "unavailable" }] });
@@ -239,6 +244,7 @@ function deps(world: World): GitHubDependencies {
 								mergeStateStatus: pull.mergeState ?? "CLEAN",
 								mergeQueueEntry: pull.queued ? { enqueuedAt: pull.queued } : null,
 								autoMergeRequest: pull.armed ? { enabledAt: pull.armed } : null,
+								labels: labelsOf(pull),
 							},
 						},
 					});
@@ -281,6 +287,7 @@ function deps(world: World): GitHubDependencies {
 										mergeStateStatus: pull.mergeState ?? "CLEAN",
 										mergeQueueEntry: pull.queued ? { id: `MQE_${pull.number}` } : null,
 										autoMergeRequest: pull.armed ? { enabledAt: pull.armed, commitBody: "" } : null,
+										labels: labelsOf(pull),
 										removals: removalPage(pull, variables.since, null),
 									})),
 									pageInfo: { hasNextPage: false, endCursor: null },
@@ -1682,5 +1689,77 @@ git commit -qm 'disable render_timeout'`;
 		await exited(state);
 		github.now = Date.parse(at(27));
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 12 ${head}`]);
+	});
+	test("a held PR is neither fixed nor re-enqueued, whenever the hold is taken", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const heads = new Map(
+			[5, 6, 7, 8].map((number) => [number, repo.pull(number, { [`f-${number}.txt`]: "new\n" })]),
+		);
+		const removed = (number: number, labels?: string[]): Pull => ({
+			number,
+			head: heads.get(number)!,
+			labels,
+			enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+			removals: [
+				{
+					id: `R${number}`,
+					createdAt: at(5),
+					reason: "failed_checks",
+					actor: "github-merge-queue",
+					before: heads.get(number),
+				},
+			],
+		});
+		// 5 is held when the queue drops it; `quest:merge`, an older pin's leftover, holds nothing.
+		const pulls = [removed(5, ["quest:active"]), removed(6, ["quest:merge"]), removed(7), removed(8)];
+		const github = {
+			...world(
+				pulls,
+				pulls.map((pull) => ({ ...failedRun(pull.number, at(3), base), id: pull.number })),
+			),
+			origin: repo.origin,
+		};
+		github.now = Date.parse(at(6));
+		fix.round(6, fixScript("fixed.txt"));
+		fix.round(7, flakyScript);
+		// Two fixer slots: 8 waits.
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 5 failed_checks held",
+			"removed 6 failed_checks fix",
+			"removed 7 failed_checks fix",
+			"removed 8 failed_checks fix",
+			"fixing 6",
+			"fixing 7",
+		]);
+		await exited(state, 2);
+		// A session takes 6 while the watcher validates its fix, 7 while its fixer runs, and 8 while it waits.
+		let reads = 0;
+		github.onPull = (pull) => {
+			if (pull.number === 6 && ++reads === 2) pull.labels = ["quest:merge", "quest:active"];
+		};
+		pulls[2].labels = ["quest:iterate"];
+		pulls[3].labels = ["quest:active"];
+		github.now = Date.parse(at(7));
+		expect((await watchPass(REPOSITORY, { state }, deps(github), context)).sort()).toEqual([
+			"dropped 6 held",
+			"dropped 7 held",
+			"dropped 8 held",
+		]);
+		expect(github.mutations).toEqual([]);
+		expect(git(repo.origin, "rev-parse", "refs/heads/branch-6")).toBe(heads.get(6));
+		expect(fix.calls().map((call) => call.split(" ").at(-1))).toEqual(["6", "7"]);
+		for (const pull of pulls) {
+			const held = github.comments[pull.number].filter((comment) =>
+				comment.body.includes("It is held by `quest:"),
+			);
+			expect(held).toHaveLength(1);
+			expect(history(state, pull.number)).toBeUndefined();
+		}
+		// The fixer's note on 7 is not posted: the held comment is the only one after the removal's.
+		expect(github.comments[7]).toHaveLength(2);
+		expect(readRemoval(state, 5)!.verdict).toBe("held");
+		expect(readRemoval(state, 8)!.taken).toBe("held");
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 	});
 });

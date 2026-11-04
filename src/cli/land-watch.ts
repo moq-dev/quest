@@ -28,7 +28,16 @@ import {
 	save,
 	startDaemon,
 } from "./land-serve";
-import { advanceFixes, endPick, type FixContext, readPull, readRemoval, requeuedHeads } from "./land-watch-fix";
+import {
+	advanceFixes,
+	endPick,
+	type FixContext,
+	heldText,
+	holdOf,
+	readPull,
+	readRemoval,
+	requeuedHeads,
+} from "./land-watch-fix";
 import { enabledHead, headBefore } from "./status";
 
 export { readRemoval } from "./land-watch-fix";
@@ -49,9 +58,10 @@ export interface WatchOptions {
 /**
  * What a removal means for its pick: the fixer's to take (`fix`), or the end of the pick, left alone
  * until a writer enqueues the PR again: a push since the queue dropped it (`pushed`), a person's
- * removal (`removed`), or a reason the watcher does not know (`unrecognized`).
+ * removal (`removed`), a hold label another session keeps on it (`held`), or a reason the watcher
+ * does not know (`unrecognized`).
  */
-export type Verdict = "fix" | "pushed" | "removed" | "unrecognized" | "unknown";
+export type Verdict = "fix" | "pushed" | "removed" | "held" | "unrecognized" | "unknown";
 
 /** A `merge_group` job that failed, or was still running when its checks timed out. */
 export interface FailedJob {
@@ -136,6 +146,7 @@ const OPEN = `query($owner: String!, $name: String!, $base: String!, $qualified:
 			nodes {
 				id number url title headRefOid headRefName maintainerCanModify mergeStateStatus
 				headRepository { nameWithOwner }
+				labels(first: 100) { nodes { name } }
 				mergeQueueEntry { id }
 				autoMergeRequest { enabledAt commitBody }
 				removals: timelineItems(since: $since, first: 20, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { ${REMOVALS} }
@@ -377,7 +388,7 @@ export function jobsSection(blocks: string[], room: number): string {
 }
 
 /** What the watcher does about it, if anything it needs to say; `fixing` when a land fixer is configured. */
-const AFTER: Record<Verdict, (current: string, fixing: boolean) => string> = {
+const AFTER: Record<Verdict, (current: string, fixing: boolean, hold: string) => string> = {
 	fix: (_, fixing) =>
 		fixing
 			? "\n\nThe land fixer works on it in the background, and the watcher re-enqueues it at the back of the queue once it is fixed or judged flaky, or hands it back here with what it needs."
@@ -386,6 +397,7 @@ const AFTER: Record<Verdict, (current: string, fixing: boolean) => string> = {
 		`\n\nIts head has moved to ${current} since, and a push by anyone but the land fixer ends the pick: the watcher leaves this pull request alone until a maintainer enqueues it again.`,
 	removed: () =>
 		"\n\nA person's removal ends the pick: the watcher leaves this pull request alone until a maintainer enqueues it again.",
+	held: (_, __, hold) => `\n\n${heldText(hold)}`,
 	unrecognized: () =>
 		"\n\nThe watcher does not recognize this reason, so it leaves this pull request alone until a maintainer enqueues it again.",
 	unknown: () =>
@@ -431,6 +443,7 @@ async function handle(
 	// An unknown head never authorizes the fixer: wait for GitHub to list the push, then end the pick.
 	if (known === null && now - Date.parse(at) < UNLISTED) return null;
 	const head = known ?? current;
+	const hold = holdOf(pull);
 	const { pick, queued } = head === current ? first : await pickOf(github, string(pull.id), event, head, app, own);
 	const verdict: Verdict =
 		known === null
@@ -439,9 +452,11 @@ async function handle(
 				? "pushed"
 				: reason === "manual"
 					? "removed"
-					: FIXABLE.includes(reason)
-						? "fix"
-						: "unrecognized";
+					: !FIXABLE.includes(reason)
+						? "unrecognized"
+						: hold !== undefined
+							? "held"
+							: "fix";
 	const build =
 		reason === "failed_checks" || reason === "checks_timed_out"
 			? await failedBuild(
@@ -484,7 +499,7 @@ async function handle(
 		github,
 		{ repository },
 		{ number, enabledAt: pick.at },
-		`quest land watch: the merge queue removed this pull request at ${head} because ${because(reason, actor, base.ref)} (\`${reason.replace(/[^a-z_]/g, "")}\`).${AFTER[verdict](current, fixing)}${missing}`,
+		`quest land watch: the merge queue removed this pull request at ${head} because ${because(reason, actor, base.ref)} (\`${reason.replace(/[^a-z_]/g, "")}\`).${AFTER[verdict](current, fixing, hold ?? "")}${missing}`,
 		`removed ${string(event.id)}`,
 		"quest land watch",
 		undefined,

@@ -817,8 +817,8 @@ head the watcher itself put back in the queue continues the watcher's pick
 instead, until a handback ends it: the watcher's re-enqueue, GitHub's
 auto-merge of it, or such a workflow picking the fixer's push. A failed build
 or a conflict is recorded for the land fixer in `removal-<n>.json`, with the
-full log beside it. A push since the removal, a person's removal, or a reason
-the watcher does not know ends the pick, and the comment says the PR waits for
+full log beside it. A push since the removal, a person's removal, a hold, or a
+reason the watcher does not know ends the pick, and the comment says the PR waits for
 a maintainer to enqueue it again. The state directory remembers each removal
 handled, so a restart neither misses nor repeats one; a crash between
 commenting and recording finds its own comment's marker and posts nothing. The
@@ -874,6 +874,14 @@ handback, from a stop rule, the fixer, a refusal, a crash, or a timeout, is
 posted with its reason and a recommendation, and the PR leaves the watcher's
 care until a maintainer enqueues it again. A round whose pick ended while it
 ran, by a writer's push or enqueue, is not applied, and its comment says so.
+
+The watcher leaves a PR another session holds to that session: one with a hold
+label, such as the `quest:active` that `/quest-iterate` takes. It reads the
+PR's labels when it handles the removal, before it starts the fixer, and again
+before it pushes a result or re-enqueues the PR, so a hold taken while the
+fixer runs counts too. A hold ends the pick, as a person's removal does: the
+PR gets one comment saying so, and a maintainer enqueues it again once its
+session is done.
 A round whose collection fails three passes in a row, as when GitHub refuses its
 handback comment, is set aside with a logged warning, freeing its fixer slot.
 
