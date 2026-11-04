@@ -764,12 +764,15 @@ test("a refused enqueue of an armed pick is reported once and retried, and says 
 	expect(JSON.parse(readFileSync(join(state, "watch.json"), "utf8")).refused).toEqual({});
 });
 
-test("an armed pick withdrawn or retargeted while the pass reads it is not enqueued", async () => {
+test("an armed pick withdrawn, retargeted, or held while the pass reads it is not enqueued", async () => {
 	const state = tempDir();
 	const github = world([
 		{ number: 32, head: HEAD, enqueues: [], removals: [], armed: at(2) },
 		{ number: 33, head: HEAD, enqueues: [], removals: [], armed: at(2) },
 		{ number: 34, head: HEAD, enqueues: [], removals: [], armed: at(2) },
+		// Held when the pass reads it, or once it does.
+		{ number: 35, head: HEAD, enqueues: [], removals: [], armed: at(2), labels: ["quest:active"] },
+		{ number: 36, head: HEAD, enqueues: [], removals: [], armed: at(2) },
 	]);
 	github.now = Date.parse(at(4));
 	github.onActivity = (pull) => {
@@ -777,9 +780,19 @@ test("an armed pick withdrawn or retargeted while the pass reads it is not enque
 		if (pull.number === 33) pull.base = "release";
 		// Disabled and armed again: a new pick, which the next pass weighs on its own.
 		if (pull.number === 34) pull.armed = at(3);
+		if (pull.number === 36) pull.labels = ["quest:iterate"];
 	};
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
 	expect(github.mutations).toEqual([]);
+
+	// The holds clear with the pick still armed at its head: the next pass enqueues it, with 34's new pick.
+	github.onActivity = undefined;
+	for (const pull of github.pulls.slice(3)) pull.labels = [];
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
+		`enqueued 34 ${HEAD}`,
+		`enqueued 35 ${HEAD}`,
+		`enqueued 36 ${HEAD}`,
+	]);
 });
 
 test("the watcher's tokens ask for writes only with a fixer, and pushes for workflows only when they carry one", () => {

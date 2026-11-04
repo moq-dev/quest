@@ -834,8 +834,8 @@ enqueues only the head auto-merge was armed on, with `expectedHeadOid` bound to
 it: GitHub keeps auto-merge across a push, but a push by anyone but the land
 fixer ends the pick, and a head it cannot tell yet waits for the next pass. An
 armed PR whose required checks fail, or that conflicts, is left alone for
-`/quest-iterate` and a new pick. The watcher's own re-enqueues are among these
-picks. A refusal is logged once per pick and retried each pass.
+`/quest-iterate` and a new pick. One another session holds waits, armed, until
+its hold clears. The watcher's own re-enqueues are among these picks. A refusal is logged once per pick and retried each pass.
 
 With `--fixer`, the watcher takes each recorded removal, oldest first, while
 its PR still waits as the queue dropped it:

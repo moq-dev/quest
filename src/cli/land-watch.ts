@@ -235,7 +235,7 @@ async function pickOf(
  * `expectedHeadOid` bound to it: GitHub keeps auto-merge across a writer's push, but that push ends the
  * pick, and a head `enabledHead` cannot tell yet waits for the next pass. The PR is read again just
  * before the enqueue, so a request disabled or a PR retargeted since the pass read it is not enqueued,
- * which `expectedHeadOid` alone would not catch. An armed pick whose required
+ * which `expectedHeadOid` alone would not catch, and neither is a PR another session holds. An armed pick whose required
  * checks fail, or that conflicts, is not ready and is left alone. A refusal is reported once per pick
  * and retried each pass; one because GitHub queued the PR first says nothing.
  */
@@ -268,7 +268,9 @@ async function enqueueArmed(
 			string(now.headRefOid) !== head ||
 			now.mergeQueueEntry != null ||
 			request === null ||
-			string(request.enabledAt) !== armed
+			string(request.enabledAt) !== armed ||
+			// Another session holds it: leave the pick armed, for the next pass once the hold clears.
+			holdOf(now) !== undefined
 		)
 			continue;
 		try {
