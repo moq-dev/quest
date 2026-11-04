@@ -95,8 +95,6 @@ interface WatchJob extends Process {
 	requeued?: Queued;
 	/** Why the round ended in a handback, recorded before posting it, so a restart keeps the reason. */
 	handback?: string;
-	/** The hold that ended the round, recorded before posting it, so a retry never applies the round once it clears. */
-	held?: string;
 	/** A validated fix whose push GitHub refused, handed back for `quest land apply`. */
 	resolution?: Resolution;
 	/** Passes that failed to collect it, so one that keeps failing is set aside rather than holding a fixer slot. */
@@ -123,20 +121,35 @@ export async function readPull(github: GitHub, id: string): Promise<ObjectValue>
 	return object((await github.graphql(PULL, { id })).node);
 }
 
-/** The hold label another session keeps on the PR, such as `/quest-iterate`'s `quest:active`, if any. */
-export const holdOf = (pull: ObjectValue): string | undefined =>
-	array(object(pull.labels).nodes)
-		.map((label) => string(label.name))
-		.find(isHoldLabel);
+/** Whether another session holds the PR with a hold label, such as `/quest-iterate`'s `quest:active`. */
+export const isHeld = (pull: ObjectValue): boolean =>
+	array(object(pull.labels).nodes).some((label) => isHoldLabel(string(label.name)));
 
-/** Why the watcher leaves a held PR alone, as a comment's closing sentence. */
-export const heldText = (label: string) =>
-	`It is held by ${fixerText(label)}, so the watcher leaves it to the session that holds it: the hold ends the pick, and a maintainer enqueues it again once that session is done.`;
+/** What the watcher says on a held PR, whatever step found the hold and whether a fix was pushed. */
+export const HELD =
+	"Another session holds this pull request, so the watcher stops acting on it and leaves it to that session: the hold ends the pick, and a maintainer enqueues it again once that session is done.";
+
+/**
+ * Say once, best-effort, that the watcher left a held PR to its session. The caller has already ended
+ * the pick in its state, so a comment GitHub refuses is only warned about and never retried.
+ */
+async function sayHeld(
+	github: GitHub,
+	repository: string,
+	entry: Pick<Entry, "number" | "enabledAt">,
+	warn: (text: string) => void,
+): Promise<void> {
+	try {
+		await post(github, { repository }, entry, `quest land watch: ${HELD}`, "held", MERGER);
+	} catch (error) {
+		warn(`quest land watch: hold comment on ${entry.number} not posted: ${String(error)}`);
+	}
+}
 
 /** A hold found right before a push or a re-enqueue. */
 class Held extends Error {
-	constructor(readonly label: string) {
-		super(`held by ${label}`);
+	constructor() {
+		super("held by another session");
 	}
 }
 
@@ -317,20 +330,10 @@ async function take(
 		mark(`${started[1].merged ? "merged" : "fixer"} ${started[0]}`);
 		return undefined;
 	}
-	// A hold recorded before GitHub refused its comment still ends the pick once it clears.
-	const hold = removal.hold ?? holdOf(pull);
-	if (hold !== undefined) {
-		save(removalPath(state, number), { ...removal, hold } satisfies Removal);
-		endPick(state, number, entry.enabledAt);
-		await post(
-			github,
-			{ repository },
-			entry,
-			`quest land watch: the land fixer did not start on ${removal.head}. ${heldText(hold)}`,
-			"held",
-			MERGER,
-		);
+	if (isHeld(pull)) {
 		mark("held");
+		endPick(state, number, entry.enabledAt);
+		await sayHeld(github, repository, entry, deps.warn);
 		return `dropped ${number} held`;
 	}
 	const conflict = removal.reason === "merge_conflict";
@@ -536,28 +539,16 @@ async function collect(
 				: queued(pull, job.dropped) && !ours && job.requeuing === undefined
 					? "a maintainer enqueued it again while the fixer ran, and that pick stands"
 					: undefined;
-	// Whether the PR's head is this round's fix, so the holding session hears its branch moved.
-	let pushed = ours;
-	// Leave a held PR to its session: its own comment replaces the fixer's note.
-	const leave = async (hold: string): Promise<string[]> => {
-		job.held = hold;
-		save(path, job);
+	// Leave a held PR to its session: the pick and the round end first, and the hold's comment replaces
+	// the fixer's note.
+	const leave = async (): Promise<string[]> => {
 		endPick(state, number, entry.enabledAt);
-		await post(
-			github,
-			plan,
-			marked,
-			`quest land watch: the land fixer's result for ${entry.head} ${pushed ? `was pushed as ${head}, but not re-enqueued` : "was not applied"}. ${heldText(hold)}`,
-			"held",
-			MERGER,
-		);
 		finish(path, job);
+		await sayHeld(github, job.repository, marked, deps.warn);
 		return [`dropped ${number} held`];
 	};
-	if (job.held !== undefined) return leave(job.held);
 	// A head this round already asked GitHub to queue, and GitHub took, stays: the hold came after it.
-	const hold = holdOf(pull);
-	if (hold !== undefined && !(job.requeuing !== undefined && queued(pull, job.dropped))) return leave(hold);
+	if (isHeld(pull) && !(job.requeuing !== undefined && queued(pull, job.dropped))) return leave();
 	if (ended) {
 		await note();
 		await post(
@@ -641,15 +632,11 @@ async function collect(
 				}
 				// Validating the fix takes a while, and a session may have taken the PR since. A head already
 				// pushed needs no push, and `requeue` checks the hold before any enqueue.
-				if (!pushed) {
-					const hold = holdOf(await readPull(github, entry.id));
-					if (hold !== undefined) throw new Held(hold);
-				}
+				if (!ours && isHeld(await readPull(github, entry.id))) throw new Held();
 				await publishHead(github, context.root, job, entry, entry.head, current, head, deps, context.token, {
 					reason: result.reason,
 					attribution,
 				});
-				pushed = true;
 			}
 			if (job.requeuing === undefined) {
 				job.requeuing = head;
@@ -658,7 +645,7 @@ async function collect(
 			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped);
 			save(path, job);
 		} catch (failure) {
-			if (failure instanceof Held) return [...said, ...(await leave(failure.label))];
+			if (failure instanceof Held) return [...said, ...(await leave())];
 			if (!(failure instanceof FixerRefusal)) throw failure;
 			handback = failure.message;
 			if (failure.resolution) job.resolution = failure.resolution;
@@ -710,8 +697,7 @@ async function requeue(github: GitHub, id: string, head: string, base: string, d
 	if (string(pull.baseRefName) !== base) throw new FixerRefusal(`retargeted from ${base} before it was re-enqueued`);
 	if (string(pull.headRefOid) !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 	if (!queued(pull, dropped)) {
-		const hold = holdOf(pull);
-		if (hold !== undefined) throw new Held(hold);
+		if (isHeld(pull)) throw new Held();
 		try {
 			await queueHead(
 				(query, variables) => github.graphql(query, variables),
@@ -736,7 +722,7 @@ async function requeue(github: GitHub, id: string, head: string, base: string, d
 /**
  * Open each validated disable as a PR of its own and enqueue it like any other, with no maintainer's
  * pick: its Review records the fixer's change. A disable that fails to advance is retried on the next
- * pass; one GitHub refuses is left for a maintainer.
+ * pass; one GitHub refuses, or another session holds, is left for a maintainer.
  */
 async function advanceDisables(
 	github: GitHub,
@@ -751,7 +737,15 @@ async function advanceDisables(
 		if (!test.disable || test.disable.done !== undefined) continue;
 		try {
 			output.push(
-				await openDisable(github, repository, context, test, test.disable, () => saveFlaky(state, tests)),
+				await openDisable(
+					github,
+					repository,
+					context,
+					test,
+					test.disable,
+					() => saveFlaky(state, tests),
+					deps.warn,
+				),
 			);
 		} catch (error) {
 			deps.warn(`quest land watch: disable of ${test.disable.quest} pending: ${String(error)}`);
@@ -779,6 +773,7 @@ async function openDisable(
 	test: FlakyTest,
 	disable: Disable,
 	record: () => void,
+	warn: (text: string) => void,
 ): Promise<string> {
 	const name = questName(disable.quest);
 	if (disable.id === undefined) {
@@ -816,26 +811,30 @@ async function openDisable(
 		disable.id = string(pull.node_id);
 		record();
 	}
-	if (disable.refused === undefined) {
-		try {
-			disable.done = await requeue(github, disable.id, disable.head, disable.base.ref, "");
+	const entry = { number: disable.number!, enabledAt: disable.head };
+	try {
+		disable.done = await requeue(github, disable.id, disable.head, disable.base.ref, "");
+	} catch (error) {
+		if (error instanceof Held) {
+			// Left for a maintainer, as a refused one is, once recorded.
+			disable.done = "held";
 			record();
-			return `disabled ${name} ${disable.number}`;
-		} catch (error) {
-			if (!(error instanceof FixerRefusal || error instanceof Held)) throw error;
-			disable.refused = error.message;
-			record();
+			await sayHeld(github, repository, entry, warn);
+			return `disable held ${name} ${disable.number}`;
 		}
+		if (!(error instanceof FixerRefusal)) throw error;
+		await post(
+			github,
+			{ repository },
+			entry,
+			`quest land watch: ${fixerText(error.message)}, so this pull request waits for a maintainer to enqueue it.`,
+			"refused",
+			MERGER,
+		);
+		disable.done = error.message;
+		record();
+		return `disable refused ${name}: ${error.message}`;
 	}
-	await post(
-		github,
-		{ repository },
-		{ number: disable.number!, enabledAt: disable.head },
-		`quest land watch: ${fixerText(disable.refused)}, so this pull request waits for a maintainer to enqueue it.`,
-		"refused",
-		MERGER,
-	);
-	disable.done = disable.refused;
 	record();
-	return `disable refused ${name}: ${disable.refused}`;
+	return `disabled ${name} ${disable.number}`;
 }

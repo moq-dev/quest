@@ -910,8 +910,9 @@ label, such as the `quest:active` that `/quest-iterate` takes. It reads the
 PR's labels when it handles the removal, before it starts the fixer, and again
 before it pushes a result or re-enqueues the PR, so a hold taken while the
 fixer runs counts too. A hold ends the pick, as a person's removal does: the
-PR gets one comment saying so, naming the fixer's head if it was already pushed,
-and a maintainer enqueues it again once its session is done.
+watcher records that first and stops acting on the PR, then posts one comment
+saying so, best-effort and never retried. A maintainer enqueues it again once
+its session is done. A held flaky-test disable PR is left for a maintainer too.
 A round whose collection fails three passes in a row, as when GitHub refuses its
 handback comment, is set aside with a logged warning, freeing its fixer slot.
 

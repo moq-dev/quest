@@ -31,8 +31,6 @@ export interface Disable {
 	/** Its PR, once opened. */
 	number?: number;
 	id?: string;
-	/** Why it could not be queued, such as a hold, recorded before its comment, so a retry only comments. */
-	refused?: string;
 	/** How it ended: queued (`enqueued` or `armed`), or why it could not be. */
 	done?: string;
 }
