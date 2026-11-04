@@ -1,6 +1,16 @@
 import { expect, test } from "vitest";
 
-import { type Doc, check, handedBack, parse, parseWait, unblocked, waiting, withoutHandBack } from "../src/core";
+import {
+	type Doc,
+	check,
+	handBackWaits,
+	handedBack,
+	parse,
+	parseWait,
+	unblocked,
+	waiting,
+	withoutHandBack,
+} from "../src/core";
 
 const ROOT = "# Quests\n\n## Goal\n\nAll.\n\n## Required\n\n- [m0](/quest/m0/README.md)\n- [m1](/quest/m1/README.md)\n";
 
@@ -55,6 +65,7 @@ test("lists the maintainer's waits first, then by milestone and impact", () => {
 	expect(waiting(docs)).toEqual([
 		{
 			path: "quest/m1/decide.md",
+			pr: null,
 			dependents: 0,
 			ready: true,
 			waits: [
@@ -64,6 +75,7 @@ test("lists the maintainer's waits first, then by milestone and impact", () => {
 		},
 		{
 			path: "quest/m0/upstream.md",
+			pr: null,
 			dependents: 1,
 			ready: true,
 			waits: [{ line: 9, party: "moq-dev/moq", text: "a release." }],
@@ -100,4 +112,49 @@ test("withoutHandBack keeps fenced examples and drops fenced text inside a hand-
 	expect(withoutHandBack("Work.\n\n## Waiting\n\n```\n## Not a heading\n```\n\n## Validation\n\nPasses.")).toBe(
 		"Work.\n\n## Validation\n\nPasses.",
 	);
+});
+
+test("a draft's hand-back items are the maintainer's unless a Waiting item names its party", () => {
+	expect(
+		handBackWaits(
+			"Work.\n\n## Waiting\n\n- Codex: out of quota until 15:00 UTC.\n- pick a name,\n  either one.\n\n" +
+				"## Validation\n\n- Passes.\n\n## Decisions needed\n\n1. Naming: foo or bar?\n",
+		),
+	).toEqual([
+		{ line: 5, party: "Codex", text: "out of quota until 15:00 UTC." },
+		{ line: 6, party: "Maintainer", text: "pick a name, either one." },
+		{ line: 15, party: "Maintainer", text: "Naming: foo or bar?" },
+	]);
+});
+
+test("a draft's hand-back without items is one maintainer item holding its prose", () => {
+	expect(handBackWaits("Work.\r\n\r\nWaiting\r\n-------\r\n\r\nPick a name\r\nfor it.\r\n")).toEqual([
+		{ line: 3, party: "Maintainer", text: "Pick a name for it." },
+	]);
+	expect(handBackWaits("## Waiting\n")).toEqual([
+		{ line: 1, party: "Maintainer", text: "the draft hands back without saying what it waits on" },
+	]);
+	expect(handBackWaits("Work.\n\n```\n## Waiting\n\n- Maintainer: pick.\n```\n")).toEqual([]);
+});
+
+test("drafts rank as the quest they carry, after quests on a tie, and last when they carry none", () => {
+	const docs = tree(
+		{ "a.md": "\n## Waiting\n\n- Maintainer: pick one.\n", "b.md": "" },
+		{ "c.md": "\n## Required\n\n- [B](/quest/m0/b.md)\n" },
+	);
+	const draft = (url: string, branch: string, body: string) => ({ url, branch, body });
+	const found = waiting(docs, [
+		draft("https://example.com/pull/1", "quest-plan/x", "## Waiting\n\n- Maintainer: plan it.\n"),
+		draft("https://example.com/pull/2", "quest/m0/b", "## Waiting\n\n- Maintainer: pick b.\n"),
+		draft("https://example.com/pull/3", "quest/m0/a", "## Waiting\n\n- moq-dev/moq: a release.\n"),
+		draft("https://example.com/pull/4", "quest/m0/a", "Ready soon.\n"),
+		draft("https://example.com/pull/5", "quest/m9/gone", "## Decisions needed\n\n- Keep it?\n"),
+	]);
+	expect(found.map((quest) => [quest.pr ?? quest.path, quest.path, quest.dependents, quest.ready])).toEqual([
+		["https://example.com/pull/2", "quest/m0/b.md", 1, true],
+		["quest/m0/a.md", "quest/m0/a.md", 0, true],
+		["https://example.com/pull/1", null, 0, true],
+		["https://example.com/pull/5", null, 0, true],
+		["https://example.com/pull/3", "quest/m0/a.md", 0, true],
+	]);
 });

@@ -6,6 +6,9 @@
 import type { Nodes } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 
+import { parse } from "./doc";
+import { MAINTAINER, type Wait, parseWait } from "./waiting";
+
 // `Decisions needed` is the heading `Waiting` replaced; drafts opened before it
 // still hand back with it.
 const HAND_BACK = /^(?:Waiting|Decisions needed)$/i;
@@ -16,23 +19,39 @@ function text(node: Nodes): string {
 	return "children" in node ? node.children.map(text).join("") : "";
 }
 
+/** One hand-back section of a PR body, by source offsets. */
+interface HandBack {
+	/** The start of its heading's line. */
+	start: number;
+	/** Just past its heading. */
+	content: number;
+	/** The next level-1 or level-2 heading's line, or the body's end. */
+	end: number;
+	/** Its heading is `Waiting`, whose items open with their party, rather than the older `Decisions needed`. */
+	waiting: boolean;
+}
+
 /**
- * The source offsets of each hand-back section in a PR body: from the start of
- * its `## Waiting` (or older `## Decisions needed`) heading's line to the next
- * level-1 or level-2 heading. Only top-level headings count, as Markdown parses
- * them, so an example inside a code fence, a list, or a quote is text.
+ * Each hand-back section in a PR body: from the start of its `## Waiting` (or
+ * older `## Decisions needed`) heading's line to the next level-1 or level-2
+ * heading. Only top-level headings count, as Markdown parses them, so an
+ * example inside a code fence, a list, or a quote is text.
  */
-function handBacks(body: string): [number, number][] {
-	const sections: [number, number][] = [];
-	let open: number | undefined;
+function handBacks(body: string): HandBack[] {
+	const sections: HandBack[] = [];
+	let open: Omit<HandBack, "end"> | undefined;
 	for (const node of fromMarkdown(body).children) {
 		if (node.type !== "heading" || node.depth > 2) continue;
 		const offset = node.position?.start.offset ?? 0;
 		const line = body.lastIndexOf("\n", offset - 1) + 1;
-		if (open !== undefined) sections.push([open, line]);
-		open = node.depth === 2 && HAND_BACK.test(text(node).trim()) ? line : undefined;
+		if (open !== undefined) sections.push({ ...open, end: line });
+		const title = text(node).trim();
+		open =
+			node.depth === 2 && HAND_BACK.test(title)
+				? { start: line, content: node.position?.end.offset ?? offset, waiting: /^waiting$/i.test(title) }
+				: undefined;
 	}
-	if (open !== undefined) sections.push([open, body.length]);
+	if (open !== undefined) sections.push({ ...open, end: body.length });
 	return sections;
 }
 
@@ -41,11 +60,39 @@ export function handedBack(body: string): boolean {
 	return handBacks(body).length > 0;
 }
 
+/**
+ * What a PR body hands back, one wait per top-level item of each hand-back
+ * section, with lines counted in `body`. A draft hands back to the maintainer,
+ * so an item that names no party is theirs, as is every `Decisions needed`
+ * item, whose format predates parties. A section without items still hands
+ * the draft back, so it reads as one maintainer item holding its prose.
+ */
+export function handBackWaits(body: string): Wait[] {
+	const found: Wait[] = [];
+	for (const { start, content, end, waiting } of handBacks(body)) {
+		const offset = body.slice(0, start).split("\n").length - 1;
+		const items = parse("", body.slice(start, end)).entries.map(
+			(entry): Wait =>
+				(waiting ? parseWait(entry) : null) ?? { line: entry.line, party: MAINTAINER, text: entry.text },
+		);
+		if (items.length === 0) {
+			const prose = body.slice(content, end).replace(/\s+/g, " ").trim();
+			items.push({
+				line: 1,
+				party: MAINTAINER,
+				text: prose || "the draft hands back without saying what it waits on",
+			});
+		}
+		for (const item of items) found.push({ ...item, line: item.line + offset });
+	}
+	return found;
+}
+
 /** `body` without its hand-back sections, which `quest ready` drops as it marks a draft ready. */
 export function withoutHandBack(body: string): string {
 	let kept = "";
 	let from = 0;
-	for (const [start, end] of handBacks(body)) {
+	for (const { start, end } of handBacks(body)) {
 		kept += body.slice(from, start);
 		from = end;
 	}

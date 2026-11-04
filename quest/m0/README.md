@@ -95,7 +95,6 @@ ownership-manifest design:
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
 - [Split the rejected-login review test](/quest/m0/review-test-load.md) - each rejected-login variant is its own test, within the default limit under load
 - [Reviewer usage limits](/quest/m0/review-quota.md) - `quest review` exits distinctly on a reviewer's quota and prints the reset time
-- [Drafts in quest waiting](/quest/m0/waiting-drafts.md) - `quest waiting` lists open draft PRs' `## Waiting` items beside the tree's
 - [Decision records](/quest/m0/decision-records.md) - grill and plan label rejected options, and record a decision in the PR when the PR deletes the quest
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Per-PR picks in /quest-complete](/quest/m0/complete-per-pr.md) - one question per PR, with no grouped or blanket option offered

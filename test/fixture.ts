@@ -239,6 +239,15 @@ export class Tree {
 		return run("--root", this.path, ...args);
 	}
 
+	/** Run an asynchronous CLI command against this tree and wait for it. */
+	async exec(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+		let stdout = "";
+		let stderr = "";
+		const out: Output = { stdout: (text) => void (stdout += text), stderr: (text) => void (stderr += text) };
+		const code = await main(["--root", this.path, ...args], out);
+		return { code, stdout, stderr };
+	}
+
 	/** Run the CLI against this tree with stdout on a terminal. */
 	runOn(terminal: Terminal, ...args: string[]): { code: number; stdout: string; stderr: string } {
 		return runOn(terminal, "--root", this.path, ...args);
