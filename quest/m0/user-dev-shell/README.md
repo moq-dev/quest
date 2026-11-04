@@ -73,6 +73,5 @@ moq-dev/moq's `.codex/hooks/direnv.sh`.
 
 ## Required
 
-- [quest init writes no hooks](/quest/m0/user-dev-shell/init-hooks.md) - `quest init` stops writing hook entries and removes the ones it or a wrapper wrote; the docs describe the hooks as user-level opt-in
 - [.worktrees/ stays out of git status](/quest/m0/user-dev-shell/worktrees-exclude.md) - `quest worktree` adds `/.worktrees/` to the clone's local exclude unless something ignores it
-- [Repositories drop dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - quest, moq, moq.pro, rind, and rust2 drop their dev-shell hooks, Quest worktree hooks, and `nix develop` instructions
+- [Repositories drop dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - quest, moq, moq.pro, rind, and rust2 drop their dev-shell hooks and `nix develop` instructions

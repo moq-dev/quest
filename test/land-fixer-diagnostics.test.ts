@@ -32,6 +32,7 @@ test.skipIf(process.platform === "win32")(
 		const sha = git("rev-parse", "HEAD");
 		const plan: Plan = {
 			repository: "moq-dev/fixture",
+			method: "squash",
 			base: { ref: "main", sha },
 			eject: [],
 			queue: [

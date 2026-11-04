@@ -103,7 +103,8 @@ commits beyond the default branch; `POST
 on screen records the approver, the SHA, and the time in `head_approvals`,
 one per pull request. An approval lapses when the head moves and counts only
 while its approver keeps a maintain or admin role. The check runs at
-creation and again at assignment. Other heads, including unsigned ones and
+creation, again whenever the job queues or its head moves, without waiting for
+a free runner, and again at assignment. Other heads, including unsigned ones and
 those kix pushed to, route only to Linux runners whose owner declared VM
 builds when registering them, a statement kix does not verify
 ([trust by stage](GITHUB.md#trust-by-stage)). `quest runner` cannot build in a

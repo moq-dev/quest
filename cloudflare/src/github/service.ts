@@ -1462,7 +1462,7 @@ export class GitHubService {
 					mode: "100644" as const,
 				}));
 				const message =
-					"chore: set up Quest\n\nWrites what `quest init` installs: skill stubs, quest/README.md, the agent\ninstructions' Quests line, the merge driver's .gitattributes line, and\nClaude Code's worktree hooks.\n";
+					"chore: set up Quest\n\nWrites what `quest init` installs: skill stubs, quest/README.md, the agent\ninstructions' Quests line, and the merge driver's .gitattributes line.\n";
 				// A retry builds on the default branch's files, but keeps kix's earlier commit as a parent,
 				// so the branch only fast-forwards: a push since the check above makes it fail rather than vanish.
 				const commit =

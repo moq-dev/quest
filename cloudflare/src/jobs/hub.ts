@@ -133,6 +133,19 @@ export class RunnerHub extends DurableObject<Env> {
 		await this.#notify(owner);
 	}
 
+	/**
+	 * Reread a queued job's trust after a change outside the job, such as a
+	 * head approval. Marking it in turn with dispatch passes keeps a pass that
+	 * read the trust before the change from clearing the mark.
+	 */
+	async recheck(owner: string, job: string) {
+		await this.#run(async () => {
+			await store.recheck(this.env.DB, job);
+			await this.#dispatch(owner);
+		});
+		await this.#notify(owner);
+	}
+
 	/** Only a fixed invalidation hint crosses this browser connection; content is reauthorized over HTTPS. */
 	changed() {
 		for (const ws of this.ctx.getWebSockets("inbox")) if (ws.readyState === WebSocket.OPEN) ws.send("changed");

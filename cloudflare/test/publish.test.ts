@@ -1085,6 +1085,32 @@ describe("runner publication", () => {
 		});
 	});
 
+	it("rechecks the trust of a job requeued while its publication moved the head", async () => {
+		const id = await running({
+			workflow: "iterate",
+			target: "pulls/2",
+			revision: prHead,
+			branch: "contributor/fix",
+			trusted: true,
+		});
+		// The runner's lease expires while GitHub moves the branch, with no runner left to take the job.
+		intercept(
+			(url, method) => method === "PATCH" && url.pathname.includes("/git/refs/"),
+			async (next) => {
+				const response = await next();
+				await store.dispatch(db, user, new Map(), 1, async () => true);
+				await store.dispatch(db, user, new Map(), store.GRACE + 1, async () => true);
+				expect(await job(id)).toMatchObject({ state: "queued", trusted: 1, recheck: 0 });
+				return response;
+			},
+		);
+		const response = await publish({ job: id, attempt: 1, head: prHead, message: "m", changes: [file("a", "1")] });
+		expect(response.status).toBe(200);
+		const { head } = (await response.json()) as { head: string };
+		// kix's commit carries no maintainer's signature.
+		expect(await job(id)).toMatchObject({ state: "queued", head, trusted: 0, recheck: 0 });
+	});
+
 	it("turns off an iterated pull request's auto-merge before pushing, so the new head never lands unreviewed", async () => {
 		const id = await running({
 			workflow: "iterate",

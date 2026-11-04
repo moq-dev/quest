@@ -18,6 +18,7 @@ import {
 } from "./github";
 import { appOf, latestContexts } from "../github/checks";
 import { classifyCheck } from "./status";
+import type { Method } from "./hold";
 import { committedSources, snapshot } from "./tree";
 
 /** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
@@ -31,12 +32,43 @@ export function pin(sha: string): string {
 	return `${PIN}: ${sha}`;
 }
 
+/** How a `quest land serve` instance lands each PR: as a squash commit, or as a merge commit keeping its ancestry. */
+export type LandMethod = "squash" | "merge";
+
 /**
- * Queue `head` for the gate: squash auto-merge whose commit body pins it. GitHub keeps an
- * existing auto-merge request, and its old commit body, when asked to enable it again, so an
- * existing request is disabled first and the pin always names `head`.
+ * How many times the gate retries while GitHub catches up on a push, 15.5 s of backoff in all. A
+ * merge still unsettled after them throws, and the next round rebuilds the queue as GitHub then shows it.
  */
-export async function enqueue(github: GitHub, id: string, head: string): Promise<void> {
+export const SETTLE_RETRIES = 5;
+
+/** The repository setting that allows each merge method. */
+export const ALLOWS: Record<Method, string> = {
+	merge: "allow_merge_commit",
+	squash: "allow_squash_merge",
+	rebase: "allow_rebase_merge",
+};
+
+/** Each merge method as GitHub's settings name it. */
+export const METHOD_NAMES: Record<Method, string> = {
+	merge: "merge commits",
+	squash: "squash merges",
+	rebase: "rebase merges",
+};
+
+/** Which base a queue is read for, and how its PRs land. */
+export interface Target {
+	/** The base branch; the repository's default when absent. */
+	base?: string;
+	method: LandMethod;
+}
+
+/**
+ * Queue `head` for the gate: auto-merge with `method`, a method the base allows, whose commit body
+ * pins it. The request only signals the queue, so its method never decides how the gate lands.
+ * GitHub keeps an existing auto-merge request, and its old commit body, when asked to enable it
+ * again, so an existing request is disabled first and the pin always names `head`.
+ */
+export async function enqueue(github: GitHub, id: string, head: string, method: Method): Promise<void> {
 	const current = object(
 		await github.graphql(
 			"query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { commitBody } } } }",
@@ -55,8 +87,8 @@ export async function enqueue(github: GitHub, id: string, head: string): Promise
 		);
 	}
 	await github.graphql(
-		"mutation($id: ID!, $sha: GitObjectID!, $body: String!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: SQUASH, commitBody: $body }) { clientMutationId } }",
-		{ id, sha: head, body: pin(head) },
+		"mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!, $body: String!) { enablePullRequestAutoMerge(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: $method, commitBody: $body }) { clientMutationId } }",
+		{ id, sha: head, method: method.toUpperCase(), body: pin(head) },
 	);
 }
 
@@ -111,6 +143,8 @@ export interface Ejection {
 export interface Plan {
 	/** `owner/name`. */
 	repository: string;
+	/** How the gate lands each PR. */
+	method: LandMethod;
 	base: { ref: string; sha: string };
 	/** Queued PRs in enqueue order. */
 	queue: Entry[];
@@ -168,18 +202,19 @@ const MORE_CONTEXTS = `query($owner: String!, $name: String!, $oid: GitObjectID!
 export const UPHELD: Record<string, string> = {
 	creation: "the gate never creates the base",
 	deletion: "the gate never deletes the base",
-	non_fast_forward: "GitHub squashes each PR onto the current base",
-	required_linear_history: "the gate lands squash commits in a line",
+	non_fast_forward: "GitHub merges each PR onto the current base",
+	required_linear_history: "the gate lands squash commits in a line, and refuses merge-commit landing on such a base",
 	pull_request:
 		"each PR's review decision must not block it, and its review threads must be resolved if the rule says so",
 	required_status_checks: "each required check must pass on each PR's head, from the app the rule names",
 	copilot_code_review: "it requests a review and blocks nothing",
 };
 
-/** What `rule` sets that the gate does not uphold, or null when it upholds all of it. */
-function unheld(rule: ObjectValue): string | null {
+/** What `rule` sets that the gate, landing with `method`, does not uphold, or null when it upholds all of it. */
+function unheld(rule: ObjectValue, method: LandMethod): string | null {
 	const type = string(rule.type);
 	if (!(type in UPHELD)) return type;
+	if (type === "required_linear_history") return method === "merge" ? `${type} (with merge commits)` : null;
 	if (type !== "pull_request") return null;
 	// The review decision covers approvals, code owners, and stale reviews, but not these.
 	const parameters = rule.parameters == null ? {} : object(rule.parameters);
@@ -187,7 +222,7 @@ function unheld(rule: ObjectValue): string | null {
 	const reviewers = parameters.required_reviewers;
 	const settings = [
 		parameters.require_last_push_approval === true && "require_last_push_approval",
-		Array.isArray(methods) && !methods.includes("squash") && "allowed_merge_methods without squash",
+		Array.isArray(methods) && !methods.includes(method) && `allowed_merge_methods without ${method}`,
 		Array.isArray(reviewers) && reviewers.length > 0 && "required_reviewers",
 	].filter((setting) => setting !== false);
 	return settings.length > 0 ? `${type} (${settings.join(", ")})` : null;
@@ -202,20 +237,21 @@ export const UPHELD_CLASSIC: Record<string, string> = {
 		"each required check must pass on each PR's head, from the app it names, and the gate checks the chain on the current base",
 	required_pull_request_reviews: "each PR's review decision must not block it",
 	required_conversation_resolution: "each PR's review threads must be resolved",
-	required_linear_history: "the gate lands squash commits in a line",
+	required_linear_history: "the gate lands squash commits in a line, and refuses merge-commit landing on such a base",
 	block_creations: "the gate never creates the base",
 	allow_force_pushes: "it only loosens the base",
 	allow_deletions: "it only loosens the base",
 	allow_fork_syncing: "it only loosens a locked base",
 };
 
-/** The settings of a base's classic protection that the gate does not uphold. */
-function unheldClassic(protection: ObjectValue): string[] {
+/** The settings of a base's classic protection that the gate, landing with `method`, does not uphold. */
+function unheldClassic(protection: ObjectValue, method: LandMethod): string[] {
 	return Object.entries(protection).flatMap(([setting, value]) => {
 		if (setting === "url") return [];
 		// A setting is on unless it says it is off; one without `enabled`, such as `restrictions`, is on when present.
 		if (value == null || object(value).enabled === false) return [];
 		if (!(setting in UPHELD_CLASSIC)) return [setting];
+		if (setting === "required_linear_history" && method === "merge") return [`${setting} (with merge commits)`];
 		// As for rulesets, the review decision does not cover approval of the last push.
 		return setting === "required_pull_request_reviews" && object(value).require_last_push_approval === true
 			? [`${setting} (require_last_push_approval)`]
@@ -271,26 +307,20 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
  */
 export async function resolveQueue(
 	repository: Repository,
-	base: string | undefined,
+	target: Target,
 	deps: GitHubDependencies,
 	acceptHead?: (entry: Entry) => boolean,
 ): Promise<Plan> {
 	const github = new GitHub(deps);
 	const name = `${repository.owner}/${repository.repo}`;
-	const ref =
-		base ??
-		string(
-			object(
-				object(
-					(
-						await github.graphql(
-							"query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name } } }",
-							{ owner: repository.owner, name: repository.repo },
-						)
-					).repository,
-				).defaultBranchRef,
-			).name,
+	const settings = object(await (await github.request(repositoryPath(repository))).json());
+	const ref = target.base ?? string(settings.default_branch);
+	// A setting hidden from the token counts as allowed, leaving GitHub to refuse.
+	if (settings[ALLOWS[target.method]] === false) {
+		throw new Error(
+			`${name} does not allow ${METHOD_NAMES[target.method]}, so GitHub would refuse every merge the gate checks`,
 		);
+	}
 	const needs = await requirements(github, repository, ref);
 	if (!needs.checks.some((check) => check.name === LAND_CHECK)) {
 		throw new Error(
@@ -298,7 +328,7 @@ export async function resolveQueue(
 		);
 	}
 	const refused = needs.rules.flatMap((rule) => {
-		const what = unheld(rule);
+		const what = unheld(rule, target.method);
 		return what === null ? [] : [`${what} from ruleset ${String(rule.ruleset_id)}`];
 	});
 	if (refused.length > 0) {
@@ -308,7 +338,7 @@ export async function resolveQueue(
 	}
 	// Classic protection's required checks are already among `needs.checks`.
 	const classic = needs.classic ? await classicProtection(github, repository, ref) : null;
-	const unmodeled = classic === null ? [] : unheldClassic(classic);
+	const unmodeled = classic === null ? [] : unheldClassic(classic, target.method);
 	if (unmodeled.length > 0) {
 		throw new Error(
 			`${name}'s ${ref} has classic branch protection settings the gate does not uphold, and its merge bypasses them: ${unmodeled.join(", ")}. It upholds only ${Object.keys(UPHELD_CLASSIC).join(", ")}`,
@@ -346,7 +376,14 @@ export async function resolveQueue(
 		after = info.hasNextPage === true ? string(info.endCursor) : null;
 	} while (after !== null);
 
-	const plan: Plan = { repository: name, base: { ref, sha: sha! }, queue: [], eject: [], waiting: [] };
+	const plan: Plan = {
+		repository: name,
+		method: target.method,
+		base: { ref, sha: sha! },
+		queue: [],
+		eject: [],
+		waiting: [],
+	};
 	const landing = nodes.filter((node) => node.autoMergeRequest !== null && node.isDraft !== true);
 	const order = (node: ObjectValue) => string(object(node.autoMergeRequest).enabledAt);
 	landing.sort((a, b) => order(a).localeCompare(order(b)) || Number(a.number) - Number(b.number));
@@ -463,7 +500,7 @@ function checks(contexts: ObjectValue[], required: RequiredCheck[]): { failing: 
 	return { failing: failing.sort(), pending: pending.sort() };
 }
 
-/** A queued PR's squash commit on the chain. */
+/** A queued PR's commit on the chain, as the gate lands it. */
 interface Link {
 	entry: Entry;
 	commit: string;
@@ -476,22 +513,22 @@ interface Conflict {
 	files: string[];
 }
 
-/** A queued PR that fails `quest check` squashed alone onto the base, with the findings the base lacks. */
+/** A queued PR that fails `quest check` landed alone onto the base, with the findings the base lacks. */
 export interface Rejection {
 	entry: Entry;
-	/** The squash onto the base that fails, which a fixer starts from. */
+	/** Its commit onto the base that fails, which a fixer starts from. */
 	commit: string;
 	findings: string[];
 }
 
-/** A newly screened PR, and the PRs ahead of it that it conflicts with, each squashed alone onto the base. */
+/** A newly screened PR, and the PRs ahead of it that it conflicts with, each landed alone onto the base. */
 export interface Overlap {
 	entry: Entry;
 	ahead: Conflict[];
 }
 
 /**
- * A bounded batch of squash commits, or a conflict on its base PR. Rejected PRs are left out of
+ * A bounded batch of commits as the gate lands them, or a conflict on its base PR. Rejected PRs are left out of
  * it; overlaps only inform.
  */
 interface Chain {
@@ -512,10 +549,11 @@ export interface BatchPolicy {
 
 /**
  * Fetch the base and every queued head, then fill a batch in `policy`'s order in a scratch
- * worktree inside the git directory, resolving quest files with `quest resolve`. Each candidate
- * is first squashed alone onto the base: one that fails `quest check` there with findings the
- * base lacks is rejected, and a fresh one is also squashed onto the PRs landing soonest ahead of
- * it, to report which ones it conflicts with. Stop at the policy's batch limit, skipping
+ * worktree inside the git directory, resolving quest files with `quest resolve`. Each link is a
+ * commit as `plan.method` lands it: a squash, or a merge commit whose second parent is the head.
+ * Each candidate is first landed alone onto the base: one that fails `quest check` there with
+ * findings the base lacks is rejected, and a fresh one is also landed onto the PRs landing soonest
+ * ahead of it, to report which ones it conflicts with. Stop at the policy's batch limit, skipping
  * conflicting additions; a conflicting base stops the batch.
  */
 export async function build(
@@ -546,7 +584,7 @@ export async function build(
 			if (alone === null) {
 				if (chain.links.length > 0) continue;
 				git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
-				chain.conflict = { entry, files: squash(dir, driver, entry)! };
+				chain.conflict = { entry, files: combine(dir, driver, entry, plan.method)! };
 				break;
 			}
 			if (alone.findings.length > 0) {
@@ -555,7 +593,7 @@ export async function build(
 			}
 			if (fresh(entry)) chain.overlaps.push({ entry, ahead: screening.overlaps(entry) });
 			git(dir, ["reset", "--quiet", "--hard", chain.links.at(-1)?.commit ?? plan.base.sha]);
-			if (squash(dir, driver, entry) !== null) continue;
+			if (combine(dir, driver, entry, plan.method) !== null) continue;
 			chain.links.push({
 				entry,
 				commit: git(dir, ["rev-parse", "HEAD"]),
@@ -566,17 +604,30 @@ export async function build(
 	});
 }
 
-/** Squash `entry` onto `HEAD` and commit it, or return the conflicting files and leave `HEAD` as it was. */
-function squash(dir: string, driver: string, entry: Entry): string[] | null {
-	const merged = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", "--squash", entry.head]);
+/**
+ * Land `entry` onto `HEAD` as `method` does and commit it, or return the conflicting files and
+ * leave `HEAD` as it was. A merge commit is committed from its tree, as GitHub's is, even when
+ * `HEAD` already contains the head.
+ */
+function combine(dir: string, driver: string, entry: Entry, method: LandMethod): string[] | null {
+	const how = method === "squash" ? ["--squash"] : ["--no-ff", "--no-commit"];
+	const merged = tryGit(dir, ["-c", `merge.quest.driver=${driver}`, "merge", ...how, entry.head]);
 	if (merged.status !== 0) {
 		const files = lines(git(dir, ["diff", "--name-only", "--diff-filter=U"]));
-		if (files.length === 0) throw new Error(`git merge --squash ${entry.head} failed: ${merged.stderr.trim()}`);
+		if (files.length === 0)
+			throw new Error(`git merge ${how.join(" ")} ${entry.head} failed: ${merged.stderr.trim()}`);
 		git(dir, ["reset", "--quiet", "--hard", "HEAD"]);
 		return files;
 	}
 	prune(dir, entry.head);
-	git(dir, ["commit", "--quiet", "--allow-empty", "-m", `${entry.title} (#${entry.number})`]);
+	const message = `${entry.title} (#${entry.number})`;
+	if (method === "squash") {
+		git(dir, ["commit", "--quiet", "--allow-empty", "-m", message]);
+		return null;
+	}
+	const tree = git(dir, ["write-tree"]);
+	const created = git(dir, ["commit-tree", tree, "-p", "HEAD", "-p", entry.head], { input: message });
+	git(dir, ["reset", "--quiet", "--hard", created]);
 	return null;
 }
 
@@ -629,9 +680,9 @@ function prune(dir: string, head: string): string[] {
 const OVERLAP_AHEAD = 4;
 
 /**
- * Screening for one batch: each head squashed alone onto the base, with `quest check` findings
+ * Screening for one batch: each head landed alone onto the base, with `quest check` findings
  * the base lacks, and a fresh head's conflicts with the PRs landing soonest ahead of it. Results are
- * memoized, since a head is squashed alone once per batch however often it is needed.
+ * memoized, since a head is landed alone once per batch however often it is needed.
  */
 function screener(dir: string, driver: string, plan: Plan) {
 	// A base without quests is a repository that does not use them.
@@ -642,7 +693,7 @@ function screener(dir: string, driver: string, plan: Plan) {
 		if (cache.has(entry)) return cache.get(entry)!;
 		git(dir, ["reset", "--quiet", "--hard", plan.base.sha]);
 		let result: { commit: string; findings: Finding[] } | null = null;
-		if (squash(dir, driver, entry) === null) {
+		if (combine(dir, driver, entry, plan.method) === null) {
 			const commit = git(dir, ["rev-parse", "HEAD"]);
 			// A finding the base already has is not this PR's, even on a line the PR moved.
 			const findings =
@@ -666,7 +717,7 @@ function screener(dir: string, driver: string, plan: Plan) {
 				const base = alone(earlier);
 				if (base === null || base.findings.length > 0) return [];
 				git(dir, ["reset", "--quiet", "--hard", base.commit]);
-				const files = squash(dir, driver, entry);
+				const files = combine(dir, driver, entry, plan.method);
 				return files === null ? [] : [{ entry: earlier, files }];
 			});
 	};

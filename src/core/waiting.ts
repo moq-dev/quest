@@ -25,7 +25,7 @@ export interface Wait {
 const PARTY = /^([^:\s][^:]{0,39}):\s+(\S[\s\S]*)$/;
 
 /** Parse one `## Waiting` item, or `null` when it does not open with its party. */
-export function parseWait(entry: Entry): Wait | null {
+export function parseWait(entry: Pick<Entry, "line" | "text">): Wait | null {
 	const match = PARTY.exec(entry.text.replace(/\s+/g, " ").trim());
 	if (!match) return null;
 	return { line: entry.line, party: match[1].trim(), text: match[2] };

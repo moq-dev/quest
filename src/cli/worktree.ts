@@ -1,6 +1,6 @@
 // Git checkouts under a shared disk budget. Release prunes declared scratch in place, by hand or
 // once the last supervised run in the checkout stops. Remove deletes a checkout that holds no unpreserved work.
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
 	type Stats,
@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
+import { GitError, discoveryEnv, git } from "./git";
 import { type Owner, Retained, type RunOptions, type Scopes, alive, currentOwner, systemdScopes } from "./supervise";
 
 /** A supervised command, live while its owner runs or its scope holds a process. */
@@ -55,30 +56,8 @@ interface Registry {
 /** Another live process holds the registry lock. */
 export class Busy extends Error {}
 
-let located: string[] | undefined;
-/**
- * The environment for Git run on an explicit `-C` path. The repository-local variables a Git hook or
- * `git submodule foreach` exports, such as GIT_DIR and GIT_WORK_TREE, override discovery from that
- * path, so they are dropped as Git drops them when it runs in another repository, keeping `-c` config.
- */
-export function discoveryEnv(): NodeJS.ProcessEnv {
-	located ??= execFileSync("git", ["rev-parse", "--local-env-vars"], { encoding: "utf8" })
-		.split("\n")
-		.filter((name) => name && name !== "GIT_CONFIG_PARAMETERS" && name !== "GIT_CONFIG_COUNT");
-	const env = { ...process.env };
-	for (const name of located) delete env[name];
-	return env;
-}
-function git(root: string, ...args: string[]): string {
-	return execFileSync("git", ["-C", root, ...args], {
-		encoding: "utf8",
-		env: discoveryEnv(),
-		maxBuffer: 64 * 1024 * 1024,
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-}
 /** Git that may wait on the network, run without blocking concurrent hooks and commands. */
-function gitAsync(root: string, ...args: string[]): Promise<unknown> {
+function gitAsync(root: string, args: string[]): Promise<unknown> {
 	return promisify(execFile)("git", ["-C", root, ...args], { env: discoveryEnv(), maxBuffer: 64 * 1024 * 1024 });
 }
 /** Write `value` as JSON, user-only, replacing `path` atomically. */
@@ -117,7 +96,7 @@ export function canonical(path: string): string {
 }
 /** Git's registered checkouts, with canonical paths and lock reasons. */
 function checkouts(repository: string): { path: string; locked?: string }[] {
-	return git(repository, "worktree", "list", "--porcelain", "-z")
+	return git(repository, ["worktree", "list", "--porcelain", "-z"])
 		.split("\0\0")
 		.flatMap((entry) => {
 			const lines = entry.split("\0");
@@ -151,15 +130,9 @@ function present(root: string, path: string): boolean {
 /** The paths Git ignores; check-ignore exits 1 when it matches none. */
 function ignored(root: string, paths: string[]): Set<string> {
 	try {
-		const output = execFileSync("git", ["-C", root, "check-ignore", "-z", "--stdin"], {
-			encoding: "utf8",
-			env: discoveryEnv(),
-			input: `${paths.join("\0")}\0`,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		return new Set(output.split("\0"));
+		return new Set(git(root, ["check-ignore", "-z", "--stdin"], `${paths.join("\0")}\0`).split("\0"));
 	} catch (error) {
-		if ((error as { status?: number }).status === 1) return new Set();
+		if (error instanceof GitError && error.status === 1) return new Set();
 		throw error;
 	}
 }
@@ -226,13 +199,11 @@ function changes(root: string, ignored: boolean): string[] {
 		"--ignore-submodules=none",
 		...(ignored ? ["--ignored"] : []),
 	];
-	return git(root, ...args)
-		.split("\0")
-		.filter(Boolean);
+	return git(root, args).split("\0").filter(Boolean);
 }
 /** The repository's submodule paths from its index, initialized or not. */
 function gitlinks(repository: string): string[] {
-	const paths = git(repository, "ls-files", "--stage", "-z")
+	const paths = git(repository, ["ls-files", "--stage", "-z"])
 		.split("\0")
 		.filter((record) => record.startsWith("160000 "))
 		.map((record) => join(repository, record.slice(record.indexOf("\t") + 1)));
@@ -277,8 +248,8 @@ function clean(root: string): { modules: string[]; stores: Set<string> } {
 		}
 	}
 	const stores = new Set([
-		...moduleStores(git(root, "rev-parse", "--path-format=absolute", "--git-path", "modules").trim()),
-		...modules.map((path) => git(path, "rev-parse", "--absolute-git-dir").trim()),
+		...moduleStores(git(root, ["rev-parse", "--path-format=absolute", "--git-path", "modules"])),
+		...modules.map((path) => git(path, ["rev-parse", "--absolute-git-dir"])),
 	]);
 	for (const store of stores) {
 		// Removal deletes the store, and with it the Git directories of the store's own linked worktrees.
@@ -288,8 +259,7 @@ function clean(root: string): { modules: string[]; stores: Set<string> } {
 				`submodule ${store} has linked worktrees that removal would break; remove or prune them first: ${linked.join(", ")}`,
 			);
 		// Local branches and tags in a module store disappear with the worktree. Only remote refs preserve them.
-		const commit = git(
-			root,
+		const commit = git(root, [
 			"--git-dir",
 			store,
 			"--work-tree",
@@ -300,7 +270,7 @@ function clean(root: string): { modules: string[]; stores: Set<string> } {
 			"--all",
 			"--not",
 			"--remotes",
-		).trim();
+		]);
 		if (commit) throw new Error(`submodule ${store} has commits no remote-tracking ref reaches: ${commit}`);
 	}
 	return { modules, stores };
@@ -311,9 +281,9 @@ function clean(root: string): { modules: string[]; stores: Set<string> } {
  * remote-tracking ref reaches.
  */
 function unreached(root: string): string[] {
-	const own = git(root, "for-each-ref", "--format=%(objectname)", "refs/worktree", "refs/bisect", "refs/rewritten");
-	const tips = new Set([git(root, "rev-parse", "HEAD").trim(), ...own.split("\n").filter(Boolean)]);
-	return [...tips].filter((tip) => git(root, "rev-list", "-n1", tip, "--not", "--branches", "--remotes").trim());
+	const own = git(root, ["for-each-ref", "--format=%(objectname)", "refs/worktree", "refs/bisect", "refs/rewritten"]);
+	const tips = new Set([git(root, ["rev-parse", "HEAD"]), ...own.split("\n").filter(Boolean)]);
+	return [...tips].filter((tip) => git(root, ["rev-list", "-n1", tip, "--not", "--branches", "--remotes"]));
 }
 
 /** Whether the forge merged a change, such as a squash-merged PR, whose head is exactly `commit`. */
@@ -352,14 +322,14 @@ function repositoryWithin(path: string): string | undefined {
 
 /** The repository's main checkout, which every linked worktree of it shares, from any path inside one. */
 export function mainCheckout(path: string): string {
-	const [main] = git(path, "worktree", "list", "--porcelain", "-z").split("\0\0");
+	const [main] = git(path, ["worktree", "list", "--porcelain", "-z"]).split("\0\0");
 	const lines = main?.split("\0") ?? [];
 	const found = lines.find((line) => line.startsWith("worktree "))?.slice(9);
 	if (!found || lines.includes("bare")) throw new Error(`repository has no main checkout: ${path}`);
 	// Git lists an absorbed submodule's store as its main worktree; core.worktree
 	// still names the actual checkout relative to that store.
-	if (canonical(found) === canonical(git(path, "rev-parse", "--path-format=absolute", "--git-common-dir").trim()))
-		return canonical(git(path, "--git-dir", found, "rev-parse", "--show-toplevel").trim());
+	if (canonical(found) === canonical(git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])))
+		return canonical(git(path, ["--git-dir", found, "rev-parse", "--show-toplevel"]));
 	return canonical(found);
 }
 
@@ -378,7 +348,7 @@ export function derivedDefaults(main: string): { reserve: number; scratch: strin
 	const scratch = names.filter((name) => matched.has(name) && !repositoryWithin(join(main, name))).sort();
 	const skip = new Set([join(main, ".git"), join(main, ".worktrees"), join(main, ".claude", "worktrees")]);
 	// A new checkout clones its own module stores, about the size of the main checkout's.
-	const modules = git(main, "rev-parse", "--path-format=absolute", "--git-path", "modules").trim();
+	const modules = git(main, ["rev-parse", "--path-format=absolute", "--git-path", "modules"]);
 	return { reserve: Math.max(1, diskUsage(main, new Set(), skip) + diskUsage(modules)), scratch };
 }
 
@@ -606,7 +576,7 @@ export class Worktrees {
 			if (!Number.isSafeInteger(reserve) || reserve <= 0)
 				throw new Error("reserve must be a positive safe integer in bytes, including expected build growth");
 			const declared = scratch.map(childPath);
-			const repository = canonical(git(root, "rev-parse", "--show-toplevel").trim());
+			const repository = canonical(git(root, ["rev-parse", "--show-toplevel"]));
 			if (registry.records.some((item) => item.name === name && item.repository === repository))
 				throw new Error(
 					`worktree name already exists in this repository; use restore or another name: ${name}`,
@@ -629,8 +599,7 @@ export class Worktrees {
 			registry.records.push(record);
 			save(join(this.home, "registry.json"), registry); // Reservation survives a crash in git.
 			try {
-				git(
-					repository,
+				git(repository, [
 					"worktree",
 					"add",
 					"--detach",
@@ -639,7 +608,7 @@ export class Worktrees {
 					`quest worktree ${record.id}`,
 					path,
 					ref,
-				);
+				]);
 				return record;
 			} catch (error) {
 				record.failure = String(error);
@@ -650,14 +619,14 @@ export class Worktrees {
 		try {
 			// Cloning can need the network; the reservation stays charged without holding the shared lock.
 			if (gitlinks(record.path).length)
-				await gitAsync(record.path, "submodule", "update", "--init", "--recursive");
+				await gitAsync(record.path, ["submodule", "update", "--init", "--recursive"]);
 			for (const module of submodules(record.path)) {
-				const untracked = (ref: string) => git(module, "rev-list", "-n1", ref, "--not", "--remotes").trim();
+				const untracked = (ref: string) => git(module, ["rev-list", "-n1", ref, "--not", "--remotes"]);
 				const fetch = (refs: string[]) =>
-					gitAsync(module, "fetch", "--no-tags", "--no-write-fetch-head", "origin", ...refs);
+					gitAsync(module, ["fetch", "--no-tags", "--no-write-fetch-head", "origin", ...refs]);
 				// Named tag refs work even when the server refuses unadvertised SHA wants.
 				// Keep preservation refs outside origin's branch-prune namespace.
-				const tags = git(module, "for-each-ref", "--format=%(refname)", "refs/tags")
+				const tags = git(module, ["for-each-ref", "--format=%(refname)", "refs/tags"])
 					.split("\n")
 					.filter(Boolean)
 					.filter(untracked);
@@ -667,8 +636,8 @@ export class Worktrees {
 					);
 				const tips = [
 					...new Set([
-						git(module, "rev-parse", "HEAD").trim(),
-						...git(module, "for-each-ref", "--format=%(objectname)").split("\n").filter(Boolean),
+						git(module, ["rev-parse", "HEAD"]),
+						...git(module, ["for-each-ref", "--format=%(objectname)"]).split("\n").filter(Boolean),
 					]),
 				].filter(untracked);
 				// A pin update may have fetched only a SHA, without an advertised branch or tag.
@@ -733,7 +702,7 @@ export class Worktrees {
 				const owner = modules.find((module) => absolute.startsWith(module + sep)) ?? root;
 				const local = relative(owner, absolute).split(sep).join("/");
 				// icase covers filesystem aliases of tracked paths on case-insensitive hosts.
-				const tracked = git(owner, "ls-files", "-z", "--", `:(literal,icase)${local}`)
+				const tracked = git(owner, ["ls-files", "-z", "--", `:(literal,icase)${local}`])
 					.split("\0")
 					.filter(Boolean);
 				if (tracked.length)
@@ -815,20 +784,19 @@ export class Worktrees {
 					`ignored files outside the declared scratch remain, so the checkout was only released: ${left.slice(0, 20).join(", ")}`,
 				);
 			const reason = `quest worktree ${record.id}`;
-			git(record.repository, "worktree", "unlock", record.path);
+			git(record.repository, ["worktree", "unlock", record.path]);
 			try {
 				// Git requires --force for initialized submodules. The recursive checks above
 				// cover their files and every module store, including deinitialized modules.
-				git(
-					record.repository,
+				git(record.repository, [
 					"worktree",
 					"remove",
 					...(stores.size || modules.length ? ["--force"] : []),
 					record.path,
-				);
+				]);
 			} catch (error) {
 				try {
-					git(record.repository, "worktree", "lock", "--reason", reason, record.path);
+					git(record.repository, ["worktree", "lock", "--reason", reason, record.path]);
 				} catch (relock) {
 					throw new Error(`${message(error)}; locking the checkout again failed: ${message(relock)}`);
 				}
@@ -902,7 +870,9 @@ export class Worktrees {
 			record.runs.push(run); // Recorded before the scope exists, so a crash is reconciled.
 			return { id: record.id, path: record.path };
 		});
-		const result = await this.scopes.run(run.unit, record.path, command, options).then(
+		// The command runs in this checkout, where a location inherited from a Git hook names the wrong repository.
+		const env = discoveryEnv(options?.env);
+		const result = await this.scopes.run(run.unit, record.path, command, { ...options, env }).then(
 			(code) => ({ code }),
 			(error: unknown) => ({ error }),
 		);

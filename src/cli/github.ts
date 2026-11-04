@@ -1,6 +1,7 @@
 // The GitHub client shared by the commands that talk to GitHub, outside the repository-independent core.
 import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { git } from "./git";
 
 const API = "https://api.github.com";
 const MAX_SLEEP = 2_147_483_647;
@@ -147,16 +148,6 @@ function rewritten(root: string, name: string): { fetch: string; push: string } 
 	}
 	if (urls.fetch === undefined) throw new Error(`no ${name} remote`);
 	return { fetch: urls.fetch, push: urls.push ?? urls.fetch };
-}
-
-/** Run git in `root` for its output; a lookup that matches nothing, which exits 1, is empty. */
-function git(root: string, args: string[]): string {
-	try {
-		return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-	} catch (error) {
-		if (args[0] === "config" && (error as { status?: number }).status === 1) return "";
-		throw error;
-	}
 }
 
 /** Read `name` like `readRemote`, failing when there is no such remote. */
