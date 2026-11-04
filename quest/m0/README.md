@@ -72,13 +72,13 @@ ownership-manifest design:
 
 - The binary carries the skills, the quest contract, and all hook logic.
   `quest init` installs only static stubs into a repository: one-line skill
-  stubs, one reference line in its root instructions, one `.gitattributes`
-  line, and Claude hook entries in `.claude/settings.json` that only call a
-  `quest` subcommand. Upgrading never rewrites repository files. (Amended
-  2026-10-26 (user), replacing "Nothing is vendored", so `quest init` can
-  install the agent lifecycle hooks. Amended 2026-11-01 (user, /quest-plan):
-  `quest init` also rewrites a Quest-written stub nobody edited when its
-  text is out of date.)
+  stubs, one reference line in its root instructions, and one
+  `.gitattributes` line. Upgrading never rewrites repository files. (Amended
+  2026-11-01 (user, /quest-plan): `quest init` also rewrites a Quest-written
+  stub nobody edited when its text is out of date. Amended 2026-11-03
+  (maintainer, /quest-unblock): `quest init` writes no Claude hook entries;
+  Quest's worktree hooks are a user-level opt-in, see
+  [user-dev-shell](/quest/m0/user-dev-shell/README.md).)
 - The repository's own tool manager pins the version: mise (release binaries)
   or a nix flake input (any rev, built from source). Quest ships no launcher
   and no pin file; an install outside either is simply unpinned.
@@ -93,8 +93,10 @@ ownership-manifest design:
 - [Land through the merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for the repositories not yet switched, with merge-commit landing as its one exception
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - workflow pushes and the PR's own CI as context
+- [Review sessions keyed by upstream branch](/quest/m0/review-session-key.md) - a round from a local branch tracking the PR branch continues that branch's review session
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
-- [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the harness, model, and effort `MODELS.md` maps its size to, and PRs record their implementer
+- [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the first model of its size's ranked list that can run, reviews rank the same way, and PRs record size, implementer, and reviewer
+- [Model check](/quest/m0/model-check.md) - recurring: the first audit of the routed PRs retunes the built-in size lists
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
 - [Gate bench](/quest/m0/gate-bench.md) - measure headroom admission on an idle host

@@ -853,10 +853,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("hook")
 		.summary("Handle a Claude Code worktree or subagent hook event read on stdin")
 		.description(
-			"Handle the Claude Code hook event whose JSON input arrives on stdin; `quest init` installs it in " +
-				".claude/settings.json for " +
+			"Handle the Claude Code hook event whose JSON input arrives on stdin, for " +
 				HOOK_EVENTS.join(", ") +
-				".\n\n" +
+				". Add it to your own Claude Code settings for those events to opt in, as the README describes.\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
 				"initializes its submodules recursively, and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
@@ -1246,9 +1245,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("init")
-		.description(
-			"Install skill stubs, a quest root, agent pointers, Claude Code worktree hooks, and the merge driver for this repository",
-		)
+		.description("Install skill stubs, a quest root, agent pointers, and the merge driver for this repository")
 		.action(() => {
 			const changes = init(root());
 			for (const line of theme ? theme.init(changes) : changes) print(line);
@@ -1256,7 +1253,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("uninstall")
-		.description("Remove Quest stubs, markers, hooks, and the merge driver installed by `quest init`")
+		.description("Remove Quest stubs, markers, and the merge driver installed by `quest init`")
 		.action(() => {
 			const changes = uninstall(root());
 			for (const line of theme ? theme.uninstall(changes) : changes) print(line);

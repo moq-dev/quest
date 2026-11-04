@@ -259,8 +259,7 @@ export function QuestSetupPage(props: {
 				<p>
 					This repository has no Quest files on its default branch yet. The App opens a pull request with what{" "}
 					<code>quest init</code> writes: skill stubs, <code>quest/README.md</code>, one line in the agent
-					instructions, a <code>.gitattributes</code> line, and Claude Code's worktree hooks. Contributions
-					are enabled when you merge it.
+					instructions, and a <code>.gitattributes</code> line. Contributions are enabled when you merge it.
 				</p>
 				<form method="post" action={`${projectURL(repo.owner, repo.name)}/setup`}>
 					<input type="hidden" name="id" value={repo.id} />
