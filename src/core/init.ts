@@ -248,16 +248,18 @@ const record = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
- * The command of a hook handler that runs `quest worktree hook`, directly or through a wrapper that names
- * the `quest` executable, package, or flake attribute as a word, such as
- * `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`. Another tool's command that merely ends in
- * `worktree hook` is not Quest's.
+ * A command that runs `quest worktree hook`: the word before `worktree hook`, past an optional `--`, is
+ * the `quest` executable, package, or flake attribute, as in `/usr/local/bin/quest worktree hook`,
+ * `npx @moq-dev/quest@latest worktree hook`, or `nix run "${CLAUDE_PROJECT_DIR}#quest" -- worktree hook`.
+ * Another tool's command that merely ends in `worktree hook` is not Quest's.
  */
+const QUEST_COMMAND = /(?:^|\s)["']?(?:[^\s=]*[/#])?quest(?:[@?][^\s"']*)?["']?(?:\s+--)?\s+worktree hook$/;
+
+/** The trimmed command of a hook handler that runs Quest, or undefined for any other handler. */
 function questCommand(handler: unknown): string | undefined {
 	if (!record(handler) || handler.type !== "command" || typeof handler.command !== "string") return undefined;
 	const command = handler.command.trim();
-	const runner = /^(.*?)(?:^|\s)worktree hook$/.exec(command)?.[1];
-	return runner !== undefined && /(?:^|[\s/#"'])quest(?=$|[\s"'@])/.test(runner) ? command : undefined;
+	return QUEST_COMMAND.test(command) ? command : undefined;
 }
 
 /**

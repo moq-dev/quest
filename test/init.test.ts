@@ -407,7 +407,11 @@ test("init removes the hooks an earlier version wrote, plain or wrapped, and the
 			WorktreeCreate: [group(QUEST)],
 			WorktreeRemove: [group(WRAPPED)],
 			SubagentStart: [group("npx @moq-dev/quest@latest worktree hook")],
-			SubagentStop: [group("/usr/local/bin/quest   worktree hook ")],
+			SubagentStop: [
+				group("/usr/local/bin/quest   worktree hook "),
+				group("nix run github:moq-dev/quest -- worktree hook"),
+				group("bun run --silent quest worktree hook"),
+			],
 		},
 	});
 	const change = apply(dir).find((change) => change.path === ".claude/settings.json");
@@ -416,6 +420,8 @@ test("init removes the hooks an earlier version wrote, plain or wrapped, and the
 		{ event: "WorktreeRemove", command: WRAPPED },
 		{ event: "SubagentStart", command: "npx @moq-dev/quest@latest worktree hook" },
 		{ event: "SubagentStop", command: "/usr/local/bin/quest   worktree hook" },
+		{ event: "SubagentStop", command: "nix run github:moq-dev/quest -- worktree hook" },
+		{ event: "SubagentStop", command: "bun run --silent quest worktree hook" },
 	]);
 	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
 	expect(isFile(dir, ".claude/skills/quest-start/SKILL.md")).toBe(true);
@@ -428,7 +434,12 @@ test("init and uninstall keep other hooks and settings, and the file's formattin
 		PreCompact: [],
 		// Another tool's commands that end in `worktree hook` without running Quest.
 		WorktreeCreate: [group("othertool worktree hook")],
-		WorktreeRemove: [group("my-quest worktree hook"), group("tool --quest-mode worktree hook")],
+		WorktreeRemove: [
+			group("my-quest worktree hook"),
+			group("tool --quest-mode worktree hook"),
+			group("cd quest && othertool worktree hook"),
+			group("othertool --dir=/quest worktree hook"),
+		],
 		SubagentStop: [SESSION, { matcher: "", hooks: [handler("quest-like worktree hook")] }],
 	};
 	const kept = { $schema: "https://json.schemastore.org/claude-code-settings.json", hooks: others };
@@ -440,7 +451,12 @@ test("init and uninstall keep other hooks and settings, and the file's formattin
 				SessionStart: [SESSION],
 				PreCompact: [],
 				WorktreeCreate: [group("othertool worktree hook")],
-				WorktreeRemove: [group("my-quest worktree hook"), group("tool --quest-mode worktree hook")],
+				WorktreeRemove: [
+					group("my-quest worktree hook"),
+					group("tool --quest-mode worktree hook"),
+					group("cd quest && othertool worktree hook"),
+					group("othertool --dir=/quest worktree hook"),
+				],
 				SubagentStart: [group(WRAPPED)],
 				SubagentStop: [SESSION, { matcher: "", hooks: [handler(QUEST), handler("quest-like worktree hook")] }],
 			},
