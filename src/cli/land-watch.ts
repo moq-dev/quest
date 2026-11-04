@@ -13,7 +13,7 @@ import {
 	type Repository,
 	string,
 } from "./github";
-import type { Entry } from "./land";
+import type { Entry, Plan } from "./land";
 import { authenticatedRead } from "./land-git";
 import { jobLog } from "./land-checks";
 import { fixerText, post } from "./land-fixer";
@@ -100,7 +100,7 @@ export interface Removal {
 	/** The full log the comment quotes the tail of. */
 	log: string;
 	/** For a `fix` verdict: the fixer's input, the dropped head as the pick's one entry on the base it was built on. */
-	failure?: Failure;
+	failure?: QueueFailure;
 	/** What the fixer step made of a `fix` verdict; unset while it waits for one. */
 	taken?: string;
 	/** The hold label that ends the pick, recorded before its comment, so a retry honors it once it clears. */
@@ -108,6 +108,9 @@ export interface Removal {
 	/** For a conflict: the base the quest merge driver could not merge, retried only once the base moves. */
 	unmerged?: string;
 }
+
+/** A dropped PR's failure for the fixer. The merge queue applies its own method, so its plan names none. */
+type QueueFailure = Omit<Failure, "plan"> & { plan: Omit<Plan, "method"> };
 
 /** The watcher's progress, in `watch.json`. */
 interface Progress {
@@ -537,7 +540,7 @@ async function handle(
 						tip: head,
 						reason: reason === "merge_conflict" ? "merge_conflict" : "failed_checks",
 						blame: [number],
-					} satisfies Failure,
+					} satisfies QueueFailure,
 				}
 			: {}),
 	};

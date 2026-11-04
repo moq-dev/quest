@@ -12,7 +12,7 @@ import type { GitHubDependencies } from "../src/cli/github";
 import { readRemote } from "../src/cli/land";
 import { parseResolution } from "../src/cli/land-apply";
 import { CHECK_LOG } from "../src/cli/land-checks";
-import { COLLECTION_ATTEMPTS, FLAKY_LIMIT, history } from "../src/cli/land-fixer";
+import { COLLECTION_ATTEMPTS, REQUEUE_LIMIT, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
 import type { FixContext } from "../src/cli/land-watch-fix";
@@ -966,8 +966,11 @@ git add '${file}'
 git commit -qm 'mechanical fix'
 printf '[{"number":%s,"action":"fixed","head":"%s","reason":"add the missing file","failure":"${failure}"}]' "$2" "$(git rev-parse HEAD)" > quest-land-result.json
 `;
-const flakyScript = `printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","failure":"just test: render_timeout","comment":"render_timeout timed out under load."}]' "$2" > quest-land-result.json
+/** A fixer round that requeues the PR unchanged for `cause`, naming render_timeout, disabling it at HEAD if asked. */
+const requeueScript = (cause?: string, disable = false) =>
+	`printf '[{"number":%s,"action":"requeue","reason":"healthy","failure":"just test: render_timeout"${cause ? `,"cause":"${cause}"` : ""}${disable ? `,"disable":"%s"` : ""},"comment":"render_timeout timed out under load."}]' "$2"${disable ? ` "$(git rev-parse HEAD)"` : ""} > quest-land-result.json
 `;
+const flakyScript = requeueScript("flaky");
 
 /** Wait for `count` fixer jobs to have exited. */
 async function exited(state: string, count = 1): Promise<void> {
@@ -1325,7 +1328,7 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		const pull: Pull = { number: 7, head, enqueues: [{ createdAt: at(1), actor: APP }], removals: [] };
 		const github = { ...world([pull], []), origin: repo.origin };
 		fix.round(7, flakyScript);
-		for (let round = 1; round <= FLAKY_LIMIT; round++) {
+		for (let round = 1; round <= REQUEUE_LIMIT; round++) {
 			const minute = round * 10;
 			pull.queued = undefined;
 			pull.removals.push({
@@ -1345,11 +1348,11 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 			await exited(state);
 			github.now = Date.parse(at(minute + 2));
 			expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
-				round < FLAKY_LIMIT ? `requeued 7 ${head}` : "handback 7",
+				round < REQUEUE_LIMIT ? `requeued 7 ${head}` : "handback 7",
 			]);
 		}
 		expect(github.mutations).toEqual([`enqueuePullRequest 7 ${head}`, `enqueuePullRequest 7 ${head}`]);
-		expect(github.comments[7].at(-1)!.body).toContain("stop rule (flaky limit)");
+		expect(github.comments[7].at(-1)!.body).toContain("stop rule (requeue limit)");
 		expect(history(state, 7)!.rounds.map((round) => round.outcome)).toEqual(["flaky", "flaky", "handback"]);
 
 		// The handback ended the pick: the workflow's next enqueue, even of the same head, is a new one.
@@ -1371,6 +1374,65 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		await exited(state);
 	});
 
+	test("a failure on the base or from the runner is requeued with no flaky verdict, and one with no cause goes back", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const heads = [5, 6].map((number) => repo.pull(number, { [`feature-${number}.txt`]: "new\n" }));
+		const github = { ...world([], []), origin: repo.origin };
+		const drop = async (number: number, minute: number, script: string) => {
+			fix.round(number, script);
+			const pull = github.pulls.find((item) => item.number === number);
+			const removal = {
+				id: `R${minute}`,
+				createdAt: at(minute),
+				reason: "failed_checks",
+				actor: "github-merge-queue",
+				before: heads[number - 5],
+			};
+			if (pull) {
+				pull.queued = undefined;
+				pull.removals.push(removal);
+			} else
+				github.pulls.push({
+					number,
+					head: heads[number - 5],
+					enqueues: [{ createdAt: at(minute - 5), actor: "maintainer" }],
+					removals: [removal],
+				});
+			github.runs.push({ ...failedRun(number, at(minute - 2), base), id: minute });
+			github.now = Date.parse(at(minute + 1));
+			expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+				`removed ${number} failed_checks fix`,
+				`fixing ${number}`,
+			]);
+			await exited(state);
+			github.now = Date.parse(at(minute + 2));
+			return watchPass(REPOSITORY, { state }, deps(github), context);
+		};
+		// The same test fails on the base twice, then on the runner: never a flaky verdict, but still rounds.
+		expect(await drop(5, 10, requeueScript("base"))).toEqual([`requeued 5 ${heads[0]}`]);
+		expect(github.comments[5].at(-1)!.body).toContain(
+			"unchanged, since the land fixer found the failure on the base too: `just test: render_timeout`",
+		);
+		expect(await drop(5, 20, requeueScript("base"))).toEqual([`requeued 5 ${heads[0]}`]);
+		expect(await drop(5, 30, requeueScript("environment"))).toEqual(["handback 5"]);
+		expect(github.comments[5].at(-1)!.body).toContain(
+			"the failure was requeued unchanged 3 times in a row, last because the runner's environment fails it",
+		);
+		expect(history(state, 5)!.rounds.map((round) => round.outcome)).toEqual(["base", "base", "handback"]);
+		expect(readFlaky(state)).toEqual([]);
+		// So the test's first genuine flake is its first verdict, and its disable is ignored.
+		expect(await drop(6, 40, requeueScript("flaky", true))).toEqual([
+			"disable ignored 6: first flaky verdict",
+			`requeued 6 ${heads[1]}`,
+		]);
+		expect(readFlaky(state)).toMatchObject([{ failure: "just test: render_timeout", verdicts: [{ number: 6 }] }]);
+		// A requeue that names no cause outside the PR is no progress, and goes back.
+		expect(await drop(6, 50, requeueScript())).toEqual(["handback 6"]);
+		expect(github.comments[6].at(-1)!.body).toContain("stop rule (no new commit)");
+		expect(readFlaky(state)[0].verdicts).toHaveLength(1);
+	});
+
 	test.each([false, true])(
 		"a test seen flaking twice is disabled in its own pull request, which the watcher enqueues unless it is held (held: %s)",
 		async (held) => {
@@ -1380,7 +1442,7 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 			const github = { ...world([], []), origin: repo.origin };
 			/** A flaky requeue naming render_timeout, disabling it at the checkout's HEAD after `script`. */
 			const flaky = (script: string) => `${script}
-printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","failure":"just test: render_timeout","disable":"%s"}]' "$2" "$(git rev-parse HEAD)" > quest-land-result.json
+printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","cause":"flaky","failure":"%s","disable":"%s"}]' "$2" "$FAILURE" "$(git rev-parse HEAD)" > quest-land-result.json
 `;
 			/** A disabling commit on base that skips the test, adds its follow-up quest, and writes `extra`. */
 			const disabling = (extra: string) => `grep -q 'just test: render_timeout' .git/quest-land-flaky.json
@@ -1394,9 +1456,13 @@ git add quest skip.txt ${extra ? "flake.nix" : ""}
 git commit -qm 'disable render_timeout'`;
 			// The first verdict's disable is ignored: one judgment alone never disables a test. The second's edits a
 			// protected path and is refused, and the third's is opened as its own pull request.
-			fix.round(5, flaky("[ ! -e .git/quest-land-flaky.json ]"));
-			fix.round(6, flaky(disabling("printf 'changed\\n' > flake.nix")));
-			fix.round(7, flaky(disabling("")));
+			// Each names the test with different quoting and spacing, which still makes one test.
+			fix.round(5, flaky("[ ! -e .git/quest-land-flaky.json ]\nFAILURE='just test: `render_timeout`'"));
+			fix.round(
+				6,
+				flaky(`${disabling("printf 'changed\\n' > flake.nix")}\nFAILURE='just  test: \\"render_timeout\\"'`),
+			);
+			fix.round(7, flaky(`${disabling("")}\nFAILURE='just test: render_timeout'`));
 			const said: string[][] = [];
 			for (const [index, number] of [5, 6, 7].entries()) {
 				const minute = (index + 1) * 10;

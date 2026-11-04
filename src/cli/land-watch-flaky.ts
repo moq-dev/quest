@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./land";
-import { FLAKY_INPUT, type FixResult, type KnownFlaky } from "./land-fix";
+import { FLAKY_INPUT, type FixResult, type KnownFlaky, signature } from "./land-fix";
 import { validateFix } from "./land-fixer";
 import { importFixer } from "./land-fixer-repository";
 import { save } from "./land-serve";
@@ -87,7 +87,7 @@ export function writeKnownFlaky(state: string, checkout: string): void {
 	if (known.length) writeFileSync(join(checkout, ".git", FLAKY_INPUT), JSON.stringify(known), { mode: 0o600 });
 }
 
-/** A collected round that requeued a failed build unchanged, judging it flaky. */
+/** A collected round that requeued a failed build unchanged, judging it flaky (`cause` is `flaky`). */
 export interface FlakyRound {
 	/** The fixer job's file name. */
 	job: string;
@@ -109,7 +109,7 @@ export interface FlakyRound {
  */
 export function recordFlaky(root: string, state: string, round: FlakyRound): string[] {
 	const tests = readFlaky(state);
-	let test = tests.find((item) => item.failure === round.failure);
+	let test = tests.find((item) => signature(item.failure) === signature(round.failure));
 	if (!test) {
 		test = { failure: round.failure, verdicts: [] };
 		tests.push(test);

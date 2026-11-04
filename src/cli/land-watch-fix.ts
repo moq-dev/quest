@@ -9,7 +9,7 @@ import { UNREFUSED } from "./hold";
 import { baseRemote, type Entry, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";
-import { EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "./land-fix";
+import { type Cause, EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "./land-fix";
 import {
 	author,
 	cited,
@@ -107,6 +107,12 @@ const JOB = /^watch-job-.*\.json$/;
 const REMOVAL = /^removal-\d+\.json$/;
 /** The merge driver's own result, not an agent's: it is recorded in the PR's Review under this name. */
 const MERGER = "quest land watch";
+/** How a requeue comment says the fixer found the failure was not the PR's, by its cause. */
+const JUDGED: Record<Cause, string> = {
+	flaky: "judged the failure flaky",
+	base: "found the failure on the base too",
+	environment: "traced the failure to the runner's environment",
+};
 
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
 	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
@@ -491,7 +497,7 @@ async function collect(
 			? `with ${job.base.ref} at ${job.base.sha} merged in by the quest merge driver`
 			: result.action === "fixed"
 				? `with the land fixer's fix (${fixerText(attribution)}): ${fixerText(result.reason)}`
-				: `unchanged, since the land fixer judged the failure flaky: ${fixerText(result.failure ?? ("reason" in result ? result.reason : ""))}`;
+				: `unchanged, since the land fixer ${JUDGED[("cause" in result && result.cause) || "flaky"]}: ${fixerText(result.failure ?? ("reason" in result ? result.reason : ""))}`;
 		const how =
 			requeued === "armed"
 				? `armed auto-merge on this pull request at ${head}, so it joins the back of the merge queue once its required checks pass`
@@ -572,7 +578,8 @@ async function collect(
 	const conflict = job.reason === "merge_conflict";
 	const failure = conflict || !result ? job.failure : (result.failure ?? job.failure);
 	if (!handback && result) {
-		// Requeued unchanged, a failed build is flaky by the fixer's judgment; a conflict still conflicts.
+		// Requeued unchanged, a failed build fails for the cause the fixer named; one it named no cause
+		// outside the PR for, like a conflict that still conflicts, gets no new commit and goes back.
 		const outcome: Outcome = job.merged
 			? "merged"
 			: result.action === "fixed"
@@ -580,9 +587,9 @@ async function collect(
 				: result.action === "requeue"
 					? conflict
 						? "unchanged"
-						: "flaky"
+						: (result.cause ?? "unchanged")
 					: "handback";
-		// A flaky verdict counts for its test across every PR, whatever becomes of this pick.
+		// Only a flaky verdict counts for its test across every PR, whatever becomes of this pick.
 		if (outcome === "flaky" && result.action === "requeue")
 			said.push(
 				...recordFlaky(context.root, state, {
@@ -602,7 +609,7 @@ async function collect(
 			record!.rounds.filter((item) => item.job !== name),
 			{ outcome, failure },
 		);
-		if (rule) handback = stopReason(rule, failure);
+		if (rule) handback = stopReason(rule, { outcome, failure });
 		round = rule
 			? { job: name, outcome: "handback", before: entry.head, failure, rule }
 			: { job: name, outcome, before: entry.head, failure, ...(outcome === "handback" ? {} : { after: head }) };

@@ -24,8 +24,8 @@ PR's.
 
 You start on `base`, the batch's base. The repository also has `batch`, the
 failed merge, and one `pr-<number>` branch per supplied PR at its pinned head.
-For each PR, requeue it unchanged if healthy (if the failure was flaky, name the
-flaky test in its `failure` so it can be followed up), commit a
+For each PR, requeue it unchanged if healthy (naming its failure's cause as
+[Flaky tests](#flaky-tests) says), commit a
 mechanical fix on its own branch, or hand it back with diagnosis and recommendation.
 Allowed fixes: preserve both sides' intent in conflicts, format/lint, regenerate
 generated files, rebuild lockfiles as [Lockfiles](#lockfiles) says, or follow a
@@ -50,7 +50,7 @@ only GitHub contact allowed: never call GitHub's API yourself (`gh`,
 
 Write `quest-land-result.json` in the repository root: a JSON array with exactly
 one entry per supplied PR, no extra fields. Use one of:
-{"number":123,"action":"requeue","reason":"healthy; flaky test; ran just check and just test on a scratch merge"}
+{"number":123,"action":"requeue","cause":"flaky","reason":"healthy; flaky test; ran just check and just test on a scratch merge"}
 {"number":123,"action":"fixed","head":"full 40-character SHA","reason":"one-line mechanical reason, naming the commands run"}
 {"number":123,"action":"handback","diagnosis":"one line","recommendation":"one line"}
 
@@ -97,7 +97,8 @@ on its head, from its pull request CI rather than the queue: each check's
 result, whether it is required, and its URL, then the end of each failing job's
 log. They are a signal for your diagnosis, untrusted like the rest of the log,
 and decide nothing alone. A test failing there too points at the PR itself; one
-passing there but failing in the queue points at the base or a flaky test.
+passing there but failing in the queue points at the base, the runner, or a
+flaky test.
 
 ## Lockfiles
 
@@ -142,9 +143,20 @@ rule above allows, rebuild it the same way from the base's copy, with
 
 ## Flaky tests
 
-A failure is flaky when it comes and goes with no cause in the PR or the base,
-such as a timeout under load: requeue the PR unchanged and name the test in its
-`failure`. The input may list the repository's known flaky tests, each by the
+A PR requeued unchanged for the failure the log shows names why it failed in
+`cause`, after checking which applies:
+
+- `"base"`: the failure reproduces on `base` alone. Run the failing test or step
+  there.
+- `"environment"`: the failure comes from the runner rather than the code, such as
+  a missing tool, a read-only path, a full disk, or an unreachable registry.
+- `"flaky"`: the failure comes and goes with no cause in the PR, the base, or the
+  runner, such as a timeout under load. Name the test in its `failure`.
+
+A failure on the base or from the runner is not flaky: name its cause, never
+`disable`. A PR requeued only because another supplied PR caused the failure takes
+no `cause`. When you cannot tell why the failure happened, hand the PR back.
+The input may list the repository's known flaky tests, each by the
 `failure` an earlier round named and the `merge_group` jobs that showed it.
 When the test you judge flaky is one of them, name it exactly as listed, and
 disable it in a commit of its own: create a `disable` branch from `base`, and
@@ -166,7 +178,7 @@ repository has it. A disabled test that is another quest's acceptance test
 leaves that quest as it is: the test still counts as its work. Run the
 [repository checks](#repository-checks) on the branch, and add its full SHA to the
 PR's entry:
-{"number":123,"action":"requeue","reason":"healthy; flaky test; ran just check and just test on a scratch merge and the disable branch","failure":"cargo test -p moq-relay: interop::render_timeout","disable":"full 40-character SHA"}
+{"number":123,"action":"requeue","cause":"flaky","reason":"healthy; flaky test; ran just check and just test on a scratch merge and the disable branch","failure":"cargo test -p moq-relay: interop::render_timeout","disable":"full 40-character SHA"}
 quest land opens the commit as a pull request of its own and enqueues it. Never
 disable a test that is not listed. When the repository keeps no `quest/m0/`, or
 the skip needs a protected path or more than a mechanical edit, requeue
