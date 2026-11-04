@@ -15,18 +15,25 @@ export interface Implementer {
 const field = (value: string) => (/^[\w.:/@+-]{1,100}$/.test(value) ? value : "unknown");
 
 /**
- * `message` ending with `by`'s trailers, replacing any it already gives, by Git's own trailer rules so
- * they join an existing block such as `Co-Authored-By`.
+ * `message` ending with `by`'s trailers, which replace every one it already gives, by Git's own trailer
+ * rules so they join an existing block such as `Co-Authored-By`.
  */
 export function withTrailers(message: string, by: Implementer): string {
+	// Git replaces only the last of a key's repeats, so drop them all from the closing paragraph first.
+	const paragraphs = message.trimEnd().split(/\n[ \t]*\n/);
+	if (paragraphs.length > 1) {
+		const kept = paragraphs
+			.pop()!
+			.split("\n")
+			.filter((line) => !/^Agent-(?:Harness|Model|Effort)\s*:/i.test(line));
+		if (kept.length) paragraphs.push(kept.join("\n"));
+	}
 	const result = spawnSync(
 		"git",
 		[
 			"interpret-trailers",
 			// A `---` line in the message is prose, not the start of a patch.
 			"--no-divider",
-			"--if-exists",
-			"replace",
 			"--trailer",
 			`Agent-Harness: ${field(by.harness)}`,
 			"--trailer",
@@ -39,7 +46,7 @@ export function withTrailers(message: string, by: Implementer): string {
 			cwd: "/",
 			encoding: "utf8",
 			env: { ...discoveryEnv(), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
-			input: message,
+			input: `${paragraphs.join("\n\n")}\n`,
 		},
 	);
 	if (result.error) throw result.error;
