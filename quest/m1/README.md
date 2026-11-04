@@ -22,6 +22,7 @@ earlier "Later work" milestone became m2.
 
 ## Required
 
+- [User state in their RunnerHub](/quest/m1/user-state.md) - each user's runners, jobs, inbox, and push subscriptions live in their Durable Object, and D1 keeps repository data and other cross-user state
 - [Open kix.quest](/quest/m1/open.md) - the Worker moves to kix.quest and any owner may enroll
 - [Release with worktree hooks](/quest/m1/release.md) - tag a release that has `quest worktree hook`, so SETUP.md's release routes work
 - [Kix for any repository](/quest/m1/kix/README.md) - onboarding, read-only CI checks, contributor sandboxing, and the maintainer guide

@@ -60,7 +60,3 @@ The lists, pinned in `src/cli/models.ts` beside the review lists
 ## Required
 
 - [Grok agents](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok as well as Claude Code and Codex
-
-## Related
-
-- [Reviewer usage limits](/quest/m0/review-quota.md) - its usage-limit exit is how `quest agent` reports a harness at its limit

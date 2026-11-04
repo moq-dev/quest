@@ -844,9 +844,9 @@ head the watcher itself put back in the queue continues the watcher's pick
 instead, until a handback ends it: the watcher's re-enqueue, GitHub's
 auto-merge of it, or such a workflow picking the fixer's push. A failed build
 or a conflict is recorded for the land fixer in `removal-<n>.json`, with the
-full log beside it. A push since the removal, a person's removal, or a reason
-the watcher does not know ends the pick, and the comment says the PR waits for
-a maintainer to enqueue it again. The state directory remembers each removal
+full log beside it. A push since the removal, a person's removal, a hold, or a
+reason the watcher does not know ends the pick, and the comment says the PR
+waits for a maintainer to enqueue it again. The state directory remembers each removal
 handled, so a restart neither misses nor repeats one; a crash between
 commenting and recording finds its own comment's marker and posts nothing. The
 first pass reads the ten minutes before it.
@@ -861,8 +861,9 @@ enqueues only the head auto-merge was armed on, with `expectedHeadOid` bound to
 it: GitHub keeps auto-merge across a push, but a push by anyone but the land
 fixer ends the pick, and a head it cannot tell yet waits for the next pass. An
 armed PR whose required checks fail, or that conflicts, is left alone for
-`/quest-iterate` and a new pick. The watcher's own re-enqueues are among these
-picks. A refusal is logged once per pick and retried each pass.
+`/quest-iterate` and a new pick. One another session holds waits, armed, until
+its hold clears. The watcher's own re-enqueues are among these picks. A refusal
+is logged once per pick and retried each pass.
 
 With `--fixer`, the watcher takes each recorded removal, oldest first, while
 its PR still waits as the queue dropped it:
@@ -903,6 +904,15 @@ handback, from a stop rule, the fixer, a refusal, a crash, or a timeout, is
 posted with its reason and a recommendation, and the PR leaves the watcher's
 care until a maintainer enqueues it again. A round whose pick ended while it
 ran, by a writer's push or enqueue, is not applied, and its comment says so.
+
+The watcher leaves a PR another session holds to that session: one with a hold
+label, such as the `quest:active` that `/quest-iterate` takes. It reads the
+PR's labels when it handles the removal, before it starts the fixer, and again
+before it pushes a result or re-enqueues the PR, so a hold taken while the
+fixer runs counts too. A hold ends the pick, as a person's removal does: the
+watcher records that first and stops acting on the PR, then posts one comment
+saying so, best-effort and never retried. A maintainer enqueues it again once
+its session is done. A held flaky-test disable PR is left for a maintainer too.
 A round whose collection fails three passes in a row, as when GitHub refuses its
 handback comment, is set aside with a logged warning, freeing its fixer slot.
 
@@ -1154,7 +1164,11 @@ It prints the reviewer, model, and effort, the size and its source, session, rou
 finding count, then each finding as severity, `path:line`, and title over its
 indented body. `--json` prints the same as one object. It exits 0 once the round
 finishes, whatever it found, 2 for invalid arguments or a checkout or CLI that
-cannot be reviewed, and 1 for other failures. `/quest-review` runs the rounds,
+cannot be reviewed, including a login the API rejects, 3 when the reviewer's
+account hit its usage limit, and 1 for other failures. A usage limit prints one
+line, `error: <harness> hit its usage limit; resets <time>`, where `<time>` is
+the reset as an ISO 8601 UTC timestamp, or `unknown` when the CLI named none.
+`/quest-review` runs the rounds,
 records them in the PR body's `## Review` section, and marks the PR ready.
 
 ## Headless agents

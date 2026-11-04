@@ -37,7 +37,9 @@ const CLAUDE_LOGGED_OUT =
  * `claude auth status` counts such a variable, and `codex login status` counts
  * CODEX_ACCESS_TOKEN but not CODEX_API_KEY. FAKE_REJECTED has the API
  * reject the login in each turn with the real CLI's error, in the style it
- * names. FAKE_REPLY replaces the findings reply.
+ * names. FAKE_LIMITED fails a turn on the account's usage limit with the real
+ * CLI's error, naming its reset unless set to `unknown`. FAKE_REPLY replaces
+ * the findings reply.
  */
 const FAKES: Record<string, string> = {
 	claude: `
@@ -62,6 +64,14 @@ if (rejected) {
 	} else {
 		result({ session_id, is_error: true, result: "OAuth token revoked · Please run /login" });
 	}
+	process.exit(1);
+}
+// The limit hits the findings turn, after the review turn passed.
+if (process.env.FAKE_LIMITED && argv.includes("--resume")) {
+	if (process.env.FAKE_LIMITED !== "unknown") {
+		console.log(JSON.stringify({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1900000000 } }));
+	}
+	result({ session_id: at("--resume"), is_error: true, result: "You've hit your weekly limit · resets Nov 5, 3pm (UTC)" });
 	process.exit(1);
 }
 const usage = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
@@ -112,6 +122,15 @@ if (rejected === "turn") {
 }
 if (rejected) {
 	console.error("Error: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.");
+	process.exit(1);
+}
+if (process.env.FAKE_LIMITED) {
+	const message = process.env.FAKE_LIMITED === "unknown"
+		? "You've hit your usage limit."
+		: "You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 5th, 2026 3:15 PM.";
+	event({ type: "thread.started", thread_id: "thread-1" });
+	event({ type: "error", message });
+	event({ type: "turn.failed", error: { message } });
 	process.exit(1);
 }
 const message = (text) => event({ type: "item.completed", item: { type: "agent_message", text } });
@@ -200,7 +219,7 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	vi.stubEnv("FAKE_LOG", log);
 	// The session's own profile would change the logged-out errors.
 	const unset = [...HOST_CREDENTIALS, "CLAUDECODE", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
-	for (const name of [...unset, "FAKE_LOGGED_OUT", "FAKE_REJECTED", "FAKE_HANG"]) {
+	for (const name of [...unset, "FAKE_LOGGED_OUT", "FAKE_REJECTED", "FAKE_LIMITED", "FAKE_HANG"]) {
 		vi.stubEnv(name, undefined);
 	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
@@ -413,6 +432,27 @@ fakes.each([
 		expect(s.calls()).toHaveLength(2);
 	},
 );
+
+fakes("a reviewer's usage limit exits 3 with its reset, and records no round", async () => {
+	// Codex prints its reset in the local time zone, which this process shares.
+	const codex = new Date(2026, 10, 5, 15, 15).toISOString().replace(".000Z", "Z");
+	for (const [host, variant, message] of [
+		["CLAUDECODE", "reset", `codex hit its usage limit; resets ${codex}`],
+		["CLAUDECODE", "unknown", "codex hit its usage limit; resets unknown"],
+		["CODEX_THREAD_ID", "reset", "claude hit its usage limit; resets 2030-03-17T17:46:40Z"],
+		["CODEX_THREAD_ID", "unknown", "claude hit its usage limit; resets unknown"],
+	] as const) {
+		const s = setup(host);
+		vi.stubEnv("FAKE_LIMITED", variant);
+		const result = await quest("--root", s.repo, "review");
+		expect(result.stderr, `${host} ${variant}`).toBe(`error: ${message}\n`);
+		expect(result.code, `${host} ${variant}`).toBe(3);
+		expect(result.stdout).toBe("");
+		vi.stubEnv("FAKE_LIMITED", undefined);
+		// No round was recorded, so the next one needs no responses.
+		expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	}
+});
 
 fakes("a reviewer with no stored login reviews with the credential its CLI reads from the environment", async () => {
 	const s = setup();
