@@ -64,9 +64,11 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 - opencode jobs' commands run under sandbox-runtime, set as opencode's
   shell, with the same policy
   ([moq-dev/quest#338](https://github.com/moq-dev/quest/pull/338)).
-  opencode 1.19 still imports the plugins a checkout's own `opencode.json`
-  or `.opencode/` names, even with project config disabled, so the runner
-  keeps the agent from creating them and refuses a checkout that holds them.
+  The runner keeps the agent from creating a checkout's own `opencode.json`
+  or `.opencode/`, refuses a checkout that holds them, and before each turn
+  refuses to run if opencode loaded any config but the runner's and the
+  account's, since opencode 1.19 imported a checkout's plugins even with
+  project config disabled.
   `test/live/runner-sandbox.test.ts` checks that boundary with the pinned
   opencode and srt and a scripted model. It runs in `just runner-sandbox`
   and a nightly GitHub-hosted workflow (`.github/workflows/sandbox.yml`),

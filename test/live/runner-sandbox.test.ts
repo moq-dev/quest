@@ -197,7 +197,7 @@ const missing = new Set<string>();
  * until it is reviewed: the questions, WebFetch, web search, and Code Mode it
  * denies are absent, and so are the kix tools, at a port nothing listens on.
  */
-const OFFERED = ["edit", "glob", "grep", "read", "shell", "skill", "subagent", "todowrite", "write"];
+const OFFERED = ["edit", "glob", "grep", "read", "shell", "skill", "subagent", "write"];
 /** Standing instructions for the job, which must reach the model. */
 const SYSTEM = "Quest boundary instructions.";
 
@@ -280,9 +280,10 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 		const results = toolResults();
 		const context = `exit ${JSON.stringify(exit)}\n${output.slice(-4000)}`;
 		expect([...missing], "opencode no longer offers a tool the script calls").toEqual([]);
-		const offered = requests.find((request) => request.tools?.length)?.tools?.map((t) => t.function.name);
-		expect(offered?.toSorted(), "opencode offers other tools than the reviewed ones").toEqual(OFFERED);
-		expect(JSON.stringify(requests[0]?.messages), "the job's instructions did not reach the model").toContain(SYSTEM);
+		const first = requests.find((request) => request.tools?.length);
+		const offered = first?.tools?.map((t) => t.function.name);
+		expect(offered && [...offered].sort(), "opencode offers other tools than the reviewed ones").toEqual(OFFERED);
+		expect(JSON.stringify(first?.messages), "the job's instructions did not reach the model").toContain(SYSTEM);
 		expect(exit.failed, context).toBe(false);
 		expect(exit.reply).toBe("done");
 		expect(results, `the model saw ${results.length} of ${script.length} results\n${context}`).toHaveLength(
@@ -387,11 +388,11 @@ function signIn(account: string, baseURL: string) {
 			},
 		]),
 	);
-	const imported = spawnSync(
-		binaryPath("opencode", process.env),
-		["auth", "import", "--standalone", exported],
-		{ cwd: account, env: { PATH: process.env.PATH, HOME: account, ...dirs }, encoding: "utf8" },
-	);
+	const imported = spawnSync(binaryPath("opencode", process.env), ["auth", "import", "--standalone", exported], {
+		cwd: account,
+		env: { PATH: process.env.PATH, HOME: account, ...dirs },
+		encoding: "utf8",
+	});
 	rmSync(exported);
 	if (imported.status !== 0) throw new Error(`opencode auth import failed: ${imported.stderr}`);
 }

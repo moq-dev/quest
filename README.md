@@ -1205,10 +1205,13 @@ install dependencies; an untrusted one's reach no network host. npm's registry
 also accepts publishes, so a prompt-injected agent holding someone's npm token
 could publish the checkout there. The agent's file tools stay in the checkout
 (opencode's may also use the private temporary directory, and its read tool
-the output it saved), WebFetch is off, and nothing the checkout configures is
-loaded: not its `.claude` settings, hooks, and MCP servers, nor its
-`opencode.json` and `.opencode` plugins, tools, and MCP servers, and opencode's
-language servers and formatters are off. The CLI itself, Claude Code or
+the output it saved), WebFetch and opencode's web search are off, and nothing
+the checkout configures is loaded: not its `.claude` settings, hooks, and MCP
+servers, nor its `opencode.json` and `.opencode` plugins, tools, and MCP
+servers, and opencode's language servers and formatters are off. An opencode
+job refuses to run if opencode loaded any config besides the runner's and the
+account's, such as a machine's managed `/etc/opencode`, which would outrank
+the runner's. The CLI itself, Claude Code or
 `opencode serve`, runs outside the sandbox and outside the devShell, and its
 commands start from a minimal environment, so its login, the opencode server's
 password, and the kix tools' token stay out of their reach. This is an OS

@@ -111,7 +111,9 @@ function readAccountSettings(home: string): Partial<AccountSettings> {
 	const { model, policies } = (parsed ?? {}) as { model?: unknown; policies?: unknown };
 	const allowed = Array.isArray(policies)
 		? policies.flatMap((p: { action?: unknown; resource?: unknown; effect?: unknown }) =>
-				p.action === "provider.use" && p.effect === "allow" && typeof p.resource === "string" ? [p.resource] : [],
+				p.action === "provider.use" && p.effect === "allow" && typeof p.resource === "string"
+					? [p.resource]
+					: [],
 			)
 		: undefined;
 	return { ...(allowed && { providers: allowed }), ...(typeof model === "string" && { model }) };
@@ -435,7 +437,9 @@ async function refusal(client: OpenCodeClient, location: LocationRef, home: stri
 	await client.model.default({ location });
 	const own = join(accountDirectories(home).XDG_CONFIG_HOME, "opencode");
 	const entries = await client.config.get({ location });
-	const foreign = entries.flatMap((entry) => (entry.path && relative(own, entry.path).startsWith("..") ? [entry.path] : []));
+	const foreign = entries.flatMap((entry) =>
+		entry.path && relative(own, entry.path).startsWith("..") ? [entry.path] : [],
+	);
 	// Only the runner's own config arrives without a path.
 	const unnamed = entries.filter((entry) => !entry.path).length;
 	if (foreign.length || unnamed !== 1)
@@ -447,7 +451,11 @@ async function refusal(client: OpenCodeClient, location: LocationRef, home: stri
 }
 
 /** The last assistant message after `user`, the turn's prompt, newest first through the session's messages. */
-async function reply(client: OpenCodeClient, session: string, user: string): Promise<SessionMessageAssistant | undefined> {
+async function reply(
+	client: OpenCodeClient,
+	session: string,
+	user: string,
+): Promise<SessionMessageAssistant | undefined> {
 	let cursor: string | undefined;
 	let last: SessionMessageAssistant | undefined;
 	do {
@@ -486,6 +494,8 @@ export class Opencode implements Adapter {
 		await new Promise<void>((resolve, reject) => {
 			const child = spawn(this.binary, ["auth", "login", "--standalone"], {
 				env: accountEnvironment(this.env, home),
+				// Not the caller's directory, whose own opencode config the server would load.
+				cwd: home,
 				stdio: "inherit",
 			});
 			child.once("error", reject);

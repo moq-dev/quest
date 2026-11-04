@@ -118,7 +118,7 @@
               fi
               touch "$out"
             '';
-            opencode-sdk = pkgs.runCommand "opencode-sdk" { } ''
+            opencode-client = pkgs.runCommand "opencode-client" { } ''
               if [ "${opencode.version}" != "${opencodeClient}" ]; then
                 echo "package.json pins @opencode/client ${opencodeClient}, but the runner pins opencode ${opencode.version}" >&2
                 exit 1

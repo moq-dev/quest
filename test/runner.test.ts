@@ -939,24 +939,32 @@ describe("opencode", () => {
 			),
 		).toEqual({ until: 1_900_000_000 });
 		expect(
-			accountLimit(
-				error("provider.quota", "Quota", JSON.stringify({ error: { resets_in_seconds: 60 } })),
-				now,
-			),
+			accountLimit(error("provider.quota", "Quota", JSON.stringify({ error: { resets_in_seconds: 60 } })), now),
 		).toEqual({ until: now + 60_000 });
 		expect(accountLimit(error("provider.rate-limit", "Rate limit reached for requests"), now)).toBeNull();
 
 		const assistant = (content: unknown[], failure?: object) =>
 			({ type: "assistant", content, ...(failure && { error: failure }) }) as never;
-		expect(turnExit(assistant([], error("provider.quota", "The usage limit has been reached")), undefined, null, now))
-			.toEqual({ limited: { until: null }, failed: true, reply: "The usage limit has been reached" });
-		expect(turnExit(assistant([], error("provider.invalid-request", "Bad request")), undefined, null, now)).toEqual({
-			limited: null,
-			failed: true,
-			reply: "Bad request",
-		});
 		expect(
-			turnExit(assistant([{ type: "reasoning", text: "hm" }, { type: "text", text: "All done" }]), undefined, null, now),
+			turnExit(assistant([], error("provider.quota", "The usage limit has been reached")), undefined, null, now),
+		).toEqual({ limited: { until: null }, failed: true, reply: "The usage limit has been reached" });
+		expect(turnExit(assistant([], error("provider.invalid-request", "Bad request")), undefined, null, now)).toEqual(
+			{
+				limited: null,
+				failed: true,
+				reply: "Bad request",
+			},
+		);
+		expect(
+			turnExit(
+				assistant([
+					{ type: "reasoning", text: "hm" },
+					{ type: "text", text: "All done" },
+				]),
+				undefined,
+				null,
+				now,
+			),
 		).toEqual({ limited: null, failed: false, reply: "All done" });
 		// A run that failed before answering, such as on an unknown model.
 		expect(turnExit(undefined, error("unknown", "No model"), null, now)).toEqual({
@@ -2038,7 +2046,11 @@ describe("quest runner", () => {
 			formatter: false,
 			mcp: {
 				servers: {
-					kix: { type: "remote", codemode: false, headers: { Authorization: expect.stringMatching(/^Bearer /) } },
+					kix: {
+						type: "remote",
+						codemode: false,
+						headers: { Authorization: expect.stringMatching(/^Bearer /) },
+					},
 				},
 			},
 		});
@@ -2104,7 +2116,9 @@ describe("quest runner", () => {
 			message: "You've hit your usage limit",
 			response: { body: JSON.stringify({ error: { type: "usage_limit_reached", resets_at: resets } }) },
 		};
-		r.steps({ start: [{ emit: { type: "session.retry.scheduled", data: { attempt: 1, at: 0, error } } }, { wait: true }] });
+		r.steps({
+			start: [{ emit: { type: "session.retry.scheduled", data: { attempt: 1, at: 0, error } } }, { wait: true }],
+		});
 		r.assign(job(r.upstream.commit, { id: "job2" }));
 		const limited = await r.hub.next((m) => m.type === "result" && m.job === "job2");
 		await idle(r.runner);
