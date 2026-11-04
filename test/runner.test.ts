@@ -47,6 +47,7 @@ import {
 	openSandbox,
 	refusalReason,
 	sandboxRefusal,
+	unixSocketRefusal,
 } from "../src/runner/sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "../src/runner/wait";
 import { Workspace } from "../src/runner/workspace";
@@ -1145,6 +1146,9 @@ describe("account add", () => {
 });
 
 describe("runner adapters", () => {
+	/** What socat says when srt's seccomp filter refuses it a Unix socket. */
+	const REFUSED = "socat[5] E socket(1, 1, 0): Operation not permitted";
+
 	test.skipIf(process.platform !== "linux")("need the sandbox's programs only once an account needs them", () => {
 		const bin = join(tempDir(), "bin");
 		mkdirSync(bin);
@@ -1162,8 +1166,36 @@ describe("runner adapters", () => {
 		expect(adapter("claude")).toBeInstanceOf(Claude);
 		// opencode's commands run through sandbox-runtime.
 		expect(() => adapter("opencode")).toThrow(/srt is not installed/);
-		install("srt");
+		writeFileSync(join(bin, "srt"), `#!/bin/sh\necho '${REFUSED}' >&2\nexit 1\n`);
+		chmodSync(join(bin, "srt"), 0o755);
 		expect(adapter("opencode")).toBeInstanceOf(Opencode);
+	});
+
+	test.skipIf(process.platform !== "linux")("refuse opencode when sandbox-runtime allows Unix sockets", () => {
+		const bin = join(tempDir(), "bin");
+		mkdirSync(bin);
+		const srt = (script: string) => {
+			writeFileSync(join(bin, "srt"), `#!/bin/sh\n${script}`);
+			chmodSync(join(bin, "srt"), 0o755);
+			return join(bin, "srt");
+		};
+		// What socat says when no seccomp filter stopped it making the socket.
+		srt(
+			`echo 'socat[9] E connect(, AF=1 "/tmp/quest-probe-x/missing", 31): No such file or directory' >&2\nexit 1\n`,
+		);
+		for (const name of ["opencode", "bwrap", "socat"]) {
+			writeFileSync(join(bin, name), "#!/bin/sh\n");
+			chmodSync(join(bin, name), 0o755);
+		}
+		expect(() => runnerAdapters({ PATH: bin })("opencode")).toThrow(/has no seccomp helper \(apply-seccomp/);
+		// Anything but the filter's own refusal fails closed.
+		expect(unixSocketRefusal(srt("exit 0\n"), { PATH: bin })).toMatch(/^could not check that .* \(exit 0\)$/);
+		expect(unixSocketRefusal(srt(`echo '${REFUSED}' >&2\nexit 1\n`), { PATH: bin })).toBeNull();
+		// srt runs with the jobs' environment, since it looks for its helper through `npm root -g`.
+		const jobs = srt(
+			`[ -z "$NPM_CONFIG_PREFIX" ] && [ "$TMPDIR" = "$PWD" ] && [ "$CLAUDE_CODE_TMPDIR" = "$PWD" ] && echo '${REFUSED}' >&2\nexit 1\n`,
+		);
+		expect(unixSocketRefusal(jobs, { PATH: bin, NPM_CONFIG_PREFIX: tempDir() })).toBeNull();
 	});
 
 	test.skipIf(process.platform !== "linux")("refuse to start when bubblewrap cannot make the sandbox", () => {
@@ -1944,7 +1976,10 @@ describe("quest runner", () => {
 				allowRead: [checkout, repository, tmp],
 				allowWrite: [checkout, tmp],
 				// Nor can they write the opencode config the server would load.
-				denyWrite: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
+				denyWrite: [
+					...[".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
+					"/tmp/claude",
+				],
 			},
 			enableWeakerNestedSandbox: false,
 		});

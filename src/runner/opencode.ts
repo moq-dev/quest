@@ -43,7 +43,7 @@ import {
 	signalGroup,
 	STOP_GRACE_MS,
 } from "./adapter";
-import { keptEnvironment, quote, runtimeSettings, type Sandbox } from "./sandbox";
+import { quote, runtimeSettings, type Sandbox, srtEnvironment } from "./sandbox";
 
 /** The XDG base directories opencode keeps its config, credentials, sessions, and caches in, with their defaults. */
 const XDG = {
@@ -200,16 +200,10 @@ export default {
  * environment, which holds the server password, the tools' token in
  * `OPENCODE_CONFIG_CONTENT`, and any provider key opencode exported, then
  * sources the private HOME and the devShell inside the sandbox before the
- * command, as Claude Code does with `CLAUDE_ENV_FILE`. srt replaces the
- * command's TMPDIR with its own `CLAUDE_CODE_TMPDIR`, or `/tmp/claude`
- * without it, so that names the attempt's directory too.
+ * command, as Claude Code does with `CLAUDE_ENV_FILE`.
  */
 export function shellScript(srt: string, settings: string, sandbox: Sandbox, env: NodeJS.ProcessEnv): string {
-	const kept = Object.entries({
-		...keptEnvironment(env),
-		TMPDIR: sandbox.tmp,
-		CLAUDE_CODE_TMPDIR: sandbox.tmp,
-	}).map(([name, value]) => quote(`${name}=${value}`));
+	const kept = Object.entries(srtEnvironment(env, sandbox.tmp)).map(([name, value]) => quote(`${name}=${value}`));
 	const inner = `. ${quote(sandbox.env)} && quest_command=$QUEST_COMMAND && unset QUEST_COMMAND && eval "$quest_command"`;
 	return `#!/bin/sh
 if [ "$#" -ne 2 ] || [ "$1" != -c ]; then

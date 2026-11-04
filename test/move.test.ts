@@ -495,6 +495,7 @@ test("open pull requests come from every page, by head branch", async () => {
 			draft: true,
 			...times,
 			handedBack: true,
+			body: "Notes.\n\n## Decisions needed\n",
 		},
 		{
 			number: 2,
@@ -504,6 +505,7 @@ test("open pull requests come from every page, by head branch", async () => {
 			draft: false,
 			...times,
 			handedBack: false,
+			body: "",
 		},
 	]);
 	expect(requested).toEqual([

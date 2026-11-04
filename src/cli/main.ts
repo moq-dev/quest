@@ -40,7 +40,7 @@ import {
 	runRunner,
 } from "../runner/cli";
 import type { AdapterName } from "../runner/adapter";
-import { held, reach, target, upstream, upstreamRefs } from "./claims";
+import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { gate, QUICK_MS } from "./gate";
 import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, readRemote, remoteRepository } from "./github";
 import { type Hold, finish, land, release, take } from "./hold";
@@ -325,40 +325,54 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("waiting")
-		.summary("List quests waiting on the maintainer or an outside party")
+		.summary("List quests and draft PRs waiting on the maintainer or an outside party")
 		.description(
-			"List every quest with a ## Waiting section: those waiting on the maintainer first, then milestone " +
-				"priority, distinct transitive dependents as quest unblocked counts them, ready before blocked, then " +
-				"tree order. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
-				"followed by the condition and how to check or advance it.\n\n" +
-				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the path, " +
-				"and the item. --json prints an ordered array of {path, dependents, ready, waits: [{line, party, text}]} " +
-				"objects. --maintainer keeps only the items the maintainer settles. Invalid trees fail before printing. " +
-				"Outside conditions are never checked. Draft PRs hand back with the same heading; this reads only the " +
-				"quest tree.",
+			"List every quest with a ## Waiting section and every open draft PR handed back with one (or the " +
+				"older ## Decisions needed): those waiting on the maintainer first, then milestone priority, distinct " +
+				"transitive dependents as quest unblocked counts them, ready before blocked, then tree order, with " +
+				"drafts after quests by PR number. A draft ranks as the quest its branch carries, or last when it " +
+				"carries none. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
+				"followed by the condition and how to check or advance it. A draft's item without a party, and every " +
+				"Decisions needed item, is the maintainer's; a draft's section without items is one maintainer item " +
+				"holding its prose.\n\n" +
+				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the quest's " +
+				"path or the draft's URL, and the item. --json prints an ordered array of {path, pr, dependents, " +
+				"ready, waits: [{line, party, text}]} objects, where pr is the draft's URL or null and path is the " +
+				"quest, the quest a draft carries, or null. --maintainer keeps only the items the maintainer settles. " +
+				"Invalid trees fail before printing. Outside conditions are never checked, nor whether another " +
+				"session holds a draft.\n\n" +
+				"Drafts are read from the open PRs of the remote's upstream, found as for quest unblocked " +
+				"--unclaimed, using GH_TOKEN, GITHUB_TOKEN, or gh auth token. Without the remote, off GitHub, or " +
+				"when GitHub cannot be read, it lists the quest tree's items alone and warns that drafts were skipped.",
 		)
 		.option("--json", "Print a deterministic JSON array")
 		.option("--maintainer", "Only items waiting on the maintainer")
-		.option("--limit <count>", "Maximum number of quests to print", positiveInteger("limit"))
-		.action((options: { json?: boolean; maintainer?: boolean; limit?: number }) => {
+		.option("--limit <count>", "Maximum number of entries to print", positiveInteger("limit"))
+		.option("--remote <name>", "Remote whose upstream holds the draft PRs", "origin")
+		.action((options: { json?: boolean; maintainer?: boolean; limit?: number; remote: string }) => {
 			const tree = checkout(root(), warn);
 			if (!valid(tree)) return;
-			const quests = waiting(tree.docs)
-				.map((quest) => (options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest))
-				.filter((quest) => quest.waits.length > 0)
-				.slice(0, options.limit);
-			if (options.json) {
-				print(JSON.stringify(quests));
-				return;
-			}
-			if (theme) print("Quests waiting, the maintainer's first, by milestone and downstream impact:");
-			for (const quest of quests) {
-				for (const wait of quest.waits) {
-					print(
-						`${quest.dependents}\t${quest.ready ? "ready" : "blocked"}\t${quest.path}\t${wait.party}: ${wait.text}`,
-					);
+			settle(openDrafts(root(), options.remote, { github: () => gitHubDependencies(warn), warn }), (drafts) => {
+				const found = waiting(tree.docs, drafts)
+					.map((quest) =>
+						options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest,
+					)
+					.filter((quest) => quest.waits.length > 0)
+					.slice(0, options.limit);
+				if (options.json) {
+					print(JSON.stringify(found));
+					return;
 				}
-			}
+				if (theme)
+					print("Quests and drafts waiting, the maintainer's first, by milestone and downstream impact:");
+				for (const quest of found) {
+					for (const wait of quest.waits) {
+						print(
+							`${quest.dependents}\t${quest.ready ? "ready" : "blocked"}\t${quest.pr ?? quest.path}\t${wait.party}: ${wait.text}`,
+						);
+					}
+				}
+			});
 		});
 
 	program
@@ -556,8 +570,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
 				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
 				"is, and a head GitHub refuses to enqueue fails, to be fixed and landed again. On a base " +
-				`that requires the \`${LAND_CHECK}\` check, it queues the PR for \`quest land\` instead: squash ` +
-				"auto-merge whose commit body pins the head. On an ungated base with auto-merge disabled, it refuses " +
+				`that requires the \`${LAND_CHECK}\` check, it queues the PR for \`quest land\` instead: auto-merge ` +
+				"whose commit body pins the head, with the method named, else squash, else any method the " +
+				"repository and the base's rulesets allow, as only a queue signal, since quest land applies its own " +
+				"method. On an ungated base with auto-merge disabled, it refuses " +
 				"unless --direct is passed. Follow the repository landing instructions in CONTRIBUTING.md or " +
 				"AGENTS.md; never retry with --direct unless the user asks. GitHub keeps auto-merge across a " +
 				"writer's push, so disable it before pushing to the PR; quest status and quest wait report a head " +
@@ -639,9 +655,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	landCommand
 		.command("serve")
 		.description(
-			"Run one daemon per repository. Every squash, and every base merged into a PR head, drops each list entry linking to a quest the base deleted since the PR branched, as quest rm would. As a batch is filled, park alone for the fixer (eject alone, without one) each PR it reaches whose squash onto the base fails quest check with findings the base lacks, and comment once on each newly queued PR that conflicts with the four PRs landing soonest ahead of it. Check a base PR plus up to floor(log2 n) cleanly merging PRs once through the sandbox, alternating the oldest and the newest queued PR as the base. A failed batch is never bisected: its PRs are parked for the fixer, which blames the ones at fault, or ejected together without a fixer. It halves the next batch's size down to one PR; each landed batch grows it back by one. When the fixer blames none and the base fails its check alone, the queue halts until a moved base passes, and the fixer proposes a fix of the base as a PR. Requires quest on PATH and flock. Sandbox and fixer wrappers MUST run code as a different user from the App key owner (for example in nspawn containers); environment filtering alone cannot isolate /proc or host files. The sandbox receives <checkout> <base-sha>, with the base also in QUEST_LAND_BASE and present in the standalone shallow clone; the optional tracked background fixer receives the log path followed by PR numbers, or none for a base that fails alone. Neither receives credentials. State retains logs, fixer jobs, and one mechanical attempt per maintainer pick across restarts. Fixer results are validated, lease-pushed, recorded in Review, and pinned for requeue, and the comment a result carries for its PR is posted there; invalid results, crashes, and timeouts are handed back. A validated fix whose push GitHub refuses, or a fix that edits protected paths beyond the base merge, is handed back with its resolution for `quest land apply`. After revalidating the queue, merge the base into each behind-base PR head with quest resolve, verify the tested tree, and lease-push that head before the pinned GitHub squash API merge. A permissions-refused branch push falls back to a leased fast-forward of the tested squash to the base, closing the PR with a linked-commit comment. A recorded daemon merge atop the original pin is recognized after restart; other moved heads require maintainer requeueing. Pending mergeability, and GitHub still showing the pin after the daemon's own push, are retried briefly; a confirmed conflict parks only that PR for the fixer and a moved head ejects only that PR, and the rest of the batch stays queued. A refusal that would repeat, such as squash being disabled, ejects as merge_refused without the fixer. An unexpected squash parent rebuilds the queue without ejecting; a tree mismatch logs CRITICAL, ejects only a PR whose prepared tree differs as tree_mismatch (an already squashed PR stays merged), and leaves the rest of the batch queued to be rebuilt on the new base. Merged PRs drop out of the queue after restart.",
+			"Run one daemon per repository. Each PR lands as a squash commit, or with --method merge as a merge commit whose first parent is the tested base and whose second parent is the landed head, so the base keeps the PR's ancestry; merge commits refuse a base that requires linear history. Every commit it lands, and every base merged into a PR head, drops each list entry linking to a quest the base deleted since the PR branched, as quest rm would. As a batch is filled, park alone for the fixer (eject alone, without one) each PR it reaches that fails quest check landed alone onto the base with findings the base lacks, and comment once on each newly queued PR that conflicts with the four PRs landing soonest ahead of it. Check a base PR plus up to floor(log2 n) cleanly merging PRs once through the sandbox, alternating the oldest and the newest queued PR as the base. A failed batch is never bisected: its PRs are parked for the fixer, which blames the ones at fault, or ejected together without a fixer. It halves the next batch's size down to one PR; each landed batch grows it back by one. When the fixer blames none and the base fails its check alone, the queue halts until a moved base passes, and the fixer proposes a fix of the base as a PR. Requires quest on PATH and flock. Sandbox and fixer wrappers MUST run code as a different user from the App key owner (for example in nspawn containers); environment filtering alone cannot isolate /proc or host files. The sandbox receives <checkout> <base-sha>, with the base also in QUEST_LAND_BASE and present in the standalone shallow clone; the optional tracked background fixer receives the log path followed by PR numbers, or none for a base that fails alone. Neither receives credentials. State retains logs, fixer jobs, and one mechanical attempt per maintainer pick across restarts. Fixer results are validated, lease-pushed, recorded in Review, and pinned for requeue, and the comment a result carries for its PR is posted there; invalid results, crashes, and timeouts are handed back. A validated fix whose push GitHub refuses, or a fix that edits protected paths beyond the base merge, is handed back with its resolution for `quest land apply`. After revalidating the queue, merge the base into each behind-base PR head with quest resolve, verify the tested tree, and lease-push that head before GitHub's merge API, pinned to that head, lands it. A permissions-refused branch push falls back to a leased fast-forward of the tested commit to the base, closing the PR with a linked-commit comment. A recorded daemon merge atop the original pin is recognized after restart; other moved heads require maintainer requeueing. Pending mergeability, and GitHub still showing the pin after the daemon's own push, are retried briefly; a confirmed conflict parks only that PR for the fixer and a moved head ejects only that PR, and the rest of the batch stays queued. A refusal that would repeat, such as the method being disabled, ejects as merge_refused without the fixer. An unexpected first parent rebuilds the queue without ejecting; a tree mismatch, or a merge commit whose second parent is not the landed head, logs CRITICAL, ejects only a PR whose prepared tree differs as tree_mismatch (an already landed PR stays merged), and leaves the rest of the batch queued to be rebuilt on the new base. Merged PRs drop out of the queue after restart.",
 		)
 		.option("--base <branch>", "Base branch (default: repository default)")
+		.addOption(
+			new Option("--method <method>", "Land each PR as a squash commit or a merge commit")
+				.choices(["squash", "merge"])
+				.default("squash"),
+		)
 		.option("--state <path>", "Private daemon state directory (default: $STATE_DIRECTORY or the XDG state home)")
 		.requiredOption(
 			"--sandbox <command>",
