@@ -30,6 +30,7 @@ import {
 	eject,
 	ejection,
 	git,
+	type LandMethod,
 	readRemote,
 	type Overlap,
 	type RemoteRead,
@@ -39,6 +40,8 @@ import {
 
 export interface ServeOptions {
 	base?: string;
+	/** How each PR lands, decided once at startup. */
+	method: LandMethod;
 	/** Empty for the default, `defaultState`. */
 	state: string;
 	sandbox: string;
@@ -91,7 +94,7 @@ export function save(path: string, value: unknown): void {
 }
 
 /**
- * The merge needs workflow write when this PR's squash changes a workflow, or when any commit the PR
+ * The merge needs workflow write when this PR's landed commit changes a workflow, or when any commit the PR
  * brings changes one: GitHub refuses an App's merge of a PR whose commits touch workflows, such as a
  * merge of a base that changed one, whether the gate or the author made it.
  */
@@ -349,15 +352,21 @@ type MergeResult =
 const SETTLE_RETRIES = 5;
 
 /**
- * Retry only GitHub's pending mergeability or base refresh. Any other refusal, such as squash being
+ * Retry only GitHub's pending mergeability or base refresh. Any other refusal, such as `method` being
  * disabled or a rule the bot cannot bypass, would refuse every round after a full check, so it ejects.
  * `previous` is the head before the gate pushed its own base merge as `head`, if it did.
  */
-async function mergePinned(github: GitHub, path: string, head: string, previous = head): Promise<MergeResult> {
+async function mergePinned(
+	github: GitHub,
+	path: string,
+	method: LandMethod,
+	head: string,
+	previous = head,
+): Promise<MergeResult> {
 	for (let attempt = 0; ; attempt++) {
 		const response = await github.request(`${path}/merge`, {
 			method: "PUT",
-			body: { merge_method: "squash", sha: head },
+			body: { merge_method: method, sha: head },
 			allow: [403, 405, 409],
 		});
 		// The client waits out a rate limit; any other 403 is GitHub refusing this PR, which stops this PR
@@ -394,7 +403,7 @@ async function mergePinned(github: GitHub, path: string, head: string, previous 
 	}
 }
 
-/** One batch: check once, then squash through GitHub in order, verifying each resulting tree. */
+/** One batch: check once, then land through GitHub in order, verifying each resulting commit. */
 const POLICY = "batch-policy.json";
 
 /** The next batch's order and size; a missing or unreadable record starts oldest-first at full size. */
@@ -574,7 +583,7 @@ export async function serveBatch(
 				entries: [entry],
 				blame: [entry.number],
 				reason: "failed_checks",
-				detail: `\`quest check\` fails with it squashed alone onto the base ${plan.base.sha}.\n\n<pre>${excerpt(findings.join("\n"))}</pre>\n`,
+				detail: `\`quest check\` fails with it landed alone onto the base ${plan.base.sha}.\n\n<pre>${excerpt(findings.join("\n"))}</pre>\n`,
 			})),
 		);
 	}
@@ -616,7 +625,13 @@ export async function serveBatch(
 		return output;
 	}
 	const [owner, repo] = plan.repository.split("/");
-	const fresh = await resolvePreparedQueue(root, options.state, { owner, repo }, plan.base.ref, deps);
+	const fresh = await resolvePreparedQueue(
+		root,
+		options.state,
+		{ owner, repo },
+		{ base: plan.base.ref, method: plan.method },
+		deps,
+	);
 	for (const item of fresh.eject) await report(item);
 	if (
 		fresh.base.sha !== plan.base.sha ||
@@ -667,7 +682,10 @@ export async function serveBatch(
 						...deps,
 						token: await token(touchesWorkflows(root, parent, link, plan.base.sha, prepared.head)),
 					});
-		const result = "reason" in prepared ? prepared : await mergePinned(merge, path, prepared.head, link.entry.head);
+		const result =
+			"reason" in prepared
+				? prepared
+				: await mergePinned(merge, path, plan.method, prepared.head, link.entry.head);
 		if (result === null) {
 			forgetHeads(options.state, link.entry.number);
 			return output;
@@ -702,20 +720,29 @@ export async function serveBatch(
 		forgetHeads(options.state, link.entry.number);
 		output.push(`landed ${link.entry.number} ${sha}`);
 		const commit = object(await (await merge.request(`/repos/${plan.repository}/git/commits/${sha}`)).json());
-		const parents = commit.parents;
-		const actualParent = Array.isArray(parents) && parents.length ? string(object(parents[0]).sha) : null;
+		const parents = Array.isArray(commit.parents) ? commit.parents.map((parent) => string(object(parent).sha)) : [];
+		const actualParent = parents[0] ?? null;
 		if (actualParent !== expectedParent) {
-			const message = `quest land: base moved before squash #${link.entry.number}: expected parent ${expectedParent}, got ${actualParent}; rebuilding the remaining queue`;
+			const message = `quest land: base moved before ${plan.method} #${link.entry.number}: expected parent ${expectedParent}, got ${actualParent}; rebuilding the remaining queue`;
 			appendFileSync(log, `${message}\n`);
 			deps.warn(message);
 			return output;
 		}
 		expectedParent = sha;
 		const tree = string(object(commit.tree).sha);
-		if (tree === link.tree) continue;
-		// The squash is already merged, so there is nothing to eject. The rest of the batch stays queued and
+		// GitHub merged the head the gate pinned, so its merge commit's second parent is that head: the
+		// approved pin, or the gate's own base merge on it.
+		const landed = "head" in prepared ? prepared.head : null;
+		const faults = [
+			tree !== link.tree && `has tree ${tree}, but the tested chain has ${link.tree}`,
+			plan.method === "merge" &&
+				(parents.length !== 2 || parents[1] !== landed) &&
+				`has parents ${parents.join(" ")}, but its second parent must be the landed head ${landed}`,
+		].filter((fault) => fault !== false);
+		if (faults.length === 0) continue;
+		// The PR is already merged, so there is nothing to eject. The rest of the batch stays queued and
 		// is rebuilt and checked on the base as it now is, like after a moved base.
-		const detail = `CRITICAL: GitHub squash #${link.entry.number} at ${sha} has tree ${tree}, but the tested chain has ${link.tree}. It stays merged; the rest of the batch stays queued, to be rebuilt on the new base`;
+		const detail = `CRITICAL: GitHub ${plan.method} #${link.entry.number} at ${sha} ${faults.join(", and ")}. It stays merged; the rest of the batch stays queued, to be rebuilt on the new base`;
 		deps.warn(detail);
 		appendFileSync(log, `${detail}\n`);
 		return output;
@@ -873,7 +900,7 @@ export async function serve(
 			for (const line of await resumeFailure(trusted, options, deps)) warn(line);
 			const completed = await finishFallback(trusted, options.state, deps, mint, read);
 			if (completed) warn(completed);
-			const plan = await resolvePreparedQueue(trusted, options.state, repository, options.base, deps);
+			const plan = await resolvePreparedQueue(trusted, options.state, repository, options, deps);
 			const lines = await serveBatch(trusted, plan, batch, deps, mint, read);
 			for (const line of lines) warn(line);
 			return lines.length > 0;

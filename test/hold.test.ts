@@ -565,10 +565,18 @@ describe("merge --land", () => {
 		});
 
 		test("leaves a gated base or a merge queue to its own method", async () => {
-			const gated = allowing("merge");
-			gated.required = ["quest land"];
-			await land(PR, HEAD, undefined, gated.deps());
-			expect(gated.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`);
+			// The gate's auto-merge only signals the queue: squash where allowed, else a method the base allows.
+			for (const [methods, signal] of [
+				[["merge", "squash"], "SQUASH"],
+				[["merge"], "MERGE"],
+			] as const) {
+				const gated = allowing(...methods);
+				gated.required = ["quest land"];
+				await land(PR, HEAD, undefined, gated.deps());
+				expect(gated.writes.at(-1)).toBe(
+					`enablePullRequestAutoMerge ${HEAD} ${signal} Quest-Land-Head: ${HEAD}`,
+				);
+			}
 
 			const queued = allowing("squash");
 			queued.queue = true;
@@ -589,15 +597,15 @@ describe("merge --land", () => {
 		expect(warnings).toEqual([`${URL_} lands through a merge queue, which applies its own merge method`]);
 	});
 
-	test("queues a gated base's PR for quest land: squash auto-merge pinning the head", async () => {
+	test("queues a gated base's PR for quest land: auto-merge pinning the head", async () => {
 		const pull = new FakePull();
 		pull.required = ["test", "quest land"];
 		pull.allowAutoMerge = false; // The host-gated path does not use the ungated pre-check.
 		pull.comparison = "diverged";
 		const warnings: string[] = [];
 		await land(PR, HEAD, "merge", pull.deps(warnings));
-		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`]);
-		expect(warnings).toEqual([`${URL_} lands through quest land, which squashes`]);
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE Quest-Land-Head: ${HEAD}`]);
+		expect(warnings).toEqual([`${URL_} lands through quest land, which applies its own merge method`]);
 		expect(pull.comparisons).toEqual([]);
 	});
 

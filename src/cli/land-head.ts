@@ -16,6 +16,7 @@ import {
 	tryGit,
 	type Entry,
 	type Plan,
+	type Target,
 } from "./land";
 
 interface Prepared {
@@ -42,10 +43,10 @@ export async function resolvePreparedQueue(
 	root: string,
 	state: string,
 	repository: Repository,
-	base: string | undefined,
+	target: Target,
 	deps: GitHubDependencies,
 ): Promise<Plan> {
-	const plan = await resolveQueue(repository, base, deps, (entry) => isPrepared(root, state, entry));
+	const plan = await resolveQueue(repository, target, deps, (entry) => isPrepared(root, state, entry));
 	const numbers = new Set(
 		readdirSync(state).flatMap((name) => {
 			const match = /^head-(\d+)-.*\.json$/.exec(name);
@@ -190,7 +191,13 @@ export async function finishFallback(
 			return null;
 		}
 		const [owner, repo] = plan.repository.split("/");
-		const fresh = await resolvePreparedQueue(root, state, { owner, repo }, plan.base.ref, deps);
+		const fresh = await resolvePreparedQueue(
+			root,
+			state,
+			{ owner, repo },
+			{ base: plan.base.ref, method: plan.method },
+			deps,
+		);
 		const queued = fresh.queue.find(
 			(now) =>
 				now.number === entry.number && now.approved === entry.approved && now.enabledAt === entry.enabledAt,
@@ -219,10 +226,11 @@ export async function finishFallback(
 	const comments = await github.all(`${issue}/comments?per_page=100`);
 	if (!comments.some((comment) => string(comment.body).includes(marker))) {
 		const url = `https://github.com/${plan.repository}/commit/${commit}`;
+		// A merge commit brings the head into the base, which GitHub shows as merged; a squash does not.
+		const why =
+			plan.method === "squash" ? "; GitHub cannot show a fork PR as merged without a push to its branch" : "";
 		await github.request(`${issue}/comments`, {
-			body: {
-				body: `landed as [${commit}](${url}) by quest land; GitHub cannot show a fork PR as merged without a push to its branch.\n\n${marker}`,
-			},
+			body: { body: `landed as [${commit}](${url}) by quest land${why}.\n\n${marker}` },
 		});
 	}
 	const data = await github.graphql(
@@ -258,14 +266,18 @@ export async function landFallback(
 	token: (workflows: boolean) => Promise<string>,
 	read: RemoteRead = readRemote,
 ): Promise<string | null> {
-	// The local chain parent has a different SHA from an API squash, but the same verified tree.
-	// Reparent without changing the tested tree so the fallback is strictly a fast-forward.
+	// The local chain parent has a different SHA from one GitHub landed, but the same verified tree.
+	// Reparent without changing the tested tree so the fallback is strictly a fast-forward, keeping a
+	// merge commit's second parent, the PR's head.
 	const tree = git(root, ["rev-parse", `${commit}^{tree}`]);
 	const message = git(root, ["show", "-s", "--format=%B", commit]);
+	const [first, ...rest] = git(root, ["show", "-s", "--format=%P", commit]).split(" ");
 	const landed =
-		git(root, ["show", "-s", "--format=%P", commit]) === parent
+		first === parent
 			? commit
-			: git(root, ["commit-tree", tree, "-p", parent], { input: message });
+			: git(root, ["commit-tree", tree, ...[parent, ...rest].flatMap((sha) => ["-p", sha])], {
+					input: message,
+				});
 	save(join(state, "fallback.json"), { plan, entry, commit: landed, parent });
 	return finishFallback(root, state, deps, token, read);
 }

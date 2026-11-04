@@ -194,7 +194,8 @@ function mergeMethod(repository: ObjectValue, named: Method | undefined, url: st
  * enable auto-merge bound to it, or merge at once when GitHub would refuse auto-merge because
  * nothing is left to wait for. A base with a merge queue gets {@link pick} instead.
  * A base that requires the `quest land` check queues it for `quest land` instead:
- * squash auto-merge whose commit body pins `sha`. It takes no label.
+ * auto-merge whose commit body pins `sha`, with a method the repository allows, squash when it can.
+ * That request only signals the queue: `quest land` lands with its own method. It takes no label.
  * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one.
  */
 export async function land(
@@ -224,10 +225,16 @@ export async function land(
 		(check) => check.name === LAND_CHECK,
 	);
 	if (gated) {
-		if (named !== undefined && named !== "squash")
-			deps.warn(`${snapshot.url} lands through quest land, which squashes`);
+		if (named !== undefined)
+			deps.warn(`${snapshot.url} lands through quest land, which applies its own merge method`);
+		const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
+		const method = mergeMethod(
+			repository,
+			named ?? (repository.allow_squash_merge === false ? undefined : "squash"),
+			snapshot.url,
+		);
 		await unchanged();
-		await enqueue(labels.github, snapshot.id, snapshot.head);
+		await enqueue(labels.github, snapshot.id, snapshot.head, method);
 		return;
 	}
 	// A merge queue is the repository's own gate: it applies its own method and needs no auto-merge setting.

@@ -1083,7 +1083,7 @@ async function collectJob(
 				if (queuedAs !== entry.enabledAt || head !== entry.head) {
 					// Save intent before enabling, so a lost response can be reconciled after restart.
 					save(historyPath(state, number), { ...previous, ...actor, head });
-					await enqueue(github, entry.id, head);
+					await enqueue(github, entry.id, head, job.plan.method);
 					const enabled = await github.graphql(
 						"query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }",
 						{ id: entry.id },
