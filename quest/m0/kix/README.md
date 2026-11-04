@@ -88,10 +88,12 @@ operator-paid-hosting decisions:
   default branch may be implemented. Draft plans are not eligible. Project
   pause stops new work. An explicit spawn decision can prioritize ready work
   without introducing another approval flag per quest.
-- **Keep useful infrastructure.** Retain Workers/Hono and D1 for the web
+- **Keep useful infrastructure.** Retain Workers/Hono for the web
   service. Durable database claims and live WebSocket connections to a
   per-owner Durable Object (decided 2026-10-16 on moq-dev/quest#135)
-  replace MoQ locks and logs.
+  replace MoQ locks and logs. D1 is the record until
+  [owner state moves into the hub](/quest/m1/owner-state.md) (decided
+  2026-11-04, user), after which D1 keeps only cross-owner lookups.
 - **Not exclusive.** The web UI is one interface, not the only one. Every
   skill keeps working from a user's own agent (Claude Code, Codex, ...)
   without kix. The two coexist through GitHub: kix sees a local agent's

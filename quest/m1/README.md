@@ -22,6 +22,7 @@ earlier "Later work" milestone became m2.
 
 ## Required
 
+- [Owner state in its RunnerHub](/quest/m1/owner-state.md) - each owner's projects, jobs, runners, and inbox live in its Durable Object, and D1 keeps only cross-owner lookups
 - [Open kix.quest](/quest/m1/open.md) - the Worker moves to kix.quest and any owner may enroll
 - [Release with worktree hooks](/quest/m1/release.md) - tag a release that has `quest worktree hook`, so SETUP.md's release routes work
 - [Git location variables](/quest/m1/git-env.md) - every Git call on an explicit path ignores a hook's inherited `GIT_DIR` and index
