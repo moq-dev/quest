@@ -1025,7 +1025,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"timestamp, or `unknown` when the CLI named none.",
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
-		.addOption(new Option("--harness <name>", "Reviewer to run instead of the other harness").choices(HARNESSES))
+		.addOption(new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(HARNESSES))
 		.option("--model <model>", "Model the reviewer runs instead")
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option(
