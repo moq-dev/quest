@@ -153,7 +153,6 @@ work, done once the Required quests below have merged.
 
 ## Required
 
-- [Leave held PRs alone](/quest/m0/land-fixer/holds.md) - the watcher never fixes, pushes to, or re-enqueues a PR another session holds
 - [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
 
 ## Related
