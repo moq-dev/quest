@@ -505,7 +505,7 @@ export class Attempt {
 		}
 		return {
 			passed: false,
-			note: `The runner's review of ${short} by ${by} found ${round.findings.length} finding${round.findings.length === 1 ? "" : "s"}.${scored}${recorded || " kix recorded it as a failing `quest review` check."} Fix each one or refute it with evidence the reviewer cannot rebut (a path:line, a command's output, or a recorded maintainer decision), then call \`deliver\` again with \`responses\` saying what you did for each. Follow the guide's review rules, including its design checkpoint every fourth round.\n\n${formatFindings(round.findings)}`,
+			note: `The runner's review of ${short} by ${by} found ${round.findings.length} finding${round.findings.length === 1 ? "" : "s"}.${scored}${recorded || " kix recorded it as a failing `quest review` check."} Fix each one or refute it with evidence the reviewer cannot rebut (a path:line, a command's output, or a recorded maintainer decision), then call \`deliver\` again with \`responses\` saying what you did for each. Follow the guide's review rules, including its design checkpoint every third round.\n\n${formatFindings(round.findings)}`,
 		};
 	}
 

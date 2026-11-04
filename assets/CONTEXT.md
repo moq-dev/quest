@@ -150,8 +150,9 @@ Where it says nothing, only a record on a PR whose author has write access count
 
 Checkpoint the design across review rounds.
 A review round is one `quest review` round, numbered within the branch's review session.
-Every fourth round, stop before fixing more findings and reconsider the approach.
-Report that judgment and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
+Every third round, stop before fixing more findings and reconsider the approach.
+Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.
+Report the alternatives and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide; a background agent leaves this under `## Waiting` rather than deciding it.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
 Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.
