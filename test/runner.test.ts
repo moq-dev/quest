@@ -23,12 +23,12 @@ import { type Account, RunnerHome } from "../src/runner/home";
 import { serveTools } from "../src/runner/mcp";
 import {
 	accountDirectories,
+	accountLimit,
 	credentials,
 	environment,
 	Opencode,
 	PLUGIN,
 	projectConfig,
-	retryLimit,
 	signedIn,
 	turnExit,
 } from "../src/runner/opencode";
@@ -798,26 +798,25 @@ test("a webhook wait reads only on a wake and wakes immediately when its job sto
 });
 
 describe("opencode", () => {
-	test("labels an account by the providers its home signed in to", () => {
-		const home = tempDir();
-		expect(credentials(home)).toEqual([]);
-		const data = join(accountDirectories(home).XDG_DATA_HOME, "opencode");
-		mkdirSync(data, { recursive: true });
-		writeFileSync(
-			join(data, "auth.json"),
-			JSON.stringify({ openai: { type: "oauth", access: "a" }, "opencode-go": { type: "api", key: "k" } }),
-		);
-		expect(signedIn(credentials(home))).toEqual({
+	test("labels an account by the providers it stored credentials for", () => {
+		const list = [
+			{ id: "openai", connections: [{ type: "credential", id: "c1", label: "OAuth", method: "oauth" }] },
+			{ id: "opencode-go", connections: [{ type: "credential", id: "c2", label: "API key", method: "key" }] },
+			// A key the environment holds is not the account's.
+			{ id: "anthropic", connections: [{ type: "env", name: "ANTHROPIC_API_KEY" }] },
+		];
+		expect(signedIn(credentials(list))).toEqual({
 			provider: "openai",
 			kind: "subscription",
 			label: "ChatGPT, OpenCode Go (opencode)",
 		});
-		expect(signedIn([{ provider: "wafer.ai", type: "api" }])).toEqual({
+		expect(signedIn([{ provider: "wafer.ai", type: "key" }])).toEqual({
 			provider: "wafer-ai",
 			kind: "api-key",
 			label: "wafer.ai API key (opencode)",
 		});
-		expect(signedIn([])).toBeNull();
+		expect(signedIn(credentials([]))).toBeNull();
+		expect(() => credentials({})).toThrow(/no list/);
 	});
 
 	test("keeps the user's provider credentials and opencode settings from the account", () => {
@@ -845,46 +844,56 @@ describe("opencode", () => {
 		writeFileSync(file, PLUGIN);
 		const { default: plugin } = await import(pathToFileURL(file).href);
 		const config = ["opencode.json", ".opencode"].map((name) => join(checkout, name));
-		const hooks = await plugin.server({}, { cwd: checkout, writes: [checkout, tmp], reads: [output], config });
-		const call = (tool: string, args: Record<string, unknown>) =>
-			hooks["tool.execute.before"]({ tool, sessionID: "s", callID: "c" }, { args });
+		let hook: ((event: { tool: string; input: unknown }) => unknown) | undefined;
+		await plugin.setup({
+			options: { cwd: checkout, writes: [checkout, tmp], reads: [output], config },
+			tool: {
+				hook: async (name: string, callback: typeof hook) => {
+					expect(name).toBe("execute.before");
+					hook = callback;
+				},
+			},
+		});
+		const call = async (tool: string, input: unknown) => hook!({ tool, input });
 		const patch = (...headers: string[]) => ({
 			patchText: ["*** Begin Patch", ...headers, "+x", "*** End Patch"].join("\n"),
 		});
 
-		await call("read", { filePath: "a.txt" });
-		await call("write", { filePath: "new/dir/b.txt" });
-		await call("edit", { filePath: join(tmp, "notes.md") });
+		await call("read", { path: "a.txt" });
+		await call("write", { path: "new/dir/b.txt" });
+		await call("edit", { path: join(tmp, "notes.md") });
 		await call("glob", { pattern: "**/*.ts" });
 		await call("grep", { pattern: "x", path: "." });
-		await call("apply_patch", patch("*** Update File: a.txt", "*** Move to: c.txt"));
+		await call("patch", patch("*** Update File: a.txt", "*** Move to: c.txt"));
 		// opencode's saved output is readable, not writable.
-		await call("read", { filePath: join(output, "tool_1") });
-		await expect(call("write", { filePath: join(output, "tool_1") })).rejects.toThrow(/outside the checkout/);
+		await call("read", { path: join(output, "tool_1") });
+		await expect(call("write", { path: join(output, "tool_1") })).rejects.toThrow(/outside the checkout/);
 		// Commands are the sandbox's to confine.
-		await call("bash", { command: "cat /etc/passwd" });
+		await call("shell", { command: "cat /etc/passwd" });
 
-		for (const [tool, args] of [
-			["read", { filePath: "auth.json" }],
-			["read", { filePath: "out/auth.json" }],
-			["write", { filePath: "out/new.txt" }],
-			["write", { filePath: "../outside/new.txt" }],
+		for (const [tool, input] of [
+			["read", { path: "auth.json" }],
+			["read", { path: "out/auth.json" }],
+			// opencode repairs an input sent as a JSON string into its object.
+			["read", JSON.stringify({ path: "auth.json" })],
+			["write", { path: "out/new.txt" }],
+			["write", { path: "../outside/new.txt" }],
 			["grep", { pattern: "x", path: outside }],
 			["glob", { pattern: "*", path: "out" }],
-			["apply_patch", patch("*** Add File: out/x")],
-			["apply_patch", patch("*** Update File: a.txt", "*** Move to: /etc/x")],
+			["patch", patch("*** Add File: out/x")],
+			["patch", patch("*** Update File: a.txt", "*** Move to: /etc/x")],
 		] as const)
-			await expect(call(tool, args), `${tool} ${JSON.stringify(args)}`).rejects.toThrow(/outside the checkout/);
+			await expect(call(tool, input), `${tool} ${JSON.stringify(input)}`).rejects.toThrow(/outside the checkout/);
 		// A write would follow a symlink to nothing out of the checkout.
-		await expect(call("write", { filePath: "dangling" })).rejects.toThrow(/symlink to nothing/);
+		await expect(call("write", { path: "dangling" })).rejects.toThrow(/symlink to nothing/);
 		// opencode would load its own config from the checkout, outside the sandbox.
-		await call("read", { filePath: "opencode.json" });
-		for (const [tool, args] of [
-			["write", { filePath: "opencode.json" }],
-			["edit", { filePath: ".opencode/plugin/x.js" }],
-			["apply_patch", patch("*** Add File: .opencode/opencode.json")],
+		await call("read", { path: "opencode.json" });
+		for (const [tool, input] of [
+			["write", { path: "opencode.json" }],
+			["edit", { path: ".opencode/plugin/x.js" }],
+			["patch", patch("*** Add File: .opencode/opencode.json")],
 		] as const)
-			await expect(call(tool, args)).rejects.toThrow(/opencode's own config/);
+			await expect(call(tool, input)).rejects.toThrow(/opencode's own config/);
 	});
 
 	posix("refuses a checkout holding opencode's own config, which opencode would load unconfined", () => {
@@ -905,44 +914,56 @@ describe("opencode", () => {
 		);
 	});
 
-	test("reads account limits from retries and errors, not brief rate limits", () => {
-		const retry = { type: "retry" as const, attempt: 1, next: 1_900_000_000_000 };
-		expect(
-			retryLimit({
-				...retry,
-				message: "Go limit reached",
-				action: { reason: "account_rate_limit", provider: "opencode-go", title: "", message: "", label: "" },
-			}),
-		).toEqual({ until: 1_900_000_000_000 });
-		expect(retryLimit({ ...retry, message: "The usage limit has been reached" })).toEqual({ until: null });
-		expect(retryLimit({ ...retry, message: "Rate limit reached for requests" })).toBeNull();
-		expect(retryLimit({ type: "busy" })).toBeNull();
+	test("refuses an account that does not record the providers it signed in to", () => {
+		const launch = { cwd: tempDir(), home: tempDir() } as Parameters<Opencode["launch"]>[0];
+		expect(() => new Opencode("/opencode", "/srt").launch(launch)).toThrow(/add it again/);
+		expect(() => Opencode.setModel(launch.home, "openai/gpt-5.5")).toThrow(/not signed in/);
+	});
 
+	test("reads account limits from errors, not brief rate limits", () => {
 		const now = 1_000_000;
-		const api = (message: string, responseBody?: string, responseHeaders?: Record<string, string>) =>
-			({
-				role: "assistant",
-				error: { name: "APIError", data: { message, isRetryable: false, responseBody, responseHeaders } },
-			}) as never;
-		expect(
-			turnExit(
-				api("Too many", JSON.stringify({ error: { type: "usage_limit_reached", resets_at: 1_900_000 } })),
-				[],
-				null,
-				now,
-			).limited,
-		).toEqual({ until: 1_900_000_000 });
-		expect(turnExit(api("Quota exceeded.", "", { "retry-after": "60" }), [], null, now).limited).toEqual({
-			until: now + 60_000,
+		const error = (type: string, message: string, body?: string) => ({
+			type,
+			message,
+			...(body !== undefined && { response: { body } }),
 		});
-		expect(turnExit(api("Bad request"), [], null, now)).toEqual({
+		expect(accountLimit(error("provider.quota", "Out of credits"), now)).toEqual({ until: null });
+		expect(
+			accountLimit(
+				error(
+					"provider.rate-limit",
+					"Too many",
+					JSON.stringify({ error: { type: "usage_limit_reached", resets_at: 1_900_000 } }),
+				),
+				now,
+			),
+		).toEqual({ until: 1_900_000_000 });
+		expect(
+			accountLimit(
+				error("provider.quota", "Quota", JSON.stringify({ error: { resets_in_seconds: 60 } })),
+				now,
+			),
+		).toEqual({ until: now + 60_000 });
+		expect(accountLimit(error("provider.rate-limit", "Rate limit reached for requests"), now)).toBeNull();
+
+		const assistant = (content: unknown[], failure?: object) =>
+			({ type: "assistant", content, ...(failure && { error: failure }) }) as never;
+		expect(turnExit(assistant([], error("provider.quota", "The usage limit has been reached")), undefined, null, now))
+			.toEqual({ limited: { until: null }, failed: true, reply: "The usage limit has been reached" });
+		expect(turnExit(assistant([], error("provider.invalid-request", "Bad request")), undefined, null, now)).toEqual({
 			limited: null,
 			failed: true,
 			reply: "Bad request",
 		});
 		expect(
-			turnExit({ role: "assistant" } as never, [{ type: "text", text: "All done" } as never], null, now),
+			turnExit(assistant([{ type: "reasoning", text: "hm" }, { type: "text", text: "All done" }]), undefined, null, now),
 		).toEqual({ limited: null, failed: false, reply: "All done" });
+		// A run that failed before answering, such as on an unknown model.
+		expect(turnExit(undefined, error("unknown", "No model"), null, now)).toEqual({
+			limited: null,
+			failed: true,
+			reply: "No model",
+		});
 	});
 });
 
@@ -1092,10 +1113,13 @@ describe("account add", () => {
 		const dir = tempDir();
 		const bin = join(dir, "bin");
 		mkdirSync(bin);
-		// opencode's sign-in stores the credential under its XDG data home.
+		// opencode's sign-in stores the credential in its own store, which `auth list` reports.
+		const list = JSON.stringify([
+			{ id: "opencode-go", connections: [{ type: "credential", id: "c", label: "API key", method: "key" }] },
+		]);
 		writeFileSync(
 			join(bin, "opencode"),
-			`#!/bin/sh\nmkdir -p "$XDG_DATA_HOME/opencode"\necho '{"opencode-go":{"type":"api","key":"k"}}' > "$XDG_DATA_HOME/opencode/auth.json"\n`,
+			`#!/bin/sh\necho "$*" >> "${join(dir, "calls")}"\ncase "$1 $2" in "auth list") echo '${list}' ;; esac\n`,
 		);
 		chmodSync(join(bin, "opencode"), 0o755);
 		const out: string[] = [];
@@ -1128,7 +1152,18 @@ describe("account add", () => {
 			"opencode",
 			"opencode.json",
 		);
-		expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ model: "opencode-go/kimi-k3" });
+		// Its jobs may use only the providers it signed in to.
+		expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({
+			model: "opencode-go/kimi-k3",
+			policies: [
+				{ action: "provider.use", resource: "*", effect: "deny" },
+				{ action: "provider.use", resource: "opencode-go", effect: "allow" },
+			],
+		});
+		// In a private server each time, not opencode's background service.
+		expect(readFileSync(join(dir, "calls"), "utf8")).toBe(
+			"auth login --standalone\nauth list --standalone --format json\nauth list --standalone --format json\n",
+		);
 	});
 });
 
@@ -1337,23 +1372,26 @@ async function rpc(method, params) {
 `;
 
 /**
- * A fake `opencode serve` that runs the same steps as the fake `claude` on
- * each prompt: it checks the password, streams events, and ends a waiting
- * turn when the session is aborted.
+ * A fake `opencode serve --stdio` that runs the same steps as the fake
+ * `claude` on each prompt: it checks the password, loads the runner's plugin,
+ * streams events, and ends a waiting turn when the session is interrupted.
  */
 const FAKE_OPENCODE = `
 const fs = require("node:fs");
 const { join } = require("node:path");
 const http = require("node:http");
+const { pathToFileURL } = require("node:url");
 const argv = process.argv.slice(2);
 const logFile = join(__dirname, "..", "calls.log");
 const log = (value) => fs.appendFileSync(logFile, JSON.stringify(value) + "\\n");
 const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
 const auth = "Basic " + Buffer.from("opencode:" + process.env.OPENCODE_SERVER_PASSWORD).toString("base64");
-const kix = config.mcp.kix;
+const kix = config.mcp.servers.kix;
 const streams = [];
 const send = (event) => { for (const s of streams) s.write("data: " + JSON.stringify(event) + "\\n\\n"); };
-let aborted = () => {};
+const messages = {};
+const running = {};
+let interrupted = () => {};
 let sessions = 0;
 let id = 0;
 async function rpc(method, params) {
@@ -1364,17 +1402,25 @@ async function rpc(method, params) {
 	});
 	return (await response.json()).result;
 }
+// opencode loads a local plugin from its directory and fails it rather than the server.
+const plugin = (async () => {
+	const { package: dir, options } = config.plugins[0];
+	const { default: definition } = await import(pathToFileURL(join(dir, "server.js")).href);
+	let hooked = false;
+	await definition.setup({ options, tool: { hook: async () => (hooked = true) } });
+	return { id: definition.id, source: { type: "local", path: dir }, features: {}, state: hooked ? { status: "active" } : { status: "failed", error: "no hook" } };
+})();
 const body = (request) => new Promise((resolve) => {
 	let text = "";
 	request.on("data", (chunk) => (text += chunk));
 	request.on("end", () => resolve(text ? JSON.parse(text) : {}));
 });
 const json = (response, value) => response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(value));
-async function prompt(session, input) {
+async function turn(session, text) {
 	const steps = JSON.parse(fs.readFileSync(join(__dirname, "..", "steps.json"), "utf8"));
 	const resume = fs.existsSync(logFile) && fs.readFileSync(logFile, "utf8").includes('"prompted":"' + session + '"');
 	log({
-		argv, cwd: process.cwd(), stdin: input.parts[0].text, system: input.system, session, prompted: session,
+		argv, cwd: process.cwd(), stdin: text, system: fs.readFileSync(config.instructions[0], "utf8"), session, prompted: session,
 		xdg: process.env.XDG_DATA_HOME, home: process.env.HOME, devShell: process.env.IN_DEVSHELL ?? null,
 		gh: process.env.GH_TOKEN ?? null, projectConfig: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null, config,
 	});
@@ -1385,35 +1431,55 @@ async function prompt(session, input) {
 		// opencode runs a command as its shell's -c, with the server's own environment.
 		if (step.shell)
 			log({ shell: require("node:child_process").execFileSync(config.shell, ["-c", step.shell], { encoding: "utf8" }) });
-		if (step.emit) send({ ...step.emit, properties: { ...step.emit.properties, sessionID: session } });
+		if (step.emit) send({ ...step.emit, data: { ...step.emit.data, sessionID: session } });
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
-			await new Promise((resolve) => (aborted = resolve));
+			await new Promise((resolve) => (interrupted = resolve));
 			log({ aborted: session });
-			return { info: { role: "assistant", error: { name: "MessageAbortedError", data: { message: "Aborted" } } }, parts: [] };
+			return { type: "assistant", content: [], error: { type: "aborted", message: "Interrupted" } };
 		}
 	}
-	return { info: { role: "assistant", finish: "stop" }, parts: [{ type: "text", text: "done" }] };
+	return { type: "assistant", content: [{ type: "text", text: "done" }], finish: "stop" };
 }
 const server = http.createServer(async (request, response) => {
 	if (request.headers.authorization !== auth) return response.writeHead(401).end();
 	const path = new URL(request.url, "http://x").pathname;
-	if (path === "/event") {
+	if (path === "/api/event") {
 		response.writeHead(200, { "Content-Type": "text/event-stream" });
 		streams.push(response);
-		return response.write("data: " + JSON.stringify({ type: "server.connected", properties: {} }) + "\\n\\n");
+		return response.write("data: " + JSON.stringify({ type: "server.connected", data: {} }) + "\\n\\n");
 	}
-	if (path === "/session") return json(response, { id: "ses_" + ++sessions + "_" + process.pid });
-	const message = /^\\/session\\/([^/]+)\\/message$/.exec(path);
-	if (message) return json(response, await prompt(message[1], await body(request)));
-	if (/\\/abort$/.test(path)) {
-		aborted();
-		return json(response, true);
+	if (path === "/api/model/default") return json(response, { data: { id: "gpt-5.5", providerID: "openai" } });
+	// The runner's config, and the account's config directory.
+	if (path === "/api/config")
+		return json(response, [
+			{ type: "directory", path: join(process.env.XDG_CONFIG_HOME, "opencode") },
+			{ type: "document", info: config },
+		]);
+	if (path === "/api/plugin") return json(response, { location: {}, data: [await plugin] });
+	if (path === "/api/session") return json(response, { data: { id: "ses_" + ++sessions + "_" + process.pid } });
+	const [, session, action] = /^\\/api(?:\\/experimental)?\\/session\\/([^/]+)\\/(\\w+)$/.exec(path) ?? [];
+	if (action === "prompt") {
+		const { text } = await body(request);
+		const user = { type: "user", id: "msg_" + ++id };
+		messages[session] = [user, ...(messages[session] ?? [])];
+		running[session] = turn(session, text).then((reply) => messages[session].unshift({ id: "msg_" + ++id, ...reply }));
+		return json(response, { data: { id: user.id } });
+	}
+	if (action === "wait") {
+		await running[session];
+		return response.writeHead(204).end();
+	}
+	if (action === "message") return json(response, { data: messages[session], cursor: {} });
+	if (action === "interrupt") {
+		interrupted();
+		return json(response, { interrupted: true });
 	}
 	response.writeHead(404).end();
 });
 process.on("SIGTERM", () => process.exit(143));
-server.listen(0, "127.0.0.1", () => console.log("opencode server listening on http://127.0.0.1:" + server.address().port));
+process.stdin.on("end", () => process.exit(0)).resume();
+server.listen(0, "127.0.0.1", () => console.log(JSON.stringify({ url: "http://127.0.0.1:" + server.address().port })));
 `;
 
 /** A fake sandbox-runtime that records its settings and environment, then runs the command unconfined. */
@@ -1503,10 +1569,19 @@ function rig(
 	};
 	home.saveAccounts([account]);
 	if (cli === "opencode") {
-		const data = join(accountDirectories(home.accountHome("acct1")).XDG_DATA_HOME, "opencode");
-		mkdirSync(data, { recursive: true });
-		writeFileSync(join(data, "auth.json"), JSON.stringify({ openai: { type: "oauth", access: "secret" } }));
-		Opencode.setModel(home.accountHome("acct1"), "openai/gpt-5.5");
+		// What `quest runner account add opencode --model openai/gpt-5.5` records after a ChatGPT sign-in.
+		const config = join(accountDirectories(home.accountHome("acct1")).XDG_CONFIG_HOME, "opencode");
+		mkdirSync(config, { recursive: true });
+		writeFileSync(
+			join(config, "opencode.json"),
+			JSON.stringify({
+				model: "openai/gpt-5.5",
+				policies: [
+					{ action: "provider.use", resource: "*", effect: "deny" },
+					{ action: "provider.use", resource: "openai", effect: "allow" },
+				],
+			}),
+		);
 	}
 	const hub = new FakeHub();
 	const publishes: Sent[] = [];
@@ -1894,6 +1969,7 @@ describe("quest runner", () => {
 		const r = rig(undefined, "opencode");
 		r.steps({
 			start: [
+				{ emit: { type: "marker" } },
 				{ write: "a.txt", content: "draft\n" },
 				{
 					shell: 'printf "%s|%s|%s|%s|%s" "$IN_DEVSHELL" "$HOME" "${OPENCODE_SERVER_PASSWORD:-none}" "${QUEST_COMMAND:-none}" "$TMPDIR"',
@@ -1914,7 +1990,7 @@ describe("quest runner", () => {
 		expect(nix.nix.slice(0, 3)).toEqual(["print-dev-env", "--accept-flake-config", "--no-write-lock-file"]);
 		const home = r.home.accountHome("acct1");
 		// The server runs outside the devShell, in the account's own homes, and loads nothing from the checkout.
-		expect(first.argv).toEqual(["serve", "--hostname=127.0.0.1", "--port=0"]);
+		expect(first.argv).toEqual(["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"]);
 		expect(first.devShell).toBeNull();
 		expect(first.xdg).toBe(join(home, "data"));
 		expect(first.home).toBe(home);
@@ -1947,21 +2023,26 @@ describe("quest runner", () => {
 		expect(first.stdin).toContain("kix adds for this job: Extra rule.");
 		expect(first.system).toContain("checkpoint");
 		expect(first.config).toMatchObject({
-			model: "openai/gpt-5.5",
-			enabled_providers: ["openai"],
 			shell: join(home, `kix-${question.session}`, "sandboxed-bash"),
-			// The file tools stay in the checkout and the attempt's directory, and WebFetch is off.
-			permission: {
-				"*": "allow",
-				question: "deny",
-				webfetch: "deny",
-				external_directory: { "*": "deny", [`${tmp}/*`]: "allow" },
-			},
+			// The file tools stay in the checkout and the attempt's directory, and nothing that runs in the server is offered.
+			permissions: [
+				{ action: "*", resource: "*", effect: "allow" },
+				...["question", "webfetch", "websearch", "execute", "browser", "external_directory"].map((action) => ({
+					action,
+					resource: "*",
+					effect: "deny",
+				})),
+				{ action: "external_directory", resource: `${tmp}/*`, effect: "allow" },
+			],
 			lsp: false,
 			formatter: false,
-			mcp: { kix: { type: "remote", headers: { Authorization: expect.stringMatching(/^Bearer /) } } },
+			mcp: {
+				servers: {
+					kix: { type: "remote", codemode: false, headers: { Authorization: expect.stringMatching(/^Bearer /) } },
+				},
+			},
 		});
-		expect(first.config.plugin[0][1]).toEqual({
+		expect(first.config.plugins[0].options).toEqual({
 			cwd: checkout,
 			writes: [checkout, tmp],
 			reads: [join(home, "data", "opencode", "tool-output")],
@@ -1969,13 +2050,13 @@ describe("quest runner", () => {
 		});
 		// The launch's shell, plugin, and settings are gone once it ends.
 		expect(existsSync(dirname(first.config.shell))).toBe(false);
-		// Events stream as raw output.
-		expect(
-			r.hub
-				.of("output")
-				.map((o) => o.text)
-				.join(""),
-		).toContain("opencode server listening");
+		// The server's own output and its events stream as raw output.
+		const output = r.hub
+			.of("output")
+			.map((o) => o.text)
+			.join("");
+		expect(output).toContain('{"url":"http://127.0.0.1:');
+		expect(output).toContain('"type":"marker"');
 
 		r.assign(
 			job(r.upstream.commit, {
@@ -2016,20 +2097,19 @@ describe("quest runner", () => {
 		expect(cancelled).toMatchObject({ outcome: "cancelled" });
 		expect(r.calls().some((c) => c.aborted)).toBe(true);
 
-		const resets = Date.now() + 3_600_000;
-		const status = {
-			type: "retry",
-			attempt: 1,
-			message: "Go limit",
-			next: resets,
-			action: { reason: "account_rate_limit" },
+		// A limit only the message names, which opencode would retry until the reset.
+		const resets = Math.floor(Date.now() / 1000) + 3600;
+		const error = {
+			type: "provider.rate-limit",
+			message: "You've hit your usage limit",
+			response: { body: JSON.stringify({ error: { type: "usage_limit_reached", resets_at: resets } }) },
 		};
-		r.steps({ start: [{ emit: { type: "session.status", properties: { status } } }, { wait: true }] });
+		r.steps({ start: [{ emit: { type: "session.retry.scheduled", data: { attempt: 1, at: 0, error } } }, { wait: true }] });
 		r.assign(job(r.upstream.commit, { id: "job2" }));
 		const limited = await r.hub.next((m) => m.type === "result" && m.job === "job2");
 		await idle(r.runner);
 		expect(limited).toMatchObject({ outcome: "limited" });
-		expect(r.home.accounts()[0]!.limitedUntil).toBe(resets);
+		expect(r.home.accounts()[0]!.limitedUntil).toBe(resets * 1000);
 		await r.runner.shutdown();
 	});
 

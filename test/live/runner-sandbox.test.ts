@@ -36,6 +36,8 @@ import { closeSandbox, openSandbox, quote, type Sandbox } from "../../src/runner
 
 /** What the scripted provider's key is, which no command may read. */
 const KEY = "quest-boundary-provider-key";
+/** A pattern matching the key without holding it, since a command's own text reaches the model. */
+const KEY_PATTERN = quote(`${KEY.slice(0, -1)}[${KEY.at(-1)}]`);
 /** The kix tools' bearer token, which no command may see. */
 const TOOLS_TOKEN = "quest-boundary-tools-token";
 
@@ -64,18 +66,20 @@ interface Attempt {
 	clean?(paths: Paths): void;
 }
 
-const auth = (paths: Paths) => join(accountDirectories(paths.account).XDG_DATA_HOME, "opencode", "auth.json");
+/** The database opencode keeps the account's credentials in. */
+const credentialStore = (paths: Paths) =>
+	join(accountDirectories(paths.account).XDG_DATA_HOME, "opencode", "opencode.db");
 
-/** Commands avoid `cat`, `touch`, `mkdir`, and the like, which opencode's own path check refuses before srt sees them. */
+/** Commands avoid `cd` and the like, whose directory opencode's own path check refuses before srt sees it. */
 const ATTEMPTS: Attempt[] = [
 	{
 		name: "reads the account's credentials by absolute path",
-		command: (paths) => `head -c 4096 ${quote(auth(paths))}`,
+		command: (paths) => `grep -ao ${KEY_PATTERN} ${quote(credentialStore(paths))}`,
 		escaped: (_paths, output) => output.includes(KEY),
 	},
 	{
 		name: "reads them through a symlink the checkout commits",
-		command: () => "head -c 4096 leak",
+		command: () => `grep -ao ${KEY_PATTERN} leak`,
 		escaped: (_paths, output) => output.includes(KEY),
 	},
 	{
@@ -152,12 +156,12 @@ interface FileAttempt {
 const FILE_ATTEMPTS: FileAttempt[] = [
 	{
 		name: "the read tool follows the committed symlink to the credentials",
-		call: { tool: "read", args: { filePath: "leak" } },
+		call: { tool: "read", args: { path: "leak" } },
 		escaped: (_paths, output) => output.includes(KEY),
 	},
 	{
 		name: "the write tool writes .opencode/opencode.json",
-		call: { tool: "write", args: { filePath: ".opencode/opencode.json", content: `{"plugin":["./p.js"]}` } },
+		call: { tool: "write", args: { path: ".opencode/opencode.json", content: `{"plugin":["./p.js"]}` } },
 		escaped: (paths) => existsSync(join(paths.checkout, ".opencode", "opencode.json")),
 	},
 ];
@@ -168,7 +172,7 @@ interface Call {
 	args: Record<string, unknown>;
 }
 
-const bash = (command: string): Call => ({ tool: "bash", args: { command, description: "Run a step" } });
+const bash = (command: string): Call => ({ tool: "shell", args: { command } });
 
 /** A command inside the sandbox that must work, so the refusals above are not every command failing. */
 const ALLOWED = bash(`printf allowed > allowed.txt && printf ok > "$TMPDIR/allowed" && echo ALLOWED-$((6 * 7))`);
@@ -188,6 +192,15 @@ let script: Call[] = [];
 /** Tools the script calls that opencode did not offer. */
 const missing = new Set<string>();
 
+/**
+ * Every tool the job offers the model, so a release adding one fails here
+ * until it is reviewed: the questions, WebFetch, web search, and Code Mode it
+ * denies are absent, and so are the kix tools, at a port nothing listens on.
+ */
+const OFFERED = ["edit", "glob", "grep", "read", "shell", "skill", "subagent", "todowrite", "write"];
+/** Standing instructions for the job, which must reach the model. */
+const SYSTEM = "Quest boundary instructions.";
+
 const linux = process.platform === "linux";
 
 describe.skipIf(!linux)("opencode's sandbox", () => {
@@ -203,7 +216,7 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 		const repository = join(runner, "repos", "fixture.git");
 		const seed = join(scratch, "seed");
 		git(scratch, "init", "-q", "-b", "main", seed);
-		symlinkSync(join(accountDirectories(account).XDG_DATA_HOME, "opencode", "auth.json"), join(seed, "leak"));
+		symlinkSync(join(accountDirectories(account).XDG_DATA_HOME, "opencode", "opencode.db"), join(seed, "leak"));
 		writeFileSync(join(seed, "README.md"), "fixture\n");
 		git(seed, "add", ".");
 		git(seed, "commit", "-qm", "base");
@@ -267,6 +280,9 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 		const results = toolResults();
 		const context = `exit ${JSON.stringify(exit)}\n${output.slice(-4000)}`;
 		expect([...missing], "opencode no longer offers a tool the script calls").toEqual([]);
+		const offered = requests.find((request) => request.tools?.length)?.tools?.map((t) => t.function.name);
+		expect(offered?.toSorted(), "opencode offers other tools than the reviewed ones").toEqual(OFFERED);
+		expect(JSON.stringify(requests[0]?.messages), "the job's instructions did not reach the model").toContain(SYSTEM);
 		expect(exit.failed, context).toBe(false);
 		expect(exit.reply).toBe("done");
 		expect(results, `the model saw ${results.length} of ${script.length} results\n${context}`).toHaveLength(
@@ -315,7 +331,7 @@ async function run(adapter: Opencode, sandbox: Sandbox, output: (line: string) =
 		session: "boundary",
 		resume: false,
 		prompt: "Run the commands you are given.",
-		system: "",
+		system: SYSTEM,
 		tools: { url: "http://127.0.0.1:9/mcp", token: TOOLS_TOKEN },
 		sandbox,
 		env: process.env,
@@ -333,20 +349,21 @@ async function run(adapter: Opencode, sandbox: Sandbox, output: (line: string) =
 
 /**
  * Sign the account in to the scripted provider: an OpenAI-compatible API on
- * localhost, with an API key no command may read, picked as the account's model.
+ * localhost, with an API key no command may read, picked as the account's
+ * model and its only provider. opencode imports the key into its own store,
+ * as its sign-in would.
  */
 function signIn(account: string, baseURL: string) {
 	const dirs = accountDirectories(account);
-	mkdirSync(join(dirs.XDG_DATA_HOME, "opencode"), { recursive: true });
-	writeFileSync(
-		join(dirs.XDG_DATA_HOME, "opencode", "auth.json"),
-		JSON.stringify({ scripted: { type: "api", key: KEY } }),
-	);
 	mkdirSync(join(dirs.XDG_CONFIG_HOME, "opencode"), { recursive: true });
 	writeFileSync(
 		join(dirs.XDG_CONFIG_HOME, "opencode", "opencode.json"),
 		JSON.stringify({
 			model: "scripted/boundary",
+			policies: [
+				{ action: "provider.use", resource: "*", effect: "deny" },
+				{ action: "provider.use", resource: "scripted", effect: "allow" },
+			],
 			provider: {
 				scripted: {
 					npm: "@ai-sdk/openai-compatible",
@@ -357,6 +374,26 @@ function signIn(account: string, baseURL: string) {
 			},
 		}),
 	);
+	const exported = join(account, "credentials.json");
+	writeFileSync(
+		exported,
+		JSON.stringify([
+			{
+				id: "cred_boundary",
+				integrationID: "scripted",
+				label: "API key",
+				active: true,
+				value: { type: "key", key: KEY },
+			},
+		]),
+	);
+	const imported = spawnSync(
+		binaryPath("opencode", process.env),
+		["auth", "import", "--standalone", exported],
+		{ cwd: account, env: { PATH: process.env.PATH, HOME: account, ...dirs }, encoding: "utf8" },
+	);
+	rmSync(exported);
+	if (imported.status !== 0) throw new Error(`opencode auth import failed: ${imported.stderr}`);
 }
 
 interface ChatMessage {
