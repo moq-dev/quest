@@ -4,11 +4,11 @@
 
 Quest sessions spend their tokens on the work itself, not on loading rules,
 a second review pass, polling, oversized coordinator context, or merge churn.
-The epic finishes by re-measuring the baseline below over a week of sessions
+Rules a program can check are enforced instead of read. The epic finishes by
+re-measuring the baseline below with `quest usage` over a week of sessions
 and recording the comparison in its closing PR.
 
-Non-goals: the online reviewers (CodeRabbit and Pullfrog are free and stay),
-and turning prose rules into hooks or lint.
+Non-goal: the online reviewers (CodeRabbit and Pullfrog are free and stay).
 
 ## Plan
 
