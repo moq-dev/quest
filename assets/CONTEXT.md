@@ -136,7 +136,8 @@ A quest PR's size is its quest's; a skill that opens its own PR, such as `/quest
 List them as `Size: M` and one `Implementer: Codex, gpt-6.1-sol, high effort` line per session, which each session adds when it first pushes.
 Read your model and effort rather than guess: Claude Code knows its model and exports `CLAUDE_EFFORT`; Codex records `model` and `effort` in the last `turn_context` of `~/.codex/sessions/*/*/*/rollout-*-$CODEX_THREAD_ID.jsonl`; Grok records `model_id` and `reasoning_effort` in `~/.grok/sessions/*/$GROK_SESSION_ID/chat_history.jsonl`.
 Write `unknown` for any you cannot find.
-The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
+The PR body's `## Review` section records the latest round: the reviewer harness, model, and effort, the reviewed head SHA, the round's score out of 10 with its rationale, and each finding's disposition (fixed, or refuted with the reason), or the skip and its reason.
+Never block on a score: the findings and their refutations decide when the review is done.
 Rewrite it after each round.
 A review counts for the head whose SHA it names.
 

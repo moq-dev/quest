@@ -68,9 +68,12 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
   from source (`nix/sandbox-runtime.nix`), and the runner refuses an opencode
   account when srt lets commands make Unix sockets
   ([moq-dev/quest#465](https://github.com/moq-dev/quest/pull/465)).
-  opencode 1.19 still imports the plugins a checkout's own `opencode.json`
-  or `.opencode/` names, even with project config disabled, so the runner
-  keeps the agent from creating them and refuses a checkout that holds them.
+  Besides disabling project config, the runner keeps the agent from creating
+  a checkout's own `opencode.json` or `.opencode/` and refuses a checkout
+  that holds them. Before each turn it refuses to run if opencode loaded any
+  config but the runner's and the account's, since a machine's managed
+  `/etc/opencode` loads above the runner's and could replace the sandboxed
+  `shell`.
   `test/live/runner-sandbox.test.ts` checks that boundary with the pinned
   opencode and srt and a scripted model. It runs in `just runner-sandbox`
   and a nightly GitHub-hosted workflow (`.github/workflows/sandbox.yml`),

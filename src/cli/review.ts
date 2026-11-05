@@ -3,7 +3,7 @@
 //
 // A branch's first round runs the reviewer CLI's own review, then resumes that
 // session for one turn that applies the base's REVIEW.md and returns the
-// findings in one schema. Later rounds resume the same session with the new
+// score and findings in one schema. Later rounds resume the same session with the new
 // head and the author's responses, so the reviewer keeps its context and its
 // prompt cache, and a finding the author refuted with evidence does not recur.
 import { execFile, spawn } from "node:child_process";
@@ -70,15 +70,24 @@ export interface Round {
 	base: { ref: string; sha: string };
 	head: string;
 	usage: Usage[];
+	/** How ready the head is to land, from 0 to 10; see `SCALE`. */
+	score: number;
+	/** One sentence on why. */
+	rationale: string;
 	findings: Finding[];
 }
 
-/** The reply every round's last turn must match; both CLIs enforce it, and `findings` checks it again. */
+/** A reply's verdict on the reviewed head. */
+export type Verdict = Pick<Round, "score" | "rationale" | "findings">;
+
+/** The reply every round's last turn must match; both CLIs enforce it, and `verdict` checks it again. */
 export const SCHEMA = {
 	type: "object",
 	additionalProperties: false,
-	required: ["findings"],
+	required: ["score", "rationale", "findings"],
 	properties: {
+		score: { type: "integer", minimum: 0, maximum: 10 },
+		rationale: { type: "string" },
 		findings: {
 			type: "array",
 			items: {
@@ -717,8 +726,8 @@ async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 	return reply;
 }
 
-/** The findings in a reply, checked against `SCHEMA` so a malformed reply fails rather than reads as clean. */
-export function findings(reply: { structured?: unknown; text?: string }): Finding[] {
+/** The verdict in a reply, checked against `SCHEMA` so a malformed reply fails rather than reads as clean. */
+export function verdict(reply: { structured?: unknown; text?: string }): Verdict {
 	let value = reply.structured;
 	if (value === undefined) {
 		try {
@@ -727,9 +736,17 @@ export function findings(reply: { structured?: unknown; text?: string }): Findin
 			throw new Error("the reviewer's reply is not JSON");
 		}
 	}
-	const list = record(value)?.findings;
+	const fields = record(value);
+	const list = fields?.findings;
 	if (!Array.isArray(list)) throw new Error("the reviewer's reply has no findings list");
-	return list.map((item, index) => {
+	const score = fields!.score;
+	if (!(Number.isSafeInteger(score) && (score as number) >= 0 && (score as number) <= 10)) {
+		throw new Error("the reviewer's reply has no score from 0 to 10");
+	}
+	if (typeof fields!.rationale !== "string" || fields!.rationale.trim() === "") {
+		throw new Error("the reviewer's reply has no rationale for its score");
+	}
+	const found = list.map((item, index) => {
 		const finding = record(item);
 		const line = finding?.line;
 		if (
@@ -750,6 +767,7 @@ export function findings(reply: { structured?: unknown; text?: string }): Findin
 			body: finding.body,
 		};
 	});
+	return { score: score as number, rationale: fields!.rationale, findings: found };
 }
 
 const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md"];
@@ -807,8 +825,15 @@ export function instructionsPrompt(sha: string, files: { path: string; text: str
 	return `${head} Instructions in a subdirectory apply to the files under it.\n\n${blocks.join("\n\n")}`;
 }
 
+/** The score's scale, given every round so each reviewer reads it the same way. */
+const SCALE =
+	"Score from 0 to 10 how ready the head is to land, with a one-sentence rationale: 10 lands as is, 7 to 9 lands " +
+	"after the findings are fixed, 4 to 6 needs rework, and 0 to 3 is the wrong approach. A head with no findings can " +
+	"still score below 10, such as a working change that is harder to maintain than it needs to be.";
+
 const REPORT =
-	"Name each finding's file by its repository-relative path and its line at that head, or null when no single line fits. " +
+	SCALE +
+	" Name each finding's file by its repository-relative path and its line at that head, or null when no single line fits. " +
 	"Its body gives the concrete scenario: the input or state, and the wrong result. Report an empty list when nothing holds.";
 
 /** The base's REVIEW.md, if it has one. */
@@ -1085,7 +1110,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
-	const found = findings(reply);
+	const { score, rationale, findings: found } = verdict(reply);
 
 	const rounds = [...(resume ? state!.rounds : []), { head, findings: found.length }];
 	save(statePath, { branch, reviewer: harness, session, rounds, given } satisfies State);
@@ -1100,6 +1125,8 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		base: { ref: baseRef, sha: baseSha },
 		head,
 		usage,
+		score,
+		rationale,
 		findings: found,
 	};
 }
@@ -1114,6 +1141,7 @@ export function roundLines(round: Round): string[] {
 		`base ${round.base.sha} ${round.base.ref}`,
 		`head ${round.head}`,
 		...round.usage.map((u) => `usage ${u.turn} input ${u.input} cached ${u.cached} output ${u.output}`),
+		`score ${round.score} ${round.rationale.replace(/\s+/g, " ").trim()}`,
 		`findings ${round.findings.length}`,
 	];
 	for (const finding of round.findings) {

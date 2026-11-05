@@ -40,8 +40,7 @@ Agent's choices, for the implementer to revisit:
   and branch: a quest branch names its quest, and a PR's head branch names
   the PR. Sessions on no quest or PR branch roll up as unattributed.
 - Accuracy comes from the PR record: the body's `## Models` size and
-  implementers, and each `## Review` round's reviewer, score
-  ([review score](/quest/m0/model-routing/review-score.md)), and findings
+  implementers, and each `## Review` round's reviewer, score, and findings
   with their dispositions; follow-up fixes are later PRs that list it under
   `## Caused by` (`quest context`'s Pull requests section).
 - Prices are a pinned table beside the model lists, by model and token

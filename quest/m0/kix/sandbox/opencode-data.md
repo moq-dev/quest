@@ -78,7 +78,3 @@ Implementation guidance:
 - Extend `test/live/runner-sandbox.test.ts` with a second job, in the same
   repository, that tries to read the first job's saved tool output and shell
   capture.
-
-## Required
-
-- [opencode 2.x](/quest/m0/opencode-sdk.md) - this builds on its client and job plugin

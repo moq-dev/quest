@@ -105,4 +105,3 @@ ownership-manifest design:
 - [Remote control worktrees](/quest/m0/worktree-routes.md) - live-check `claude remote-control --spawn worktree` against the hooks, from a session spawned on claude.ai
 - [Session checkouts released](/quest/m0/session-checkouts.md) - a Claude session's own checkout is released when the session ends and reclaimed on resume
 - [claude rm upstream report](/quest/m0/claude-rm-upstream.md) - waiting on approval: ask Claude Code to run `WorktreeRemove` instead of advising an unlock
-- [opencode 2.x](/quest/m0/opencode-sdk.md) - the runner drives the opencode 2.x binary through `@opencode/client`, removing the interim 1.19.0 pin

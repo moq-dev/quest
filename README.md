@@ -1126,7 +1126,12 @@ base gained since, which a diff against its tip shows as reverted.
 The first round runs the reviewer's own review, `codex exec review --base
 <merge-base>` or Claude Code's `/code-review <effort> <merge-base>...HEAD`, then resumes that session for
 one turn that applies the base's `REVIEW.md`, if any, and reports the findings
-in one JSON schema. Later rounds resume the same session with the new head and
+in one JSON schema, with a score from 0 to 10 for how ready the head is to land
+and one sentence on why: 10 lands as is, 7 to 9 lands after the findings are
+fixed, 4 to 6 needs rework, and 0 to 3 is the wrong approach. A head with no
+findings can still score below 10. A reply without a valid score fails like any
+malformed reply. The score informs; the findings and their refutations still
+decide when the loop ends. Later rounds resume the same session with the new head and
 `--responses`, the author's free-text fixes and refutations, which a round that
 reported findings requires. A refutation stands only when it cites evidence the
 reviewer can check. A resumed session keeps the instructions it started with,
@@ -1266,10 +1271,13 @@ install dependencies; an untrusted one's reach no network host. npm's registry
 also accepts publishes, so a prompt-injected agent holding someone's npm token
 could publish the checkout there. The agent's file tools stay in the checkout
 (opencode's may also use the private temporary directory, and its read tool
-the output it saved), WebFetch is off, and nothing the checkout configures is
-loaded: not its `.claude` settings, hooks, and MCP servers, nor its
-`opencode.json` and `.opencode` plugins, tools, and MCP servers, and opencode's
-language servers and formatters are off. The CLI itself, Claude Code or
+the output it saved), WebFetch and opencode's web search are off, and nothing
+the checkout configures is loaded: not its `.claude` settings, hooks, and MCP
+servers, nor its `opencode.json` and `.opencode` plugins, tools, and MCP
+servers, and opencode's language servers and formatters are off. An opencode
+job refuses to run if opencode loaded any config besides the runner's and the
+account's, such as a machine's managed `/etc/opencode`, which would outrank
+the runner's. The CLI itself, Claude Code or
 `opencode serve`, runs outside the sandbox and outside the devShell, and its
 commands start from a minimal environment, so its login, the opencode server's
 password, and the kix tools' token stay out of their reach. This is an OS
