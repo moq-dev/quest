@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { discoveryEnv, git } from "./git";
+import { LIMIT } from "./limit";
 import { alive, programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
 import { Worktrees, save } from "./worktree";
@@ -82,26 +83,6 @@ export const LOGINS = {
 	// because your refresh token was revoked. Please log out and sign in again."
 	codex: { command: "codex login", unauthorized: /\b401 Unauthorized\b|sign in again/ },
 } as const satisfies Record<HarnessName, Login>;
-
-/**
- * Messages for an account's spent usage limit or credit, as opposed to a brief
- * rate limit, a context or budget limit, or another failure: Claude Code's
- * "You've hit your weekly limit" or "5-hour limit reached", Codex's "You've hit
- * your usage limit" or "Quota exceeded", and a provider's spent balance.
- * Claude Code's server throttle says "(not your usage limit)", so the bare
- * "usage limit" skips that negation.
- */
-const LIMIT = new RegExp(
-	[
-		"(?<!not your )usage (?:credit )?limit",
-		"usage_limit_reached",
-		"(?:hit|reached) your (?:[\\w'-]+ )*(?:limit|spend cap|budget)",
-		"(?:hour|weekly|opus|sonnet|fable) limit reached",
-		"out of (?:extra usage|usage credits|credits)",
-		"credit balance is too low|insufficient_quota|exceeded your current quota|quota exceeded",
-	].join("|"),
-	"i",
-);
 
 /** How one agent CLI is launched and read. The prompt always arrives on stdin. */
 interface Harness {

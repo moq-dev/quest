@@ -54,6 +54,10 @@ if (process.env.FAKE_MODE === "limited") {
 	result({ is_error: true, result: "You've hit your weekly limit · resets 3pm (UTC)" });
 	process.exit(1);
 }
+if (process.env.FAKE_MODE === "free-limited") {
+	result({ is_error: true, result: "Free usage exceeded" });
+	process.exit(1);
+}
 if (process.env.FAKE_MODE === "logged-out") {
 	result({ is_error: true, result: "Not logged in · Please run /login" });
 	process.exit(1);
@@ -351,6 +355,14 @@ test("an account at its usage limit exits 3, and the session resumes once it res
 	expect(call.argv).toContain(session);
 	expect(call.argv).not.toContain("--session-id");
 	expect(call.stdin).toBe("continue");
+});
+
+test("a spent free usage allowance exits 3 as limited", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_MODE", "free-limited");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
+	expect(result.code).toBe(3);
+	expect(result.stdout).toMatch(/^session \S+\noutcome limited\n\nFree usage exceeded\n$/);
 });
 
 test("a logged-out claude exits 4 and names its login command", async () => {
