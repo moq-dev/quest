@@ -1005,9 +1005,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"JSON schema without reading anything again. Later rounds on the branch resume the " +
 				"same session with the new head and --responses, the author's fixes and refutations of the last " +
 				"round's findings, required while that round reported any, and check only what changed since the last " +
-				"round's head and those findings; the reply settles each of them, by " +
+				"round's head and those findings, or the whole change again once REVIEW.md changed or the change starts " +
+				"from a merge base the last round did not cover; the reply settles each of those findings, by " +
 				"its number in the prompt, as fixed, refuted, or still open. A round on the head the last round " +
-				"reviewed, when that round found nothing and the instructions and REVIEW.md are unchanged, runs no " +
+				"reviewed, from the same merge base with the same model and effort, when that round found nothing and " +
+				"the instructions and REVIEW.md are unchanged, runs no " +
 				"reviewer and repeats that round, marked unchanged. A resumed session keeps the instructions it " +
 				"started with, so when the applicable AGENTS.md or CLAUDE.md files change, the round starts a new " +
 				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +

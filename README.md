@@ -1140,9 +1140,11 @@ The score informs; the findings and their refutations still decide when the
 loop ends. Later rounds resume the same session with the new head and
 `--responses`, the author's free-text fixes and refutations, which a round that
 reported findings requires, and check only what changed since the last round's
-head and its findings. A round on the head the last round reviewed, when that
-round found nothing and the instructions and `REVIEW.md` are unchanged, runs no
-reviewer and repeats that round, marked `unchanged`. A refutation stands only when it cites evidence the
+head and its findings, or the whole change again once `REVIEW.md` changed or
+the change starts from a merge base the last round did not cover. A round on
+the head the last round reviewed, from the same merge base with the same model
+and effort, when that round found nothing and the instructions and `REVIEW.md`
+are unchanged, runs no reviewer and repeats that round, marked `unchanged`. A refutation stands only when it cites evidence the
 reviewer can check. The prompt numbers the last round's findings, and the reply
 settles each by its number as fixed, refuted, or still open, with a one-sentence
 reason; a reply that skips or repeats one, or keeps more open than it reports,

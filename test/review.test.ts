@@ -1004,8 +1004,35 @@ fakes("a later round revokes REVIEW.md rules the base removed", async () => {
 	expect((await quest("--root", s.repo, "review")).stdout).toContain(`round 2\nbase ${base}`);
 	const prompt = s.calls().at(-1)!.stdin;
 	expect(prompt).toContain("no longer has a REVIEW.md");
+	expect(prompt).toContain("review the whole change again for anything they had excluded");
 	expect(prompt).not.toContain("BASE-REVIEW rule");
 });
+
+fakes(
+	"a later round reviews the whole change again when it starts from a merge base the last one did not cover",
+	async () => {
+		const s = setup();
+		vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+		// The branch merges a base ahead of main, and is reviewed against it, then against main.
+		git(s.repo, "checkout", "-qb", "next", "main");
+		write(s.repo, "notes.md", "next\n");
+		git(s.repo, "add", ".");
+		git(s.repo, "commit", "-qm", "next");
+		git(s.repo, "push", "-q", "origin", "next");
+		git(s.repo, "checkout", "-q", "feature");
+		git(s.repo, "merge", "-q", "--no-edit", "next");
+		expect((await quest("--root", s.repo, "review", "--base", "origin/next")).code).toBe(0);
+		const older = await quest("--root", s.repo, "review", "--base", "origin/main");
+		expect(older.stdout).toContain("round 2\n");
+		expect(older.stdout).not.toContain("unchanged");
+		expect(s.calls().at(-1)!.stdin).toContain("review the whole change again.");
+		// Back on a base whose merge base descends from that one, the round checks only what changed.
+		write(s.repo, "src/lib.ts", "export const x = 9;\n");
+		git(s.repo, "commit", "-qam", "more");
+		expect((await quest("--root", s.repo, "review")).stdout).toContain("round 3\n");
+		expect(s.calls().at(-1)!.stdin).not.toContain("review the whole change again");
+	},
+);
 
 fakes("a change to the applicable instructions starts a new session that weighs the responses", async () => {
 	const s = setup();
@@ -1221,7 +1248,7 @@ fakes("a round on the head the last round passed runs no reviewer and repeats th
 	moveBase(s.repo, (dir) => write(dir, "REVIEW.md", "BASE-REVIEW new rule\n"));
 	const rules = await quest("--root", s.repo, "review", "--effort", "xhigh");
 	expect(rules.stdout).toContain("round 3\n");
-	expect(s.calls().at(-1)!.stdin).toContain("also check the whole change against the rules below");
+	expect(s.calls().at(-1)!.stdin).toContain("review the whole change again against the rules below");
 	expect(s.calls().at(-1)!.stdin).toContain("BASE-REVIEW new rule");
 
 	// A round with findings to settle runs on the same head, since a refutation needs no new commit.
@@ -1244,7 +1271,8 @@ fakes("a later round checks only what changed since the reviewed head, and the o
 	expect((await quest("--root", s.repo, "review", "--responses", join(s.repo, ".tmp", "responses.md"))).code).toBe(0);
 	const prompt = s.calls().at(-1)!.stdin;
 	const head = git(s.repo, "rev-parse", "HEAD");
-	expect(prompt).toContain(`Check only what changed since then and the findings below`);
+	expect(prompt).toContain(`Otherwise, check only what changed since ${previous} and the findings below`);
+	expect(prompt).not.toContain("review the whole change again");
 	expect(prompt).toContain(`\`git diff ${previous} ${head}\``);
 	expect(prompt).toContain("1. high src/lib.ts:2 Off by one");
 });

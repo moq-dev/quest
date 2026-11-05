@@ -294,7 +294,8 @@ interface State {
 	branch: string;
 	reviewer: HarnessName;
 	session: string;
-	rounds: { head: string; findings: Finding[] }[];
+	/** Each round's head, the merge base its change started from, and its findings. */
+	rounds: { head: string; mergeBase: string; findings: Finding[] }[];
 	/** The session's last round, which a round on the same head with nothing to settle repeats. */
 	last: Round;
 	/**
@@ -911,6 +912,16 @@ export function baseInstructions(root: string, base: string, changed: string[]):
 
 const show = (root: string, base: string, path: string) => git(root, ["show", `${base}:${path}`]);
 
+/** Whether a change from `earlier`'s merge base spans one from `later`'s: `later` descends from it, as when the base moved on. */
+function covers(root: string, earlier: string, later: string): boolean {
+	try {
+		git(root, ["merge-base", "--is-ancestor", earlier, later]);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function exists(root: string, base: string, path: string): boolean {
 	return git(root, ["ls-tree", "--name-only", base, "--", path]) !== "";
 }
@@ -1049,34 +1060,41 @@ export interface LaterRound extends Change {
 	rules: Rules | null;
 	/** The session was last given other REVIEW.md rules, or none. */
 	rulesChanged: boolean;
+	/** The change starts at a merge base the last review's change did not cover, such as from another base. */
+	rangeGrew: boolean;
 }
 
 /**
  * A later round's only turn: check what changed since the last review and the open findings under the base's
  * current rules, weighing the author's responses. The rest of the change was reviewed already, unless the
- * rules changed since, which the whole change is then checked against.
+ * rules or the change's range changed since, when the whole change is checked again.
  */
 export function laterPrompt(round: LaterRound): string {
 	const { head, previous, responses } = round;
-	const parts = [
-		`The branch is now at ${head}; your last review covered ${previous}. Check only what changed since then and ` +
-			`the findings below; the rest of the change was reviewed already. \`git diff ${previous} ${head}\` shows ` +
-			"what changed, along with any base commits merged in since, which are not part of the change.",
-		scope(round),
-	];
-	if (round.rulesChanged && round.rules === null) {
-		parts.push("The base no longer has a REVIEW.md, so the review rules you were given no longer apply.");
+	const parts = [`The branch is now at ${head}; your last review covered ${previous}.`, scope(round)];
+	if (round.rangeGrew) {
+		parts.push(
+			"The change now starts from a merge base your last review did not cover, so review the whole change again.",
+		);
 	} else if (round.rulesChanged) {
 		parts.push(
-			"The base's REVIEW.md changed since your last review, so also check the whole change against the rules " +
-				"below wherever they differ from the ones you were given before.",
+			round.rules === null
+				? "The base no longer has a REVIEW.md, so the review rules you were given no longer apply: review the " +
+						"whole change again for anything they had excluded."
+				: "The base's REVIEW.md changed since your last review, so review the whole change again against the " +
+						"rules below wherever they differ from the ones you were given before.",
 		);
 	}
-	parts.push(...rulesParts(round.rules));
+	parts.push(
+		`Otherwise, check only what changed since ${previous} and the findings below; the rest of the change was ` +
+			`reviewed already. \`git diff ${previous} ${head}\` shows what changed, along with any base commits ` +
+			"merged in since, which are not part of the change.",
+		...rulesParts(round.rules),
+	);
 	if (round.earlier.length > 0) parts.push(earlierList(round.earlier), settling("in `earlier`"));
 	parts.push(
 		...responseParts(responses),
-		`Report as JSON matching the response schema every finding that holds at ${head}: those still open, and any the changes since ${previous} introduce.`,
+		`Report as JSON matching the response schema every finding that holds at ${head}: those still open, and any new ones.`,
 		REPORT,
 	);
 	return parts.join("\n\n");
@@ -1241,6 +1259,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	if (
 		resume &&
 		previous!.head === head &&
+		previous!.mergeBase === mergeBase &&
 		earlier.length === 0 &&
 		state!.given.rules === given.rules &&
 		last !== undefined &&
@@ -1285,13 +1304,14 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			responses: options.responses,
 			rules,
 			rulesChanged: state!.given.rules !== given.rules,
+			rangeGrew: !covers(root, previous!.mergeBase, mergeBase),
 		});
 		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
 	const { score, rationale, findings: found, earlier: answers } = verdict(reply, earlier.length);
 
-	const rounds = [...(resume ? state!.rounds : []), { head, findings: found }];
+	const rounds = [...(resume ? state!.rounds : []), { head, mergeBase, findings: found }];
 	const round: Round = {
 		reviewer: harness,
 		model: context.model,
