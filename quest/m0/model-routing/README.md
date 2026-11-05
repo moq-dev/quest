@@ -83,6 +83,12 @@ are mostly judgment.
   write at (XS medium, S high, M xhigh, L and XL xhigh); and coordinators
   size each `/quest-iterate` by its remaining work. The tables and the
   iterate decisions are in [Route by size](/quest/m0/model-routing/models.md).
+- Revised again 2026-11-05 evening (user, /quest-plan): xhigh is XL's
+  alone. Haiku high writes XS; Opus writes S low, M medium, L high, XL
+  xhigh; Sol falls back one rung lower, now through L; Sol reviews follow
+  [Single-pass review](/quest/m0/token-waste/review-single-pass.md)'s
+  table. The tables and the benchmark evidence are in
+  [Route by size](/quest/m0/model-routing/models.md).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
 
