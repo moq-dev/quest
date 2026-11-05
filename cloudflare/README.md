@@ -356,8 +356,8 @@ secrets. Configure the GitHub app's homepage as
 `http://localhost:8787` and callback as
 `http://localhost:8787/api/auth/callback/github`. The file is ignored by Git.
 Its `AUTH_URL` overrides the production origin in `wrangler.jsonc`. Use a
-separate GitHub App for production. The App needs the manifest's Email addresses
-read permission for accounts with private email addresses; see [GITHUB.md](GITHUB.md).
+separate GitHub App for production. The App needs the Email addresses read
+user permission, added in its settings since a manifest cannot request it, for accounts with private email addresses; see [GITHUB.md](GITHUB.md).
 
 ```sh
 just worker-dev
@@ -526,12 +526,8 @@ bun run deploy
 ```
 
 D1 schema migrations are applied separately before deployment. The `exports`
-tombstone in `wrangler.jsonc` deletes the legacy `RepositoryCoordinator`
-Durable Object namespace, and any storage it held, from Workers deployed before
-it was removed; Wrangler reports a stale tombstone where none exists. Remove the
-tombstone after the next production deploy. This does not affect the D1 auth
-database. The same `exports` block creates the SQLite-backed `RunnerHub` class
-bound as `RUNNERS`; it stores only its owner's ID, so it needs no data migration.
+block in `wrangler.jsonc` creates the SQLite-backed `RunnerHub` class bound as
+`RUNNERS`; it stores only its owner's ID, so it needs no data migration.
 
 After deploying, verify `/health`, `/setup`, and a theme asset, then complete
 sign-in/sign-out in the browser.

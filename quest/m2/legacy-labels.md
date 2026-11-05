@@ -17,7 +17,8 @@ Decided 2026-10-31 (user, /quest-plan of the follow-ups from moq.pro's and rust2
 
 ## Waiting
 
-- moq.pro, rind, rust2: each pins a quest release that includes
-  [moq-dev/quest#326](https://github.com/moq-dev/quest/pull/326); quest and
-  moq already do (2026-11-02). Check each repository's quest pin
+- rind, rust2: each pins a quest release that includes
+  [moq-dev/quest#326](https://github.com/moq-dev/quest/pull/326); quest,
+  moq and moq.pro already do (2026-11-04; rind pins 782132e and rust2
+  dc8008b, both older). Check each repository's quest pin
   (`flake.nix` or `mise.toml`).

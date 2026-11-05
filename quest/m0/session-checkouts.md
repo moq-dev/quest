@@ -35,13 +35,12 @@ Work:
   reclaims it. An idle background session never ends; leave it held.
 - Remote control's `bridge-*` checkouts are session checkouts too, and the
   release covers them if `SessionEnd` fires in a bridge-spawned session.
-  [Remote control's live check](/quest/m0/worktree-routes.md) confirms
-  whether it does. Release only prunes the declared scratch: it keeps every
-  other file and Git's worktree lock (`release` and `prune` in
-  `src/cli/worktree.ts`; only `remove` unlocks). The bridge still decides at
-  session end, as that quest describes: it removes a clean checkout through
-  `WorktreeRemove` and keeps one with changes. Verify that order in the same
-  live check.
+  Whether it does is unverified: the maintainer dropped remote control's
+  live check on 2026-11-04 (/quest-unblock). Release only prunes the
+  declared scratch: it keeps every other file and Git's worktree lock
+  (`release` and `prune` in `src/cli/worktree.ts`; only `remove` unlocks).
+  The bridge still decides at session end: it removes a clean checkout
+  through `WorktreeRemove` and keeps one with changes.
 - Claude Code bounds `SessionEnd` hooks by a short budget
   (`CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`) and does not wait past it.
   Measure a release with scratch to delete, and set the entry's timeout to

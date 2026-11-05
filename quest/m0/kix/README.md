@@ -139,7 +139,6 @@ fixes what it finds:
 
 ## Required
 
-- [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the operator registers the App and deploys the Worker with GitHub sign-in at quest.moq.dev
 - [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/moq and moq-dev/quest
 - [Private repositories](/quest/m0/kix/private.md) - moq-dev/moq.pro enrolls, visible only to signed-in users who can read it
 - [Job sandbox](/quest/m0/kix/sandbox/README.md) - head approval for kix-pushed heads, and opencode sandboxed

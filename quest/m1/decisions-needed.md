@@ -19,8 +19,8 @@ m1.
 ## Waiting
 
 - moq, moq.pro, rind, rust2, quest: no open draft carries
-  `## Decisions needed` (on 2026-11-02, 11 in moq, 16 in moq.pro, 1 each in
-  rind and rust2). Check with
+  `## Decisions needed` (on 2026-11-04, 4 in moq, 5 in moq.pro, 2 in rind,
+  3 in rust2, none in quest). Check with
   `gh pr list -R moq-dev/<repo> --state open --draft --json number,body` and
   search the bodies for the heading. To advance it, rewrite each to
   `## Waiting`.

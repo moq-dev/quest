@@ -17,8 +17,7 @@
 		"administration": "read",
 		"secrets": "read",
 		"actions": "read",
-		"environments": "read",
-		"email_addresses": "read"
+		"environments": "read"
 	},
 	"default_events": [
 		"push",

@@ -14,6 +14,14 @@ Decided 2026-11-02 (coordinator, /quest-spawn follow-ups, after the user
 asked the coordinator to decide follow-ups from evidence): plan it, [XS],
 m0, waiting on the maintainer's approval to post.
 
+Decided 2026-11-04 (maintainer, /quest-unblock): posting on
+anthropics/claude-code is approved.
+
+- Can I file the issue on anthropics/claude-code?
+  - ✅ Approve posting
+  - Decline
+  - Skip for now
+
 - [moq-dev/quest#425](https://github.com/moq-dev/quest/pull/425)'s probe
   with Claude Code 2.1.316: `claude rm` on an agent-view session's
   hook-made checkout reports it "locked … by something other than Claude
@@ -28,7 +36,3 @@ m0, waiting on the maintainer's approval to post.
   them in the report.
 - Include the Claude Code version, the minimal reproduction from #425's
   scratch repository, and the expected behaviour.
-
-## Waiting
-
-- Maintainer: approve posting on anthropics/claude-code, which is outside the kixelated and moq-dev orgs where agents may post without asking; check by a ✅ recorded in this quest's Plan
