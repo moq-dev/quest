@@ -4,7 +4,7 @@
 
 `/quest-council <pr>` works like `/quest-review`, but a council reviews
 the branch: one reviewer per model maker that can run (Anthropic, OpenAI,
-xAI, DeepSeek), leaving out the maker or makers that implemented the PR.
+DeepSeek), leaving out the maker or makers that implemented the PR.
 Each reviews independently and blind, never seeing another's findings or
 which model wrote the change. The author gets one merged list, each
 finding tagged with how many members raised it, plus each member's score
@@ -28,9 +28,10 @@ a token cost the user chooses per PR:
 - Who sits on it?
   - ✅ One reviewer per maker, minus the implementers' makers: Sol and
     Opus at the PR size's efforts in `quest review`'s lists
-    (`src/cli/models.ts`), and Grok
-    `grok-4.7` and DeepSeek `opencode-go/deepseek-v4-pro` at high (agent's
-    choice, since single reviews dropped Grok and DeepSeek on 2026-11-04)
+    (`src/cli/models.ts`), and DeepSeek `opencode-go/deepseek-v4-pro` at
+    high (agent's choice, since single reviews dropped DeepSeek on
+    2026-11-04). Grok left the council on 2026-11-05 (user, /quest-plan):
+    its weekly usage is close to zero and its results were weak.
   - One per maker, the implementer's included
   - Every ranked model
 - Which milestone? ✅ m2 (rejected: m0 after routing, m1)
@@ -61,7 +62,7 @@ Agent's choices, for the implementer to revisit:
 
 ## Required
 
-- [Grok and opencode reviewers](/quest/m2/review-harnesses.md) - the council's xAI and DeepSeek members
+- [opencode reviewers](/quest/m2/review-harnesses.md) - the council's DeepSeek member
 
 ## Related
 

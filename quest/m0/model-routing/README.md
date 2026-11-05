@@ -2,16 +2,19 @@
 
 ## Goal
 
-`/quest-spawn` starts each ready quest on the first harness and model that
-can run from a ranked list `quest` builds in for the quest's size, the same
-for every repository unless its `AGENTS.md` overrides it: Grok for XS, Opus
-from S up, with Sol as the fallback through M, and a usage limit falling
-through to the next entry. Sol reviews, at an effort set by size, and Opus
+`/quest-spawn` starts each ready quest, and each coordinator its
+`/quest-iterate` dispatches, on the first harness and model that can run from
+a ranked list `quest` builds in for the work's size, the same for every
+repository unless its `AGENTS.md` overrides it: Opus writes at every size,
+with Sol as the fallback through M, and a usage limit falls through to the
+next entry. An iterate is sized by the work left on its PR, not its quest's
+original size, and runs on the model that first wrote the PR, so the other
+can always review it. Sol reviews, at an effort set by the PR's size, and Opus
 reviews whatever Sol wrote, so no model reviews its own code. Every PR
 records the models and efforts behind it, and fixes link the PR that
 caused them, so the rankings can be audited and retuned. This epic's own
 work is one live spawn in moq-dev/quest from Claude Code that starts an XS
-quest on Grok and an S or larger on Opus, each recorded and reviewed by Sol.
+and an S quest on Opus, each recorded and reviewed by Sol.
 
 Non-goals: routing kix.quest's runner jobs, which pick their own accounts
 and models (their PRs still record their models); billing agents to API
@@ -60,7 +63,7 @@ are mostly judgment.
 - Ranked lists replace one model per size, so a usage limit falls through
   to the next entry (user), and a quest with an open maintainer decision
   routes one size up.
-- The lists, settled later the same day (user), replacing earlier ones that
+- The lists, settled later the same day (user) and revised on 2026-11-05 (below), replacing earlier ones that
   led S with Sol, ranked Grok and DeepSeek reviewers, and considered free
   models: Opus writes the code, since it does a much better job. XS: Grok
   high, then Sol medium. S: Opus medium, then Sol high. M: Opus high, then
@@ -75,12 +78,16 @@ are mostly judgment.
   branch trailers from `main`, so audits read the PR record anyway.
 - Every `/quest-review` scores the change out of 10 (user, while planning
   [the council](/quest/m2/council.md), which joins m2).
+- Revised 2026-11-05 (user, /quest-plan): Grok leaves routing and the
+  council, so XS starts on Opus low; Sol reviews at the effort it would
+  write at (XS medium, S high, M xhigh, L and XL xhigh); and coordinators
+  size each `/quest-iterate` by its remaining work. The tables and the
+  iterate decisions are in [Route by size](/quest/m0/model-routing/models.md).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
 
 ## Required
 
-- [Grok agents](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok as well as Claude Code and Codex
-- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the first entry of its size's ranked list that can run
+- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` and iterate dispatches start on the first entry of the size's ranked list that can run, an iterate sized by its remaining work
 - [kix records its follow-up sessions](/quest/m0/model-routing/kix-sessions.md) - kix `iterate` and `merge` jobs that change an existing PR record their `Implementer:` line in a PR comment
 - [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing

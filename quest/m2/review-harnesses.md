@@ -1,12 +1,12 @@
-# [L] quest review runs Grok and opencode reviewers
+# [M] quest review runs opencode reviewers
 
 ## Goal
 
-`quest review --harness grok` and `--harness opencode` review a branch as
+`quest review --harness opencode` reviews a branch as
 the Claude Code and Codex reviewers do: read-only, running nothing from the
 reviewed head, following the base's `AGENTS.md` and `REVIEW.md`, resuming
 one session per branch across rounds, and returning findings in the same
-schema. `just review-sandbox`'s planted hostile repository proves both.
+schema. `just review-sandbox`'s planted hostile repository proves it.
 
 ## Plan
 
@@ -17,15 +17,15 @@ the council once single reviews became Sol only (user, the same day).
 - Sandboxing is the work. The reviewer must not run code from the head or
   write anywhere. opencode already runs kix jobs inside srt
   (`src/runner/opencode.ts`, `src/runner/cli.ts`); reuse that boundary.
-  For Grok, find what its permission rules (`--deny`, `--allow`,
-  `--disallowed-tools`) and config can lock down, and wrap it in srt if
-  they are not enough.
-- Each CLI's own review mode where it has one, as Codex's `exec review`
-  and Claude Code's `/code-review`; otherwise one turn with the review
-  prompt, then the schema turn.
+- Grok was dropped from this quest on 2026-11-05 (user, /quest-plan): its
+  weekly usage is close to zero and its results were weak, so the council
+  has no xAI member.
+- opencode's own review mode if it has one, as Codex's `exec review` and
+  Claude Code's `/code-review`; otherwise one turn with the review prompt,
+  then the schema turn.
 - Report a logged-out CLI and a usage limit distinctly, as `quest review`
   does for Claude Code and Codex (exit 3 with the reset, through
   `ReviewLimitError` and `src/cli/limit.ts`), so the council can run
   without that maker.
 - The [model check](/quest/m1/model-check.md)'s sandbox test covers all
-  four reviewers from then on; the PR adds them to its Plan.
+  three reviewers from then on; the PR adds opencode to its Plan.
