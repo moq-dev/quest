@@ -28,7 +28,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { type HarnessName, strippedEnvironment } from "../../src/cli/agent";
 import { DEFAULT_SIZE, REVIEWERS } from "../../src/cli/models";
-import { ReviewInputError, claudeFlags, review, reviewerEnvironment } from "../../src/cli/review";
+import { ReviewInputError, claudeFlags, review, reviewerEnvironment, schema } from "../../src/cli/review";
 
 /** The model a sizeless review runs on `harness`. */
 const modelOf = (harness: HarnessName) => REVIEWERS[DEFAULT_SIZE].find((entry) => entry.harness === harness)!.model;
@@ -377,6 +377,7 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 				instructions: "Do what the user asks.",
 				model: modelOf("claude"),
 				effort: EFFORT,
+				schema: schema(0),
 				schemaFile: "",
 			};
 			const [program, ...args] = claudeFlags(context);

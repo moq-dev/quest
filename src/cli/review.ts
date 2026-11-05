@@ -95,44 +95,51 @@ export type Verdict = Pick<Round, "score" | "rationale" | "findings"> & {
 	earlier: { finding: number; disposition: Settled["disposition"]; reason: string }[];
 };
 
-/** The reply every round's last turn must match; both CLIs enforce it, and `verdict` checks it again. */
-export const SCHEMA = {
-	type: "object",
-	additionalProperties: false,
-	required: ["score", "rationale", "findings", "earlier"],
-	properties: {
-		score: { type: "integer", minimum: 0, maximum: 10 },
-		rationale: { type: "string" },
-		findings: {
-			type: "array",
-			items: {
-				type: "object",
-				additionalProperties: false,
-				required: ["file", "line", "severity", "title", "body"],
-				properties: {
-					file: { type: "string" },
-					line: { type: ["integer", "null"] },
-					severity: { type: "string", enum: SEVERITIES },
-					title: { type: "string" },
-					body: { type: "string" },
+/**
+ * The reply a round's last turn must match, settling exactly the last round's `earlier` findings; both CLIs
+ * enforce it, and `verdict` checks it again. Without the bound, a first round's reply settles the findings
+ * of its own review turn.
+ */
+export const schema = (earlier: number) =>
+	({
+		type: "object",
+		additionalProperties: false,
+		required: ["score", "rationale", "findings", "earlier"],
+		properties: {
+			score: { type: "integer", minimum: 0, maximum: 10 },
+			rationale: { type: "string" },
+			findings: {
+				type: "array",
+				items: {
+					type: "object",
+					additionalProperties: false,
+					required: ["file", "line", "severity", "title", "body"],
+					properties: {
+						file: { type: "string" },
+						line: { type: ["integer", "null"] },
+						severity: { type: "string", enum: SEVERITIES },
+						title: { type: "string" },
+						body: { type: "string" },
+					},
+				},
+			},
+			earlier: {
+				type: "array",
+				minItems: earlier,
+				maxItems: earlier,
+				items: {
+					type: "object",
+					additionalProperties: false,
+					required: ["finding", "disposition", "reason"],
+					properties: {
+						finding: { type: "integer", minimum: 1, maximum: Math.max(earlier, 1) },
+						disposition: { type: "string", enum: DISPOSITIONS },
+						reason: { type: "string" },
+					},
 				},
 			},
 		},
-		earlier: {
-			type: "array",
-			items: {
-				type: "object",
-				additionalProperties: false,
-				required: ["finding", "disposition", "reason"],
-				properties: {
-					finding: { type: "integer", minimum: 1 },
-					disposition: { type: "string", enum: DISPOSITIONS },
-					reason: { type: "string" },
-				},
-			},
-		},
-	},
-} as const;
+	}) as const;
 
 /**
  * The harness running this command, from the variables each sets for its
@@ -285,7 +292,8 @@ export interface Context {
 	instructions: string;
 	model: string;
 	effort: string;
-	/** Where `--output-schema` reads the schema from. */
+	/** The reply's schema, and where `--output-schema` reads it from. */
+	schema: ReturnType<typeof schema>;
 	schemaFile: string;
 }
 
@@ -416,7 +424,7 @@ const claude: Reviewer = {
 		env: claudeEnv(),
 	}),
 	resume: (context, session, prompt) => ({
-		argv: [...claudeFlags(context), "--resume", session, "--json-schema", JSON.stringify(SCHEMA)],
+		argv: [...claudeFlags(context), "--resume", session, "--json-schema", JSON.stringify(context.schema)],
 		stdin: prompt,
 		env: claudeEnv(),
 	}),
@@ -755,7 +763,7 @@ async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 }
 
 /**
- * The verdict in a reply, checked against `SCHEMA` so a malformed reply fails rather than reads as clean,
+ * The verdict in a reply, checked against `schema` so a malformed reply fails rather than reads as clean,
  * and settling each of the last round's `earlier` findings exactly once.
  */
 export function verdict(reply: { structured?: unknown; text?: string }, earlier: number): Verdict {
@@ -1147,14 +1155,17 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		.split("\0")
 		.filter(Boolean);
 
-	const schemaFile = join(dir, "schema.json");
-	save(schemaFile, SCHEMA);
+	// Named by its bound, so a round on another branch never rewrites the file this one reads.
+	const replySchema = schema(earlier.length);
+	const schemaFile = join(dir, `schema-${earlier.length}.json`);
+	save(schemaFile, replySchema);
 	const files = baseInstructions(root, baseSha, changed);
 	const context: Context = {
 		mergeBase,
 		instructions: instructionsPrompt(baseSha, files),
 		model: picked.model,
 		effort: picked.effort,
+		schema: replySchema,
 		schemaFile,
 	};
 

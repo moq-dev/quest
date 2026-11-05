@@ -858,6 +858,8 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	expect(second.stdin).toContain(head);
 	const schema = second.argv[second.argv.indexOf("--output-schema") + 1];
 	expect(JSON.parse(readFileSync(schema, "utf8")).required).toEqual(["score", "rationale", "findings", "earlier"]);
+	// A first round settles nothing, so its own review turn's findings never land in `earlier`.
+	expect(JSON.parse(readFileSync(schema, "utf8")).properties.earlier).toMatchObject({ minItems: 0, maxItems: 0 });
 });
 
 fakes("--base reviews against another branch, fetched first, with that branch's instructions", async () => {
@@ -948,6 +950,8 @@ fakes("a later round resumes the session with the new head and the author's resp
 	const resumed = calls.at(-1)!;
 	expect(resumed.argv.slice(0, 2)).toEqual(["exec", "resume"]);
 	expect(resumed.argv.at(-2)).toBe("thread-1");
+	const bounded = JSON.parse(readFileSync(resumed.argv[resumed.argv.indexOf("--output-schema") + 1], "utf8"));
+	expect(bounded.properties.earlier).toMatchObject({ minItems: 1, maxItems: 1 });
 	expect(resumed.stdin).toContain("Fixed at src/lib.ts:1.");
 	expect(resumed.stdin).toContain("<earlier-findings>\n1. high src/lib.ts:2 Off by one\n</earlier-findings>");
 	expect(resumed.stdin).toContain("BASE-REVIEW rule");
