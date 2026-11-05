@@ -1134,7 +1134,9 @@ malformed reply. The score informs; the findings and their refutations still
 decide when the loop ends. Later rounds resume the same session with the new head and
 `--responses`, the author's free-text fixes and refutations, which a round that
 reported findings requires. A refutation stands only when it cites evidence the
-reviewer can check. A resumed session keeps the instructions it started with,
+reviewer can check. The prompt numbers the last round's findings, and the reply
+settles each by its number as fixed, refuted, or still open, with a one-sentence
+reason; a reply that skips or repeats one fails like any malformed reply. A resumed session keeps the instructions it started with,
 so a round whose applicable `AGENTS.md` or `CLAUDE.md` files changed starts a
 new session instead, which still weighs the responses. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
@@ -1167,14 +1169,32 @@ given every round, and chooses the review's stance, such as adversarial.
 It prints the reviewer, model, and effort, the size and its source, session, round, base, head, a
 `usage` line per turn (input tokens, the part read from the prompt cache, and output), the
 finding count, then each finding as severity, `path:line`, and title over its
-indented body. `--json` prints the same as one object. It exits 0 once the round
+indented body, then `earlier` with the last round's head and its findings, each
+as its disposition, severity, `path:line`, and title over its reason, and last
+a `record` line. `--json` prints the same as one object.
+
+After each round, `quest review` rewrites the `## Review` section of the open PR
+from the branch into the base, found among the upstream's PRs from the
+repository the base's remote pushes to, and prints `record <url>`. The record
+names the reviewer harness, model, and effort, the session and round, the
+reviewed head's full SHA and the base's short one, the score and rationale, each
+finding with its location, and the last round's findings with their
+dispositions. Model text appears as inline code, so it mentions or links
+nothing, and only the reviewed head's SHA appears in full, since the land gate
+counts every full SHA the section names. The section runs to the next level-1 or
+level-2 heading; the rest of the body stays as written, and a body without one
+gains it at the end. With no such PR, or a remote off GitHub, it changes nothing
+and prints `record skipped: <why>`. It edits as the user the GitHub token names
+(`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`), and the land gate counts the
+record only while the PR's author made the body's latest edit, so review your
+own PRs with your own token. A record GitHub refuses fails the command after the
+round's report, with exit status 1. It exits 0 once the round
 finishes, whatever it found, 2 for invalid arguments or a checkout or CLI that
 cannot be reviewed, including a login the API rejects, 3 when the reviewer's
 account hit its usage limit, and 1 for other failures. A usage limit prints one
 line, `error: <harness> hit its usage limit; resets <time>`, where `<time>` is
 the reset as an ISO 8601 UTC timestamp, or `unknown` when the CLI named none.
-`/quest-review` runs the rounds,
-records them in the PR body's `## Review` section, and marks the PR ready.
+`/quest-review` runs the rounds and marks the PR ready.
 
 ## Headless agents
 

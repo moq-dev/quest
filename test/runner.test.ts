@@ -2719,6 +2719,7 @@ describe("runner reviews", () => {
 			reviewer: request.reviewer.harness,
 			model: "gpt-6.1-sol",
 			effort: "medium",
+			branch: "quest/m0/one",
 			size: "M",
 			sizeFrom: "default",
 			session: "s",
@@ -2729,6 +2730,7 @@ describe("runner reviews", () => {
 			score: found[round - 1]?.length ? 8 : 10,
 			rationale: "Scored.",
 			findings: (found[round - 1] ?? []) as Round["findings"],
+			earlier: null,
 		});
 	}
 	const tools = (r: Rig) => r.calls().filter((call) => call.tool);

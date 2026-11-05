@@ -35,6 +35,8 @@ export class ReviewLimitError extends Error {
 }
 
 export const SEVERITIES = ["high", "medium", "low"] as const;
+/** What became of a finding by the next round: the head fixes it, the author's refutation holds, or it still holds. */
+export const DISPOSITIONS = ["fixed", "refuted", "open"] as const;
 
 export interface Finding {
 	/** Repository-relative path. */
@@ -45,6 +47,13 @@ export interface Finding {
 	title: string;
 	/** The concrete scenario: the input or state, and the wrong result. */
 	body: string;
+}
+
+/** A finding of the last round, with what became of it by this one. */
+export interface Settled extends Finding {
+	disposition: (typeof DISPOSITIONS)[number];
+	/** One sentence citing the fix or the refutation's evidence, or why it still holds. */
+	reason: string;
 }
 
 /** Tokens one reviewer turn reported; `cached` is the part of `input` read from the prompt cache. */
@@ -60,6 +69,8 @@ export interface Round {
 	reviewer: HarnessName;
 	model: string;
 	effort: string;
+	/** The branch whose session the round continues. */
+	branch: string;
 	/** The PR size that picked the reviewer. */
 	size: Size;
 	/** Where the size came from: the quest's path on the base, `--size`, or `default`. */
@@ -75,16 +86,20 @@ export interface Round {
 	/** One sentence on why. */
 	rationale: string;
 	findings: Finding[];
+	/** The last round's head and its findings, settled by this round; null on the branch's first round. */
+	earlier: { head: string; findings: Settled[] } | null;
 }
 
-/** A reply's verdict on the reviewed head. */
-export type Verdict = Pick<Round, "score" | "rationale" | "findings">;
+/** A reply's verdict on the reviewed head; `earlier` settles the last round's findings by their 1-based number. */
+export type Verdict = Pick<Round, "score" | "rationale" | "findings"> & {
+	earlier: { finding: number; disposition: Settled["disposition"]; reason: string }[];
+};
 
 /** The reply every round's last turn must match; both CLIs enforce it, and `verdict` checks it again. */
 export const SCHEMA = {
 	type: "object",
 	additionalProperties: false,
-	required: ["score", "rationale", "findings"],
+	required: ["score", "rationale", "findings", "earlier"],
 	properties: {
 		score: { type: "integer", minimum: 0, maximum: 10 },
 		rationale: { type: "string" },
@@ -100,6 +115,19 @@ export const SCHEMA = {
 					severity: { type: "string", enum: SEVERITIES },
 					title: { type: "string" },
 					body: { type: "string" },
+				},
+			},
+		},
+		earlier: {
+			type: "array",
+			items: {
+				type: "object",
+				additionalProperties: false,
+				required: ["finding", "disposition", "reason"],
+				properties: {
+					finding: { type: "integer", minimum: 1 },
+					disposition: { type: "string", enum: DISPOSITIONS },
+					reason: { type: "string" },
 				},
 			},
 		},
@@ -237,7 +265,7 @@ interface State {
 	branch: string;
 	reviewer: HarnessName;
 	session: string;
-	rounds: { head: string; findings: number }[];
+	rounds: { head: string; findings: Finding[] }[];
 	/**
 	 * Digests of the instruction files the session started with, and the
 	 * REVIEW.md it was last given. A resumed session keeps its first system or
@@ -726,8 +754,11 @@ async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 	return reply;
 }
 
-/** The verdict in a reply, checked against `SCHEMA` so a malformed reply fails rather than reads as clean. */
-export function verdict(reply: { structured?: unknown; text?: string }): Verdict {
+/**
+ * The verdict in a reply, checked against `SCHEMA` so a malformed reply fails rather than reads as clean,
+ * and settling each of the last round's `earlier` findings exactly once.
+ */
+export function verdict(reply: { structured?: unknown; text?: string }, earlier: number): Verdict {
 	let value = reply.structured;
 	if (value === undefined) {
 		try {
@@ -767,7 +798,30 @@ export function verdict(reply: { structured?: unknown; text?: string }): Verdict
 			body: finding.body,
 		};
 	});
-	return { score: score as number, rationale: fields!.rationale, findings: found };
+	const answers = fields!.earlier;
+	if (!Array.isArray(answers)) throw new Error("the reviewer's reply has no earlier list");
+	const settled = answers.map((item, index) => {
+		const answer = record(item);
+		if (
+			answer === undefined ||
+			!Number.isSafeInteger(answer.finding) ||
+			!DISPOSITIONS.includes(answer.disposition as Settled["disposition"]) ||
+			typeof answer.reason !== "string" ||
+			answer.reason.trim() === ""
+		) {
+			throw new Error(`the reviewer's earlier entry ${index + 1} does not match the schema`);
+		}
+		return {
+			finding: answer.finding as number,
+			disposition: answer.disposition as Settled["disposition"],
+			reason: answer.reason,
+		};
+	});
+	const numbers = settled.map((answer) => answer.finding).sort((a, b) => a - b);
+	if (numbers.length !== earlier || numbers.some((n, i) => n !== i + 1)) {
+		throw new Error(`the reviewer's reply does not settle each of the last round's ${earlier} finding(s) once`);
+	}
+	return { score: score as number, rationale: fields!.rationale, findings: found, earlier: settled };
 }
 
 const INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md"];
@@ -834,7 +888,8 @@ const SCALE =
 const REPORT =
 	SCALE +
 	" Name each finding's file by its repository-relative path and its line at that head, or null when no single line fits. " +
-	"Its body gives the concrete scenario: the input or state, and the wrong result. Report an empty list when nothing holds.";
+	"Its body gives the concrete scenario: the input or state, and the wrong result. Report an empty list when nothing holds. " +
+	"Report `earlier` as an empty list unless earlier findings are listed above.";
 
 /** The base's REVIEW.md, if it has one. */
 export interface Rules {
@@ -858,10 +913,27 @@ function rulesParts(rules: Rules | null, first: boolean): string[] {
 	];
 }
 
-/** The author's responses to an earlier round, and how a refutation stands. */
-function responseParts(responses: string | undefined): string[] {
-	if (responses === undefined) return [];
+/** Where a finding is: its `path:line`, or its path when no single line fits. */
+export const located = (finding: Finding) => (finding.line === null ? finding.file : `${finding.file}:${finding.line}`);
+
+/**
+ * The last round's findings, numbered, which `earlier` settles, then the author's responses to them and
+ * how a refutation stands.
+ */
+function responseParts(earlier: Finding[], responses: string | undefined): string[] {
+	const parts: string[] = [];
+	if (earlier.length > 0) {
+		const list = earlier.map((f, i) => `${i + 1}. ${f.severity} ${located(f)} ${f.title}`).join("\n");
+		parts.push(
+			`The last review reported these findings, numbered:\n\n<earlier-findings>\n${list}\n</earlier-findings>`,
+			"Settle each in `earlier` by its number: `fixed` when the head fixes it, `refuted` when the author's " +
+				"refutation holds, or `open` when it still holds, reporting it in `findings` again. Give each a " +
+				"one-sentence reason citing the fix, the refutation's evidence, or why it still holds.",
+		);
+	}
+	if (responses === undefined) return parts;
 	return [
+		...parts,
 		`The author responded to the findings of an earlier review:\n\n<responses>\n${responses}\n</responses>`,
 		"Verify each response. A fix holds only if the head fixes the problem. A refutation holds only when it " +
 			"cites evidence you can check and cannot rebut: a `path:line`, a command's output, or a recorded maintainer " +
@@ -894,12 +966,12 @@ function scope({ base, mergeBase, head }: Change): string {
  * A session's follow-up turn: apply the base's REVIEW.md, if any, weigh any
  * responses to an earlier session's findings, and report in the schema.
  */
-export function firstPrompt(change: Change, rules: Rules | null, responses?: string): string {
+export function firstPrompt(change: Change, rules: Rules | null, earlier: Finding[] = [], responses?: string): string {
 	return [
 		`Report your review as JSON matching the response schema: every finding that holds at the head ${change.head}.`,
 		scope(change),
 		...rulesParts(rules, true),
-		...responseParts(responses),
+		...responseParts(earlier, responses),
 		REPORT,
 	].join("\n\n");
 }
@@ -907,6 +979,8 @@ export function firstPrompt(change: Change, rules: Rules | null, responses?: str
 /** What a later round tells the resumed session. */
 export interface LaterRound extends Change {
 	previous: string;
+	/** The findings of the review of `previous`. */
+	earlier: Finding[];
 	responses?: string;
 	rules: Rules | null;
 	/** The session was given REVIEW.md rules the base no longer has. */
@@ -923,7 +997,7 @@ export function laterPrompt(round: LaterRound): string {
 	if (round.rulesRemoved && round.rules === null) {
 		parts.push("The base no longer has a REVIEW.md, so the review rules you were given no longer apply.");
 	}
-	parts.push(...rulesParts(round.rules, false), ...responseParts(responses));
+	parts.push(...rulesParts(round.rules, false), ...responseParts(round.earlier, responses));
 	parts.push(
 		`Report as JSON matching the response schema every finding that holds at ${head}, including any the new changes introduce.`,
 		REPORT,
@@ -932,7 +1006,7 @@ export function laterPrompt(round: LaterRound): string {
 }
 
 /** `<remote>/<branch>` split at the longest remote name it starts with. */
-function parseBase(root: string, base: string): { remote: string; branch: string } {
+export function parseBase(root: string, base: string): { remote: string; branch: string } {
 	const remotes = git(root, ["remote"]).split("\n").filter(Boolean);
 	const remote = remotes.filter((name) => base.startsWith(`${name}/`)).sort((a, b) => b.length - a.length)[0];
 	if (remote === undefined || base.length === remote.length + 1) {
@@ -1052,9 +1126,10 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	if (previous === undefined && options.responses !== undefined) {
 		throw new ResponsesError("--responses answers a previous round, and this branch has none to resume");
 	}
-	if (previous !== undefined && previous.findings > 0 && options.responses === undefined) {
+	const earlier = previous?.findings ?? [];
+	if (earlier.length > 0 && options.responses === undefined) {
 		throw new ResponsesError(
-			`the last round reported ${previous.findings} finding(s); pass --responses with a fix or refutation for each`,
+			`the last round reported ${earlier.length} finding(s); pass --responses with a fix or refutation for each`,
 		);
 	}
 
@@ -1096,13 +1171,14 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		if (first.session === undefined) throw new Error(`${harness} did not report its session`);
 		session = first.session;
 		if (reported(first.usage)) usage.push({ turn: "review", ...first.usage });
-		const prompt = firstPrompt(change, rules, options.responses);
+		const prompt = firstPrompt(change, rules, earlier, options.responses);
 		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
 	} else {
 		session = state!.session;
 		const prompt = laterPrompt({
 			...change,
 			previous: previous!.head,
+			earlier,
 			responses: options.responses,
 			rules,
 			rulesRemoved: state!.given.rules !== null,
@@ -1110,14 +1186,15 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
-	const { score, rationale, findings: found } = verdict(reply);
+	const { score, rationale, findings: found, earlier: answers } = verdict(reply, earlier.length);
 
-	const rounds = [...(resume ? state!.rounds : []), { head, findings: found.length }];
+	const rounds = [...(resume ? state!.rounds : []), { head, findings: found }];
 	save(statePath, { branch, reviewer: harness, session, rounds, given } satisfies State);
 	return {
 		reviewer: harness,
 		model: context.model,
 		effort: context.effort,
+		branch,
 		size: sized.size,
 		sizeFrom: sized.from,
 		session,
@@ -1128,6 +1205,19 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		score,
 		rationale,
 		findings: found,
+		earlier:
+			previous === undefined
+				? null
+				: {
+						head: previous.head,
+						findings: answers
+							.sort((a, b) => a.finding - b.finding)
+							.map(({ finding, disposition, reason }) => ({
+								...earlier[finding - 1],
+								disposition,
+								reason,
+							})),
+					},
 	};
 }
 
@@ -1145,11 +1235,19 @@ export function roundLines(round: Round): string[] {
 		`findings ${round.findings.length}`,
 	];
 	for (const finding of round.findings) {
-		const where = finding.line === null ? finding.file : `${finding.file}:${finding.line}`;
 		lines.push(
 			"",
-			`${finding.severity} ${where} ${finding.title}`,
+			`${finding.severity} ${located(finding)} ${finding.title}`,
 			...finding.body.split("\n").map((l) => `  ${l}`),
+		);
+	}
+	const settled = round.earlier?.findings ?? [];
+	if (settled.length > 0) lines.push("", `earlier ${settled.length} ${round.earlier!.head}`);
+	for (const finding of settled) {
+		lines.push(
+			"",
+			`${finding.disposition} ${finding.severity} ${located(finding)} ${finding.title}`,
+			`  ${finding.reason.replace(/\s+/g, " ").trim()}`,
 		);
 	}
 	return lines;
