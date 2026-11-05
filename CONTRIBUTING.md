@@ -55,8 +55,8 @@ The host's `quest land watch` daemon runs the Codex fixer when the queue drops a
 A fix that needs a maintainer decision is handed back with a diagnosis on the PR.
 The admin bypass of `main`'s ruleset is for emergencies.
 
-Every AI-authored GitHub post must end with `(written by <model>)`, naming the
-running model. This is separate from commit co-author trailers.
+Every AI-authored GitHub post must end with `(written by <model> with <effort>)`,
+naming the running model and its reasoning effort. This is separate from commit co-author trailers.
 
 The package stays `private`; GitHub releases will ship the `quest` binary.
 
