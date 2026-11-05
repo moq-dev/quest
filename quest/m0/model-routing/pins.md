@@ -20,4 +20,3 @@ repository uses the same settings, so nothing in them changes but the pin.
 ## Required
 
 - [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` reads the built-in size table
-- [PRs record their implementer](/quest/m0/model-routing/implementer.md) - the record that shows the routing working

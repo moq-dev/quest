@@ -87,7 +87,14 @@ export const signature = (failure: string) => failure.replace(/[`'"]/g, "").repl
  * a commit on the base that skips the test and adds its follow-up quest, which the daemon opens as a PR
  * of its own.
  */
-export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string; failure?: string } & (
+export type FixResult = {
+	agent?: string;
+	model?: string;
+	effort?: string;
+	blame?: boolean;
+	comment?: string;
+	failure?: string;
+} & (
 	| { number: number; action: "requeue"; reason: string; cause?: Cause; disable?: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
@@ -97,7 +104,7 @@ export type FixResult = { agent?: string; model?: string; blame?: boolean; comme
  * The fixer's verdict on the base alone, when no PR is supplied: a mechanical fix committed on its
  * `base` branch, which the daemon opens as a PR, or a handback, which halts the queue with an issue.
  */
-export type BaseFix = { agent?: string; model?: string } & (
+export type BaseFix = { agent?: string; model?: string; effort?: string } & (
 	| { action: "fixed"; head: string; reason: string }
 	| { action: "handback"; diagnosis: string; recommendation: string }
 );
@@ -122,7 +129,7 @@ function validate(item: any, pr: boolean): void {
 				: item.action === "handback"
 					? [...named, "action", "diagnosis", "recommendation"]
 					: [];
-	const metadata = ["agent", "model"].filter((key) => key in item);
+	const metadata = ["agent", "model", "effort"].filter((key) => key in item);
 	if (metadata.some((key) => typeof item[key] !== "string" || !/^[a-zA-Z0-9 ._/-]{1,100}$/.test(item[key])))
 		throw new Error("invalid fixer identity");
 	if (pr && "blame" in item) {
@@ -295,6 +302,8 @@ export async function fix(
 		...(model ? ["--model", model] : []),
 		"-",
 	];
+	// Codex names its model in the header it prints first, whether or not the command line does.
+	let header = "";
 	await new Promise<void>((done, reject) => {
 		// Relay the agent's output through pipes of its own rather than letting it inherit ours. Once Bun writes
 		// to a pipe it marks that pipe non-blocking, and an inheriting child shares the flag: Codex then panicked
@@ -302,6 +311,9 @@ export async function fix(
 		const child = spawn(program, argv, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
 		child.stdout.pipe(process.stdout, { end: false });
 		child.stderr.pipe(process.stderr, { end: false });
+		child.stderr.on("data", (chunk: Buffer) => {
+			if (header.length < 4096) header += chunk.toString("utf8");
+		});
 		child.once("error", reject);
 		child.stdin.on("error", () => {});
 		child.stdin.end(
@@ -312,8 +324,15 @@ export async function fix(
 	const parse = (text: string) => (numbers.length ? parseFixResult(text, numbers) : parseBaseFix(text));
 	const results = parse(readFixResult(root));
 	const index = argv.findIndex((arg) => arg === "-m" || arg === "--model");
-	const ranModel = index >= 0 ? argv[index + 1] : argv.find((arg) => arg.startsWith("--model="))?.slice(8);
-	const identity = { agent: basename(agent), model: ranModel ?? "Codex" };
+	const ranModel =
+		(index >= 0 ? argv[index + 1] : argv.find((arg) => arg.startsWith("--model="))?.slice(8)) ??
+		/^model: ([a-zA-Z0-9._/-]{1,100})$/m.exec(header)?.[1];
+	const identity = {
+		agent: basename(agent),
+		model: ranModel ?? "unknown",
+		// Replaced arguments may run the agent at any effort.
+		effort: args ? "unknown" : effort,
+	};
 	const result = JSON.stringify(
 		Array.isArray(results) ? results.map((item) => ({ ...item, ...identity })) : { ...results, ...identity },
 	);

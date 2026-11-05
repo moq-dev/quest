@@ -25,6 +25,7 @@ import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/de
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import {
 	ADMITTED,
+	author,
 	COLLECTION_ATTEMPTS,
 	collectFixers,
 	validateFix,
@@ -2770,7 +2771,9 @@ describe.skipIf(process.platform === "win32")("asynchronous land fixer", () => {
 		expect(fix.branch).toBe(branch);
 		const head = forge.ref("upstream/project", `refs/heads/${branch}`);
 		expect(git(forge.origin, "rev-parse", `${head}^`)).toBe(fixture.base.sha);
-		expect(fix.body).toContain(`mechanical fix by agent / Codex: \`restore the missing file\` (head ${head})`);
+		expect(fix.body).toContain(
+			`mechanical fix by agent, unknown, unknown effort: \`restore the missing file\` (head ${head})`,
+		);
 		expect(fix.body).toContain("Merge it as an administrator");
 		// Collected once, and the queue stays halted on this base.
 		expect(await fixture.collect()).toEqual([]);
@@ -2848,7 +2851,7 @@ printf '{"action":"fixed","head":"%s","reason":"edit the flake"}' "$(git rev-par
 		expect(fixture.pull.head).not.toBe(fixture.plan.queue[0].head);
 		expect(git(fixture.root, "show", "-s", "--format=%P", fixture.pull.head!)).toContain(fixture.plan.base.sha);
 		expect(fixture.pull.body).toContain(
-			`mechanical fix by agent / Codex: \`preserve both conflict sides\` (head ${fixture.pull.head})`,
+			`mechanical fix by agent, unknown, unknown effort: \`preserve both conflict sides\` (head ${fixture.pull.head})`,
 		);
 		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixture.pull.head!));
 	});
@@ -3433,7 +3436,7 @@ ${requeueScript}`);
 		expect(fixture.pull.autoMerge?.commitBody).toBe(pin(fixture.pull.head!));
 		// The fix is recorded in `## Review`; a PR that stays queued gets no outcome comment.
 		expect(fixture.pull.body).toContain(
-			`mechanical fix by agent / Codex: \`preserve both conflict sides\` (head ${fixture.pull.head})`,
+			`mechanical fix by agent, unknown, unknown effort: \`preserve both conflict sides\` (head ${fixture.pull.head})`,
 		);
 		expect(fixture.forge.comment(1)).toBeUndefined();
 	});
@@ -3687,6 +3690,24 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		expect(result.model).toBe("actual-model");
 	});
 
+	test("records the model Codex's header names and the effort it ran at", async () => {
+		const dir = fixRepository();
+		const log = join(dir, "failure");
+		writeFileSync(log, "failure");
+		const agent = join(dir, "codex");
+		writeFileSync(
+			agent,
+			`#!/bin/sh\ncat >/dev/null\nprintf 'model: header-model\\nreasoning effort: high\\n' >&2\n${requeueScript}\n`,
+			{ mode: 0o755 },
+		);
+		vi.stubEnv("OPENAI_BASE_URL", "http://proxy.test/v1");
+		vi.stubEnv("OPENAI_API_KEY", "proxy-client");
+		await fix(dir, log, [1], agent, undefined, undefined, "high");
+		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1]);
+		expect(result).toMatchObject({ agent: "codex", model: "header-model", effort: "high" });
+		expect(author(result)).toBe("codex, header-model, high effort");
+	});
+
 	test("rejects mixing individually approved protected files", async () => {
 		const forge = new Forge();
 		forge.advance({ "flake.nix": "old", "shell.nix": "old" });
@@ -3745,11 +3766,12 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		const results = JSON.parse(readFileSync(resultPath, "utf8"));
 		results[0].agent = "Claude";
 		results[0].model = "actual-model";
+		results[0].effort = "xhigh";
 		writeFileSync(resultPath, JSON.stringify(results));
 		fixture.pull.body =
 			"Author content\r\n\r\n## Review\r\n\r\nPrevious review\r\n\r\n(written by old-model)\n\n(written by older-model)";
 		expect(await fixture.collect()).toEqual(["requeued 1"]);
-		expect(fixture.pull.body).toContain("mechanical fix by Claude / actual-model:");
+		expect(fixture.pull.body).toContain("mechanical fix by Claude, actual-model, xhigh effort:");
 		expect(fixture.pull.body).toContain("Author content");
 		expect(fixture.pull.body).toContain("Previous review");
 		// The author's attributions stay; the fix is credited only in its own Review line.

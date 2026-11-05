@@ -13,6 +13,8 @@ import {
 } from "quest/core";
 import { checksState, latestContexts } from "../../../src/github/checks";
 import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../../../src/github/merge";
+import { implementers, withModels } from "../../../src/github/models";
+import { BODY_LIMIT } from "../jobs/trail";
 import { osiApproved } from "../licenses";
 import { CI_PERMISSIONS, type CIPermission, ciProblems } from "./ci";
 import { OBSERVED, type Observed, observedGap, REVIEW_CHECK, unreviewed } from "./review";
@@ -2204,10 +2206,13 @@ export class GitHubService {
 					if (pull?.state !== "open") throw error;
 				}
 			}
-			if (pull.title !== input.title || pull.body !== input.body)
+			// A later session's body keeps the sessions that delivered before it in its `## Models` record.
+			const body = implementers(pull.body ?? "").reduce(withModels, input.body);
+			if (body.length > BODY_LIMIT) throw new GitHubError("The pull request body is too long");
+			if (pull.title !== input.title || pull.body !== body)
 				pull = await this.#api<PullHead>(token, `${pulls}/${number(pull.number)}`, "PATCH", {
 					title: input.title,
-					body: input.body,
+					body,
 				});
 			// Finished work leaves draft; a maintainer's own choice to mark it ready is never reverted.
 			if (pull.draft && !input.draft) {

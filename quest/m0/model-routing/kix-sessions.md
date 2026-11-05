@@ -48,7 +48,3 @@ Implementation guidance:
   comment too, and `quest context`'s `## Models` rule and its
   `--exclude-model` rule ("each implementing model the PR body records")
   to name it.
-
-## Required
-
-- [Commits and PRs record their models](/quest/m0/model-routing/implementer.md) - this builds on its `## Models` record and the runner's reporting

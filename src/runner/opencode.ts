@@ -711,6 +711,8 @@ export class Opencode implements Adapter {
 		);
 
 		let stopping = false;
+		const unknown = { model: "unknown", effort: "unknown" };
+		let ran: () => Promise<{ model: string; effort: string }> = async () => unknown;
 		let abort: () => Promise<unknown> = async () => {};
 		const events = new AbortController();
 		let watched: Promise<void> = Promise.resolve();
@@ -736,6 +738,13 @@ export class Opencode implements Adapter {
 				writeFileSync(join(sessions, launch.session), session, { mode: 0o600 });
 			}
 			abort = () => client.session.interrupt({ sessionID: session });
+			// The assistant message that is calling a kix tool is the session's latest.
+			ran = async () => {
+				const { data } = await client.message.list({ sessionID: session, limit: 1, order: "desc" });
+				const info = data[0];
+				if (info?.type !== "assistant") return unknown;
+				return { model: `${info.model.providerID}/${info.model.id}`, effort: info.model.variant ?? "unknown" };
+			};
 			if (stopping) return failure("stopped");
 
 			let limited: Exit["limited"] = null;
@@ -792,6 +801,7 @@ export class Opencode implements Adapter {
 			});
 		return {
 			done,
+			ran: () => ran().catch(() => unknown),
 			stop() {
 				stopping = true;
 				// Interrupt the turn so opencode records it, then stop the server whether or not it answered.

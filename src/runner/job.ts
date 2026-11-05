@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 
 import { type Round, ResponsesError } from "../cli/review";
+import { withModels } from "../github/models";
 
 import type { Adapter, Exit, Running } from "./adapter";
 import { Refused } from "./connection";
@@ -90,6 +91,9 @@ function subject(summary: string): string {
 	return line.length <= 72 ? line : `${line.slice(0, 71)}…`;
 }
 
+/** `value` when it fits in a `## Models` line, otherwise `unknown`. */
+const field = (value: string) => (/^[\w.:/@+-]{1,100}$/.test(value) ? value : "unknown");
+
 function string(value: unknown, name: string, max: number): string {
 	if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`);
 	if (value.length > max) throw new Error(`${name} is longer than ${max} characters`);
@@ -115,6 +119,8 @@ export class Attempt {
 	/** Settles once no review runs, so the attempt never removes a checkout a review still uses. */
 	#reviewRun: Promise<unknown> = Promise.resolve();
 	#agent: Running | undefined;
+	/** The CLI the attempt's account runs, which its pull request's `## Models` record names. */
+	#harness = "unknown";
 	/** Aborts the devShell build, which runs before there is an agent to stop. */
 	#preparing = new AbortController();
 	#publishing: Promise<unknown> = Promise.resolve();
@@ -209,6 +215,7 @@ export class Attempt {
 				return await this.#finish("failed", `The account ${job.account} is no longer on this runner.`);
 			// Before any checkout: an account added while the runner runs may lack its CLI or sandbox.
 			const adapter = ctx.adapter(account);
+			this.#harness = adapter.name;
 			this.#account = account;
 			this.#workspace = await Workspace.prepare(ctx.root, job, ctx.remote(job));
 			if (this.#workspace.preserved)
@@ -742,11 +749,14 @@ export class Attempt {
 					const closed = this.#closed();
 					if (closed) return closed;
 					const text = string(args.summary, "summary", 4000);
+					// kix names this session in the body's `## Models` record, from what the CLI reports.
+					const ran = (await this.#agent?.ran()) ?? { model: "unknown", effort: "unknown" };
+					const implementer = `Implementer: ${field(this.#harness)}, ${field(ran.model)}, ${field(ran.effort)} effort`;
 					const pull = pulled
 						? undefined
 						: {
 								title: string(args.title, "title", 256),
-								body: string(args.body, "body", 60_000),
+								body: withModels(string(args.body, "body", 59_000), implementer),
 								draft: args.draft !== false,
 							};
 					const method = args.method as Land["method"];

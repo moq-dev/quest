@@ -7,14 +7,14 @@ can run from a ranked list `quest` builds in for the quest's size, the same
 for every repository unless its `AGENTS.md` overrides it: Grok for XS, Opus
 from S up, with Sol as the fallback through M, and a usage limit falling
 through to the next entry. Sol reviews, at an effort set by size, and Opus
-reviews whatever Sol wrote, so no model reviews its own code. Every commit
-and PR records the models and efforts behind it, and fixes link the PR that
+reviews whatever Sol wrote, so no model reviews its own code. Every PR
+records the models and efforts behind it, and fixes link the PR that
 caused them, so the rankings can be audited and retuned. This epic's own
 work is one live spawn in moq-dev/quest from Claude Code that starts an XS
 quest on Grok and an S or larger on Opus, each recorded and reviewed by Sol.
 
 Non-goals: routing kix.quest's runner jobs, which pick their own accounts
-and models (their commits still record their models); billing agents to API
+and models (their PRs still record their models); billing agents to API
 keys, which this epic removes.
 
 ## Plan
@@ -67,8 +67,12 @@ are mostly judgment.
   Sol xhigh. L and XL: Opus xhigh, no fallback. Reviews: Sol low, medium,
   high, xhigh, xhigh for XS to XL, never the model that wrote the code;
   Pullfrog and CodeRabbit add free reviews on top.
-- Every commit and PR records its models and efforts, and every fix links
-  the PR that caused it, so the rankings can be audited (user).
+- Every PR records its models and efforts, and every fix links the PR that
+  caused it, so the rankings can be audited (user). The PR record alone,
+  without commit trailers (user, 2026-11-04 design checkpoint of
+  [moq-dev/quest#494](https://github.com/moq-dev/quest/pull/494), revising
+  that day's /quest-plan pick of `Agent-*` trailers): squash merges drop
+  branch trailers from `main`, so audits read the PR record anyway.
 - Every `/quest-review` scores the change out of 10 (user, while planning
   [the council](/quest/m2/council.md), which joins m2).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
@@ -78,6 +82,5 @@ are mostly judgment.
 
 - [Grok agents](/quest/m0/model-routing/agent-harnesses.md) - `quest agent` starts Grok as well as Claude Code and Codex
 - [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` starts each quest on the first entry of its size's ranked list that can run
-- [Commits and PRs record their models](/quest/m0/model-routing/implementer.md) - commit trailers and PR records name each harness, model, and effort, and the PR's size
 - [kix records its follow-up sessions](/quest/m0/model-routing/kix-sessions.md) - kix `iterate` and `merge` jobs that change an existing PR record their `Implementer:` line in a PR comment
 - [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing

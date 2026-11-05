@@ -1448,7 +1448,14 @@ log({
 	timeout: kix.timeout,
 });
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-out({ type: "system", subtype: "init", session_id: session });
+out({ type: "system", subtype: "init", session_id: session, model: "claude-test" });
+// Claude Code runs the settings' hooks for a tool, with the turn's effort, before calling it.
+const hooks = (tool) => {
+	for (const entry of JSON.parse(fs.readFileSync(at("--settings"), "utf8")).hooks?.PreToolUse ?? [])
+		if (new RegExp("^(?:" + entry.matcher + ")$").test("mcp__kix__" + tool))
+			for (const hook of entry.hooks)
+				require("node:child_process").execSync(hook.command, { env: { ...process.env, CLAUDE_EFFORT: "high" } });
+};
 let id = 0;
 async function rpc(method, params) {
 	const response = await fetch(kix.url, {
@@ -1471,6 +1478,7 @@ async function rpc(method, params) {
 			await rpc("tools/call", { name: "context", arguments: {} });
 			log({ backgroundWaitPid: process.pid });
 		}
+		if (step.tool) hooks(step.tool);
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
 			process.on("SIGTERM", () => { log({ terminated: true }); process.exit(143); });
@@ -1551,6 +1559,7 @@ async function turn(session, text) {
 		if (step.shell)
 			log({ shell: require("node:child_process").execFileSync(config.shell, ["-c", step.shell], { encoding: "utf8" }) });
 		if (step.emit) send({ ...step.emit, data: { ...step.emit.data, sessionID: session } });
+		if (step.assistant) messages[session].unshift({ id: "msg_" + ++id, content: [], ...step.assistant });
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
 			await new Promise((resolve) => (interrupted = resolve));
@@ -1951,7 +1960,12 @@ describe("quest runner", () => {
 		expect(checkpoint!.changes).toEqual([{ path: "a.txt", content: Buffer.from("first\n").toString("base64") }]);
 		expect(delivery).toMatchObject({
 			head: "0".repeat(39) + "1",
-			pull: { title: "feat: thing", body: "Body", draft: false },
+			// The runner names the session in the body's record, from the CLI's own report of its model and effort.
+			pull: {
+				title: "feat: thing",
+				body: "Body\n\n## Models\n\n- Implementer: claude, claude-test, high effort\n",
+				draft: false,
+			},
 		});
 		expect(delivery!.changes.map((c: Sent) => [c.path, c.content === null])).toEqual([
 			["b.txt", false],
@@ -2102,7 +2116,17 @@ describe("quest runner", () => {
 					args: { summary: "Need a choice", questions: [{ question: "Which?", options: [{ label: "A" }] }] },
 				},
 			],
-			resume: [{ tool: "deliver", args: { summary: "Went with A", title: "feat: a", body: "Body" } }],
+			resume: [
+				{ assistant: { type: "assistant", model: { providerID: "openai", id: "gpt-test", variant: "high" } } },
+				{
+					tool: "deliver",
+					args: {
+						summary: "Went with A",
+						title: "feat: a",
+						body: "## Models\n\n- Size: S\n\n## Review\n\nNone",
+					},
+				},
+			],
 		});
 		r.assign(job(r.upstream.commit), "Extra rule.");
 		const question = await r.hub.next((m) => m.type === "question");
@@ -2209,6 +2233,10 @@ describe("quest runner", () => {
 		const result = await r.result();
 		await idle(r.runner);
 		expect(result).toMatchObject({ attempt: 2, outcome: "completed", summary: "Went with A" });
+		// The resumed session names itself from its latest assistant message, in the agent's own record.
+		expect(r.publishes.at(-1)!.pull.body).toBe(
+			"## Models\n\n- Size: S\n- Implementer: opencode, openai/gpt-test, high effort\n\n## Review\n\nNone",
+		);
 		const resumed = r.calls().filter((c) => c.prompted);
 		expect(resumed).toHaveLength(2);
 		// The kix session maps to the opencode session that asked.
