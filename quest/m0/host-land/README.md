@@ -1,4 +1,4 @@
-# Merge through a host gate until the merge queue replaces it
+# [XS] Merge through a host gate until the merge queue replaces it
 
 ## Goal
 
@@ -119,7 +119,3 @@ exactly the tested tree.
   - Move that branch to GitHub's merge queue instead
 
   The exception covers only that work; the rest of the freeze stands.
-
-## Required
-
-- [Fixer TLS](/quest/m0/host-land/fixer-tls.md) - the fixer's container trusts public certificates, so workerd and the Worker tests run there
