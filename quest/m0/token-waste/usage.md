@@ -29,25 +29,30 @@ Decided 2026-11-04 (user, /quest-plan):
   - Tokens only
   - Each session's share of its plan's usage limit
 
+- Tokens and cost: ✅ reuse [ccusage](https://github.com/ccusage/ccusage)'s
+  `session --json` (decided 2026-11-05, user, while planning
+  [token-max](/quest/m0/token-waste/token-max.md); rejected: quest's own
+  log readers and price table). ccusage already reads Claude Code, Codex,
+  opencode, and Grok sessions and prices them from models.dev, so quest
+  keeps only what is its own: tying sessions to quests and PRs, and the
+  review record.
+
 Agent's choices, for the implementer to revisit:
 
-- Sources, read only, never printing prompt or reply text: Claude Code's
-  session logs (`~/.claude*/projects/*/*.jsonl`, whose messages carry
-  `usage` and the model), Codex's (`~/.codex/sessions`, token-count
-  events), opencode's session storage, and Grok's for sessions from before
-  it left routing on 2026-11-05, each found where its
-  CLI keeps it, honoring `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. Sessions
-  that `quest agent` and `quest review` start are found the same way, so
-  nothing new is logged.
 - A session belongs to a quest or PR by its working directory's checkout
   and branch: a quest branch names its quest, and a PR's head branch names
-  the PR. Sessions on no quest or PR branch roll up as unattributed.
+  the PR. Sessions on no quest or PR branch roll up as unattributed. Check
+  that ccusage's session JSON carries a session id or path to join on;
+  where it lacks the branch, read only that from the session's log,
+  honoring `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, never printing prompt or
+  reply text. Sessions that `quest agent` and `quest review` start are
+  found the same way, so nothing new is logged.
+- When `ccusage` is not installed, say how to install it and still report
+  the review record.
 - Accuracy comes from the PR record: the body's `## Models` size and
   implementers, and each `## Review` round's reviewer, score, and findings
   with their dispositions; follow-up fixes are later PRs that list it under
   `## Caused by` (`quest context`'s Pull requests section).
-- Prices are a pinned table beside the model lists, by model and token
-  kind; the model check keeps it current with the ids.
 - Output: a table per quest or PR, a rollup by size, role, and model, and
   `--json`. `--since`, `--quest`, and `--pr` narrow it.
 - One host only: each host reports its own sessions. Combining hosts
