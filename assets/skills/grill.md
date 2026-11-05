@@ -1,8 +1,7 @@
 ---
 description: Settle open decisions through an interactive interview with the user. Use when the user invokes /quest-grill or wants unsettled thinking challenged before action.
+guide: Questions
 ---
-
-Before you begin, run `quest guide` and read its output completely.
 
 Interview the user until you reach a shared understanding.
 Map the decisions as a design tree: every material decision branches into the decisions that hang off it.
@@ -10,7 +9,7 @@ A background agent that cannot prompt never picks an answer: it puts each open d
 
 Work the tree in **rounds**.
 The **frontier** is every decision whose prerequisites are already settled.
-Ask the whole frontier in one synchronous round, following `quest context`'s Questions section.
+Ask the whole frontier in one synchronous round, following the guide's Questions section.
 Open each question with the context it needs, including the settled answers it builds on, since a later round's question often hangs off a decision made rounds earlier.
 Mark one answer per question as (recommended) and wait for the user's answers (never guess) before the next round.
 

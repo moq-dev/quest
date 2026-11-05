@@ -38,11 +38,11 @@ CodeRabbit review; it is optional.
 Quest execution stops at PR creation; it merges only when the user picks /quest-merge.
 
 On a PR whose author has write access, the PR body's `## Review` record of a
-local `quest review` round satisfies the guide's required review when it names
+local `quest review` round satisfies the required review `/quest-merge` describes when it names
 the exact head being landed, with no finding left unfixed or unrefuted; so does
 a recorded skip of a trivial change.
 A hand-resolved conflict outside the exemptions below needs a local review of the new head, but does not
-require a maintainer review specifically. The guide's exemptions for a
+require a maintainer review specifically. `/quest-merge`'s exemptions for a
 conflict-free base merge, a reviewer's suggested patch applied unchanged, or a land
 fixer's recorded mechanical fix that changes no behavior still apply. Online reviewers' findings already posted are addressed at merge,
 never waited for. Dependabot PRs that only bump patch versions or a lockfile

@@ -1244,6 +1244,18 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	};
 }
 
+/**
+ * The author's next step after `round`, printed last so each step of the
+ * procedure arrives when it applies: the design checkpoint on every third
+ * round that reports findings, else answering them, or nothing left to do.
+ */
+export function nextStep(round: Round): string {
+	if (round.findings.length === 0) return "next done: no findings remain on this head";
+	if (round.round % 3 === 0)
+		return "next checkpoint: before fixing these findings, reconsider the approach and let the user decide, as /quest-review describes";
+	return "next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number";
+}
+
 /** The plain report: one record per line, then each finding with its body indented. */
 export function roundLines(round: Round): string[] {
 	const lines = [

@@ -6,8 +6,9 @@
 // The plan touches only skill stubs (writing missing or outdated ones and
 // removing those of retired skills), one reference line in the root agent
 // instructions, one `.gitattributes` line, and `quest/README.md` when missing.
-// It writes no Claude Code hooks: Quest's worktree hooks are a user-level
-// opt-in, since a repository's settings would force them on every contributor.
+// It writes no Claude Code hooks: Quest's hooks are a user-level opt-in
+// (`quest setup`), since a repository's settings would force them on every
+// contributor.
 
 /** Installed skills carry this prefix so they don't collide with a repository's own. */
 export const PREFIX = "quest-";
@@ -18,17 +19,31 @@ export const PREFIX = "quest-";
  */
 export const REFERENCE_MARKER = "Quests: ";
 
-/** Appended to the root agent instructions when Quest is installed. */
-export const REFERENCE_LINE = "Quests: before any work, run `quest context` and follow it.";
+/**
+ * Appended to the root agent instructions when Quest is installed. A session
+ * whose `quest setup` hook already printed the rules skips the command.
+ */
+export const REFERENCE_LINE =
+	"Quests: before any work, run `quest context` and follow it, unless this session already holds its rules.";
 
 /** Earlier releases' default reference lines, which init upgrades in place; a reworded line stays. */
 const OLD_REFERENCE_LINES: readonly string[] = [
 	"Quests: before starting work, run `quest guide` and follow it.",
 	"Quests: before starting work, run `quest context` and `quest guide`, and follow both.",
+	"Quests: before any work, run `quest context` and follow it.",
 ];
 
-/** The skill directories Claude Code and Codex read; new installs use real directories. */
+/**
+ * The skill directories Claude Code and other agents (Codex) read, each with
+ * its own stub; new installs use real directories.
+ */
 export const SKILL_DIRS = [".claude/skills", ".agents/skills"] as const;
+
+/** One of `SKILL_DIRS`. */
+export type SkillDir = (typeof SKILL_DIRS)[number];
+
+/** The directory whose stub works for every agent, so a directory both read through a link gets it. */
+const PORTABLE: SkillDir = ".agents/skills";
 
 /** Routes quest files through the `quest` merge driver; uninstall removes lines starting with it. */
 export const ATTRIBUTES_LINE = "quest/** merge=quest";
@@ -59,10 +74,10 @@ export interface Checkout {
 	real(path: string): string;
 }
 
-/** One skill as a repository installs it: its directory name and its `SKILL.md`. */
+/** One skill as a repository installs it: its directory name and the `SKILL.md` each skill directory gets. */
 export interface Stub {
 	installed: string;
-	stub: string;
+	stubs: Readonly<Record<SkillDir, string>>;
 }
 
 /** One file the plan sets to `content`, or, with null content, a retired stub it deletes along with its directory once empty. */
@@ -95,29 +110,30 @@ function refuse(path: string, why: string): never {
  */
 export function planInit(repo: Checkout, stubs: readonly Stub[], options: { goal?: string } = {}): InitChange[] {
 	const dirs = skillDirs(repo);
-	const written = dirs.flatMap((skills) =>
+	const written = dirs.flatMap(({ skills, shared }) =>
 		stubs.flatMap((skill): InitChange[] => {
 			const dir = `${skills}/${skill.installed}`;
 			const path = `${dir}/SKILL.md`;
+			const stub = skill.stubs[shared ? PORTABLE : skills];
 			checkPath(repo, path, "file");
 			if (repo.stat(path) === "file") {
 				if (!isStub(repo, path, skill.installed)) refuse(path, "is not a Quest stub");
 				// An older version's stub is rewritten in place, keeping its newlines; Quest writes no links, so it leaves linked ones.
 				const content = repo.read(path);
-				if (content.replaceAll("\r\n", "\n") === skill.stub) return [];
+				if (content.replaceAll("\r\n", "\n") === stub) return [];
 				if (repo.lstat(dir) !== "dir" || repo.lstat(path) !== "file") return [];
-				return [{ path, content: skill.stub.replaceAll("\n", newline(content)) }];
+				return [{ path, content: stub.replaceAll("\n", newline(content)) }];
 			} else if (repo.lstat(dir) !== null) {
 				throw new InitRefused(
 					dir,
 					`${dir} exists without SKILL.md; remove or rename it before running \`quest init\``,
 				);
 			}
-			return [{ path, content: skill.stub }];
+			return [{ path, content: stub }];
 		}),
 	);
 	const current = new Set(stubs.map((skill) => skill.installed));
-	const retired = dirs.flatMap((skills) =>
+	const retired = dirs.flatMap(({ skills }) =>
 		installedStubs(repo, skills).filter((dir) => !current.has(dir.slice(dir.lastIndexOf("/") + 1))),
 	);
 	const readme = "quest/README.md";
@@ -147,34 +163,48 @@ function checkPath(repo: Checkout, path: string, expected: "dir" | "file"): void
 	refuse(path, `is not a ${expected === "dir" ? "directory" : "file"}`);
 }
 
-/** Validate both destinations before writing; existing links to one tree are installed once. */
-function skillDirs(repo: Checkout): string[] {
-	const seen = new Set<string>();
-	return SKILL_DIRS.filter((dir) => {
-		checkPath(repo, dir, "dir");
-		const destination = repo.stat(dir) === null ? dir : repo.real(dir);
-		if (seen.has(destination)) return false;
-		seen.add(destination);
-		return true;
-	});
+/**
+ * Validate both destinations before writing. Existing links to one tree are
+ * installed once, with the stub every agent can follow, marked `shared`.
+ */
+function skillDirs(repo: Checkout): { skills: SkillDir; shared: boolean }[] {
+	const seen = new Map<string, { skills: SkillDir; shared: boolean }>();
+	for (const skills of SKILL_DIRS) {
+		checkPath(repo, skills, "dir");
+		const destination = repo.stat(skills) === null ? skills : repo.real(skills);
+		const earlier = seen.get(destination);
+		if (earlier) earlier.shared = true;
+		else seen.set(destination, { skills, shared: false });
+	}
+	return [...seen.values()];
 }
 
 /**
- * Any version's stub: frontmatter naming the skill, then the pointer to
- * `quest skill`. Descriptions and the setup link change between versions, so
- * only this shape identifies a file Quest wrote. Skill frontmatter has only
- * ever held `name` and `description`, so any other field marks an edited stub.
+ * Any version's stub: frontmatter naming the skill, then either the pointer
+ * to `quest skill` or Claude Code's inline call of it. Descriptions and the
+ * setup link change between versions, so only these shapes identify a file
+ * Quest wrote. A pointer's frontmatter has only ever held `name` and
+ * `description`, and an inline stub's also exactly the one `allowed-tools`
+ * entry its call needs, so any other field marks an edited stub. Each capture
+ * names the skill.
  */
-const STUB =
-	/^---\nname: (\S+)\n(?:(?:name|description): .*\n)*---\n\nRun `quest skill (\S+)` and follow its output\.\nIf `quest` is not installed, follow \S+ first\.\n$/;
+const STUBS = [
+	/^---\nname: (\S+)\n(?:(?:name|description): .*\n)*---\n\nRun `quest skill (\S+)` and follow its output\.\nIf `quest` is not installed, follow \S+ first\.\n$/,
+	/^---\nname: (\S+)\n(?:(?:name|description): .*\n)*allowed-tools: Bash\(quest skill (\S+)\)\n---\n\n!`quest skill (\S+) \|\| echo "[^"`\n]*"`\n$/,
+];
 
 /**
  * Whether `path` holds a Quest stub of any version for the skill installed as
  * `installed`. Git may check out unchanged stubs with CRLF in an adopting repository.
  */
 function isStub(repo: Checkout, path: string, installed: string): boolean {
-	const match = STUB.exec(repo.read(path).replaceAll("\r\n", "\n"));
-	return match?.[1] === installed && `${PREFIX}${match[2]}` === installed;
+	const content = repo.read(path).replaceAll("\r\n", "\n");
+	return STUBS.some((shape) => {
+		const match = shape.exec(content);
+		return (
+			match !== null && match[1] === installed && match.slice(2).every((name) => `${PREFIX}${name}` === installed)
+		);
+	});
 }
 
 /**

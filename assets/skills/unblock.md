@@ -1,8 +1,8 @@
 ---
 description: Walk the maintainer through every quest and draft PR waiting on them, and clear waits that have resolved.
+guide: Format, Creation, Deletion, Summaries
+skills: grill, plan
 ---
-
-Before you begin, run `quest guide`, `quest skill grill`, and `quest skill plan`, and read their output completely.
 
 The goal is to unblock the most work for each thing the maintainer settles, and to clear every wait whose condition has already resolved.
 The skill argument, if any, filters the quests or PRs in scope.

@@ -1,7 +1,7 @@
 ---
 name: quest-afk
 description: Keep quest work moving while the user is away, leaving every decision for their return.
+allowed-tools: Bash(quest skill afk)
 ---
 
-Run `quest skill afk` and follow its output.
-If `quest` is not installed, follow https://github.com/moq-dev/quest/blob/main/SETUP.md first.
+!`quest skill afk || echo "quest skill afk could not run: install quest as https://github.com/moq-dev/quest/blob/main/SETUP.md describes, then run quest skill afk and follow its output."`

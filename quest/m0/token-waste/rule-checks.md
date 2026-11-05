@@ -26,10 +26,10 @@ Recommendations for the implementer:
 
 - Deliver Claude Code `PreToolUse` hooks (Bash for `git push`, `git rebase`,
   `--force`, `/tmp` writes, and `gh` post bodies; Write and Edit for em
-  dashes) at user level through `quest setup`, as
-  [Rules load once](/quest/m0/token-waste/rule-loading.md) installs its
-  `SessionStart` hook, since repositories write no hooks. Give Codex the
-  equivalent `hooks.json` entries where its hooks can match.
+  dashes) at user level through `quest setup`, as a row each in `HOOKS` and a
+  case each in `quest hook` (`src/cli/hooks.ts`), beside its `SessionStart`
+  and `SubagentStart` entries, since repositories write no hooks. Give Codex
+  the equivalent `hooks.json` entries where its hooks can match.
 - Keep a check narrow enough that it never blocks legitimate work: a force
   push the user asked for, an em dash quoted from someone else, `/tmp` used
   by a tool rather than for agent scratch. A check that cannot tell these

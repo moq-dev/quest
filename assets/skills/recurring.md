@@ -1,8 +1,7 @@
 ---
 description: Plan a quest that repeats, such as a periodic audit or a release cut. Use when the user invokes /quest-recurring or wants the same work redone each milestone or release.
+skills: plan
 ---
-
-Before you begin, run `quest guide` and `quest skill plan`, and read their output completely.
 
 Run the plan interview for a quest that recurs: the PR that finishes one run creates the next.
 The argument (if provided) is the work to repeat, or an existing quest to make recurring.

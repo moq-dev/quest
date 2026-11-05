@@ -60,12 +60,14 @@ import {
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
 	review,
+	nextStep,
 	roundLines,
 } from "./review";
 import { type Recorded, recordRound } from "./review-record";
+import { HOOKS, hook, settingsPath, setup } from "./hooks";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
-import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
+import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
 import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
 import { pullRequestStatus, statusLines } from "./status";
@@ -1014,7 +1016,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Prints the reviewer, model, and effort, the size and where it came from, session, round, base, head, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
 				"its one-sentence rationale, the finding count, each finding, then the last round's findings with " +
-				"their dispositions. A reply without a valid score " +
+				"their dispositions, then the `record` line below and a last `next` line naming the author's next step: " +
+				"`next respond` to fix or refute the findings, `next checkpoint` on every third round that reports " +
+				"findings, to reconsider the approach before fixing them, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
 				"the same as one object.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
@@ -1072,11 +1076,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						} catch (error) {
 							failure = error;
 						}
-						if (options.json) print(JSON.stringify({ ...round, record: record ?? null }));
+						if (options.json)
+							print(JSON.stringify({ ...round, record: record ?? null, next: nextStep(round) }));
 						else {
 							for (const line of roundLines(round)) print(line);
 							if (record !== undefined)
 								print("url" in record ? `record ${record.url}` : `record skipped: ${record.skipped}`);
+							print(nextStep(round));
 						}
 						if (failure === undefined) return 0;
 						warn(
@@ -1254,12 +1260,32 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("guide")
-		.description("Print the quest guide: the format, workflow, and rules agents follow")
-		.action(() => out.stdout(GUIDE));
+		.summary("Print the quest guide: the format, workflow, and rules agents follow")
+		.description(
+			"Print the quest guide: the format, workflow, and rules agents follow. Each skill already carries the " +
+				`sections it needs. Name sections to print only those, in the guide's order: ${GUIDE_SECTIONS.join(", ")}.`,
+		)
+		.argument("[section...]", "Sections to print, ignoring case")
+		.action((sections: string[]) => {
+			if (sections.length === 0) return out.stdout(GUIDE);
+			for (const section of sections) {
+				try {
+					sectionHeading(section);
+				} catch (error) {
+					throw new UsageError(error instanceof Error ? error.message : String(error));
+				}
+			}
+			out.stdout(`${guideSections(sections)}\n`);
+		});
 
 	program
 		.command("context")
-		.description("Print the engineering rules agents follow in every task, before the repository's own")
+		.summary("Print the engineering rules agents follow in every task, before the repository's own")
+		.description(
+			"Print the engineering rules agents follow in every task, before the repository's own. The hook " +
+				"`quest setup` installs adds them to each Claude Code session in a repository that uses Quest, so " +
+				"its agents need not run this.",
+		)
 		.action(() => out.stdout(CONTEXT));
 
 	program
@@ -1267,20 +1293,52 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Print a skill's instructions, or list the skills with no name")
 		.description(
 			"Print a skill's instructions, or list the skills with no name.\n\n" +
-				"A repository installs only a stub per skill, which runs this, so the pinned binary decides what " +
-				"every agent follows.",
+				"A repository installs only a stub per skill, so the pinned binary decides what every agent follows. " +
+				"Claude Code's stub runs this when the skill is invoked and reads its output in place; the stub other " +
+				"agents read asks them to run it. It prints the skill's own instructions, then each skill it builds " +
+				"on, then the quest guide's sections any of them use, so one call holds everything the skill needs.",
 		)
 		.argument("[name]", "Skill to print")
-		.option("--stub", "Print the stub SKILL.md a repository installs instead")
-		.action((name: string | undefined, options: { stub?: boolean }) => {
+		.action((name: string | undefined) => {
 			if (name === undefined) {
-				if (options.stub) throw new UsageError("--stub requires a skill name");
 				for (const s of SKILLS) print(`${s.name} - ${s.description}`);
 				return;
 			}
 			const found = skill(name);
 			if (!found) throw new Error(`no skill named ${name} (have: ${SKILLS.map((s) => s.name).join(", ")})`);
-			out.stdout(options.stub ? found.stub : found.body);
+			out.stdout(found.instructions);
+		});
+
+	program
+		.command("setup")
+		.summary("Install Quest's hooks in your own Claude Code settings")
+		.description(
+			"Install Quest's hooks in your own Claude Code settings, $CLAUDE_CONFIG_DIR/settings.json or else " +
+				"~/.claude/settings.json, keeping every other setting and hook, and print the file's path when it " +
+				"changed. Each hook runs `quest hook`, so `quest` must be on the PATH Claude Code starts with. " +
+				`It installs ${HOOKS.map((h) => (h.matcher ? `${h.event} (${h.matcher})` : h.event)).join(" and ")}, ` +
+				"which add `quest context` to each session and subagent in a repository that uses Quest, and again " +
+				"after compaction, so agents never run it themselves. Rerun it after upgrading Quest; it replaces " +
+				"Quest's earlier entries. A settings file that is not valid JSON is an error and stays unchanged.",
+		)
+		.option("--remove", "Remove Quest's hooks instead")
+		.action((options: { remove?: boolean }) => {
+			const path = settingsPath();
+			if (setup(path, options)) print(path);
+		});
+
+	program
+		.command("hook")
+		.summary("Handle a Claude Code hook event `quest setup` installed, read on stdin")
+		.description(
+			"Handle the Claude Code hook event whose JSON input arrives on stdin, for the entries `quest setup` " +
+				"installs. SessionStart and SubagentStart print `quest context` as the session's or subagent's " +
+				"additional context, when the root AGENTS.md or CLAUDE.md of the checkout holding the input's cwd " +
+				"has a line starting with `Quests: `, as `quest init` writes, and nothing otherwise. Exits 1 on " +
+				"malformed input or an event it does not handle.",
+		)
+		.action(() => {
+			out.stdout(hook(JSON.parse(readFileSync(0, "utf8"))));
 		});
 
 	program
@@ -1301,7 +1359,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	// Fresh clones and worktrees get the merge driver from whichever command runs first.
 	program.hook("preAction", (_program, action) => {
-		if (!["init", "uninstall"].includes(action.name())) heal(root());
+		// `setup` and `hook` act on the user's settings, and every session waits on `hook`.
+		if (action.parent !== program || !["init", "uninstall", "setup", "hook"].includes(action.name())) heal(root());
 	});
 
 	try {

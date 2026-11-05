@@ -54,6 +54,7 @@ export {
 	REFERENCE_LINE,
 	REFERENCE_MARKER,
 	SKILL_DIRS,
+	type SkillDir,
 	type Stub,
 	installedStubs,
 	lines,
