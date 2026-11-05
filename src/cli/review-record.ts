@@ -1,6 +1,7 @@
 // `quest review` rewrites the `## Review` section of its branch's open PR after each round, so the head
 // it reviewed counts without an agent copying the round into the body by hand.
 import { reviewSection } from "../core";
+import { recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { git } from "./git";
 import { requireRemote, string } from "./github";
@@ -69,27 +70,40 @@ export function withReview(body: string, record: string): string {
 export type Recorded = { url: string } | { skipped: string };
 
 /**
- * Record `round` in the `## Review` section of the open PR from its branch into its base, found among the
- * upstream's PRs from the repository the base's remote pushes to, as claims find a branch's PR. The edit
- * is the token's user's, which the land gate counts only when that user wrote the PR.
+ * The open PR from `branch` into the base `<remote>/<branch>` names, found among the upstream's PRs from the
+ * repository the base's remote pushes to, as claims find a branch's PR; or why there is none.
  */
-export async function recordRound(root: string, round: Round, deps: ClaimDependencies): Promise<Recorded> {
-	// The checkout's top level, as the round reviewed it: a subdirectory would look for the quest tree below it.
+async function openPull(root: string, baseRef: string, branch: string, deps: ClaimDependencies) {
+	// The checkout's top level: a subdirectory would look for the quest tree below it.
 	const top = git(root, ["rev-parse", "--show-toplevel"]);
-	const { remote, branch: base } = parseBase(top, round.base.ref);
+	const { remote, branch: base } = parseBase(top, baseRef);
 	const up = await upstream(top, requireRemote(top, remote), deps);
 	if (up.github === null) return { skipped: `${remote} is not on GitHub` };
 	const { client, repository, head } = up.github;
-	const from = `${head.owner}:${round.branch}`;
+	const from = `${head.owner}:${branch}`;
 	const query = `state=open&head=${encodeURIComponent(from)}&base=${encodeURIComponent(base)}&per_page=100`;
 	const [pull] = await client.all(`${repositoryPath(repository)}/pulls?${query}`);
 	if (pull === undefined) return { skipped: `no open PR from ${from} into ${base}` };
-	const body = typeof pull.body === "string" ? pull.body : "";
-	const next = withReview(body, reviewRecord(round));
-	if (next !== body)
-		await client.request(`${repositoryPath(repository)}/pulls/${Number(pull.number)}`, {
-			method: "PATCH",
-			body: { body: next },
-		});
-	return { url: string(pull.html_url) };
+	const path = `${repositoryPath(repository)}/pulls/${Number(pull.number)}`;
+	return { client, path, url: string(pull.html_url), body: typeof pull.body === "string" ? pull.body : "" };
+}
+
+/** The `## Models` record of `branch`'s open PR into `baseRef`, or null when it has no PR. */
+export async function pullModels(
+	root: string,
+	baseRef: string,
+	branch: string,
+	deps: ClaimDependencies,
+): Promise<{ size: string | null; models: string[] } | null> {
+	const pull = await openPull(root, baseRef, branch, deps);
+	return "skipped" in pull ? null : recorded(pull.body);
+}
+
+/** Record `round` in the `## Review` section of its branch's open PR. The edit is the token's user's, which the land gate counts only when that user wrote the PR. */
+export async function recordRound(root: string, round: Round, deps: ClaimDependencies): Promise<Recorded> {
+	const pull = await openPull(root, round.base.ref, round.branch, deps);
+	if ("skipped" in pull) return pull;
+	const next = withReview(pull.body, reviewRecord(round));
+	if (next !== pull.body) await pull.client.request(pull.path, { method: "PATCH", body: { body: next } });
+	return { url: pull.url };
 }

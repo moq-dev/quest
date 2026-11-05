@@ -54,9 +54,10 @@ work it was routed for:
   [moq-dev/quest#361](https://github.com/moq-dev/quest/pull/361).
   - The review efforts follow the PR's size since
     [moq-dev/quest#493](https://github.com/moq-dev/quest/pull/493) (user,
-    2026-11-04): Sol low, medium, high, xhigh, and xhigh for XS to XL, and
-    Opus low, low, medium, high, and high when Sol wrote the code (agent's
-    choice). They replaced Codex `xhigh` and Claude `high` (maintainer,
+    2026-11-04): Sol low, medium, medium, high, and xhigh for XS to XL since
+    the [token waste](/quest/m0/token-waste/README.md) audit (user,
+    2026-11-05; it had high and xhigh for M and L), and Opus low, low,
+    medium, high, and high when Sol wrote the code (agent's choice). They replaced Codex `xhigh` and Claude `high` (maintainer,
     2026-11-03), for which Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
     `/code-review high`, and codex-cli 0.166.0 ran `gpt-6.1-sol` with
     `model_reasoning_effort="xhigh"`, both with `quest review`'s flags.

@@ -2731,6 +2731,7 @@ describe("runner reviews", () => {
 			rationale: "Scored.",
 			findings: (found[round - 1] ?? []) as Round["findings"],
 			earlier: null,
+			unchanged: false,
 		});
 	}
 	const tools = (r: Rig) => r.calls().filter((call) => call.tool);
