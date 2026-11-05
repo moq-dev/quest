@@ -95,51 +95,58 @@ export type Verdict = Pick<Round, "score" | "rationale" | "findings"> & {
 	earlier: { finding: number; disposition: Settled["disposition"]; reason: string }[];
 };
 
-/**
- * The reply a round's last turn must match, settling exactly the last round's `earlier` findings; both CLIs
- * enforce it, and `verdict` checks it again. Without the bound, a first round's reply settles the findings
- * of its own review turn.
- */
-export const schema = (earlier: number) =>
-	({
-		type: "object",
-		additionalProperties: false,
-		required: ["score", "rationale", "findings", "earlier"],
-		properties: {
-			score: { type: "integer", minimum: 0, maximum: 10 },
-			rationale: { type: "string" },
-			findings: {
-				type: "array",
-				items: {
-					type: "object",
-					additionalProperties: false,
-					required: ["file", "line", "severity", "title", "body"],
-					properties: {
-						file: { type: "string" },
-						line: { type: ["integer", "null"] },
-						severity: { type: "string", enum: SEVERITIES },
-						title: { type: "string" },
-						body: { type: "string" },
-					},
-				},
-			},
-			earlier: {
-				type: "array",
-				minItems: earlier,
-				maxItems: earlier,
-				items: {
-					type: "object",
-					additionalProperties: false,
-					required: ["finding", "disposition", "reason"],
-					properties: {
-						finding: { type: "integer", minimum: 1, maximum: Math.max(earlier, 1) },
-						disposition: { type: "string", enum: DISPOSITIONS },
-						reason: { type: "string" },
-					},
+const FINDINGS = {
+	type: "object",
+	additionalProperties: false,
+	required: ["score", "rationale", "findings"],
+	properties: {
+		score: { type: "integer", minimum: 0, maximum: 10 },
+		rationale: { type: "string" },
+		findings: {
+			type: "array",
+			items: {
+				type: "object",
+				additionalProperties: false,
+				required: ["file", "line", "severity", "title", "body"],
+				properties: {
+					file: { type: "string" },
+					line: { type: ["integer", "null"] },
+					severity: { type: "string", enum: SEVERITIES },
+					title: { type: "string" },
+					body: { type: "string" },
 				},
 			},
 		},
-	}) as const;
+	},
+} as const;
+
+const EARLIER = {
+	type: "array",
+	items: {
+		type: "object",
+		additionalProperties: false,
+		required: ["finding", "disposition", "reason"],
+		properties: {
+			finding: { type: "integer", minimum: 1 },
+			disposition: { type: "string", enum: DISPOSITIONS },
+			reason: { type: "string" },
+		},
+	},
+} as const;
+
+/**
+ * The reply a round's last turn must match; both CLIs enforce it, and `verdict` checks it again. Only a
+ * round with the last round's findings to settle has `earlier`: given one, a first round settled its own
+ * review turn's findings there, and bounded to none, it never finished its reply.
+ */
+export const schema = (earlier: number) =>
+	earlier === 0
+		? FINDINGS
+		: {
+				...FINDINGS,
+				required: [...FINDINGS.required, "earlier"],
+				properties: { ...FINDINGS.properties, earlier: EARLIER },
+			};
 
 /**
  * The harness running this command, from the variables each sets for its
@@ -806,7 +813,7 @@ export function verdict(reply: { structured?: unknown; text?: string }, earlier:
 			body: finding.body,
 		};
 	});
-	const answers = fields!.earlier;
+	const answers = earlier === 0 && fields!.earlier === undefined ? [] : fields!.earlier;
 	if (!Array.isArray(answers)) throw new Error("the reviewer's reply has no earlier list");
 	const settled = answers.map((item, index) => {
 		const answer = record(item);
@@ -828,6 +835,11 @@ export function verdict(reply: { structured?: unknown; text?: string }, earlier:
 	const numbers = settled.map((answer) => answer.finding).sort((a, b) => a - b);
 	if (numbers.length !== earlier || numbers.some((n, i) => n !== i + 1)) {
 		throw new Error(`the reviewer's reply does not settle each of the last round's ${earlier} finding(s) once`);
+	}
+	// A finding still open is one this round reports again; one left out of `findings` would read as clean.
+	const open = settled.filter((answer) => answer.disposition === "open").length;
+	if (open > found.length) {
+		throw new Error(`the reviewer's reply keeps ${open} earlier finding(s) open but reports ${found.length}`);
 	}
 	return { score: score as number, rationale: fields!.rationale, findings: found, earlier: settled };
 }
@@ -896,8 +908,7 @@ const SCALE =
 const REPORT =
 	SCALE +
 	" Name each finding's file by its repository-relative path and its line at that head, or null when no single line fits. " +
-	"Its body gives the concrete scenario: the input or state, and the wrong result. Report an empty list when nothing holds. " +
-	"Report `earlier` as an empty list unless earlier findings are listed above.";
+	"Its body gives the concrete scenario: the input or state, and the wrong result. Report an empty list when nothing holds.";
 
 /** The base's REVIEW.md, if it has one. */
 export interface Rules {
@@ -936,7 +947,8 @@ function responseParts(earlier: Finding[], responses: string | undefined): strin
 			`The last review reported these findings, numbered:\n\n<earlier-findings>\n${list}\n</earlier-findings>`,
 			"Settle each in `earlier` by its number: `fixed` when the head fixes it, `refuted` when the author's " +
 				"refutation holds, or `open` when it still holds, reporting it in `findings` again. Give each a " +
-				"one-sentence reason citing the fix, the refutation's evidence, or why it still holds.",
+				"one-sentence reason citing the fix, the refutation's evidence, or why it still holds. Settle only " +
+				"these; a review turn of this session reports this round's findings, never earlier ones.",
 		);
 	}
 	if (responses === undefined) return parts;

@@ -857,9 +857,10 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	expect(second.stdin).toContain("BASE-REVIEW rule");
 	expect(second.stdin).toContain(head);
 	const schema = second.argv[second.argv.indexOf("--output-schema") + 1];
-	expect(JSON.parse(readFileSync(schema, "utf8")).required).toEqual(["score", "rationale", "findings", "earlier"]);
 	// A first round settles nothing, so its own review turn's findings never land in `earlier`.
-	expect(JSON.parse(readFileSync(schema, "utf8")).properties.earlier).toMatchObject({ minItems: 0, maxItems: 0 });
+	const replySchema = JSON.parse(readFileSync(schema, "utf8"));
+	expect(replySchema.required).toEqual(["score", "rationale", "findings"]);
+	expect(replySchema.properties.earlier).toBeUndefined();
 });
 
 fakes("--base reviews against another branch, fetched first, with that branch's instructions", async () => {
@@ -951,7 +952,7 @@ fakes("a later round resumes the session with the new head and the author's resp
 	expect(resumed.argv.slice(0, 2)).toEqual(["exec", "resume"]);
 	expect(resumed.argv.at(-2)).toBe("thread-1");
 	const bounded = JSON.parse(readFileSync(resumed.argv[resumed.argv.indexOf("--output-schema") + 1], "utf8"));
-	expect(bounded.properties.earlier).toMatchObject({ minItems: 1, maxItems: 1 });
+	expect(bounded.required).toEqual(["score", "rationale", "findings", "earlier"]);
 	expect(resumed.stdin).toContain("Fixed at src/lib.ts:1.");
 	expect(resumed.stdin).toContain("<earlier-findings>\n1. high src/lib.ts:2 Off by one\n</earlier-findings>");
 	expect(resumed.stdin).toContain("BASE-REVIEW rule");
@@ -1080,7 +1081,8 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 				"",
 				"- Reviewer: Codex, gpt-6.1-sol, high effort",
 				"- Session: `thread-1`, round 1",
-				`- Head: ${head}`,
+				// The land gate counts a full SHA, which a head with an open finding does not earn.
+				`- Head: ${head.slice(0, 12)}, named in full once a round reports no findings`,
 				`- Base: origin/main at ${base.slice(0, 12)}`,
 				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
 				"- Findings, open until the next round settles them:",
@@ -1111,7 +1113,9 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 		expect(second.code).toBe(0);
 		expect(JSON.parse(second.stdout).record).toEqual({ url: "https://github.com/acme/widget/pull/7" });
 		const record = pull.body.split("## Review\r\n\n")[1]!.split("\n\n## Models")[0];
-		expect(record).toContain(`- Session: \`thread-1\`, round 2\n- Head: ${git(s.repo, "rev-parse", "HEAD")}\n`);
+		expect(record).toContain(
+			`- Session: \`thread-1\`, round 2\n- Head: ${git(s.repo, "rev-parse", "HEAD").slice(0, 12)},`,
+		);
 		expect(record).toContain("- Score: 9/10, `Fixes #3.`\n");
 		expect(record).toContain(
 			`  - High, \`src/lib.ts\`: \`\`Ping @someone about \`${base.slice(0, 12)}\` in #12\`\`\n`,
@@ -1119,7 +1123,7 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 		expect(record).toContain(
 			`- The last round's findings, at ${head.slice(0, 12)}:\n  - Refuted: high, \`src/lib.ts:2\`: \`Off by one\`; \`Checked against the head.\``,
 		);
-		expect(record.match(/\b[0-9a-f]{40}\b/g)).toEqual([git(s.repo, "rev-parse", "HEAD")]);
+		expect(record).not.toMatch(/\b[0-9a-f]{40}\b/);
 		expect(pull.body.startsWith("Fixes averaging.\r\n\r\n## Review\r\n\nRewritten")).toBe(true);
 		expect(writes).toHaveLength(2);
 	} finally {
@@ -1144,6 +1148,8 @@ fakes("a branch with no open PR, or a body without a Review section, is reported
 		expect(pulls[0]!.body).toMatch(
 			/^## Review\n\nRewritten by `quest review` after each round\.\n[\s\S]*- Findings: none\n/,
 		);
+		// A round with no findings names its head in full, which the land gate counts.
+		expect(pulls[0]!.body.match(/\b[0-9a-f]{40}\b/g)).toEqual([git(s.repo, "rev-parse", "HEAD")]);
 	} finally {
 		vi.unstubAllGlobals();
 	}
@@ -1219,9 +1225,17 @@ test("the verdict is checked field by field, settling each earlier finding once"
 	const refuted = { finding: 2, disposition: "refuted", reason: "The maintainer decided it." };
 	const answered = { ...scored, findings: [], earlier: [refuted, fixed] };
 	expect(verdict({ structured: answered }, 2).earlier).toEqual([refuted, fixed]);
-	expect(() => verdict({ structured: { ...scored, findings: [], earlier: undefined } }, 0)).toThrow(
+	// A first round's schema has no `earlier`; a later one's requires it.
+	expect(verdict({ structured: { ...scored, findings: [], earlier: undefined } }, 0).earlier).toEqual([]);
+	expect(() => verdict({ structured: { ...scored, findings: [], earlier: undefined } }, 1)).toThrow(
 		"no earlier list",
 	);
+	// A finding kept open is reported again, so a reply cannot keep one open and read as clean.
+	const open = { ...fixed, disposition: "open" };
+	expect(() => verdict({ structured: { ...scored, findings: [], earlier: [open] } }, 1)).toThrow(
+		"keeps 1 earlier finding(s) open but reports 0",
+	);
+	expect(verdict({ structured: { ...scored, findings: [FINDING], earlier: [open] } }, 1).earlier).toEqual([open]);
 	// Each of the last round's findings is settled exactly once, by its number.
 	for (const earlier of [[fixed], [fixed, fixed], [fixed, { ...refuted, finding: 3 }]]) {
 		expect(() => verdict({ structured: { ...scored, findings: [], earlier } }, 2)).toThrow("settle each");

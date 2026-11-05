@@ -8,7 +8,7 @@ const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", co
 
 /**
  * Model text as one inline code span, so a mention, issue reference, or Markdown in it renders as text.
- * The land gate counts every full SHA the section names, so only the reviewed head appears in full.
+ * The land gate counts every full SHA the section names, so no full SHA appears in it.
  */
 function code(text: string): string {
 	const flat = text
@@ -29,7 +29,8 @@ export function reviewRecord(round: Round): string {
 		"",
 		`- Reviewer: ${HARNESSES[round.reviewer]}, ${round.model}, ${round.effort} effort`,
 		`- Session: ${code(round.session)}, round ${round.round}`,
-		`- Head: ${round.head}`,
+		// The land gate counts a full SHA here as a review of that head, which an open finding has not passed.
+		`- Head: ${round.findings.length === 0 ? round.head : `${round.head.slice(0, 12)}, named in full once a round reports no findings`}`,
 		`- Base: ${round.base.ref} at ${round.base.sha.slice(0, 12)}`,
 		`- Score: ${round.score}/10, ${code(round.rationale)}`,
 	];

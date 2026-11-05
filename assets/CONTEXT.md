@@ -137,7 +137,7 @@ List them as `Size: M` and one `Implementer: Codex, gpt-6.1-sol, high effort` li
 Read your model and effort rather than guess: Claude Code knows its model and exports `CLAUDE_EFFORT`; Codex records `model` and `effort` in the last `turn_context` of `~/.codex/sessions/*/*/*/rollout-*-$CODEX_THREAD_ID.jsonl`; Grok records `model_id` and `reasoning_effort` in `~/.grok/sessions/*/$GROK_SESSION_ID/chat_history.jsonl`.
 Write `unknown` for any you cannot find.
 The PR body's `## Review` section records the latest round, or the skip and its reason.
-`quest review` rewrites it after each round on a branch with an open PR: the reviewer harness, model, and effort, the session and round, the reviewed head SHA and base, the score out of 10 with its rationale, and each finding with its location and disposition, which the next round settles from your responses as fixed, refuted with the reason, or still open.
+`quest review` rewrites it after each round on a branch with an open PR: the reviewer harness, model, and effort, the session and round, the reviewed head and base, naming the head's full SHA only once a round reports no findings, the score out of 10 with its rationale, and each finding with its location and disposition, which the next round settles from your responses as fixed, refuted with the reason, or still open.
 Open the draft PR before the first round, and write a round's record by hand only when the round printed `record skipped`, as on another author's fork; add context only after the record, since the next round rewrites the section.
 Never block on a score: the findings and their refutations decide when the review is done.
 A review counts for the head whose SHA it names.

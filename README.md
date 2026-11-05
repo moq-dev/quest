@@ -1136,7 +1136,8 @@ decide when the loop ends. Later rounds resume the same session with the new hea
 reported findings requires. A refutation stands only when it cites evidence the
 reviewer can check. The prompt numbers the last round's findings, and the reply
 settles each by its number as fixed, refuted, or still open, with a one-sentence
-reason; a reply that skips or repeats one fails like any malformed reply. A resumed session keeps the instructions it started with,
+reason; a reply that skips or repeats one, or keeps more open than it reports,
+fails like any malformed reply. A first round's schema has no such list. A resumed session keeps the instructions it started with,
 so a round whose applicable `AGENTS.md` or `CLAUDE.md` files changed starts a
 new session instead, which still weighs the responses. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
@@ -1177,11 +1178,12 @@ After each round, `quest review` rewrites the `## Review` section of the open PR
 from the branch into the base, found among the upstream's PRs from the
 repository the base's remote pushes to, and prints `record <url>`. The record
 names the reviewer harness, model, and effort, the session and round, the
-reviewed head's full SHA and the base's short one, the score and rationale, each
-finding with its location, and the last round's findings with their
-dispositions. Model text appears as inline code, so it mentions or links
-nothing, and only the reviewed head's SHA appears in full, since the land gate
-counts every full SHA the section names. The section runs to the next level-1 or
+reviewed head, the base's short SHA, the score and rationale, each finding with
+its location, and the last round's findings with their dispositions. The land
+gate counts every full SHA the section names as a review of that head, so the
+head appears in full only once a round reports no findings, and model text
+appears as inline code, which mentions or links nothing and never holds a full
+SHA. The section runs to the next level-1 or
 level-2 heading; the rest of the body stays as written, and a body without one
 gains it at the end. With no such PR, or a remote off GitHub, it changes nothing
 and prints `record skipped: <why>`. It edits as the user the GitHub token names
