@@ -85,9 +85,10 @@ export function remove(sources: Source[], deleted: (path: string) => boolean): M
 		const path = target(entry);
 		return path !== null && deleted(path);
 	};
+	// Only a quest that exists is held: a mistyped link stays for `quest check` to report.
 	const held = (doc: Doc, entry: Entry) => {
 		const path = target(entry);
-		return entry.section === "Required" && path !== null && holds(doc.path, path);
+		return entry.section === "Required" && path !== null && texts.has(path) && holds(doc.path, path);
 	};
 	for (let progress = true; progress;) {
 		progress = false;

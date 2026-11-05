@@ -147,22 +147,28 @@ describe("remove", () => {
 	});
 
 	// An epic waits for everything in its directory, so its links to those quests
-	// are the child lists this format retired. A sibling's link is a real blocker.
+	// are the child lists this format retired. A sibling's link is a real blocker,
+	// and a link to no quest is a mistake for the check to report.
 	test("drops an epic's Required links to quests it holds, at any depth", () => {
 		const readme =
 			"# Epic\n\n## Goal\n\nG.\n\n## Required\n\n- [A](/quest/m0/epic/a.md)\n" +
-			"- [Outside](/quest/m0/outside.md)\n- [Deep](/quest/m0/epic/sub/deep.md)\n\n## Related\n\n- [A](/quest/m0/epic/a.md)\n";
+			"- [Outside](/quest/m0/outside.md)\n- [Deep](/quest/m0/epic/sub/deep.md)\n- [Typo](/quest/m0/epic/typo.md)\n\n" +
+			"## Related\n\n- [A](/quest/m0/epic/a.md)\n";
 		const sibling = "# [S] B\n\n## Goal\n\nG.\n\n## Required\n\n- [A](/quest/m0/epic/a.md)\n";
+		const quest = (title: string) => `# [S] ${title}\n\n## Goal\n\nG.\n`;
 		const texts = remove(
 			[
 				{ path: "quest/m0/epic/README.md", text: readme },
+				{ path: "quest/m0/epic/a.md", text: quest("A") },
 				{ path: "quest/m0/epic/b.md", text: sibling },
+				{ path: "quest/m0/epic/sub/deep.md", text: quest("Deep") },
 			],
 			() => false,
 		);
 		expect([...texts.keys()]).toEqual(["quest/m0/epic/README.md"]);
 		expect(texts.get("quest/m0/epic/README.md")).toBe(
-			"# Epic\n\n## Goal\n\nG.\n\n## Required\n\n- [Outside](/quest/m0/outside.md)\n\n## Related\n\n- [A](/quest/m0/epic/a.md)\n",
+			"# Epic\n\n## Goal\n\nG.\n\n## Required\n\n- [Outside](/quest/m0/outside.md)\n- [Typo](/quest/m0/epic/typo.md)\n\n" +
+				"## Related\n\n- [A](/quest/m0/epic/a.md)\n",
 		);
 	});
 });
