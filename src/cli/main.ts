@@ -1002,17 +1002,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reviewer's own review (`codex exec review` with custom instructions, or Claude Code's " +
 				"`/code-review <effort> <merge-base>...HEAD` with text after it), given the range, the base's REVIEW.md, if " +
 				"any, and any responses up front, then resumes that session for one turn that reports the review in one " +
-				"JSON schema without reading anything again. Later rounds on the branch resume the " +
-				"same session with the new head and --responses, the author's fixes and refutations of the last " +
-				"round's findings, required while that round reported any, and check only what changed since the last " +
-				"round's head and those findings, or the whole change again once REVIEW.md changed or the change starts " +
-				"from a merge base the last round did not cover; the reply settles each of those findings, by " +
-				"its number in the prompt, as fixed, refuted, or still open. A round on the head the last round " +
-				"reviewed, from the same merge base with the same model and effort, when that round found nothing and " +
-				"the instructions and REVIEW.md are unchanged, runs no " +
-				"reviewer and repeats that round, marked unchanged. A resumed session keeps the instructions it " +
-				"started with, so when the applicable AGENTS.md or CLAUDE.md files change, the round starts a new " +
-				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"JSON schema without reading anything again. --responses gives the author's fixes and refutations of " +
+				"the last round's findings, required while that round reported any; the reply settles each of those " +
+				"findings, by its number in the prompt, as fixed, refuted, or still open. A later round resumes the " +
+				"session and checks only what changed since the last round's head and those findings when nothing " +
+				"but the head changed: the same model, effort, and base, a merge base the last round's covers, as " +
+				"when the base moved on, and the same applicable AGENTS.md, CLAUDE.md, and REVIEW.md. Otherwise it " +
+				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
+				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
+				"repeats that round, marked unchanged. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +

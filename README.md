@@ -1137,20 +1137,19 @@ is the wrong approach. A head with no findings can still score below 10. A
 reply without a valid score fails like any malformed reply. Each finding is
 high, medium, or low severity; low is anything that would not block landing.
 The score informs; the findings and their refutations still decide when the
-loop ends. Later rounds resume the same session with the new head and
-`--responses`, the author's free-text fixes and refutations, which a round that
-reported findings requires, and check only what changed since the last round's
-head and its findings, or the whole change again once `REVIEW.md` changed or
-the change starts from a merge base the last round did not cover. A round on
-the head the last round reviewed, from the same merge base with the same model
-and effort, when that round found nothing and the instructions and `REVIEW.md`
-are unchanged, runs no reviewer and repeats that round, marked `unchanged`. A refutation stands only when it cites evidence the
+loop ends. Later rounds take `--responses`, the author's free-text fixes and
+refutations, which a round that reported findings requires. A later round
+resumes the session and checks only what changed since the last round's head
+and its findings when nothing but the head changed: the same model, effort, and
+base, a merge base the last round's covers, as when the base moved on, and the
+same applicable `AGENTS.md`, `CLAUDE.md`, and `REVIEW.md`. Otherwise it starts a
+new session that reviews the whole change and still weighs the responses. A
+round that would resume on the head the last round reviewed, when that round
+found nothing, runs no reviewer and repeats that round, marked `unchanged`. A refutation stands only when it cites evidence the
 reviewer can check. The prompt numbers the last round's findings, and the reply
 settles each by its number as fixed, refuted, or still open, with a one-sentence
 reason; a reply that skips or repeats one, or keeps more open than it reports,
-fails like any malformed reply. A first round's schema has no such list. A resumed session keeps the instructions it started with,
-so a round whose applicable `AGENTS.md` or `CLAUDE.md` files changed starts a
-new session instead, which still weighs the responses. Resuming keeps the
+fails like any malformed reply. A first round's schema has no such list. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. The session is kept per branch in the clone's
 common Git directory, so any worktree of the clone resumes it; `--new` starts
@@ -1180,7 +1179,7 @@ after upgrading either CLI. The base is fetched first, since
 the sandbox has no network. The reviewer follows the base's `AGENTS.md` and `CLAUDE.md`, at the
 root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
-given every round, and chooses the review's stance, such as adversarial.
+given at the start of each session, and chooses the review's stance, such as adversarial.
 
 It prints the reviewer, model, and effort, the size and its source, session, round, base, head,
 an `unchanged` line for a repeated round, a `usage` line per turn (input tokens, the part read from the prompt cache, and output), the

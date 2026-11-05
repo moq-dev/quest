@@ -299,9 +299,9 @@ interface State {
 	/** The session's last round, which a round on the same head with nothing to settle repeats. */
 	last: Round;
 	/**
-	 * Digests of the instruction files the session started with, and the
-	 * REVIEW.md it was last given. A resumed session keeps its first system or
-	 * developer instructions, so a change to the files starts a new session.
+	 * Digests of the instruction files and the REVIEW.md the session started
+	 * with. A resumed session keeps its first instructions and rules, so a change
+	 * to either starts a new session.
 	 */
 	given: { instructions: string; rules: string | null };
 }
@@ -967,19 +967,6 @@ export interface Rules {
 	text: string;
 }
 
-/**
- * The base's review rules, given every round since the base may move between
- * rounds. They take precedence over the built-in review's defaults.
- */
-function rulesParts(rules: Rules | null): string[] {
-	if (rules === null) return [];
-	return [
-		`The repository's review rules follow, read from REVIEW.md at the base branch's tip ${rules.sha}. ` +
-			"They take precedence over the review's defaults: drop the findings they exclude, and check anything they ask for.",
-		`<review-rules>\n${rules.text}\n</review-rules>`,
-	];
-}
-
 /** Where a finding is: its `path:line`, or its path when no single line fits. */
 export const located = (finding: Finding) => (finding.line === null ? finding.file : `${finding.file}:${finding.line}`);
 
@@ -1034,7 +1021,14 @@ function scope({ base, mergeBase, head }: Change): string {
 export function reviewPrompt(change: Change, rules: Rules | null, earlier: Finding[] = [], responses?: string): string {
 	return [
 		scope(change),
-		...rulesParts(rules),
+		// The rules outrank the built-in review's defaults; a session that resumes keeps them.
+		...(rules === null
+			? []
+			: [
+					`The repository's review rules follow, read from REVIEW.md at the base branch's tip ${rules.sha}. ` +
+						"They take precedence over the review's defaults: drop the findings they exclude, and check anything they ask for.",
+					`<review-rules>\n${rules.text}\n</review-rules>`,
+				]),
 		...(earlier.length > 0 ? [earlierList(earlier), settling("in your review")] : []),
 		...responseParts(responses),
 		`${SEVERITY} End with a score from 0 to 10 for how ready the head is to land, and one sentence on why.`,
@@ -1051,46 +1045,27 @@ export function reportPrompt(head: string, earlier: Finding[] = []): string {
 	].join("\n\n");
 }
 
-/** What a later round tells the resumed session. */
+/** What a later round tells the resumed session, which reviewed the same range under the same rules. */
 export interface LaterRound extends Change {
 	previous: string;
 	/** The findings of the review of `previous`. */
 	earlier: Finding[];
 	responses?: string;
-	rules: Rules | null;
-	/** The session was last given other REVIEW.md rules, or none. */
-	rulesChanged: boolean;
-	/** The change starts at a merge base the last review's change did not cover, such as from another base. */
-	rangeGrew: boolean;
 }
 
 /**
- * A later round's only turn: check what changed since the last review and the open findings under the base's
- * current rules, weighing the author's responses. The rest of the change was reviewed already, unless the
- * rules or the change's range changed since, when the whole change is checked again.
+ * A later round's only turn: check what changed since the last review and the open findings, weighing the
+ * author's responses. The rest of the change was reviewed already, by this reviewer under these rules.
  */
 export function laterPrompt(round: LaterRound): string {
 	const { head, previous, responses } = round;
-	const parts = [`The branch is now at ${head}; your last review covered ${previous}.`, scope(round)];
-	if (round.rangeGrew) {
-		parts.push(
-			"The change now starts from a merge base your last review did not cover, so review the whole change again.",
-		);
-	} else if (round.rulesChanged) {
-		parts.push(
-			round.rules === null
-				? "The base no longer has a REVIEW.md, so the review rules you were given no longer apply: review the " +
-						"whole change again for anything they had excluded."
-				: "The base's REVIEW.md changed since your last review, so review the whole change again against the " +
-						"rules below wherever they differ from the ones you were given before.",
-		);
-	}
-	parts.push(
-		`Otherwise, check only what changed since ${previous} and the findings below; the rest of the change was ` +
-			`reviewed already. \`git diff ${previous} ${head}\` shows what changed, along with any base commits ` +
-			"merged in since, which are not part of the change.",
-		...rulesParts(round.rules),
-	);
+	const parts = [
+		`The branch is now at ${head}; your last review covered ${previous}.`,
+		scope(round),
+		`Check only what changed since ${previous} and the findings below; the rest of the change was reviewed ` +
+			`already. \`git diff ${previous} ${head}\` shows what changed, along with any base commits merged in ` +
+			"since, which are not part of the change.",
+	];
 	if (round.earlier.length > 0) parts.push(earlierList(round.earlier), settling("in `earlier`"));
 	parts.push(
 		...responseParts(responses),
@@ -1251,23 +1226,23 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const rules = exists(root, baseSha, "REVIEW.md") ? { sha: baseSha, text: show(root, baseSha, "REVIEW.md") } : null;
 	// Digests of content only, so a base that moved without changing them restates nothing.
 	const given = { instructions: digest(JSON.stringify(files)), rules: rules && digest(rules.text) };
-	// A resumed session would keep instructions the base or the change has since replaced.
-	const resume = previous !== undefined && state?.given.instructions === given.instructions;
-
-	// The last round already passed this head under these rules and this reviewer, and has nothing left to settle.
+	// A round checks only what changed since the last one when nothing but the head changed: the same
+	// reviewer, base, instructions, and REVIEW.md, and a range the last round's covers. Anything else starts
+	// a new session that reviews the whole change, since a resumed one keeps its first instructions.
 	const last = state?.last;
-	if (
-		resume &&
-		previous!.head === head &&
-		previous!.mergeBase === mergeBase &&
-		earlier.length === 0 &&
-		state!.given.rules === given.rules &&
+	const resume =
+		previous !== undefined &&
 		last !== undefined &&
+		state!.given.instructions === given.instructions &&
+		state!.given.rules === given.rules &&
 		last.model === picked.model &&
 		last.effort === picked.effort &&
-		last.base.ref === baseRef
-	) {
-		return { ...last, usage: [], unchanged: true };
+		last.base.ref === baseRef &&
+		covers(root, previous.mergeBase, mergeBase);
+
+	// The last round already passed this head, and has nothing left to settle.
+	if (resume && previous!.head === head && previous!.mergeBase === mergeBase && earlier.length === 0) {
+		return { ...last!, usage: [], unchanged: true };
 	}
 
 	const cli = await prepare(harness, root, deps.env, options.signal);
@@ -1302,9 +1277,6 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			previous: previous!.head,
 			earlier,
 			responses: options.responses,
-			rules,
-			rulesChanged: state!.given.rules !== given.rules,
-			rangeGrew: !covers(root, previous!.mergeBase, mergeBase),
 		});
 		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
 	}
