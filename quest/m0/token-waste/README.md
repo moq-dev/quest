@@ -35,7 +35,26 @@ Decision prompts, chosen options marked ✅:
 - Milestone: ✅ m0 (rejected: m1).
 - Online reviewers: ✅ keep CodeRabbit and Pullfrog, which are free
   (rejected: drop them).
-- Rules to hooks or lint: ✅ not planned (rejected: plan it now).
+- Rules to hooks or lint: first not planned, then ✅ planned the same day
+  (user, adopting practices from the research below).
+- Adopted 2026-11-05 (user) from a survey of AI-heavy developers' setups
+  (Theo's tstack, jdx's jouet, Matt Pocock's skills, HumanLayer, Mitchell
+  Hashimoto), chosen ✅ and rejected listed:
+  - ✅ Mechanical rules become hooks or lint, so their prose leaves the
+    always-loaded rules ([rule checks](/quest/m0/token-waste/rule-checks.md)).
+  - ✅ A review round budget by severity, after Theo's `sol-loop`
+    ([single-pass review](/quest/m0/token-waste/review-single-pass.md)).
+  - ✅ `quest usage` moves from m1 into this epic, so its closing
+    re-measure is one command instead of a multi-agent audit (this audit took
+    four agents about 650k tokens). Try jdx's `jouet audit` first and say why
+    `quest usage` still earns its place.
+  - ✅ Codex compacts at 240k, half its window, in the maintainer's dotfiles
+    (outside this tree).
+  - Rejected: `disable-model-invocation` on user-only skills (Claude-only,
+    small payoff); Ralph loops (greenfield only); the superpowers suite
+    (overlaps quest); octopool (heavy to run); a test-runner sub-agent
+    (large tool outputs were not a measured cost); evals for skill text
+    (later).
 - Applied outside the tree the same day: Claude's auto-compact window is
   400k for Opus (`modelSettings.claude-opus-5-5.autoCompactWindow`, the
   value the Claude Code team recommends), and `BASH_MAX_TIMEOUT_MS` is
@@ -54,8 +73,9 @@ Decision prompts, chosen options marked ✅:
 - [Coordinators and waits](/quest/m0/token-waste/coordinator-waits.md) - coordinators lean on compaction, children report briefly, and waits block
 - [Epics list no children](/quest/m0/token-waste/child-lists.md) - an epic's children are its directory, so finishing a quest edits no README
 - [Base merges only when needed](/quest/m0/token-waste/base-merges.md) - a branch merges its base on a conflict, not before every queue attempt
+- [Mechanical rules become checks](/quest/m0/token-waste/rule-checks.md) - hooks enforce em dashes, push refspecs, no rebase or force-push, the footer, and `.tmp/`, and their prose leaves the always-loaded rules
+- [quest usage](/quest/m0/token-waste/usage.md) - per quest and PR: which models and efforts worked on it, their tokens and API-equal cost, and how the work went; the epic's re-measure runs it
 
 ## Related
 
-- [Usage reports](/quest/m1/usage.md) - `quest usage` will report these numbers from session logs
 - [Model check](/quest/m0/model-check.md) - audits the size tables the review quest changes

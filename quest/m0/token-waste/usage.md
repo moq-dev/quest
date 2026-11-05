@@ -15,7 +15,9 @@ tallies from it.
 
 Decided 2026-11-04 (user, /quest-plan):
 
-- Which milestone? ✅ m1 (rejected: a new m3, m2)
+- Which milestone? ✅ m1 (rejected: a new m3, m2). Moved to m0's
+  [token waste](/quest/m0/token-waste/README.md) epic on 2026-11-05 (user),
+  whose closing re-measure runs it.
 - Where is it seen?
   - ✅ A `quest usage` CLI first, working without kix; a kix page can
     follow as its own quest

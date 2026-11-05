@@ -9,7 +9,7 @@ record. Whatever reads the PR's implementers reads the PR body's `## Models`
 section plus that comment: the `--exclude-model` rule in `quest context`'s
 Reviews section, so a local review never picks a model a kix session coded
 with, the [model check](/quest/m1/model-check.md), and
-[`quest usage`](/quest/m1/usage.md). The PR body and its `## Review` record
+[`quest usage`](/quest/m0/token-waste/usage.md). The PR body and its `## Review` record
 stay untouched.
 
 ## Plan
@@ -44,7 +44,7 @@ Implementation guidance:
   publication and let the Worker post it.
 - Readers take the marked comment only when a GitHub App wrote it, since
   any commenter can copy a hidden marker.
-- Update `quest/m1/model-check.md` and `quest/m1/usage.md` to read the
+- Update `quest/m1/model-check.md` and `quest/m0/token-waste/usage.md` to read the
   comment too, and `quest context`'s `## Models` rule and its
   `--exclude-model` rule ("each implementing model the PR body records")
   to name it.
