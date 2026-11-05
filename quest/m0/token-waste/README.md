@@ -75,7 +75,7 @@ Decision prompts, chosen options marked ✅:
 - [Base merges only when needed](/quest/m0/token-waste/base-merges.md) - a branch merges its base on a conflict, not before every queue attempt
 - [Mechanical rules become checks](/quest/m0/token-waste/rule-checks.md) - hooks enforce em dashes, push refspecs, no rebase or force-push, the footer, and `.tmp/`, and their prose leaves the always-loaded rules
 - [quest usage](/quest/m0/token-waste/usage.md) - per quest and PR: which models and efforts worked on it, their tokens and API-equal cost, and how the work went; the epic's re-measure runs it
-- [token-max](/quest/m0/token-waste/token-max.md) - a standalone Rust CLI that replays Claude Code and Codex transcripts against API prices and recommends cache TTL, compaction, and Bash cap settings
+- [Point to token-max](/quest/m0/token-waste/token-max.md) - `SETUP.md` recommends the standalone settings doctor, and the re-measure runs it
 
 ## Related
 
