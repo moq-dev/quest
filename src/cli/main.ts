@@ -163,14 +163,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"first: a stale base can predate the quest and skip it.\n\n" +
 				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
 				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
-				"does, such as the quests a merged base finished, with any heading left empty. It prints M for each " +
-				"edited document and leaves the edits unstaged. A quest moved rather than deleted, a link that never " +
-				"named a quest, and a link in prose stay for the check to report. Refuses outside a git work tree " +
-				"and while a quest file has unresolved conflicts.",
+				"does, such as the quests a merged base finished, and every epic's Required entry naming a quest in " +
+				"its own directory, which the epic already waits for, with any heading left empty. It prints M for " +
+				"each edited document and leaves the edits unstaged. A quest moved rather than deleted, a link that " +
+				"never named a quest, and a link in prose stay for the check to report. Refuses outside a git work " +
+				"tree and while a quest file has unresolved conflicts.",
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
-		.option("--fix", "First drop list links to quests the history deleted")
+		.option("--fix", "First drop list links to quests the history deleted, and epics' links to their own quests")
 		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
@@ -245,7 +246,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("unblocked")
 		.summary("Rank ready quests, or print what blocks one quest")
 		.description(
-			"Rank ready quests by milestone priority, distinct transitive dependents, then tree order. " +
+			"Rank ready quests by milestone priority, distinct transitive dependents, then path order. " +
 				"Given a path, print what blocks that quest instead.\n\n" +
 				"Counts exclude structural epic membership. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
@@ -332,7 +333,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"List every quest with a ## Waiting section and every open draft PR handed back with one (or the " +
 				"older ## Decisions needed): those waiting on the maintainer first, then milestone priority, distinct " +
-				"transitive dependents as quest unblocked counts them, ready before blocked, then tree order, with " +
+				"transitive dependents as quest unblocked counts them, ready before blocked, then path order, with " +
 				"drafts after quests by PR number. A draft ranks as the quest its branch carries, or last when it " +
 				"carries none. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
 				"followed by the condition and how to check or advance it. A draft's item without a party, and every " +
@@ -1186,8 +1187,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"root-absolute link to it under quest/. The change is staged.\n\n" +
 				"Refuses the root epic and milestones, which are permanent. Refuses outside a git work tree, when " +
 				"the destination exists, and while a moved quest has a claim branch or open PR on origin, or on " +
-				"the upstream that holds origin's claims (see quest start), since the old branch would no longer name it. Moving a " +
-				"quest into or out of an epic changes which epic lists it; the check afterwards reports what to fix.\n\n" +
+				"the upstream that holds origin's claims (see quest start), since the old branch would no longer name it. A " +
+				"quest belongs to the epic whose directory holds it, so moving it into another directory moves it " +
+				"into that epic.\n\n" +
 				"Prints R for the move and M for each edited document. Mentions of the old path that are not links, " +
 				"or are outside quest/, are reported on stderr and left alone. Runs quest check on the result and " +
 				"exits 1 if it fails.",
@@ -1210,8 +1212,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Delete a quest, or an epic and the quests under it, with git rm, and drop every Required, Related, " +
 				"or Closes entry that links to it, with any heading left empty. It also drops every Required link to a " +
-				"finished milestone, one whose README has no Required left, except the root's own listing. The change " +
-				"is staged.\n\n" +
+				"finished milestone, one whose directory holds no other quest and whose README has no Required left, " +
+				"and every epic's Required entry naming a quest in its own directory. The change is staged.\n\n" +
 				"Refuses outside a git work tree. An epic is its directory or README; removing one that holds other " +
 				"quests requires -r. The root epic and milestones are permanent.\n\n" +
 				"Prints D for each deleted quest and M for each edited document. Mentions that are not list entries, " +

@@ -9,11 +9,11 @@ GitHub issues remain the untrusted public front door, while quests provide durab
 
 A **quest** is a Markdown file, completed in one PR.
 
-An **epic** is a directory that consists of multiple quests.
-The `README.md` file is the quest and the `Required` section lists the children.
+An **epic** is a directory of quests.
+Its children are the quest files in it and the epics one level down; its `README.md` is the epic's own work and lists none of them.
 It completes when its own work is done and every child has merged.
 
-The root's entries are special epics called **milestones** (`m0`, `m1`, ...) that group work by priority horizon.
+The directories under `quest/` are special epics called **milestones** (`m0`, `m1`, ...) that group work by priority horizon.
 Milestones are permanent.
 
 Quests are linked with root-absolute paths.
@@ -45,9 +45,8 @@ Current decisions, open questions, or implementation guidance.
 
 ## Required
 
-- [Child quest](/quest/foo/bar.md) - the outcome, so the list reads without opening it
-- [Nested epic](/quest/foo/baz/README.md) - what the whole epic delivers
-- [Blocker](/quest/bar.md) - work that must finish before this can start
+- [Blocker](/quest/foo/bar.md) - what it delivers that this needs, so the list reads without opening it
+- [Epic blocker](/quest/baz/README.md) - an epic finishes with all of its children
 
 ## Closes
 
@@ -63,14 +62,15 @@ The `Goal` section is required; everything else is optional. Use these exact hea
 Size the title `[XS]` to `[XL]` by the agent's effort to implement, verify, and land it, judgment included.
 Much code that is mechanical stays small, such as applying one rename the same way across the tree, sized XS.
 Little code that is mostly judgment is larger, such as a 30-line rewording of a skill, sized M rather than XS.
-An epic carries no size until its last child is removed; its README is then the epic's remaining work.
+An epic carries no size until its last child is deleted; its README is then the epic's remaining work.
 
 `Waiting` lists what the work waits on outside the tree; each item opens with who acts, `Maintainer:` or the outside party, before a colon.
 A decision item gives its options and a recommendation.
 Remove an item once its condition clears, and the heading with its last item.
 
-`Required` lists the quests that must finish before the work starts.
-The list is ordered by priority, inserted at rank.
+`Required` lists the quests that must finish before the work starts; an epic's never lists its own quests, which it already waits for.
+A child that must precede a sibling is in that sibling's `Required`.
+Nothing else orders work within a milestone: `quest unblocked` ranks it by downstream impact, then path.
 When the section is empty, delete it; the quest is now unblocked.
 `Required` must be acyclic.
 

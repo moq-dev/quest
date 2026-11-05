@@ -92,9 +92,9 @@ work it was routed for:
     which passes `--ignore-user-config`) nor `quest agent` used Codex hooks,
     and `quest init` installs none. Recheck if either starts to.
 - The PR that finishes this run creates the next milestone's run the same
-  way: listed in that milestone's `Required`, requiring this milestone's
-  README, carrying forward the model ids and efforts it found, the routing
-  tallies as a baseline, and anything to check first.
+  way: in that milestone's directory, requiring this milestone's README,
+  carrying forward the model ids and efforts it found, the routing tallies
+  as a baseline, and anything to check first.
 
 ## Required
 

@@ -84,16 +84,8 @@ try {
 			for (const skill of skills)
 				assertFile(root, `${dir}/quest-${skill}/SKILL.md`, run(root, "skill", skill, "--stub"));
 		}
-		write(
-			root,
-			"quest/README.md",
-			"# Lifecycle\r\n\r\n## Goal\r\n\r\nKeep plans.\r\n\r\n## Required\r\n\r\n- [First](/quest/m0/README.md)\r\n",
-		);
-		write(
-			root,
-			"quest/m0/README.md",
-			"# First\r\n\r\n## Goal\r\n\r\nA milestone.\r\n\r\n## Required\r\n\r\n- [One](/quest/m0/one.md)\r\n- [Two](/quest/m0/two.md)\r\n",
-		);
+		write(root, "quest/README.md", "# Lifecycle\r\n\r\n## Goal\r\n\r\nKeep plans.\r\n");
+		write(root, "quest/m0/README.md", "# First\r\n\r\n## Goal\r\n\r\nA milestone.\r\n");
 		write(root, "quest/m0/one.md", "# [S] One\r\n\r\n## Goal\r\n\r\nFirst.\r\n");
 		write(
 			root,

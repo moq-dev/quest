@@ -10,7 +10,7 @@ import { move, remove } from "../src/core";
 import { openPullRequests } from "../src/cli/claims";
 import { GitHub, type GitHubDependencies } from "../src/cli/github";
 import { main } from "../src/cli/main";
-import { EPIC_README, ROOT_README, Tree, initRepository, tempDir } from "./fixture";
+import { EPIC_README, M0_README, ROOT_README, Tree, initRepository, tempDir } from "./fixture";
 
 // Each test spawns git up to a dozen times, which a busy Windows runner can stretch past 5 s.
 vi.setConfig({ testTimeout: 30_000 });
@@ -63,22 +63,23 @@ describe("move", () => {
 		const moved = move(
 			[
 				{
-					path: "quest/m0/README.md",
-					text: "# M0\n\n## Goal\n\nG.\n\n## Required\n\n- [E](/quest/m0/e/README.md)\n",
+					path: "quest/m0/next.md",
+					text: "# [S] Next\n\n## Goal\n\nG.\n\n## Required\n\n- [E](/quest/m0/e/README.md)\n",
 				},
-				{
-					path: "quest/m0/e/README.md",
-					text: "# E\n\n## Goal\n\nG.\n\n## Required\n\n- [A](/quest/m0/e/a.md)\n",
-				},
+				{ path: "quest/m0/e/README.md", text: "# E\n\n## Goal\n\nG.\n" },
 				{ path: "quest/m0/e/a.md", text: "# [S] A\n\n## Goal\n\nG.\n" },
+				{
+					path: "quest/m0/e/b.md",
+					text: "# [S] B\n\n## Goal\n\nG.\n\n## Required\n\n- [A](/quest/m0/e/a.md)\n",
+				},
 				{ path: "quest/m0/elsewhere.md", text: "# [S] X\n\n## Related\n\n- [E2](/quest/m0/e2.md)\n" },
 			],
 			"quest/m0/e",
 			"quest/m1/e",
 		);
-		expect([...moved.texts.keys()]).toEqual(["quest/m0/README.md", "quest/m1/e/README.md"]);
-		expect(moved.texts.get("quest/m0/README.md")).toContain("- [E](/quest/m1/e/README.md)\n");
-		expect(moved.texts.get("quest/m1/e/README.md")).toContain("- [A](/quest/m1/e/a.md)\n");
+		expect([...moved.texts.keys()]).toEqual(["quest/m0/next.md", "quest/m1/e/b.md"]);
+		expect(moved.texts.get("quest/m0/next.md")).toContain("- [E](/quest/m1/e/README.md)\n");
+		expect(moved.texts.get("quest/m1/e/b.md")).toContain("- [A](/quest/m1/e/a.md)\n");
 	});
 
 	test("reports a link whose destination is not written as parsed", () => {
@@ -119,11 +120,9 @@ describe("remove", () => {
 			"# [S] A\n\n## Goal\n\nAfter [B](/quest/b.md).\n\n- [B](/quest/b.md) in a goal list\n\n## Related\n\nContext.\n",
 		);
 	});
-	test("drops links to finished milestones until nothing changes, keeping the root's listing", () => {
-		const root =
-			"# Quests\n\n## Goal\n\nG.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n- [M1](/quest/m1/README.md)\n";
+	test("drops links to finished milestones until nothing changes", () => {
 		const sources = [
-			{ path: "quest/README.md", text: root },
+			{ path: "quest/README.md", text: "# Quests\n\n## Goal\n\nG.\n" },
 			// m0 finishes once b goes, which finishes m1, which only waited on m0.
 			{ path: "quest/m0/README.md", text: "# M0\n\n## Goal\n\nG.\n\n## Required\n\n- [B](/quest/b.md)\n" },
 			{
@@ -132,7 +131,7 @@ describe("remove", () => {
 			},
 			{ path: "quest/b.md", text: "# [S] B\n\n## Goal\n\nG.\n" },
 			{
-				path: "quest/m1/a.md",
+				path: "quest/a.md",
 				text:
 					"# [S] A\n\n## Goal\n\nG.\n\n## Required\n\n- [M1](/quest/m1/README.md)\n- [M2](/quest/m2/README.md)\n\n" +
 					"## Related\n\n- [M0](/quest/m0/README.md)\n",
@@ -141,11 +140,29 @@ describe("remove", () => {
 			{ path: "quest/m2/README.md", text: "# M2\n\n## Goal\n\nG.\n" },
 		];
 		const texts = remove(sources, gone);
-		expect([...texts.keys()].sort()).toEqual(["quest/m0/README.md", "quest/m1/README.md", "quest/m1/a.md"]);
+		expect([...texts.keys()].sort()).toEqual(["quest/a.md", "quest/m0/README.md", "quest/m1/README.md"]);
 		expect(texts.get("quest/m0/README.md")).toBe("# M0\n\n## Goal\n\nG.\n");
 		expect(texts.get("quest/m1/README.md")).toBe("# M1\n\n## Goal\n\nG.\n");
-		expect(texts.get("quest/m1/a.md")).toBe(
-			"# [S] A\n\n## Goal\n\nG.\n\n## Related\n\n- [M0](/quest/m0/README.md)\n",
+		expect(texts.get("quest/a.md")).toBe("# [S] A\n\n## Goal\n\nG.\n\n## Related\n\n- [M0](/quest/m0/README.md)\n");
+	});
+
+	// An epic waits for everything in its directory, so its links to those quests
+	// are the child lists this format retired. A sibling's link is a real blocker.
+	test("drops an epic's Required links to quests it holds, at any depth", () => {
+		const readme =
+			"# Epic\n\n## Goal\n\nG.\n\n## Required\n\n- [A](/quest/m0/epic/a.md)\n" +
+			"- [Outside](/quest/m0/outside.md)\n- [Deep](/quest/m0/epic/sub/deep.md)\n\n## Related\n\n- [A](/quest/m0/epic/a.md)\n";
+		const sibling = "# [S] B\n\n## Goal\n\nG.\n\n## Required\n\n- [A](/quest/m0/epic/a.md)\n";
+		const texts = remove(
+			[
+				{ path: "quest/m0/epic/README.md", text: readme },
+				{ path: "quest/m0/epic/b.md", text: sibling },
+			],
+			() => false,
+		);
+		expect([...texts.keys()]).toEqual(["quest/m0/epic/README.md"]);
+		expect(texts.get("quest/m0/epic/README.md")).toBe(
+			"# Epic\n\n## Goal\n\nG.\n\n## Required\n\n- [Outside](/quest/m0/outside.md)\n\n## Related\n\n- [A](/quest/m0/epic/a.md)\n",
 		);
 	});
 });
@@ -156,28 +173,22 @@ describe("quest mv", () => {
 		const out = await quest(tree, "mv", "/quest/m0/epic/one.md", "quest/m0/epic/first.md");
 		expect(out).toEqual({
 			code: 0,
-			stdout: "R quest/m0/epic/one.md -> quest/m0/epic/first.md\nM quest/m0/epic/README.md\nM quest/m0/epic/two.md\n",
+			stdout: "R quest/m0/epic/one.md -> quest/m0/epic/first.md\nM quest/m0/epic/two.md\n",
 			stderr: "quest: no origin remote, so claims were not checked\n",
 		});
 		expect(tree.read("quest/m0/epic/two.md")).toContain("- [One](/quest/m0/epic/first.md) - must finish first");
-		expect(staged(tree)).toEqual([
-			"M  quest/m0/epic/README.md",
-			"M  quest/m0/epic/two.md",
-			"R  quest/m0/epic/one.md -> quest/m0/epic/first.md",
-		]);
+		expect(staged(tree)).toEqual(["M  quest/m0/epic/two.md", "R  quest/m0/epic/one.md -> quest/m0/epic/first.md"]);
 		tree.accepts();
 	});
 
 	test("moves an epic into a new directory", async () => {
 		const tree = Tree.committed();
 		const out = await quest(tree, "mv", "quest/m0/epic", "quest/m1/later/epic");
-		expect(out.stdout).toBe(
-			"R quest/m0/epic -> quest/m1/later/epic\nM quest/m0/README.md\nM quest/m1/later/epic/README.md\nM quest/m1/later/epic/two.md\n",
-		);
-		expect(tree.read("quest/m1/later/epic/README.md")).toContain("- [One](/quest/m1/later/epic/one.md)\n");
+		expect(out.stdout).toBe("R quest/m0/epic -> quest/m1/later/epic\nM quest/m1/later/epic/two.md\n");
+		expect(tree.read("quest/m1/later/epic/two.md")).toContain("- [One](/quest/m1/later/epic/one.md)");
 		// The epic left m0 for a directory with no README, which check reports rather than mv guessing.
 		expect(out.code).toBe(1);
-		expect(out.stderr).toContain("quest/m1/later/epic/README.md: not listed in quest/m1/later/README.md");
+		expect(out.stderr).toContain("quest/m1/later/epic/README.md: sits in quest/m1/later, which has no README.md");
 	});
 
 	test("reports mentions it does not edit", async () => {
@@ -260,18 +271,16 @@ describe("quest mv", () => {
 
 describe("quest rm", () => {
 	test("deletes a quest listed under several Required and Related sections", async () => {
-		const tree = Tree.baseline()
-			.append("quest/m0/epic/README.md", "- [Three](/quest/m0/epic/three.md)\n")
-			.write(
-				"quest/m0/epic/three.md",
-				"# [S] Three\n\n## Goal\n\nMore.\n\n## Required\n\n- [Two](/quest/m0/epic/two.md)\n- [One](/quest/m0/epic/one.md)\n\n" +
-					"## Related\n\n- [One](/quest/m0/epic/one.md) - similar\n",
-			);
+		const tree = Tree.baseline().write(
+			"quest/m0/epic/three.md",
+			"# [S] Three\n\n## Goal\n\nMore.\n\n## Required\n\n- [Two](/quest/m0/epic/two.md)\n- [One](/quest/m0/epic/one.md)\n\n" +
+				"## Related\n\n- [One](/quest/m0/epic/one.md) - similar\n",
+		);
 		committed(tree);
 		const out = await quest(tree, "rm", "quest/m0/epic/one.md");
 		expect(out).toEqual({
 			code: 0,
-			stdout: "D quest/m0/epic/one.md\nM quest/m0/epic/README.md\nM quest/m0/epic/three.md\nM quest/m0/epic/two.md\n",
+			stdout: "D quest/m0/epic/one.md\nM quest/m0/epic/three.md\nM quest/m0/epic/two.md\n",
 			stderr: "",
 		});
 		expect(tree.read("quest/m0/epic/two.md")).toBe("# [S] Two\n\n## Goal\n\nAnother quest.\n");
@@ -282,10 +291,9 @@ describe("quest rm", () => {
 		tree.accepts();
 	});
 
-	test("drops links to the milestone it finishes while the root still lists it", async () => {
+	test("drops links to the milestone it finishes", async () => {
 		const tree = Tree.baseline()
-			.write("quest/README.md", `${ROOT_README}- [M1](/quest/m1/README.md)\n`)
-			.write("quest/m1/README.md", "# M1\n\n## Goal\n\nNext.\n\n## Required\n\n- [Later](/quest/m1/later.md)\n")
+			.write("quest/m1/README.md", "# M1\n\n## Goal\n\nNext.\n")
 			.write(
 				"quest/m1/later.md",
 				"# [S] Later\n\n## Goal\n\nAfter m0.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
@@ -294,11 +302,9 @@ describe("quest rm", () => {
 		const out = await quest(tree, "rm", "-r", "quest/m0/epic");
 		expect(out.code).toBe(0);
 		expect(out.stdout).toBe(
-			"D quest/m0/epic/README.md\nD quest/m0/epic/one.md\nD quest/m0/epic/two.md\nM quest/m0/README.md\nM quest/m1/later.md\n",
+			"D quest/m0/epic/README.md\nD quest/m0/epic/one.md\nD quest/m0/epic/two.md\nM quest/m1/later.md\n",
 		);
-		expect(tree.read("quest/m0/README.md")).toBe("# M0\n\n## Goal\n\nA milestone.\n");
 		expect(tree.read("quest/m1/later.md")).toBe("# [S] Later\n\n## Goal\n\nAfter m0.\n");
-		expect(tree.read("quest/README.md")).toContain("- [M0](/quest/m0/README.md)\n");
 		tree.accepts();
 	});
 
@@ -357,10 +363,7 @@ describe("quest check --fix", () => {
 	async function diverged(change: (tree: Tree) => Promise<void> | void): Promise<Tree> {
 		const tree = Tree.committed();
 		git(tree.path, "checkout", "-q", "-b", "feature");
-		tree.append("quest/m0/epic/README.md", "- [Three](/quest/m0/epic/three.md)\n").write(
-			"quest/m0/epic/three.md",
-			THREE,
-		);
+		tree.write("quest/m0/epic/three.md", THREE);
 		git(tree.path, "add", "-A");
 		git(tree.path, "commit", "-q", "-m", "three");
 		git(tree.path, "checkout", "-q", "main");
@@ -407,7 +410,7 @@ describe("quest check --fix", () => {
 
 		const out = await quest(tree, "check", "--fix");
 		expect(out.code).toBe(1);
-		expect(out.stdout).toBe("M quest/m0/epic/README.md\nM quest/m0/epic/second.md\nM quest/m0/epic/three.md\n");
+		expect(out.stdout).toBe("M quest/m0/epic/second.md\nM quest/m0/epic/three.md\n");
 		expect(tree.read("quest/m0/epic/three.md").replaceAll("\r\n", "\n")).toBe(
 			"# [S] Three\n\n## Goal\n\nMore.\n\n## Related\n\n- [Two](/quest/m0/epic/two.md) - similar\n" +
 				"- [Nope](/quest/m0/epic/nope.md)\n\n## Plan\n\nAfter [one](/quest/m0/epic/one.md).\n",
@@ -426,24 +429,45 @@ describe("quest check --fix", () => {
 		git(repo, "commit", "-q", "-m", "finish one");
 		expect(await quest(tree, "check", "--fix")).toEqual({
 			code: 0,
-			stdout: "M quest/m0/epic/README.md\nM quest/m0/epic/two.md\nquest: 4 documents ok\n",
+			stdout: "M quest/m0/epic/two.md\nquest: 4 documents ok\n",
 			stderr: "",
 		});
 	});
 
 	test("refuses while a quest file has unresolved conflicts", async () => {
 		const tree = await diverged((tree) => {
-			tree.write("quest/m0/epic/README.md", `${EPIC_README}- [Four](/quest/m0/epic/four.md)\n`);
+			tree.write("quest/m0/epic/three.md", "# [S] Three\n\n## Goal\n\nPlanned on main too.\n");
+			git(tree.path, "add", "quest/m0/epic/three.md");
 		});
 		expect(spawnSync("git", ["-C", tree.path, "merge", "-q", "main"]).status).not.toBe(0);
-		const before = tree.read("quest/m0/epic/README.md");
+		const before = tree.read("quest/m0/epic/three.md");
 		const out = await quest(tree, "check", "--fix");
 		expect(out).toEqual({
 			code: 1,
 			stdout: "",
-			stderr: "quest: resolve the merge conflicts in quest/m0/epic/README.md before quest check --fix\n",
+			stderr: "quest: resolve the merge conflicts in quest/m0/epic/three.md before quest check --fix\n",
 		});
-		expect(tree.read("quest/m0/epic/README.md")).toBe(before);
+		expect(tree.read("quest/m0/epic/three.md")).toBe(before);
+	});
+
+	// Trees from before epics stopped listing their children migrate with one run.
+	test("strips the child lists of the root, milestones, and epics", async () => {
+		const tree = Tree.baseline()
+			.append("quest/README.md", "\n## Required\n\n- [M0](/quest/m0/README.md)\n")
+			.append("quest/m0/README.md", "\n## Required\n\n- [Epic](/quest/m0/epic/README.md)\n")
+			.append(
+				"quest/m0/epic/README.md",
+				"\n## Required\n\n- [One](/quest/m0/epic/one.md)\n- [Two](/quest/m0/epic/two.md)\n",
+			);
+		committed(tree);
+		expect(await quest(tree, "check", "--fix")).toEqual({
+			code: 0,
+			stdout: "M quest/README.md\nM quest/m0/README.md\nM quest/m0/epic/README.md\nquest: 5 documents ok\n",
+			stderr: "",
+		});
+		expect(tree.read("quest/README.md")).toBe(ROOT_README);
+		expect(tree.read("quest/m0/README.md")).toBe(M0_README);
+		expect(tree.read("quest/m0/epic/README.md")).toBe(EPIC_README);
 	});
 
 	test("fails outside a git work tree", async () => {

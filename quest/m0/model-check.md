@@ -18,8 +18,7 @@ run is in m0 once routing lands, then each milestone.
   routing epic's last quest landed. It skips m1's model id comparison and
   sandbox test, which m0 ran in
   [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426).
-- m1's run already exists, listed in [m1](/quest/m1/README.md)'s `Required`
-  and requiring m0. The PR that finishes this run creates no new run: it
+- m1's run already exists in [m1](/quest/m1/README.md), requiring m0. The PR that finishes this run creates no new run: it
   carries the tallies and any table changes into m1's Plan as its baseline.
 
 ## Required

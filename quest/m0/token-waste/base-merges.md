@@ -27,8 +27,9 @@ Decision prompts, chosen options marked ✅:
 
 - Merge churn: ✅ the watcher merges quest files, and agents merge the base
   only on a real conflict or at queue time (rejected: stop editing READMEs,
-  which [Epics list no children](/quest/m0/token-waste/child-lists.md) now
-  does a cleaner way; membership from directories, adopted there too). The
+  which epics listing no children, from
+  [moq-dev/quest#518](https://github.com/moq-dev/quest/pull/518), now does
+  a cleaner way; membership from directories, adopted there too). The
   watcher half already exists: it merges a dropped PR's conflict with the
   quest merge driver before using a fixer slot
   ([moq-dev/quest#389](https://github.com/moq-dev/quest/pull/389)).
