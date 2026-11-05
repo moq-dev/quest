@@ -45,3 +45,9 @@ Implementation guidance:
   base today, so the base's branch has to be known first.
 - Nothing is in production, so sessions already stored under temporary names
   need no migration.
+- Added 2026-11-05 (/quest-plan, the
+  [token waste](/quest/m0/token-waste/README.md) audit): 80 `quest review`
+  runs in Claude sessions failed with "HEAD is detached". A detached
+  `quest review` without `--branch` names the PR branch to pass when it
+  can find one, such as a branch whose tip is the head, so the agent's next
+  call succeeds.
