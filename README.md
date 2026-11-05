@@ -1184,7 +1184,8 @@ gate counts every full SHA the section names as a review of that head, so the
 head appears in full only once a round reports no findings, and model text
 appears as inline code, which mentions or links nothing and never holds a full
 SHA. The section runs to the next level-1 or
-level-2 heading; the rest of the body stays as written, and a body without one
+level-2 heading, both as Markdown parses them, so an example in a code fence is
+text to the land gate and the record alike; the rest of the body stays as written, and a body without one
 gains it at the end. With no such PR, or a remote off GitHub, it changes nothing
 and prints `record skipped: <why>`. It edits as the user the GitHub token names
 (`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`), and the land gate counts the

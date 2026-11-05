@@ -1,6 +1,8 @@
 // `quest review` rewrites the `## Review` section of its branch's open PR after each round, so the head
 // it reviewed counts without an agent copying the round into the body by hand.
+import { reviewSection } from "../core";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
+import { git } from "./git";
 import { requireRemote, string } from "./github";
 import { type Round, located, parseBase } from "./review";
 
@@ -47,16 +49,11 @@ export function reviewRecord(round: Round): string {
 	return lines.join("\n");
 }
 
-/**
- * `body` with `record` as its first `## Review` section, which it gains when it has none. The section
- * runs to the next level-1 or level-2 heading, as the land gate reads it; the rest of the body stays as written.
- */
+/** `body` with `record` as its `## Review` section, which it gains when it has none; the rest stays as written. */
 export function withReview(body: string, record: string): string {
-	const heading = /^##[ \t]+Review[ \t]*\r?$/m.exec(body);
-	if (!heading) return `${body.trimEnd()}${body.trim() ? "\n\n" : ""}## Review\n\n${record}\n`;
-	const start = heading.index + heading[0].length;
-	const next = /^##?[ \t]/m.exec(body.slice(start));
-	const end = next ? start + next.index : body.length;
+	const section = reviewSection(body);
+	if (!section) return `${body.trimEnd()}${body.trim() ? "\n\n" : ""}## Review\n\n${record}\n`;
+	const { start, end } = section;
 	return `${body.slice(0, start)}\n\n${record}\n${end < body.length ? "\n" : ""}${body.slice(end)}`;
 }
 
@@ -69,8 +66,10 @@ export type Recorded = { url: string } | { skipped: string };
  * is the token's user's, which the land gate counts only when that user wrote the PR.
  */
 export async function recordRound(root: string, round: Round, deps: ClaimDependencies): Promise<Recorded> {
-	const { remote, branch: base } = parseBase(root, round.base.ref);
-	const up = await upstream(root, requireRemote(root, remote), deps);
+	// The checkout's top level, as the round reviewed it: a subdirectory would look for the quest tree below it.
+	const top = git(root, ["rev-parse", "--show-toplevel"]);
+	const { remote, branch: base } = parseBase(top, round.base.ref);
+	const up = await upstream(top, requireRemote(top, remote), deps);
 	if (up.github === null) return { skipped: `${remote} is not on GitHub` };
 	const { client, repository, head } = up.github;
 	const from = `${head.owner}:${round.branch}`;

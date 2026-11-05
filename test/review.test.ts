@@ -14,6 +14,7 @@ import {
 	sessionFile,
 	verdict,
 } from "../src/cli/review";
+import { withReview } from "../src/cli/review-record";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -1005,37 +1006,44 @@ fakes("a change to the applicable instructions starts a new session that weighs 
 
 /**
  * Point the fixture's origin at `acme/widget` on GitHub, still fetched from its local copy, and answer the
- * API with `pulls` as the open PRs from `acme:<branch>` into main. Returns the PR bodies each PATCH wrote.
+ * API with `pulls` as the open PRs from `acme:<branch>` into main. With `fork`, `acme/widget` is a fork of
+ * `upstream/widget`, whose root holds the quest tree, and the PRs are upstream's. Returns the PR bodies
+ * each PATCH wrote.
  */
-function onGitHub(repo: string, pulls: { number: number; body: string | null }[]): { body: string }[] {
+function onGitHub(repo: string, pulls: { number: number; body: string | null }[], fork = false): { body: string }[] {
 	const local = git(repo, "remote", "get-url", "origin");
 	git(repo, "remote", "set-url", "origin", "https://github.com/acme/widget.git");
 	git(repo, "config", `url.${local}.insteadOf`, "https://github.com/acme/widget.git");
+	const owner = fork ? "upstream" : "acme";
 	const writes: { body: string }[] = [];
-	const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 });
+	const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+	const info = (login: string, parent: string | null) => ({
+		owner: { login },
+		name: "widget",
+		fork: parent !== null,
+		...(parent === null ? {} : { parent: { owner: { login: parent }, name: "widget" } }),
+		default_branch: "main",
+		clone_url: `https://github.com/${login}/widget.git`,
+		ssh_url: `git@github.com:${login}/widget.git`,
+	});
 	vi.stubEnv("GH_TOKEN", "token");
 	vi.stubGlobal("fetch", async (input: URL, init?: RequestInit) => {
 		const url = new URL(input);
-		if (url.pathname === "/repos/acme/widget")
-			return json({
-				owner: { login: "acme" },
-				name: "widget",
-				fork: false,
-				default_branch: "main",
-				clone_url: "https://github.com/acme/widget.git",
-				ssh_url: "git@github.com:acme/widget.git",
-			});
-		if (url.pathname === "/repos/acme/widget/pulls") {
+		if (url.pathname === "/repos/acme/widget") return json(info("acme", fork ? "upstream" : null));
+		if (url.pathname === "/repos/upstream/widget") return json(info("upstream", null));
+		if (url.pathname.startsWith("/repos/upstream/widget/contents/"))
+			return url.pathname.endsWith("/contents/quest/README.md") ? json({}) : json({}, 404);
+		if (url.pathname === `/repos/${owner}/widget/pulls`) {
 			expect(url.searchParams.get("state")).toBe("open");
 			expect(url.searchParams.get("base")).toBe("main");
 			const head = url.searchParams.get("head");
 			return json(
 				head === "acme:feature"
-					? pulls.map((p) => ({ ...p, html_url: `https://github.com/acme/widget/pull/${p.number}` }))
+					? pulls.map((p) => ({ ...p, html_url: `https://github.com/${owner}/widget/pull/${p.number}` }))
 					: [],
 			);
 		}
-		const patched = /^\/repos\/acme\/widget\/pulls\/(\d+)$/.exec(url.pathname);
+		const patched = new RegExp(`^/repos/${owner}/widget/pulls/(\\d+)$`).exec(url.pathname);
 		if (patched && init?.method === "PATCH") {
 			const { body } = JSON.parse(String(init.body)) as { body: string };
 			writes.push({ body });
@@ -1153,6 +1161,35 @@ fakes("a branch with no open PR, or a body without a Review section, is reported
 	} finally {
 		vi.unstubAllGlobals();
 	}
+});
+
+fakes("a review from a subdirectory of a fork records on the upstream PR", async () => {
+	const s = setup();
+	const pull = { number: 11, body: "Body." };
+	onGitHub(s.repo, [pull], true);
+	try {
+		const result = await quest("--root", join(s.repo, "src"), "review");
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("record https://github.com/upstream/widget/pull/11\n");
+		expect(pull.body).toMatch(/^Body\.\n\n## Review\n\nRewritten by `quest review`/);
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+test("the record replaces only a top-level Review section, never an example of one", () => {
+	const fenced = "Example:\n\n```md\n## Review\n\nold\n```\n\nAfter.\n";
+	expect(withReview(fenced, "new")).toBe(`${fenced.trimEnd()}\n\n## Review\n\nnew\n`);
+	const quoted = "> ## Review\n> quoted\n\n## Review\n\nold\n\n# Notes\n\n## Review\n\nsecond\n";
+	expect(withReview(quoted, "new")).toBe(
+		"> ## Review\n> quoted\n\n## Review\n\nnew\n\n# Notes\n\n## Review\n\nsecond\n",
+	);
+	// A level-3 heading stays inside the section, and a rewrite of the same record changes nothing.
+	const nested = "## Review\n\nold\n\n### Detail\n\nmore\n\n## Models\n\n- Size: S\n";
+	const once = withReview(nested, "new");
+	expect(once).toBe("## Review\n\nnew\n\n## Models\n\n- Size: S\n");
+	expect(withReview(once, "new")).toBe(once);
+	expect(withReview("", "new")).toBe("## Review\n\nnew\n");
 });
 
 fakes("a record GitHub refuses fails the command after printing the round", async () => {

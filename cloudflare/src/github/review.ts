@@ -5,6 +5,8 @@
 // except the `## Review` record a write-access author keeps in their own pull
 // request's body, which counts only on commits no App committed.
 
+import { reviewSection } from "quest/core";
+
 /** The check run a runner's `quest review` result becomes, written only by the App. */
 export const REVIEW_CHECK = "quest review";
 /** How many merges of the base since its review a head carries the review across; each costs about ten reads. */
@@ -141,8 +143,8 @@ function named(pull: Pick<PullRow, "author" | "body" | "userContentEdits">): Set
 	if (author?.__typename !== "User") return new Set();
 	const editor = pull.userContentEdits?.nodes[0]?.editor;
 	if (editor !== undefined && editor?.login.toLowerCase() !== author.login.toLowerCase()) return new Set();
-	const section = /^##[ \t]+Review[ \t]*$([\s\S]*?)(?=^##?[ \t]|(?![\s\S]))/m.exec(pull.body.replace(/\r/g, ""));
-	return new Set(section?.[1]!.match(/\b[0-9a-f]{40}\b/g) ?? []);
+	const section = reviewSection(pull.body);
+	return new Set(section ? (pull.body.slice(section.start, section.end).match(/\b[0-9a-f]{40}\b/g) ?? []) : []);
 }
 
 /**
