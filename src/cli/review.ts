@@ -21,6 +21,7 @@ import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
 import { DEFAULT_SIZE, type Model, REVIEWERS } from "./models";
 import { programEnvironment, requireProgram } from "./program";
+import type { recorded } from "../github/models";
 import { save } from "./worktree";
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
@@ -284,7 +285,7 @@ export interface ReviewDependencies {
 	 * The `## Models` record of the open PR from `branch` into `base`, or null when it has none; without
 	 * it, as in the runner, only the options and the running harness pick the reviewer.
 	 */
-	models?: (root: string, base: string, branch: string) => Promise<{ size: string | null; models: string[] } | null>;
+	models?: (root: string, base: string, branch: string) => Promise<ReturnType<typeof recorded> | null>;
 }
 
 export const processDependencies = (): ReviewDependencies => ({ env: process.env });
@@ -1162,6 +1163,29 @@ function sessionBranch(root: string, name: string | undefined): string {
 	}
 }
 
+type ModelsRecord = ReturnType<typeof recorded> | null | undefined;
+
+/** The size the PR's record names, checked only when no `--size` replaces it. */
+function recordedSize(record: ModelsRecord, options: ReviewOptions): Size | null {
+	if (record == null || options.size !== undefined) return null;
+	const [size, ...more] = record.sizes;
+	if (more.length > 0) throw new ReviewInputError(`the PR's ## Models record names ${record.sizes.length} sizes`);
+	if (size === undefined) return null;
+	if (!SIZES.includes(size as Size)) {
+		throw new ReviewInputError(`the PR's ## Models record names size ${size}, not one of ${SIZES.join(", ")}`);
+	}
+	return size as Size;
+}
+
+/** The implementing models the PR's record names, checked only when no `--exclude-model` replaces them. */
+function recordedModels(record: ModelsRecord, options: ReviewOptions): string[] {
+	if (record == null || (options.exclude ?? []).length > 0) return [];
+	return record.implementers.map(({ item, model }) => {
+		if (model === null) throw new ReviewInputError(`the PR's ## Models record names no model in: ${item}`);
+		return model;
+	});
+}
+
 /** Review the checkout's committed branch: one round, resuming the branch's session unless `fresh`. */
 export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Round> {
 	// Native Windows installs the reviewer CLIs as batch shims, which `run` cannot start without a shell.
@@ -1184,14 +1208,8 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	// The PR's own record names its size and implementers, so the author passes neither as a flag.
 	const needed = options.size === undefined || (options.exclude ?? []).length === 0;
 	const record = needed ? await deps.models?.(root, baseRef, branch) : undefined;
-	const recordedSize = record?.size ?? null;
-	if (recordedSize !== null && !SIZES.includes(recordedSize as Size)) {
-		throw new ReviewInputError(
-			`the PR's ## Models record names size ${recordedSize}, not one of ${SIZES.join(", ")}`,
-		);
-	}
-	const sized = reviewSize(root, baseSha, options.sizeBranch ?? branch, options.size, recordedSize as Size | null);
-	const picked = pickReviewer(sized.size, options, authored(options, deps.env, record?.models));
+	const sized = reviewSize(root, baseSha, options.sizeBranch ?? branch, options.size, recordedSize(record, options));
+	const picked = pickReviewer(sized.size, options, authored(options, deps.env, recordedModels(record, options)));
 	const harness = picked.harness;
 	const reviewer = CLIS[harness];
 

@@ -94,7 +94,7 @@ export async function pullModels(
 	baseRef: string,
 	branch: string,
 	deps: ClaimDependencies,
-): Promise<{ size: string | null; models: string[] } | null> {
+): Promise<ReturnType<typeof recorded> | null> {
 	const pull = await openPull(root, baseRef, branch, deps);
 	return "skipped" in pull ? null : recorded(pull.body);
 }

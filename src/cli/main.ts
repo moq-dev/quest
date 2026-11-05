@@ -1033,7 +1033,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when the reviewer's " +
 				"account hit its usage limit, and 1 for other failures, including a PR GitHub will not show or a record it " +
-				"refuses, or an Implementer line naming no model; a Size line naming no size is a usage error. A usage limit prints one line, " +
+				"refuses. A malformed `## Models` field the round reads, such as a Size line naming no size or an " +
+				"Implementer line naming no model, is a usage error, unless --size or --exclude-model replaces it. A usage limit prints one line, " +
 				"`error: <harness> hit its usage limit; resets <time>`, where <time> is the reset as an ISO 8601 UTC " +
 				"timestamp, or `unknown` when the CLI named none.",
 		)

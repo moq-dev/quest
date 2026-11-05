@@ -1303,14 +1303,18 @@ fakes("the PR's Models record sizes the review and names the models that wrote i
 			"reviewer codex gpt-6.1-sol medium\n",
 		);
 
-		pull.body = body("- Size: XXL");
-		const invalid = await quest("--root", s.repo, "review", "--new");
+		// A malformed field fails the round, unless the flag that replaces it is given.
+		pull.body = body("- Size: XXL", "- Implementer: Codex");
+		const invalid = await quest("--root", s.repo, "review", "--new", "--exclude-model", "gpt-6.1-sol");
 		expect(invalid.code).toBe(2);
 		expect(invalid.stderr).toContain("the PR's ## Models record names size XXL, not one of XS, S, M, L, XL");
-		pull.body = body("- Implementer: Codex");
-		const nameless = await quest("--root", s.repo, "review", "--new");
-		expect(nameless.code).toBe(1);
+		const nameless = await quest("--root", s.repo, "review", "--new", "--size", "S");
+		expect(nameless.code).toBe(2);
 		expect(nameless.stderr).toContain("names no model in: Implementer: Codex");
+		const both = await quest("--root", s.repo, "review", "--new", "--size", "S", "--exclude-model", "gpt-6.1-sol");
+		expect(both.stdout).toContain("reviewer claude claude-opus-5-5 low\nsize S --size\n");
+		pull.body = body("- Size: S", "- Size: M");
+		expect((await quest("--root", s.repo, "review", "--new")).stderr).toContain("names 2 sizes");
 	} finally {
 		vi.unstubAllGlobals();
 	}
@@ -1319,9 +1323,17 @@ fakes("the PR's Models record sizes the review and names the models that wrote i
 test("a Models record reads its size and every implementing model", () => {
 	const body =
 		"x\n\n## Models\n\nSize: S\n- Implementer: Claude Code, claude-opus-5-5, high effort\n* Implementer: Codex, unknown, unknown effort\n\n## Review\n\n- Size: XL\n";
-	expect(recorded(body)).toEqual({ size: "S", models: ["claude-opus-5-5", "unknown"] });
-	expect(recorded("No record.")).toEqual({ size: null, models: [] });
-	expect(() => recorded("## Models\n\n- Size: S\n- Size: M\n")).toThrow("names 2 sizes");
+	expect(recorded(body)).toEqual({
+		sizes: ["S"],
+		implementers: [
+			{ item: "Implementer: Claude Code, claude-opus-5-5, high effort", model: "claude-opus-5-5" },
+			{ item: "Implementer: Codex, unknown, unknown effort", model: "unknown" },
+		],
+	});
+	expect(recorded("No record.")).toEqual({ sizes: [], implementers: [] });
+	expect(recorded("## Models\n\n- Implementer: Codex\n").implementers).toEqual([
+		{ item: "Implementer: Codex", model: null },
+	]);
 });
 
 test("the record replaces only a top-level Review section, never an example of one", () => {

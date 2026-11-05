@@ -22,27 +22,23 @@ export function implementers(body: string): string[] {
 }
 
 /**
- * The size and implementing models `body`'s `## Models` section records: its `Size:` item, or null, and
- * the model each `Implementer: <harness>, <model>, <effort> effort` item names, `unknown` included.
- * An `Implementer:` item that names no model is an error, never a session to ignore.
+ * What `body`'s `## Models` section records: each `Size:` item's size, and each
+ * `Implementer: <harness>, <model>, <effort> effort` item with the model it names, or null when it names none.
+ * The caller checks only the fields it uses, so a flag that replaces one is not blocked by a malformed one.
  */
-export function recorded(body: string): { size: string | null; models: string[] } {
+export function recorded(body: string): { sizes: string[]; implementers: { item: string; model: string | null }[] } {
 	const found = section(body);
-	if (!found) return { size: null, models: [] };
+	if (!found) return { sizes: [], implementers: [] };
 	const items = body
 		.slice(found.start, found.end)
 		.split(/\r?\n/)
 		.map((line) => line.replace(/^\s*[-*]\s+/, "").trim());
-	const size = items.flatMap((item) => /^Size:\s*(\S+)$/.exec(item)?.[1] ?? []);
-	if (size.length > 1) throw new Error(`the PR's ## Models record names ${size.length} sizes`);
-	const models = items
-		.filter((item) => item.startsWith("Implementer:"))
-		.map((item) => {
-			const model = item.slice("Implementer:".length).split(",")[1]?.trim();
-			if (!model) throw new Error(`the PR's ## Models record names no model in: ${item}`);
-			return model;
-		});
-	return { size: size[0] ?? null, models };
+	return {
+		sizes: items.flatMap((item) => /^Size:\s*(\S+)$/.exec(item)?.[1] ?? []),
+		implementers: items
+			.filter((item) => item.startsWith("Implementer:"))
+			.map((item) => ({ item, model: item.slice("Implementer:".length).split(",")[1]?.trim() || null })),
+	};
 }
 
 /** `body` with `line` as an item of its `## Models` section, which it gains when it has none. */
