@@ -99,7 +99,6 @@ ownership-manifest design:
 - [Model check](/quest/m0/model-check.md) - recurring: the first audit of the routed PRs retunes the built-in size lists
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
-- [Agent workflow helpers](/quest/m0/helpers/README.md) - CLI commands for CI waits, PR status, claims, quest moves, and serialized merges
 - [Agents get the dev shell from user settings](/quest/m0/user-dev-shell/README.md) - maintainers' own Claude and Codex settings load the dev shell; repositories drop dev-shell hooks, Quest worktree hooks, and `nix develop` instructions, and `quest init` writes no hooks
 - [Session checkouts released](/quest/m0/session-checkouts.md) - a Claude session's own checkout is released when the session ends and reclaimed on resume
 - [claude rm upstream report](/quest/m0/claude-rm-upstream.md) - posting approved: ask Claude Code to run `WorktreeRemove` instead of advising an unlock
