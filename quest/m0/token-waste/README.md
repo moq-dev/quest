@@ -1,0 +1,61 @@
+# Cut agent token waste
+
+## Goal
+
+Quest sessions spend their tokens on the work itself, not on loading rules,
+a second review pass, polling, oversized coordinator context, or merge churn.
+The epic finishes by re-measuring the baseline below over a week of sessions
+and recording the comparison in its closing PR.
+
+Non-goals: the online reviewers (CodeRabbit and Pullfrog are free and stay),
+and turning prose rules into hooks or lint.
+
+## Plan
+
+Decided 2026-11-05 (user, /quest-plan), from an audit of this host's Claude
+Code and Codex transcripts and the moq-dev PRs created 2026-10-06 to 11-05.
+
+Baseline:
+
+- Claude Code, 2026-10-28 to 11-05 (all the data the profile holds): about
+  $11k API-equivalent. Re-sent cache is 71% of weighted cost; the average
+  request carries 144k tokens of context; the 88 sessions that peaked above
+  400k (2.6%) are 35% of cost. Auto-compaction ran 14 times, at a median of
+  967k. By skill: iterate 24%, start 24%, complete 22%, spawn 10%.
+- Codex, 30 days: 31.0B input tokens, 97% cached. `quest review` is 10% of
+  it (28% since 11-02); interactive sessions are 76%. The weekly limit ran
+  out on 11-02.
+- PRs, 30 days, 7 repositories: 5,553 PRs, 93% merged. Base merges are 33%
+  of all commits (70% in moq.pro) and rose from 2.6 to 3.4 per merged PR
+  after 11-01. The merge queue ejected 723 PRs for conflicts. 21% of PRs
+  change only `quest/*.md`.
+
+Decision prompts, chosen options marked ✅:
+
+- Milestone: ✅ m0 (rejected: m1).
+- Online reviewers: ✅ keep CodeRabbit and Pullfrog, which are free
+  (rejected: drop them).
+- Rules to hooks or lint: ✅ not planned (rejected: plan it now).
+- Applied outside the tree the same day: Claude's auto-compact window is
+  400k for Opus (`modelSettings.claude-opus-5-5.autoCompactWindow`, the
+  value the Claude Code team recommends), and `BASH_MAX_TIMEOUT_MS` is
+  3300000, just under the 1h prompt-cache TTL, in the maintainer's user
+  settings. The 1h TTL stays for main sessions and sub-agents: replayed over
+  the requests since 10-30, a 5m TTL would have cost 35% more cache spend
+  for main sessions and 14% more for sub-agents.
+- The milestone re-cut the maintainer raised (m1 additive improvements, m2
+  semver-breaking features) is moq-dev/moq's own plan: ✅ re-plan moq
+  separately (rejected: make it quest's convention; not now).
+
+## Required
+
+- [Single-pass review](/quest/m0/token-waste/review-single-pass.md) - a review round explores the change once, with the diff and REVIEW.md given up front
+- [Rules load once](/quest/m0/token-waste/rule-loading.md) - skills and rules arrive in the first turn and survive compaction
+- [Coordinators and waits](/quest/m0/token-waste/coordinator-waits.md) - coordinators lean on compaction, children report briefly, and waits block
+- [Epics list no children](/quest/m0/token-waste/child-lists.md) - an epic's children are its directory, so finishing a quest edits no README
+- [Base merges only when needed](/quest/m0/token-waste/base-merges.md) - a branch merges its base on a conflict, not before every queue attempt
+
+## Related
+
+- [Usage reports](/quest/m1/usage.md) - `quest usage` will report these numbers from session logs
+- [Model check](/quest/m0/model-check.md) - audits the size tables the review quest changes
