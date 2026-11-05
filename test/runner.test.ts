@@ -1139,7 +1139,7 @@ describe("prompts", () => {
 		expect(merge).toContain("Where the workflow says to run `quest wait`, call `wait`");
 		expect(merge).toContain("# The merge workflow");
 		// The skill's design checkpoint still reaches the maintainer.
-		expect(merge).toContain("Every third round");
+		expect(merge).toContain("a multiple of three reports findings");
 	});
 
 	test("carry earlier summaries and the latest answer", () => {
