@@ -67,11 +67,16 @@ Run such a command in the foreground and read its exit code directly, not throug
 When it may outlast the tool's time limit, start it in the background and block on it in the same turn with the harness's wait for that task.
 Run no more sub-agents at once than the harness allows; queue the rest and start one as each reports.
 
-Wait on a PR's CI or reviews with `quest wait`, and on other background work with a blocking command that ends on its terminal state, not timed polls.
+Every turn re-sends the whole context, so spend turns on the work.
+Batch independent reads, searches, and checks into one turn, as parallel tool calls or one command.
+Wait on a PR's CI or reviews with `quest wait`, and on other background work with one blocking call that ends on its terminal state.
+Never poll: no `sleep`, no `until` or `while` loop re-checking a log or status, no wait with a timeout far below the tool's limit, and no repeated status checks or output reads of a running task.
 Bound each wait, not the work, under an hour so the prompt cache stays warm; `quest wait` has no deadline without `--timeout`.
 Re-run a wait that times out, passing the resume point a timed-out `quest wait` printed as its `--since`, so activity during the first wait is still reported.
 A sub-agent ends its turn only with a final result or a question, never with background work still running or an interim status report.
+Its final report holds only what its caller acts on, such as its PR's URL, state, and head, and each decision it needs with a recommendation; details go in the PR body.
 A coordinator relays no interim report: it resumes a sub-agent that ended its turn on one, telling it to block until its work finishes.
+A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
 Back out when progress stalls rather than burn tokens; a gate's queue or a long command still running is not a stall.
 
 ## Questions

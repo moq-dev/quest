@@ -70,7 +70,6 @@ Decision prompts, chosen options marked ✅:
 
 - [Single-pass review](/quest/m0/token-waste/review-single-pass.md) - a review round explores the change once, with the diff and REVIEW.md given up front
 - [Rules load once](/quest/m0/token-waste/rule-loading.md) - skills and rules arrive in the first turn and survive compaction
-- [Coordinators and waits](/quest/m0/token-waste/coordinator-waits.md) - coordinators lean on compaction, children report briefly, and waits block
 - [Epics list no children](/quest/m0/token-waste/child-lists.md) - an epic's children are its directory, so finishing a quest edits no README
 - [Base merges only when needed](/quest/m0/token-waste/base-merges.md) - a branch merges its base on a conflict, not before every queue attempt
 - [Mechanical rules become checks](/quest/m0/token-waste/rule-checks.md) - hooks enforce em dashes, push refspecs, no rebase or force-push, the footer, and `.tmp/`, and their prose leaves the always-loaded rules
