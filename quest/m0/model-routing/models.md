@@ -90,10 +90,11 @@ run in moq-dev/moq sent many merge-and-record iterates):
   models, and otherwise the list. Start a quest on a harness matching the
   session's as a native sub-agent, and any other through `quest agent` on
   the logged-in account. When `quest agent` cannot start an entry (CLI
-  missing, logged out) or the agent exits on a usage limit before it has
-  pushed any code (the claim commit only), move to the next entry, resuming
-  from the claim PR and checkout. Once a model has pushed code, the PR has
-  its writer: wait for it rather than fall back, as iterates do. With no
+  missing, logged out) or the agent exits on a usage limit while its
+  checkout still holds nothing beyond the claim commit (no edits, no local
+  or pushed commits), move to the next entry, resuming from the claim PR and
+  checkout. Once a model has written anything there, the PR has its writer:
+  wait for it rather than fall back, as iterates do. With no
   entry left, skip the quest. Report each harness's outage once.
 - `/quest-complete`, `/quest-unblock`, and `/quest-merge`: size each
   `/quest-iterate` they dispatch by its remaining work and start it on the
