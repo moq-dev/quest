@@ -26,6 +26,16 @@ how the service works.
   decision flow.
 - Extend the guide when cloud runners, API-key funding, and donations ship;
   do not advertise them as available before then.
+- Explain read-only pull-request CI (`cloudflare/GITHUB.md`) and what the
+  setup page's CI panel checks: repository settings, not workflow files.
+  Point maintainers at a workflow linter such as zizmor, which moq-dev/moq
+  already runs, for jobs that request write `permissions:`, use secrets
+  outside an environment, or check out a PR head under `pull_request_target`
+  or `workflow_run`. Decided 2026-11-03 (coordinator, /quest-complete
+  follow-ups) instead of parsing workflows in the Worker, which
+  [moq-dev/quest#434](https://github.com/moq-dev/quest/pull/434) suggested:
+  none of the pilots' pull-request jobs can write, and the linter covers
+  every case it named.
 - Validate the guide against the running UI and a real pilot repository.
 
 ## Required

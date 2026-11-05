@@ -115,6 +115,7 @@ function setup(
 	} = {},
 ) {
 	const queries: Record<string, unknown>[] = [];
+	const texts: string[] = [];
 	const holdQueries: Record<string, unknown>[] = [];
 	const eventRequests: string[] = [];
 	let last: ReturnType<typeof pull> | undefined;
@@ -162,13 +163,14 @@ function setup(
 				});
 			}
 			queries.push(request.variables);
+			texts.push(request.query);
 			const body = bodies.shift();
 			if (body === undefined) throw new Error("unexpected request");
 			last = body as ReturnType<typeof pull>;
 			return Response.json(body);
 		},
 	};
-	return { deps, queries, holdQueries, eventRequests, activityRequests };
+	return { deps, queries, texts, holdQueries, eventRequests, activityRequests };
 }
 
 test("reports checks by requiredness, each reviewer's latest review against the head, and open threads", async () => {
@@ -402,6 +404,101 @@ test("reports quest land's ejection after the auto-merge it disabled, ignoring o
 	const body = pull({ checks: null, reviews: page([]), threads: page([]), timelineItems: { nodes } });
 	const status = await pullRequestStatus(pr, setup([body]).deps);
 	expect(status.landingStopped).toEqual({ reason: "merge_conflict", actor: "gate", at: "2026-10-07T12:02:00Z" });
+});
+
+test("drops the landing exit once the PR enters the merge queue or auto-merge again", async () => {
+	const disabled = {
+		__typename: "AutoMergeDisabledEvent",
+		createdAt: "2026-10-07T12:01:00Z",
+		reasonCode: "manually_disabled",
+		actor: { login: "kixelated" },
+	};
+	const removed = {
+		__typename: "RemovedFromMergeQueueEvent",
+		createdAt: "2026-10-07T12:01:00Z",
+		reason: "MERGE_CONFLICT",
+		actor: { login: "github-merge-queue" },
+	};
+	const ejected = {
+		__typename: "IssueComment",
+		createdAt: "2026-10-07T12:01:00Z",
+		body: "quest land removed this pull request from the queue: it conflicts.\n\n<!-- quest land: merge_conflict -->",
+		authorAssociation: "NONE",
+		author: { __typename: "Bot", login: "gate" },
+	};
+	const autoMerge = (enabledAt: string) => ({ enabledAt, mergeMethod: "SQUASH", enabledBy: { login: "kixelated" } });
+	const queue = (enqueuedAt: string) => ({ state: "QUEUED", position: 1, enqueuedAt });
+	const stopped = async (node: Node, fields: Node) => {
+		const body = pull({
+			checks: null,
+			reviews: page([]),
+			threads: page([]),
+			timelineItems: { nodes: [node] },
+			...fields,
+		});
+		return (await pullRequestStatus(pr, setup([body]).deps)).landingStopped?.reason ?? null;
+	};
+	// `quest merge --land` disables auto-merge and enables it again, often within the same second.
+	expect(await stopped(disabled, { autoMergeRequest: autoMerge("2026-10-07T12:01:00Z") })).toBeNull();
+	expect(await stopped(ejected, { autoMergeRequest: autoMerge("2026-10-07T12:05:00Z") })).toBeNull();
+	expect(await stopped(removed, { mergeQueueEntry: queue("2026-10-07T12:05:00Z") })).toBeNull();
+	// An entry that began before the exit is not a new one.
+	expect(await stopped(removed, { autoMergeRequest: autoMerge("2026-10-07T12:00:00Z") })).toBe("merge_conflict");
+	expect(await stopped(ejected, { mergeQueueEntry: queue("2026-10-07T12:00:59Z") })).toBe("merge_conflict");
+});
+
+test("counts only each check's newest run from its app", async () => {
+	const rerun = (name: string, conclusion: string, databaseId: number, app = 15368) => ({
+		...run(name, "COMPLETED", conclusion, true),
+		databaseId,
+		checkSuite: { app: { databaseId: app } },
+	});
+	const fixture = setup([
+		pull({
+			checks: page([
+				rerun("build", "SUCCESS", 7),
+				rerun("build", "CANCELLED", 3),
+				rerun("test", "SUCCESS", 4),
+				rerun("test", "FAILURE", 8),
+				rerun("lint", "SUCCESS", 5),
+				rerun("lint", "FAILURE", 2, 99),
+			]),
+			reviews: page([]),
+			threads: page([]),
+		}),
+	]);
+	const status = await pullRequestStatus(pr, fixture.deps);
+	// The fixture answers whatever is asked, so the query must ask for what tells runs apart.
+	expect(fixture.texts[0].replace(/\s+/g, " ")).toContain(
+		"... on CheckRun { databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number) checkSuite { app { databaseId } } }",
+	);
+	expect(status.checks.passed).toBe(2);
+	expect(status.checks.failing.map((check) => check.name)).toEqual(["test", "lint"]);
+	expect(status.checks.pending).toEqual([]);
+});
+
+test("judges checks by their latest runs, not the rollup's state, as on moq-dev/moq#7325", async () => {
+	// A cancelled run's gate failed on purpose; the newer run of the same workflow passed, and GitHub's
+	// merge state counted the pass while its rollup state stayed FAILURE.
+	const latest = (name: string, conclusion: string, databaseId: number) => ({
+		...run(name, "COMPLETED", conclusion, name === "Release gate"),
+		databaseId,
+		checkSuite: { app: { databaseId: 15368 } },
+	});
+	const body = pull({
+		checks: page([
+			latest("Scope", "CANCELLED", 1),
+			latest("Release gate", "FAILURE", 2),
+			latest("Scope", "SUCCESS", 3),
+			latest("Release gate", "SUCCESS", 4),
+		]),
+		reviews: page([]),
+		threads: page([]),
+	});
+	const fixture = setup([body]);
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(statusLines(status)).toContain("checks success passed=2 failing=0 pending=0");
+	expect(fixture.texts[0].replace(/\s+/g, " ")).toContain("... on StatusContext { context state createdAt targetUrl");
 });
 
 test("long lists page only the connections that have more, keeping the first page's PR fields", async () => {

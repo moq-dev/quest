@@ -3,7 +3,7 @@
 // that added the label is its hold token, since sessions often share an account.
 // `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
 import { ACTIVE_LABEL, handedBack, isHoldLabel, latestHold, heldToken, withoutHandBack } from "../core";
-import { cleanAutoMergeRefusal, immediateMerge } from "../github/merge";
+import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../github/merge";
 import { repositoryPath } from "./claims";
 import {
 	array,
@@ -16,7 +16,7 @@ import {
 	requirements,
 	string,
 } from "./github";
-import { LAND_CHECK, enqueue } from "./land";
+import { ALLOWS, LAND_CHECK, METHOD_NAMES, enqueue } from "./land";
 import { Refusal, ago } from "./start";
 
 export type Method = "merge" | "squash" | "rebase";
@@ -153,20 +153,6 @@ export async function finish(pr: PullRequest, token: string, deps: GitHubDepende
 	});
 }
 
-/** The repository setting that allows each merge method. */
-const ALLOWS: Record<Method, string> = {
-	merge: "allow_merge_commit",
-	squash: "allow_squash_merge",
-	rebase: "allow_rebase_merge",
-};
-
-/** Each merge method as GitHub's settings name it. */
-const METHOD_NAMES: Record<Method, string> = {
-	merge: "merge commits",
-	squash: "squash merges",
-	rebase: "rebase merges",
-};
-
 /**
  * The method an ungated landing uses: the one `named`, which the repository must allow, else the
  * only one it allows, else a merge commit. Settings hidden from the token leave GitHub to refuse.
@@ -190,12 +176,44 @@ function mergeMethod(repository: ObjectValue, named: Method | undefined, url: st
 }
 
 /**
+ * The method of the auto-merge that queues a PR for `quest land`, which only signals the queue: the
+ * one `named`, else squash, else any method both the repository and the base's rulesets allow.
+ * Settings hidden from the token count as allowed, leaving GitHub to refuse.
+ */
+function signalMethod(
+	repository: ObjectValue,
+	rules: ObjectValue[],
+	named: Method | undefined,
+	url: string,
+	base: string,
+): Method {
+	const ruled = rules.flatMap((rule) => {
+		const methods =
+			rule.type === "pull_request" && rule.parameters != null && object(rule.parameters).allowed_merge_methods;
+		return Array.isArray(methods) ? [methods] : [];
+	});
+	const allows = (method: Method) =>
+		repository[ALLOWS[method]] !== false && ruled.every((methods) => methods.includes(method));
+	if (named !== undefined) {
+		if (allows(named)) return named;
+		throw new Refusal(
+			`${url} cannot land with ${METHOD_NAMES[named]} on ${base}, by its repository settings or rulesets`,
+		);
+	}
+	const method = (["squash", "merge", "rebase"] as const).find(allows);
+	if (method === undefined)
+		throw new Refusal(`${url} has no merge method its repository and ${base}'s rulesets both allow`);
+	return method;
+}
+
+/**
  * Land `sha`, which must still be the head of `pr`, while no session holds it:
  * enable auto-merge bound to it, or merge at once when GitHub would refuse auto-merge because
  * nothing is left to wait for. A base with a merge queue gets {@link pick} instead.
  * A base that requires the `quest land` check queues it for `quest land` instead:
- * squash auto-merge whose commit body pins `sha`. It takes no label.
- * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one.
+ * auto-merge whose commit body pins `sha`, with a method {@link signalMethod} picks.
+ * That request only signals the queue: `quest land` lands with its own method. It takes no label.
+ * `named` is the method the caller asked for; otherwise {@link mergeMethod} picks one on an ungated base.
  */
 export async function land(
 	pr: PullRequest,
@@ -220,14 +238,14 @@ export async function land(
 			throw new Refusal(`${snapshot.url} was retargeted from ${snapshot.base} to ${fresh.base}; land it again`);
 		}
 	};
-	const gated = (await requirements(labels.github, pr, snapshot.base)).checks.some(
-		(check) => check.name === LAND_CHECK,
-	);
-	if (gated) {
-		if (named !== undefined && named !== "squash")
-			deps.warn(`${snapshot.url} lands through quest land, which squashes`);
+	const needs = await requirements(labels.github, pr, snapshot.base);
+	if (needs.checks.some((check) => check.name === LAND_CHECK)) {
+		if (named !== undefined)
+			deps.warn(`${snapshot.url} lands through quest land, which applies its own merge method`);
+		const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
+		const method = signalMethod(repository, needs.rules, named, snapshot.url, snapshot.base);
 		await unchanged();
-		await enqueue(labels.github, snapshot.id, snapshot.head);
+		await enqueue(labels.github, snapshot.id, snapshot.head, method);
 		return;
 	}
 	// A merge queue is the repository's own gate: it applies its own method and needs no auto-merge setting.
@@ -298,59 +316,25 @@ export async function land(
 	}
 }
 
-/** Merge states in which GitHub may still be running required checks, so only auto-merge can wait for them. */
-const PENDING = ["BLOCKED", "UNKNOWN"];
-
 /** GraphQL error types that fault the token or the request, not the PR GitHub would enqueue. */
 export const UNREFUSED = ["FORBIDDEN", "NOT_FOUND", "INSUFFICIENT_SCOPES", "INTERNAL"];
 
 /**
- * Put `head` in the base's merge queue: enqueue it, or, while GitHub may still be running its
- * required checks (`mergeState` pending), arm auto-merge bound to it, which enqueues it once they
- * pass. Either joins the back of the queue. A refusal throws GitHub's error.
- */
-export async function queueHead(
-	github: GitHub,
-	id: string,
-	head: string,
-	mergeState: string,
-	method: Method = "merge",
-): Promise<void> {
-	const enqueuePull = () =>
-		github.graphql(
-			`mutation($id: ID!, $sha: GitObjectID!) {
-				enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $sha }) { clientMutationId }
-			}`,
-			{ id, sha: head },
-		);
-	if (!PENDING.includes(mergeState)) {
-		await enqueuePull();
-		return;
-	}
-	try {
-		await github.graphql(
-			`mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!) {
-				enablePullRequestAutoMerge(input: { pullRequestId: $id, expectedHeadOid: $sha, mergeMethod: $method }) { clientMutationId }
-			}`,
-			{ id, sha: head, method: method.toUpperCase() },
-		);
-	} catch (error) {
-		// An UNKNOWN state GitHub finished computing as ready: nothing is left to wait for.
-		if (!cleanAutoMergeRefusal(error instanceof Error ? error.message : null)) throw error;
-		await enqueuePull();
-	}
-}
-
-/**
  * Pick `snapshot`'s head to land through the base's merge queue, as {@link land} checked it, with
- * {@link queueHead}. The queue builds each PR on the current base, so a head behind it is enqueued
+ * `queueHead`. The queue builds each PR on the current base, so a head behind it is enqueued
  * as is. GitHub's queue events and auto-merge request record the pick, naming who made it.
  * A pick GitHub refuses, such as one that conflicts or fails its required checks, fails:
  * the PR needs a fix before it can land.
  */
 async function pick(labels: Labels, snapshot: Snapshot, method: Method): Promise<void> {
 	try {
-		await queueHead(labels.github, snapshot.id, snapshot.head, snapshot.mergeState, method);
+		await queueHead(
+			(query, variables) => labels.github.graphql(query, variables),
+			snapshot.id,
+			snapshot.head,
+			snapshot.mergeState,
+			method,
+		);
 	} catch (error) {
 		if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 			throw error;

@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
+import * as fs from "node:fs/promises";
 import {
 	chmodSync,
 	existsSync,
@@ -11,7 +12,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 
@@ -23,20 +24,32 @@ import { type Account, RunnerHome } from "../src/runner/home";
 import { serveTools } from "../src/runner/mcp";
 import {
 	accountDirectories,
+	accountLimit,
 	credentials,
 	environment,
 	Opencode,
 	PLUGIN,
 	projectConfig,
-	retryLimit,
 	signedIn,
+	signedInProviders,
 	turnExit,
 } from "../src/runner/opencode";
 import { FLUSH_BYTES, OutputUploader, split } from "../src/runner/output";
 import { formatAnswer, resumePrompt, startPrompt, systemPrompt } from "../src/runner/prompt";
 import type { Job } from "../src/runner/protocol";
+import type { Round } from "../src/cli/review";
+import { type ReviewRequest, reviewerFor, Unreviewable } from "../src/runner/review";
 import { Runner } from "../src/runner/runner";
-import { REGISTRIES, type Sandbox, closeSandbox, openSandbox } from "../src/runner/sandbox";
+import {
+	REGISTRIES,
+	type Sandbox,
+	bwrapProfile,
+	closeSandbox,
+	openSandbox,
+	refusalReason,
+	sandboxRefusal,
+	unixSocketRefusal,
+} from "../src/runner/sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "../src/runner/wait";
 import { Workspace } from "../src/runner/workspace";
 import { initRepository, template, tempDir } from "./fixture";
@@ -666,7 +679,7 @@ describe("sandbox", () => {
 });
 
 describe("Claude Code output", () => {
-	test("reads limits from rate limit events, assistant errors, and results", () => {
+	test("reads limits from rate limit events, billing errors, and results, but not a throttle", () => {
 		const event = streamReader();
 		event.line(
 			JSON.stringify({
@@ -678,8 +691,19 @@ describe("Claude Code output", () => {
 		expect(event.exit(1, "")).toMatchObject({ limited: { until: 1_900_000_000_000 }, failed: true });
 
 		const flagged = streamReader();
-		flagged.line(JSON.stringify({ type: "assistant", error: "rate_limit" }));
+		flagged.line(JSON.stringify({ type: "assistant", error: "billing_error" }));
 		expect(flagged.exit(1, "").limited).toEqual({ until: null });
+
+		const throttled = streamReader();
+		throttled.line(JSON.stringify({ type: "assistant", error: "rate_limit" }));
+		throttled.line(
+			JSON.stringify({
+				type: "result",
+				is_error: true,
+				result: "API Error: Server is temporarily limiting requests (not your usage limit)",
+			}),
+		);
+		expect(throttled.exit(1, "").limited).toBeNull();
 
 		const legacy = streamReader();
 		legacy.line(
@@ -788,26 +812,36 @@ test("a webhook wait reads only on a wake and wakes immediately when its job sto
 });
 
 describe("opencode", () => {
-	test("labels an account by the providers its home signed in to", () => {
-		const home = tempDir();
-		expect(credentials(home)).toEqual([]);
-		const data = join(accountDirectories(home).XDG_DATA_HOME, "opencode");
-		mkdirSync(data, { recursive: true });
-		writeFileSync(
-			join(data, "auth.json"),
-			JSON.stringify({ openai: { type: "oauth", access: "a" }, "opencode-go": { type: "api", key: "k" } }),
-		);
-		expect(signedIn(credentials(home))).toEqual({
+	test("labels an account by the providers it stored credentials for", () => {
+		const list = [
+			{ id: "openai", connections: [{ type: "credential", id: "c1", label: "OAuth", method: "oauth" }] },
+			{ id: "opencode-go", connections: [{ type: "credential", id: "c2", label: "API key", method: "key" }] },
+			// A key the environment holds is not the account's.
+			{ id: "anthropic", connections: [{ type: "env", name: "ANTHROPIC_API_KEY" }] },
+		];
+		expect(signedIn(credentials(list))).toEqual({
 			provider: "openai",
 			kind: "subscription",
 			label: "ChatGPT, OpenCode Go (opencode)",
 		});
-		expect(signedIn([{ provider: "wafer.ai", type: "api" }])).toEqual({
+		expect(signedIn([{ provider: "wafer.ai", type: "key" }])).toEqual({
 			provider: "wafer-ai",
 			kind: "api-key",
 			label: "wafer.ai API key (opencode)",
 		});
-		expect(signedIn([])).toBeNull();
+		expect(signedIn(credentials([]))).toBeNull();
+		expect(() => credentials({})).toThrow(/no integrations/);
+		// OpenCode Console's providers keep their own IDs; a provider needing no sign-in is no account's.
+		expect(
+			signedInProviders(
+				[{ id: "opencode", connections: [{ type: "credential", id: "c", label: "Console", method: "oauth" }] }],
+				[
+					{ id: "acme-gpt", integrationID: "opencode" },
+					{ id: "opencode", integrationID: "opencode" },
+					{ id: "ollama" },
+				],
+			),
+		).toEqual(["acme-gpt", "opencode"]);
 	});
 
 	test("keeps the user's provider credentials and opencode settings from the account", () => {
@@ -835,46 +869,78 @@ describe("opencode", () => {
 		writeFileSync(file, PLUGIN);
 		const { default: plugin } = await import(pathToFileURL(file).href);
 		const config = ["opencode.json", ".opencode"].map((name) => join(checkout, name));
-		const hooks = await plugin.server({}, { cwd: checkout, writes: [checkout, tmp], reads: [output], config });
-		const call = (tool: string, args: Record<string, unknown>) =>
-			hooks["tool.execute.before"]({ tool, sessionID: "s", callID: "c" }, { args });
+		let hook: ((event: { tool: string; input: unknown }) => unknown) | undefined;
+		await plugin.setup({
+			options: { cwd: checkout, writes: [checkout, tmp], reads: [output], config },
+			tool: {
+				hook: async (name: string, callback: typeof hook) => {
+					expect(name).toBe("execute.before");
+					hook = callback;
+				},
+			},
+		});
+		const call = async (tool: string, input: unknown) => hook!({ tool, input });
 		const patch = (...headers: string[]) => ({
 			patchText: ["*** Begin Patch", ...headers, "+x", "*** End Patch"].join("\n"),
 		});
 
-		await call("read", { filePath: "a.txt" });
-		await call("write", { filePath: "new/dir/b.txt" });
-		await call("edit", { filePath: join(tmp, "notes.md") });
+		await call("read", { path: "a.txt" });
+		await call("write", { path: "new/dir/b.txt" });
+		await call("edit", { path: join(tmp, "notes.md") });
 		await call("glob", { pattern: "**/*.ts" });
 		await call("grep", { pattern: "x", path: "." });
-		await call("apply_patch", patch("*** Update File: a.txt", "*** Move to: c.txt"));
+		await call("patch", patch("*** Update File: a.txt", "*** Move to: c.txt"));
 		// opencode's saved output is readable, not writable.
-		await call("read", { filePath: join(output, "tool_1") });
-		await expect(call("write", { filePath: join(output, "tool_1") })).rejects.toThrow(/outside the checkout/);
+		await call("read", { path: join(output, "tool_1") });
+		await expect(call("write", { path: join(output, "tool_1") })).rejects.toThrow(/outside the checkout/);
 		// Commands are the sandbox's to confine.
-		await call("bash", { command: "cat /etc/passwd" });
+		await call("shell", { command: "cat /etc/passwd" });
+		// opencode resolves a leading ~ as its home, here the root holding the saved output.
+		vi.stubEnv("OPENCODE_TEST_HOME", root);
+		await call("read", { path: "~/tool-output/tool_1" });
+		for (const [tool, input] of [
+			["write", { path: "~/tool-output/tool_1" }],
+			["read", { path: "~/outside/auth.json" }],
+			["read", { path: "~" }],
+			["patch", patch("*** Add File: ~/tool-output/x")],
+		] as const)
+			await expect(call(tool, input), `${tool} ${JSON.stringify(input)}`).rejects.toThrow(/outside the checkout/);
+		vi.unstubAllEnvs();
+		// Background work would outlive the turn, and the server with it.
+		await call("shell", { command: "true", background: false });
+		for (const [tool, input] of [
+			["shell", { command: "sleep 60", background: true }],
+			["subagent", { description: "x", prompt: "x", background: "true" }],
+			["shell", JSON.stringify({ command: "sleep 60", background: true })],
+		] as const)
+			await expect(call(tool, input), `${tool} ${JSON.stringify(input)}`).rejects.toThrow(/in the foreground/);
 
-		for (const [tool, args] of [
-			["read", { filePath: "auth.json" }],
-			["read", { filePath: "out/auth.json" }],
-			["write", { filePath: "out/new.txt" }],
-			["write", { filePath: "../outside/new.txt" }],
+		for (const [tool, input] of [
+			["read", { path: "auth.json" }],
+			["read", { path: "out/auth.json" }],
+			// opencode repairs an input sent as a JSON string into its object.
+			["read", JSON.stringify({ path: "auth.json" })],
+			["write", { path: "out/new.txt" }],
+			["write", { path: "../outside/new.txt" }],
 			["grep", { pattern: "x", path: outside }],
 			["glob", { pattern: "*", path: "out" }],
-			["apply_patch", patch("*** Add File: out/x")],
-			["apply_patch", patch("*** Update File: a.txt", "*** Move to: /etc/x")],
+			["patch", patch("*** Add File: out/x")],
+			["patch", patch("*** Update File: a.txt", "*** Move to: /etc/x")],
 		] as const)
-			await expect(call(tool, args), `${tool} ${JSON.stringify(args)}`).rejects.toThrow(/outside the checkout/);
+			await expect(call(tool, input), `${tool} ${JSON.stringify(input)}`).rejects.toThrow(/outside the checkout/);
+		// Input that is not an object, even after opencode's repair, has no paths to check.
+		for (const input of ["{path: 'auth.json'}", "auth.json", null, 1])
+			await expect(call("read", input), JSON.stringify(input)).rejects.toThrow(/not an object/);
 		// A write would follow a symlink to nothing out of the checkout.
-		await expect(call("write", { filePath: "dangling" })).rejects.toThrow(/symlink to nothing/);
+		await expect(call("write", { path: "dangling" })).rejects.toThrow(/symlink to nothing/);
 		// opencode would load its own config from the checkout, outside the sandbox.
-		await call("read", { filePath: "opencode.json" });
-		for (const [tool, args] of [
-			["write", { filePath: "opencode.json" }],
-			["edit", { filePath: ".opencode/plugin/x.js" }],
-			["apply_patch", patch("*** Add File: .opencode/opencode.json")],
+		await call("read", { path: "opencode.json" });
+		for (const [tool, input] of [
+			["write", { path: "opencode.json" }],
+			["edit", { path: ".opencode/plugin/x.js" }],
+			["patch", patch("*** Add File: .opencode/opencode.json")],
 		] as const)
-			await expect(call(tool, args)).rejects.toThrow(/opencode's own config/);
+			await expect(call(tool, input)).rejects.toThrow(/opencode's own config/);
 	});
 
 	posix("refuses a checkout holding opencode's own config, which opencode would load unconfined", () => {
@@ -895,44 +961,76 @@ describe("opencode", () => {
 		);
 	});
 
-	test("reads account limits from retries and errors, not brief rate limits", () => {
-		const retry = { type: "retry" as const, attempt: 1, next: 1_900_000_000_000 };
-		expect(
-			retryLimit({
-				...retry,
-				message: "Go limit reached",
-				action: { reason: "account_rate_limit", provider: "opencode-go", title: "", message: "", label: "" },
-			}),
-		).toEqual({ until: 1_900_000_000_000 });
-		expect(retryLimit({ ...retry, message: "The usage limit has been reached" })).toEqual({ until: null });
-		expect(retryLimit({ ...retry, message: "Rate limit reached for requests" })).toBeNull();
-		expect(retryLimit({ type: "busy" })).toBeNull();
+	test("refuses an account that does not record the providers it signed in to", () => {
+		const launch = { cwd: tempDir(), home: tempDir() } as Parameters<Opencode["launch"]>[0];
+		expect(() => new Opencode("/opencode", "/srt").launch(launch)).toThrow(/add it again/);
+		expect(() => Opencode.setModel(launch.home, "openai/gpt-5.5")).toThrow(/not signed in/);
+	});
 
+	test("leaves no kill timer behind a server that could not start", async () => {
+		vi.useFakeTimers();
+		try {
+			await expect(new Opencode(join(tempDir(), "opencode"), "/srt").status(tempDir())).rejects.toThrow(
+				/could not start/,
+			);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("reads account limits from errors, not brief rate limits", () => {
 		const now = 1_000_000;
-		const api = (message: string, responseBody?: string, responseHeaders?: Record<string, string>) =>
-			({
-				role: "assistant",
-				error: { name: "APIError", data: { message, isRetryable: false, responseBody, responseHeaders } },
-			}) as never;
+		const error = (type: string, message: string, body?: string) => ({
+			type,
+			message,
+			...(body !== undefined && { response: { body } }),
+		});
+		expect(accountLimit(error("provider.quota", "Out of credits"), now)).toEqual({ until: null });
+		expect(
+			accountLimit(
+				error(
+					"provider.rate-limit",
+					"Too many",
+					JSON.stringify({ error: { type: "usage_limit_reached", resets_at: 1_900_000 } }),
+				),
+				now,
+			),
+		).toEqual({ until: 1_900_000_000 });
+		expect(
+			accountLimit(error("provider.quota", "Quota", JSON.stringify({ error: { resets_in_seconds: 60 } })), now),
+		).toEqual({ until: now + 60_000 });
+		expect(accountLimit(error("provider.rate-limit", "Rate limit reached for requests"), now)).toBeNull();
+
+		const assistant = (content: unknown[], failure?: object) =>
+			({ type: "assistant", content, ...(failure && { error: failure }) }) as never;
+		expect(
+			turnExit(assistant([], error("provider.quota", "The usage limit has been reached")), undefined, null, now),
+		).toEqual({ limited: { until: null }, failed: true, reply: "The usage limit has been reached" });
+		expect(turnExit(assistant([], error("provider.invalid-request", "Bad request")), undefined, null, now)).toEqual(
+			{
+				limited: null,
+				failed: true,
+				reply: "Bad request",
+			},
+		);
 		expect(
 			turnExit(
-				api("Too many", JSON.stringify({ error: { type: "usage_limit_reached", resets_at: 1_900_000 } })),
-				[],
+				assistant([
+					{ type: "reasoning", text: "hm" },
+					{ type: "text", text: "All done" },
+				]),
+				undefined,
 				null,
 				now,
-			).limited,
-		).toEqual({ until: 1_900_000_000 });
-		expect(turnExit(api("Quota exceeded.", "", { "retry-after": "60" }), [], null, now).limited).toEqual({
-			until: now + 60_000,
-		});
-		expect(turnExit(api("Bad request"), [], null, now)).toEqual({
+			),
+		).toEqual({ limited: null, failed: false, reply: "All done" });
+		// A run that failed before answering, such as on an unknown model.
+		expect(turnExit(undefined, error("unknown", "No model"), null, now)).toEqual({
 			limited: null,
 			failed: true,
-			reply: "Bad request",
+			reply: "No model",
 		});
-		expect(
-			turnExit({ role: "assistant" } as never, [{ type: "text", text: "All done" } as never], null, now),
-		).toEqual({ limited: null, failed: false, reply: "All done" });
 	});
 });
 
@@ -999,6 +1097,7 @@ describe("prompts", () => {
 		expect(prompt).toContain("kix adds for this job: Extra rule.");
 		expect(prompt).toContain("Use tabs.");
 		expect(prompt).toContain("# The start workflow");
+		expect(prompt).toContain("# Engineering context");
 		expect(prompt).toContain("# Quest guide");
 	});
 
@@ -1040,7 +1139,7 @@ describe("prompts", () => {
 		expect(merge).toContain("Where the workflow says to run `quest wait`, call `wait`");
 		expect(merge).toContain("# The merge workflow");
 		// The skill's design checkpoint still reaches the maintainer.
-		expect(merge).toContain("Every fourth round");
+		expect(merge).toContain("a multiple of three reports findings");
 	});
 
 	test("carry earlier summaries and the latest answer", () => {
@@ -1081,12 +1180,22 @@ describe("account add", () => {
 		const dir = tempDir();
 		const bin = join(dir, "bin");
 		mkdirSync(bin);
-		// opencode's sign-in stores the credential under its XDG data home.
-		writeFileSync(
-			join(bin, "opencode"),
-			`#!/bin/sh\nmkdir -p "$XDG_DATA_HOME/opencode"\necho '{"opencode-go":{"type":"api","key":"k"}}' > "$XDG_DATA_HOME/opencode/auth.json"\n`,
-		);
+		// opencode's sign-in stores the credential in its own store, which its server reports.
+		writeFileSync(join(bin, "opencode"), `#!${process.execPath}\n${FAKE_OPENCODE}`);
 		chmodSync(join(bin, "opencode"), 0o755);
+		writeFileSync(
+			join(dir, "signed-in.json"),
+			JSON.stringify({
+				integrations: [
+					{
+						id: "opencode-go",
+						connections: [{ type: "credential", id: "c", label: "API key", method: "key" }],
+					},
+					{ id: "openai", connections: [] },
+				],
+				providers: [{ id: "opencode-go", integrationID: "opencode-go" }, { id: "openai" }],
+			}),
+		);
 		const out: string[] = [];
 		const io = {
 			stdout: (text: string) => out.push(text),
@@ -1095,6 +1204,7 @@ describe("account add", () => {
 				...process.env,
 				PATH: `${bin}:${process.env.PATH}`,
 				QUEST_RUNNER_HOME: join(dir, "home"),
+				QUEST_RUNNER_OPENCODE: join(bin, "opencode"),
 				QUEST_RUNNER_SRT: join(bin, "srt"),
 			},
 		};
@@ -1116,11 +1226,32 @@ describe("account add", () => {
 			"opencode",
 			"opencode.json",
 		);
-		expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ model: "opencode-go/kimi-k3" });
+		// Its jobs may use only the providers it signed in to.
+		expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({
+			model: "opencode-go/kimi-k3",
+			policies: [
+				{ action: "provider.use", resource: "*", effect: "deny" },
+				{ action: "provider.use", resource: "opencode-go", effect: "allow" },
+			],
+		});
+		// Each in a private server in the account's home, not opencode's background service.
+		const calls = readFileSync(join(dir, "calls.log"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(calls.map((c) => c.argv)).toEqual([
+			["auth", "login", "--standalone"],
+			["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"],
+			["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"],
+		]);
+		expect(new Set(calls.map((c) => c.cwd))).toEqual(new Set([home.accountHome(account!.id)]));
 	});
 });
 
 describe("runner adapters", () => {
+	/** What socat says when srt's seccomp filter refuses it a Unix socket. */
+	const REFUSED = "socat[5] E socket(1, 1, 0): Operation not permitted";
+
 	test.skipIf(process.platform !== "linux")("need the sandbox's programs only once an account needs them", () => {
 		const bin = join(tempDir(), "bin");
 		mkdirSync(bin);
@@ -1138,8 +1269,76 @@ describe("runner adapters", () => {
 		expect(adapter("claude")).toBeInstanceOf(Claude);
 		// opencode's commands run through sandbox-runtime.
 		expect(() => adapter("opencode")).toThrow(/srt is not installed/);
-		install("srt");
+		writeFileSync(join(bin, "srt"), `#!/bin/sh\necho '${REFUSED}' >&2\nexit 1\n`);
+		chmodSync(join(bin, "srt"), 0o755);
 		expect(adapter("opencode")).toBeInstanceOf(Opencode);
+	});
+
+	test.skipIf(process.platform !== "linux")("refuse opencode when sandbox-runtime allows Unix sockets", () => {
+		const bin = join(tempDir(), "bin");
+		mkdirSync(bin);
+		const srt = (script: string) => {
+			writeFileSync(join(bin, "srt"), `#!/bin/sh\n${script}`);
+			chmodSync(join(bin, "srt"), 0o755);
+			return join(bin, "srt");
+		};
+		// What socat says when no seccomp filter stopped it making the socket.
+		srt(
+			`echo 'socat[9] E connect(, AF=1 "/tmp/quest-probe-x/missing", 31): No such file or directory' >&2\nexit 1\n`,
+		);
+		for (const name of ["opencode", "bwrap", "socat"]) {
+			writeFileSync(join(bin, name), "#!/bin/sh\n");
+			chmodSync(join(bin, name), 0o755);
+		}
+		expect(() => runnerAdapters({ PATH: bin })("opencode")).toThrow(/has no seccomp helper \(apply-seccomp/);
+		// Anything but the filter's own refusal fails closed.
+		expect(unixSocketRefusal(srt("exit 0\n"), { PATH: bin })).toMatch(/^could not check that .* \(exit 0\)$/);
+		expect(unixSocketRefusal(srt(`echo '${REFUSED}' >&2\nexit 1\n`), { PATH: bin })).toBeNull();
+		// srt runs with the jobs' environment, since it looks for its helper through `npm root -g`.
+		const jobs = srt(
+			`[ -z "$NPM_CONFIG_PREFIX" ] && [ "$TMPDIR" = "$PWD" ] && [ "$CLAUDE_CODE_TMPDIR" = "$PWD" ] && echo '${REFUSED}' >&2\nexit 1\n`,
+		);
+		expect(unixSocketRefusal(jobs, { PATH: bin, NPM_CONFIG_PREFIX: tempDir() })).toBeNull();
+	});
+
+	test.skipIf(process.platform !== "linux")("refuse to start when bubblewrap cannot make the sandbox", () => {
+		const bin = join(tempDir(), "bin");
+		mkdirSync(bin);
+		for (const [name, script] of [
+			["claude", ""],
+			["socat", ""],
+			// What the Nix-pinned bwrap says under Ubuntu's restriction on unprivileged user namespaces.
+			["bwrap", "echo 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' >&2\nexit 1\n"],
+		] as const) {
+			writeFileSync(join(bin, name), `#!/bin/sh\n${script}`);
+			chmodSync(join(bin, name), 0o755);
+		}
+		const bwrap = join(realpathSync(bin), "bwrap");
+		expect(() => runnerAdapters({ PATH: bin })("claude")).toThrow(
+			`${bwrap} cannot make the sandbox's namespaces (bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted)`,
+		);
+		expect(sandboxRefusal(join(bin, "claude"))).toBeNull();
+		// Under AppArmor's restriction, the refusal carries the profile for the runner package's exact bwrap.
+		const said = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
+		const pinned = "/nix/store/mvj6y8k3xs35cj7kq937xi44q4hl3r93-bubblewrap-0.12.0/bin/bwrap";
+		const restricted = refusalReason(pinned, said, true);
+		expect(restricted).toContain(
+			`sudo tee /etc/apparmor.d/quest-bwrap >/dev/null <<'EOF'\n${bwrapProfile(pinned)}EOF\n`,
+		);
+		expect(restricted).toMatch(/\nsudo apparmor_parser -r \/etc\/apparmor.d\/quest-bwrap$/);
+		expect(bwrapProfile(pinned)).toContain(`profile quest-bwrap ${pinned} flags=(unconfined) {\n  userns,\n}`);
+		// A system bwrap may have the distribution's profile, which a second one would disable.
+		const system = refusalReason("/usr/bin/bwrap", said, true);
+		expect(system).toContain("nix run github:moq-dev/quest#runner -- runner");
+		expect(system).not.toContain("apparmor_parser");
+		const unrestricted = refusalReason(pinned, said, false);
+		expect(unrestricted).toContain("needs unprivileged user namespaces");
+		expect(unrestricted).not.toContain("AppArmor");
+	});
+
+	test("document the AppArmor profile the runner prints", () => {
+		const readme = readFileSync(resolve(import.meta.dirname, "../README.md"), "utf8");
+		expect(readme).toContain(bwrapProfile("/nix/store/HASH-bubblewrap-VERSION/bin/bwrap"));
 	});
 });
 
@@ -1249,7 +1448,14 @@ log({
 	timeout: kix.timeout,
 });
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-out({ type: "system", subtype: "init", session_id: session });
+out({ type: "system", subtype: "init", session_id: session, model: "claude-test" });
+// Claude Code runs the settings' hooks for a tool, with the turn's effort, before calling it.
+const hooks = (tool) => {
+	for (const entry of JSON.parse(fs.readFileSync(at("--settings"), "utf8")).hooks?.PreToolUse ?? [])
+		if (new RegExp("^(?:" + entry.matcher + ")$").test("mcp__kix__" + tool))
+			for (const hook of entry.hooks)
+				require("node:child_process").execSync(hook.command, { env: { ...process.env, CLAUDE_EFFORT: "high" } });
+};
 let id = 0;
 async function rpc(method, params) {
 	const response = await fetch(kix.url, {
@@ -1272,6 +1478,7 @@ async function rpc(method, params) {
 			await rpc("tools/call", { name: "context", arguments: {} });
 			log({ backgroundWaitPid: process.pid });
 		}
+		if (step.tool) hooks(step.tool);
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
 			process.on("SIGTERM", () => { log({ terminated: true }); process.exit(143); });
@@ -1285,23 +1492,33 @@ async function rpc(method, params) {
 `;
 
 /**
- * A fake `opencode serve` that runs the same steps as the fake `claude` on
- * each prompt: it checks the password, streams events, and ends a waiting
- * turn when the session is aborted.
+ * A fake `opencode serve --stdio` that runs the same steps as the fake
+ * `claude` on each prompt: it checks the password, loads the runner's plugin,
+ * streams events, and ends a waiting turn when the session is interrupted.
  */
 const FAKE_OPENCODE = `
 const fs = require("node:fs");
 const { join } = require("node:path");
 const http = require("node:http");
+const { pathToFileURL } = require("node:url");
 const argv = process.argv.slice(2);
 const logFile = join(__dirname, "..", "calls.log");
 const log = (value) => fs.appendFileSync(logFile, JSON.stringify(value) + "\\n");
-const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
+if (argv[0] === "auth") {
+	log({ argv, cwd: process.cwd() });
+	process.exit(0);
+}
+// A job's server carries the runner's config; a server answering about the account carries none.
+const config = process.env.OPENCODE_CONFIG_CONTENT ? JSON.parse(process.env.OPENCODE_CONFIG_CONTENT) : undefined;
+if (!config) log({ argv, cwd: process.cwd() });
+const signedIn = () => JSON.parse(fs.readFileSync(join(__dirname, "..", "signed-in.json"), "utf8"));
 const auth = "Basic " + Buffer.from("opencode:" + process.env.OPENCODE_SERVER_PASSWORD).toString("base64");
-const kix = config.mcp.kix;
+const kix = config?.mcp.servers.kix;
 const streams = [];
 const send = (event) => { for (const s of streams) s.write("data: " + JSON.stringify(event) + "\\n\\n"); };
-let aborted = () => {};
+const messages = {};
+const running = {};
+let interrupted = () => {};
 let sessions = 0;
 let id = 0;
 async function rpc(method, params) {
@@ -1312,17 +1529,25 @@ async function rpc(method, params) {
 	});
 	return (await response.json()).result;
 }
+// opencode loads a local plugin from its directory and fails it rather than the server.
+const plugin = config && (async () => {
+	const { package: dir, options } = config.plugins[0];
+	const { default: definition } = await import(pathToFileURL(join(dir, "server.js")).href);
+	let hooked = false;
+	await definition.setup({ options, tool: { hook: async () => (hooked = true) } });
+	return { id: definition.id, source: { type: "local", path: dir }, features: {}, state: hooked ? { status: "active" } : { status: "failed", error: "no hook" } };
+})();
 const body = (request) => new Promise((resolve) => {
 	let text = "";
 	request.on("data", (chunk) => (text += chunk));
 	request.on("end", () => resolve(text ? JSON.parse(text) : {}));
 });
 const json = (response, value) => response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(value));
-async function prompt(session, input) {
+async function turn(session, text) {
 	const steps = JSON.parse(fs.readFileSync(join(__dirname, "..", "steps.json"), "utf8"));
 	const resume = fs.existsSync(logFile) && fs.readFileSync(logFile, "utf8").includes('"prompted":"' + session + '"');
 	log({
-		argv, cwd: process.cwd(), stdin: input.parts[0].text, system: input.system, session, prompted: session,
+		argv, cwd: process.cwd(), stdin: text, system: fs.readFileSync(config.instructions[0], "utf8"), session, prompted: session,
 		xdg: process.env.XDG_DATA_HOME, home: process.env.HOME, devShell: process.env.IN_DEVSHELL ?? null,
 		gh: process.env.GH_TOKEN ?? null, projectConfig: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null, config,
 	});
@@ -1333,35 +1558,59 @@ async function prompt(session, input) {
 		// opencode runs a command as its shell's -c, with the server's own environment.
 		if (step.shell)
 			log({ shell: require("node:child_process").execFileSync(config.shell, ["-c", step.shell], { encoding: "utf8" }) });
-		if (step.emit) send({ ...step.emit, properties: { ...step.emit.properties, sessionID: session } });
+		if (step.emit) send({ ...step.emit, data: { ...step.emit.data, sessionID: session } });
+		if (step.assistant) messages[session].unshift({ id: "msg_" + ++id, content: [], ...step.assistant });
 		if (step.tool) log({ tool: step.tool, reply: await rpc("tools/call", { name: step.tool, arguments: step.args }) });
 		if (step.wait) {
-			await new Promise((resolve) => (aborted = resolve));
+			await new Promise((resolve) => (interrupted = resolve));
 			log({ aborted: session });
-			return { info: { role: "assistant", error: { name: "MessageAbortedError", data: { message: "Aborted" } } }, parts: [] };
+			return { type: "assistant", content: [], error: { type: "aborted", message: "Interrupted" } };
 		}
 	}
-	return { info: { role: "assistant", finish: "stop" }, parts: [{ type: "text", text: "done" }] };
+	return { type: "assistant", content: [{ type: "text", text: "done" }], finish: "stop" };
 }
 const server = http.createServer(async (request, response) => {
 	if (request.headers.authorization !== auth) return response.writeHead(401).end();
 	const path = new URL(request.url, "http://x").pathname;
-	if (path === "/event") {
+	if (path === "/api/event") {
 		response.writeHead(200, { "Content-Type": "text/event-stream" });
 		streams.push(response);
-		return response.write("data: " + JSON.stringify({ type: "server.connected", properties: {} }) + "\\n\\n");
+		return response.write("data: " + JSON.stringify({ type: "server.connected", data: {} }) + "\\n\\n");
 	}
-	if (path === "/session") return json(response, { id: "ses_" + ++sessions + "_" + process.pid });
-	const message = /^\\/session\\/([^/]+)\\/message$/.exec(path);
-	if (message) return json(response, await prompt(message[1], await body(request)));
-	if (/\\/abort$/.test(path)) {
-		aborted();
-		return json(response, true);
+	if (path === "/api/model/default") return json(response, { data: { id: "gpt-5.5", providerID: "openai" } });
+	if (path === "/api/integration") return json(response, { location: {}, data: signedIn().integrations });
+	if (path === "/api/provider") return json(response, { location: {}, data: signedIn().providers });
+	// The runner's config, the account's config directory, and any the steps add, such as a machine's.
+	if (path === "/api/config")
+		return json(response, [
+			...(JSON.parse(fs.readFileSync(join(__dirname, "..", "steps.json"), "utf8")).config ?? []),
+			{ type: "directory", path: join(process.env.XDG_CONFIG_HOME, "opencode") },
+			{ type: "document", info: config },
+		]);
+	if (path === "/api/plugin") return json(response, { location: {}, data: [await plugin] });
+	if (path === "/api/session") return json(response, { data: { id: "ses_" + ++sessions + "_" + process.pid } });
+	const [, session, action] = /^\\/api(?:\\/experimental)?\\/session\\/([^/]+)\\/(\\w+)$/.exec(path) ?? [];
+	if (action === "prompt") {
+		const { text } = await body(request);
+		const user = { type: "user", id: "msg_" + ++id };
+		messages[session] = [user, ...(messages[session] ?? [])];
+		running[session] = turn(session, text).then((reply) => messages[session].unshift({ id: "msg_" + ++id, ...reply }));
+		return json(response, { data: { id: user.id } });
+	}
+	if (action === "wait") {
+		await running[session];
+		return response.writeHead(204).end();
+	}
+	if (action === "message") return json(response, { data: messages[session], cursor: {} });
+	if (action === "interrupt") {
+		interrupted();
+		return json(response, { interrupted: true });
 	}
 	response.writeHead(404).end();
 });
 process.on("SIGTERM", () => process.exit(143));
-server.listen(0, "127.0.0.1", () => console.log("opencode server listening on http://127.0.0.1:" + server.address().port));
+process.stdin.on("end", () => process.exit(0)).resume();
+server.listen(0, "127.0.0.1", () => console.log(JSON.stringify({ url: "http://127.0.0.1:" + server.address().port })));
 `;
 
 /** A fake sandbox-runtime that records its settings and environment, then runs the command unconfined. */
@@ -1396,6 +1645,10 @@ interface Rig {
 	runner: Runner;
 	home: RunnerHome;
 	publishes: Sent[];
+	/** The review rounds the runner reported to kix. */
+	reviews: Sent[];
+	/** The reviews the runner asked for. */
+	reviewed: ReviewRequest[];
 	/** The context URLs the runner read. */
 	contexts: string[];
 	upstream: { dir: string; commit: string };
@@ -1413,6 +1666,15 @@ function rig(
 		upstream: { dir: string; commit: string },
 	) => { status: number; body: unknown } | undefined,
 	cli: AdapterName = "claude",
+	/** Each review round, which by default no reviewer can run. */
+	reviewRound: (request: ReviewRequest) => Promise<Round> = async () => {
+		throw new Unreviewable("the test runs no reviewer");
+	},
+	/** kix's answer to a reported review round. */
+	reviewReply: (body: Sent) => { status: number; body: unknown } = () => ({
+		status: 200,
+		body: { conclusion: "success" },
+	}),
 ): Rig {
 	const dir = tempDir();
 	const bin = join(dir, "bin");
@@ -1438,13 +1700,24 @@ function rig(
 	};
 	home.saveAccounts([account]);
 	if (cli === "opencode") {
-		const data = join(accountDirectories(home.accountHome("acct1")).XDG_DATA_HOME, "opencode");
-		mkdirSync(data, { recursive: true });
-		writeFileSync(join(data, "auth.json"), JSON.stringify({ openai: { type: "oauth", access: "secret" } }));
-		Opencode.setModel(home.accountHome("acct1"), "openai/gpt-5.5");
+		// What `quest runner account add opencode --model openai/gpt-5.5` records after a ChatGPT sign-in.
+		const config = join(accountDirectories(home.accountHome("acct1")).XDG_CONFIG_HOME, "opencode");
+		mkdirSync(config, { recursive: true });
+		writeFileSync(
+			join(config, "opencode.json"),
+			JSON.stringify({
+				model: "openai/gpt-5.5",
+				policies: [
+					{ action: "provider.use", resource: "*", effect: "deny" },
+					{ action: "provider.use", resource: "openai", effect: "allow" },
+				],
+			}),
+		);
 	}
 	const hub = new FakeHub();
 	const publishes: Sent[] = [];
+	const reviews: Sent[] = [];
+	const reviewed: ReviewRequest[] = [];
 	const contexts: string[] = [];
 	let heads = 0;
 	const env = {
@@ -1465,6 +1738,10 @@ function rig(
 				: new Opencode(join(bin, "opencode"), join(bin, "srt"), env),
 		devShell: (job, repository, signal) => devShell(job, repository, env, signal),
 		remote: () => source.dir,
+		review: (request) => {
+			reviewed.push(request);
+			return reviewRound(request);
+		},
 		env,
 		dial: hub.dial,
 		fetch: (async (url: string, init: RequestInit) => {
@@ -1473,6 +1750,11 @@ function rig(
 				return Response.json({ kind: "issue", number: 4, title: "Parser breaks", body: "On empty input" });
 			}
 			const body = JSON.parse(init.body as string);
+			if (url.endsWith("/api/runner/review")) {
+				reviews.push(body);
+				const reply = reviewReply(body);
+				return Response.json(reply.body, { status: reply.status });
+			}
 			publishes.push(body);
 			const custom = publishReply?.(body, source);
 			if (custom) return Response.json(custom.body, { status: custom.status });
@@ -1492,6 +1774,8 @@ function rig(
 		runner,
 		home,
 		publishes,
+		reviews,
+		reviewed,
 		contexts,
 		upstream: source,
 		logs,
@@ -1599,13 +1883,24 @@ describe("quest runner", () => {
 			await idle(r.runner);
 			expect(r.hub.of("question")).toHaveLength(1);
 			expect(r.calls().find((call) => call.stdin)!.stdin).toContain("Resolve conflicts");
-			expect(r.publishes).toHaveLength(1);
+			// The fixes publish first, and land in a second publication once reviewed.
+			expect(r.publishes).toHaveLength(2);
 			expect(r.publishes[0]).toMatchObject({
 				head,
 				changes: expect.arrayContaining([
 					{ path: paths[0], content: Buffer.from("resolved both versions\n").toString("base64") },
 				]),
 			});
+			expect(r.publishes[0]!.land).toBeUndefined();
+			expect(r.publishes[1]).toEqual({
+				job: "job1",
+				attempt: 3,
+				head: "1".padStart(40, "0"),
+				session: expect.any(String),
+				changes: [],
+				land: {},
+			});
+			expect(r.reviews).toEqual([]);
 		} finally {
 			await r.runner.shutdown();
 		}
@@ -1665,7 +1960,12 @@ describe("quest runner", () => {
 		expect(checkpoint!.changes).toEqual([{ path: "a.txt", content: Buffer.from("first\n").toString("base64") }]);
 		expect(delivery).toMatchObject({
 			head: "0".repeat(39) + "1",
-			pull: { title: "feat: thing", body: "Body", draft: false },
+			// The runner names the session in the body's record, from the CLI's own report of its model and effort.
+			pull: {
+				title: "feat: thing",
+				body: "Body\n\n## Models\n\n- Implementer: claude, claude-test, high effort\n",
+				draft: false,
+			},
 		});
 		expect(delivery!.changes.map((c: Sent) => [c.path, c.content === null])).toEqual([
 			["b.txt", false],
@@ -1805,6 +2105,7 @@ describe("quest runner", () => {
 		const r = rig(undefined, "opencode");
 		r.steps({
 			start: [
+				{ emit: { type: "marker" } },
 				{ write: "a.txt", content: "draft\n" },
 				{
 					shell: 'printf "%s|%s|%s|%s|%s" "$IN_DEVSHELL" "$HOME" "${OPENCODE_SERVER_PASSWORD:-none}" "${QUEST_COMMAND:-none}" "$TMPDIR"',
@@ -1815,7 +2116,17 @@ describe("quest runner", () => {
 					args: { summary: "Need a choice", questions: [{ question: "Which?", options: [{ label: "A" }] }] },
 				},
 			],
-			resume: [{ tool: "deliver", args: { summary: "Went with A", title: "feat: a", body: "Body" } }],
+			resume: [
+				{ assistant: { type: "assistant", model: { providerID: "openai", id: "gpt-test", variant: "high" } } },
+				{
+					tool: "deliver",
+					args: {
+						summary: "Went with A",
+						title: "feat: a",
+						body: "## Models\n\n- Size: S\n\n## Review\n\nNone",
+					},
+				},
+			],
 		});
 		r.assign(job(r.upstream.commit), "Extra rule.");
 		const question = await r.hub.next((m) => m.type === "question");
@@ -1825,7 +2136,7 @@ describe("quest runner", () => {
 		expect(nix.nix.slice(0, 3)).toEqual(["print-dev-env", "--accept-flake-config", "--no-write-lock-file"]);
 		const home = r.home.accountHome("acct1");
 		// The server runs outside the devShell, in the account's own homes, and loads nothing from the checkout.
-		expect(first.argv).toEqual(["serve", "--hostname=127.0.0.1", "--port=0"]);
+		expect(first.argv).toEqual(["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"]);
 		expect(first.devShell).toBeNull();
 		expect(first.xdg).toBe(join(home, "data"));
 		expect(first.home).toBe(home);
@@ -1843,7 +2154,10 @@ describe("quest runner", () => {
 				allowRead: [checkout, repository, tmp],
 				allowWrite: [checkout, tmp],
 				// Nor can they write the opencode config the server would load.
-				denyWrite: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
+				denyWrite: [
+					...[".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
+					"/tmp/claude",
+				],
 			},
 			enableWeakerNestedSandbox: false,
 		});
@@ -1852,39 +2166,52 @@ describe("quest runner", () => {
 		expect(srt.env).not.toContain("OPENCODE_CONFIG_CONTENT");
 		expect(srt.env).not.toContain("AWS_SECRET_ACCESS_KEY");
 		expect(srt.env).not.toContain("XDG_DATA_HOME");
+		// srt hands commands this as their TMPDIR.
+		expect(srt.env).toContain("CLAUDE_CODE_TMPDIR");
 		expect(shell.shell).toBe(`1|${tmp}/home|none|none|${tmp}`);
 		expect(first.stdin).toContain("kix adds for this job: Extra rule.");
 		expect(first.system).toContain("checkpoint");
 		expect(first.config).toMatchObject({
-			model: "openai/gpt-5.5",
-			enabled_providers: ["openai"],
 			shell: join(home, `kix-${question.session}`, "sandboxed-bash"),
-			// The file tools stay in the checkout and the attempt's directory, and WebFetch is off.
-			permission: {
-				"*": "allow",
-				question: "deny",
-				webfetch: "deny",
-				external_directory: { "*": "deny", [`${tmp}/*`]: "allow" },
-			},
+			// The file tools stay in the checkout and the attempt's directory, and nothing that runs in the server is offered.
+			permissions: [
+				{ action: "*", resource: "*", effect: "allow" },
+				...["question", "webfetch", "websearch", "execute", "browser", "external_directory"].map((action) => ({
+					action,
+					resource: "*",
+					effect: "deny",
+				})),
+				...[tmp, join(home, "data", "opencode", "tool-output"), join(home, "data", "opencode", "shell")].map(
+					(dir) => ({ action: "external_directory", resource: `${dir}/*`, effect: "allow" }),
+				),
+			],
 			lsp: false,
 			formatter: false,
-			mcp: { kix: { type: "remote", headers: { Authorization: expect.stringMatching(/^Bearer /) } } },
+			mcp: {
+				servers: {
+					kix: {
+						type: "remote",
+						codemode: false,
+						headers: { Authorization: expect.stringMatching(/^Bearer /) },
+					},
+				},
+			},
 		});
-		expect(first.config.plugin[0][1]).toEqual({
+		expect(first.config.plugins[0].options).toEqual({
 			cwd: checkout,
 			writes: [checkout, tmp],
-			reads: [join(home, "data", "opencode", "tool-output")],
+			reads: [join(home, "data", "opencode", "tool-output"), join(home, "data", "opencode", "shell")],
 			config: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
 		});
 		// The launch's shell, plugin, and settings are gone once it ends.
 		expect(existsSync(dirname(first.config.shell))).toBe(false);
-		// Events stream as raw output.
-		expect(
-			r.hub
-				.of("output")
-				.map((o) => o.text)
-				.join(""),
-		).toContain("opencode server listening");
+		// The server's own output and its events stream as raw output.
+		const output = r.hub
+			.of("output")
+			.map((o) => o.text)
+			.join("");
+		expect(output).toContain('{"url":"http://127.0.0.1:');
+		expect(output).toContain('"type":"marker"');
 
 		r.assign(
 			job(r.upstream.commit, {
@@ -1906,6 +2233,10 @@ describe("quest runner", () => {
 		const result = await r.result();
 		await idle(r.runner);
 		expect(result).toMatchObject({ attempt: 2, outcome: "completed", summary: "Went with A" });
+		// The resumed session names itself from its latest assistant message, in the agent's own record.
+		expect(r.publishes.at(-1)!.pull.body).toBe(
+			"## Models\n\n- Size: S\n- Implementer: opencode, openai/gpt-test, high effort\n\n## Review\n\nNone",
+		);
 		const resumed = r.calls().filter((c) => c.prompted);
 		expect(resumed).toHaveLength(2);
 		// The kix session maps to the opencode session that asked.
@@ -1925,20 +2256,37 @@ describe("quest runner", () => {
 		expect(cancelled).toMatchObject({ outcome: "cancelled" });
 		expect(r.calls().some((c) => c.aborted)).toBe(true);
 
-		const resets = Date.now() + 3_600_000;
-		const status = {
-			type: "retry",
-			attempt: 1,
-			message: "Go limit",
-			next: resets,
-			action: { reason: "account_rate_limit" },
+		// A limit only the message names, which opencode would retry until the reset.
+		const resets = Math.floor(Date.now() / 1000) + 3600;
+		const error = {
+			type: "provider.rate-limit",
+			message: "You've hit your usage limit",
+			response: { body: JSON.stringify({ error: { type: "usage_limit_reached", resets_at: resets } }) },
 		};
-		r.steps({ start: [{ emit: { type: "session.status", properties: { status } } }, { wait: true }] });
+		r.steps({
+			start: [{ emit: { type: "session.retry.scheduled", data: { attempt: 1, at: 0, error } } }, { wait: true }],
+		});
 		r.assign(job(r.upstream.commit, { id: "job2" }));
 		const limited = await r.hub.next((m) => m.type === "result" && m.job === "job2");
 		await idle(r.runner);
 		expect(limited).toMatchObject({ outcome: "limited" });
-		expect(r.home.accounts()[0]!.limitedUntil).toBe(resets);
+		expect(r.home.accounts()[0]!.limitedUntil).toBe(resets * 1000);
+		await r.runner.shutdown();
+	});
+
+	posix("refuses an opencode turn when opencode loaded config the runner did not write", async () => {
+		const r = rig(undefined, "opencode");
+		r.steps({
+			config: [{ type: "document", path: "/etc/opencode/opencode.json", info: { shell: "/bin/sh" } }],
+			start: [{ write: "a.txt", content: "x\n" }],
+		});
+		r.assign(job(r.upstream.commit));
+		const refused = await r.result();
+		await idle(r.runner);
+		expect(refused).toMatchObject({ outcome: "failed" });
+		expect(refused.summary).toContain("/etc/opencode/opencode.json");
+		// Nothing was prompted.
+		expect(r.calls().filter((c) => c.prompted)).toEqual([]);
 		await r.runner.shutdown();
 	});
 
@@ -2238,6 +2586,321 @@ describe("quest runner", () => {
 		} finally {
 			set.mockRestore();
 			clear.mockRestore();
+		}
+	});
+});
+
+describe("runner reviews", () => {
+	const account = (extra: Partial<Account>): Account => ({
+		id: "a",
+		adapter: "claude",
+		provider: "anthropic",
+		kind: "subscription",
+		label: "a",
+		...extra,
+	});
+	const home = (a: Account) => `/runner/accounts/${a.id}`;
+
+	test("pick the other vendor: Codex on the user's own login, or one of the runner's free Claude Code accounts", () => {
+		const env = {
+			PATH: "/usr/bin",
+			QUEST_RUNNER_CLAUDE: "/nix/store/claude/bin/claude",
+			QUEST_RUNNER_CODEX: "/nix/store/codex/bin/codex",
+		};
+		const claude = account({ id: "claude" });
+		expect(reviewerFor(claude, [claude], home, env)).toEqual({
+			harness: "codex",
+			env: { ...env, PATH: "/nix/store/codex/bin:/usr/bin" },
+		});
+		expect(reviewerFor(claude, [claude], home, { PATH: "/usr/bin" })).toEqual({
+			harness: "codex",
+			env: { PATH: "/usr/bin" },
+		});
+		const openai = account({ id: "gpt", adapter: "opencode", provider: "openai" });
+		const limited = account({ id: "busy", limitedUntil: 2000 });
+		expect(reviewerFor(openai, [openai, limited, claude], home, env, 1000)).toEqual({
+			harness: "claude",
+			env: {
+				...env,
+				CLAUDE_CONFIG_DIR: "/runner/accounts/claude",
+				PATH: ["/nix/store/claude/bin", "/usr/bin"].join(delimiter),
+			},
+		});
+		expect(() => reviewerFor(openai, [openai, limited], home, env, 1000)).toThrow(Unreviewable);
+		expect(reviewerFor(openai, [openai, limited], home, env, 3000).env.CLAUDE_CONFIG_DIR).toBe(
+			"/runner/accounts/busy",
+		);
+	});
+
+	posix("check out each published head on the job's review branch, beside the agent's checkout", async () => {
+		const { dir, commit } = upstream();
+		const root = tempDir();
+		const workspace = await Workspace.prepare(root, job(commit), dir);
+		writeFileSync(join(dir, "published.txt"), "one\n");
+		git(dir, "add", ".");
+		git(dir, "commit", "-q", "-m", "published");
+		const first = git(dir, "rev-parse", "HEAD");
+		const { root: checkout, base } = await workspace.reviewCheckout(first);
+		expect(checkout).toBe(`${workspace.dir}.review`);
+		// The review's base is fetched with it, so the review itself needs no network.
+		expect(base).toBe("origin/main");
+		expect(git(checkout, "rev-parse", "origin/main")).toBe(first);
+		expect(git(checkout, "symbolic-ref", "--short", "HEAD")).toBe("kix-review/job1");
+		expect(git(checkout, "rev-parse", "HEAD")).toBe(first);
+		writeFileSync(join(dir, "published.txt"), "two\n");
+		git(dir, "commit", "-qam", "again");
+		const second = git(dir, "rev-parse", "HEAD");
+		expect(git((await workspace.reviewCheckout(second)).root, "rev-parse", "HEAD")).toBe(second);
+		expect(readFileSync(join(checkout, "published.txt"), "utf8")).toBe("two\n");
+		await workspace.remove();
+		expect(existsSync(checkout)).toBe(false);
+		expect(git(workspace.repository, "branch", "--list", "kix-review/*")).toBe("");
+	});
+
+	posix("fetch a review's base without blocking the runner", async () => {
+		const { dir, commit } = upstream();
+		const workspace = await Workspace.prepare(tempDir(), job(commit), dir);
+		writeFileSync(join(dir, "published.txt"), "one\n");
+		git(dir, "add", ".");
+		git(dir, "commit", "-q", "-m", "published");
+		const head = git(dir, "rev-parse", "HEAD");
+		// The head is already here, so the connection that holds is the review's base lookup.
+		git(workspace.repository, "fetch", "-q", "origin", head);
+		// A transport whose first connection holds until the test opens `gate`, after
+		// telling the test through `started` that it is holding.
+		const bin = tempDir();
+		const started = join(bin, "started");
+		const gate = join(bin, "gate");
+		execFileSync("mkfifo", [started, gate]);
+		const ssh = join(bin, "ssh");
+		writeFileSync(
+			ssh,
+			[
+				"#!/bin/sh",
+				"for arg; do command=$arg; done",
+				`if [ ! -e '${bin}/released' ]; then`,
+				// A runner that blocks never opens the gate; fail rather than hang the suite.
+				"  (sleep 20; kill $$) </dev/null >/dev/null 2>&1 & guard=$!",
+				`  echo > '${started}'; read _ < '${gate}'; kill $guard; touch '${bin}/released'`,
+				"fi",
+				'exec sh -c "$command"',
+				"",
+			].join("\n"),
+		);
+		chmodSync(ssh, 0o755);
+		git(workspace.repository, "remote", "set-url", "origin", `ssh://upstream${dir}`);
+		const saved = { command: process.env.GIT_SSH_COMMAND, variant: process.env.GIT_SSH_VARIANT };
+		process.env.GIT_SSH_COMMAND = ssh;
+		process.env.GIT_SSH_VARIANT = "simple";
+		try {
+			const checkout = workspace.reviewCheckout(head);
+			// Reading `started` needs the event loop, which a blocking fetch would hold until the guard fires.
+			await fs.readFile(started);
+			await fs.writeFile(gate, "\n");
+			const { root, base } = await checkout;
+			expect(git(root, "rev-parse", "HEAD")).toBe(head);
+			expect(git(root, "rev-parse", base)).toBe(head);
+		} finally {
+			for (const [key, value] of [
+				["GIT_SSH_COMMAND", saved.command],
+				["GIT_SSH_VARIANT", saved.variant],
+			] as const) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
+	const finding = { file: "new.txt", line: 1, severity: "high", title: "Wrong value", body: "It says new." };
+	/** A reviewer whose rounds report `found`'s findings in turn, then none. */
+	function rounds(...found: (typeof finding)[][]) {
+		let round = 0;
+		return async (request: ReviewRequest): Promise<Round> => ({
+			reviewer: request.reviewer.harness,
+			model: "gpt-6.1-sol",
+			effort: "medium",
+			size: "M",
+			sizeFrom: "default",
+			session: "s",
+			round: ++round,
+			base: { ref: "origin/main", sha: "b".repeat(40) },
+			head: request.head,
+			usage: [],
+			score: found[round - 1]?.length ? 8 : 10,
+			rationale: "Scored.",
+			findings: (found[round - 1] ?? []) as Round["findings"],
+		});
+	}
+	const tools = (r: Rig) => r.calls().filter((call) => call.tool);
+	const pull = { title: "feat: new", body: "Body", draft: false };
+
+	posix("review a delivered head, hand the findings to the agent, and review its answer", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+					{ tool: "deliver", args: { summary: "Refuted", ...pull, responses: "1: it should say new." } },
+				],
+			});
+			r.assign(job(r.upstream.commit));
+			expect(await r.result()).toMatchObject({ outcome: "completed", summary: "Refuted" });
+			const [first, second] = r.publishes.map((p) => (p.head === null ? "" : p.head));
+			expect([first, second]).toEqual(["", "1".padStart(40, "0")]);
+			// The Anthropic job is reviewed by Codex, sized by the job's quest branch, and each round goes to kix as it is.
+			expect(r.reviewed.map((q) => [q.head, q.reviewer.harness, q.branch, q.responses])).toEqual([
+				["1".padStart(40, "0"), "codex", "quest/m0/thing", undefined],
+				["2".padStart(40, "0"), "codex", "quest/m0/thing", "1: it should say new."],
+			]);
+			expect(r.reviews).toEqual([
+				{
+					job: "job1",
+					attempt: 1,
+					head: "1".padStart(40, "0"),
+					reviewer: "codex",
+					model: "gpt-6.1-sol",
+					effort: "medium",
+					round: 1,
+					score: 8,
+					rationale: "Scored.",
+					findings: [finding],
+				},
+				expect.objectContaining({ head: "2".padStart(40, "0"), round: 2, score: 10, findings: [] }),
+			]);
+			const [found, passed] = tools(r).map((call) => call.reply.content[0].text as string);
+			expect(found).toContain("before you end your turn");
+			expect(found).toContain(
+				"found 1 finding. It scored 8/10: Scored. kix recorded it as a failing `quest review` check.",
+			);
+			expect(found).toContain("1. [high] new.txt:1: Wrong value\nIt says new.");
+			expect(passed).toContain(
+				"found nothing. It scored 10/10: Scored. kix recorded it as the passing `quest review` check.",
+			);
+		} finally {
+			await r.runner.shutdown();
+		}
+	});
+
+	posix("fail a job whose agent ends before answering its review, and stop a review when the job stops", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+				],
+			});
+			r.assign(job(r.upstream.commit));
+			expect(await r.result()).toMatchObject({
+				outcome: "failed",
+				summary: "The agent published 0000000, but ended before answering its review's findings: done",
+			});
+		} finally {
+			await r.runner.shutdown();
+		}
+		let started!: () => void;
+		const reviewing = new Promise<void>((resolve) => (started = resolve));
+		let aborted = false;
+		const stopped = rig(undefined, "claude", (request) => {
+			started();
+			return new Promise((_, reject) =>
+				request.signal!.addEventListener("abort", () => {
+					aborted = true;
+					reject(request.signal!.reason);
+				}),
+			);
+		});
+		try {
+			stopped.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+				],
+			});
+			stopped.assign(job(stopped.upstream.commit));
+			await reviewing;
+			stopped.hub.socket.deliver({ type: "cancel", job: "job1", attempt: 1 });
+			expect(await stopped.result()).toMatchObject({ outcome: "cancelled" });
+			expect(aborted).toBe(true);
+			expect(stopped.reviews).toEqual([]);
+		} finally {
+			await stopped.runner.shutdown();
+		}
+	});
+
+	posix("lands a merge job's head only once its review passes", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Fixed" } },
+				],
+			});
+			const head = r.upstream.commit;
+			r.assign(job(head, { workflow: "merge", target: "pulls/2", branch: "feature", head }));
+			expect(await r.result()).toMatchObject({ outcome: "failed" });
+			// The fix published, but nothing landed past the findings.
+			expect(r.publishes.map((p) => p.land)).toEqual([undefined]);
+			expect(tools(r)[0].reply.content[0].text).toMatch(/^Not landed, but the review needs your fixes/);
+		} finally {
+			await r.runner.shutdown();
+		}
+		const clean = rig(undefined, "claude", rounds());
+		try {
+			clean.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Fixed", method: "squash" } },
+				],
+			});
+			const head = clean.upstream.commit;
+			clean.assign(job(head, { workflow: "merge", target: "pulls/2", branch: "feature", head }));
+			expect(await clean.result()).toMatchObject({ outcome: "completed" });
+			expect(clean.publishes.map((p) => [p.head, p.land])).toEqual([
+				[head, undefined],
+				["1".padStart(40, "0"), { method: "squash" }],
+			]);
+			expect(clean.reviews.map((p) => p.head)).toEqual(["1".padStart(40, "0")]);
+		} finally {
+			await clean.runner.shutdown();
+		}
+	});
+
+	posix("reviews no draft, and lands a head it cannot review only through kix's own gate", async () => {
+		const r = rig(undefined, "claude", rounds([finding]));
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Draft", ...pull, draft: true } },
+				],
+			});
+			r.assign(job(r.upstream.commit));
+			expect(await r.result()).toMatchObject({ outcome: "completed" });
+			expect(r.reviewed).toEqual([]);
+		} finally {
+			await r.runner.shutdown();
+		}
+		const unreviewed = rig();
+		try {
+			unreviewed.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Fixed" } },
+				],
+			});
+			const head = unreviewed.upstream.commit;
+			unreviewed.assign(job(head, { workflow: "merge", target: "pulls/2", branch: "feature", head }));
+			expect(await unreviewed.result()).toMatchObject({ outcome: "completed" });
+			expect(unreviewed.publishes.map((p) => p.land)).toEqual([undefined, {}]);
+			expect(unreviewed.reviews).toEqual([]);
+			expect(tools(unreviewed)[0].reply.content[0].text).toContain(
+				"The runner did not review 0000000: the test runs no reviewer. Landing it needs a maintainer's approval on GitHub instead.",
+			);
+		} finally {
+			await unreviewed.runner.shutdown();
 		}
 	});
 });

@@ -26,13 +26,15 @@ async function seeded(edit: (world: World) => void = () => {}) {
 	// Webhooks read and notify in the background, so each request finishes its `waitUntil` work.
 	const request = async (path: string, init?: RequestInit) => {
 		const ctx = createExecutionContext();
-		const response = await app.request(`${origin}${path}`, init, testEnv, ctx);
+		// The seed's owner, rather than the deployed allowlist, as the local server admits.
+		const response = await app.request(`${origin}${path}`, init, { ...testEnv, ENROLL_OWNERS: [data.owner] }, ctx);
 		await waitOnExecutionContext(ctx);
 		return response;
 	};
 	const { user, cookie } = await seed({
 		fetch: request,
 		db,
+		output: env.OUTPUT,
 		world: data,
 		origin,
 		secret: env.GITHUB_WEBHOOK_SECRET,
@@ -140,6 +142,33 @@ it("seeds a representative inbox through the Worker's own routes", async () => {
 	});
 	expect(merged.status).toBe(303);
 	expect(data.repos[0]!.pulls.find((p) => p.number === 12)!.closed).toBe(true);
+});
+
+it("seeds raw output that pages, ends, and reaches the cap", async () => {
+	const { request, cookie } = await seeded();
+	const html = await (await request("/inbox", { headers: { Cookie: cookie } })).text();
+	const read = async (job: string, after?: string) => {
+		const url = `/projects/github/example/rocket/jobs/${job}/output${after ? `?after=${after}` : ""}`;
+		expect(html).toContain(`data-output="${url.split("?")[0]}"`);
+		const response = await request(url, { headers: { Cookie: cookie } });
+		expect(response.status).toBe(200);
+		return response.json<{
+			output: { text: string }[];
+			next: { attempt: number; seq: number } | null;
+			truncated: number[];
+		}>();
+	};
+	// More than a page, so the card offers "Load more".
+	const first = await read("seed-plan-settings");
+	expect(first.output).toHaveLength(4);
+	expect(first.next).not.toBeNull();
+	const rest = await read("seed-plan-settings", `${first.next!.attempt}.${first.next!.seq}`);
+	expect(rest.output.at(-1)!.text).toContain("Reproduced.");
+	expect(rest.next).toBeNull();
+	expect((await read("seed-plan-config")).truncated).toEqual([]);
+	expect((await read("seed-iterate-cache")).truncated).toEqual([1]);
+	// A card without output says so when opened.
+	expect((await read("seed-start-offline")).output).toEqual([]);
 });
 
 it("lists the seeded maintainer's repositories in the project picker", async () => {
@@ -436,6 +465,26 @@ it("publishes jobs' work end to end, through the upstream branch to the pull req
 	// Finished work marks it ready for review.
 	await publish({ job: "seed-start-offline", head: first.head, pull: { ...pull, draft: false } });
 	expect(rocket.pulls.at(-1)!.draft).toBe(false);
+	// A later session's body keeps the sessions that delivered before it in its `## Models` record.
+	const models = (lines: string) => ({
+		...pull,
+		draft: false,
+		body: `Done.\n\n## Models\n\n${lines}\n\n## Review\n\nNone`,
+	});
+	await publish({
+		job: "seed-start-offline",
+		head: first.head,
+		pull: models("- Implementer: claude, first, high effort"),
+	});
+	await publish({
+		job: "seed-start-offline",
+		head: first.head,
+		pull: models("- Size: S\n- Implementer: opencode, second, high effort"),
+	});
+	expect(rocket.pulls.at(-1)!.body).toBe(
+		models("- Size: S\n- Implementer: opencode, second, high effort\n- Implementer: claude, first, high effort")
+			.body,
+	);
 
 	const continued = await latest("quest/m0/import.md");
 	expect(continued).toMatchObject({ id: retry.id, state: "running", head: rocket.branches["quest/m0/import"] });

@@ -11,14 +11,22 @@
 		"watch_dir": ["src", "scripts", "../docs", "../design", "../quest"],
 	},
 	"assets": { "directory": "build/public" },
-	"routes": [{ "pattern": "kix.quest", "custom_domain": true }],
+	"routes": [{ "pattern": "quest.moq.dev", "custom_domain": true }],
 	"workers_dev": false,
 	"vars": {
-		"AUTH_URL": "https://kix.quest",
+		"AUTH_URL": "https://quest.moq.dev",
 		"GITHUB_APP_ID": "",
 		"GOOGLE_CLIENT_ID": "",
 		// The Web Push application server key; see README.md. Notifications stay off while it is empty.
 		"VAPID_PUBLIC_KEY": "",
+		// GitHub owner IDs, not logins, whose repositories may enroll until the public release
+		// (quest/m1/open.md); any other owner's can't enroll, deliver webhooks, or queue jobs. GitHub
+		// frees a deleted or renamed account's login for anyone to claim, so an ID is the identity.
+		// Find one with `gh api users/<login> --jq .id`; see GITHUB.md.
+		"ENROLL_OWNERS": [
+			248218914, // moq-dev
+			432854, // kixelated
+		],
 	},
 	"secrets": {
 		"required": [

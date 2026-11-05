@@ -1,15 +1,32 @@
 import { env } from "cloudflare:workers";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type World, fakeGitHub } from "../dev/github";
 import { app } from "../src/index";
 import { readBoard } from "../src/board/model";
 import { type ActivityPage, associatedQuest, RETENTION, readActivity } from "../src/github/state";
+import { CI_PERMISSIONS, READS } from "../src/github/ci";
 import { GitHubService } from "../src/github/service";
 import { privateKey } from "./github-key";
-import { identity, oauth, origin } from "./login-fixtures";
+import { type Identity, identity, oauth, origin } from "./login-fixtures";
+import { outsider, owner } from "./owners";
 import { delivery } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
+/** A repository's Actions settings, as the CI check reads them. */
+type CISettings = {
+	token?: "read" | "write";
+	repository?: string[];
+	organization?: string[];
+	/** Branches GitHub reports protected, listing the first hundred; `trunk` by default. */
+	protected?: string[];
+	/** Other branches that exist. */
+	branches?: string[];
+	/** `policy` is null for any branch, "protected", or branch patterns, with `tag:` marking a tag pattern. */
+	environments?: { name: string; policy: null | "protected" | string[]; secrets: number }[];
+	/** Paths below the repository that GitHub refuses. */
+	fail?: string[];
+};
 const repo = { owner: "upstream", name: "project", id: 10 };
 const commit = "a".repeat(40);
 const tree = "b".repeat(40);
@@ -40,6 +57,8 @@ function github(
 		activityErrors?: boolean;
 		repositoryName?: string;
 		repositoryOwner?: string;
+		/** The repository owner's GitHub ID; the admitted test owner's by default. */
+		owner?: number;
 		installation?: number;
 		account?: number;
 		private?: boolean;
@@ -65,6 +84,8 @@ function github(
 		licenseStatus?: number;
 		licenseFails?: boolean;
 		onLicenseRead?: () => void;
+		/** The repository's Actions settings; the installation grants the CI check's permissions only with this. */
+		ci?: CISettings;
 	} = {},
 ) {
 	const repositoryName = options.repositoryName ?? repo.name;
@@ -122,6 +143,7 @@ function github(
 								pull_requests: "read",
 								checks: "read",
 								statuses: "read",
+								...(options.ci && CI_PERMISSIONS),
 							},
 						},
 				{ status: options.missing ? 404 : 200 },
@@ -140,7 +162,7 @@ function github(
 				...repo,
 				name: repositoryName,
 				id: options.id ?? repo.id,
-				owner: { login: repositoryOwner },
+				owner: { login: repositoryOwner, id: options.owner ?? owner },
 				private: options.private ?? false,
 				visibility: options.private ? "private" : "public",
 				default_branch: "trunk",
@@ -151,6 +173,70 @@ function github(
 		}
 		if (path.startsWith("/user/"))
 			return Response.json({ id: Number(path.split("/").at(-1)), login: "maintainer" });
+		if (options.ci && path.startsWith(`${repositoryBase}/`)) {
+			const ci = options.ci;
+			const rest = path.slice(repositoryBase.length);
+			const failed = ci.fail?.includes(rest) ? Response.json({ message: "Forbidden" }, { status: 403 }) : null;
+			const secrets = (names: string[]) => ({
+				total_count: names.length,
+				secrets: names.map((name) => ({ name })),
+			});
+			if (rest === "/actions/permissions/workflow")
+				return failed ?? Response.json({ default_workflow_permissions: ci.token ?? "read" });
+			if (rest === "/actions/secrets") return failed ?? Response.json(secrets(ci.repository ?? []));
+			if (rest === "/actions/organization-secrets")
+				return failed ?? Response.json(secrets(ci.organization ?? []));
+			const protectedBranches = ci.protected ?? ["trunk"];
+			if (rest === "/branches") {
+				expect(url.searchParams.get("protected")).toBe("true");
+				return (
+					failed ?? Response.json(protectedBranches.slice(0, 100).map((name) => ({ name, protected: true })))
+				);
+			}
+			const branch = rest.match(/^\/branches\/(.+)$/)?.[1];
+			if (branch !== undefined) {
+				const name = branch.split("/").map(decodeURIComponent).join("/");
+				if (!protectedBranches.includes(name) && !ci.branches?.includes(name))
+					return Response.json({ message: "Branch not found" }, { status: 404 });
+				return failed ?? Response.json({ name, protected: protectedBranches.includes(name) });
+			}
+			const environments = ci.environments ?? [];
+			if (rest === "/environments")
+				return (
+					failed ??
+					Response.json({
+						total_count: environments.length,
+						environments: environments.slice(0, 100).map(({ name, policy }) => ({
+							name,
+							deployment_branch_policy:
+								policy === null
+									? null
+									: {
+											protected_branches: policy === "protected",
+											custom_branch_policies: Array.isArray(policy),
+										},
+						})),
+					})
+				);
+			const environment = rest.match(/^\/environments\/([^/]+)\/(secrets|deployment-branch-policies)$/);
+			const found = environment && environments.find((e) => e.name === decodeURIComponent(environment[1]!));
+			if (found && environment![2] === "secrets")
+				return failed ?? Response.json(secrets(Array.from({ length: found.secrets }, (_, i) => `S${i}`)));
+			if (found && Array.isArray(found.policy))
+				return (
+					failed ??
+					Response.json({
+						total_count: found.policy.length,
+						branch_policies: found.policy
+							.slice(0, 100)
+							.map((name) =>
+								name.startsWith("tag:")
+									? { name: name.slice(4), type: "tag" }
+									: { name, type: "branch" },
+							),
+					})
+				);
+		}
 		if (path.endsWith("/permission")) {
 			return Response.json({
 				user: { id: options.account ?? 7007 },
@@ -231,6 +317,12 @@ function github(
 	return { calls, request, service: new GitHubService(testEnv, request as typeof fetch) };
 }
 
+/** A project read's activity query: not its quest blobs, nor its batch of open pull requests' bodies. */
+const activityRead = (call: ReturnType<typeof github>["calls"][number]) =>
+	call.path === "/graphql" &&
+	!call.body.query.includes("object(oid:") &&
+	!call.body.query.includes("b0:pullRequest(");
+
 async function state() {
 	return env.DB.prepare("SELECT * FROM github_projects WHERE id=10").first<{ state: string }>();
 }
@@ -270,6 +362,184 @@ describe("project enrollment", () => {
 		]);
 		expect(calls.some((call) => call.path === `/repos/upstream/project/git/trees/${tree}?recursive=1`)).toBe(true);
 		expect(calls.at(-1)?.path).toBe("/installation/token");
+	});
+	it("asks for the CI check's permissions an installation has not accepted, without failing the preview", async () => {
+		const { service, calls } = github();
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Accept the App's Administration (read), Secrets (read), Actions (read), Environments (read) permissions in its GitHub installation settings so kix can check the default workflow token, repository and organization secrets, environments.",
+		]);
+		expect(calls.some((call) => call.path.includes("/actions/") || call.path.includes("/environments"))).toBe(
+			false,
+		);
+	});
+	it("finds nothing to fix in read-only pull-request CI", async () => {
+		const { service, calls } = github({
+			ci: {
+				environments: [
+					{ name: "release", policy: "protected", secrets: 2 },
+					{ name: "land", policy: ["trunk", "gh-readonly-queue/trunk/*", "tag:v*"], secrets: 1 },
+					{ name: "preview", policy: null, secrets: 0 },
+				],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([]);
+		expect(calls.filter((call) => call.path.endsWith("/access_tokens")).at(-1)?.body.permissions).toEqual({
+			metadata: "read",
+			contents: "read",
+			...CI_PERMISSIONS,
+		});
+		// Protected branches are read once however many policies name them, and
+		// an environment's secrets only when its policy lets an unprotected branch deploy.
+		expect(calls.filter((call) => call.path.startsWith("/repos/upstream/project/branches"))).toHaveLength(1);
+		expect(calls.filter((call) => call.path.includes("secrets?")).map((call) => call.path)).toEqual([
+			"/repos/upstream/project/actions/secrets?per_page=100",
+			"/repos/upstream/project/actions/organization-secrets?per_page=100",
+			"/repos/upstream/project/environments/preview/secrets?per_page=100",
+		]);
+	});
+	it("warns about each way pull-request CI can write", async () => {
+		const { service } = github({
+			ci: {
+				token: "write",
+				repository: ["NPM_TOKEN"],
+				organization: ["DISCORD_WEBHOOK", "CACHIX"],
+				protected: ["trunk"],
+				environments: [
+					{ name: "open", policy: null, secrets: 1 },
+					{ name: "wild", policy: ["release/*", "tag:v*"], secrets: 2 },
+					{ name: "loose", policy: ["trunk", "staging"], secrets: 1 },
+					{ name: "queue", policy: ["gh-readonly-queue/staging/*"], secrets: 1 },
+				],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"The default GITHUB_TOKEN can write. Set Settings → Actions → General → Workflow permissions to read repository contents and packages.",
+			"Every workflow, including those on kix's branches, receives 1 repository secret: NPM_TOKEN. Move them into environments limited to protected branches.",
+			"Every workflow, including those on kix's branches, receives 2 organization secrets: DISCORD_WEBHOOK, CACHIX. Stop sharing them with this repository, or move them into environments limited to protected branches.",
+			"Environment open has 1 secret and lets any branch deploy. Limit its deployment branches to protected branches.",
+			"Environment wild has 2 secrets and lets release/* deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
+			"Environment loose has 1 secret and lets staging deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
+			"Environment queue has 1 secret and lets gh-readonly-queue/staging/* deploy, which kix cannot confirm is a protected branch. Limit its deployment branches to protected branches.",
+		]);
+	});
+	it("looks up a named branch that a full page of protected branches leaves out", async () => {
+		const many = Array.from({ length: 100 }, (_, i) => `keep/${i}`);
+		const { service, calls } = github({
+			ci: {
+				protected: [...many, "release/v1"],
+				branches: ["staging"],
+				environments: [
+					{ name: "ship", policy: ["release/v1", "keep/0"], secrets: 1 },
+					{ name: "stage", policy: ["staging", "missing"], secrets: 1 },
+					{ name: "again", policy: ["release/v1"], secrets: 1 },
+				],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Environment stage has 1 secret and lets staging, missing deploy, which kix cannot confirm are protected branches. Limit its deployment branches to protected branches.",
+		]);
+		// Each branch the page left out is looked up once.
+		expect(
+			calls.filter((call) => /\/branches\/./.test(call.path)).map((call) => call.path.split("/branches/")[1]),
+		).toEqual(["release/v1", "staging", "missing"]);
+	});
+	it("does not confirm a deployment policy with more patterns than one page holds", async () => {
+		const { service } = github({
+			ci: {
+				environments: [{ name: "big", policy: Array.from({ length: 101 }, () => "trunk"), secrets: 1 }],
+			},
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Environment big has 1 secret and lists 101 deployment branch and tag patterns, more than kix reads. Limit its deployment branches to protected branches.",
+		]);
+	});
+	it("warns that a protected-branches policy admits every branch while none is protected", async () => {
+		const { service } = github({
+			ci: { protected: [], environments: [{ name: "deploy", policy: "protected", secrets: 1 }] },
+		});
+		expect((await service.previewProject(repo, "enrollment-test")).ci).toEqual([
+			"Environment deploy has 1 secret and allows only protected branches, but no branch is protected, so GitHub lets any branch deploy. Limit its deployment branches to protected branches.",
+		]);
+	});
+	it("reports a failed CI read as a warning and checks the rest", async () => {
+		const { service } = github({
+			ci: { repository: ["TOKEN"], fail: ["/actions/permissions/workflow", "/environments"] },
+		});
+		const preview = await service.previewProject(repo, "enrollment-test");
+		expect(preview.quests).toHaveLength(1);
+		expect(preview.ci).toEqual([
+			"kix could not read the default workflow token's permissions; review this project again later.",
+			"Every workflow, including those on kix's branches, receives 1 repository secret: TOKEN. Move them into environments limited to protected branches.",
+			"kix could not read environments; review this project again later.",
+		]);
+	});
+	it.each([
+		{
+			name: "many environments",
+			ci: {
+				environments: Array.from({ length: 20 }, (_, i) => ({
+					name: `env-${i}`,
+					policy: ["feature/*"],
+					secrets: 1,
+				})),
+			},
+		},
+		{
+			name: "branch lookups past a full page of protected branches",
+			ci: {
+				protected: Array.from({ length: 100 }, (_, i) => `keep/${i}`),
+				environments: [
+					{ name: "wide", policy: Array.from({ length: 60 }, (_, i) => `other/${i}`), secrets: 1 },
+					{ name: "open", policy: null, secrets: 1 },
+				],
+			},
+		},
+	])("stops a CI check with $name within Workers Free's 50 external subrequests", async ({ ci }) => {
+		const { service, calls } = github({ ci, subrequestLimit: 50 });
+		await service.resolveRepository(repo.owner, repo.name);
+		const preview = await service.previewProject(repo, "enrollment-test");
+		expect(preview.ci.at(-1)).toBe(
+			`kix stopped after ${READS} reads of this repository's settings, before checking every environment. Limit each environment with secrets to protected branches.`,
+		);
+		expect(preview.ci.filter((problem) => problem.startsWith("kix could not"))).toEqual([]);
+		expect(calls.length).toBeLessThanOrEqual(50);
+	});
+	it("does not report a check that spent its last read on its last environment as stopped", async () => {
+		// Four reads before environments, then one for each one's secrets.
+		const environments = Array.from({ length: READS - 4 }, (_, i) => ({
+			name: `env-${i}`,
+			policy: null,
+			secrets: 1,
+		}));
+		const { service } = github({ ci: { environments } });
+		const { ci } = await service.previewProject(repo, "enrollment-test");
+		expect(ci).toHaveLength(READS - 4);
+		expect(ci.filter((problem) => problem.startsWith("kix stopped"))).toEqual([]);
+	});
+	it("shows the CI check on the project's setup page", async () => {
+		const who = identity("github");
+		const { session } = await oauth(who);
+		const { request } = github({ account: Number(who.id), ci: { token: "write" } });
+		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		const html = await (
+			await app.request(`${origin}/projects/github/upstream/project`, { headers: { Cookie: session! } }, testEnv)
+		).text();
+		expect(html).toContain("Pull-request CI");
+		expect(html).toContain("The default GITHUB_TOKEN can write.");
+		// Warnings never block enabling contributions.
+		expect(html).not.toContain("disabled");
+	});
+	it("shows the CI check beside the setup pull request's form, since merging it enables contributions", async () => {
+		const who = identity("github");
+		const { session } = await oauth(who);
+		const { request } = github({ account: Number(who.id), noQuests: true, ci: { repository: ["NPM_TOKEN"] } });
+		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		const html = await (
+			await app.request(`${origin}/projects/github/upstream/project`, { headers: { Cookie: session! } }, testEnv)
+		).text();
+		expect(html).toContain("Open the setup pull request");
+		expect(html).toContain("Pull-request CI");
+		expect(html).toContain("receives 1 repository secret: NPM_TOKEN");
 	});
 	it.each(["AGENTS.md", "CLAUDE.md"])("ignores root and nested %s instructions like the CLI", async (filename) => {
 		const { service, calls } = github({
@@ -429,6 +699,31 @@ describe("project enrollment", () => {
 			expect(calls.some((call) => call.path.includes("/git/") || call.path === "/graphql")).toBe(false);
 		},
 	);
+	it("refuses an owner off the allowlist everything but stop controls", async () => {
+		const outside = github({ owner: outsider });
+		await expect(outside.service.previewProject(repo, "enrollment-test")).rejects.toThrow("isn't open");
+		await expect(outside.service.setContributions(repo, "enrollment-test", "enabled")).rejects.toThrow(
+			"isn't open",
+		);
+		expect(await state()).toBeNull();
+		// Refused before any authority, snapshot, or license read.
+		expect(
+			outside.calls.some(
+				(call) => call.path.endsWith("/permission") || call.path.includes("/git/") || call.path === "/graphql",
+			),
+		).toBe(false);
+		expect(outside.request.mock.calls.some(([input]) => new URL(String(input)).hostname === "spdx.org")).toBe(
+			false,
+		);
+
+		// A project whose owner leaves the allowlist, such as by a transfer, is read no more but can still be stopped.
+		await github().service.setContributions(repo, "enrollment-test", "enabled");
+		await expect(outside.service.projectState(repo, "enrollment-test", true)).rejects.toThrow("isn't open");
+		await outside.service.setContributions(repo, "enrollment-test", "paused");
+		expect(await state()).toMatchObject({ state: "paused" });
+		await outside.service.setContributions(repo, "enrollment-test", "disconnected");
+		expect(await state()).toBeNull();
+	});
 	it("can pause and disconnect even after Quest files disappear or the project becomes private", async () => {
 		await github().service.setContributions(repo, "enrollment-test", "enabled");
 		const { service, calls } = github({ noQuests: true, private: true });
@@ -451,7 +746,7 @@ describe("project enrollment", () => {
 		[{ id: 99 }, "identity"],
 		[{ private: true }, "public"],
 		[{ truncated: true }, "incomplete"],
-		[{ noQuests: true }, "setup guide"],
+		[{ noQuests: true }, "setup pull request"],
 		[{ invalid: true }, "quest check"],
 		[{ symlink: true }, "regular files"],
 	] as const)("rejects unavailable or ineligible snapshots: %j", async (options, message) => {
@@ -481,6 +776,46 @@ describe("project enrollment", () => {
 	});
 });
 
+/**
+ * The fake GitHub's `upstream/project`, ID 10 on installation 5, whose default
+ * branch `trunk` holds `documents`. The enrollment test's account maintains
+ * it, as do the logins of `people`, who sign in.
+ */
+function world(...people: Identity[]): World {
+	const users = [
+		{ id: 7007, login: "maintainer" },
+		...people.map((who) => ({ id: Number(who.id), login: `person${who.id}` })),
+	];
+	return {
+		app: { id: Number(env.GITHUB_APP_ID), slug: "quest-test" },
+		installation: 5,
+		owner,
+		users: users.map((user) => ({ ...user, name: user.login, email: `${user.login}@example.test` })),
+		repos: [
+			{
+				...repo,
+				defaultBranch: "trunk",
+				maintainers: users.map((user) => user.login),
+				files: documents.map((doc) => ({ ...doc })),
+				issues: [],
+				pulls: [],
+				branches: {},
+				commits: {},
+				trees: {},
+			},
+		],
+	};
+}
+
+/** Enroll the project for the enrollment test's account against the fake GitHub over `world(who)`. */
+async function enrolled(who: Identity) {
+	const data = world(who);
+	const fake = fakeGitHub(data);
+	vi.spyOn(globalThis, "fetch").mockImplementation(fake);
+	await new GitHubService(testEnv).setContributions(repo, "enrollment-test", "enabled");
+	return { data, fake };
+}
+
 describe("project setup routes", () => {
 	it.each([
 		{ private: true, repositoryName: repo.name },
@@ -490,17 +825,20 @@ describe("project setup routes", () => {
 		{ archived: true, repositoryName: "renamed" },
 		{ invalid: true, repositoryName: "renamed" },
 	])("lets a replacement maintainer reach stop controls when preview fails: %j", async (options) => {
-		await github().service.setContributions(repo, "enrollment-test", "enabled");
 		const who = identity("github");
+		const { data, fake } = await enrolled(who);
 		const { session } = await oauth(who);
 		const account = await env.DB.prepare("SELECT userId FROM account WHERE providerId='github' AND accountId=?")
 			.bind(who.id)
 			.first<{ userId: string }>();
 		expect(account!.userId).not.toBe("enrollment-test");
 		expect(await github().service.projects(account!.userId)).toEqual([]);
-		const { request } = github({ ...options, account: Number(who.id) });
+		// The repository becomes private or archived, is renamed, or its quest tree breaks.
+		const project = data.repos[0]!;
+		Object.assign(project, { private: options.private, archived: options.archived, name: options.repositoryName });
+		if (options.invalid) project.files[1]!.content = "# Bad quest";
 		const route = `${origin}/projects/github/upstream/${options.repositoryName}`;
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		vi.spyOn(globalThis, "fetch").mockImplementation(fake);
 		const response = await app.request(route, { headers: { Cookie: session! } }, testEnv);
 		expect(response.status).toBe(403);
 		const html = await response.text();
@@ -530,11 +868,13 @@ describe("project setup routes", () => {
 	});
 
 	it("keeps stop controls after transfer without inheriting opt-in for the new installation", async () => {
-		await github().service.setContributions(repo, "enrollment-test", "enabled");
 		const who = identity("github");
+		const { data, fake } = await enrolled(who);
 		const { session } = await oauth(who);
-		const { request } = github({ account: Number(who.id), repositoryOwner: "receiving", installation: 6 });
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		// The repository moves to another owner, whose installation of the App is another.
+		data.repos[0]!.owner = "receiving";
+		data.installation = 6;
+		vi.spyOn(globalThis, "fetch").mockImplementation(fake);
 		const route = `${origin}/projects/github/receiving/project`;
 		const response = await app.request(route, { headers: { Cookie: session! } }, testEnv);
 		expect(response.status).toBe(200);
@@ -563,11 +903,11 @@ describe("project setup routes", () => {
 		expect(await state()).toBeNull();
 	});
 	it("does not expose enrolled stop controls or accept their forms without current authority", async () => {
-		await github().service.setContributions(repo, "enrollment-test", "enabled");
 		const who = identity("github");
+		const { data, fake } = await enrolled(who);
 		const { session } = await oauth(who);
-		const { request } = github({ account: Number(who.id), role: "write", private: true });
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		Object.assign(data.repos[0]!, { private: true, roles: { [`person${who.id}`]: "write" } });
+		vi.spyOn(globalThis, "fetch").mockImplementation(fake);
 		const response = await app.request(
 			`${origin}/projects/github/upstream/project`,
 			{ headers: { Cookie: session! } },
@@ -614,8 +954,9 @@ describe("project setup routes", () => {
 	it("disables opt-in for unapproved licensing and rejects a forged enable form", async () => {
 		const who = identity("github");
 		const { session } = await oauth(who);
-		const { request } = github({ account: Number(who.id), license: "BUSL-1.1", approval: [false, false] });
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		const data = world(who);
+		data.repos[0]!.license = "BUSL-1.1";
+		vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(data));
 		const response = await app.request(
 			`${origin}/projects/github/upstream/project`,
 			{ headers: { Cookie: session! } },
@@ -639,9 +980,9 @@ describe("project setup routes", () => {
 	it("renders ready quests in the existing visual system and enables eligible repositories through authenticated forms", async () => {
 		const who = identity("github");
 		const { session } = await oauth(who);
-		// The fixture verifies the actual linked account supplied by this session.
-		const { request } = github({ account: Number(who.id) });
-		vi.spyOn(globalThis, "fetch").mockImplementation(request as typeof fetch);
+		// GitHub checks the role of the account linked to this session.
+		const data = world(who);
+		vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(data));
 		const response = await app.request(
 			`${origin}/projects/github/upstream/project`,
 			{ headers: { Cookie: session! } },
@@ -673,8 +1014,7 @@ describe("project setup routes", () => {
 		expect(posted.status).toBe(303);
 		expect(await state()).toMatchObject({ state: "enabled" });
 		// Authenticated stop controls do not depend on readable Quest snapshots.
-		const unavailable = github({ account: Number(who.id), noQuests: true, private: true });
-		vi.mocked(globalThis.fetch).mockImplementation(unavailable.request as typeof fetch);
+		Object.assign(data.repos[0]!, { files: [], private: true });
 		for (const state of ["paused", "disconnected"]) {
 			const stopped = await app.request(
 				`${origin}/projects/github/upstream/project`,
@@ -700,6 +1040,8 @@ type Listed = {
 	archived?: boolean;
 	license?: string | null;
 	quest?: { name: string; type: string }[] | null;
+	/** The owner's GitHub ID; the admitted test owner's by default. */
+	owner?: number;
 };
 
 /**
@@ -740,7 +1082,7 @@ function picker(installations: { id: number; app_id?: number; suspended?: boolea
 			const listed = installation.repos.map((repo) => ({
 				id: repo.id,
 				name: repo.name,
-				owner: { login: "upstream" },
+				owner: { login: "upstream", id: repo.owner ?? owner },
 				private: repo.private ?? false,
 				visibility: repo.private ? "private" : "public",
 				archived: repo.archived ?? false,
@@ -765,6 +1107,8 @@ function picker(installations: { id: number; app_id?: number; suspended?: boolea
 			for (const [, alias, index] of query.matchAll(/(r(\d+)): repository/g)) {
 				const repo = repos.find((repo) => repo.name === variables[`n${index}`])!;
 				expect(variables[`o${index}`]).toBe("upstream");
+				// Only an admitted owner's repositories cost a quest read.
+				expect(repo.owner ?? owner).toBe(owner);
 				const entries = repo.quest === undefined ? [{ name: "README.md", type: "blob" }] : repo.quest;
 				data[alias!] = { databaseId: repo.id, object: entries && { entries } };
 			}
@@ -789,6 +1133,7 @@ describe("project picker", () => {
 		{ id: 18, name: "unlicensed", license: null },
 		{ id: 19, name: "paused" },
 		{ id: 20, name: "moved" },
+		{ id: 21, name: "outside", owner: outsider },
 	];
 	const installations = [
 		{ id: 5, repos: [...writers, ...listed] },
@@ -819,6 +1164,7 @@ describe("project picker", () => {
 			"moved",
 			"nested",
 			"old",
+			"outside",
 			"paused",
 			"project",
 			"secret",
@@ -836,6 +1182,8 @@ describe("project picker", () => {
 			setup: false,
 		});
 		expect(rows.old).toEqual({ state: null, problems: ["Archived or disabled on GitHub."], setup: false });
+		// An owner off the allowlist costs no quest or license read.
+		expect(rows.outside).toEqual({ state: null, problems: ["Quest isn't open to this owner yet."], setup: false });
 		for (const name of ["bare", "instructions"])
 			expect(rows[name]).toEqual({
 				state: null,
@@ -882,6 +1230,7 @@ describe("project picker", () => {
 				repos: [
 					{ id: 10, name: "project" },
 					{ id: 14, name: "bare", quest: null },
+					{ id: 21, name: "outside", owner: outsider },
 				],
 			},
 		]);
@@ -893,8 +1242,14 @@ describe("project picker", () => {
 		expect(html).toContain('action="/projects/github/upstream/project"');
 		expect(html).toContain("Enable contributions");
 		expect(html).toContain("No Quest files on the default branch yet.");
-		expect(html).toContain('<a href="/setup">Set up Quest</a>');
+		// A repository without Quest files enables through its setup page's form, which opens the setup pull request.
+		expect(html).toContain(
+			'<a class="button primary" href="/projects/github/upstream/bare">Enable contributions</a>',
+		);
 		expect(html).not.toContain('action="/projects/github/upstream/bare"');
+		expect(html).toContain("Quest isn&#39;t open yet.");
+		expect(html).toContain("Quest isn&#39;t open to this owner yet.");
+		expect(html).not.toContain('action="/projects/github/upstream/outside"');
 		expect(html).toContain("https://github.com/apps/quest-test/installations/new");
 		// The session's GitHub sign-in token lists repositories.
 		expect(
@@ -903,7 +1258,7 @@ describe("project picker", () => {
 				.every((call) => call.authorization === "Bearer mock-token"),
 		).toBe(true);
 		// The row's form is the setup page's: enabling rechecks authority and eligibility with an installation token.
-		vi.mocked(globalThis.fetch).mockImplementation(github({ account: Number(who.id) }).request as typeof fetch);
+		vi.mocked(globalThis.fetch).mockImplementation(fakeGitHub(world(who)));
 		const posted = await app.request(
 			`${origin}/projects/github/upstream/project`,
 			{
@@ -918,22 +1273,15 @@ describe("project picker", () => {
 	});
 	it("asks to sign in with GitHub again when the user's token cannot list repositories", async () => {
 		const { session } = await oauth(identity("github"));
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-			const url = new URL(String(input));
-			if (url.pathname === "/app") return Response.json({ id: 123, slug: "quest-test" });
-			return Response.json({ message: "Bad credentials" }, { status: 401 });
-		});
+		// GitHub no longer accepts the token the session signed in with.
+		vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(world()));
 		const html = await (await app.request(`${origin}/projects`, { headers: { Cookie: session! } }, testEnv)).text();
 		expect(html).toContain("Your GitHub repositories could not be listed");
 		expect(html).toContain("Find an enrolled project");
 	});
 	it("asks a user without a linked GitHub account to link one", async () => {
 		const { session } = await oauth(identity("google"));
-		const outbound = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-			const url = new URL(String(input));
-			if (url.pathname === "/app") return Response.json({ id: 123, slug: "quest-test" });
-			throw new Error(`Unexpected request ${url.href}`);
-		});
+		const outbound = vi.spyOn(globalThis, "fetch").mockImplementation(fakeGitHub(world()));
 		const html = await (await app.request(`${origin}/projects`, { headers: { Cookie: session! } }, testEnv)).text();
 		expect(html).toContain(
 			'<a href="/account">Link your GitHub account</a> to list the repositories you maintain.',
@@ -1145,7 +1493,7 @@ describe("enrolled project observations", () => {
 		const result = await second.service.projectState(repo, "enrollment-test", true);
 		expect(result!.complete).toBe(true);
 		expect(result!.activity).toHaveLength(4);
-		const query = second.calls.filter((c) => c.path === "/graphql").at(-1)!;
+		const query = second.calls.filter(activityRead).at(-1)!;
 		expect(query.body.variables.issues).toBe("issue-cursor");
 		expect(query.body.query).not.toContain("pullRequests(first:50");
 		const closed = activity();
@@ -1184,7 +1532,7 @@ describe("enrolled project observations", () => {
 			onActivity: async () => void (await delivery("status", event)),
 		});
 		const result = await second.service.projectState(repo, "enrollment-test", true);
-		const query = second.calls.filter((c) => c.path === "/graphql").at(-1)!;
+		const query = second.calls.filter(activityRead).at(-1)!;
 		expect(query.body.variables.issues).toBe("issue-cursor");
 		expect(result!.complete).toBe(true);
 		expect(result!.project.available).toEqual(["quest/first.md"]);
@@ -1210,7 +1558,7 @@ describe("enrolled project observations", () => {
 			},
 		});
 		const result = await second.service.projectState(repo, "enrollment-test", true);
-		expect(second.calls.filter((c) => c.path === "/graphql").at(-1)!.body.variables.issues).toBe("issue-cursor");
+		expect(second.calls.filter(activityRead).at(-1)!.body.variables.issues).toBe("issue-cursor");
 		expect(result!.project.available).toEqual([]);
 		expect(result!.project.changes).toMatchObject([{ quest: "quest/first.md" }]);
 	});
@@ -1410,7 +1758,7 @@ describe("enrolled project observations", () => {
 		expect((await readActivity(env.DB, 10)).items.some((item) => item.id === "200")).toBe(false);
 	});
 
-	it("reads bodies once per open draft and never in metadata/history pages", async () => {
+	it("reads open pull requests' bodies in one batch and never in metadata/history pages", async () => {
 		await enrolled();
 		const page = activity();
 		Object.assign(page.pullRequests!.nodes[0]!, { isDraft: true, body: "## Decisions needed\n\nChoose." });
@@ -1422,10 +1770,49 @@ describe("enrolled project observations", () => {
 		expect(queries).toHaveLength(2);
 		expect(queries[0]!.body.query).not.toMatch(/\bbody\b/);
 		expect(queries[1]!.body.query).toContain("b0:pullRequest(number:2)");
-		expect(queries[1]!.body.query).not.toContain("number:3");
+		// An open pull request that is not a draft is read too, for the reviews on its head.
+		expect(queries[1]!.body.query).toContain("b1:pullRequest(number:3)");
+		expect(queries[1]!.body.variables.app).toBe(Number(testEnv.GITHUB_APP_ID));
 		expect(queries[1]!.body.query).not.toContain("number:5");
 		expect((result!.activity.find((item) => item.id === "200")!.data as { handedBack: boolean }).handedBack).toBe(
 			true,
+		);
+	});
+
+	it("records why the land gate would refuse each open pull request's head, without keeping what it read", async () => {
+		await enrolled();
+		const page = activity();
+		const human = page.open!.nodes[1]!;
+		const read = {
+			...human,
+			body: `## Review\n\nClean on ${commit}.`,
+			authorAssociation: "CONTRIBUTOR",
+			author: { __typename: "User", login: "human" },
+			userContentEdits: { nodes: [] },
+			latestOpinionatedReviews: { nodes: [] },
+			tip: { nodes: [{ commit: { oid: commit, parents: { totalCount: 1 }, checkSuites: { nodes: [] } } }] },
+		};
+		const result = await github({ activity: page, entities: { 3: read } }).service.projectState(
+			repo,
+			"enrollment-test",
+			true,
+		);
+		const data = (id: string) => result!.activity.find((item) => item.id === id)!.data as Record<string, unknown>;
+		// A contributor's own record does not count, so the gate would refuse the head.
+		expect(data("201").unreviewed).toBe(
+			`No review counts on ${commit.slice(0, 7)} yet. kix lands only a reviewed head. Approve ${commit.slice(0, 7)} on GitHub as someone with write access other than the pull request's author, have a runner's \`quest review\` check pass on it, or, as its author with write access, name it in the body's \`## Review\` record if no App committed it.`,
+		);
+		expect(data("201")).not.toHaveProperty("body");
+		expect(data("201")).not.toHaveProperty("tip");
+		// A read without the reviews flags nothing.
+		expect(data("200").unreviewed).toBeNull();
+		// The same read with a member's record counts it.
+		const member = await github({
+			activity: page,
+			entities: { 3: { ...read, authorAssociation: "MEMBER" } },
+		}).service.projectState(repo, "enrollment-test", true);
+		expect((member!.activity.find((item) => item.id === "201")!.data as { unreviewed: unknown }).unreviewed).toBe(
+			null,
 		);
 	});
 
@@ -1521,8 +1908,7 @@ describe("webhook reconciliation", () => {
 		vi.spyOn(globalThis, "fetch").mockImplementation(mock.request as typeof fetch);
 		return mock;
 	}
-	const reads = (calls: ReturnType<typeof github>["calls"]) =>
-		calls.filter((call) => call.path === "/graphql" && !call.body.query.includes("object(oid:"));
+	const reads = (calls: ReturnType<typeof github>["calls"]) => calls.filter(activityRead);
 	const opened = (id: number, number: number, id_ = crypto.randomUUID()) =>
 		delivery("issues", { ...event, action: "opened", issue: { id, number } }, id_, {}, testEnv);
 	async function row(id: string) {
@@ -1675,6 +2061,30 @@ describe("webhook reconciliation", () => {
 		expect(read).toMatchObject({ stale: 0 });
 		expect(JSON.parse(read!.data!).comments).toEqual({ totalCount: 3 });
 		expect(await row("999")).toBeNull();
+	});
+
+	it("rereads the pull requests the App's own review check names, and no other check's", async () => {
+		await enrolled();
+		const { calls } = mocked({ entities: { 2: { ...pull(), comments: { totalCount: 3 } } } });
+		const run = (name: string, app: number, number = 2) => ({
+			...event,
+			action: "completed",
+			check_run: { name, app: { id: app }, pull_requests: [{ id: 200, number, base: { repo: { id: 10 } } }] },
+		});
+		const app = Number(testEnv.GITHUB_APP_ID);
+		// CI's checks, another App's \`quest review\`, and a pull request of another repository cost no read.
+		for (const other of [run("test", app), run("quest review", app + 1)])
+			expect((await delivery("check_run", other, undefined, {}, testEnv)).status).toBe(202);
+		const foreign = run("quest review", app);
+		foreign.check_run.pull_requests[0]!.base.repo.id = 11;
+		await delivery("check_run", foreign, undefined, {}, testEnv);
+		expect(reads(calls)).toHaveLength(0);
+		await delivery("check_run", run("quest review", app), undefined, {}, testEnv);
+		expect(reads(calls)).toHaveLength(1);
+		expect(reads(calls)[0]!.body.query).toContain("s0:pullRequest(number:2)");
+		const read = await row("200");
+		expect(read).toMatchObject({ stale: 0 });
+		expect(JSON.parse(read!.data!).comments).toEqual({ totalCount: 3 });
 	});
 
 	it("records a failed read without retrying, and a later webhook reads again", async () => {

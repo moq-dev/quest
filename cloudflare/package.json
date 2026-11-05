@@ -7,26 +7,26 @@
 		"seeded": "wrangler deploy --dry-run --outdir .wrangler/seeded && bun dev/serve.ts",
 		"build": "bun scripts/build.ts",
 		"check": "bun run build && wrangler types --check && tsc --noEmit && prettier --check . && wrangler deploy --dry-run",
-		"test": "bun run build && vitest run",
+		"test": "bun run build && vitest run && bun run seeded --check",
 		"fix": "prettier --write .",
 		"types": "wrangler types",
 		"migrate": "wrangler d1 migrations apply DB --local",
 		"deploy": "wrangler deploy"
 	},
 	"dependencies": {
-		"@better-auth/passkey": "1.7.13",
-		"better-auth": "1.7.13",
+		"@better-auth/passkey": "1.7.14",
+		"better-auth": "1.7.14",
 		"hono": "4.13.14",
-		"marked": "18.1.1",
+		"marked": "18.1.2",
 		"quest": "file:.."
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-plugin": "1.4.7",
+		"@cloudflare/vitest-plugin": "1.4.8",
 		"@types/node": "26.6.5",
 		"miniflare": "5.20261012.0-beta",
 		"prettier": "3.9.10",
 		"typescript": "7.0.2",
 		"vitest": "5.0.5",
-		"wrangler": "4.152.0"
+		"wrangler": "4.153.0"
 	}
 }

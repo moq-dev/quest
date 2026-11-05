@@ -15,7 +15,8 @@ import {
 	string,
 } from "./github";
 import { LAND_CHECK } from "./land";
-import { classifyCheck, enabledHead } from "./status";
+import { latestContexts } from "../github/checks";
+import { BRANCH_UPDATES, classifyCheck, enabledHead } from "./status";
 
 const POLL = 5 * 60_000;
 /**
@@ -28,6 +29,9 @@ const FINAL_POLL = 30_000;
 const PAGE = 100;
 /** How often setup rereads repository activity while GitHub has yet to list the head's push. */
 const LISTING_POLL = 15_000;
+
+/** Repository activity types a person's push makes; merges into the branch also move it (`BRANCH_UPDATES`). */
+const PUSHES = ["push", "force_push", "branch_creation"];
 const SHA = /^[a-f\d]{7,40}$/i;
 /** The timeline records a force push a few seconds after repository activity (1-2s observed). */
 const TIMELINE_LAG = 60_000;
@@ -60,8 +64,8 @@ const CHECKS = `query($owner: String!, $repo: String!, $number: Int!, $after: St
 					nodes {
 						__typename
 						... on CheckRun {
-							name status conclusion completedAt detailsUrl isRequired(pullRequestNumber: $number)
-							checkSuite { status workflowRun { file { path } } }
+							databaseId name status conclusion completedAt detailsUrl isRequired(pullRequestNumber: $number)
+							checkSuite { status app { databaseId } workflowRun { file { path } } }
 						}
 						... on StatusContext { context state createdAt targetUrl isRequired(pullRequestNumber: $number) }
 					}
@@ -208,7 +212,9 @@ async function watch(
 		const point = options.since ?? currentSha;
 		const shaPoint = SHA.test(point);
 		const time = shaPoint ? undefined : timestamp(point);
-		const isPoint = (row: ObjectValue) => string(row.after).startsWith(point.toLowerCase());
+		// A merge into the branch, such as GitHub's Update branch, can also have moved the head to the point.
+		const moved = (row: ObjectValue) => BRANCH_UPDATES.includes(string(row.activity_type));
+		const isPoint = (row: ObjectValue) => moved(row) && string(row.after).startsWith(point.toLowerCase());
 		let activities: ObjectValue[] = [];
 		if (head.repo !== null) {
 			const headRepo = object(head.repo);
@@ -236,10 +242,8 @@ async function watch(
 		} else if (shaPoint) {
 			throw new Error("head repository was deleted; pass a timestamp with --since");
 		}
-		const pushed = activities.filter((row) =>
-			["push", "force_push", "branch_creation"].includes(string(row.activity_type)),
-		);
-		const match = shaPoint ? pushed.find(isPoint) : undefined;
+		const pushed = activities.filter((row) => PUSHES.includes(string(row.activity_type)));
+		const match = shaPoint ? activities.find(isPoint) : undefined;
 		if (shaPoint && !match) throw new Error(`cannot resolve push time for ${point}; pass a timestamp with --since`);
 		const since = time ?? timestamp(string(match!.timestamp));
 		// An explicit timestamp includes its own instant; a SHA point excludes its own push.
@@ -267,6 +271,15 @@ async function watch(
 		// A push racing setup is reported once, as a push, not again as a new commit.
 		pushedTips = plain.map((row) => string(row.after));
 		for (const sha of pushedTips) baselineCommits.add(sha);
+		// A merge into the branch after the point is not a push, so it is reported as its new commit.
+		for (const row of activities)
+			if (
+				moved(row) &&
+				!PUSHES.includes(string(row.activity_type)) &&
+				after(row) &&
+				!pushedTips.includes(string(row.after))
+			)
+				baselineCommits.delete(string(row.after));
 		historical = plain.map((row) => ({
 			point: string(row.timestamp),
 			time: timestamp(string(row.timestamp)),
@@ -345,7 +358,7 @@ async function watch(
 	const checks = async (): Promise<
 		{ head: string; base: string; checks: Check[]; pull: ObjectValue } | undefined
 	> => {
-		const result: Check[] = [];
+		const rows: ObjectValue[] = [];
 		let head: string | undefined;
 		let after: string | null = null;
 		let pull: ObjectValue;
@@ -358,11 +371,11 @@ async function watch(
 			if (!fullSha(head)) throw new Error("invalid GitHub head SHA");
 			if (commit.statusCheckRollup === null) break;
 			const contexts = object(object(commit.statusCheckRollup).contexts);
-			result.push(...array(contexts.nodes).map(check));
+			rows.push(...array(contexts.nodes));
 			const page = object(contexts.pageInfo);
 			after = page.hasNextPage === true ? string(page.endCursor) : null;
 		} while (after !== null);
-		return { head: head!, base: string(pull.baseRefName), checks: result, pull };
+		return { head: head!, base: string(pull.baseRefName), checks: latestContexts(rows).map(check), pull };
 	};
 	/**
 	 * What the base branch requires, read once per wait. Only a requirement says whether a missing

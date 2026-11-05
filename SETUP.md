@@ -48,15 +48,25 @@ without creating symbolic links (existing linked layouts continue to work), crea
 starting with `Quests: ` to the root `AGENTS.md`, or `CLAUDE.md` when only that
 exists. It also appends `quest/** merge=quest` to `.gitattributes` and sets
 `merge.quest.driver` in the clone's git config, so local merges resolve
-concurrent edits to quest link lists. It adds hook entries running
-`quest worktree hook` to `.claude/settings.json`, keeping the file's other
-settings, so Quest creates and reclaims Claude Code's worktrees; Claude Code
-then needs `quest` on its `PATH` to create any worktree in the repository. It
+concurrent edits to quest link lists. It writes no Claude Code hooks. It
 prints each path it changed and is safe to rerun. Rerun after an upgrade, it
-also removes the unmodified stubs of skills the new version no longer ships.
+also rewrites the unmodified stubs whose description or setup link changed and
+removes the unmodified stubs of skills the new version no longer ships.
 
 If init refuses, it names the conflicting path. Report it and ask the user how
 to proceed; never delete or rename their files to get past it.
+
+## Opt into worktree hooks
+
+Quest can create and reclaim Claude Code's worktrees, sharing one disk budget
+across the user's repositories, through hooks in the user's own Claude Code
+settings rather than the repository's, since repository settings apply to
+every contributor. Offer them, explaining that they then apply in every
+repository the user opens in Claude Code and need `quest` on the `PATH`
+Claude Code runs hooks with. With consent, merge the entries in
+[Claude Code checkouts](README.md#claude-code-checkouts) into
+`~/.claude/settings.json`, keeping its other settings. If it already has a
+`WorktreeCreate` or `WorktreeRemove` hook, ask the user which to keep.
 
 ## Adapt the instructions
 
@@ -81,6 +91,17 @@ job the condition
 `github.event_name != 'pull_request' || github.event.pull_request.draft == false`.
 Change workflows only if the user agrees.
 
+Agents push their quest branches to the repository itself, and GitHub gives
+workflows on those branches the repository's secrets and default token, so
+recommend keeping that CI read-only: code no maintainer has reviewed should
+meet only a read-only `GITHUB_TOKEN` and no write credentials. In GitHub, set
+Settings → Actions → General → Workflow permissions to read; move repository
+secrets, and organization secrets shared with the repository, into
+environments whose deployment branches are limited to protected branches; and
+keep write `permissions:` out of jobs that pull requests and pushes to other
+branches run. kix checks the same settings when a repository enrolls.
+Change settings and workflows only if the user agrees.
+
 Run `quest check`, then suggest next steps: restart the agent session so it
 loads the new skills, then `/quest-plan` (`$quest-plan` in Codex) to plan
 work or `/quest-import` to bring in open GitHub issues.
@@ -90,11 +111,13 @@ work or `/quest-import` to bring in open GitHub issues.
 1. Run `quest skill export` and follow it, so active quests become GitHub
    issues. Skip this only if the user says so.
 2. Run `quest uninstall`. It removes only unmodified stubs of any version, the
-   `Quests: ` line, Quest's hook entries, and the merge driver, and never
-   deletes the quest tree.
+   `Quests: ` line, and the merge driver, and never deletes the quest tree.
 3. Remove the pin added above: the mise entry, or the flake input and dev
    shell package. For an unpinned install, delete the `quest` binary the
    installer placed (`~/.local/bin/quest` by default, or `quest.exe` in the
-   chosen Windows install directory). Remove any PATH entry you added.
+   chosen Windows install directory). Remove any PATH entry you added. If the
+   user opted into Quest's worktree hooks and Claude Code no longer finds
+   `quest`, remove those entries from `~/.claude/settings.json`, since without
+   it they stop Claude Code making worktrees.
 4. Ask the user whether to delete `quest/`. Git history keeps the plans either
    way.

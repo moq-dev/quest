@@ -1,11 +1,14 @@
-// The agent skills and the quest guide, bundled into the CLI.
+// The agent skills, the quest guide, and the shared engineering context, bundled into the CLI.
 //
 // A repository installs only a stub per skill, which asks the agent to run
 // `quest skill <name>`. The stub only points at the binary, so the version a
-// repository pins decides which instructions its agents follow, and upgrading
-// never rewrites repository files.
+// repository pins decides which instructions its agents follow. Upgrading
+// rewrites only the stubs themselves, when their description or setup link
+// changed and nobody edited them.
 
+import { PREFIX } from "../core";
 import guide from "../../assets/AGENTS.md";
+import context from "../../assets/CONTEXT.md";
 import afk from "../../assets/skills/afk.md";
 import audit from "../../assets/skills/audit.md";
 import complete from "../../assets/skills/complete.md";
@@ -25,11 +28,11 @@ import unblock from "../../assets/skills/unblock.md";
 /** The quest contract: the format, workflow, and rules every skill builds on. */
 export const GUIDE: string = guide;
 
+/** The engineering rules every task follows, shared across repositories so each keeps only its own. */
+export const CONTEXT: string = context;
+
 /** Where an agent without the CLI learns to install it. */
 const SETUP = "https://github.com/moq-dev/quest/blob/main/SETUP.md";
-
-/** Installed skills carry this prefix so they don't collide with a repository's own. */
-export const PREFIX = "quest-";
 
 /** One skill: YAML frontmatter, then the instructions. */
 export class Skill {

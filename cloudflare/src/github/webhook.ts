@@ -3,7 +3,8 @@ import { bodyLimit } from "hono/body-limit";
 import * as landing from "../jobs/landing";
 import { wake } from "../jobs/wake";
 import { arrived } from "../push/notify";
-import { GitHubService } from "./service";
+import { REVIEW_CHECK } from "./review";
+import { admitted, GitHubService } from "./service";
 
 export function positiveId(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -92,6 +93,10 @@ githubWebhooks.post("/webhooks/github", async (c) => {
 		return c.json({ error: "Invalid repository event" }, 400);
 	}
 	if (observed.has(event) && !positiveId(repository)) return c.json({ error: "Invalid repository" }, 400);
+	// An owner off the allowlist gets nothing recorded, read, or woken. Installation
+	// events name their account; repository events, the repository's owner.
+	const owner = observed.has(event) ? payload.repository.owner?.id : payload.installation?.account?.id;
+	if (event !== "ping" && !admitted(c.env, owner)) return c.json({ status: "ignored" }, 202);
 	const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (b) =>
 		b.toString(16).padStart(2, "0"),
 	).join("");
@@ -169,6 +174,30 @@ githubWebhooks.post("/webhooks/github", async (c) => {
 			WHERE repository=? AND kind='pull' AND number=? AND ${pending} AND ${enrolled}`,
 				).bind(now, repository, issue.number, delivery, digest, event, repository, installation),
 			);
+		// CI's checks cost no read, but the App's own review check decides whether
+		// the inbox flags a head as needing a review, so it marks the pull requests
+		// its payload lists for a read by number; the read itself says whether
+		// anything changed. An untracked PR waits for history.
+		const run = event === "check_run" ? payload.check_run : null;
+		const reviewed =
+			run?.name === REVIEW_CHECK &&
+			String(run.app?.id) === c.env.GITHUB_APP_ID &&
+			Array.isArray(run.pull_requests)
+				? [
+						...new Set(
+							run.pull_requests
+								.filter((pr: any) => pr?.base?.repo?.id === repository && positiveId(pr.number))
+								.map((pr: any) => pr.number as number),
+						),
+					]
+				: [];
+		if (reviewed.length)
+			statements.push(
+				c.env.DB.prepare(
+					`UPDATE github_project_activity SET stale=stale+1
+			WHERE repository=? AND kind='pull' AND number IN (SELECT value FROM json_each(?)) AND ${pending} AND ${enrolled}`,
+				).bind(repository, JSON.stringify(reviewed), delivery, digest, event, repository, installation),
+			);
 		const invalidating = invalidates(event, payload);
 		if (invalidating)
 			statements.push(
@@ -176,9 +205,9 @@ githubWebhooks.post("/webhooks/github", async (c) => {
 					`UPDATE github_project_state SET invalidated=1,revision=revision+1 WHERE repository=? AND ${pending} AND ${enrolled}`,
 				).bind(repository, delivery, digest, event, repository, installation),
 			);
-		// What the inbox shows changed: ask for a background read. CI and other
-		// pushes change neither, so they cost no read.
-		if (named || discussed || invalidating) {
+		// What the inbox shows changed: ask for a background read. Other checks
+		// and pushes change neither, so they cost no read.
+		if (named || discussed || reviewed.length || invalidating) {
 			reads = statements.length;
 			statements.push(
 				c.env.DB.prepare(
@@ -227,5 +256,28 @@ githubWebhooks.post("/webhooks/github", async (c) => {
 	// A landing that ended unmerged, such as a merge queue removal, gives a merge job's pull request back.
 	const landed = event === "pull_request" && positiveId(payload.pull_request?.number);
 	if (landed) c.executionCtx.waitUntil(landing.release(c.env, repository, `pulls/${payload.pull_request.number}`));
+	// A setup pull request that merged enables its project; one closed or reopened changes what its page offers.
+	if (landed && (action === "closed" || action === "reopened"))
+		c.executionCtx.waitUntil(setupChanged(c.env, repository, installation, payload.pull_request.number));
 	return c.json({ status: "accepted" }, 202);
 });
+
+/**
+ * Reconcile the setup whose pull request a delivery names. The delivery only
+ * says to look: the service rereads the pull request and rechecks the
+ * enroller's authority, so a forged or delayed event cannot enable a project.
+ */
+async function setupChanged(env: Env, repository: number, installation: number, pull: number) {
+	const setup = await env.DB.prepare(
+		"SELECT owner,name FROM github_project_setups WHERE id=? AND installation=? AND pull=?",
+	)
+		.bind(repository, installation, pull)
+		.first<{ owner: string; name: string }>();
+	if (!setup) return;
+	try {
+		await new GitHubService(env).settleSetup({ id: repository, ...setup });
+	} catch (error) {
+		// The setup page reconciles again whenever a maintainer opens it.
+		console.error({ event: "setup_reconcile_failed", repository, message: String(error) });
+	}
+}

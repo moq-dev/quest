@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { HOOK_COMMAND, REFERENCE_LINE, init, uninstall } from "../src/cli/setup";
+import { REFERENCE_LINE, init, uninstall } from "../src/cli/setup";
 import { SKILLS } from "../src/cli/skills";
 import { tempDir } from "./fixture";
 
@@ -244,6 +244,16 @@ test("init keeps a reworded reference line", () => {
 	expect(read(dir, "AGENTS.md")).toBe("# Repo\n");
 });
 
+test("init upgrades an earlier release's default reference line", () => {
+	const dir = tempDir();
+	writeFileSync(
+		join(dir, "AGENTS.md"),
+		"# Repo\r\n\r\nQuests: before starting work, run `quest guide` and follow it.\r\n",
+	);
+	init(dir);
+	expect(read(dir, "AGENTS.md")).toBe(`# Repo\r\n\r\n${REFERENCE_LINE}\r\n`);
+});
+
 /** The stub an earlier release installed for `/quest-ready`, before `/quest-review` replaced it. */
 const READY_STUB =
 	"---\nname: quest-ready\ndescription: Mark a draft PR ready for review, wait for an automated review, then decide whether to merge.\n---\n\nRun `quest skill ready` and follow its output.\nIf `quest` is not installed, follow https://github.com/kixelated/quest/blob/main/SETUP.md first.\n";
@@ -257,23 +267,41 @@ function write(dir: string, path: string, content: string) {
 	writeFileSync(join(dir, path), content);
 }
 
-test("init removes stubs of retired skills and keeps older stubs of current ones", () => {
+test("init removes stubs of retired skills and refreshes older stubs of current ones", () => {
 	const dir = tempDir();
 	init(dir);
+	const audit = SKILLS.find((skill) => skill.name === "audit")!;
 	for (const skills of [".claude/skills", ".agents/skills"]) {
-		write(
-			dir,
-			`${skills}/quest-ready/SKILL.md`,
-			READY_STUB.replaceAll("\n", skills === ".agents/skills" ? "\r\n" : "\n"),
-		);
-		write(dir, `${skills}/quest-audit/SKILL.md`, OLD_AUDIT_STUB);
+		const eol = skills === ".agents/skills" ? "\r\n" : "\n";
+		write(dir, `${skills}/quest-ready/SKILL.md`, READY_STUB.replaceAll("\n", eol));
+		write(dir, `${skills}/quest-audit/SKILL.md`, OLD_AUDIT_STUB.replaceAll("\n", eol));
 	}
-	expect(init(dir)).toEqual([".claude/skills/quest-ready/SKILL.md", ".agents/skills/quest-ready/SKILL.md"]);
-	for (const skills of [".claude/skills", ".agents/skills"]) {
-		expect(existsSync(join(dir, skills, "quest-ready"))).toBe(false);
-		expect(read(dir, `${skills}/quest-audit/SKILL.md`)).toBe(OLD_AUDIT_STUB);
-	}
+	expect(init(dir)).toEqual([
+		".claude/skills/quest-audit/SKILL.md",
+		".agents/skills/quest-audit/SKILL.md",
+		".claude/skills/quest-ready/SKILL.md",
+		".agents/skills/quest-ready/SKILL.md",
+	]);
+	expect(existsSync(join(dir, ".claude/skills/quest-ready"))).toBe(false);
+	expect(existsSync(join(dir, ".agents/skills/quest-ready"))).toBe(false);
+	expect(read(dir, ".claude/skills/quest-audit/SKILL.md")).toBe(audit.stub);
+	expect(read(dir, ".agents/skills/quest-audit/SKILL.md")).toBe(audit.stub.replaceAll("\n", "\r\n"));
 	expect(init(dir)).toEqual([]);
+});
+
+test.skipIf(process.platform === "win32")("init leaves a linked older stub of a current skill", () => {
+	const dir = tempDir();
+	write(dir, "stub.md", OLD_AUDIT_STUB);
+	write(dir, "elsewhere/quest-audit/SKILL.md", OLD_AUDIT_STUB);
+	mkdirSync(join(dir, ".claude/skills/quest-audit"), { recursive: true });
+	symlinkSync("../../../stub.md", join(dir, ".claude/skills/quest-audit/SKILL.md"));
+	mkdirSync(join(dir, ".agents/skills"), { recursive: true });
+	symlinkSync("../../elsewhere/quest-audit", join(dir, ".agents/skills/quest-audit"));
+	const changed = init(dir);
+	expect(changed).not.toContain(".claude/skills/quest-audit/SKILL.md");
+	expect(changed).not.toContain(".agents/skills/quest-audit/SKILL.md");
+	expect(read(dir, "stub.md")).toBe(OLD_AUDIT_STUB);
+	expect(read(dir, "elsewhere/quest-audit/SKILL.md")).toBe(OLD_AUDIT_STUB);
 });
 
 test("init keeps a retired stub's directory when it holds other files", () => {
@@ -300,6 +328,17 @@ for (const [name, content] of [
 		init(dir);
 		uninstall(dir);
 		expect(read(dir, ".claude/skills/quest-ready/SKILL.md")).toBe(content);
+	});
+
+for (const [name, content] of [
+	["a stub with added instructions", `${OLD_AUDIT_STUB}Then tell the team.\n`],
+	["a stub with an added frontmatter field", OLD_AUDIT_STUB.replace("\n---\n\n", "\nallowed-tools: Bash\n---\n\n")],
+] as const)
+	test(`init keeps ${name} of a current skill`, () => {
+		const dir = tempDir();
+		write(dir, ".claude/skills/quest-audit/SKILL.md", content);
+		expect(() => init(dir)).toThrow(".claude/skills/quest-audit/SKILL.md is not a Quest stub");
+		expect(read(dir, ".claude/skills/quest-audit/SKILL.md")).toBe(content);
 	});
 
 test("init leaves a user's skill without the quest- prefix", () => {
@@ -340,66 +379,13 @@ test("uninstall removes stubs that older versions installed", () => {
 	expect(existsSync(join(dir, ".agents"))).toBe(false);
 });
 
-const QUEST_HOOK = { type: "command", command: HOOK_COMMAND };
-const SESSION_HOOK = { hooks: [{ type: "command", command: "bash .claude/hooks/direnv.sh" }] };
-
-test("init installs Quest's worktree hooks in Claude's project settings, and uninstall removes them", () => {
+test("init and uninstall leave Claude Code's project settings alone", () => {
 	const dir = tempDir();
 	init(dir);
-	const settings = JSON.parse(read(dir, ".claude/settings.json"));
-	expect(Object.keys(settings.hooks)).toEqual(["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"]);
-	for (const groups of Object.values(settings.hooks)) expect(groups).toEqual([{ hooks: [QUEST_HOOK] }]);
+	expect(existsSync(join(dir, ".claude/settings.json"))).toBe(false);
+	const text = `${JSON.stringify({ hooks: { WorktreeCreate: [{ hooks: [{ type: "command", command: "quest worktree hook" }] }] } })}\n`;
+	write(dir, ".claude/settings.json", text);
+	init(dir);
 	uninstall(dir);
-	expect(existsSync(join(dir, ".claude"))).toBe(false);
-});
-
-test("init merges hooks into existing settings, keeping their formatting, and uninstall restores them", () => {
-	const dir = tempDir();
-	mkdirSync(join(dir, ".claude"));
-	const original = {
-		$schema: "https://json.schemastore.org/claude-code-settings.json",
-		hooks: { SessionStart: [SESSION_HOOK], SubagentStop: [SESSION_HOOK] },
-	};
-	const text = `${JSON.stringify(original, null, "\t")}\n`;
-	writeFileSync(join(dir, ".claude/settings.json"), text);
-	expect(init(dir)).toContain(".claude/settings.json");
-	const merged = read(dir, ".claude/settings.json");
-	expect(merged).toContain('\n\t"hooks"');
-	const settings = JSON.parse(merged);
-	expect(settings.hooks.SessionStart).toEqual([SESSION_HOOK]);
-	expect(settings.hooks.SubagentStop).toEqual([SESSION_HOOK, { hooks: [QUEST_HOOK] }]);
-	expect(init(dir)).not.toContain(".claude/settings.json");
-	expect(uninstall(dir)).toContain(".claude/settings.json");
 	expect(read(dir, ".claude/settings.json")).toBe(text);
 });
-
-test("uninstall removes only Quest's handler from a group it shares", () => {
-	const dir = tempDir();
-	mkdirSync(join(dir, ".claude"));
-	const shared = { matcher: "", hooks: [QUEST_HOOK, SESSION_HOOK.hooks[0]] };
-	writeFileSync(join(dir, ".claude/settings.json"), JSON.stringify({ hooks: { SubagentStart: [shared] } }));
-	init(dir);
-	uninstall(dir);
-	expect(JSON.parse(read(dir, ".claude/settings.json"))).toEqual({
-		hooks: { SubagentStart: [{ matcher: "", hooks: SESSION_HOOK.hooks }] },
-	});
-});
-
-for (const [why, content, error] of [
-	[
-		"another WorktreeCreate hook",
-		JSON.stringify({ hooks: { WorktreeCreate: [SESSION_HOOK] } }),
-		"already has a WorktreeCreate hook",
-	],
-	["invalid JSON", "{", "is not valid JSON"],
-	["hooks that are not hook groups", JSON.stringify({ hooks: { SubagentStop: {} } }), "not a list of hook groups"],
-] as const) {
-	test(`init refuses settings with ${why} and writes nothing`, () => {
-		const dir = tempDir();
-		mkdirSync(join(dir, ".claude"));
-		writeFileSync(join(dir, ".claude/settings.json"), content);
-		const before = snapshot(dir);
-		expect(() => init(dir)).toThrow(error);
-		expect(snapshot(dir)).toEqual(before);
-	});
-}

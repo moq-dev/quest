@@ -1,7 +1,7 @@
 # Quest Worker
 
-A deployable foundation for Quest on Cloudflare, and the site at
-`https://kix.quest`: the quest log for your repo and your agents, on the web.
+A deployable foundation for Quest on Cloudflare, and the kix site at
+`https://quest.moq.dev`: the quest log for your repo and your agents, on the web.
 Hono serves HTML directly, so there is no client bundle; only passkeys
 (`src/passkey.js`) and the installed app (`src/app.js` and `src/sw.js`) need
 small scripts. Every page renders
@@ -27,7 +27,10 @@ renders the repository's `docs/*.md` into `build/docs.json`, so the Markdown
 stays the single source and its relative links keep working on GitHub: links to
 other docs become `/docs/<name>` and other repository paths point at GitHub. It
 also snapshots this repository's `quest/` tree and finished quests into
-`build/board.json`, which supplies the public board. Enrolled repositories use authenticated
+`build/board.json`, which supplies the public board. It renders the skill
+stubs `quest init` installs into `build/stubs.json`, for the setup pull request
+a repository without Quest files gets when enrolling
+([GITHUB.md](GITHUB.md#setup-pull-request)). Enrolled repositories use authenticated
 GitHub snapshots through the same board model. A shallow clone has no
 history, so its board shows no finished work. It also copies `design/theme/`,
 `src/site.css`, the scripts, and the web app manifest into `build/public/`,
@@ -93,9 +96,23 @@ rereads it from GitHub, refusing one that closed or whose head moved since
 observations read it. `iterate` and `merge` jobs trust a head only when
 every commit beyond the repository's default branch, independently of the
 PR's chosen base, has a valid signature from a current maintain or admin
-collaborator. The check runs at creation and again at assignment. Other
-heads, including unsigned ones and those kix pushed to, route only to Linux
-runners that declare VM builds. A `merge` job runs the merge
+collaborator, or a maintainer approved that exact head. The inbox shows a
+queued job's other head as a decision linking GitHub's compare view of its
+commits beyond the default branch; `POST
+/projects/github/:owner/:repository/pulls/:number/approve` with the `head`
+on screen records the approver, the SHA, and the time in `head_approvals`,
+one per pull request. An approval lapses when the head moves and counts only
+while its approver keeps a maintain or admin role. The check runs at
+creation, again whenever the job queues or its head moves, without waiting for
+a free runner, and again at assignment. Other heads, including unsigned ones and
+those kix pushed to, route only to Linux runners whose owner declared VM
+builds when registering them, a statement kix does not verify
+([trust by stage](GITHUB.md#trust-by-stage)). `quest runner` cannot build in a
+VM yet: `quest runner login` registers it without declaring VM builds, so such
+jobs wait for a runner that declares them. kix trusts that declaration, so a
+runner declared through `POST /api/runners` with `vm: true` that cannot build
+in a VM is still sent the job; `quest runner` fails it rather than run it. A
+`merge` job runs the merge
 skill's loop on an open, non-draft pull request and lands it; it holds the PR
 with its own `quest:kix` label, which local sessions respect as they do each
 other's `quest:active` (`src/jobs/landing.ts`), as described in
@@ -110,7 +127,8 @@ on the machine and prints a link to `/runners?name=…&platform=…&key=…`, wh
 `key` is the token's SHA-256; the signed-in user approves it there
 (`POST /runners/connect`), and the runner polls `GET /api/runner` with its token
 until it is accepted. A script can instead register at `POST /api/runners` and
-get a token back. Either way kix stores only the hash. With that token a
+get a token back, declaring `vm: true` if it builds untrusted heads in a VM.
+Either way kix stores only the hash. With that token a
 runner opens a WebSocket at `/api/runner/connect`. `/runners`, linked from the
 decision inbox, lists the user's runners with their presence and accounts, and
 moves an account earlier or later in the preference order
@@ -169,9 +187,14 @@ Changes a workflow may not publish pause the job with a `publication`
 decision. The current attempt of a job on an issue or pull request reads it at
 `GET /api/runner/context?job=…&attempt=…`, as the App with the requester's
 current authority: an issue's text and comments, or a pull request's text,
-comments, reviews, unresolved review threads, and checks at its head. A new
+comments, reviews, unresolved review threads, and checks at its head, each by
+its latest run as `quest status` judges them. A new
 plan's attempt reads its `idea` and `context` there instead. [GITHUB.md](GITHUB.md#publication) describes the request, its
-validation, and how interrupted publications are reconciled.
+validation, and how interrupted publications are reconciled. After a delivery,
+the runner reviews the head the job published with the other vendor's model
+and reports the round at `POST /api/runner/review`, which kix records as the
+App's `quest review` check run on that commit
+([GITHUB.md](GITHUB.md#runner-reviews)).
 
 ### Raw output
 
@@ -268,7 +291,7 @@ stopped job sets its item aside the same way.
 
 ### Installed app and notifications
 
-kix.quest installs as a progressive web app (`src/manifest.webmanifest`,
+kix installs as a progressive web app (`src/manifest.webmanifest`,
 starting at `/inbox`) on Android, desktop browsers, and iOS/iPadOS 16.4+ once
 added to the Home Screen. Signed-in pages load `src/app.js`, which registers
 the service worker `src/sw.js`, sets the installed app's icon badge to the
@@ -343,7 +366,7 @@ just worker-dev
 This applies local D1 migrations and starts Wrangler. Open
 `http://localhost:8787`, sign in, and sign out. `/health` reports process health;
 it does not probe storage. `/setup` redirects to `SETUP.md` on GitHub, so the
-one-line setup paste can use `https://kix.quest/setup`. D1 persists locally
+one-line setup paste can use `https://quest.moq.dev/setup`. D1 persists locally
 under `cloudflare/.wrangler/`. There are no remote-only bindings: local
 development and tests need no Cloudflare login. Wrangler reruns the build when
 `src/`, `scripts/`, or `docs/` change.
@@ -366,7 +389,8 @@ projects through the Worker's own routes: ready, claimed, and blocked quests,
 issues (one known only from a webhook, one with a long title), pull requests
 with checks and reviews (one clean to merge), and a paused second project. It then adds runners and
 jobs that are queued, running, failed, or waiting on an agent's questions, a
-tool permission, or an account limit.
+tool permission, or an account limit, and raw output behind their cards: one
+long enough to page, a short one, and one that reached the size cap.
 
 `dev/github.ts` fakes GitHub for every outbound request, so nothing leaves
 localhost and no real credential is used. It models what publication needs:
@@ -375,7 +399,9 @@ request creation, so a runner's job publishes end to end. Like
 GitHub, it scopes each installation token to the repositories and permissions
 it was minted for. Notifications are off, since a push
 would reach a real push service. Sign in with GitHub completes as the
-seeded maintainer. From a shell, sign in with a cookie jar:
+seeded maintainer. Browsers share localhost's cookies across ports, so each
+seeded server names its cookies after its port (`seeded-8788.…`), and servers
+on different ports keep their own sessions. From a shell, sign in with a cookie jar:
 
 ```sh
 curl -sL -c jar -b jar -H 'Origin: http://localhost:8787' -d provider=github http://localhost:8787/sign-in
@@ -385,6 +411,8 @@ Check phone and desktop widths with the browser's device emulation. The Worker
 tests run the same seed (`test/seed.test.ts`), so it follows schema and route
 changes, and later end-to-end tests can start from it. The publication tests
 (`test/publish.test.ts`) use the same fake with a smaller world of their own.
+`just worker-test` also starts this server with `--check` on a free port, which
+checks what only it wires up: the built static assets and its cookie names.
 
 ## Checks
 
@@ -417,6 +445,13 @@ tests encrypt RFC 8291's example, verify VAPID signatures, decrypt what a
 subscribed device receives, and check that only decisions push, once each. No
 OAuth credentials or Cloudflare account are required for checks.
 
+The Worker tests share one runtime and reset only storage between tests, so a
+test could still lean on module-level state another left behind. A daily CI job
+(`.github/workflows/isolated.yml`) runs each test case in its own process
+instead, which is too slow for every pull request. Run it locally with
+`just worker-test-isolated`, optionally with `--jobs N` and file filters such as
+`inbox`.
+
 After changing bindings, regenerate types:
 
 ```sh
@@ -446,10 +481,15 @@ check it on an existing bucket with
 `bun run wrangler r2 bucket lifecycle list quest-output`. Keep it at the
 30 days the Worker's cron uses (`RETENTION` in `src/jobs/output.ts`).
 
-The checked-in config deploys to `https://kix.quest` as a Workers custom
-domain, which requires the `kix.quest` zone in the same Cloudflare account;
+The checked-in config deploys to `https://quest.moq.dev` as a Workers custom
+domain, which requires the `moq.dev` zone in the same Cloudflare account;
 `workers.dev` is disabled so sign-in has one origin. `AUTH_URL` is the only
 authentication origin and supplies generated absolute links.
+
+Until the public release, only repositories whose owner's GitHub ID is in
+`ENROLL_OWNERS` (`wrangler.jsonc`) may enroll. Find an owner's ID with
+`gh api users/<login> --jq .id` and note its login beside it; see
+[the owner allowlist](GITHUB.md#owner-allowlist).
 
 For an existing deployment, retain the Worker name, D1 database ID, and
 `AUTH_SECRET` so account data is preserved. The `create` commands above are
@@ -458,12 +498,12 @@ for a fresh deployment only. For another environment, change `routes`,
 together.
 
 Register the production GitHub App from [the manifest](github-app-manifest.json),
-which includes callback `https://kix.quest/api/auth/callback/github` and requests
+which includes callback `https://quest.moq.dev/api/auth/callback/github` and requests
 user authorization during installation. Use that App's client ID and client
 secret as `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; no separate GitHub OAuth
 app is needed. For Google sign-in, also register
 a production Google OAuth web client with redirect URI
-`https://kix.quest/api/auth/callback/google`, set its public client ID as
+`https://quest.moq.dev/api/auth/callback/google`, set its public client ID as
 `GOOGLE_CLIENT_ID` in `wrangler.jsonc`, and set the secret with
 `bun run wrangler secret put GOOGLE_CLIENT_SECRET`; without both, Google is
 not offered. The secret is optional, so it is not listed under `secrets.required`.

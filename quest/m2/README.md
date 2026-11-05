@@ -12,9 +12,10 @@ additional login providers. This milestone does not gate the public release.
 - [Native mobile app](/quest/m2/mobile-app.md) - push notifications with quick replies to decisions
 - [Shared runners](/quest/m2/donor-runner.md) - offer your runner and accounts to other projects
 - [Review and check automation](/quest/m2/automation/README.md) - donated reviews, CI, and a shared Nix cache
+- [Grok and opencode reviewers](/quest/m2/review-harnesses.md) - `quest review` runs Grok and opencode read-only, for the council's xAI and DeepSeek members
+- [Review council](/quest/m2/council.md) - `/quest-council` reviews a PR with one blind model per maker and merges their findings with agreement counts
 - [Donor isolation](/quest/m2/donor-isolation.md) - stronger boundaries for untrusted shared jobs
 - [ChatGPT hosted runs](/quest/m2/chatgpt-hosted.md) - conditional on provider approval and current terms
 - [ChatGPT approval](/quest/m2/chatgpt-waitlist.md) - resolve hosted-use approval before implementation
-- [Worker dev setup](/quest/m2/worker-dev.md) - per-server cookies, seeded raw output, static assets, one fake GitHub, each test run alone
-- [Gate ownership everywhere](/quest/m2/gate-ownership.md) - delegated sub-cgroups for nested gates and Windows Job Objects
-- [Delete the legacy hold labels](/quest/m2/legacy-labels.md) - condition: every gated repository pins quest past #326; then only `quest:active` and `quest:kix` are holds
+- [Delete the legacy hold labels](/quest/m2/legacy-labels.md) - once every gated repository pins quest past #326, only `quest:active` and `quest:kix` are holds
+- [Worktree hook PATH error](/quest/m2/hook-path-error.md) - a worktree hook without `quest` on `PATH` says so and names the dev-shell launch route

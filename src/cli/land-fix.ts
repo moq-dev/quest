@@ -1,9 +1,10 @@
 // Untrusted agent side. The host wrapper supplies only a model endpoint and its client key; the agent holds no
 // GitHub credential, and the daemon posts the comments it writes into its result.
 import { spawn, spawnSync } from "node:child_process";
-import { constants, closeSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import prompt from "../../assets/land-fix.md";
+import { discoveryEnv } from "./git";
 import { programEnvironment, requireProgram } from "./program";
 
 export class FixerAgentError extends Error {
@@ -13,15 +14,51 @@ export class FixerAgentError extends Error {
 }
 
 export const FIX_RESULT = "quest-land-result.json";
-export function readFixResult(root: string): string {
-	const fd = openSync(join(root, FIX_RESULT), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+/**
+ * The repository's known flaky tests, which a daemon may write in the checkout's `.git` before a round,
+ * where no commit can carry it: a JSON array of `KnownFlaky`.
+ */
+export const FLAKY_INPUT = "quest-land-flaky.json";
+
+/** A test the fixer judged flaky before, by the `failure` it named, with the `merge_group` jobs that showed it. */
+export interface KnownFlaky {
+	failure: string;
+	jobs: string[];
+}
+
+/** A regular file of at most 100 KB, never through a link. */
+function readBounded(path: string, what: string): string {
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
 		const stat = fstatSync(fd);
-		if (!stat.isFile() || stat.size > 100_000) throw new Error("fixer result must be a regular file under 100 KB");
+		if (!stat.isFile() || stat.size > 100_000) throw new Error(`${what} must be a regular file under 100 KB`);
 		return readFileSync(fd, "utf8");
 	} finally {
 		closeSync(fd);
 	}
+}
+
+export function readFixResult(root: string): string {
+	return readBounded(join(root, FIX_RESULT), "fixer result");
+}
+
+/** The known flaky tests the daemon left in `root`'s `.git`, if any, as the agent's input lists them. */
+function knownFlaky(root: string): KnownFlaky[] {
+	const path = join(root, ".git", FLAKY_INPUT);
+	if (!existsSync(path)) return [];
+	const value = json(readBounded(path, "known flaky tests"));
+	if (
+		!Array.isArray(value) ||
+		!value.every(
+			(item) =>
+				item &&
+				typeof item.failure === "string" &&
+				Array.isArray(item.jobs) &&
+				item.jobs.every((job: unknown) => typeof job === "string"),
+		)
+	)
+		throw new Error("invalid known flaky tests");
+	return value as KnownFlaky[];
 }
 /** The longest Markdown comment a result may ask the daemon to post on its PR. */
 export const COMMENT_LIMIT = 4000;
@@ -29,13 +66,36 @@ export const COMMENT_LIMIT = 4000;
 const FAILURE_LIMIT = 200;
 
 /**
+ * Why a PR requeued unchanged failed with no fault of its own: a test that comes and goes (`flaky`), a
+ * failure the base shows alone (`base`), or the runner's environment, such as a missing tool or a full disk.
+ */
+export const CAUSES = ["flaky", "base", "environment"] as const;
+export type Cause = (typeof CAUSES)[number];
+
+/**
+ * `failure` as signatures are compared: without backticks or quotes, with whitespace collapsed, so one
+ * test named with and without quoting is still one test.
+ */
+export const signature = (failure: string) => failure.replace(/[`'"]/g, "").replace(/\s+/g, " ").trim();
+
+/**
  * The fixer's verdict on one PR. `blame` names a PR whose own change caused the failure; a blamed PR
  * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
  * to last, that show the failure, which its comment quotes. `failure` names the failing test or step,
- * the signature the stop rules compare across a pick's rounds.
+ * the signature the stop rules compare across a pick's rounds. A requeue of the PR's own failure names
+ * its `cause`; one of a known flaky test's may carry `disable`: the tip of the fixer's `disable` branch,
+ * a commit on the base that skips the test and adds its follow-up quest, which the daemon opens as a PR
+ * of its own.
  */
-export type FixResult = { agent?: string; model?: string; blame?: boolean; comment?: string; failure?: string } & (
-	| { number: number; action: "requeue"; reason: string }
+export type FixResult = {
+	agent?: string;
+	model?: string;
+	effort?: string;
+	blame?: boolean;
+	comment?: string;
+	failure?: string;
+} & (
+	| { number: number; action: "requeue"; reason: string; cause?: Cause; disable?: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
 );
@@ -44,7 +104,7 @@ export type FixResult = { agent?: string; model?: string; blame?: boolean; comme
  * The fixer's verdict on the base alone, when no PR is supplied: a mechanical fix committed on its
  * `base` branch, which the daemon opens as a PR, or a handback, which halts the queue with an issue.
  */
-export type BaseFix = { agent?: string; model?: string } & (
+export type BaseFix = { agent?: string; model?: string; effort?: string } & (
 	| { action: "fixed"; head: string; reason: string }
 	| { action: "handback"; diagnosis: string; recommendation: string }
 );
@@ -69,7 +129,7 @@ function validate(item: any, pr: boolean): void {
 				: item.action === "handback"
 					? [...named, "action", "diagnosis", "recommendation"]
 					: [];
-	const metadata = ["agent", "model"].filter((key) => key in item);
+	const metadata = ["agent", "model", "effort"].filter((key) => key in item);
 	if (metadata.some((key) => typeof item[key] !== "string" || !/^[a-zA-Z0-9 ._/-]{1,100}$/.test(item[key])))
 		throw new Error("invalid fixer identity");
 	if (pr && "blame" in item) {
@@ -92,12 +152,21 @@ function validate(item: any, pr: boolean): void {
 	if (pr && "failure" in item) {
 		if (
 			typeof item.failure !== "string" ||
-			!item.failure.trim() ||
+			!signature(item.failure) ||
 			item.failure.length > FAILURE_LIMIT ||
 			/[\u0000-\u001f\u007f]/.test(item.failure)
 		)
 			throw new Error("invalid fixer failure");
 		metadata.push("failure");
+	}
+	if (pr && "cause" in item) {
+		if (item.action !== "requeue" || !CAUSES.includes(item.cause)) throw new Error("invalid fixer cause");
+		metadata.push("cause");
+	}
+	if (pr && "disable" in item) {
+		if (item.cause !== "flaky" || typeof item.disable !== "string" || !/^[a-f0-9]{40}$/.test(item.disable))
+			throw new Error("invalid fixer disable");
+		metadata.push("disable");
 	}
 	// One optional Markdown comment per PR: multiline, but no other control characters.
 	if (pr && "comment" in item) {
@@ -139,6 +208,7 @@ export function parseFixResult(text: string, numbers: number[]): FixResult[] {
 			throw new Error("invalid or duplicate fixer PR");
 		seen.add(item.number);
 		validate(item, true);
+		if ("failure" in item) item.failure = signature(item.failure);
 	}
 	return value as FixResult[];
 }
@@ -179,12 +249,14 @@ export async function fix(
 	if (!args && (!process.env.OPENAI_BASE_URL || !process.env.OPENAI_API_KEY))
 		throw new Error("fix needs OPENAI_BASE_URL and OPENAI_API_KEY from the container wrapper");
 	readFileSync(log); // Fail before starting an agent when the wrapper did not expose the log.
+	const flaky = numbers.length ? knownFlaky(root) : [];
 	// The daemon pinned each PR's head on its pr-<n> branch; name it so the agent need not look it up.
 	const prs = numbers.map((number) => {
 		const ref = `pr-${number}`;
 		const head = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${ref}^{commit}`], {
 			cwd: root,
 			encoding: "utf8",
+			env: discoveryEnv(),
 		}).stdout.trim();
 		if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error(`fix needs a ${ref} branch`);
 		return `- #${number}: branch ${ref} at ${head}`;
@@ -230,6 +302,8 @@ export async function fix(
 		...(model ? ["--model", model] : []),
 		"-",
 	];
+	// Codex names its model in the header it prints first, whether or not the command line does.
+	let header = "";
 	await new Promise<void>((done, reject) => {
 		// Relay the agent's output through pipes of its own rather than letting it inherit ours. Once Bun writes
 		// to a pipe it marks that pipe non-blocking, and an inheriting child shares the flag: Codex then panicked
@@ -237,18 +311,28 @@ export async function fix(
 		const child = spawn(program, argv, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
 		child.stdout.pipe(process.stdout, { end: false });
 		child.stderr.pipe(process.stderr, { end: false });
+		child.stderr.on("data", (chunk: Buffer) => {
+			if (header.length < 4096) header += chunk.toString("utf8");
+		});
 		child.once("error", reject);
 		child.stdin.on("error", () => {});
 		child.stdin.end(
-			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:${prs.length ? `\n${prs.join("\n")}` : " none; the base fails alone"}\n`,
+			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:${prs.length ? `\n${prs.join("\n")}` : " none; the base fails alone"}\n${flaky.length ? `Known flaky tests: ${JSON.stringify(flaky)}\n` : ""}`,
 		);
 		child.once("close", (code) => (code === 0 ? done() : reject(new FixerAgentError(code ?? 1))));
 	});
 	const parse = (text: string) => (numbers.length ? parseFixResult(text, numbers) : parseBaseFix(text));
 	const results = parse(readFixResult(root));
 	const index = argv.findIndex((arg) => arg === "-m" || arg === "--model");
-	const ranModel = index >= 0 ? argv[index + 1] : argv.find((arg) => arg.startsWith("--model="))?.slice(8);
-	const identity = { agent: basename(agent), model: ranModel ?? "Codex" };
+	const ranModel =
+		(index >= 0 ? argv[index + 1] : argv.find((arg) => arg.startsWith("--model="))?.slice(8)) ??
+		/^model: ([a-zA-Z0-9._/-]{1,100})$/m.exec(header)?.[1];
+	const identity = {
+		agent: basename(agent),
+		model: ranModel ?? "unknown",
+		// Replaced arguments may run the agent at any effort.
+		effort: args ? "unknown" : effort,
+	};
 	const result = JSON.stringify(
 		Array.isArray(results) ? results.map((item) => ({ ...item, ...identity })) : { ...results, ...identity },
 	);

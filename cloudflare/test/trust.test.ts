@@ -5,6 +5,7 @@ import { GitHubService } from "../src/github/service";
 import * as store from "../src/jobs/store";
 import { verify } from "../src/jobs/trust";
 import { privateKey } from "./github-key";
+import { owner } from "./owners";
 
 const db = env.DB;
 const base = "a".repeat(40);
@@ -33,6 +34,7 @@ beforeEach(async () => {
 	const world: World = {
 		app: { id: Number(env.GITHUB_APP_ID), slug: "quest" },
 		installation: 5,
+		owner,
 		users: [
 			{ id: 7, login: "maintainer", name: "Maintainer", email: "maintainer@example.test" },
 			{ id: 8, login: "contributor", name: "Contributor", email: "contributor@example.test" },
@@ -55,7 +57,7 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-async function queued() {
+async function queued(revision = head) {
 	return (
 		await store.createJob(
 			db,
@@ -64,9 +66,9 @@ async function queued() {
 				actor: "owner",
 				workflow: "iterate",
 				target: "pulls/2",
-				revision: head,
+				revision,
 				branch: "fix",
-				trusted: await trusted(),
+				trusted: await trusted(revision),
 			},
 			0,
 		)
@@ -263,7 +265,8 @@ describe("authenticated PR provenance", () => {
 		const pass = await store.dispatch(racing, "owner", new Map([[mac.id, 1]]), store.GRACE + 4, verify(testEnv));
 		expect(pass.assign).toEqual([]);
 		expect(pass.cancel).toEqual([{ runner: mac.id, job: id, attempt: 2 }]);
-		expect(await store.readJob(db, id)).toMatchObject({ head: published, trusted: 0, state: "queued" });
+		// The delivery recheck's head-guarded read leaves nothing stale to reread.
+		expect(await store.readJob(db, id)).toMatchObject({ head: published, trusted: 0, recheck: 0, state: "queued" });
 	});
 
 	it("leaves a head kix published to VM-only, even after a lost response", async () => {
@@ -290,5 +293,188 @@ describe("authenticated PR provenance", () => {
 		const slots = new Map([mac, vm].map((r) => [r.id, 1]));
 		const pass = await store.dispatch(db, "owner", slots, store.GRACE + 4, verify(testEnv));
 		expect(pass.assign).toMatchObject([{ runner: vm.id, job: { id, trusted: 0, attempt: 2 } }]);
+	});
+});
+
+describe("trust recheck on queue", () => {
+	// kix's commits are signed for the App, never a maintainer.
+	const published = "d".repeat(40);
+	let reads: number;
+	const counted: store.Verify = (job) => {
+		reads++;
+		return verify(testEnv)(job);
+	};
+	// No runner has a free slot.
+	const busy = (now: number) => store.dispatch(db, "owner", new Map(), now, counted);
+
+	// A trusted job runs on a runner, whose attempt kix publishes an unsigned commit for.
+	async function publishedJob() {
+		const id = await queued();
+		const mac = await runner("mac", "darwin");
+		expect((await dispatch([mac])).assign).toMatchObject([{ job: { id, trusted: 1 } }]);
+		await store.report(
+			db,
+			mac,
+			[{ id: "account", provider: "anthropic", kind: "subscription", label: "mac", limited: false }],
+			[{ job: id, attempt: 1 }],
+			1,
+		);
+		repo.commits[published] = { ...commit([head]), signature: { isValid: true, signer: null } };
+		await store.claim(db, mac, id, 1, head, published, 2);
+		repo.branches.fix = published;
+		await store.settle(db, id, published, true, 2);
+		reads = 0;
+		return { id, mac };
+	}
+
+	it("shows a resumed job's unsigned head for approval without a free runner slot", async () => {
+		const { id, mac } = await publishedJob();
+		const { question } = await store.ask(db, mac, id, 1, { summary: "?", session: "s", prompt: {} }, 3);
+		expect(await store.answer(db, id, question, "owner", "A", 4)).toEqual({ resumed: true });
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", trusted: 1, recheck: 1 });
+		await busy(5);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: published, trusted: 0, recheck: 0 });
+		// Another pass without a free slot rereads nothing until the job queues again.
+		await busy(6);
+		expect(reads).toBe(1);
+	});
+
+	it("shows an expired lease's unsigned head for approval without a free runner slot", async () => {
+		const { id } = await publishedJob();
+		// The runner disconnects, and its lease expires with no other runner free.
+		await busy(3);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "running", trusted: 1 });
+		await busy(store.GRACE + 3);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: published, trusted: 0, recheck: 0 });
+		expect(reads).toBe(1);
+	});
+
+	it("rereads a paused project's stale trust, which the inbox still shows", async () => {
+		const { id } = await publishedJob();
+		await busy(3);
+		await busy(store.GRACE + 3);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", trusted: 0 });
+		await db.prepare("UPDATE github_projects SET state='paused' WHERE id=10").run();
+		await service().approveHead(repository, "owner", 2, published);
+		await store.recheck(db, id);
+		await busy(store.GRACE + 4);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", trusted: 1, recheck: 0 });
+	});
+
+	it("rechecks a head that settles while the job is queued", async () => {
+		const { id, mac } = await publishedJob();
+		const next = "e".repeat(40);
+		repo.commits[next] = { ...commit([published]), signature: { isValid: true, signer: null } };
+		await store.claim(db, mac, id, 1, published, next, 3);
+		await busy(4);
+		await busy(store.GRACE + 4);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: published, recheck: 0 });
+		// The lost publication lands after the job queued, and a maintainer approves it.
+		repo.branches.fix = next;
+		await service().approveHead(repository, "owner", 2, next);
+		await store.settle(db, id, next, true, store.GRACE + 5);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", head: next, trusted: 0, recheck: 1 });
+		await busy(store.GRACE + 6);
+		expect(await store.readJob(db, id)).toMatchObject({ head: next, trusted: 1, recheck: 0 });
+	});
+
+	it("never rereads a job that opens its pull request rather than working on one", async () => {
+		reads = 0;
+		const { id } = await store.createJob(
+			db,
+			{
+				repository: repo.id,
+				actor: "owner",
+				workflow: "start",
+				target: "quest/first.md",
+				revision: base,
+				branch: "quest/first",
+				trusted: true,
+			},
+			0,
+		);
+		expect(await store.readJob(db, id)).toMatchObject({ state: "queued", recheck: 1 });
+		expect(await store.stale(db, "owner", id)).toBe(false);
+		await busy(1);
+		expect(reads).toBe(0);
+	});
+});
+
+describe("head approval", () => {
+	// kix's own commits are signed for the App, never a maintainer.
+	const pushed = "d".repeat(40);
+	const approve = (user = "owner", sha = pushed) => service().approveHead(repository, user, 2, sha);
+
+	beforeEach(async () => {
+		repo.commits[pushed] = { ...commit([head]), signature: { isValid: true, signer: null } };
+		repo.branches.fix = pushed;
+		await db.batch([
+			db.prepare(
+				"INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES('outsider','Contributor','contributor@example.test',1,0,0)",
+			),
+			db.prepare(
+				"INSERT INTO account(id,accountId,providerId,userId,createdAt,updatedAt) VALUES('outsider-github','8','github','outsider',0,0)",
+			),
+		]);
+	});
+
+	it("runs a kix-pushed head a maintainer approved on an ordinary runner", async () => {
+		const id = await queued(pushed);
+		const mac = await runner("mac", "darwin");
+		expect((await dispatch([mac])).assign).toEqual([]);
+		await approve();
+		expect(
+			await db
+				.prepare("SELECT pull,head,approver,approvedAt FROM head_approvals WHERE repository=?")
+				.bind(10)
+				.first(),
+		).toMatchObject({ pull: 2, head: pushed, approver: "owner", approvedAt: expect.any(Number) });
+		expect((await dispatch([mac])).assign).toMatchObject([{ runner: mac.id, job: { id, trusted: 1 } }]);
+	});
+
+	it("lapses when the head moves after the approval", async () => {
+		await approve();
+		expect(await trusted(pushed)).toBe(true);
+		const next = "e".repeat(40);
+		repo.commits[next] = { ...commit([pushed]), signature: { isValid: true, signer: null } };
+		repo.branches.fix = next;
+		expect(await trusted(next)).toBe(false);
+		expect(await trusted(pushed)).toBe(false);
+		// The approval names the head the maintainer saw, never a later one.
+		await expect(approve()).rejects.toThrow("moved since you looked");
+		repo.branches.fix = pushed;
+		expect(await trusted(pushed)).toBe(true);
+	});
+
+	it("counts only while the approver keeps a maintain or admin role", async () => {
+		await approve();
+		repo.maintainers = [];
+		expect(await trusted(pushed)).toBe(false);
+		repo.maintainers = ["maintainer"];
+		expect(await trusted(pushed)).toBe(true);
+	});
+
+	it("refuses an approval from someone who is not a maintainer, and never counts one", async () => {
+		await expect(approve("outsider")).rejects.toThrow("maintainer authority required");
+		expect(await db.prepare("SELECT 1 FROM head_approvals").first()).toBeNull();
+		await db
+			.prepare("INSERT INTO head_approvals(repository,pull,head,approver,approvedAt) VALUES(10,2,?,'outsider',0)")
+			.bind(pushed)
+			.run();
+		expect(await trusted(pushed)).toBe(false);
+	});
+
+	it("covers only its own pull request", async () => {
+		repo.pulls.push({
+			number: 3,
+			title: "Other",
+			author: "maintainer",
+			branch: "other",
+			checks: null,
+			review: null,
+		});
+		repo.branches.other = pushed;
+		await approve();
+		expect(await service().jobTrust(repository, "pulls/3", pushed)).toBe(false);
 	});
 });

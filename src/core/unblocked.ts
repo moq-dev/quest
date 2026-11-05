@@ -1,6 +1,7 @@
 // Rank ready work without mistaking the epic index for downstream work.
 
-import { type Doc, children, entries, permanent, rooted } from "./doc";
+import { handBackWaits } from "./claim";
+import { type Doc, branchQuest, children, entries, permanent, rooted } from "./doc";
 import { ready, treeOrder } from "./ready";
 import { ROOT, check, formatFinding } from "./rules";
 import { type Wait, onMaintainer, waits } from "./waiting";
@@ -83,40 +84,60 @@ export function unblocked(docs: Doc[]): RankedQuest[] {
 		.sort((a, b) => rank.priority(a.path) - rank.priority(b.path) || b.dependents - a.dependents);
 }
 
-/** A quest with a `## Waiting` section, as `quest waiting` lists it. */
+/** An open draft PR, as `quest waiting` reads its hand-back. */
+export interface Draft {
+	url: string;
+	/** Its head branch, which names the quest it carries when it is a claim. */
+	branch: string;
+	body: string;
+}
+
+/** A quest with a `## Waiting` section, or a draft PR handed back, as `quest waiting` lists it. */
 export interface WaitingQuest {
-	path: string;
+	/** The quest, or the one the draft carries; `null` for a draft that carries none. */
+	path: string | null;
+	/** The draft's URL, or `null` for a quest's own section. */
+	pr: string | null;
 	/** Distinct transitive dependents, as `quest unblocked` counts them. */
 	dependents: number;
-	/** No `Required` entry remains, so clearing its waits lets it start. */
+	/** No `Required` entry remains, so clearing its waits lets the work go on. */
 	ready: boolean;
 	waits: Wait[];
 }
 
 /**
- * Every quest with a `## Waiting` section: those waiting on the maintainer
- * first, then milestone order, descending downstream impact, ready before
- * blocked, then tree order. Validates the tree first, as `unblocked` does.
+ * Every quest with a `## Waiting` section and every draft in `drafts` handed
+ * back with one: those waiting on the maintainer first, then milestone order,
+ * descending downstream impact, ready before blocked, then tree order, with
+ * drafts after quests in the order given. A draft ranks as the quest its branch
+ * carries, or last when it carries none. Validates the tree first, as
+ * `unblocked` does.
  */
-export function waiting(docs: Doc[]): WaitingQuest[] {
+export function waiting(docs: Doc[], drafts: Draft[] = []): WaitingQuest[] {
 	const rank = ranking(docs);
 	const startable = new Set(ready(docs));
 	const maintainer = (quest: WaitingQuest) => (quest.waits.some(onMaintainer) ? 0 : 1);
+	const priority = (quest: WaitingQuest) => (quest.path === null ? Infinity : rank.priority(quest.path));
 	const byPath = new Map(docs.map((doc) => [doc.path, doc]));
+	const entry = (path: string | null, pr: string | null, found: Wait[]): WaitingQuest => ({
+		path,
+		pr,
+		dependents: path === null ? 0 : rank.impact(path),
+		ready: path === null || startable.has(path),
+		waits: found,
+	});
+	const quests = treeOrder(docs).map((path) => entry(path, null, waits(byPath.get(path)!)));
+	const pulls = drafts.map((draft) => {
+		const quest = branchQuest(draft.branch);
+		return entry(byPath.has(quest) ? quest : null, draft.url, handBackWaits(draft.body));
+	});
 	// The sort is stable, so ties keep tree order, as they do in `unblocked`.
-	return treeOrder(docs)
-		.map((path) => ({ path, waits: waits(byPath.get(path)!) }))
+	return [...quests, ...pulls]
 		.filter((quest) => quest.waits.length > 0)
-		.map((quest) => ({
-			path: quest.path,
-			dependents: rank.impact(quest.path),
-			ready: startable.has(quest.path),
-			waits: quest.waits,
-		}))
 		.sort(
 			(a, b) =>
 				maintainer(a) - maintainer(b) ||
-				rank.priority(a.path) - rank.priority(b.path) ||
+				priority(a) - priority(b) ||
 				b.dependents - a.dependents ||
 				Number(b.ready) - Number(a.ready),
 		);

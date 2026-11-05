@@ -1,5 +1,6 @@
 import type { Activity, ProjectState, Pull } from "./github/state";
-import type { Candidate, Enrollment, ProjectPreview } from "./github/service";
+import type { Candidate, Enrollment, ProjectPreview, ProjectSetup } from "./github/service";
+import { GOAL_LIMIT } from "./github/setup";
 import { Difficulty, Marker } from "./layout";
 import { title } from "./board/model";
 
@@ -32,18 +33,41 @@ export function ProjectStopControls({ project }: { project: Enrollment }) {
 /** One repository the App reaches and the user maintains, with its state or why it cannot be enabled. */
 function CandidateRow({ candidate }: { candidate: Candidate }) {
 	const href = projectURL(candidate.owner, candidate.name);
-	const eligible = !candidate.state && !candidate.problems.length;
+	// A repository without Quest files enables through its setup pull request.
+	const blocking = candidate.problems.length - (candidate.setup ? 1 : 0);
+	const eligible = !candidate.state && blocking === 0;
 	return (
 		<li class="entry">
-			<Marker status={candidate.state ? "accepted" : eligible ? "available" : "blocked"} />
+			<Marker
+				status={
+					candidate.state === "setup"
+						? "pending"
+						: candidate.state
+							? "accepted"
+							: eligible
+								? "available"
+								: "blocked"
+				}
+			/>
 			<a class="entry-title" href={href}>
 				{candidate.owner}/{candidate.name}
 			</a>
 			<div class="entry-meta">
 				{candidate.state ? (
 					<span>
-						{candidate.state === "enabled" ? "Contributions enabled" : "Contributions paused"}.{" "}
-						<a href={href}>Manage</a>
+						{candidate.state === "setup"
+							? "Setting up"
+							: candidate.state === "enabled"
+								? "Contributions enabled"
+								: "Contributions paused"}
+						. <a href={href}>Manage</a>
+					</span>
+				) : eligible && candidate.setup ? (
+					<span>
+						{candidate.problems.join(" ")}{" "}
+						<a class="button primary" href={href}>
+							Enable contributions
+						</a>
 					</span>
 				) : eligible ? (
 					<form method="post" action={href}>
@@ -52,15 +76,7 @@ function CandidateRow({ candidate }: { candidate: Candidate }) {
 						<button class="button primary">Enable contributions</button>
 					</form>
 				) : (
-					<span>
-						{candidate.problems.join(" ")}
-						{candidate.setup && (
-							<>
-								{" "}
-								<a href="/setup">Set up Quest</a>, then return here.
-							</>
-						)}
-					</span>
+					<span>{candidate.problems.join(" ")}</span>
 				)}
 			</div>
 		</li>
@@ -69,6 +85,8 @@ function CandidateRow({ candidate }: { candidate: Candidate }) {
 
 export function ProjectsPage(props: {
 	projects: Enrollment[];
+	/** The user's projects still setting up. */
+	setups: ProjectSetup[];
 	/** The repositories to pick from, or null when the user's GitHub token cannot list them. */
 	candidates: Candidate[] | null;
 	/** Whether the user has a linked GitHub account, without which nothing can be listed. */
@@ -82,6 +100,9 @@ export function ProjectsPage(props: {
 			<p class="intro">
 				Choose a public open-source repository you maintain. Keep its issues, reviews, CI, and merge protections
 				on GitHub.
+			</p>
+			<p class="note-small">
+				Quest isn't open yet. Until the public release, only invited owners' repositories can enroll.
 			</p>
 			{props.error && <p role="alert">{props.error}</p>}
 			<section class="ql-panel panel">
@@ -133,10 +154,18 @@ export function ProjectsPage(props: {
 					<button class="button quiet">Find project</button>
 				</form>
 			</section>
-			{props.projects.length > 0 && (
+			{props.projects.length + props.setups.length > 0 && (
 				<section>
 					<h2>Your enrolled projects</h2>
 					<ul>
+						{props.setups.map((setup) => (
+							<li>
+								<a href={projectURL(setup.owner, setup.name)}>
+									{setup.owner}/{setup.name}
+								</a>{" "}
+								· Setting up
+							</li>
+						))}
 						{props.projects.map((project) => (
 							<li>
 								<a href={projectURL(project.owner, project.name)}>
@@ -159,6 +188,150 @@ export function ProjectsPage(props: {
 					</ul>
 				</section>
 			)}
+		</section>
+	);
+}
+
+/** The goal question, the only one enrolling a repository without Quest files asks. */
+function GoalField() {
+	return (
+		<>
+			<label for="goal">What is this project working toward? (optional)</label>
+			<textarea id="goal" name="goal" rows={4} maxlength={GOAL_LIMIT}></textarea>
+			<p class="note-small">
+				It becomes the Goal of <code>quest/README.md</code>, which you can edit before merging.
+			</p>
+		</>
+	);
+}
+
+/** The pull-request CI check's warnings (`./github/ci.ts`), which never block enabling. */
+function CIPanel(props: { problems: string[] }) {
+	return (
+		<section class="ql-panel panel">
+			<h2>Pull-request CI</h2>
+			<p>
+				kix publishes job branches on this repository, where GitHub gives their workflows the repository's
+				secrets and default token. Keep that CI read-only, so code no maintainer has reviewed meets only a
+				read-only <code>GITHUB_TOKEN</code> and no write credentials.
+			</p>
+			{props.problems.length ? (
+				<ul role="alert">
+					{props.problems.map((problem) => (
+						<li>{problem}</li>
+					))}
+				</ul>
+			) : (
+				<p class="muted">
+					The default token is read-only, no repository or organization secrets reach workflows, and
+					environment secrets deploy only from protected branches.
+				</p>
+			)}
+			<p class="note-small">
+				Jobs still run either way. kix does not read workflow files, so also keep write{" "}
+				<code>permissions:</code> and secrets out of jobs that pull requests and pushes to unprotected branches
+				trigger, including <code>pull_request_target</code> and <code>workflow_run</code> jobs that check out a
+				pull request's head.
+			</p>
+		</section>
+	);
+}
+
+/** Enrolling a repository with no Quest files: the setup pull request's one question. */
+export function QuestSetupPage(props: {
+	repository: { id: number; owner: string; name: string };
+	/** The pull-request CI check's warnings, when it ran. */
+	ci?: string[];
+	error?: string;
+}) {
+	const repo = props.repository;
+	return (
+		<section class="wrap docs projects">
+			<p>
+				<a href="/projects">Project setup</a>
+			</p>
+			<h1>
+				{repo.owner}/{repo.name}
+			</h1>
+			{props.error && <p role="alert">{props.error}</p>}
+			<section class="ql-panel panel">
+				<h2>Set up Quest</h2>
+				<p>
+					This repository has no Quest files on its default branch yet. The App opens a pull request with what{" "}
+					<code>quest init</code> writes: skill stubs, <code>quest/README.md</code>, one line in the agent
+					instructions, and a <code>.gitattributes</code> line. Contributions are enabled when you merge it.
+				</p>
+				<form method="post" action={`${projectURL(repo.owner, repo.name)}/setup`}>
+					<input type="hidden" name="id" value={repo.id} />
+					<GoalField />
+					<p>
+						<button class="button primary">Open the setup pull request</button>
+					</p>
+				</form>
+			</section>
+			{props.ci && <CIPanel problems={props.ci} />}
+		</section>
+	);
+}
+
+/** A project enrolled, setting up: its setup pull request, and what the maintainer can do next. */
+export function SettingUpPage(props: { setup: ProjectSetup; error?: string }) {
+	const { setup } = props;
+	const action = projectURL(setup.owner, setup.name);
+	const pull = `https://github.com/${setup.owner}/${setup.name}/pull/${setup.pull}`;
+	const retry = setup.pull === null || (setup.state === "closed" && !setup.failure);
+	return (
+		<section class="wrap docs projects">
+			<p>
+				<a href="/projects">Project setup</a>
+			</p>
+			<h1>
+				{setup.owner}/{setup.name}
+			</h1>
+			{props.error && <p role="alert">{props.error}</p>}
+			<section class="ql-panel panel">
+				<h2>Setting up</h2>
+				{setup.failure ? (
+					<>
+						<p role="alert">
+							The <a href={pull}>setup pull request</a> merged, but contributions could not be enabled:{" "}
+							{setup.failure}
+						</p>
+						<p>
+							<a class="button primary" href={action}>
+								Check again
+							</a>
+						</p>
+					</>
+				) : setup.pull === null ? (
+					<p>The setup pull request has not been opened yet.</p>
+				) : setup.state === "open" ? (
+					<p>
+						The <a href={pull}>setup pull request #{setup.pull}</a> is open. Contributions are enabled when
+						it merges.
+					</p>
+				) : (
+					<p>
+						The <a href={pull}>setup pull request #{setup.pull}</a> was closed without merging. Open it
+						again with the current default branch, or disconnect the project.
+					</p>
+				)}
+				{retry && (
+					<form method="post" action={`${action}/setup`}>
+						<input type="hidden" name="id" value={setup.id} />
+						<GoalField />
+						<p>
+							<button class="button primary">Open the setup pull request</button>
+						</p>
+					</form>
+				)}
+				<form method="post" action={action}>
+					<input type="hidden" name="id" value={setup.id} />
+					<input type="hidden" name="state" value="disconnected" />
+					<button class="button quiet">Disconnect project</button>
+				</form>
+				<p class="note-small">Disconnecting leaves the setup pull request and its branch as they are.</p>
+			</section>
 		</section>
 	);
 }
@@ -230,6 +403,7 @@ export function ProjectSetupPage(props: { preview: ProjectPreview; enrollment: E
 					</>
 				)}
 			</section>
+			<CIPanel problems={preview.ci} />
 			<section>
 				<h2>Ready quests</h2>
 				{props.enrollment && (

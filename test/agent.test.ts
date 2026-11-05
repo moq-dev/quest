@@ -8,14 +8,13 @@ import {
 	readdirSync,
 	realpathSync,
 	rmSync,
-	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { launchEnvironment, boundedLines, redactedLines, spawnDirectory } from "../src/cli/agent";
+import { boundedLines, spawnDirectory, strippedEnvironment } from "../src/cli/agent";
 import { batchArgument, programCommand, programEnvironment, signalProcess, which } from "../src/cli/program";
 import { type Output, main } from "../src/cli/main";
 import { tempDir } from "./fixture";
@@ -38,8 +37,8 @@ const posix = test.skipIf(windows);
 const LOGGED = /^(CLAUDE|ANTHROPIC|QUEST|OP_|CODEX)/;
 
 /**
- * Fake agent CLIs and secret manager. Each logs its argv, stdin, and the
- * variables it was given, then behaves as FAKE_MODE says.
+ * Fake agent CLIs. Each logs its argv, stdin, and the variables it was given,
+ * then behaves as FAKE_MODE says.
  */
 const FAKES: Record<string, string> = {
 	claude: `
@@ -50,25 +49,25 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ${LOG
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
 const at = (flag) => argv[argv.indexOf(flag) + 1];
 const session = argv.includes("--resume") ? at("--resume") : at("--session-id");
-const key = process.env.ANTHROPIC_API_KEY;
 const result = (fields) => console.log(JSON.stringify({ type: "result", session_id: session, ...fields }));
-if (process.env.FAKE_MODE === "exhausted") {
-	result({ is_error: true, result: "Credit balance is too low" });
+if (process.env.FAKE_MODE === "limited") {
+	result({ is_error: true, result: "You've hit your weekly limit · resets 3pm (UTC)" });
 	process.exit(1);
 }
-if (process.env.FAKE_MODE === "quota-reply") {
-	result({ is_error: false, result: "fixed the insufficient_quota check" });
+if (process.env.FAKE_MODE === "free-limited") {
+	result({ is_error: true, result: "Free usage exceeded" });
+	process.exit(1);
+}
+if (process.env.FAKE_MODE === "logged-out") {
+	result({ is_error: true, result: "Not logged in · Please run /login" });
+	process.exit(1);
+}
+if (process.env.FAKE_MODE === "limit-reply") {
+	result({ is_error: false, result: "fixed the usage limit check" });
 } else if (process.env.FAKE_MODE === "noisy") {
-	// No result, and a key just before the last 64 KiB of output.
-	process.stdout.write("x".repeat(1000) + key + "y".repeat(64 * 1024 - 5) + "\\n");
+	process.stdout.write("not json\\n");
+	process.stderr.write("warning\\n");
 	process.exitCode = 1;
-} else if (process.env.FAKE_MODE === "leak") {
-	// The key arrives on stderr in two separate writes.
-	process.stderr.write("using " + key.slice(0, 4));
-	setTimeout(() => {
-		process.stderr.write(key.slice(4) + "\\nunterminated " + key);
-		result({ is_error: false, result: "leaked" });
-	}, 100);
 } else if (process.env.FAKE_MODE === "sleep") {
 	process.on("SIGTERM", () => {
 		fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ terminated: true }) + "\\n");
@@ -76,7 +75,7 @@ if (process.env.FAKE_MODE === "quota-reply") {
 	});
 	setInterval(() => {}, 1000);
 } else {
-	result({ is_error: false, result: "done with " + key, total_cost_usd: 0.25 });
+	result({ is_error: false, result: "done", total_cost_usd: 0.25 });
 }
 `,
 	codex: `
@@ -100,21 +99,21 @@ if (process.env.FAKE_MODE === "decision") {
 	event({ type: "item.completed", item: { type: "agent_message", text: "Which option?" } });
 	return;
 }
-if (process.env.FAKE_MODE === "exhausted") {
-	event({ type: "error", message: "insufficient_quota: You exceeded your current quota" });
-	event({ type: "turn.failed", error: { message: "insufficient_quota" } });
+if (process.env.FAKE_MODE === "limited") {
+	event({ type: "error", message: "You've hit your usage limit. Try again at 3:15 PM." });
+	event({ type: "turn.failed", error: { message: "You've hit your usage limit. Try again at 3:15 PM." } });
+	process.exit(1);
+}
+if (process.env.FAKE_MODE === "logged-out") {
+	const message = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header";
+	event({ type: "error", message: "Reconnecting... 1/5 (" + message + ")" });
+	event({ type: "turn.failed", error: { message } });
 	process.exit(1);
 }
 if (process.env.FAKE_MODE === "reconnect") event({ type: "error", message: "Reconnecting... 1/5" });
 event({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "first" } });
 event({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "final reply" } });
 event({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } });
-`,
-	op: `
-const fs = require("node:fs");
-const template = fs.readFileSync(0, "utf8");
-fs.appendFileSync(process.env.FAKE_OP_LOG, template + "--\\n");
-process.stdout.write(template.replace(/\\{\\{ op:\\/\\/[^/]+\\/[^/]+\\/([^ ]+) \\}\\}/g, "resolved-$1"));
 `,
 };
 
@@ -137,12 +136,11 @@ interface Setup {
 	worktree: string;
 	runtime: string;
 	log: string;
-	opLog: string;
 	/** Every logged invocation of a fake agent CLI. */
 	calls(): Record<string, unknown>[];
 }
 
-function setup(keys = "sk-literal op://vault/item/second"): Setup {
+function setup(): Setup {
 	const dir = tempDir();
 	const bin = join(dir, "bin");
 	mkdirSync(bin);
@@ -153,14 +151,11 @@ function setup(keys = "sk-literal op://vault/item/second"): Setup {
 	const runtime = join(dir, "runtime");
 	mkdirSync(runtime, { mode: 0o700 });
 	const log = join(dir, "agent.log");
-	const opLog = join(dir, "op.log");
 	// Only what the test sets: the caller may itself run in an agent session.
 	for (const name of Object.keys(process.env)) if (LOGGED.test(name)) vi.stubEnv(name, undefined);
 	vi.stubEnv("PATH", `${bin}${delimiter}${process.env.PATH}`);
 	vi.stubEnv("XDG_RUNTIME_DIR", runtime);
-	vi.stubEnv("QUEST_API_KEYS", keys);
 	vi.stubEnv("FAKE_LOG", log);
-	vi.stubEnv("FAKE_OP_LOG", opLog);
 	// The coordinating session's own harness state and credentials.
 	vi.stubEnv("CLAUDECODE", "1");
 	vi.stubEnv("CLAUDE_CODE_ENTRYPOINT", "cli");
@@ -172,7 +167,6 @@ function setup(keys = "sk-literal op://vault/item/second"): Setup {
 		worktree,
 		runtime,
 		log,
-		opLog,
 		calls: () =>
 			existsSync(log)
 				? readFileSync(log, "utf8")
@@ -184,7 +178,7 @@ function setup(keys = "sk-literal op://vault/item/second"): Setup {
 }
 
 /** Real registry and release/restore lifecycle; only the process-ownership backend and CLI are fake. */
-function managed() {
+async function managed() {
 	const s = setup();
 	const home = join(s.runtime, "worktrees");
 	vi.stubEnv("QUEST_WORKTREE_HOME", home);
@@ -218,7 +212,7 @@ function managed() {
 	]);
 	const worktrees = new Worktrees(home);
 	worktrees.configure(100_000_000);
-	const record = worktrees.create(s.worktree, "agent", 10_000_000, "HEAD", ["cache"]);
+	const record = await worktrees.create(s.worktree, "agent", 10_000_000, "HEAD", ["cache"]);
 	s.worktree = record.path;
 	return { ...s, worktrees, record };
 }
@@ -238,11 +232,9 @@ async function quest(...args: string[]): Promise<{ code: number; stdout: string;
 	return { code, stdout, stderr };
 }
 
-const launch = (harness: string, key: string) => [
+const launch = (harness: string) => [
 	"--harness",
 	harness,
-	"--key",
-	key,
 	"--model",
 	"opus",
 	"--effort",
@@ -251,40 +243,35 @@ const launch = (harness: string, key: string) => [
 	"auto",
 ];
 
-test("the agent environment holds only its own key", () => {
-	const env = launchEnvironment(
-		{
-			PATH: "/bin",
-			HOME: "/home/me",
-			CLAUDECODE: "1",
-			CLAUDE_CODE_SSE_PORT: "1",
-			ANTHROPIC_API_KEY: "sk-session",
-			ANTHROPIC_BASE_URL: "https://proxy",
-			QUEST_API_KEYS: "a b",
-			QUEST_GATE_ADMITTED: "1",
-			QUEST_GATE_PRIORITY: "1",
-			QUEST_LAND_BASE: "0123456789abcdef0123456789abcdef01234567",
-			OP_SERVICE_ACCOUNT_TOKEN: "t",
-			OP_SESSION_me: "s",
-			OPENAI_API_KEY: "o",
-			CODEX_SANDBOX: "seatbelt",
-			CODEX_HOME: "/home/me/.codex",
-			CLAUDE_CONFIG_DIR: "/home/me/.claude-work",
-		},
-		"ANTHROPIC_API_KEY",
-		"sk-agent",
-	);
+test("the agent environment holds no session credentials or harness state", () => {
+	const env = strippedEnvironment({
+		PATH: "/bin",
+		HOME: "/home/me",
+		CLAUDECODE: "1",
+		CLAUDE_CODE_SSE_PORT: "1",
+		ANTHROPIC_API_KEY: "sk-session",
+		ANTHROPIC_BASE_URL: "https://proxy",
+		QUEST_GATE_ADMITTED: "1",
+		QUEST_GATE_PRIORITY: "1",
+		QUEST_LAND_BASE: "0123456789abcdef0123456789abcdef01234567",
+		OP_SERVICE_ACCOUNT_TOKEN: "t",
+		OP_SESSION_me: "s",
+		OPENAI_API_KEY: "o",
+		CODEX_API_KEY: "c",
+		CODEX_SANDBOX: "seatbelt",
+		CODEX_HOME: "/home/me/.codex",
+		CLAUDE_CONFIG_DIR: "/home/me/.claude-work",
+	});
 	expect(env).toEqual({
 		PATH: "/bin",
 		HOME: "/home/me",
 		CODEX_HOME: "/home/me/.codex",
 		CLAUDE_CONFIG_DIR: "/home/me/.claude-work",
-		ANTHROPIC_API_KEY: "sk-agent",
 	});
 });
 
 test("on Windows, the agent environment drops credentials whatever their case", () => {
-	const env = launchEnvironment(
+	const env = strippedEnvironment(
 		{
 			Path: "C:\\bin",
 			op_service_account_token: "t",
@@ -292,26 +279,16 @@ test("on Windows, the agent environment drops credentials whatever their case", 
 			Claude_Config_Dir: "C:\\claude",
 			Codex_Home: "C:\\codex",
 		},
-		"ANTHROPIC_API_KEY",
-		"sk-agent",
 		"win32",
 	);
-	expect(env).toEqual({
-		Path: "C:\\bin",
-		Claude_Config_Dir: "C:\\claude",
-		Codex_Home: "C:\\codex",
-		ANTHROPIC_API_KEY: "sk-agent",
-	});
+	expect(env).toEqual({ Path: "C:\\bin", Claude_Config_Dir: "C:\\claude", Codex_Home: "C:\\codex" });
 	// POSIX names are case-sensitive, so only the exact names are credentials there.
-	expect(launchEnvironment({ op_token: "t" }, "ANTHROPIC_API_KEY", "sk-agent", "linux")).toEqual({
-		op_token: "t",
-		ANTHROPIC_API_KEY: "sk-agent",
-	});
+	expect(strippedEnvironment({ op_token: "t" }, "linux")).toEqual({ op_token: "t" });
 });
 
-test("start runs claude with every launch setting, one resolved key, and no key in its output", async () => {
+test("start runs claude with every launch setting on its own login", async () => {
 	const s = setup();
-	const result = await quest("agent", "start", ...launch("claude", "2"), s.worktree, "/quest-start quest/m0/a.md");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "/quest-start quest/m0/a.md");
 	expect(result.code).toBe(0);
 	const [call] = s.calls();
 	const argv = call.argv as string[];
@@ -336,51 +313,19 @@ test("start runs claude with every launch setting, one resolved key, and no key 
 			execFileSync("git", ["-C", s.worktree, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim(),
 		),
 	);
-	// Only its own key: no session credentials, harness markers, other keys, or secret-manager token.
+	// No session credentials, harness markers, or secret-manager token, so the CLI uses its stored login.
 	expect(call.env).toEqual({
-		ANTHROPIC_API_KEY: "resolved-second",
 		CODEX_HOME: process.env.CODEX_HOME,
 		QUEST_WORKTREE_HOME: process.env.QUEST_WORKTREE_HOME,
 	});
-	expect(result.stdout).toBe(`session ${session}\ncost 0.25\noutcome finished\n\ndone with <key 2>\n`);
-	expect(result.stdout + result.stderr).not.toContain("resolved-second");
-	// The op:// entry resolved in one invocation; the literal key never reached op.
-	expect(readFileSync(s.opLog, "utf8")).toBe("{{ op://vault/item/second }}\n--\n");
+	expect(result.stdout).toBe(`session ${session}\noutcome finished\n\ndone\n`);
 });
 
-test("keys resolve once per spawn into a user-only store, and stop --all deletes them", async () => {
-	const s = setup();
-	expect((await quest("agent", "start", ...launch("claude", "1"), s.worktree, "one")).code).toBe(0);
-	expect((await quest("agent", "start", ...launch("claude", "2"), s.worktree, "two")).code).toBe(0);
-	expect(readFileSync(s.opLog, "utf8").split("--\n").filter(Boolean)).toHaveLength(1);
-	expect(s.calls().map((call) => (call.env as Record<string, string>).ANTHROPIC_API_KEY)).toEqual([
-		"sk-literal",
-		"resolved-second",
-	]);
-	const dir = spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree);
-	const keys = join(dir, "keys.json");
-	if (!windows) {
-		expect(statSync(keys).mode & 0o777).toBe(0o600);
-		expect(statSync(dir).mode & 0o077).toBe(0);
-	}
-
-	// A different QUEST_API_KEYS resolves again rather than reusing stale keys.
-	vi.stubEnv("QUEST_API_KEYS", "op://vault/item/third");
-	expect((await quest("agent", "start", ...launch("claude", "1"), s.worktree, "three")).code).toBe(0);
-	expect(readFileSync(s.opLog, "utf8").split("--\n").filter(Boolean)).toHaveLength(2);
-
-	const stop = await quest("--root", s.worktree, "agent", "stop", "--all");
-	expect(stop).toEqual({ code: 0, stdout: "deleted the resolved keys\n", stderr: "" });
-	expect(existsSync(dir)).toBe(false);
-});
-
-test("a launch that died leaves no lock or record that blocks the next launch", async () => {
+test("a launch that died leaves no record that blocks the next launch", async () => {
 	const s = setup();
 	const dir = spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree);
 	mkdirSync(join(dir, "agents"), { recursive: true });
 	const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
-	const lock = join(dir, "resolving");
-	writeFileSync(lock, String(dead));
 	// A record named as a launch names it: the worktree's digest, then the run.
 	const records = join(dir, "agents");
 	const worktree = createHash("sha256").update(realpathSync(s.worktree)).digest("hex").slice(0, 16);
@@ -388,33 +333,50 @@ test("a launch that died leaves no lock or record that blocks the next launch", 
 		join(records, `${worktree}.stale.json`),
 		JSON.stringify({ pid: dead, child: dead, worktree: s.worktree }),
 	);
-	expect((await quest("agent", "start", ...launch("claude", "2"), s.worktree, "go")).code).toBe(0);
-	expect(existsSync(lock)).toBe(false);
+	expect((await quest("agent", "start", ...launch("claude"), s.worktree, "go")).code).toBe(0);
 	expect(readdirSync(records)).toEqual([]);
 });
 
-test("a key with no credit exits 3 so the spawn resumes on the next key", async () => {
+test("an account at its usage limit exits 3, and the session resumes once it resets", async () => {
 	const s = setup();
-	vi.stubEnv("FAKE_MODE", "exhausted");
-	const started = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	vi.stubEnv("FAKE_MODE", "limited");
+	const started = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
 	expect(started.code).toBe(3);
 	const session = /^session (\S+)$/m.exec(started.stdout)![1];
-	expect(started.stdout).toBe(`session ${session}\noutcome exhausted\n\nCredit balance is too low\n`);
+	expect(started.stdout).toBe(
+		`session ${session}\noutcome limited\n\nYou've hit your weekly limit · resets 3pm (UTC)\n`,
+	);
 
 	vi.stubEnv("FAKE_MODE", "");
-	const resumed = await quest("agent", "resume", ...launch("claude", "2"), s.worktree, session, "continue");
+	const resumed = await quest("agent", "resume", ...launch("claude"), s.worktree, session, "continue");
 	expect(resumed.code).toBe(0);
 	const call = s.calls()[1];
 	expect(call.argv).toContain("--resume");
 	expect(call.argv).toContain(session);
 	expect(call.argv).not.toContain("--session-id");
 	expect(call.stdin).toBe("continue");
-	expect((call.env as Record<string, string>).ANTHROPIC_API_KEY).toBe("resolved-second");
 });
 
-posix("codex runs with its key variable and reports its thread and last message", async () => {
-	const s = managed();
-	const started = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
+test("a spent free usage allowance exits 3 as limited", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_MODE", "free-limited");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
+	expect(result.code).toBe(3);
+	expect(result.stdout).toMatch(/^session \S+\noutcome limited\n\nFree usage exceeded\n$/);
+});
+
+test("a logged-out claude exits 4 and names its login command", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_MODE", "logged-out");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
+	expect(result.code).toBe(4);
+	expect(result.stdout).toMatch(/^session \S+\noutcome logged-out\n\nNot logged in · Please run \/login\n$/);
+	expect(result.stderr).toBe("quest: claude is logged out; run `claude auth login`\n");
+});
+
+posix("codex runs on its own login and reports its thread, last message, limit, and logout", async () => {
+	const s = await managed();
+	const started = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
 	expect(started).toEqual({ code: 0, stdout: "session thread-1\noutcome finished\n\nfinal reply\n", stderr: "" });
 	expect(s.calls()[0].argv).toEqual([
 		"exec",
@@ -430,29 +392,34 @@ posix("codex runs with its key variable and reports its thread and last message"
 		"-",
 	]);
 	expect(s.calls()[0].env).toEqual({
-		CODEX_API_KEY: "sk-literal",
 		CODEX_HOME: process.env.CODEX_HOME,
 		QUEST_WORKTREE_HOME: process.env.QUEST_WORKTREE_HOME,
 	});
 
-	const resumed = await quest("agent", "resume", ...launch("codex", "2"), s.worktree, "thread-1", "answer");
+	const resumed = await quest("agent", "resume", ...launch("codex"), s.worktree, "thread-1", "answer");
 	expect(resumed.code).toBe(0);
 	expect((s.calls()[1].argv as string[]).slice(0, 3)).toEqual(["exec", "resume", "--json"]);
 	expect((s.calls()[1].argv as string[]).slice(-2)).toEqual(["thread-1", "-"]);
 
-	vi.stubEnv("FAKE_MODE", "exhausted");
-	const exhausted = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
-	expect(exhausted).toEqual({
+	vi.stubEnv("FAKE_MODE", "limited");
+	const limited = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
+	expect(limited).toEqual({
 		code: 3,
-		stdout: "session thread-1\noutcome exhausted\n\ninsufficient_quota\n",
+		stdout: "session thread-1\noutcome limited\n\nYou've hit your usage limit. Try again at 3:15 PM.\n",
 		stderr: "",
 	});
+
+	vi.stubEnv("FAKE_MODE", "logged-out");
+	const loggedOut = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
+	expect(loggedOut.code).toBe(4);
+	expect(loggedOut.stdout).toContain("outcome logged-out\n");
+	expect(loggedOut.stderr).toBe("quest: codex is logged out; run `codex login`\n");
 });
 
 test("stop ends a live agent, which reports it as stopped", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "sleep");
-	const running = quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	const running = quest("agent", "start", ...launch("claude"), s.worktree, "go");
 	const records = join(spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree), "agents");
 	await vi.waitFor(() => {
 		expect(readdirSync(records)).toHaveLength(1);
@@ -460,7 +427,7 @@ test("stop ends a live agent, which reports it as stopped", async () => {
 	});
 
 	// A second agent in the same worktree is refused while the first runs.
-	const second = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "again");
+	const second = await quest("agent", "start", ...launch("claude"), s.worktree, "again");
 	expect(second.code).toBe(1);
 	expect(second.stderr).toContain("an agent is already running");
 
@@ -477,19 +444,32 @@ test("stop ends a live agent, which reports it as stopped", async () => {
 	expect((await quest("agent", "stop", s.worktree)).stdout).toBe("no agent running\n");
 });
 
-test("stderr is redacted even when a key spans two writes", async () => {
+test("stop --all ends every agent in the repository and deletes the spawn's state", async () => {
 	const s = setup();
-	vi.stubEnv("FAKE_MODE", "leak");
-	const result = await quest("agent", "start", ...launch("claude", "2"), s.worktree, "go");
-	expect(result.code).toBe(0);
-	expect(result.stderr).toBe("using <key 2>\nunterminated <key 2>");
+	vi.stubEnv("FAKE_MODE", "sleep");
+	const running = quest("agent", "start", ...launch("claude"), s.worktree, "go");
+	const dir = spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree);
+	await vi.waitFor(() => expect(s.calls()).toHaveLength(1));
+	const stopped = await quest("--root", s.worktree, "agent", "stop", "--all");
+	expect(stopped.code).toBe(0);
+	expect(stopped.stdout).toMatch(/^stopped .* session \S+\n$/);
+	expect((await running).stdout).toMatch(/outcome stopped\n$/);
+	expect(existsSync(dir)).toBe(false);
+
+	expect(await quest("--root", s.worktree, "agent", "stop", "--all")).toEqual({
+		code: 0,
+		stdout: "no agent running\n",
+		stderr: "",
+	});
+	// It takes a worktree or --all, never both or neither.
+	expect((await quest("agent", "stop")).code).toBe(2);
 });
 
 test("concurrent launches in one worktree run only one agent", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "sleep");
-	const first = quest("agent", "start", ...launch("claude", "1"), s.worktree, "one");
-	const second = quest("agent", "start", ...launch("claude", "2"), s.worktree, "two");
+	const first = quest("agent", "start", ...launch("claude"), s.worktree, "one");
+	const second = quest("agent", "start", ...launch("claude"), s.worktree, "two");
 	// The refused launch returns first; the other runs until stopped.
 	const refused = await Promise.race([first, second]);
 	expect(refused.code).toBe(1);
@@ -501,36 +481,33 @@ test("concurrent launches in one worktree run only one agent", async () => {
 	expect(s.calls().filter((call) => "argv" in call)).toHaveLength(1);
 });
 
-test("a finished turn whose reply mentions credit is not an exhausted key", async () => {
+test("a finished turn whose reply mentions a usage limit is not limited", async () => {
 	const s = setup();
-	vi.stubEnv("FAKE_MODE", "quota-reply");
-	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	vi.stubEnv("FAKE_MODE", "limit-reply");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
 	expect(result.code).toBe(0);
 	expect(result.stdout).toContain("outcome finished\n");
 });
 
 posix("a retried codex stream error does not fail a completed turn", async () => {
-	const s = managed();
+	const s = await managed();
 	vi.stubEnv("FAKE_MODE", "reconnect");
-	const result = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
 	expect(result).toEqual({ code: 0, stdout: "session thread-1\noutcome finished\n\nfinal reply\n", stderr: "" });
 });
 
-test("the no-result diagnostic never shows part of a key", async () => {
+test("an agent that prints no result fails, showing its stderr and the end of its output", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_MODE", "noisy");
-	const result = await quest("agent", "start", ...launch("claude", "2"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
 	expect(result.code).toBe(1);
-	expect(result.stderr).toContain("printed no result");
-	// The kept tail starts inside the key; no fragment of it may precede the filler.
-	for (let length = 2; length <= "resolved-second".length; length++) {
-		expect(result.stderr).not.toContain(`${"resolved-second".slice(-length)}y`);
-	}
+	expect(result.stdout).toMatch(/^session \S+\noutcome failed\n$/);
+	expect(result.stderr).toBe("warning\nquest: claude printed no result; its output ended with:\nnot json\n\n");
 });
 
 test("a prompt starting with a dash is the prompt, not an option", async () => {
 	const s = setup();
-	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "- A: yes");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "- A: yes");
 	expect(result.code).toBe(0);
 	expect(s.calls()[0].stdin).toBe("- A: yes");
 });
@@ -540,7 +517,7 @@ test("a launch refuses while stop --all is ending the spawn", async () => {
 	const dir = spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree);
 	// A live `stop --all` marks the spawn before listing its records.
 	writeFileSync(join(dir, "ending"), String(process.pid));
-	const refused = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	const refused = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
 	expect(refused.code).toBe(1);
 	expect(refused.stderr).toContain("the spawn is ending");
 	expect(s.calls()).toEqual([]);
@@ -548,34 +525,19 @@ test("a launch refuses while stop --all is ending the spawn", async () => {
 
 	// A mark left by a `stop --all` that died does not block the next spawn.
 	writeFileSync(join(dir, "ending"), String(spawnSync(process.execPath, ["-e", ""]).pid));
-	expect((await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go")).code).toBe(0);
+	expect((await quest("agent", "start", ...launch("claude"), s.worktree, "go")).code).toBe(0);
 });
 
 posix("an agent whose record is lost is killed rather than left running untracked", async () => {
-	const s = managed();
+	const s = await managed();
 	vi.stubEnv("FAKE_MODE", "late-thread");
-	const running = quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
+	const running = quest("agent", "start", ...launch("codex"), s.worktree, "go");
 	await vi.waitFor(() => expect(s.calls()).toHaveLength(1));
 	// The state disappears before the agent announces its thread.
 	rmSync(spawnDirectory(join(s.runtime, "quest", "agent"), s.worktree), { recursive: true, force: true });
 	const result = await running;
 	expect(result.code).toBe(1);
 	expect(result.stderr).toContain("ENOENT");
-});
-
-test("a long line without a newline is forwarded early, still redacted", () => {
-	const written: string[] = [];
-	const lines = redactedLines(
-		(value) => value.replaceAll("SECRETKEY", "<key 1>"),
-		8,
-		(text) => written.push(text),
-	);
-	lines.data(`${"a".repeat(70_000)}SECRE`);
-	lines.data(`TKEY${"b".repeat(10)}`);
-	// Most of the line is out before it ends, so the buffer stays bounded.
-	expect(written.join("").length).toBeGreaterThan(60_000);
-	lines.end();
-	expect(written.join("")).toBe(`${"a".repeat(70_000)}<key 1>${"b".repeat(10)}`);
 });
 
 posix("every command refuses a state directory that is a symlink", async () => {
@@ -585,7 +547,7 @@ posix("every command refuses a state directory that is a symlink", async () => {
 	mkdirSync(join(s.runtime, "quest"));
 	symlinkSync(elsewhere, join(s.runtime, "quest", "agent"));
 	for (const args of [
-		["agent", "start", ...launch("claude", "1"), s.worktree, "go"],
+		["agent", "start", ...launch("claude"), s.worktree, "go"],
 		["agent", "stop", s.worktree],
 		["--root", s.worktree, "agent", "stop", "--all"],
 	]) {
@@ -613,26 +575,26 @@ test("the agent CLI is found on PATH, never in the worktree it runs in", async (
 	const planted = join(s.worktree, "planted.log");
 	fake(s.worktree, "claude", `require("node:fs").writeFileSync(${JSON.stringify(planted)}, "ran");`);
 	vi.stubEnv("PATH", `.${delimiter}${process.env.PATH}`);
-	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
 	expect(result.code).toBe(0);
 	expect(existsSync(planted)).toBe(false);
 	expect(s.calls()).toHaveLength(1);
 });
 
-test("a missing agent CLI fails before any key is resolved", async () => {
-	const s = setup("op://vault/item/secret");
+test("a missing agent CLI fails before any agent state is written", async () => {
+	const s = setup();
 	vi.stubEnv("PATH", join(s.runtime, "empty"));
-	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
 	expect(result.code).toBe(1);
 	expect(result.stderr).toContain("claude is not installed");
-	expect(existsSync(s.opLog)).toBe(false);
+	expect(existsSync(join(s.runtime, "quest", "agent"))).toBe(false);
 });
 
 test("launch settings reach the agent unchanged, whatever characters they hold", async () => {
 	const s = setup();
 	// Through a Windows batch shim, each of these is special to cmd.exe or the C runtime.
 	const model = 'a&b|c<d>e^f "g" (h) !i! \\"j\\ k,l;m=n [o]';
-	const args = launch("claude", "1");
+	const args = launch("claude");
 	args[args.indexOf("--model") + 1] = model;
 	const result = await quest("agent", "start", ...args, s.worktree, "go");
 	expect(result.code).toBe(0);
@@ -652,7 +614,7 @@ test.runIf(windows)("a batch shim's own program search never reaches the worktre
 	writeFileSync(join(s.worktree, "interpreter.cmd"), `@echo ran> "${planted}"\r\n`);
 	// PATH names the worktree relatively, too.
 	vi.stubEnv("PATH", `.${delimiter}${shim}${delimiter}${process.env.PATH}`);
-	const result = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
 	expect(result.code).toBe(0);
 	expect(existsSync(planted)).toBe(false);
 	expect(s.calls()).toHaveLength(1);
@@ -708,33 +670,15 @@ test("signalling a process that already exited is not an error", () => {
 	expect(() => signalProcess(0x3ffffffe, "SIGTERM")).not.toThrow();
 });
 
-test("missing keys, positions past the list, and unknown references are usage errors", async () => {
-	const s = setup("sk-one vault://x");
-	const unknown = await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go");
-	expect(unknown).toMatchObject({
-		code: 2,
-		stderr: "error: QUEST_API_KEYS has a vault:// reference; only op:// is supported\n",
-	});
-
-	vi.stubEnv("QUEST_API_KEYS", "sk-one");
-	const past = await quest("agent", "start", ...launch("claude", "2"), s.worktree, "go");
-	expect(past).toMatchObject({ code: 2, stderr: "error: --key 2 is past the 1 entries in QUEST_API_KEYS\n" });
-
-	vi.stubEnv("QUEST_API_KEYS", "");
-	expect((await quest("agent", "start", ...launch("claude", "1"), s.worktree, "go")).code).toBe(2);
-	expect((await quest("agent", "stop")).code).toBe(2);
-	expect(s.calls()).toEqual([]);
-});
-
 for (const mode of ["finished", "decision", "crash"]) {
 	posix(`Codex ${mode} releases scratch and resume restores the registered checkout`, async () => {
-		const s = managed();
+		const s = await managed();
 		vi.stubEnv("FAKE_MODE", mode);
 		mkdirSync(join(s.worktree, "cache"));
 		writeFileSync(join(s.worktree, "cache", "build"), "scratch");
 		writeFileSync(join(s.worktree, "source"), "local source survives");
 		writeFileSync(join(s.worktree, "untracked"), "new source survives");
-		const run = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
+		const run = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
 		expect(run.code).toBe(mode === "crash" ? 1 : 0);
 		if (mode === "decision") expect(run.stdout).toContain("Which option?");
 		expect(s.worktrees.status().records[0]).toMatchObject({ phase: "released", runs: [] });
@@ -748,55 +692,52 @@ for (const mode of ["finished", "decision", "crash"]) {
 			return runScope(...args);
 		});
 		vi.stubEnv("FAKE_MODE", "finished");
-		const resumed = await quest("agent", "resume", ...launch("codex", "1"), s.worktree, "thread-1", "answer");
+		const resumed = await quest("agent", "resume", ...launch("codex"), s.worktree, "thread-1", "answer");
 		expect(resumed.code).toBe(0);
 		expect(s.worktrees.status().records[0]).toMatchObject({ phase: "released", runs: [] });
 		expect(s.calls()[1].stdin).toBe("answer");
 	});
 }
 
-posix("Codex refuses an unmanaged checkout before resolving credentials or writing key state", async () => {
-	const s = setup("op://vault/item/secret");
+posix("Codex refuses an unmanaged checkout before writing agent state", async () => {
+	const s = setup();
 	vi.stubEnv("QUEST_WORKTREE_HOME", join(s.runtime, "worktrees"));
 	vi.spyOn(systemdScopes, "check").mockImplementation(() => {});
-	const result = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
 	expect(result.code).toBe(2);
 	expect(result.stderr).toContain("registered Quest checkout");
 	expect(s.calls()).toEqual([]);
-	expect(existsSync(s.opLog)).toBe(false);
 	expect(existsSync(join(s.runtime, "quest", "agent"))).toBe(false);
 });
 
-posix("Codex refuses unsupported supervision before resolving credentials", async () => {
-	const s = managed();
+posix("Codex refuses unsupported supervision before writing agent state", async () => {
+	const s = await managed();
 	vi.mocked(systemdScopes.check).mockImplementation(() => {
 		throw new Error("unsupported host");
 	});
-	const result = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
 	expect(result.code).toBe(1);
 	expect(result.stderr).toContain("unsupported host");
-	expect(existsSync(s.opLog)).toBe(false);
 	expect(existsSync(join(s.runtime, "quest", "agent"))).toBe(false);
 	expect(s.calls()).toEqual([]);
 });
 
-posix("Codex rejects a registered path whose Git ownership was replaced before credentials", async () => {
-	const s = managed();
+posix("Codex rejects a registered path whose Git ownership was replaced before it runs", async () => {
+	const s = await managed();
 	rmSync(join(s.worktree, ".git"));
 	execFileSync("git", ["-C", s.worktree, "init", "-q"]);
-	const result = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
 	expect(result.code).toBe(1);
 	expect(result.stderr).toContain("checkout ownership/lock changed");
-	expect(existsSync(s.opLog)).toBe(false);
 	expect(s.calls()).toEqual([]);
 });
 
 posix("a Codex release failure is reported instead of a finished outcome", async () => {
-	const s = managed();
+	const s = await managed();
 	mkdirSync(join(s.worktree, "cache"));
 	writeFileSync(join(s.worktree, "cache", "tracked"), "keep");
 	execFileSync("git", ["-C", s.worktree, "add", "-f", "cache/tracked"]);
-	const result = await quest("agent", "start", ...launch("codex", "1"), s.worktree, "go");
+	const result = await quest("agent", "start", ...launch("codex"), s.worktree, "go");
 	expect(result.code).toBe(1);
 	expect(result.stderr).toContain("release failed");
 	expect(result.stdout).not.toContain("outcome finished");
@@ -805,6 +746,5 @@ posix("a Codex release failure is reported instead of a finished outcome", async
 });
 
 test("a land check's base never reaches a launched agent", () => {
-	const env = launchEnvironment({ PATH: "/bin", QUEST_LAND_BASE: "0".repeat(40) }, "ANTHROPIC_API_KEY", "sk-agent");
-	expect(env).toEqual({ PATH: "/bin", ANTHROPIC_API_KEY: "sk-agent" });
+	expect(strippedEnvironment({ PATH: "/bin", QUEST_LAND_BASE: "0".repeat(40) })).toEqual({ PATH: "/bin" });
 });

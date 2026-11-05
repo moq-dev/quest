@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Check that an installed CLI's gate admits a lone command, however loaded the
-# host, and owns its command's descendants. Inside another gate or Quest scope
-# the enclosing owner holds them instead, so CI runs this on its own rather than
-# from `just test`.
+# host, and owns its command's descendants. Inside another gate or Quest scope,
+# the enclosing owner holds them or delivers their signals instead, so a signal
+# sent to the gate alone never reaches its command: CI runs this on its own
+# rather than from `just test`.
 set -euo pipefail
 
 binary=${1:?usage: gate-check.sh /absolute/path/to/quest}

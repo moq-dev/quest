@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { describe, expect, test, vi } from "vitest";
 
-import { claims, target } from "../src/cli/claims";
+import { claims, openDrafts, target } from "../src/cli/claims";
 import {
 	type GitHubDependencies,
 	type ObjectValue,
@@ -288,7 +288,8 @@ describe("start on GitHub", () => {
 		const warnings: string[] = [];
 		const started = await start(work, new FakeGitHub(), warnings);
 		expect(warnings).toEqual([
-			`local branch ${BRANCH} already exists; merge the claim commit ${started.sha} into it before pushing`,
+			`claimed, but local branch ${BRANCH} already exists from an earlier attempt; ` +
+				`switch to it, merge the claim commit ${started.sha} into it, and resume that work before pushing`,
 		]);
 		expect(git(work, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
 	});
@@ -732,6 +733,67 @@ describe("start on another forge", () => {
 		expect(ready.code, ready.stderr).toBe(0);
 		expect(tip(bare, "quest/m0/epic/two")).not.toBe("");
 	});
+});
+
+test("openDrafts reads the upstream's open drafts from a fork's clone, by number", async () => {
+	const bare = upstream();
+	const github = new FakeGitHub();
+	github.fork("me/project");
+	const work = clone(FORK, { [FORK]: initRepository(undefined, { bare: true }), [UPSTREAM]: bare });
+	github.open("example/project", "quest/m0/b", "someone/project", { body: "## Waiting\n\n- Maintainer: pick.\n" });
+	github.open("example/project", "quest/m0/a", "example/project");
+	github.open("example/project", "feature", "example/project", { draft: false });
+	github.open("me/project", "quest/m0/c", "me/project");
+	const warnings: string[] = [];
+	const drafts = await openDrafts(work, "origin", deps(github, warnings));
+	expect(drafts.map((pull) => [pull.number, pull.branch, pull.body])).toEqual([
+		[1, "quest/m0/b", "## Waiting\n\n- Maintainer: pick.\n"],
+		[2, "quest/m0/a", ""],
+	]);
+	expect(warnings).toEqual([]);
+});
+
+test("waiting lists a draft's items under its URL, ranked as the quest it carries", async () => {
+	const bare = upstream();
+	const github = new FakeGitHub();
+	const work = clone(UPSTREAM, { [UPSTREAM]: bare });
+	appendFileSync(join(work, ONE), "\n## Waiting\n\n- moq-dev/moq: a release.\n");
+	github.open("example/project", "quest/m0/epic/two", "example/project", {
+		body: "Work.\n\n## Waiting\n\n- Maintainer: pick a name.\n",
+	});
+	vi.stubEnv("GH_TOKEN", "token");
+	vi.stubGlobal("fetch", github.deps().fetch);
+	try {
+		expect(await cli("--root", work, "waiting")).toEqual({
+			code: 0,
+			stdout:
+				"0\tblocked\thttps://github.com/example/project/pull/1\tMaintainer: pick a name.\n" +
+				`1\tready\t${ONE}\tmoq-dev/moq: a release.\n`,
+			stderr: "",
+		});
+	} finally {
+		vi.unstubAllEnvs();
+		vi.unstubAllGlobals();
+	}
+});
+
+test("openDrafts skips drafts with a warning when GitHub cannot be read", async () => {
+	const work = clone(UPSTREAM, { [UPSTREAM]: upstream() });
+	const warnings: string[] = [];
+	const offline = {
+		github: () => {
+			throw new Error("set GH_TOKEN or GITHUB_TOKEN, or sign in with gh auth login");
+		},
+		warn: (message: string) => warnings.push(message),
+	};
+	expect(await openDrafts(work, "origin", offline)).toEqual([]);
+	expect(await openDrafts(clone(upstream()), "origin", offline)).toEqual([]);
+	expect(await openDrafts(work, "nope", offline)).toEqual([]);
+	expect(warnings).toEqual([
+		"draft PRs were skipped: set GH_TOKEN or GITHUB_TOKEN, or sign in with gh auth login",
+		"origin is not on GitHub, so draft PRs were skipped",
+		"no nope remote, so draft PRs were skipped",
+	]);
 });
 
 test("claims reports the earliest open PR on each branch", async () => {

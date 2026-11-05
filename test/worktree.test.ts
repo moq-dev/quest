@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
 	appendFileSync,
 	existsSync,
@@ -79,10 +80,12 @@ afterEach(() => {
 
 // Cases run up to 20 real Git processes. Process creation on the Windows ARM runner
 // costs ~80-250 ms while other test files start, so the 5 s unit-test default is too short.
+// Cases that create checkouts with submodules clone each nested repository, running
+// 100-300 Git processes, so they get 60 s.
 describe("worktrees", { timeout: 20_000 }, () => {
-	it("prunes declared scratch in place and keeps source, Git state, and untracked files", () => {
+	it("prunes declared scratch in place and keeps source, Git state, and untracked files", async () => {
 		const { repo, worktrees } = fixture();
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache/", "cache/nested", "missing"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache/", "cache/nested", "missing"]);
 		expect(record.scratch).toEqual(["cache", "cache/nested", "missing"]);
 		writeFileSync(join(record.path, "file"), "committed\n");
 		git(record.path, "commit", "-am", "local only");
@@ -105,45 +108,49 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(readFileSync(join(record.path, ".env"), "utf8")).toBe("ignored and undeclared");
 		expect(worktrees.restore(record.id).phase).toBe("active");
 	});
-	it("refuses scratch that is tracked, not ignored, or outside the checkout", () => {
+	it("refuses scratch that is tracked, not ignored, or outside the checkout", async () => {
 		const { repo, worktrees } = fixture();
 		for (const path of ["../outside", ".git", ".GIT", "/absolute", ".", "./", ""])
-			expect(() => worktrees.create(repo, "invalid", 10_000_000, "HEAD", [path])).toThrow("relative path");
+			await expect(worktrees.create(repo, "invalid", 10_000_000, "HEAD", [path])).rejects.toThrow(
+				"relative path",
+			);
 		let count = 0;
-		const declare = (scratch: string) => {
-			const record = worktrees.create(repo, `case-${count++}`, 1_000_000, "HEAD", [scratch]);
+		const declare = async (scratch: string) => {
+			const record = await worktrees.create(repo, `case-${count++}`, 1_000_000, "HEAD", [scratch]);
 			writeFileSync(join(record.path, "new"), "source");
 			mkdirSync(join(record.path, "cache"));
 			writeFileSync(join(record.path, "cache", "forced"), "tracked despite the ignore rule");
 			git(record.path, "add", "-f", "cache/forced");
 			return record;
 		};
-		expect(() => worktrees.release(declare("file").id)).toThrow("tracked files: file");
-		expect(() => worktrees.release(declare("cache").id)).toThrow("tracked files: cache/forced");
+		const tracked = await declare("file");
+		expect(() => worktrees.release(tracked.id)).toThrow("tracked files: file");
+		const cached = await declare("cache");
+		expect(() => worktrees.release(cached.id)).toThrow("tracked files: cache/forced");
 		// Another spelling, which a case-insensitive filesystem resolves to the tracked directory.
-		const aliased = declare("CACHE");
+		const aliased = await declare("CACHE");
 		mkdirSync(join(aliased.path, "CACHE"), { recursive: true });
 		appendFileSync(join(repo, ".git", "info", "exclude"), "/CACHE/\n");
 		expect(() => worktrees.release(aliased.id)).toThrow("tracked files: cache/forced");
-		const unignored = declare("new");
+		const unignored = await declare("new");
 		expect(() => worktrees.release(unignored.id)).toThrow("ignored by Git: new");
 		// Any other alias of the .git entry, here a hard link that an ignore rule matches.
-		const linked = declare(".env");
+		const linked = await declare(".env");
 		linkSync(join(linked.path, ".git"), join(linked.path, ".env"));
 		expect(() => worktrees.release(linked.id)).toThrow(".git entry: .env");
 		expect(readFileSync(join(unignored.path, "new"), "utf8")).toBe("source");
 		expect(readFileSync(join(unignored.path, "cache", "forced"), "utf8")).toBe("tracked despite the ignore rule");
 		expect(worktrees.status().records.every((record) => record.phase === "active")).toBe(true);
 	});
-	it.skipIf(process.platform === "win32")("never follows symlinks out of the checkout", () => {
+	it.skipIf(process.platform === "win32")("never follows symlinks out of the checkout", async () => {
 		const { root, repo, worktrees } = fixture();
 		const outside = join(root, "outside");
 		mkdirSync(join(outside, "cache"), { recursive: true });
 		writeFileSync(join(outside, "cache", "keep"), "outside");
-		const through = worktrees.create(repo, "through", 10_000_000, "HEAD", ["linked/cache"]);
+		const through = await worktrees.create(repo, "through", 10_000_000, "HEAD", ["linked/cache"]);
 		symlinkSync(outside, join(through.path, "linked"));
 		expect(() => worktrees.release(through.id)).toThrow("reached through a symlink");
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache", ".env"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache", ".env"]);
 		mkdirSync(join(record.path, "cache"));
 		symlinkSync(outside, join(record.path, "cache", "link"));
 		symlinkSync(outside, join(record.path, ".env"));
@@ -152,59 +159,62 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(existsSync(join(record.path, ".env"))).toBe(false);
 		expect(readFileSync(join(outside, "cache", "keep"), "utf8")).toBe("outside");
 	});
-	it.skipIf(process.platform === "win32")("unlinks a scratch symlink to another worktree", () => {
+	it.skipIf(process.platform === "win32")("unlinks a scratch symlink to another worktree", async () => {
 		const { repo, worktrees } = fixture();
-		const other = worktrees.create(repo, "other", 10_000_000);
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", [".env"]);
+		const other = await worktrees.create(repo, "other", 10_000_000);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", [".env"]);
 		symlinkSync(other.path, join(record.path, ".env"));
 		expect(worktrees.release(record.id).phase).toBe("released");
 		expect(existsSync(join(record.path, ".env"))).toBe(false);
 		expect(existsSync(join(other.path, "file"))).toBe(true);
 	});
-	it.skipIf(process.platform === "win32")("charges allocated blocks of dangling symlinks and sparse files", () => {
-		const { root } = fixture();
-		const dangling = join(root, "dangling");
-		symlinkSync("missing", dangling);
-		expect(diskUsage(dangling)).toBe(lstatSync(dangling).blocks * 512);
-		const sparse = join(root, "sparse");
-		writeFileSync(sparse, "");
-		truncateSync(sparse, 1 << 30);
-		expect(diskUsage(sparse)).toBeLessThan(1 << 20);
-		const linked = join(root, "linked");
-		mkdirSync(linked);
-		writeFileSync(join(linked, "a"), Buffer.alloc(1 << 16, 1));
-		linkSync(join(linked, "a"), join(linked, "b"));
-		expect(diskUsage(linked)).toBe((lstatSync(linked).blocks + lstatSync(join(linked, "a")).blocks) * 512);
-	});
-	it("charges active reservations and the footprint released checkouts keep", () => {
+	it.skipIf(process.platform === "win32")(
+		"charges allocated blocks of dangling symlinks and sparse files",
+		async () => {
+			const { root } = fixture();
+			const dangling = join(root, "dangling");
+			symlinkSync("missing", dangling);
+			expect(diskUsage(dangling)).toBe(lstatSync(dangling).blocks * 512);
+			const sparse = join(root, "sparse");
+			writeFileSync(sparse, "");
+			truncateSync(sparse, 1 << 30);
+			expect(diskUsage(sparse)).toBeLessThan(1 << 20);
+			const linked = join(root, "linked");
+			mkdirSync(linked);
+			writeFileSync(join(linked, "a"), Buffer.alloc(1 << 16, 1));
+			linkSync(join(linked, "a"), join(linked, "b"));
+			expect(diskUsage(linked)).toBe((lstatSync(linked).blocks + lstatSync(join(linked, "a")).blocks) * 512);
+		},
+	);
+	it("charges active reservations and the footprint released checkouts keep", async () => {
 		const { repo, worktrees } = fixture();
 		const reserve = 1_000_000;
 		worktrees.configure(reserve);
-		const record = worktrees.create(repo, "work", reserve);
+		const record = await worktrees.create(repo, "work", reserve);
 		expect(worktrees.status().allocated).toBe(reserve);
 		worktrees.release(record.id);
 		const retained = worktrees.status().allocated;
 		expect(retained).toBeGreaterThan(0);
 		expect(retained).toBeLessThan(reserve);
-		worktrees.create(repo, "other", reserve - retained);
+		await worktrees.create(repo, "other", reserve - retained);
 		expect(() => worktrees.restore(record.id)).toThrow("disk capacity exceeded");
 		expect(worktrees.status().records[0].phase).toBe("released");
 	});
-	it("drops the record once its checkout is removed", () => {
+	it("drops the record once its checkout is removed", async () => {
 		const { repo, worktrees } = fixture();
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["missing"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["missing"]);
 		expect(() => worktrees.release(record.id)).not.toThrow();
 		git(repo, "worktree", "unlock", record.path);
 		git(repo, "worktree", "remove", record.path);
 		worktrees.release(record.id);
 		expect(worktrees.status().records).toEqual([]);
 		expect(() => worktrees.restore(record.id)).toThrow("unknown worktree");
-		expect(worktrees.create(repo, "work", 10_000_000).phase).toBe("active");
+		expect((await worktrees.create(repo, "work", 10_000_000)).phase).toBe("active");
 	});
 	it("removes a finished checkout once a branch or remote-tracking ref reaches its commits", async () => {
 		const { repo, worktrees } = fixture();
 		const forge = vi.fn(async () => false);
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		mkdirSync(join(record.path, "cache"));
 		writeFileSync(join(record.path, "cache", "artifact"), "disposable");
 		writeFileSync(join(record.path, "file"), "pushed\n");
@@ -223,14 +233,14 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(worktrees.status().records).toEqual([]);
 		await expect(worktrees.remove(record.id)).rejects.toThrow("unknown worktree");
 		// A branch made in the checkout outlives it, so its commits are preserved.
-		const branched = worktrees.create(repo, "branched", 10_000_000);
+		const branched = await worktrees.create(repo, "branched", 10_000_000);
 		git(branched.path, "switch", "-c", "topic");
 		git(branched.path, "commit", "--allow-empty", "-m", "on a branch");
 		const tip = git(branched.path, "rev-parse", "HEAD");
 		await worktrees.remove(branched.id);
 		expect(git(repo, "rev-parse", "topic")).toBe(tip);
 		// A checkout already removed by hand only drops its record.
-		const gone = worktrees.create(repo, "gone", 10_000_000);
+		const gone = await worktrees.create(repo, "gone", 10_000_000);
 		git(repo, "worktree", "unlock", gone.path);
 		git(repo, "worktree", "remove", gone.path);
 		await worktrees.remove(gone.id);
@@ -238,7 +248,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 	});
 	it("removes a squash-merged checkout only when a merged change's head is exactly its commit", async () => {
 		const { repo, worktrees } = fixture();
-		const record = worktrees.create(repo, "work", 10_000_000);
+		const record = await worktrees.create(repo, "work", 10_000_000);
 		git(record.path, "commit", "--allow-empty", "-m", "first");
 		const first = git(record.path, "rev-parse", "HEAD");
 		git(record.path, "commit", "--allow-empty", "-m", "second");
@@ -255,7 +265,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 	it("refuses to remove a checkout holding work that is not preserved", async () => {
 		const { live, scopes } = fakeScopes();
 		const { root, repo, home, worktrees } = fixture(scopes);
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		const kept = () => {
 			expect(existsSync(join(record.path, "file"))).toBe(true);
 			expect(worktrees.status().records).toHaveLength(1);
@@ -283,34 +293,262 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		mkdirSync(join(record.path, "cache"));
 		writeFileSync(join(record.path, ".env"), "secret");
 		await expect(worktrees.remove(record.id)).rejects.toThrow(
-			"declared scratch remain, so the checkout was only released: !! .env",
+			"declared scratch remain, so the checkout was only released:",
 		);
 		expect(existsSync(join(record.path, "cache"))).toBe(false);
 		expect(readFileSync(join(record.path, ".env"), "utf8")).toBe("secret");
 		expect(worktrees.status().records[0].phase).toBe("released");
 		rmSync(join(record.path, ".env"));
-		// Git refuses a checkout with submodules; the checkout keeps its lock and record.
+		// A clean submodule whose commits its remote has does not prevent removal.
 		const sub = repository(join(root, "sub"));
 		git(record.path, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", sub, "sub");
 		git(record.path, "commit", "-m", "submodule");
 		git(record.path, "update-ref", "refs/remotes/origin/work", "HEAD");
-		await expect(worktrees.remove(record.id)).rejects.toThrow("submodules");
-		kept();
-		expect(worktrees.release(record.id).phase).toBe("released");
+		await worktrees.remove(record.id);
+		expect(existsSync(record.path)).toBe(false);
 	});
-	it("serializes reservations across independent repositories and preserves failed allocations", () => {
+	it("initializes nested submodules before returning a new checkout and preserves them on restore", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const inner = repository(join(root, "inner"));
+		const sub = repository(join(root, "sub"));
+		git(sub, "submodule", "add", "--quiet", inner, "nested/inner");
+		git(sub, "commit", "-am", "nested submodule");
+		git(repo, "submodule", "add", "--quiet", sub, "sub");
+		git(repo, "commit", "-am", "submodule");
+		const record = await worktrees.create(repo, "nested", 10_000_000, "HEAD", ["sub/nested/inner/cache"]);
+		const nested = join(record.path, "sub", "nested", "inner");
+		// Git checks text out with CRLF where core.autocrlf is set, as on Windows runners.
+		expect(readFileSync(join(nested, "file"), "utf8").replaceAll("\r\n", "\n")).toBe("original\n");
+		const direct = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: nested, name: "direct" },
+			worktrees,
+			async () => false,
+			nested,
+		))!.trim();
+		expect(direct).toBe(join(canonical(nested), ".worktrees", "direct"));
+		const child = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: nested, name: "agent-child" },
+			worktrees,
+			async () => false,
+			repo,
+		))!.trim();
+		expect(child).toBe(join(canonical(repo), ".worktrees", "agent-child"));
+		expect(git(child, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "HEAD"));
+		await claudeHook(
+			{ hook_event_name: "SubagentStop", cwd: join(child, "sub", "nested", "inner"), agent_id: "child" },
+			worktrees,
+			async () => false,
+		);
+		expect(worktrees.status().records.find((record) => record.name === "agent-child")?.phase).toBe("released");
+		await claudeHook(
+			{ hook_event_name: "SubagentStart", cwd: join(child, "sub"), agent_id: "child" },
+			worktrees,
+			async () => false,
+		);
+		expect(worktrees.status().records.find((record) => record.name === "agent-child")?.phase).toBe("active");
+		// A workflow agent that starts inside a submodule of its checkout binds it there too.
+		const flow = "wf_04c8d372-2e7-1";
+		const workflow = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: nested, name: flow },
+			worktrees,
+			async () => false,
+			repo,
+		))!.trim();
+		for (const event of ["SubagentStart", "SubagentStop"])
+			await claudeHook(
+				{ hook_event_name: event, cwd: join(workflow, "sub", "nested", "inner"), agent_id: "flow" },
+				worktrees,
+				async () => false,
+			);
+		expect(worktrees.status().records.find((record) => record.name === flow)).toMatchObject({
+			phase: "released",
+			agent: "flow",
+		});
+		writeFileSync(join(nested, "file"), "local work");
+		mkdirSync(join(nested, "cache"));
+		writeFileSync(join(nested, "cache", "output"), "build output");
+		worktrees.release(record.id);
+		worktrees.restore(record.id);
+		expect(existsSync(join(nested, "cache"))).toBe(false);
+		expect(readFileSync(join(nested, "file"), "utf8")).toBe("local work");
+	}, 60_000);
+	it("ignores inherited Git location variables that select a submodule", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const sub = repository(join(root, "sub"));
+		git(repo, "submodule", "add", "--quiet", sub, "sub");
+		git(repo, "commit", "-am", "submodule");
+		const module = join(repo, "sub");
+		// A Git hook or `git submodule foreach` running the session exports these for the submodule.
+		const store = git(module, "rev-parse", "--absolute-git-dir");
+		vi.stubEnv("GIT_DIR", store);
+		vi.stubEnv("GIT_WORK_TREE", module);
+		vi.stubEnv("GIT_INDEX_FILE", join(store, "index"));
+		const path = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", cwd: module, name: "agent-located" },
+			worktrees,
+			async () => false,
+			repo,
+		))!.trim();
+		expect(path).toBe(join(canonical(repo), ".worktrees", "agent-located"));
+		expect(readFileSync(join(path, "sub", "file"), "utf8").replaceAll("\r\n", "\n")).toBe("original\n");
+		const [record] = worktrees.status().records;
+		expect(record.repository).toBe(canonical(repo));
+		// Removal inspects the checkout itself, not the submodule the variables name.
+		writeFileSync(join(path, "file"), "local work");
+		await expect(worktrees.remove(record.id)).rejects.toThrow("checkout has modified or untracked files:  M file");
+		expect(readFileSync(join(path, "file"), "utf8")).toBe("local work");
+	}, 60_000);
+	it("charges cloned module stores and keeps one that serves another worktree", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const sub = repository(join(root, "sub"));
+		// Incompressible, so the module store holds about as much as the checked-out file.
+		writeFileSync(join(sub, "blob"), randomBytes(1 << 20));
+		git(sub, "add", "blob");
+		git(sub, "commit", "-q", "-m", "blob");
+		git(repo, "submodule", "add", "--quiet", sub, "sub");
+		git(repo, "commit", "-am", "submodule");
+		expect(derivedDefaults(repo).reserve).toBeGreaterThan(2 << 20);
+		const record = await worktrees.create(repo, "stores", 1);
+		worktrees.release(record.id);
+		expect(worktrees.status().allocated).toBeGreaterThan(2 << 20);
+		const elsewhere = join(root, "elsewhere");
+		git(join(record.path, "sub"), "worktree", "add", "--quiet", "--detach", elsewhere);
+		await expect(worktrees.remove(record.id)).rejects.toThrow("has linked worktrees that removal would break");
+		expect(git(elsewhere, "rev-parse", "HEAD")).toBe(git(join(record.path, "sub"), "rev-parse", "HEAD"));
+		git(join(record.path, "sub"), "worktree", "remove", elsewhere);
+		await worktrees.remove(record.id);
+		expect(existsSync(record.path)).toBe(false);
+	}, 60_000);
+	it("protects a live creation without giving interrupted-checkout removal advice", async () => {
+		const { repo, worktrees } = fixture();
+		const creation = worktrees.create(repo, "live", 10_000_000);
+		const [record] = worktrees.status().records;
+		expect(record.phase).toBe("creating");
+		expect(() => worktrees.release(record.id)).toThrow("creation is still running");
+		await creation;
+		expect(worktrees.status().records[0].creator).toBeUndefined();
+	});
+	it("records remotely fetched module pins and tags outside the branch-prune namespace", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const sub = repository(join(root, "sub"));
+		git(sub, "commit", "--allow-empty", "-m", "published pin");
+		const pin = git(sub, "rev-parse", "HEAD");
+		git(sub, "tag", "-a", "published", "-m", "remote tag", pin);
+		git(sub, "reset", "--hard", "HEAD~1");
+		for (const name of ["pinned", "tagged"]) git(repo, "submodule", "add", "--quiet", sub, name);
+		git(join(repo, "pinned"), "checkout", "--detach", pin);
+		git(repo, "commit", "-am", "modules");
+		const record = await worktrees.create(repo, "published", 10_000_000);
+		for (const name of ["pinned", "tagged"]) {
+			const module = join(record.path, name);
+			expect(git(module, "rev-list", "HEAD", "--all", "--not", "--remotes")).toBe("");
+			git(module, "fetch", "--prune", "origin");
+			expect(git(module, "rev-list", "HEAD", "--all", "--not", "--remotes")).toBe("");
+		}
+		await worktrees.remove(record.id);
+		expect(existsSync(record.path)).toBe(false);
+	}, 60_000);
+	it("keeps a partly initialized creation charged and gives recovery advice for its lock and submodules", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const sub = repository(join(root, "sub"));
+		git(repo, "submodule", "add", "--quiet", sub, "first");
+		git(repo, "submodule", "add", "--quiet", sub, "second");
+		git(repo, "config", "-f", ".gitmodules", "submodule.second.url", join(root, "missing"));
+		git(repo, "config", "submodule.second.url", join(root, "missing"));
+		git(repo, "commit", "-am", "submodules");
+		await expect(worktrees.create(repo, "partial", 10_000_000)).rejects.toThrow();
+		const [record] = worktrees.status().records;
+		expect(record.phase).toBe("creating");
+		expect(existsSync(join(record.path, "first", ".git"))).toBe(true);
+		expect(() => worktrees.release(record.id)).toThrow("inspect and preserve");
+		expect(() => worktrees.release(record.id)).toThrow("git worktree unlock");
+		expect(() => worktrees.release(record.id)).toThrow("--force for submodules");
+		expect(worktrees.status().allocated).toBe(10_000_000);
+	}, 60_000);
+	it("keeps nested submodule files and commits, including branches whose HEAD is back at the pin", async () => {
+		const { root, repo, worktrees } = fixture();
+		vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+		const inner = repository(join(root, "inner"));
+		const sub = repository(join(root, "sub"));
+		git(sub, "submodule", "add", "--quiet", inner, "nested/inner");
+		git(sub, "commit", "-am", "nested submodule");
+		git(repo, "submodule", "add", "--quiet", sub, "sub");
+		git(repo, "commit", "-am", "submodule");
+		const record = await worktrees.create(repo, "nested", 10_000_000);
+		// Populate explicitly too, so the removal protection can be tested independently of creation.
+		git(record.path, "submodule", "update", "--init", "--recursive");
+		const nested = join(record.path, "sub", "nested", "inner");
+		writeFileSync(join(nested, "file"), "local work");
+		await expect(worktrees.remove(record.id)).rejects.toThrow("modified or untracked");
+		git(nested, "checkout", "--", "file");
+		writeFileSync(join(nested, ".env"), "ignored work");
+		await expect(worktrees.remove(record.id)).rejects.toThrow("ignored files");
+		expect(readFileSync(join(nested, ".env"), "utf8")).toBe("ignored work");
+		rmSync(join(nested, ".env"));
+		git(
+			nested,
+			"-c",
+			"user.name=Test",
+			"-c",
+			"user.email=test@example.com",
+			"commit",
+			"--allow-empty",
+			"-m",
+			"local",
+		);
+		const local = git(nested, "rev-parse", "HEAD");
+		expect(() => git(inner, "cat-file", "-e", local)).toThrow();
+		git(nested, "branch", "local-only", local);
+		git(nested, "checkout", "--detach", "HEAD~1");
+		await expect(worktrees.remove(record.id)).rejects.toThrow(local);
+		// Deinitializing does not make the repository's local refs disposable.
+		git(record.path, "submodule", "deinit", "--all");
+		writeFileSync(join(record.path, "sub", "untracked"), "kept after deinit");
+		await expect(worktrees.remove(record.id)).rejects.toThrow("uninitialized submodule contains files");
+		expect(readFileSync(join(record.path, "sub", "untracked"), "utf8")).toBe("kept after deinit");
+		rmSync(join(record.path, "sub", "untracked"));
+		await expect(worktrees.remove(record.id)).rejects.toThrow(local);
+		expect(worktrees.status().records).toHaveLength(1);
+		const store = git(
+			record.path,
+			"rev-parse",
+			"--path-format=absolute",
+			"--git-path",
+			"modules/sub/modules/nested/inner",
+		);
+		git(
+			record.path,
+			"--git-dir",
+			store,
+			"--work-tree",
+			record.path,
+			"update-ref",
+			"refs/remotes/origin/local-only",
+			local,
+		);
+		await worktrees.remove(record.id);
+		expect(existsSync(record.path)).toBe(false);
+	}, 60_000);
+	it("serializes reservations across independent repositories and preserves failed allocations", async () => {
 		const { root, repo, home, worktrees } = fixture();
 		const second = repository(join(root, "second"));
 		worktrees.configure(20_000_000);
-		worktrees.create(repo, "first", 12_000_000);
-		expect(() => new Worktrees(home).create(second, "second", 12_000_000)).toThrow("disk capacity exceeded");
+		await worktrees.create(repo, "first", 12_000_000);
+		await expect(new Worktrees(home).create(second, "second", 12_000_000)).rejects.toThrow(
+			"disk capacity exceeded",
+		);
 		expect(() => worktrees.configure(1_000_000)).toThrow("below existing");
-		expect(() => worktrees.create(second, "failed", 1_000_000, "nonexistent-ref")).toThrow();
+		await expect(worktrees.create(second, "failed", 1_000_000, "nonexistent-ref")).rejects.toThrow();
 		expect(worktrees.status().records.find((record) => record.name === "failed")?.phase).toBe("creating");
 		worktrees.release("failed");
 		expect(worktrees.status().records.map((record) => record.name)).toEqual(["first"]);
 	});
-	it("never steals a live registry lock and reclaims one whose owner exited", () => {
+	it("never steals a live registry lock and reclaims one whose owner exited", async () => {
 		const { home, worktrees } = fixture();
 		const lock = join(home, "lock");
 		mkdirSync(lock);
@@ -334,7 +572,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		const module = new URL("../src/cli/worktree.ts", import.meta.url).href;
 		const create = (repository: string, name: string) =>
 			new Promise<number | null>((resolve, reject) => {
-				const source = `import { Worktrees } from ${JSON.stringify(module)}; new Worktrees(${JSON.stringify(home)}).create(${JSON.stringify(repository)}, ${JSON.stringify(name)}, 10_000_000);`;
+				const source = `import { Worktrees } from ${JSON.stringify(module)}; await new Worktrees(${JSON.stringify(home)}).create(${JSON.stringify(repository)}, ${JSON.stringify(name)}, 10_000_000);`;
 				const child = spawn(
 					process.execPath,
 					["--experimental-strip-types", "--input-type=module", "-e", source],
@@ -348,36 +586,36 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(worktrees.status().records).toHaveLength(1);
 		expect(worktrees.status().allocated).toBeLessThanOrEqual(15_000_000);
 	});
-	it("refuses foreign checkouts and changed ownership", () => {
+	it("refuses foreign checkouts and changed ownership", async () => {
 		const { repo, worktrees } = fixture();
 		mkdirSync(join(repo, ".worktrees", "foreign"), { recursive: true });
-		expect(() => worktrees.create(repo, "foreign", 10_000_000)).toThrow("refusing to adopt");
-		const record = worktrees.create(repo, "work", 10_000_000);
+		await expect(worktrees.create(repo, "foreign", 10_000_000)).rejects.toThrow("refusing to adopt");
+		const record = await worktrees.create(repo, "work", 10_000_000);
 		git(repo, "worktree", "unlock", record.path);
 		git(repo, "worktree", "lock", "--reason", "another owner", record.path);
 		expect(() => worktrees.release(record.id)).toThrow("ownership/lock changed");
 		expect(() => worktrees.restore(record.id)).toThrow("ownership/lock changed");
 	});
-	it("refuses scratch that contains another Git worktree", () => {
+	it("refuses scratch that contains another Git worktree", async () => {
 		const { root, repo, worktrees } = fixture();
-		const outer = worktrees.create(repo, "outer", 10_000_000, "HEAD", [".worktrees"]);
+		const outer = await worktrees.create(repo, "outer", 10_000_000, "HEAD", [".worktrees"]);
 		// Created from inside the outer checkout, so it lands in the outer checkout's ignored .worktrees/.
-		const inner = worktrees.create(outer.path, "inner", 10_000_000);
+		const inner = await worktrees.create(outer.path, "inner", 10_000_000);
 		expect(inner.path).toBe(join(outer.path, ".worktrees", "inner"));
 		expect(() => worktrees.release(outer.id)).toThrow("scratch contains a Git worktree");
 		expect(existsSync(join(inner.path, "file"))).toBe(true);
 		// A linked worktree of an unrelated repository, such as an agent's checkout under an ignored directory.
-		const other = worktrees.create(repo, "other", 10_000_000, "HEAD", ["cache"]);
+		const other = await worktrees.create(repo, "other", 10_000_000, "HEAD", ["cache"]);
 		const foreign = repository(join(root, "foreign"));
 		git(foreign, "worktree", "add", "--detach", join(other.path, "cache", "agent"));
 		expect(() => worktrees.release(other.id)).toThrow("scratch contains a Git worktree: cache");
 		expect(existsSync(join(other.path, "cache", "agent", "file"))).toBe(true);
 		expect(worktrees.status().records.map((record) => record.phase)).toEqual(["active", "active", "active"]);
 	});
-	it.skipIf(process.platform === "win32")("refuses a root replaced by a link to another checkout", () => {
+	it.skipIf(process.platform === "win32")("refuses a root replaced by a link to another checkout", async () => {
 		const { repo, worktrees } = fixture();
-		const replaced = worktrees.create(repo, "first", 10_000_000, "HEAD", ["cache"]);
-		const other = worktrees.create(repo, "second", 10_000_000);
+		const replaced = await worktrees.create(repo, "first", 10_000_000, "HEAD", ["cache"]);
+		const other = await worktrees.create(repo, "second", 10_000_000);
 		mkdirSync(join(other.path, "cache"));
 		rmSync(replaced.path, { recursive: true });
 		symlinkSync(other.path, replaced.path);
@@ -389,9 +627,14 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		vi.stubEnv("QUEST_WORKTREE_HOME", home);
 		expect(run("worktree", "create", "cli", "--root", repo).code).toBe(2);
 		expect(run("worktree", "capacity", "0").code).toBe(2);
-		const created = run("--root", repo, "worktree", "create", "cli", "--reserve", "10000000", "--scratch", "cache");
-		expect(created.code).toBe(0);
-		const { path } = JSON.parse(created.stdout);
+		let created = "";
+		expect(
+			await main(["--root", repo, "worktree", "create", "cli", "--reserve", "10000000", "--scratch", "cache"], {
+				stdout: (text) => (created += text),
+				stderr: () => {},
+			}),
+		).toBe(0);
+		const { path } = JSON.parse(created);
 		mkdirSync(join(path, "cache"));
 		expect(run("worktree", "release", "cli").code).toBe(0);
 		expect(existsSync(join(path, "cache"))).toBe(false);
@@ -418,7 +661,7 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 	it("keeps scratch while any run is live and prunes it once the last one stops", async () => {
 		const { finish, scopes } = fakeScopes();
 		const { repo, worktrees } = fixture(scopes);
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		worktrees.release(record.id);
 		// A run restores a released checkout before it starts.
 		const first = worktrees.run(record.id, ["first"]);
@@ -436,10 +679,10 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 		expect(existsSync(join(record.path, "cache"))).toBe(false);
 		expect(worktrees.status().records[0]).toMatchObject({ phase: "released", runs: [] });
 	});
-	it("reconciles a crashed supervisor only once its scope is empty", () => {
+	it("reconciles a crashed supervisor only once its scope is empty", async () => {
 		const { live, scopes } = fakeScopes();
 		const { repo, home, worktrees } = fixture(scopes);
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		mkdirSync(join(record.path, "cache"));
 		orphan(home, "orphan.scope");
 		live.add("orphan.scope");
@@ -450,13 +693,13 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 		expect(worktrees.status().records[0]).toMatchObject({ phase: "released", runs: [] });
 		expect(existsSync(join(record.path, "cache"))).toBe(false);
 	});
-	it("treats a run it cannot inspect as live until an inspection succeeds", () => {
+	it("treats a run it cannot inspect as live until an inspection succeeds", async () => {
 		const { repo, home } = fixture();
 		let inspect = (): boolean => {
 			throw new Error("no user manager");
 		};
 		const worktrees = new Worktrees(home, stubScopes({ live: () => inspect() }));
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		mkdirSync(join(record.path, "cache"));
 		orphan(home, "orphan.scope");
 		expect(worktrees.status().records[0]).toMatchObject({
@@ -476,7 +719,7 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 		const { live, scopes } = fakeScopes();
 		const stop = vi.spyOn(scopes, "stop");
 		const { repo, home, worktrees } = fixture(scopes);
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		mkdirSync(join(record.path, "cache"));
 		orphan(home, "crashed.scope");
 		orphan(home, "supervised.scope", currentOwner());
@@ -501,7 +744,7 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 	it("reports a failed release as a retained reservation", async () => {
 		const { finish, scopes } = fakeScopes();
 		const { repo, worktrees } = fixture(scopes);
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		const running = worktrees.run(record.id, ["build"]);
 		mkdirSync(join(record.path, "cache"));
 		writeFileSync(join(record.path, "cache", "forced"), "tracked");
@@ -515,7 +758,7 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 	it("keeps scratch when the command never started", async () => {
 		const { repo, home } = fixture();
 		const worktrees = new Worktrees(home, stubScopes({ run: () => Promise.reject(new Error("no user manager")) }));
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		mkdirSync(join(record.path, "cache"));
 		await expect(worktrees.run(record.id, ["build"])).rejects.toThrow("no user manager");
 		expect(worktrees.status().records[0]).toMatchObject({ phase: "active", runs: [] });
@@ -527,7 +770,7 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 			home,
 			stubScopes({ run: () => Promise.reject(new Retained("cannot confirm that the scope stopped")) }),
 		);
-		const record = worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		mkdirSync(join(record.path, "cache"));
 		await expect(worktrees.run(record.id, ["build"])).rejects.toThrow("cannot confirm");
 		// This process owns the run until it exits; then reconciliation asks the scope.
@@ -541,7 +784,12 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 	it.skipIf(process.platform === "linux")("fails explicitly without a supported backend", async () => {
 		const { repo, home } = fixture();
 		vi.stubEnv("QUEST_WORKTREE_HOME", home);
-		expect(run("--root", repo, "worktree", "create", "cli", "--reserve", "10000000").code).toBe(0);
+		expect(
+			await main(["--root", repo, "worktree", "create", "cli", "--reserve", "10000000"], {
+				stdout: () => {},
+				stderr: () => {},
+			}),
+		).toBe(0);
 		let stderr = "";
 		const code = await main(["worktree", "run", "cli", "--", "git", "status"], {
 			stdout: () => {},
@@ -586,7 +834,7 @@ describe("merged PR heads on GitHub", () => {
 });
 
 describe("cgroup kill", () => {
-	it("requires cgroup.kill in this process's unified cgroup", () => {
+	it("requires cgroup.kill in this process's unified cgroup", async () => {
 		const root = mkdtempSync(join(tmpdir(), "quest-cgroup-test-"));
 		roots.push(root);
 		const self = join(root, "self");
@@ -602,7 +850,7 @@ describe("cgroup kill", () => {
 		expect(killable(cgroups, self)).toBe(false);
 	});
 
-	it("ignores a missing cgroup.kill only once the cgroup is gone", () => {
+	it("ignores a missing cgroup.kill only once the cgroup is gone", async () => {
 		const root = mkdtempSync(join(tmpdir(), "quest-cgroup-test-"));
 		roots.push(root);
 		const group = join(root, "run.scope");
@@ -619,7 +867,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 	/** A subagent's hook input, as Claude sends it from inside the subagent's checkout. */
 	const subagent = (event: string, cwd: string, agent: string) => ({ hook_event_name: event, cwd, agent_id: agent });
 
-	it("derives scratch from the main checkout's ignored entries and its size as the reserve", () => {
+	it("derives scratch from the main checkout's ignored entries and its size as the reserve", async () => {
 		const { repo } = fixture();
 		mkdirSync(join(repo, "cache", "deep"), { recursive: true });
 		writeFileSync(join(repo, "cache", "deep", "artifact"), "x".repeat(100_000));
@@ -637,9 +885,9 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		expect(reserve).toBeGreaterThan(100_000);
 		expect(reserve).toBeLessThan(5_000_000);
 	});
-	it("admits by free space alone while no capacity is set", () => {
+	it("admits by free space alone while no capacity is set", async () => {
 		const { root, repo } = fixture();
-		expect(new Worktrees(join(root, "fresh")).create(repo, "work", 1_000_000).phase).toBe("active");
+		expect((await new Worktrees(join(root, "fresh")).create(repo, "work", 1_000_000)).phase).toBe("active");
 	});
 	it("creates under the main checkout at the remote's default branch, or the session's commit without one, and restores a name it already holds", async () => {
 		const { root, repo, worktrees } = fixture();
@@ -663,29 +911,109 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
 		const fresh = (await claudeHook({ ...created, name: "agent-2" }, worktrees, noForge))!.trim();
 		expect(git(fresh, "rev-parse", "HEAD")).toBe(initial);
+		for (const project of [root, repository(join(root, "unrelated"))]) {
+			const name = project === root ? "nonrepo" : "unrelated";
+			const path = (await claudeHook({ ...created, name }, worktrees, noForge, project))!.trim();
+			expect(path).toBe(join(canonical(repo), ".worktrees", name));
+		}
+		await expect(claudeHook({ ...created, cwd: root }, worktrees, noForge)).rejects.toThrow(
+			"not in a Git checkout",
+		);
 	});
 	it("releases a stopped subagent's own checkout and restores it on resume", async () => {
 		const { repo, worktrees } = fixture();
 		mkdirSync(join(repo, "cache"));
+		mkdirSync(join(repo, ".tmp"));
+		appendFileSync(join(repo, ".git", "info", "exclude"), ".tmp/\n");
 		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-abc" };
 		const path = (await claudeHook(create, worktrees, noForge))!.trim();
 		mkdirSync(join(path, "cache", "nested"), { recursive: true });
+		mkdirSync(join(path, ".tmp"));
+		writeFileSync(join(path, ".tmp", "report.md"), "findings\n");
 		// A subagent without isolation runs in this checkout too, but stops under another ID.
 		expect(await claudeHook(subagent("SubagentStop", path, "other"), worktrees, noForge)).toBeUndefined();
 		expect(existsSync(join(path, "cache"))).toBe(true);
 		await claudeHook(subagent("SubagentStop", join(path, "cache", "nested"), "abc"), worktrees, noForge);
 		expect(existsSync(join(path, "cache"))).toBe(false);
 		expect(worktrees.status().records[0].phase).toBe("released");
+		// The parent reads the stopped subagent's report from its workspace.
+		expect(readFileSync(join(path, ".tmp", "report.md"), "utf8")).toBe("findings\n");
 		const resumed = await claudeHook(subagent("SubagentStart", path, "abc"), worktrees, noForge);
 		expect(JSON.parse(resumed!).hookSpecificOutput).toMatchObject({
 			hookEventName: "SubagentStart",
-			additionalContext: expect.stringContaining("cache"),
+			additionalContext: expect.not.stringContaining(".tmp"),
 		});
+		expect(JSON.parse(resumed!).hookSpecificOutput.additionalContext).toContain("cache");
 		expect(worktrees.status().records[0].phase).toBe("active");
 		// A fresh subagent's checkout is already active and needs no notice.
 		expect(await claudeHook(subagent("SubagentStart", path, "abc"), worktrees, noForge)).toBeUndefined();
 		// Subagents outside any quest checkout are left alone.
 		expect(await claudeHook(subagent("SubagentStop", repo, "abc"), worktrees, noForge)).toBeUndefined();
+		// Once the parent is done, removal deletes the workspace with the checkout.
+		await claudeHook(subagent("SubagentStop", path, "abc"), worktrees, noForge);
+		expect(existsSync(join(path, ".tmp", "report.md"))).toBe(true);
+		await claudeHook({ hook_event_name: "WorktreeRemove", cwd: repo, worktree_path: path }, worktrees, noForge);
+		expect(existsSync(path)).toBe(false);
+		expect(worktrees.status().records).toHaveLength(0);
+	});
+	it("checks out a pull request's head from origin for Claude's pr-<number> names", async () => {
+		const { root, repo, worktrees } = fixture();
+		const create = (name: string) =>
+			claudeHook({ hook_event_name: "WorktreeCreate", cwd: repo, name }, worktrees, noForge);
+		// Without an origin, a pr- name is only a name.
+		const plain = (await create("pr-1"))!.trim();
+		expect(git(plain, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "HEAD"));
+		const origin = join(root, "origin.git");
+		git(root, "clone", "--quiet", "--bare", repo, origin);
+		git(repo, "remote", "add", "origin", origin);
+		// A request's head exists only on origin until it is fetched.
+		const identity = ["-c", "user.name=Quest", "-c", "user.email=quest@example.com"];
+		const head = git(origin, ...identity, "commit-tree", "-p", "HEAD", "-m", "feature", "HEAD^{tree}");
+		git(origin, "update-ref", "refs/pull/7/head", head);
+		git(origin, "update-ref", "refs/merge-requests/9/head", head);
+		// The head is fetched, as Claude does for --worktree '#7', not the remote's default branch.
+		for (const name of ["pr-7", "pr-9"]) {
+			const path = (await create(name))!.trim();
+			expect(git(path, "rev-parse", "HEAD")).toBe(head);
+		}
+		expect(git(repo, "rev-parse", "origin/pr/7", "origin/mr/9")).toBe(`${head}\n${head}`);
+		// Its remote-tracking ref preserves the request's commits, so the checkout can be removed.
+		await worktrees.remove("pr-7");
+		// A number origin has no request for starts from the usual base.
+		const missing = (await create("pr-8"))!.trim();
+		expect(git(missing, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "HEAD"));
+		// Both forges' refs at different commits are ambiguous, as Claude reports them.
+		git(origin, "update-ref", "refs/pull/10/head", head);
+		git(origin, "update-ref", "refs/merge-requests/10/head", git(repo, "rev-parse", "HEAD"));
+		await expect(create("pr-10")).rejects.toThrow("at different commits");
+	});
+	it("releases a workflow agent's checkout, bound to the first subagent that starts in it", async () => {
+		const { repo, worktrees } = fixture();
+		mkdirSync(join(repo, "cache"));
+		const name = "wf_04c8d372-2e7-1";
+		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name };
+		const path = (await claudeHook(create, worktrees, noForge))!.trim();
+		mkdirSync(join(path, "cache"));
+		await claudeHook(subagent("SubagentStart", path, "a79f"), worktrees, noForge);
+		// A subagent the workflow agent runs without isolation shares the checkout but never owns it.
+		await claudeHook(subagent("SubagentStart", path, "b123"), worktrees, noForge);
+		await claudeHook(subagent("SubagentStop", path, "b123"), worktrees, noForge);
+		expect(existsSync(join(path, "cache"))).toBe(true);
+		await claudeHook(subagent("SubagentStop", path, "a79f"), worktrees, noForge);
+		expect(existsSync(join(path, "cache"))).toBe(false);
+		expect(worktrees.status().records[0]).toMatchObject({ phase: "released", agent: "a79f" });
+		// A resumed run reuses the name for a new agent, which binds afresh.
+		expect((await claudeHook(create, worktrees, noForge))!.trim()).toBe(path);
+		await claudeHook(subagent("SubagentStart", path, "c456"), worktrees, noForge);
+		mkdirSync(join(path, "cache"));
+		await claudeHook(subagent("SubagentStop", path, "c456"), worktrees, noForge);
+		expect(worktrees.status().records[0]).toMatchObject({ phase: "released", agent: "c456" });
+		// Other checkouts never bind a subagent.
+		const session = (await claudeHook({ ...create, name: "session" }, worktrees, noForge))!.trim();
+		await claudeHook(subagent("SubagentStart", session, "d789"), worktrees, noForge);
+		await claudeHook(subagent("SubagentStop", session, "d789"), worktrees, noForge);
+		expect(worktrees.status().records[1]).toMatchObject({ name: "session", phase: "active" });
+		expect(worktrees.status().records[1].agent).toBeUndefined();
 	});
 	it("removes a finished checkout, never forcing, and refuses one it does not own", async () => {
 		const { root, repo, worktrees } = fixture();
@@ -734,15 +1062,15 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 	it("keeps names unique per repository, and asks for the ID where several share one", async () => {
 		const { root, repo, worktrees } = fixture();
 		const other = repository(join(root, "other"));
-		const first = worktrees.create(repo, "feature", 1_000_000);
-		const second = worktrees.create(other, "feature", 1_000_000);
-		expect(() => worktrees.create(repo, "feature", 1_000_000)).toThrow("already exists in this repository");
+		const first = await worktrees.create(repo, "feature", 1_000_000);
+		const second = await worktrees.create(other, "feature", 1_000_000);
+		await expect(worktrees.create(repo, "feature", 1_000_000)).rejects.toThrow("already exists in this repository");
 		expect(() => worktrees.release("feature")).toThrow("give the ID instead");
 		expect(worktrees.release(second.id).phase).toBe("released");
 		await worktrees.remove(first.id);
 		expect(worktrees.release("feature").id).toBe(second.id);
 	});
-	it("reads the event on stdin and exits 1, never 2, on failure", () => {
+	it("reads the event on stdin and exits 1, never 2, on failure", async () => {
 		const { repo, home } = fixture();
 		const cli = (input: string) =>
 			spawnSync(

@@ -64,9 +64,24 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 - opencode jobs' commands run under sandbox-runtime, set as opencode's
   shell, with the same policy
   ([moq-dev/quest#338](https://github.com/moq-dev/quest/pull/338)).
-  opencode 1.19 still imports the plugins a checkout's own `opencode.json`
-  or `.opencode/` names, even with project config disabled, so the runner
-  keeps the agent from creating them and refuses a checkout that holds them.
+  Its seccomp helper, which nixpkgs' sandbox-runtime leaves out, is built
+  from source (`nix/sandbox-runtime.nix`), and the runner refuses an opencode
+  account when srt lets commands make Unix sockets
+  ([moq-dev/quest#465](https://github.com/moq-dev/quest/pull/465)).
+  Besides disabling project config, the runner keeps the agent from creating
+  a checkout's own `opencode.json` or `.opencode/` and refuses a checkout
+  that holds them. Before each turn it refuses to run if opencode loaded any
+  config but the runner's and the account's, since a machine's managed
+  `/etc/opencode` loads above the runner's and could replace the sandboxed
+  `shell`.
+  `test/live/runner-sandbox.test.ts` checks that boundary with the pinned
+  opencode and srt and a scripted model. It runs in `just runner-sandbox`
+  and a nightly GitHub-hosted workflow (`.github/workflows/sandbox.yml`),
+  not in `just test` or the merge queue, whose container can't mount
+  `/proc` for bwrap, so a bump that weakens the boundary fails the next
+  nightly run. Decided 2026-11-03 (user, /quest-complete), after the merge
+  queue dropped [moq-dev/quest#404](https://github.com/moq-dev/quest/pull/404):
+  its own CI, nightly, so landing never blocks on it.
 - Decided 2026-10-24 (user) in `/quest-plan`: split the remaining work into
   the children below, ranked so the earliest unblock the most. Dropped
   (user): read-only registry access, which Claude Code's sandbox cannot
@@ -77,5 +92,5 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 
 ## Required
 
-- [Head approval](/quest/m0/kix/sandbox/head-approval.md) - a maintainer approves an exact head, such as one kix pushed, for host runners
-- [Boundary test in CI](/quest/m0/kix/sandbox/live-test.md) - the opencode sandbox's hostile-repository test runs on Linux CI with a scripted model
+- [Per-job opencode saved output](/quest/m0/kix/sandbox/opencode-data.md) - each opencode job saves its tool output and shell captures beside its checkout, so no job reads another's, while sessions and the credential stay in the account's database
+- [Claude Code boundary test](/quest/m0/kix/sandbox/claude-boundary.md) - the same hostile-repository test for Claude Code jobs, with a fake model set in the account's settings

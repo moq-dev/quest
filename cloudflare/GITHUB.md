@@ -14,8 +14,12 @@ and installation tokens stay inside the Worker; agents receive neither.
 | Contents: write       | Read quest files, write job branches and iterated PR heads on the upstream | Read for quest reads; write only for that publication or merge |
 | Issues: write         | Read native issues, publish approved comments, label merge jobs' PRs       | Read or write for that operation                               |
 | Pull requests: write  | Observe, open and update job PRs, explicitly merge an exact head           | Read or write for that operation                               |
-| Checks: read          | Observe checks on a commit                                                 | Check reads only                                               |
+| Checks: write         | Observe checks; record a runner's review as the `quest review` check run   | Read for check reads; write only to record a runner's review   |
 | Commit statuses: read | Observe legacy CI status contexts                                          | Check reads only                                               |
+| Administration: read  | Read whether the default workflow token can write                          | The setup page's [CI check](#read-only-pull-request-ci) only   |
+| Secrets: read         | List the names of Actions secrets that reach every workflow                | The setup page's CI check only                                 |
+| Actions: read         | List environments and their deployment branch policies                     | The setup page's CI check only                                 |
+| Environments: read    | Count each environment's secrets                                           | The setup page's CI check only                                 |
 
 The manifest subscribes to push, issues, issue comments, pull requests, reviews,
 review threads, inline review comments, checks and statuses. Existing App registrations
@@ -26,11 +30,31 @@ user permission, which Better Auth needs to sign in users whose email is private
 It grants no repository authority: the user token is used only for the sign-in
 profile and email reads and to list the [project picker](#project-enrollment)'s
 repositories, and never for repository writes or authority checks. No organization,
-administration, workflow, or checks-write permissions are requested. These installation grants
+administration-write, or workflow permissions are requested, and GitHub never
+returns a secret's value, only its name. These installation grants
 are necessarily broader than individual operations: minted tokens always name
 one repository ID and the particular permissions required. Tokens are never
 cached and are revoked after use; failed cleanup is logged without secrets and
 does not retry a successful write. GitHub also expires tokens after an hour.
+
+## Trust by stage
+
+Each stage of a job trusts as little as it can. Untrusted text, such as an
+issue, a pull request, a comment, a prompt answer, or anything an agent writes,
+is data at every stage: it never grants authority, approves work, or changes
+what kix may write.
+
+| Stage        | What is trusted                                                                                                                                                                                                                                                                                             | Why                                                                                                                                                                                                                  |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Intake       | GitHub's live answers to kix's own reads. A webhook only asks for a read; its signature proves GitHub sent it, not that its contents are current                                                                                                                                                            | Deliveries arrive late, out of order, or not at all, and bodies are anyone's text ([webhooks](#webhooks-and-revocation), [project state](#project-state-and-activity))                                               |
+| Job creation | The signed-in maintainer's request, after a live check of their maintain or admin role, bound to the revision or head the maintainer saw                                                                                                                                                                    | A browser's claims grant nothing, and a head that moved since observations read it is refused ([README](README.md))                                                                                                  |
+| Routing      | The requester's own runners, and their owner's word for each runner. Untrusted heads go only to Linux runners whose owner declared VM builds; kix does not verify the flag                                                                                                                                  | A runner is its owner's machine and risk, and jobs never reach another user's runner                                                                                                                                 |
+| devShell     | A trusted revision: the default branch, or a pull request head whose every commit beyond the default branch carries a valid signature from a current maintainer, or whose exact SHA a current maintainer approved in the inbox (`head_approvals`). A head kix pushed to is trusted only by such an approval | The runner's host Nix evaluates the flake outside the sandbox, and "kix published it" proves only that a runner sent it. An approval lapses when the head moves or its approver loses the role ([README](README.md)) |
+| Agent run    | Nothing the agent does. Its commands run in an OS sandbox with no GitHub credential, and it acts on an answer only once the runner's owner gave or approved it                                                                                                                                              | Issue and pull request text can inject prompts ([README](../README.md))                                                                                                                                              |
+| Publication  | Nothing in the submitted files. kix writes them as Git data to the job's branch or the same-repository head it iterates, refuses workflow files and the default branch, and fences out stale attempts                                                                                                       | A prompt-injected agent or a compromised runner can send anything ([Publication](#publication))                                                                                                                      |
+| CI           | The enrolled repository's settings keep pull-request CI read-only. A runner's request to mark its pull request ready is its owner's statement, and under read-only CI it starts only harmless checks                                                                                                        | GitHub gives same-repository branches' workflows the repository's secrets and default token, unlike fork pull requests ([Read-only pull-request CI](#read-only-pull-request-ci))                                     |
+| Review       | A review that counts on the exact head: a writer's approval, the App's `quest review` check, or the author's own `## Review` record on a commit no App made. An agent's recommendation never counts                                                                                                         | Picking merge approves the head the maintainer saw, not whatever is pushed after it ([Landing only reviewed heads](#landing-only-reviewed-heads))                                                                    |
+| Land         | The maintainer's explicit pick of that head, under GitHub's branch rules and checks                                                                                                                                                                                                                         | kix never writes the default branch itself; GitHub's refusals stand ([Merge jobs](#merge-jobs))                                                                                                                      |
 
 ## Trusted boundary
 
@@ -217,7 +241,8 @@ landed (`src/github/review.ts`):
 - an approval on GitHub of that commit by a person with write access other than
   the pull request's author; reviews by Apps never count;
 - a completed, successful `quest review` check run on that commit, written by
-  this App. Only the App can write one, and GitHub binds it to the commit;
+  this App from a runner's review (see [Runner reviews](#runner-reviews)).
+  Only the App can write one, and GitHub binds it to the commit;
 - or the author's own `## Review` record, as the guide's default review policy
   counts it in every enrolled repository: the `## Review` section of the PR
   body names the commit's full SHA, the author has write access, and the body's
@@ -240,11 +265,29 @@ An author's record carries only across merges no App committed.
 kix defers to GitHub only where GitHub enforces the same rule: a ruleset on the
 base that requires an approval and either dismisses stale approvals or requires
 approval of the most recent push, which GitHub reports this App cannot bypass.
-Classic branch protection's review settings need the administration permission
-to read, so kix keeps its own check there.
+Classic branch protection's review settings need the administration
+permission, which landing tokens do not carry, so kix keeps its own check
+there.
 
 When no review counts, a direct merge is refused and a merge job pauses on a
 decision. Both say which commit needs a review and how to give one.
+
+The inbox says so before the click. Each project read takes every open PR's
+body, its author's association with the repository, the writers' latest
+reviews, and the head commit's parents and this App's `quest review` check in
+one batched GraphQL request, the same request that classifies drafts, and
+keeps only the land gate's reason (`observedGap`), never the body. A PR whose
+merge is offered shows that reason beside **Merge this PR**. It counts what the
+gate counts on the head itself. The author's record counts unless GitHub's
+association (anything but owner, member, or collaborator) rules out write
+access. A merge head's reason says that an earlier review may still carry
+across it, since only the gate's tree reads can tell. The read does not look
+at rulesets, so where GitHub itself requires the review, the item is flagged
+and GitHub refuses the same head. The click's own check stays the authority:
+it confirms write access, that no App committed the head, and any carried
+review, and it reads the latest reviews, which a read can lag. The App's own
+`quest review` check run, unlike CI's, asks for a read of the PRs it names,
+so a runner's review clears the flag without a refresh.
 
 GitHub keeps auto-merge enabled across a push by anyone with write access, the
 App's included, and checks the `expectedHeadOid` kix pins only when auto-merge
@@ -263,15 +306,47 @@ one, kix turns that pull request's auto-merge off. If GitHub refuses or does
 not show whether it is on, the job pushes nothing and pauses on a decision. The
 new head lands only through a new landing.
 
+### Read-only pull-request CI
+
 kix pull requests come from upstream branches, and GitHub gives workflows on
-same-repository branches the repository's secrets, unlike fork pull requests.
-So enrolled repositories must keep pull-request CI read-only: a read-only
-default `GITHUB_TOKEN`, no write secrets at repository level, and write
-credentials only in environments limited to protected branches. Agent-written
-code then runs in CI before review with nothing it can write through.
-`pull_request_target` and `workflow_run` jobs that check out a PR head fall
-under the same rule. kix never runs pull request code in the publisher and
-grants runners no GitHub credentials.
+same-repository branches the repository's secrets and default token, unlike
+fork pull requests. Pushing a job branch also runs its `push` workflows. So
+enrolled repositories must keep that CI read-only: a read-only default
+`GITHUB_TOKEN`, no secrets at repository or organization level, and secrets
+only in environments limited to protected branches. Agent-written code then
+runs in CI before review with nothing it can write through. Jobs whose
+workflow asks for write `permissions:` itself, and `pull_request_target` and
+`workflow_run` jobs that check out a PR head, fall under the same rule. kix
+never runs pull request code in the publisher and grants runners no GitHub
+credentials. This rule, rather than a service fork or a review gate on every
+push, is kix's answer to agent-written code reaching CI.
+
+The project's setup page, where a maintainer enables contributions and later
+pauses them, or opens the [setup pull request](#setup-pull-request) whose merge
+enables them, checks the repository's settings with the installation's token
+(`src/github/ci.ts`) and lists each problem it finds:
+
+- the default workflow token can write;
+- Actions secrets at repository level, or organization secrets shared with the
+  repository, by name;
+- an environment with secrets whose deployment branches include one GitHub
+  does not report protected.
+
+An environment limited to protected branches passes while some branch is
+protected, since GitHub lets every branch deploy when none is. One limited to
+selected branches passes when each branch pattern names a protected branch,
+or the merge queue's `gh-readonly-queue/<branch>/*` for one; a wildcard could
+match a branch kix writes, so it is reported. Tag patterns pass, since kix
+never writes tags. Required reviewers on an environment do not count: a
+reviewer approves a deployment, not the code a job branch carries.
+
+The check only warns: enabling still works, and jobs still run. A failed read
+becomes a warning of its own. It makes at most 30 reads, so the page stays
+within a Worker's subrequest budget, and says when it stopped before checking
+every environment. It
+does not read workflow files, so the page reminds the maintainer of the rest
+of the rule. An installation that has not accepted the check's permissions
+gets a warning naming them instead of the checks they cover.
 
 Installation grants are broader than any one publication: `contents: write`
 and `pull_requests: write` cover every installed repository. Each token names
@@ -288,6 +363,36 @@ against real installations ([operator setup](../quest/m0/kix/operator-setup.md))
 plan/start/bootstrap publication on the enrolled upstream without a fork,
 GitHub's signature on App-authored API commits, and pushing or resetting a job
 branch under the repository's branch rules.
+
+### Runner reviews
+
+A runner reviews the heads its jobs publish, so they land through the gate
+above without a person's approval. When a job delivers a head it published,
+other than to a pull request that stays a draft, the runner process runs
+`quest review` on that head with the other vendor's model: Codex for a job on
+an Anthropic account, Claude Code otherwise. It runs outside the agent's
+sandbox, in a checkout of the published commit the agent cannot reach, and
+reports the round over `POST /api/runner/review`. The agent never touches the
+report, so it can neither skip nor fake the review. A merge job publishes its
+fixes, has them reviewed, and lands only a head whose review found nothing.
+
+kix records the round as the App's `quest review` check run on the commit, with
+the reviewer, model, effort, and round as its summary, the round's score out of
+10 in its title, and the score's rationale and each finding as plain text,
+cutting any too long to fit rather than refusing the report: `success` when the
+round found nothing, `failure` otherwise, whatever the score. The agent fixes or
+refutes each finding and delivers again; the next round resumes the reviewer's
+session with its responses. kix records a report only from the job's current
+attempt, only on the head kix itself last published for the job and GitHub
+attributes to a bot, not one a merge job continued onto, and only from another
+vendor's model than the job's account runs, and writes it with `checks: write`
+on behalf of the job's requester, after rechecking their maintainer authority.
+
+Claude Code reviews with one of the runner's Claude Code accounts that is not
+limited. Runners hold no Codex accounts, so Codex reviews with the login of
+the user running `quest runner`. A runner that cannot review, for want of a
+reviewer or because the review failed, says so to the agent and leaves the
+head to a person's approval, as before.
 
 ## Webhooks and revocation
 
@@ -313,7 +418,7 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
 ## Operator setup
 
 1. Review the manifest's name, homepage, webhook URL, callback URL, permissions
-   and events. The callback is `https://kix.quest/api/auth/callback/github`;
+   and events. The callback is `https://quest.moq.dev/api/auth/callback/github`;
    **Request user authorization (OAuth) during installation** is enabled.
    Register the public App once under the service owner's account using
    [GitHub's manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)
@@ -334,23 +439,31 @@ reconcile current provider state rather than replay issue/PR payloads as facts.
    PEM keys, installation tokens or `.dev.vars`.
 3. Install the public App on selected upstream repositories. Existing
    installations must accept permission increases before operations needing
-   those grants become available. GitHub's installation UI, not browser form
+   those grants become available. An App registered before runner reviews
+   holds `checks: read`: raise it to **Checks: write** in the App's settings,
+   and have each installation accept the change, or runners' reviews are not
+   recorded and their heads need a person's approval to land. GitHub's installation UI, not browser form
    claims, chooses repository access. Enroll each repository on `/projects`;
    jobs publish their branches there, with no fork setup.
-4. Run `bun run wrangler d1 migrations apply DB --remote`, then the normal
+4. Existing App registrations must add the **Administration**, **Secrets**,
+   **Actions**, and **Environments** repository permissions, each read-only,
+   which the setup page's [CI check](#read-only-pull-request-ci) reads with.
+   Each installation then accepts them on GitHub; until it does, the check
+   names them instead of running.
+5. Run `bun run wrangler d1 migrations apply DB --remote`, then the normal
    Worker deployment from [README](README.md). GitHub App setup, credentials,
    production deployment and live installation tests
    are operator work; this change performs none of those external actions.
-5. Send a GitHub ping, check successful delivery, then test installation
+6. Send a GitHub ping, check successful delivery, then test installation
    suspension/removal and repository deselection in a development installation.
    Check that service operations reject revoked access and reduced permissions.
    Use GitHub's delivery/redelivery UI to retry failed deliveries. Rotate the
    private key and webhook secret through Workers secrets and the App settings.
 
-Sign-in starts at kix.quest and keeps Better Auth's persisted state and cookie
-checks. An authorization callback started by installing the App directly on
-GitHub has no sign-in state from kix.quest: its code is discarded and the
-visitor returns to the sign-in form, then completes a fresh state-bound flow
+Sign-in starts at the Worker's origin and keeps Better Auth's persisted state
+and cookie checks. An authorization callback started by installing the App
+directly on GitHub has no sign-in state from the Worker: its code is discarded
+and the visitor returns to the sign-in form, then completes a fresh state-bound flow
 that ends on `/projects`. A visitor already signed in goes straight there.
 Installation and sign-in do not enroll a repository; the maintainer still opts
 in from the project picker after a live authority check.
@@ -377,7 +490,8 @@ and decision inbox. It links the registered App's installation URL and lists
 the repositories to pick from: those the App's installations reach and the
 user administers or maintains, each with its contribution state, an Enable
 button, or why it cannot be enabled yet (archived, private, no Quest files,
-or no OSI-approved license). A repository without Quest files links `/setup`.
+or no OSI-approved license). A repository without Quest files enables through
+its [setup pull request](#setup-pull-request).
 
 The picker is navigation, built from the user's own GitHub App token so its
 cost does not grow with an installation's size: one read of the user's
@@ -403,6 +517,27 @@ permission. Subsequent authorized operations scope tokens by repository ID.
 Resolution uses the same installation gates and token revocation as other
 reads; it never consumes GitHub's shared anonymous repository-lookup quota.
 
+### Owner allowlist
+
+Until the public release, only repositories whose owner's GitHub ID is in
+`ENROLL_OWNERS` (`wrangler.jsonc`, each ID with its login in a comment) may
+enroll; the deployed list is the moq-dev organization and the kixelated user.
+Users and organizations are checked alike, by ID alone. Logins are not
+identities: GitHub frees a deleted or renamed account's login for anyone to
+claim. `/projects` says
+Quest isn't open yet, and lists another owner's repositories as not open,
+without reading their Quest files or licenses. The service's live repository
+check treats such an owner like an archived repository: preview, opt-in,
+observations, queuing a job, a job's issue or pull request reads, publication,
+and merges all refuse it, while pause and disconnect still work, so a project
+transferred to another owner can still be stopped. A job its maintainer queued
+before such a transfer may still start on their own runners, with nothing from
+GitHub through kix; pausing the project holds it. The
+webhook route acknowledges another owner's deliveries with `ignored` before
+recording anything, by the repository's owner for repository events and the
+installation's account for installation events. The seeded local server admits
+its fake owner instead. Removing the list opens enrollment to everyone.
+
 The preview reads the default branch at an exact commit, validates its Quest
 tree with the shared core, and lists ready quests. Blob selection uses the
 core's `isQuest` predicate, excluding root and nested `AGENTS.md`/`CLAUDE.md`
@@ -412,8 +547,9 @@ external request per file. Blob IDs come from the pinned Git tree; missing,
 binary, truncated, partial, or hash-mismatched content fails closed. This keeps
 enrollment's external request count independent of the number of quest files.
 It rejects private,
-unavailable, incomplete, invalid, and symlinked quest snapshots. Repositories
-without Quest files follow `/setup`; no repository writes occur during setup.
+unavailable, incomplete, invalid, and symlinked quest snapshots. A repository
+without Quest files gets the App's [setup pull request](#setup-pull-request)
+instead; nothing else in enrollment writes to the repository.
 
 The D1 enrollment records a project-wide enabled/paused state, distinct from
 installation permissions. Every opt-in/resume, pause, and disconnect rechecks
@@ -463,6 +599,50 @@ See the official [GitHub license API](https://docs.github.com/en/rest/licenses/l
 [GraphQL blobs](https://docs.github.com/en/graphql/reference/git#blob), and
 [App metadata API](https://docs.github.com/en/rest/apps/apps#get-the-authenticated-app).
 
+### Setup pull request
+
+On a repository whose default branch has no Quest files, **Enable** opens a
+short form holding one optional question: what the project is working toward.
+Submitting it opens the App's setup pull request, with no runner involved
+(`src/github/setup.ts`). The core's `planInit`, the same file plan
+`quest init` applies to a checkout, plans it from the default branch's tree:
+the skill stubs this deployment's `quest` ships (rendered into
+`build/stubs.json` at build time), `quest/README.md` with the answer as its
+Goal, the `Quests: ` line in the root agent instructions, and the
+`.gitattributes` line. Heading
+syntax in the answer is escaped, and the planned `quest/README.md` must pass
+`quest check`, so a goal that would fail it, such as one linking a missing
+quest, is refused before anything is written instead of when enabling. A path init would refuse, such as a skill
+directory that is not a Quest stub, is named on the
+page and nothing is written; kix never deletes or renames a repository's
+files. The plan does not follow symlinks, since a Git tree stores their targets
+as data: one on a planned path is refused the same way, pointing at running
+`quest init` in a clone.
+
+The App publishes the plan as for job branches: blobs, a tree, and a commit
+through the Git Data API on `kix/setup`, outside the quest claim namespace,
+then a ready pull request against the default branch. Its body lists each
+change and what it leaves out, because those steps need judgement about the
+repository: pinning `quest` in its tool manager and adapting existing
+instructions. kix's jobs need neither, since runners bring their own `quest`.
+Without a `flake.nix`, the body says the `bootstrap` job adds one after the
+merge.
+
+Until the pull request merges the project is enrolled, setting up
+(`github_project_setups`), which the project page and picker show with the pull
+request's link. Every open, retry, and enable rechecks the maintainer's
+authority, the repository's visibility, and its license live. A `pull_request`
+webhook that closes or reopens it only asks the service to look: it rereads the
+pull request and, once merged, enables contributions through the same live
+checks as **Enable**, including `quest check` on the merged tree, with the
+enroller's authority, so no second visit is needed. The project page reconciles
+the same way when a webhook was missed, and keeps the reason when enabling
+fails. A pull request closed without merging leaves the project setting up,
+offering to open it again from the current default branch or to disconnect.
+Opening again replaces `kix/setup` only while it is still at a commit the App
+recorded writing there; a branch with anyone else's commits is refused, naming
+it. Disconnecting leaves the pull request and its branch on GitHub.
+
 The setup preview does not reserve or launch ready quests.
 The jobs/funding quests own live eligibility checks and contribution execution.
 
@@ -508,7 +688,8 @@ Paused and disconnected projects are not read. A failed or rate-limited read is
 recorded and shown next to the refresh fallback, and is not retried: only a
 request made during it gets another round, and otherwise the next webhook or a
 refresh reads again. Checks, statuses and other pushes name no entity and
-change no candidate, so they cost no read.
+change no candidate, so they cost no read, except this App's own `quest review`
+check run, which rereads the PRs its payload names by number.
 
 The inbox also treats a PR whose row still says open as closed once a
 complete, current occupancy pass no longer lists it, so a missed close webhook
@@ -536,7 +717,8 @@ escaped titles, state, comment/review counts, current PR head, that head's check
 rollup, aggregate review decision, and up to 20 latest reviewer records with an
 explicit pagination flag. Raw bodies and individual check logs are not cached:
 a PR's body is kept only as whether it has a `## Waiting` section (or the
-older `## Decisions needed`).
+older `## Decisions needed`) and as the land gate's reason its head needs a
+review, read with the open PRs' bodies in one batched request per read.
 Unavailable/deleted entities retain their notification identity and are marked
 missing rather than disappearing or presenting old state as current.
 

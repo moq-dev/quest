@@ -13,17 +13,17 @@ If you cannot push to the PR's branch, stop and report.
 Read the PR, its linked issues and quest, the reviews and comments posted on it, and the surrounding code.
 `quest status <pr>` reports its checks, reviews by head, and unresolved threads in one call.
 Judge the approach before touching anything: would you take a different one?
-Follow the guide's Reviews section for the shared design checkpoint across review rounds.
+Follow `quest context`'s Reviews section for the shared design checkpoint across review rounds.
 
 Settle every decision this PR needs with the grill skill's interview, starting from the user's feedback: those its `## Waiting` section lists, those your judgment of the approach or the review findings raise, and any you find along the way.
-Record the settled decisions in this PR's description as the paper trail, then implement them.
+Record the settled decisions in this PR description's `## Decisions` section as the paper trail, then implement them.
 A sub-agent that cannot prompt leaves each in `## Waiting` with a recommendation.
 
 Fix merge conflicts and failing CI checks.
 Address the automated review findings already posted, without waiting on optional reviewers: fix those you agree with and comment on any you decline.
 One round only; never request a review, including by toggling a ready PR to draft and back.
 
-Before pushing to a PR that is ready for review, review the new head locally as the guide's Reviews section describes.
+Before pushing to a PR that is ready for review, review the new head locally as `quest context`'s Reviews section describes.
 If `quest status <pr>` shows auto-merge enabled, disable it with `gh pr merge <pr> --disable-auto` before any push: GitHub keeps it across a writer's push and would land the new head unreviewed.
 Push your changes to the PR and update its summary.
 Summarize the changes made.

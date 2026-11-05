@@ -29,7 +29,16 @@ import {
 	type Reason,
 } from "./land";
 import { COMMENT_LIMIT, resolution, resolutionSection, type Resolution } from "./land-apply";
-import { readFixResult, parseBaseFix, parseFixResult, type BaseFix, type FixResult } from "./land-fix";
+import {
+	CAUSES,
+	type Cause,
+	readFixResult,
+	signature,
+	parseBaseFix,
+	parseFixResult,
+	type BaseFix,
+	type FixResult,
+} from "./land-fix";
 import { readRemote, type RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
 import { isPrepared, push, remoteHead } from "./land-head";
@@ -38,8 +47,8 @@ import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
 
 /**
- * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused carries the
- * validated resolution, for `quest land apply` to rebuild.
+ * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused, or a fix
+ * that edits protected paths, carries the validated resolution, for `quest land apply` to rebuild.
  */
 export class FixerRefusal extends Error {
 	constructor(
@@ -50,6 +59,8 @@ export class FixerRefusal extends Error {
 	}
 }
 class BaseCheckError extends Error {}
+/** A fix that edits protected paths beyond what the base merge carries: only a maintainer's push lands it. */
+export class ProtectedEdit extends Error {}
 
 /** The failure log's lines the fixer cited, first to last; the comment bounds them. */
 export function cited(log: string, [first, last]: [number, number]): string {
@@ -138,6 +149,8 @@ interface Job extends Process {
 	base?: boolean;
 	results?: FixResult[];
 	handbacks?: Record<number, string>;
+	/** Passes that failed to collect each PR, so one that keeps failing is set aside rather than holding up the rest. */
+	failures?: Record<number, number>;
 	/** PRs a handback is taking out of the queue, recorded before their auto-merge is disabled. */
 	left?: number[];
 	/** Validated fixes GitHub refused to publish, handed back for a maintainer to push. */
@@ -147,10 +160,10 @@ interface Job extends Process {
 }
 /**
  * How a round ended: a fixer commit (`fixed`), a clean base merge with no fixer edit (`merged`), no new
- * commit for a failure the fixer did not judge flaky (`unchanged`), an unchanged re-enqueue of a failure
- * it judged flaky (`flaky`), or a handback.
+ * commit for a failure the fixer found no cause of outside the PR (`unchanged`), an unchanged re-enqueue
+ * for the cause it named (`flaky`, `base`, or `environment`), or a handback.
  */
-export type Outcome = "fixed" | "merged" | "unchanged" | "flaky" | "handback";
+export type Outcome = "fixed" | "merged" | "unchanged" | Cause | "handback";
 
 /** One failure a pick was blamed for, and what came of it. */
 export interface Round {
@@ -203,38 +216,56 @@ function samePick(record: History | undefined, entry: Pick<Entry, "enabledAt">):
 
 /**
  * Why a pick stops being fixed while each round still changes something: a round with no new commit
- * for a failure that isn't flaky (`unchanged`), the failure a fix addressed recurring right after it
- * (`repeated`), or `FLAKY_LIMIT` flaky rounds in a row (`flaky`).
+ * for a failure with no cause outside the PR (`unchanged`), the failure a fix addressed recurring right
+ * after it (`repeated`), or `REQUEUE_LIMIT` unchanged re-enqueues in a row, whatever their causes
+ * (`requeued`).
  */
-export type StopRule = "unchanged" | "repeated" | "flaky";
-/** The flaky rounds in a row that hand a PR back, so a real nondeterministic bug in it reaches a person. */
-export const FLAKY_LIMIT = 3;
+export type StopRule = "unchanged" | "repeated" | "requeued";
+/**
+ * The unchanged re-enqueues in a row that hand a PR back, so a real nondeterministic bug in it, or a
+ * base or runner that keeps failing it, reaches a person.
+ */
+export const REQUEUE_LIMIT = 3;
+const requeue = (outcome: Outcome): outcome is Cause => (CAUSES as readonly string[]).includes(outcome);
 
 /**
- * The stop rule `round` fires after `rounds`, the pick's earlier rounds, if any. A flaky round resets
+ * The stop rule `round` fires after `rounds`, the pick's earlier rounds, if any. A re-enqueue resets
  * neither of the other rules: the failure a fix addressed recurring after flaky rounds is still a
  * repeat. A fixer's own handback needs no rule.
  */
 export function stopRule(rounds: Round[], round: Pick<Round, "outcome" | "failure">): StopRule | undefined {
 	if (round.outcome === "handback") return undefined;
 	if (round.outcome === "unchanged") return "unchanged";
-	const last = rounds.filter((item) => item.outcome !== "flaky").at(-1);
-	if ((last?.outcome === "fixed" || last?.outcome === "merged") && last.failure === round.failure) return "repeated";
-	if (round.outcome !== "flaky") return undefined;
+	const last = rounds.filter((item) => !requeue(item.outcome)).at(-1);
+	if (
+		(last?.outcome === "fixed" || last?.outcome === "merged") &&
+		signature(last.failure) === signature(round.failure)
+	)
+		return "repeated";
+	if (!requeue(round.outcome)) return undefined;
 	let streak = 1;
-	for (let index = rounds.length - 1; index >= 0 && rounds[index].outcome === "flaky"; index--) streak++;
-	return streak >= FLAKY_LIMIT ? "flaky" : undefined;
+	for (let index = rounds.length - 1; index >= 0 && requeue(rounds[index].outcome); index--) streak++;
+	return streak >= REQUEUE_LIMIT ? "requeued" : undefined;
 }
 
-/** A handback's reason, naming the stop rule that fired; worded so `fixerText` quotes it unchanged. */
-export function stopReason(rule: StopRule, failure: string): string {
+/**
+ * A handback's reason, naming the stop rule `round` fired; a requeue limit names the last round's cause.
+ * Worded so `fixerText` quotes it unchanged.
+ */
+export function stopReason(rule: StopRule, round: Pick<Round, "outcome" | "failure">): string {
 	switch (rule) {
 		case "unchanged":
-			return "stop rule (no new commit): the fixer's round produced no new commit and the failure isn't flaky";
+			return "stop rule (no new commit): the fixer's round produced no new commit and named no cause outside the pull request";
 		case "repeated":
-			return `stop rule (repeated failure): ${failure} failed again right after the round that addressed it`;
-		case "flaky":
-			return `stop rule (flaky limit): the failure was judged flaky ${FLAKY_LIMIT} times in a row; it may be a real nondeterministic bug`;
+			return `stop rule (repeated failure): ${round.failure} failed again right after the round that addressed it`;
+		case "requeued":
+			return `stop rule (requeue limit): the failure was requeued unchanged ${REQUEUE_LIMIT} times in a row, last ${
+				round.outcome === "base"
+					? "because the base fails it too; the base may need a fix"
+					: round.outcome === "environment"
+						? "because the runner's environment fails it; the runner may need a fix"
+						: "judged flaky; it may be a real nondeterministic bug"
+			}`;
 	}
 }
 
@@ -644,7 +675,7 @@ export function validateFix(root: string, entry: Pick<Entry, "head">, head: stri
 	const sets = maps.map((list) => list.filter(protectedEntry).sort().join("\0"));
 	const protectedConflict = conflicts.some((path) => protectedPath(path) || gitlinks.has(path));
 	if (sets[0] !== sets[1] && (protectedConflict || sets[0] !== sets[2]))
-		throw new Error("off-limits fixer edit: protected set must equal pinned head or base merge result");
+		throw new ProtectedEdit("off-limits fixer edit: protected set must equal pinned head or base merge result");
 }
 
 /** Anything the fixer writes may echo a token it read; GitHub tokens never reach a post. */
@@ -680,19 +711,20 @@ export function fixerText(text: string): string {
 		.replace(/[\r\n\u0000-\u001f\u007f]/g, " ");
 	return `\`${value}\``;
 }
-export function author(result?: Pick<FixResult, "agent" | "model">): string {
+/** The fixer's harness, model, and effort, as a PR's `## Models` record names a session. */
+export function author(result?: Pick<FixResult, "agent" | "model" | "effort">): string {
 	const agent = result?.agent ?? "Codex";
 	const model = result?.model;
 	return (
-		[agent, model && model !== agent ? model : undefined]
+		[agent, model && model !== agent ? model : undefined, result?.effort && `${result.effort} effort`]
 			.filter(Boolean)
-			.join(" / ")
-			.replace(/[^a-zA-Z0-9 ._/-]/g, " ")
+			.join(", ")
+			.replace(/[^a-zA-Z0-9 ,._/-]/g, " ")
 			.slice(0, 100) || "Codex"
 	);
 }
 /** The PR body with the fix recorded in its `## Review` section; the line names the agent, and the author's text stays as written. */
-function review(body: string, head: string, reason: string, attribution: string): string {
+export function review(body: string, head: string, reason: string, attribution: string): string {
 	const line = `mechanical fix by ${attribution}: ${fixerText(reason)} (head ${head})`;
 	if (body.includes(line)) return body;
 	const section = /^## Review[ \t]*\r?$/m.exec(body);
@@ -702,10 +734,35 @@ function review(body: string, head: string, reason: string, attribution: string)
 }
 
 /**
+ * The ready commit a handback carries for a validated `head` the daemon cannot publish on `entry`'s PR,
+ * while the PR stands at its pinned head: `quest land apply` rebuilds only on the head the fixer worked
+ * from.
+ */
+function ready(
+	root: string,
+	plan: Pick<Plan, "base">,
+	entry: Pick<Entry, "number" | "head">,
+	standing: string,
+	head: string,
+	warn: (message: string) => void,
+	cause?: Resolution["cause"],
+): Resolution | undefined {
+	if (standing !== entry.head) return undefined;
+	try {
+		return resolution(root, entry.head, plan.base.sha, head, cause);
+	} catch (error) {
+		warn(`quest land fixer: cannot hand back #${entry.number}'s resolution: ${String(error)}`);
+		return undefined;
+	}
+}
+
+/**
  * Check a fixer's `fixed` head before publishing it on `entry`'s PR: a fork must allow maintainer
  * edits, the head's objects are imported from the fixer's `checkout`, and it must descend from the
  * pinned head and keep the protected paths, judged against the base the fixer was given rather than
- * the current one, since other PRs may land protected changes while the result waits.
+ * the current one, since other PRs may land protected changes while the result waits. A fix that edits
+ * them is refused with its resolution, for a maintainer to review and push with `quest land apply`,
+ * when the PR stands at `entry`'s pinned head.
  */
 export async function importFix(
 	root: string,
@@ -716,6 +773,8 @@ export async function importFix(
 	packs: string[] | undefined,
 	head: string,
 	read: RemoteRead,
+	standing: string,
+	warn: (message: string) => void,
 ): Promise<void> {
 	if (entry.repository !== plan.repository && !entry.maintainerCanModify)
 		throw new FixerRefusal("fork does not allow maintainer edits");
@@ -728,7 +787,10 @@ export async function importFix(
 	try {
 		validateFix(root, entry, head, plan.base.sha);
 	} catch (error) {
-		throw new FixerRefusal(String(error));
+		throw new FixerRefusal(
+			String(error),
+			error instanceof ProtectedEdit ? ready(root, plan, entry, standing, head, warn, "protected") : undefined,
+		);
 	}
 }
 
@@ -763,15 +825,11 @@ export async function publishHead(
 		);
 		if (pushed.status !== 0) {
 			// GitHub refuses an App's push of a workflow change it lacks the permission for, and a fork's
-			// branch rules may refuse any. The maintainer's own push may still pass, but `quest land apply`
-			// rebuilds only on the head the fixer worked from.
-			let ready: Resolution | undefined;
-			try {
-				ready = standing === entry.head ? resolution(root, entry.head, plan.base.sha, head) : undefined;
-			} catch (error) {
-				deps.warn(`quest land fixer: cannot hand back #${entry.number}'s resolution: ${String(error)}`);
-			}
-			throw new FixerRefusal(`fixer push refused: ${pushed.stderr.trim()}`, ready);
+			// branch rules may refuse any. The maintainer's own push may still pass.
+			throw new FixerRefusal(
+				`fixer push refused: ${pushed.stderr.trim()}`,
+				ready(root, plan, entry, standing, head, deps.warn),
+			);
 		}
 	}
 	// GitHub shows a push a moment later. Wait for our own head; only a third head is a real move.
@@ -818,26 +876,74 @@ export async function collectFixers(
 			deps.warn(`quest land fixer: unreadable job ${name}: ${String(error)}`);
 			continue;
 		}
+		// A job saved before the gate had a method squashed.
+		job.plan.method ??= "squash";
 
-		try {
-			output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read, checkBase)));
-		} catch (error) {
-			// The gate's own base check failing to run is not the fixer's failure: retry it later.
-			if (error instanceof BaseCheckError) {
-				deps.warn(`quest land fixer: base check pending for ${name}: ${String(error.cause)}`);
-				continue;
-			}
-			// Keep the first reason: a GitHub error while handing back a crash must not replace the crash.
-			job.error ??= `fixer collection failed: ${String(error)}; run /quest-iterate`;
+		// The first try checks the base if it must; a retry only hands back, so it never checks it.
+		const failed = new Set<number>();
+		for (let retry = false; ; retry = true) {
 			try {
+				output.push(
+					...(await collectJob(
+						root,
+						state,
+						path,
+						job,
+						deps,
+						token,
+						timeout,
+						read,
+						retry ? undefined : checkBase,
+					)),
+				);
+				break;
+			} catch (error) {
+				// The gate's own base check failing to run is not the fixer's failure: retry it later.
+				if (error instanceof BaseCheckError) {
+					deps.warn(`quest land fixer: base check pending for ${name}: ${String(error.cause)}`);
+					break;
+				}
+				const aside = failCollection(job, error, failed);
 				save(path, job);
-				output.push(...(await collectJob(root, state, path, job, deps, token, timeout, read)));
-			} catch (failure) {
-				deps.warn(`quest land fixer: handback pending for ${name}: ${String(failure)}`);
+				if (aside !== undefined) {
+					deps.warn(
+						`quest land fixer: set aside ${aside} from ${name} after ${COLLECTION_ATTEMPTS} failed collections: ${String(error)}`,
+					);
+					output.push(`set aside ${aside}`);
+				} else if (retry) {
+					deps.warn(`quest land fixer: handback pending for ${name}: ${String(error)}`);
+					break;
+				}
 			}
 		}
 	}
 	return output;
+}
+
+/** Passes in a row that fail to collect the same PR before it is set aside, so its job's other PRs go on. */
+export const COLLECTION_ATTEMPTS = 3;
+
+/**
+ * Record a failure collecting `job` against the PR it was working on, its first PR left: that PR alone
+ * is handed back with it, and its job's other PRs keep their own results. A reason already recorded,
+ * such as a crash's, still wins. A PR that keeps failing, as when GitHub refuses its handback, is set
+ * aside: it leaves the job, so it rejoins batches as GitHub still queues it, and its number is returned.
+ */
+function failCollection(job: Job, error: unknown, failed: Set<number>): number | undefined {
+	const reason = `fixer collection failed: ${String(error)}; run /quest-iterate`;
+	const number = job.numbers[0];
+	if (number === undefined) {
+		job.error ??= reason;
+		return undefined;
+	}
+	if (!job.error) (job.handbacks ??= {})[number] ??= reason;
+	// A pass's retry of the same PR is not another failed collection.
+	const failures = (job.failures ??= {});
+	if (!failed.has(number)) failures[number] = (failures[number] ?? 0) + 1;
+	failed.add(number);
+	if (failures[number] < COLLECTION_ATTEMPTS) return undefined;
+	job.numbers.shift();
+	return number;
 }
 
 /** An exit status as a cause: a signal by name (143 is SIGTERM), or a crash with its code (101 is a Rust panic). */
@@ -953,21 +1059,22 @@ async function collectJob(
 				job.reason === "merge_conflict"
 					? conflictFailure(job.plan.base.sha)
 					: (result?.failure ?? job.reason ?? "failed_checks");
-			// A PR requeued unchanged is flaky by the fixer's judgment, unless the gate itself blamed it, as for a
-			// conflict that is still there: a blamed PR the fixer named is never requeued.
+			// A PR requeued unchanged fails for the cause the fixer named, flaky when it named none, unless the
+			// gate itself blamed it, as for a conflict that is still there: a blamed PR the fixer named is never
+			// requeued.
 			const outcome: Outcome =
 				result?.action === "fixed"
 					? "fixed"
 					: result?.action === "requeue"
 						? job.blame
 							? "unchanged"
-							: "flaky"
+							: (result.cause ?? "flaky")
 						: "handback";
 			const rule = stopRule(
 				previous.rounds.filter((item) => item.job !== name),
 				{ outcome, failure },
 			);
-			if (rule) error = stopReason(rule, failure);
+			if (rule) error = stopReason(rule, { outcome, failure });
 			round = rule
 				? { job: name, outcome: "handback", before: standing, failure, rule }
 				: { job: name, outcome, before: standing, failure, ...(outcome === "handback" ? {} : { after: head }) };
@@ -978,32 +1085,36 @@ async function collectJob(
 		} else if (!error && result?.action !== "handback") {
 			try {
 				if (result?.action === "fixed")
-					await importFix(root, state, job.plan, entry, job.checkout, job.packs, head, read);
+					await importFix(
+						root,
+						state,
+						job.plan,
+						entry,
+						job.checkout,
+						job.packs,
+						head,
+						read,
+						standing,
+						deps.warn,
+					);
 				if (!job.published.includes(number)) {
 					job.published.push(number);
 					save(path, job);
 				}
-				if (result?.action === "fixed") {
-					try {
-						// The fix descends from the pin, not from a gate merge the PR stands at: it replaces that
-						// merge, as the gate replaces its own, since building on it would revert the newer base it
-						// merged. The lease still refuses any writer's commit.
-						await publishHead(github, root, job.plan, entry, standing, current, head, deps, token, {
-							reason: result.reason,
-							attribution: author(result),
-						});
-					} catch (failure) {
-						if (failure instanceof FixerRefusal && failure.resolution)
-							(job.resolutions ??= {})[number] = failure.resolution;
-						throw failure;
-					}
-				}
+				// The fix descends from the pin, not from a gate merge the PR stands at: it replaces that
+				// merge, as the gate replaces its own, since building on it would revert the newer base it
+				// merged. The lease still refuses any writer's commit.
+				if (result?.action === "fixed")
+					await publishHead(github, root, job.plan, entry, standing, current, head, deps, token, {
+						reason: result.reason,
+						attribution: author(result),
+					});
 
 				// A parked PR requeued unchanged is still queued as it was; anything else is pinned anew.
 				if (queuedAs !== entry.enabledAt || head !== entry.head) {
 					// Save intent before enabling, so a lost response can be reconciled after restart.
 					save(historyPath(state, number), { ...previous, ...actor, head });
-					await enqueue(github, entry.id, head);
+					await enqueue(github, entry.id, head, job.plan.method);
 					const enabled = await github.graphql(
 						"query($id: ID!) { node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } } }",
 						{ id: entry.id },
@@ -1013,6 +1124,7 @@ async function collectJob(
 				}
 			} catch (failure) {
 				if (!(failure instanceof FixerRefusal)) throw failure;
+				if (failure.resolution) (job.resolutions ??= {})[number] = failure.resolution;
 				error = `${String(failure)}; run /quest-iterate before picking it again`;
 			}
 		}

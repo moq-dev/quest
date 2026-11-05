@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Repo } from "../dev/github";
 import { app } from "../src/index";
 import * as store from "../src/jobs/store";
 import * as push from "../src/push/notify";
@@ -121,26 +122,27 @@ describe("decision notifications", () => {
 	let cookie = "";
 	let sent: Sent[] = [];
 	let status = 201;
-	let github: Awaited<ReturnType<typeof maintainerOf>>["github"];
-	// Push services answer here; everything else goes to the mocked GitHub.
-	let respond: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+	let login = "";
+	let repo: Repo;
+	let signIn: Awaited<ReturnType<typeof maintainerOf>>["other"];
 
 	beforeEach(async () => {
 		const maintainer = await maintainerOf();
-		({ user, cookie, github } = maintainer);
+		const { github } = maintainer;
+		({ user, cookie, login, repo, other: signIn } = maintainer);
 		sent = [];
 		status = 201;
-		respond = async (input, init) => {
+		// Push services answer here; everything else goes to the fake GitHub.
+		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
 			const url = String(input instanceof Request ? input.url : input);
-			if (!url.startsWith("https://fcm.googleapis.com/")) return maintainer.mock(input);
+			if (!url.startsWith("https://fcm.googleapis.com/")) return github(input, init);
 			sent.push({
 				endpoint: url,
 				headers: new Headers(init?.headers),
 				body: new Uint8Array(await new Response(init?.body).arrayBuffer()),
 			});
 			return new Response(null, { status });
-		};
-		vi.spyOn(globalThis, "fetch").mockImplementation(respond);
+		});
 	});
 	afterEach(() => vi.restoreAllMocks());
 
@@ -224,7 +226,7 @@ describe("decision notifications", () => {
 
 	it("does not push to someone who no longer maintains the project", async () => {
 		await subscribe();
-		github.role = "write";
+		repo.roles![login] = "write";
 		await delivery("issues", {
 			action: "opened",
 			installation: { id: 5 },
@@ -237,13 +239,7 @@ describe("decision notifications", () => {
 
 	it("pushes to every member of the project, and drops one who no longer maintains it", async () => {
 		const mine = await subscribe();
-		const who = identity("github");
-		const session = (await oauth(who)).session!;
-		vi.spyOn(globalThis, "fetch").mockImplementation(respond);
-		const member = (await db
-			.prepare("SELECT userId FROM account WHERE providerId='github' AND accountId=?")
-			.bind(who.id)
-			.first<{ userId: string }>())!.userId;
+		const { session, login: co, id: member } = await signIn("maintain");
 		await db.prepare("INSERT INTO github_project_members(repository,user) VALUES(10,?)").bind(member).run();
 		const theirs = await browser();
 		expect((await post("/push/subscribe", theirs.json, { Cookie: session, Origin: origin })).status).toBe(204);
@@ -253,11 +249,10 @@ describe("decision notifications", () => {
 			repository: { id: 10 },
 			issue: { id: 10 + number, number, title: `Issue ${number}` },
 		});
-		github.maintainers.push(who.id);
 		await delivery("issues", opened(3));
 		expect(sent.map((s) => s.endpoint).sort()).toEqual([mine.endpoint, theirs.endpoint].sort());
 		// A co-maintainer who lost the role is not notified, and leaves the project's inbox.
-		github.maintainers.length = 0;
+		repo.roles![co] = "read";
 		await delivery("issues", opened(4));
 		expect(sent.slice(2).map((s) => s.endpoint)).toEqual([mine.endpoint]);
 		const members = await db.prepare("SELECT user FROM github_project_members WHERE repository=10").all();
@@ -272,6 +267,7 @@ describe("decision notifications", () => {
 			repository: { id: 10 },
 			issue: { id: 13, number: 3, title: "Crash on start" },
 		};
+		repo.issues.push({ number: 3, title: "Crash on start", author: "reporter" });
 		const id = crypto.randomUUID();
 		expect((await delivery("issues", opened, id)).status).toBe(202);
 		expect((await delivery("issues", opened, id)).status).toBe(200);

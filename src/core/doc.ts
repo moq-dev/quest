@@ -121,6 +121,20 @@ export function questBranch(path: string): string {
 	return path.replace(/\.md$/, "");
 }
 
+/** The t-shirt sizes a quest's title gives it, smallest first. */
+export const SIZES = ["XS", "S", "M", "L", "XL"] as const;
+export type Size = (typeof SIZES)[number];
+
+/**
+ * A quest's size from its literal title, `# [XS|S|M|L|XL] Title`, or null when
+ * it has none, as an epic with children does.
+ */
+export function size(doc: Doc): Size | null {
+	const title = doc.title;
+	const match = title?.literal ? /^\[([^\]]*?)\] ./s.exec(title.text) : null;
+	return match && (SIZES as readonly string[]).includes(match[1]) ? (match[1] as Size) : null;
+}
+
 /** The quest file a branch names, whether or not it exists: the branch plus `.md`. */
 export function branchQuest(branch: string): string {
 	return `${branch}.md`;
@@ -222,14 +236,19 @@ const CONTAINERS = new Set(["root", "blockquote", "listItem"]);
 /** Block-level nodes, which separate the words of an entry that spans more than one. */
 const BLOCKS = new Set(["paragraph", "heading", "blockquote", "list", "listItem", "code", "table", "thematicBreak"]);
 
-/** Parse already-loaded Markdown. `path` stays repository-relative. */
-export function parse(path: string, text: string): Doc {
+/** Markdown's tree as GitHub renders it, for quests and PR bodies alike. */
+export function markdown(text: string): Root {
 	// GitHub renders strikethrough and tables, and the Rust parser this replaced
 	// enabled both. It enabled no other GFM syntax.
-	const tree = fromMarkdown(text, {
+	return fromMarkdown(text, {
 		extensions: [gfmStrikethrough(), gfmTable()],
 		mdastExtensions: [gfmStrikethroughFromMarkdown(), gfmTableFromMarkdown()],
 	});
+}
+
+/** Parse already-loaded Markdown. `path` stays repository-relative. */
+export function parse(path: string, text: string): Doc {
+	const tree = markdown(text);
 	// Lines as grep sees them: a bare `\r` does not end one, so a CR-only file is
 	// one line and none of its headings are literal, which is what grep finds.
 	const lines = text.split("\n").map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));

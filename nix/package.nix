@@ -94,8 +94,6 @@ stdenvNoCC.mkDerivation {
   };
 
   nativeBuildInputs = [ bun ];
-  # The bundle's `#!/usr/bin/env bun` is patched to this Bun.
-  buildInputs = [ bun ];
 
   configurePhase = ''
     runHook preConfigure
@@ -113,6 +111,9 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     install -Dm755 dist/quest.js $out/bin/quest
+    # The bundle's `#!/usr/bin/env -S bun --no-env-file` names this Bun directly. Its one argument
+    # needs no `env -S`, and the line stays within the 128 bytes kernels before Linux 5.1 read.
+    sed -i '1c #!${lib.getExe bun} --no-env-file' $out/bin/quest
     runHook postInstall
   '';
 

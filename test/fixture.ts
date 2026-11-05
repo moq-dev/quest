@@ -11,6 +11,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	watch,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +22,7 @@ import { afterAll, afterEach, expect } from "vitest";
 import { blockers, check, formatFinding, lookup, ready, renderBlocker } from "../src/core";
 import { type Output, main } from "../src/cli/main";
 import { type Terminal } from "../src/cli/theme";
-import { exists, load } from "../src/cli/tree";
+import { checkout, load } from "../src/cli/tree";
 
 export const ROOT_README = `# Quests
 
@@ -217,7 +218,8 @@ export class Tree {
 	}
 
 	findings(): string[] {
-		return check(load(this.path), (path) => exists(this.path, path)).map(formatFinding);
+		const tree = checkout(this.path, () => {});
+		return check(tree.docs, tree.exists).map(formatFinding);
 	}
 
 	/** The rendered blocker chain: one line per blocker, nesting indented. */
@@ -235,6 +237,15 @@ export class Tree {
 	/** Run the CLI against this tree. */
 	run(...args: string[]): { code: number; stdout: string; stderr: string } {
 		return run("--root", this.path, ...args);
+	}
+
+	/** Run an asynchronous CLI command against this tree and wait for it. */
+	async exec(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+		let stdout = "";
+		let stderr = "";
+		const out: Output = { stdout: (text) => void (stdout += text), stderr: (text) => void (stderr += text) };
+		const code = await main(["--root", this.path, ...args], out);
+		return { code, stdout, stderr };
 	}
 
 	/** Run the CLI against this tree with stdout on a terminal. */
@@ -314,4 +325,57 @@ export async function onTerminal(
 	});
 	const [code] = await once(child, "exit");
 	return { code, output };
+}
+
+/** Resolves once `file` exists, woken by its directory's change events rather than a poll. */
+export function created(file: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const check = () => {
+			if (!existsSync(file)) return;
+			watcher.close();
+			resolve();
+		};
+		const watcher = watch(dirname(file), check);
+		watcher.on("error", reject);
+		check(); // Registration precedes the check, covering a file created during setup.
+	});
+}
+
+/**
+ * A script for `process.execPath` that handles `signals` as a process with cleanup to do would.
+ * Once its handlers are installed, it writes its PID to `ready`. Each signal it gets is appended to
+ * `received`. The cleanup after the first takes `cleanup` milliseconds, longer than wrappers that
+ * exit at once on the same signal, and catches a repeated delivery; it then creates `done` and
+ * exits 0. Without `cleanup`, it never finishes.
+ */
+export function signalled(dir: string, signals: NodeJS.Signals[], cleanup?: number) {
+	const paths = {
+		script: join(dir, "leaf.js"),
+		ready: join(dir, "ready"),
+		received: join(dir, "received"),
+		done: join(dir, "done"),
+	};
+	writeFileSync(
+		paths.script,
+		`const { appendFileSync, writeFileSync } = require("node:fs");
+		let first = true;
+		for (const name of ${JSON.stringify(signals)})
+			process.on(name, () => {
+				appendFileSync(${JSON.stringify(paths.received)}, name + "\\n");
+				if (!first || ${cleanup === undefined}) return;
+				first = false;
+				setTimeout(() => {
+					writeFileSync(${JSON.stringify(paths.done)}, "");
+					process.exit(0);
+				}, ${cleanup ?? 0});
+			});
+		writeFileSync(${JSON.stringify(paths.ready)}, String(process.pid));
+		setInterval(() => {}, 1000);`,
+	);
+	return {
+		...paths,
+		pid: () => Number(readFileSync(paths.ready, "utf8")),
+		/** The signals received so far, in order. */
+		log: () => (existsSync(paths.received) ? readFileSync(paths.received, "utf8").trim().split("\n") : []),
+	};
 }

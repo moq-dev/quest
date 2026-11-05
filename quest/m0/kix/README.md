@@ -30,7 +30,7 @@ live rehearsal on the operator's runner.
 
 Decided 2026-10-30 (user, /quest-plan): m0 serves moq-dev/moq, then
 moq-dev/quest, then the private moq-dev/moq.pro, at quest.moq.dev with only
-moq-dev allowed to enroll. Onboarding, read-only CI checks, contributor
+moq-dev allowed to enroll (and, decided 2026-11-03, the kixelated user). Onboarding, read-only CI checks, contributor
 sandboxing, and the guide moved to [m1](/quest/m1/kix/README.md), and
 kix.quest opens in [m1](/quest/m1/open.md).
 
@@ -58,7 +58,11 @@ operator-paid-hosting decisions:
   each signed in by its own CLI in an isolated home. kix stores opaque
   account IDs and routes by the user's preference order. A job that hits a
   limit pauses with a decision to switch accounts; kix never rotates
-  automatically to dodge provider limits.
+  automatically to dodge provider limits. Superseded for Claude and Codex
+  on 2026-11-04 (user): their accounts pool behind the runner's own
+  CLIProxyAPI, which rotates between them
+  ([Runner account pool](/quest/m0/kix/cliproxy.md)); opencode accounts
+  keep this.
 - **Nix only.** Runners run every job inside the project's `nix develop`
   shell, with no other way to install dependencies, for cache efficiency and
   reproducibility. The runner pins the agent CLIs through Nix as well.
@@ -88,10 +92,13 @@ operator-paid-hosting decisions:
   default branch may be implemented. Draft plans are not eligible. Project
   pause stops new work. An explicit spawn decision can prioritize ready work
   without introducing another approval flag per quest.
-- **Keep useful infrastructure.** Retain Workers/Hono and D1 for the web
+- **Keep useful infrastructure.** Retain Workers/Hono for the web
   service. Durable database claims and live WebSocket connections to a
   per-owner Durable Object (decided 2026-10-16 on moq-dev/quest#135)
-  replace MoQ locks and logs.
+  replace MoQ locks and logs. D1 is the record until
+  [each user's state moves into their hub](/quest/m1/user-state.md)
+  (decided 2026-11-04, user), after which D1 keeps only cross-user state,
+  such as repository data.
 - **Not exclusive.** The web UI is one interface, not the only one. Every
   skill keeps working from a user's own agent (Claude Code, Codex, ...)
   without kix. The two coexist through GitHub: kix sees a local agent's
@@ -133,10 +140,8 @@ fixes what it finds:
 ## Required
 
 - [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the operator registers the App and deploys the Worker with GitHub sign-in at quest.moq.dev
-- [Owner allowlist](/quest/m0/kix/owners.md) - only moq-dev may enroll until the public release
 - [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/moq and moq-dev/quest
 - [Private repositories](/quest/m0/kix/private.md) - moq-dev/moq.pro enrolls, visible only to signed-in users who can read it
 - [Job sandbox](/quest/m0/kix/sandbox/README.md) - head approval for kix-pushed heads, and opencode sandboxed
+- [Runner account pool](/quest/m0/kix/cliproxy.md) - the runner routes every Claude and Codex job and review through its own CLIProxyAPI pool
 - [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs
-- [Merge queue enqueue](/quest/m0/kix/enqueue.md) - kix enqueues ready PRs into a merge queue instead of only arming auto-merge
-- [Runner review checks](/quest/m0/kix/review-check.md) - runners publish the App's `quest review` check, so their heads land without a human approval

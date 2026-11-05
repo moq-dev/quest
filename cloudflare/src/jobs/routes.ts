@@ -10,6 +10,7 @@ import * as output from "./output";
 import { formAnswer, parseAnswer, parsePrompt } from "./prompt";
 import { data, id, text } from "./protocol";
 import { HeadMoved, LIMITS, parsePublication, publish, pullOf, restart, validateContinuation } from "./publish";
+import { parseReview, recordReview } from "./review";
 import * as store from "./store";
 import { JobError } from "./store";
 
@@ -45,7 +46,7 @@ export function inboxURL(repository: number, target: string) {
 	return `/inbox?${new URLSearchParams({ project: String(repository), item: target })}`;
 }
 /** What an inbox form just recorded, which the next decision's page notes. */
-export type Done = "answer" | "approve" | "start" | "stop" | "skip" | "merge";
+export type Done = "answer" | "approve" | "trust" | "start" | "stop" | "skip" | "merge";
 /**
  * The inbox's next active decision, or its empty state, after a form recorded
  * one. The item acted on stays reachable from its list, with its earlier answers.
@@ -113,6 +114,12 @@ jobs.get("/api/runner/connect", async (c) => {
 	});
 });
 
+// A publication can move the head of a job whose attempt was requeued meanwhile,
+// and only a dispatch rereads the trust it made stale.
+async function dispatchStale(env: Env, owner: string, job: string) {
+	if (await store.stale(env.DB, owner, job)) await hub(env, owner).dispatch(owner);
+}
+
 // A running attempt publishes its work over HTTPS rather than its connection,
 // so slow GitHub writes never hold up the hub's other runner messages.
 jobs.post("/api/runner/publish", async (c) => {
@@ -126,15 +133,30 @@ jobs.post("/api/runner/publish", async (c) => {
 	try {
 		result = await publish(c.env, runner, input);
 	} catch (error) {
+		await dispatchStale(c.env, runner.owner, input.job);
 		// The runner reconciles with the branch's head rather than failing its attempt.
 		if (error instanceof HeadMoved) return c.json({ error: error.message, head: error.head }, 409);
 		throw error;
 	}
-	if (!("decision" in result)) return c.json(result);
+	if (!("decision" in result)) {
+		await dispatchStale(c.env, runner.owner, input.job);
+		return c.json(result);
+	}
 	await hub(c.env, runner.owner).dispatch(runner.owner);
 	if (result.asked && !result.cancel) c.executionCtx.waitUntil(push.job(c.env, input.job, "publication"));
 	const { decision, cancel } = result;
 	return c.json({ decision, cancel }, 202);
+});
+
+// The runner reports its own review of a head the job published, which kix
+// records as the App's `quest review` check run on that commit.
+jobs.post("/api/runner/review", async (c) => {
+	const runner = await machine(c);
+	if (!runner) return c.json({ error: "Runner token required" }, 401);
+	const length = Number(c.req.header("Content-Length"));
+	if (!Number.isSafeInteger(length) || length > 2 * 1024 * 1024)
+		return c.json({ error: "A Content-Length of at most 2 MiB is required" }, 413);
+	return c.json(await recordReview(c.env, runner, parseReview(await json(c))));
 });
 
 // The current attempt of a job on an issue or pull request reads its target
@@ -440,6 +462,21 @@ jobs.post(`${base}/:job/approve`, async (c) => {
 	await store.approve(c.env.DB, job.id, question, user, Date.now());
 	await hub(c.env, job.actor).dispatch(job.actor);
 	return reply(c, form, "approve", null);
+});
+
+// A maintainer approves the exact pull request head they reviewed, such as one
+// kix pushed, so its iterate and merge jobs run on host runners although not
+// every commit carries a maintainer's signature.
+jobs.post("/projects/github/:owner/:repository/pulls/:number/approve", async (c) => {
+	const { user, repo, github } = await maintained(c);
+	const { body, form } = await input(c);
+	const number = c.req.param("number");
+	if (!/^[1-9]\d{0,14}$/.test(number) || typeof body.head !== "string")
+		throw new JobError("Pull request and head required");
+	await github.approveHead(repo, user, Number(number), body.head);
+	const queued = await store.queuedOn(c.env.DB, repo.id, `pulls/${number}`);
+	if (queued && store.onPull(queued.workflow)) await hub(c.env, queued.actor).recheck(queued.actor, queued.id);
+	return reply(c, form, "trust", null);
 });
 
 /** The longest reply to a publication decision, in characters as the inbox form counts them. */

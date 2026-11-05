@@ -2,14 +2,18 @@
 // the background and re-enqueued at the back of the queue, or handed back to a person.
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
-import { queueHead, UNREFUSED } from "./hold";
+import { isHoldLabel } from "../core";
+import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
+import { type Queued, queueHead } from "../github/merge";
+import { UNREFUSED } from "./hold";
 import { baseRemote, type Entry, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
-import { EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "./land-fix";
+import { checksSection } from "./land-checks";
+import { type Cause, EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "./land-fix";
 import {
 	author,
 	cited,
+	COLLECTION_ATTEMPTS,
 	comment,
 	conflictFailure,
 	FixerRefusal,
@@ -27,14 +31,26 @@ import {
 	prepare,
 	type Process,
 	publishHead,
+	review,
 	type Round,
 	saveRound,
 	settle,
 	stopReason,
 	stopRule,
 } from "./land-fixer";
+import { push, remoteHead } from "./land-head";
 import { save } from "./land-serve";
 import type { Removal } from "./land-watch";
+import {
+	type Disable,
+	type FlakyTest,
+	questName,
+	readFlaky,
+	RECENT,
+	recordFlaky,
+	saveFlaky,
+	writeKnownFlaky,
+} from "./land-watch-flaky";
 
 /** What the watcher needs to run the fixer on the PRs the queue drops. */
 export interface FixContext {
@@ -62,10 +78,12 @@ interface WatchJob extends Process {
 	/** When the queue dropped it. */
 	dropped: string;
 	reason: "failed_checks" | "merge_conflict";
-	/** The failure log the fixer reads, which a handback's comment quotes. */
+	/** The fixer's input, which a handback's comment quotes: the failure log, then the PR's own checks. */
 	log: string;
 	/** The failure's signature when the fixer names none: the failing job and step, or the conflict's base. */
 	failure: string;
+	/** A failed build's failing `merge_group` jobs, by URL, which a flaky verdict records. */
+	runs?: string[];
 	/** A clean merge of the base with the quest merge driver, which needs no fixer; `result` holds its head. */
 	merged?: boolean;
 	result?: FixResult;
@@ -74,24 +92,65 @@ interface WatchJob extends Process {
 	/** The head being put back in the queue, recorded before asking GitHub, so a restart finds its own request. */
 	requeuing?: string;
 	/** How GitHub took the head back, once it did: the round succeeded, and only its comments may remain. */
-	requeued?: Requeue;
+	requeued?: Queued;
 	/** Why the round ended in a handback, recorded before posting it, so a restart keeps the reason. */
 	handback?: string;
 	/** A validated fix whose push GitHub refused, handed back for `quest land apply`. */
 	resolution?: Resolution;
+	/** Passes that failed to collect it, so one that keeps failing is set aside rather than holding a fixer slot. */
+	failures?: number;
 }
 
 const JOB = /^watch-job-.*\.json$/;
 const REMOVAL = /^removal-\d+\.json$/;
 /** The merge driver's own result, not an agent's: it is recorded in the PR's Review under this name. */
 const MERGER = "quest land watch";
+/** How a requeue comment says the fixer found the failure was not the PR's, by its cause. */
+const JUDGED: Record<Cause, string> = {
+	flaky: "judged the failure flaky",
+	base: "found the failure on the base too",
+	environment: "traced the failure to the runner's environment",
+};
 
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
 	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
+	labels(first: 100) { nodes { name } }
 } } }`;
 
-async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
+export async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
 	return object((await github.graphql(PULL, { id })).node);
+}
+
+/** Whether another session holds the PR with a hold label, such as `/quest-iterate`'s `quest:active`. */
+export const isHeld = (pull: ObjectValue): boolean =>
+	array(object(pull.labels).nodes).some((label) => isHoldLabel(string(label.name)));
+
+/** What the watcher says on a held PR, whatever step found the hold and whether a fix was pushed. */
+export const HELD =
+	"Another session holds this pull request, so the watcher stops acting on it and leaves it to that session: the hold ends the pick, and a maintainer enqueues it again once that session is done.";
+
+/**
+ * Say once, best-effort, that the watcher left a held PR to its session. The caller has already ended
+ * the pick in its state, so a comment GitHub refuses is only warned about and never retried.
+ */
+async function sayHeld(
+	github: GitHub,
+	repository: string,
+	entry: Pick<Entry, "number" | "enabledAt">,
+	warn: (text: string) => void,
+): Promise<void> {
+	try {
+		await post(github, { repository }, entry, `quest land watch: ${HELD}`, "held", MERGER);
+	} catch (error) {
+		warn(`quest land watch: hold comment on ${entry.number} not posted: ${String(error)}`);
+	}
+}
+
+/** A hold found right before a push or a re-enqueue. */
+class Held extends Error {
+	constructor() {
+		super("held by another session");
+	}
 }
 
 /**
@@ -175,6 +234,7 @@ export async function advanceFixes(
 		if (line) output.push(line);
 	}
 	output.push(...(await collectAll(github, state, context, deps, true)));
+	output.push(...(await advanceDisables(github, repository, state, context, deps)));
 	return output;
 }
 
@@ -196,9 +256,21 @@ async function collectAll(
 		try {
 			output.push(...(await collect(github, state, path, job, context, deps)));
 		} catch (error) {
+			// A round that keeps failing, as when GitHub refuses its handback, is set aside, so it frees its
+			// fixer slot for the other dropped PRs. Only the pass's full collection counts, once.
+			if (!merges) job.failures = (job.failures ?? 0) + 1;
+			if ((job.failures ?? 0) >= COLLECTION_ATTEMPTS) {
+				deps.warn(
+					`quest land watch: set aside ${job.entry.number} from ${name} after ${COLLECTION_ATTEMPTS} failed collections: ${String(error)}`,
+				);
+				finish(path, job);
+				output.push(`set aside ${job.entry.number}`);
+				continue;
+			}
 			// Once a round has asked GitHub to take its head back, it may already be in the queue: it never
 			// becomes a handback on an error, and the next pass retries it, which re-enqueues only if needed.
 			if (job.requeuing !== undefined) {
+				save(path, job);
 				deps.warn(`quest land watch: fixer round ${name} pending: ${String(error)}`);
 				continue;
 			}
@@ -216,7 +288,7 @@ async function collectAll(
 }
 
 /**
- * Take a removal waiting for the fixer, if its PR still waits as the queue dropped it: merge a
+ * Take a removal waiting for the fixer, if its PR still waits as the queue dropped it, unheld: merge a
  * conflict's base with the quest merge driver, or start the fixer when `slot` allows. Returns what it
  * did, if anything.
  */
@@ -257,6 +329,12 @@ async function take(
 	if (started) {
 		mark(`${started[1].merged ? "merged" : "fixer"} ${started[0]}`);
 		return undefined;
+	}
+	if (isHeld(pull)) {
+		mark("held");
+		endPick(state, number, entry.enabledAt);
+		await sayHeld(github, repository, entry, deps.warn);
+		return `dropped ${number} held`;
 	}
 	const conflict = removal.reason === "merge_conflict";
 	// A conflict is merged with the current base; a failed build is fixed on the base it was built on.
@@ -316,6 +394,14 @@ async function take(
 		if (existsSync(path)) log = path;
 	}
 	if (!slot) return undefined;
+	// The fixer reads the PR's own checks on the dropped head after the queue's log, as a signal only.
+	const input = join(state, `fixer-input-${number}-${deps.now().toString(36)}.log`);
+	writeFileSync(
+		input,
+		`${readFileSync(log, "utf8").trimEnd()}\n\n${await checksSection(github, repository, entry.id, removal.head)}`,
+		{ mode: 0o600 },
+	);
+	log = input;
 
 	const checkout = mkdtempSync(join(state, "fix-"));
 	try {
@@ -330,6 +416,7 @@ async function take(
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
 			base.sha,
 		);
+		if (!conflict) writeKnownFlaky(state, checkout);
 		const job: WatchJob = {
 			checkout,
 			started: deps.now(),
@@ -342,6 +429,7 @@ async function take(
 			reason: conflict ? "merge_conflict" : "failed_checks",
 			log,
 			failure: conflict ? conflictFailure(base.sha) : jobFailure(removal),
+			...(conflict ? {} : { runs: removal.jobs.map((item) => item.url) }),
 		};
 		const name = `job-${basename(checkout)}`;
 		await launch(join(state, `watch-${name}.json`), job, context.fixer, log, [number], {
@@ -365,7 +453,8 @@ function finish(path: string, job: WatchJob): void {
 /**
  * Collect a finished round: record it in its pick's history, and either put the PR back in the queue,
  * at a fixed head or unchanged, or hand it back, as a stop rule, the fixer, or a refusal says. A
- * round whose pick ended while it ran is dropped, and the PR says so. Returns what it did.
+ * round whose pick ended while it ran, or whose PR another session holds, is dropped, and the PR says
+ * so. Returns what it did.
  */
 async function collect(
 	github: GitHub,
@@ -405,13 +494,13 @@ async function collect(
 			);
 	};
 	// Say how the round went back to the queue, once GitHub took it.
-	const announce = async (requeued: Requeue, result: FixResult): Promise<string[]> => {
+	const announce = async (requeued: Queued, result: FixResult): Promise<string[]> => {
 		await note();
 		const what = job.merged
 			? `with ${job.base.ref} at ${job.base.sha} merged in by the quest merge driver`
 			: result.action === "fixed"
 				? `with the land fixer's fix (${fixerText(attribution)}): ${fixerText(result.reason)}`
-				: `unchanged, since the land fixer judged the failure flaky: ${fixerText(result.failure ?? ("reason" in result ? result.reason : ""))}`;
+				: `unchanged, since the land fixer ${JUDGED[("cause" in result && result.cause) || "flaky"]}: ${fixerText(result.failure ?? ("reason" in result ? result.reason : ""))}`;
 		const how =
 			requeued === "armed"
 				? `armed auto-merge on this pull request at ${head}, so it joins the back of the merge queue once its required checks pass`
@@ -450,6 +539,16 @@ async function collect(
 				: queued(pull, job.dropped) && !ours && job.requeuing === undefined
 					? "a maintainer enqueued it again while the fixer ran, and that pick stands"
 					: undefined;
+	// Leave a held PR to its session: the pick and the round end first, and the hold's comment replaces
+	// the fixer's note.
+	const leave = async (): Promise<string[]> => {
+		endPick(state, number, entry.enabledAt);
+		finish(path, job);
+		await sayHeld(github, job.repository, marked, deps.warn);
+		return [`dropped ${number} held`];
+	};
+	// A head this round already asked GitHub to queue, and GitHub took, stays: the hold came after it.
+	if (isHeld(pull) && !(job.requeuing !== undefined && queued(pull, job.dropped))) return leave();
 	if (ended) {
 		await note();
 		await post(
@@ -466,10 +565,12 @@ async function collect(
 
 	let handback = job.handback ?? job.error;
 	let round: Round | undefined;
+	const said: string[] = [];
 	const conflict = job.reason === "merge_conflict";
 	const failure = conflict || !result ? job.failure : (result.failure ?? job.failure);
 	if (!handback && result) {
-		// Requeued unchanged, a failed build is flaky by the fixer's judgment; a conflict still conflicts.
+		// Requeued unchanged, a failed build fails for the cause the fixer named; one it named no cause
+		// outside the PR for, like a conflict that still conflicts, gets no new commit and goes back.
 		const outcome: Outcome = job.merged
 			? "merged"
 			: result.action === "fixed"
@@ -477,13 +578,29 @@ async function collect(
 				: result.action === "requeue"
 					? conflict
 						? "unchanged"
-						: "flaky"
+						: (result.cause ?? "unchanged")
 					: "handback";
+		// Only a flaky verdict counts for its test across every PR, whatever becomes of this pick.
+		if (outcome === "flaky" && result.action === "requeue")
+			said.push(
+				...recordFlaky(context.root, state, {
+					job: name,
+					number,
+					dropped: job.dropped,
+					jobs: job.runs ?? [],
+					base: job.base,
+					checkout: job.checkout,
+					packs: job.packs,
+					failure,
+					result,
+					attribution,
+				}),
+			);
 		const rule = stopRule(
 			record!.rounds.filter((item) => item.job !== name),
 			{ outcome, failure },
 		);
-		if (rule) handback = stopReason(rule, failure);
+		if (rule) handback = stopReason(rule, { outcome, failure });
 		round = rule
 			? { job: name, outcome: "handback", before: entry.head, failure, rule }
 			: { job: name, outcome, before: entry.head, failure, ...(outcome === "handback" ? {} : { after: head }) };
@@ -498,10 +615,24 @@ async function collect(
 						if (entry.repository !== job.repository && !entry.maintainerCanModify)
 							throw new FixerRefusal("fork does not allow maintainer edits");
 					} else
-						await importFix(context.root, state, job, entry, job.checkout, job.packs, head, context.read);
+						await importFix(
+							context.root,
+							state,
+							job,
+							entry,
+							job.checkout,
+							job.packs,
+							head,
+							context.read,
+							entry.head,
+							deps.warn,
+						);
 					job.published = head;
 					save(path, job);
 				}
+				// Validating the fix takes a while, and a session may have taken the PR since. A head already
+				// pushed needs no push, and `requeue` checks the hold before any enqueue.
+				if (!ours && isHeld(await readPull(github, entry.id))) throw new Held();
 				await publishHead(github, context.root, job, entry, entry.head, current, head, deps, context.token, {
 					reason: result.reason,
 					attribution,
@@ -514,13 +645,14 @@ async function collect(
 			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped);
 			save(path, job);
 		} catch (failure) {
+			if (failure instanceof Held) return [...said, ...(await leave())];
 			if (!(failure instanceof FixerRefusal)) throw failure;
 			handback = failure.message;
 			if (failure.resolution) job.resolution = failure.resolution;
 		}
 	}
 
-	if (job.requeued && result) return announce(job.requeued, result);
+	if (job.requeued && result) return [...said, ...(await announce(job.requeued, result))];
 	// Anything else is a handback.
 	await note();
 	// Every handback ends the pick with a round of its own, a crash's or a timeout's too, so the App's
@@ -550,25 +682,30 @@ async function collect(
 		job.resolution ? (room) => resolutionSection(number, job.resolution!, room) : undefined,
 	);
 	finish(path, job);
-	return [`handback ${number}`];
+	return [...said, `handback ${number}`];
 }
-
-/** How `head` went back: enqueued, or armed to join the queue once its required checks pass. */
-type Requeue = "enqueued" | "armed";
 
 /**
  * Put `head` back in `base`'s merge queue, at the back. A PR queued or armed at it since the queue
  * dropped it, at `dropped`, needs nothing more: a restart finds its own request, and a workflow may pick
- * the fixer's push first. A refusal, or a PR retargeted from `base`, hands the PR back.
+ * the fixer's push first. A refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves
+ * it to the session that holds it.
  */
-async function requeue(github: GitHub, id: string, head: string, base: string, dropped: string): Promise<Requeue> {
-	const how = (pull: ObjectValue): Requeue => (pull.mergeQueueEntry != null ? "enqueued" : "armed");
+async function requeue(github: GitHub, id: string, head: string, base: string, dropped: string): Promise<Queued> {
+	const how = (pull: ObjectValue): Queued => (pull.mergeQueueEntry != null ? "enqueued" : "armed");
 	let pull = await readPull(github, id);
 	if (string(pull.baseRefName) !== base) throw new FixerRefusal(`retargeted from ${base} before it was re-enqueued`);
 	if (string(pull.headRefOid) !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 	if (!queued(pull, dropped)) {
+		if (isHeld(pull)) throw new Held();
 		try {
-			await queueHead(github, id, head, string(pull.mergeStateStatus));
+			await queueHead(
+				(query, variables) => github.graphql(query, variables),
+				id,
+				head,
+				string(pull.mergeStateStatus),
+				"merge",
+			);
 		} catch (error) {
 			if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 				throw error;
@@ -580,4 +717,124 @@ async function requeue(github: GitHub, id: string, head: string, base: string, d
 		pull = await readPull(github, id);
 	}
 	return how(pull);
+}
+
+/**
+ * Open each validated disable as a PR of its own and enqueue it like any other, with no maintainer's
+ * pick: its Review records the fixer's change. A disable that fails to advance is retried on the next
+ * pass; one GitHub refuses, or another session holds, is left for a maintainer.
+ */
+async function advanceDisables(
+	github: GitHub,
+	repository: string,
+	state: string,
+	context: FixContext,
+	deps: GitHubDependencies,
+): Promise<string[]> {
+	const output: string[] = [];
+	const tests = readFlaky(state);
+	for (const test of tests) {
+		if (!test.disable || test.disable.done !== undefined) continue;
+		try {
+			output.push(
+				await openDisable(
+					github,
+					repository,
+					context,
+					test,
+					test.disable,
+					() => saveFlaky(state, tests),
+					deps.warn,
+				),
+			);
+		} catch (error) {
+			deps.warn(`quest land watch: disable of ${test.disable.quest} pending: ${String(error)}`);
+		}
+	}
+	return output;
+}
+
+/** A failing job's link, for a disable's PR body; only GitHub's own URLs. */
+const jobLinks = (jobs: string[]) =>
+	jobs
+		.filter((url) => /^https:\/\/github\.com\/[\w./-]+$/.test(url))
+		.map((url, index) => `[job ${index + 1}](${url})`)
+		.join(", ") || "no failing job found";
+
+/**
+ * Push `disable` to its own `quest-land/flaky-<sha>` branch, open it on the base it was committed on,
+ * and put it in the merge queue, recording each step with `record`, so a restart repeats none.
+ * Returns what it did.
+ */
+async function openDisable(
+	github: GitHub,
+	repository: string,
+	context: FixContext,
+	test: FlakyTest,
+	disable: Disable,
+	record: () => void,
+	warn: (text: string) => void,
+): Promise<string> {
+	const name = questName(disable.quest);
+	if (disable.id === undefined) {
+		const branch = `quest-land/flaky-${disable.head.slice(0, 12)}`;
+		const ref = `refs/heads/${branch}`;
+		const remote = `https://github.com/${repository}.git`;
+		// A retry after a restart finds its own push already there.
+		if ((await remoteHead(context.root, remote, ref, context.read)) !== disable.head) {
+			const pushed = await push(context.root, remote, disable.base.sha, disable.head, ref, context.token, "");
+			// Retried on the next pass: a push fails as often for an outage as for a rule.
+			if (pushed.status !== 0) throw new Error(`push failed: ${pushed.stderr.trim()}`);
+		}
+		const head = `${repository.split("/")[0]}:${branch}`;
+		const [open] = await github.all(`/repos/${repository}/pulls?head=${encodeURIComponent(head)}&state=open`);
+		const seen = test.verdicts
+			.slice(-RECENT)
+			.map((verdict) => `#${verdict.number} (${jobLinks(verdict.jobs)})`)
+			.join(", ");
+		const reason = `skip the flaky ${test.failure}, and add ${disable.quest} to fix or delete it`;
+		const pull =
+			open ??
+			object(
+				await (
+					await github.request(`/repos/${repository}/pulls`, {
+						body: {
+							title: `quest land: disable the flaky test ${name}`,
+							head,
+							base: disable.base.ref,
+							body: `The land fixer judged ${fixerText(test.failure)} flaky ${test.verdicts.length} times, most recently in the \`merge_group\` builds of ${seen}. This pull request skips it and adds its follow-up quest, \`${disable.quest}\`, to fix or delete it. quest land watch enqueues it like any other pull request, and fixes it if the queue drops it.${review("", disable.head, reason, disable.attribution)}\n\n(written by ${disable.attribution})`,
+						},
+					})
+				).json(),
+			);
+		disable.number = Number(pull.number);
+		disable.id = string(pull.node_id);
+		record();
+	}
+	const entry = { number: disable.number!, enabledAt: disable.head };
+	try {
+		disable.done = await requeue(github, disable.id, disable.head, disable.base.ref, "");
+	} catch (error) {
+		if (error instanceof Held) {
+			// Left for a maintainer, as a refused one is, once recorded.
+			disable.done = "held";
+			record();
+			await sayHeld(github, repository, entry, warn);
+			return `disable held ${name} ${disable.number}`;
+		}
+		if (!(error instanceof FixerRefusal)) throw error;
+		await post(
+			github,
+			{ repository },
+			entry,
+			`quest land watch: ${fixerText(error.message)}, so this pull request waits for a maintainer to enqueue it.`,
+			"refused",
+			MERGER,
+		);
+		disable.done = error.message;
+		record();
+		return `disable refused ${name}: ${error.message}`;
+	}
+	record();
+	return `disabled ${name} ${disable.number}`;
 }

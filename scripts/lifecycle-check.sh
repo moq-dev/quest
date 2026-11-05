@@ -35,4 +35,17 @@ for command in guide skill; do
     fi
 done
 
-echo 'quest lifecycle: fresh repositories, ownership, conflict refusal, and early-closed stdout passed'
+# A gated command gets the environment its caller started Quest with, never the
+# working directory's `.env` files, which Bun loads by default.
+mkdir "$work/dotenv"
+for file in .env .env.development .env.local; do
+    printf 'QUEST_DOTENV_LEAK=%s\n' "$file" >"$work/dotenv/$file"
+done
+seen=$(cd "$work/dotenv" && QUEST_DOTENV_CALLER=kept "$binary" gate --quick env)
+if [[ $seen == *QUEST_DOTENV_LEAK=* || $seen != *QUEST_DOTENV_CALLER=kept* ]]; then
+    echo "quest gate passed its working directory's .env files to its command, or dropped its caller's environment:" >&2
+    grep '^QUEST_DOTENV_' <<<"$seen" >&2
+    exit 1
+fi
+
+echo 'quest lifecycle: fresh repositories, ownership, conflict refusal, early-closed stdout, and .env isolation passed'
