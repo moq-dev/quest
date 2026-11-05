@@ -1,4 +1,4 @@
-# The land fixer resolves every mechanical failure itself
+# [S] The land fixer resolves every mechanical failure itself
 
 ## Goal
 
@@ -149,11 +149,9 @@ Decision prompts, selected options marked ✅:
 
 The README's landing section and `CONTRIBUTING.md` list what the fixer
 resolves itself and what it hands back. That docs update is the epic's own
-work, done once the Required quests below have merged.
-
-## Required
-
-- [Workflow permission](/quest/m0/land-fixer/workflows-permission.md) - waits on the maintainer to grant moq-bot `workflows`, so pushes touching workflows are accepted
+work, now unblocked: on 2026-11-04 the moq-dev installation of moq-bot
+showed `workflows: write` for all its repositories, so its last child,
+Workflow permission, was deleted (/quest-unblock).
 
 ## Related
 

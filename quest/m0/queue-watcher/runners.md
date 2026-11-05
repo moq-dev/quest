@@ -52,6 +52,11 @@ Done in [moq-dev/quest#439](https://github.com/moq-dev/quest/pull/439):
   [moq-dev/rind#289](https://github.com/moq-dev/rind/pull/289) and
   [moq-dev/rust2#536](https://github.com/moq-dev/rust2/pull/536).
 
+Deployed 2026-11-04 (/quest-unblock): kixelated/nixos#20 is live on the
+land host (generation 80, deploy/quest-land b5d46f3); only
+`quest-land-moq-pro-check.socket` remains and `/dev/kvm`'s ACL names no
+check UID.
+
 What remains:
 
 - Once a repository's first step is on main, switch its `queue.yml` call to
@@ -60,7 +65,6 @@ What remains:
   workflow and fails. Say in that repository's contributing guide that a PR's
   edit to `queue-build.yml` runs only after it lands.
 - Then restrict each group (see Waiting).
-- Deploy kixelated/nixos#20 with the rest of the stack.
 - Verify that a fork PR's workflow waits for approval.
 
 ## Waiting
@@ -77,11 +81,6 @@ What remains:
   Team plan, though the API accepts the fields; if GitHub rejects or drops
   them, revert with `-F restricted_to_workflows=false` and fall back to option
   (2) above.
-- Maintainer: deploy [kixelated/nixos#20](https://github.com/kixelated/nixos/pull/20)
-  through `deploy/quest-land`, since only the maintainer activates the live
-  host. Check that `systemctl list-units 'quest-land*check*'` shows only
-  `quest-land-moq-pro-check.socket`, and that `getfacl /dev/kvm` names no
-  check UID.
 - Maintainer: the next time an outside contributor opens a fork PR on
   moq-dev/quest, moq-dev/rind or moq-dev/rust2, check that its workflow runs
   wait for approval.

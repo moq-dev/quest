@@ -16,9 +16,9 @@ Deprioritized on 2026-10-05 behind the other m1 entries while hosted approval
 remains outstanding. Keep the quest ready so future triage checks for a reply;
 ChatGPT login and hosted runs still require its completion.
 
+The maintainer has applied (confirmed 2026-11-04, /quest-unblock).
+
 ## Waiting
 
-- Maintainer: apply through OpenAI's interest form or waitlist, if not done;
-  the application is made for the operator's account.
 - OpenAI: approve the Kix app for hosted Sign in with ChatGPT. Check for a
   reply.

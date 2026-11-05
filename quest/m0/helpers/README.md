@@ -68,7 +68,3 @@ commands from Sep-Oct. Session counts in each child come from that window.
   [moq-dev/quest#271](https://github.com/moq-dev/quest/pull/271): the
   delegated follow-up rule ranks right after the review rules, as a prose
   rule, and dropping `review-rounds` follows it.
-
-## Required
-
-- [Headless agents](/quest/m0/helpers/headless-agents.md) - auto mode allows `quest agent` launches, resumes, and stops with no per-user settings
