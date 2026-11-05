@@ -20,12 +20,12 @@ Otherwise, review the committed branch with `quest review`, as `quest context`'s
 Run it in the foreground; a round takes minutes.
 If a round fails because the reviewer is out of quota or logged out, stop reviewing: keep the PR a draft with the `## Waiting` item `quest context`'s Reviews section describes, hand it back, and report the outage.
 Fix each finding you agree with, or refute it with evidence the reviewer can check.
-Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding, written in the checkout's `.tmp/`.
+Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding by its number, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted with evidence.
 A finding the reviewer keeps against such a refutation is a decision for the user; a background agent lists it under `## Waiting`.
 If you judge the change too trivial to review, skip the review instead and record why.
 
-Rewrite the PR body's `## Review` section after each round, or once for a skip.
+Each round records itself in the PR body's `## Review` section; record a skip there yourself.
 Push, then flip the PR to "Ready for Review" with `quest ready <pr> <token>`, which also drops its `## Waiting` section.
 For your own draft, mark it ready for review yourself.
 Do not wait for online reviewers.

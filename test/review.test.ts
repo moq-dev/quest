@@ -14,6 +14,7 @@ import {
 	sessionFile,
 	verdict,
 } from "../src/cli/review";
+import { withReview } from "../src/cli/review-record";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -28,6 +29,24 @@ const FINDING = { file: "src/lib.ts", line: 2, severity: "high", title: "Off by 
 const CODEX_LOGGED_OUT = "codex is not logged in to its default profile (CODEX_HOME is unset); run `codex login`";
 const CLAUDE_LOGGED_OUT =
 	"claude is not logged in to its default profile (CLAUDE_CONFIG_DIR is unset); run `claude auth login`";
+
+/**
+ * The findings turn's reply, `reply`: FAKE_REPLY, or one finding. A JSON reply without `earlier` settles
+ * each earlier finding the prompt numbers as FAKE_DISPOSITION says, `fixed` by default.
+ */
+const REPLY = `
+const listed = /<earlier-findings>\\n([\\s\\S]*?)\\n<\\/earlier-findings>/.exec(stdin)?.[1] ?? "";
+const earlier = [...listed.matchAll(/^(\\d+)\\. /gm)].map((m) => ({
+	finding: Number(m[1]),
+	disposition: process.env.FAKE_DISPOSITION ?? "fixed",
+	reason: "Checked against the head.",
+}));
+let reply = process.env.FAKE_REPLY ?? JSON.stringify({ score: 8, rationale: "Lands once the off-by-one is fixed.", findings: [${JSON.stringify(FINDING)}] });
+try {
+	const parsed = JSON.parse(reply);
+	if (parsed && typeof parsed === "object" && !("earlier" in parsed)) reply = JSON.stringify({ ...parsed, earlier });
+} catch {}
+`;
 
 /**
  * Fake reviewer CLIs. Each logs its argv, stdin, and the variables it was
@@ -86,7 +105,7 @@ if (argv.includes("--session-id")) {
 		},
 	});
 } else {
-	const reply = process.env.FAKE_REPLY ?? JSON.stringify({ score: 8, rationale: "Lands once the off-by-one is fixed.", findings: [${JSON.stringify(FINDING)}] });
+	${REPLY}
 	result({
 		session_id: at("--resume"),
 		result: reply,
@@ -142,7 +161,8 @@ if (argv[1] === "review") {
 } else {
 	event({ type: "thread.started", thread_id: argv[argv.length - 2] });
 	message("Checking the findings.");
-	message(process.env.FAKE_REPLY ?? JSON.stringify({ score: 8, rationale: "Lands once the off-by-one is fixed.", findings: [${JSON.stringify(FINDING)}] }));
+	${REPLY}
+	message(reply);
 	event({ type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 80, output_tokens: 7 } });
 }
 `,
@@ -219,7 +239,14 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	vi.stubEnv("FAKE_LOG", log);
 	// The session's own profile would change the logged-out errors.
 	const unset = [...HOST_CREDENTIALS, "CLAUDECODE", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
-	for (const name of [...unset, "FAKE_LOGGED_OUT", "FAKE_REJECTED", "FAKE_LIMITED", "FAKE_HANG"]) {
+	for (const name of [
+		...unset,
+		"FAKE_LOGGED_OUT",
+		"FAKE_REJECTED",
+		"FAKE_LIMITED",
+		"FAKE_HANG",
+		"FAKE_DISPOSITION",
+	]) {
 		vi.stubEnv(name, undefined);
 	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
@@ -801,6 +828,8 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 			"",
 			"high src/lib.ts:2 Off by one",
 			"  average([3]) is 0.",
+			// The fixture's origin is a local path, which can have no PR.
+			"record skipped: origin is not on GitHub",
 			"",
 		].join("\n"),
 	);
@@ -829,7 +858,10 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	expect(second.stdin).toContain("BASE-REVIEW rule");
 	expect(second.stdin).toContain(head);
 	const schema = second.argv[second.argv.indexOf("--output-schema") + 1];
-	expect(JSON.parse(readFileSync(schema, "utf8")).required).toEqual(["score", "rationale", "findings"]);
+	// A first round settles nothing, so its own review turn's findings never land in `earlier`.
+	const replySchema = JSON.parse(readFileSync(schema, "utf8"));
+	expect(replySchema.required).toEqual(["score", "rationale", "findings"]);
+	expect(replySchema.properties.earlier).toBeUndefined();
 });
 
 fakes("--base reviews against another branch, fetched first, with that branch's instructions", async () => {
@@ -910,12 +942,20 @@ fakes("a later round resumes the session with the new head and the author's resp
 	expect(later.code).toBe(0);
 	expect(later.stdout).toContain("round 2\n");
 	expect(later.stdout).toContain("findings 0\n");
+	// The round settles the last round's finding, by its number in the prompt.
+	const first = git(s.repo, "rev-parse", "HEAD~1");
+	expect(later.stdout).toContain(
+		`earlier 1 ${first}\n\nfixed high src/lib.ts:2 Off by one\n  Checked against the head.\n`,
+	);
 
 	const calls = s.calls();
 	const resumed = calls.at(-1)!;
 	expect(resumed.argv.slice(0, 2)).toEqual(["exec", "resume"]);
 	expect(resumed.argv.at(-2)).toBe("thread-1");
+	const bounded = JSON.parse(readFileSync(resumed.argv[resumed.argv.indexOf("--output-schema") + 1], "utf8"));
+	expect(bounded.required).toEqual(["score", "rationale", "findings", "earlier"]);
 	expect(resumed.stdin).toContain("Fixed at src/lib.ts:1.");
+	expect(resumed.stdin).toContain("<earlier-findings>\n1. high src/lib.ts:2 Off by one\n</earlier-findings>");
 	expect(resumed.stdin).toContain("BASE-REVIEW rule");
 	expect(resumed.stdin).not.toContain("differ from those you were given");
 	const head = git(s.repo, "rev-parse", "HEAD");
@@ -960,6 +1000,218 @@ fakes("a change to the applicable instructions starts a new session that weighs 
 	expect(review.argv[1]).toBe("review");
 	expect(review.argv.find((arg) => arg.startsWith("developer_instructions="))).toContain("BASE-SRC new rule");
 	expect(followUp.stdin).toContain("Refuted: see src/lib.ts:1.");
+	// The new session is told the findings the responses answer.
+	expect(followUp.stdin).toContain("1. high src/lib.ts:2 Off by one");
+});
+
+/**
+ * Point the fixture's origin at `acme/widget` on GitHub, still fetched from its local copy, and answer the
+ * API with `pulls` as the open PRs from `acme:<branch>` into main. With `fork`, `acme/widget` is a fork of
+ * `upstream/widget`, whose root holds the quest tree, and the PRs are upstream's. Returns the PR bodies
+ * each PATCH wrote.
+ */
+function onGitHub(repo: string, pulls: { number: number; body: string | null }[], fork = false): { body: string }[] {
+	const local = git(repo, "remote", "get-url", "origin");
+	git(repo, "remote", "set-url", "origin", "https://github.com/acme/widget.git");
+	git(repo, "config", `url.${local}.insteadOf`, "https://github.com/acme/widget.git");
+	const owner = fork ? "upstream" : "acme";
+	const writes: { body: string }[] = [];
+	const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+	const info = (login: string, parent: string | null) => ({
+		owner: { login },
+		name: "widget",
+		fork: parent !== null,
+		...(parent === null ? {} : { parent: { owner: { login: parent }, name: "widget" } }),
+		default_branch: "main",
+		clone_url: `https://github.com/${login}/widget.git`,
+		ssh_url: `git@github.com:${login}/widget.git`,
+	});
+	vi.stubEnv("GH_TOKEN", "token");
+	vi.stubGlobal("fetch", async (input: URL, init?: RequestInit) => {
+		const url = new URL(input);
+		if (url.pathname === "/repos/acme/widget") return json(info("acme", fork ? "upstream" : null));
+		if (url.pathname === "/repos/upstream/widget") return json(info("upstream", null));
+		if (url.pathname.startsWith("/repos/upstream/widget/contents/"))
+			return url.pathname.endsWith("/contents/quest/README.md") ? json({}) : json({}, 404);
+		if (url.pathname === `/repos/${owner}/widget/pulls`) {
+			expect(url.searchParams.get("state")).toBe("open");
+			expect(url.searchParams.get("base")).toBe("main");
+			const head = url.searchParams.get("head");
+			return json(
+				head === "acme:feature"
+					? pulls.map((p) => ({ ...p, html_url: `https://github.com/${owner}/widget/pull/${p.number}` }))
+					: [],
+			);
+		}
+		const patched = new RegExp(`^/repos/${owner}/widget/pulls/(\\d+)$`).exec(url.pathname);
+		if (patched && init?.method === "PATCH") {
+			const { body } = JSON.parse(String(init.body)) as { body: string };
+			writes.push({ body });
+			pulls.find((p) => p.number === Number(patched[1]))!.body = body;
+			return json({});
+		}
+		throw new Error(`unexpected ${init?.method ?? "GET"} ${url.pathname}`);
+	});
+	return writes;
+}
+
+fakes("each round rewrites the Review section of the branch's open PR, keeping the author's prose", async () => {
+	const s = setup();
+	const pull = {
+		number: 7,
+		body: [
+			"Fixes averaging.",
+			"",
+			"## Review",
+			"",
+			"Hand-written record of an older head.",
+			"",
+			"## Models",
+			"",
+			"- Size: S",
+			"- Implementer: Claude Code, claude-opus-5-5, high effort",
+		].join("\r\n"),
+	};
+	const writes = onGitHub(s.repo, [pull]);
+	try {
+		const first = await quest("--root", s.repo, "review");
+		expect(first.stderr).toBe("");
+		expect(first.code).toBe(0);
+		expect(first.stdout).toContain("record https://github.com/acme/widget/pull/7\n");
+		const head = git(s.repo, "rev-parse", "HEAD");
+		const base = git(s.repo, "rev-parse", "origin/main");
+		expect(pull.body).toBe(
+			[
+				// The author's lines keep their line endings.
+				"Fixes averaging.\r\n\r\n## Review\r",
+				"",
+				"Rewritten by `quest review` after each round.",
+				"",
+				"- Reviewer: Codex, gpt-6.1-sol, high effort",
+				"- Session: `thread-1`, round 1",
+				// The land gate counts a full SHA, which a head with an open finding does not earn.
+				`- Head: ${head.slice(0, 12)}, named in full once a round reports no findings`,
+				`- Base: origin/main at ${base.slice(0, 12)}`,
+				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
+				"- Findings, open until the next round settles them:",
+				"  - High, `src/lib.ts:2`: `Off by one`",
+				"",
+				"## Models\r\n\r\n- Size: S\r\n- Implementer: Claude Code, claude-opus-5-5, high effort",
+			].join("\n"),
+		);
+
+		// The next round settles that finding from the responses; model text never mentions, links, or names a full SHA.
+		write(s.repo, "src/lib.ts", "export const x = 4;\n");
+		git(s.repo, "commit", "-qam", "fix");
+		write(s.repo, ".tmp/responses.md", "1. Fixed at src/lib.ts:1.\n");
+		vi.stubEnv("FAKE_DISPOSITION", "refuted");
+		const title = `Ping @someone about \`${base}\` in #12`;
+		vi.stubEnv(
+			"FAKE_REPLY",
+			JSON.stringify({ score: 9, rationale: "Fixes #3.", findings: [{ ...FINDING, line: null, title }] }),
+		);
+		const second = await quest(
+			"--root",
+			s.repo,
+			"review",
+			"--responses",
+			join(s.repo, ".tmp", "responses.md"),
+			"--json",
+		);
+		expect(second.code).toBe(0);
+		expect(JSON.parse(second.stdout).record).toEqual({ url: "https://github.com/acme/widget/pull/7" });
+		const record = pull.body.split("## Review\r\n\n")[1]!.split("\n\n## Models")[0];
+		expect(record).toContain(
+			`- Session: \`thread-1\`, round 2\n- Head: ${git(s.repo, "rev-parse", "HEAD").slice(0, 12)},`,
+		);
+		expect(record).toContain("- Score: 9/10, `Fixes #3.`\n");
+		expect(record).toContain(
+			`  - High, \`src/lib.ts\`: \`\`Ping @someone about \`${base.slice(0, 12)}\` in #12\`\`\n`,
+		);
+		expect(record).toContain(
+			`- The last round's findings, at ${head.slice(0, 12)}:\n  - Refuted: high, \`src/lib.ts:2\`: \`Off by one\`; \`Checked against the head.\``,
+		);
+		expect(record).not.toMatch(/\b[0-9a-f]{40}\b/);
+		expect(pull.body.startsWith("Fixes averaging.\r\n\r\n## Review\r\n\nRewritten")).toBe(true);
+		expect(writes).toHaveLength(2);
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+fakes("a branch with no open PR, or a body without a Review section, is reported as such", async () => {
+	const s = setup();
+	const pulls: { number: number; body: string | null }[] = [];
+	onGitHub(s.repo, pulls);
+	try {
+		const none = await quest("--root", s.repo, "review");
+		expect(none.code).toBe(0);
+		expect(none.stdout).toContain("record skipped: no open PR from acme:feature into main\n");
+
+		pulls.push({ number: 8, body: null });
+		vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+		write(s.repo, ".tmp/responses.md", "Fixed.\n");
+		const recorded = await quest("--root", s.repo, "review", "--responses", join(s.repo, ".tmp", "responses.md"));
+		expect(recorded.stdout).toContain("record https://github.com/acme/widget/pull/8\n");
+		expect(pulls[0]!.body).toMatch(
+			/^## Review\n\nRewritten by `quest review` after each round\.\n[\s\S]*- Findings: none\n/,
+		);
+		// A round with no findings names its head in full, which the land gate counts.
+		expect(pulls[0]!.body!.match(/\b[0-9a-f]{40}\b/g)).toEqual([git(s.repo, "rev-parse", "HEAD")]);
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+fakes("a review from a subdirectory of a fork records on the upstream PR", async () => {
+	const s = setup();
+	const pull = { number: 11, body: "Body." };
+	onGitHub(s.repo, [pull], true);
+	try {
+		const result = await quest("--root", join(s.repo, "src"), "review");
+		expect(result.stderr).toBe("");
+		expect(result.stdout).toContain("record https://github.com/upstream/widget/pull/11\n");
+		expect(pull.body).toMatch(/^Body\.\n\n## Review\n\nRewritten by `quest review`/);
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+test("the record replaces only a top-level Review section, never an example of one", () => {
+	const fenced = "Example:\n\n```md\n## Review\n\nold\n```\n\nAfter.\n";
+	expect(withReview(fenced, "new")).toBe(`${fenced.trimEnd()}\n\n## Review\n\nnew\n`);
+	const quoted = "> ## Review\n> quoted\n\n## Review\n\nold\n\n# Notes\n\n## Review\n\nsecond\n";
+	expect(withReview(quoted, "new")).toBe(
+		"> ## Review\n> quoted\n\n## Review\n\nnew\n\n# Notes\n\n## Review\n\nsecond\n",
+	);
+	// A level-3 heading stays inside the section, and a rewrite of the same record changes nothing.
+	const nested = "## Review\n\nold\n\n### Detail\n\nmore\n\n## Models\n\n- Size: S\n";
+	const once = withReview(nested, "new");
+	expect(once).toBe("## Review\n\nnew\n\n## Models\n\n- Size: S\n");
+	expect(withReview(once, "new")).toBe(once);
+	expect(withReview("", "new")).toBe("## Review\n\nnew\n");
+	// A heading appended inside an unclosed construct would be no section, which the land gate never reads.
+	for (const open of ["```md\nunclosed", "<!-- unclosed"])
+		expect(() => withReview(open, "new")).toThrow("unclosed code fence or HTML comment");
+});
+
+fakes("a record GitHub refuses fails the command after printing the round", async () => {
+	const s = setup();
+	onGitHub(s.repo, [{ number: 9, body: "" }]);
+	const fetch = globalThis.fetch;
+	vi.stubGlobal("fetch", async (input: URL, init?: RequestInit) =>
+		init?.method === "PATCH"
+			? new Response('{"message":"Must have admin rights"}', { status: 403 })
+			: fetch(input, init),
+	);
+	try {
+		const result = await quest("--root", s.repo, "review");
+		expect(result.code).toBe(1);
+		expect(result.stdout).toContain("findings 1\n");
+		expect(result.stderr).toContain("the round finished, but recording it in the PR body failed: GitHub HTTP 403");
+	} finally {
+		vi.unstubAllGlobals();
+	}
 });
 
 /** Push a commit that `change` makes to origin's main, returning its SHA. */
@@ -994,18 +1246,49 @@ fakes("a reply that does not match the schema fails rather than reads as clean",
 	expect(unscored.stderr).toContain("no score from 0 to 10");
 });
 
-test("the verdict is checked field by field", () => {
-	const scored = { score: 7, rationale: "Fix the finding." };
-	expect(verdict({ structured: { ...scored, findings: [{ ...FINDING, line: null }] } })).toEqual({
+test("the verdict is checked field by field, settling each earlier finding once", () => {
+	const scored = { score: 7, rationale: "Fix the finding.", earlier: [] };
+	expect(verdict({ structured: { ...scored, findings: [{ ...FINDING, line: null }] } }, 0)).toEqual({
 		...scored,
 		findings: [{ ...FINDING, line: null }],
 	});
-	expect(() => verdict({ structured: { ...scored, findings: [{ ...FINDING, line: 0 }] } })).toThrow("does not match");
-	expect(() => verdict({ text: '{"verdict":"approve"}' })).toThrow("no findings list");
+	expect(() => verdict({ structured: { ...scored, findings: [{ ...FINDING, line: 0 }] } }, 0)).toThrow(
+		"does not match",
+	);
+	expect(() => verdict({ text: '{"verdict":"approve"}' }, 0)).toThrow("no findings list");
 	for (const score of [-1, 11, 7.5, "7", undefined]) {
-		expect(() => verdict({ structured: { ...scored, score, findings: [] } })).toThrow("no score from 0 to 10");
+		expect(() => verdict({ structured: { ...scored, score, findings: [] } }, 0)).toThrow("no score from 0 to 10");
 	}
-	expect(() => verdict({ structured: { score: 7, rationale: " ", findings: [] } })).toThrow("no rationale");
+	expect(() => verdict({ structured: { ...scored, rationale: " ", findings: [] } }, 0)).toThrow("no rationale");
+
+	const fixed = { finding: 1, disposition: "fixed", reason: "src/lib.ts:2 divides by the length." };
+	const refuted = { finding: 2, disposition: "refuted", reason: "The maintainer decided it." };
+	const answered = { ...scored, findings: [], earlier: [refuted, fixed] };
+	expect(verdict({ structured: answered }, 2).earlier).toEqual([refuted, fixed]);
+	// A first round's schema has no `earlier`; a later one's requires it.
+	expect(verdict({ structured: { ...scored, findings: [], earlier: undefined } }, 0).earlier).toEqual([]);
+	expect(() => verdict({ structured: { ...scored, findings: [], earlier: undefined } }, 1)).toThrow(
+		"no earlier list",
+	);
+	// A finding kept open is reported again, so a reply cannot keep one open and read as clean.
+	const open = { ...fixed, disposition: "open" };
+	expect(() => verdict({ structured: { ...scored, findings: [], earlier: [open] } }, 1)).toThrow(
+		"keeps 1 earlier finding(s) open but reports 0",
+	);
+	expect(verdict({ structured: { ...scored, findings: [FINDING], earlier: [open] } }, 1).earlier).toEqual([open]);
+	// Each of the last round's findings is settled exactly once, by its number.
+	for (const earlier of [[fixed], [fixed, fixed], [fixed, { ...refuted, finding: 3 }]]) {
+		expect(() => verdict({ structured: { ...scored, findings: [], earlier } }, 2)).toThrow("settle each");
+	}
+	for (const bad of [
+		{ ...fixed, disposition: "deferred" },
+		{ ...fixed, reason: " " },
+		{ ...fixed, finding: 1.5 },
+	]) {
+		expect(() => verdict({ structured: { ...scored, findings: [], earlier: [bad] } }, 1)).toThrow(
+			"earlier entry 1",
+		);
+	}
 });
 
 test("each changed directory keeps its own instructions, and a directory's symlink is given once", () => {

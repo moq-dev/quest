@@ -319,6 +319,9 @@ describe("the review the inbox flags as missing before merge", () => {
 			null,
 		);
 		expect(observedGap(observed({ body: `## Review\n\nClean on ${head}.` }), head, "main")).toBeNull();
+		// The record is the top-level section, never an example of one in a code fence.
+		const fenced = `Example:\n\n\`\`\`md\n## Review\n\`\`\`\n\r\n## Review\r\n\r\nClean on ${head}.\r\n`;
+		expect(observedGap(observed({ body: fenced }), head, "main")).toBeNull();
 	});
 
 	it("gives the land gate's reason for a head nothing counts on", () => {
@@ -340,6 +343,10 @@ describe("the review the inbox flags as missing before merge", () => {
 		["the author's association rules out write access", { association: "CONTRIBUTOR" }],
 		["someone else last edited the body", { editor: "maintainer" }],
 		["the record names another commit", { body: `## Review\n\nClean on ${sha("old")}.` }],
+		[
+			"only an example of a record in a code fence names it",
+			{ body: `\`\`\`md\n## Review\n\nClean on ${head}.\n\`\`\`\n\n## Review\n\nSkipped.` },
+		],
 	])("does not count the author's record when %s", (_, overrides) => {
 		const body = `## Review\n\nClean on ${head}.`;
 		expect(observedGap(observed({ body, ...overrides }), head, "main")).toMatch(/^No review counts/);

@@ -62,6 +62,7 @@ import {
 	review,
 	roundLines,
 } from "./review";
+import { type Recorded, recordRound } from "./review-record";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
@@ -1000,7 +1001,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"`/code-review <effort> <merge-base>...HEAD`), then resumes that session for one turn that applies the base's " +
 				"REVIEW.md, if any, and reports the findings in one JSON schema. Later rounds on the branch resume the " +
 				"same session with the new head and --responses, the author's fixes and refutations of the last " +
-				"round's findings, required while that round reported any. A resumed session keeps the instructions it " +
+				"round's findings, required while that round reported any; the reply settles each of those findings, by " +
+				"its number in the prompt, as fixed, refuted, or still open. A resumed session keeps the instructions it " +
 				"started with, so when the applicable AGENTS.md or CLAUDE.md files change, the round starts a new " +
 				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
@@ -1011,11 +1013,17 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reviewer. The base is fetched first, since the sandbox has no network.\n\n" +
 				"Prints the reviewer, model, and effort, the size and where it came from, session, round, base, head, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
-				"its one-sentence rationale, the finding count, then each finding. A reply without a valid score " +
+				"its one-sentence rationale, the finding count, each finding, then the last round's findings with " +
+				"their dispositions. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
-				"the same as one object. Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
+				"the same as one object.\n\n" +
+				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
+				"user the GitHub token names, keeping the rest of the body, and prints `record <url>`: the reviewer, " +
+				"session and round, the reviewed head, base, score, and each finding with its disposition. With no " +
+				"such PR, or a remote off GitHub, it prints `record skipped: <why>` and changes nothing.\n\n" +
+				"Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when the reviewer's " +
-				"account hit its usage limit, and 1 for other failures. A usage limit prints one line, " +
+				"account hit its usage limit, and 1 for other failures, including a record GitHub refuses. A usage limit prints one line, " +
 				"`error: <harness> hit its usage limit; resets <time>`, where <time> is the reset as an ISO 8601 UTC " +
 				"timestamp, or `unknown` when the CLI named none.",
 		)
@@ -1055,10 +1063,26 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					reviewDependencies(),
 				);
 				pending = run.then(
-					(round) => {
-						if (options.json) print(JSON.stringify(round));
-						else for (const line of roundLines(round)) print(line);
-						return 0;
+					async (round) => {
+						// The round is saved in its session either way, so its report prints before a failed record.
+						let record: Recorded | undefined;
+						let failure: unknown;
+						try {
+							record = await recordRound(root(), round, { github: () => gitHubDependencies(warn), warn });
+						} catch (error) {
+							failure = error;
+						}
+						if (options.json) print(JSON.stringify({ ...round, record: record ?? null }));
+						else {
+							for (const line of roundLines(round)) print(line);
+							if (record !== undefined)
+								print("url" in record ? `record ${record.url}` : `record skipped: ${record.skipped}`);
+						}
+						if (failure === undefined) return 0;
+						warn(
+							`the round finished, but recording it in the PR body failed: ${failure instanceof Error ? failure.message : String(failure)}`,
+						);
+						return 1;
 					},
 					(error: unknown) => {
 						if (error instanceof ReviewInputError) {

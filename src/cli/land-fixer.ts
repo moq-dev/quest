@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { basename, join } from "node:path";
+import { reviewSection } from "../core";
 import { GitHub, type GitHubDependencies, object, string } from "./github";
 import {
 	baseRemote,
@@ -727,10 +728,9 @@ export function author(result?: Pick<FixResult, "agent" | "model" | "effort">): 
 export function review(body: string, head: string, reason: string, attribution: string): string {
 	const line = `mechanical fix by ${attribution}: ${fixerText(reason)} (head ${head})`;
 	if (body.includes(line)) return body;
-	const section = /^## Review[ \t]*\r?$/m.exec(body);
+	const section = reviewSection(body);
 	if (!section) return `${body}\n\n## Review\n\n${line}`;
-	const start = section.index + section[0].length;
-	return `${body.slice(0, start)}\n\n${line}${body.slice(start)}`;
+	return `${body.slice(0, section.start)}\n\n${line}${body.slice(section.start)}`;
 }
 
 /**
