@@ -1149,7 +1149,7 @@ fakes("a branch with no open PR, or a body without a Review section, is reported
 			/^## Review\n\nRewritten by `quest review` after each round\.\n[\s\S]*- Findings: none\n/,
 		);
 		// A round with no findings names its head in full, which the land gate counts.
-		expect(pulls[0]!.body.match(/\b[0-9a-f]{40}\b/g)).toEqual([git(s.repo, "rev-parse", "HEAD")]);
+		expect(pulls[0]!.body!.match(/\b[0-9a-f]{40}\b/g)).toEqual([git(s.repo, "rev-parse", "HEAD")]);
 	} finally {
 		vi.unstubAllGlobals();
 	}
