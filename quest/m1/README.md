@@ -31,5 +31,4 @@ earlier "Later work" milestone became m2.
 - [Workers in a 5-minute cache](/quest/m1/worker-cache.md) - re-plan #276's worker/coordinator split and gate tickets, after confirming the cache premise
 - [Retire Decisions needed](/quest/m1/decisions-needed.md) - only `## Waiting` hands a draft back, once no open draft uses the old heading
 - [Bun EFAULT report](/quest/m1/bun-efault.md) - report concurrent `rmSync` `EFAULT` on Windows, and drop the workaround once Bun fixes it
-- [quest usage](/quest/m1/usage.md) - per quest and PR: which models and efforts worked on it, their tokens and API-equal cost, and how the work went
 - [Model check](/quest/m1/model-check.md) - recurring each milestone: the built-in implementation and review tables use the newest models at efforts retuned from outcomes, and the live sandbox test passes

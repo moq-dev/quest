@@ -7,7 +7,8 @@ the diff, the base's `REVIEW.md`, and the responses to earlier findings, and
 never reloads `quest guide`, `quest context`, or the repository's
 instruction files, or runs builds and tests. `quest review` with no flags
 reads the size and implementing models from the PR body's `## Models`
-record. Review efforts follow the new table below.
+record. Review efforts follow the new table below, and low-severity
+findings end the loop once handled.
 
 ## Plan
 
@@ -45,6 +46,12 @@ Decision prompts, chosen options marked ✅:
   shows it finds more. The Opus column is unchanged. This PR updates
   [Model check](/quest/m0/model-check.md)'s Plan with the change, so its
   audit compares findings by effort once reviews are single-pass.
+- Round budget: ✅ adopted 2026-11-05 (user), after Theo's
+  [`sol-loop`](https://github.com/t3dotgg/tstack). A round whose findings
+  are all low severity needs no further round once they are fixed or
+  refuted, and a later round checks only the changes since the reviewed head
+  and the open findings. `quest context`'s Reviews section and
+  `/quest-review` change with it; the round-3 design checkpoint stays.
 - Where the size and implementing models come from: ✅ read the PR body's
   `## Models` record when no flag is given; flags still override (rejected:
   keep the flags only). The implementing agent writes that record and passes
@@ -60,9 +67,10 @@ Recommendations for the implementer:
   can return the schema directly.
 - The prompt says that the repository's instruction files and `REVIEW.md`
   are already given, and forbids builds, tests, and `quest` commands.
-- Look for a supported way to drop the skills catalog and the user's global
-  `AGENTS.md` from the reviewer, such as a Codex `--disable` feature; verify
-  it in the transcript, not by assumption.
+- Drop the skills catalog with Codex's `-c skills.include_instructions=false`
+  (Codex config reference, checked 2026-11-05), and find a supported way to
+  drop the user's global `AGENTS.md`; verify both in the transcript, not by
+  assumption.
 - Skip a round when the head has not changed since the last review.
 
 ## Related
