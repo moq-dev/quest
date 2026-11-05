@@ -1214,6 +1214,15 @@ fakes("a round on the head the last round passed runs no reviewer and repeats th
 	expect((await quest("--root", s.repo, "review")).stdout).toContain(
 		"unchanged round 1 reviewed this head and found nothing; no reviewer ran\n",
 	);
+	// Another effort is another review, as is a change to REVIEW.md, which the whole change is checked against.
+	const effort = await quest("--root", s.repo, "review", "--effort", "xhigh");
+	expect(effort.stdout).toContain("round 2\n");
+	expect(effort.stdout).not.toContain("unchanged");
+	moveBase(s.repo, (dir) => write(dir, "REVIEW.md", "BASE-REVIEW new rule\n"));
+	const rules = await quest("--root", s.repo, "review", "--effort", "xhigh");
+	expect(rules.stdout).toContain("round 3\n");
+	expect(s.calls().at(-1)!.stdin).toContain("also check the whole change against the rules below");
+	expect(s.calls().at(-1)!.stdin).toContain("BASE-REVIEW new rule");
 
 	// A round with findings to settle runs on the same head, since a refutation needs no new commit.
 	vi.stubEnv("FAKE_REPLY", undefined);

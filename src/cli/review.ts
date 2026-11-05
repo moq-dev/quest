@@ -1047,13 +1047,14 @@ export interface LaterRound extends Change {
 	earlier: Finding[];
 	responses?: string;
 	rules: Rules | null;
-	/** The session was given REVIEW.md rules the base no longer has. */
-	rulesRemoved: boolean;
+	/** The session was last given other REVIEW.md rules, or none. */
+	rulesChanged: boolean;
 }
 
 /**
  * A later round's only turn: check what changed since the last review and the open findings under the base's
- * current rules, weighing the author's responses. The rest of the change was reviewed already.
+ * current rules, weighing the author's responses. The rest of the change was reviewed already, unless the
+ * rules changed since, which the whole change is then checked against.
  */
 export function laterPrompt(round: LaterRound): string {
 	const { head, previous, responses } = round;
@@ -1063,8 +1064,13 @@ export function laterPrompt(round: LaterRound): string {
 			"what changed, along with any base commits merged in since, which are not part of the change.",
 		scope(round),
 	];
-	if (round.rulesRemoved && round.rules === null) {
+	if (round.rulesChanged && round.rules === null) {
 		parts.push("The base no longer has a REVIEW.md, so the review rules you were given no longer apply.");
+	} else if (round.rulesChanged) {
+		parts.push(
+			"The base's REVIEW.md changed since your last review, so also check the whole change against the rules " +
+				"below wherever they differ from the ones you were given before.",
+		);
 	}
 	parts.push(...rulesParts(round.rules));
 	if (round.earlier.length > 0) parts.push(earlierList(round.earlier), settling("in `earlier`"));
@@ -1230,9 +1236,19 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	// A resumed session would keep instructions the base or the change has since replaced.
 	const resume = previous !== undefined && state?.given.instructions === given.instructions;
 
-	// The last round already passed this head under these rules, and has nothing left to settle.
-	if (resume && previous!.head === head && earlier.length === 0 && state!.given.rules === given.rules) {
-		return { ...state!.last, usage: [], unchanged: true };
+	// The last round already passed this head under these rules and this reviewer, and has nothing left to settle.
+	const last = state?.last;
+	if (
+		resume &&
+		previous!.head === head &&
+		earlier.length === 0 &&
+		state!.given.rules === given.rules &&
+		last !== undefined &&
+		last.model === picked.model &&
+		last.effort === picked.effort &&
+		last.base.ref === baseRef
+	) {
+		return { ...last, usage: [], unchanged: true };
 	}
 
 	const cli = await prepare(harness, root, deps.env, options.signal);
@@ -1268,7 +1284,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			earlier,
 			responses: options.responses,
 			rules,
-			rulesRemoved: state!.given.rules !== null,
+			rulesChanged: state!.given.rules !== given.rules,
 		});
 		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
 	}
