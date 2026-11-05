@@ -8,8 +8,10 @@ bounded test PR verify the integration before contributors are invited.
 
 ## Plan
 
-- This is an operator/setup outcome. App registration and its secrets belong
-  to [Deploy quest.moq.dev](/quest/m0/kix/deploy.md), because every deploy needs them.
+- This is an operator/setup outcome. The Worker is live at quest.moq.dev
+  (deployed 2026-11-04, /quest-unblock) with the production App
+  [kixel-quest](https://github.com/apps/kixel-quest) (ID 5622964, owned by
+  moq-dev); its registration and secrets were part of that deploy.
 - Pilot repositories decided 2026-10-27 (user): moq-dev/quest and
   moq-dev/moq, ranked first so kix is usable on moq-dev/moq soonest.
   Decided 2026-10-30 (user): start with moq-dev/moq; the private
@@ -55,7 +57,3 @@ bounded test PR verify the integration before contributors are invited.
   operator account.
 - Record nonsecret setup/run instructions and deployment identifiers.
   Remove the quest when the setup condition is fulfilled.
-
-## Required
-
-- [Deploy quest.moq.dev](/quest/m0/kix/deploy.md) - the live origin and registered App

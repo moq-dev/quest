@@ -104,8 +104,8 @@ Implementation guidance:
   call, so runner messages and approvals still interleave there.
 - Cross-user reads, such as an operator overview, fan out to the hubs or
   are dropped; none may move a user's state back into D1.
-- Update `quest/m0/kix/deploy.md` and `cloudflare/README.md` for the
-  start-fresh deploy, and keep the dev and test fixtures working.
+- Update `cloudflare/README.md`'s Deployment section for the start-fresh
+  deploy, and keep the dev and test fixtures working.
 
 ## Related
 

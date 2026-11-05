@@ -25,8 +25,10 @@ The manifest subscribes to push, issues, issue comments, pull requests, reviews,
 review threads, inline review comments, checks and statuses. Existing App registrations
 must enable `pull_request_review_thread` and `pull_request_review_comment` in their
 webhook subscriptions so resolving discussions and replying inline wake merge jobs. GitHub also sends installation lifecycle and repository
-selection events automatically. The App also requests the **Email addresses: read**
+selection events automatically. The App also needs the **Email addresses: read**
 user permission, which Better Auth needs to sign in users whose email is private.
+GitHub rejects account permissions in a manifest, so the operator adds it in the
+App's settings after registering.
 It grants no repository authority: the user token is used only for the sign-in
 profile and email reads and to list the [project picker](#project-enrollment)'s
 repositories, and never for repository writes or authority checks. No organization,

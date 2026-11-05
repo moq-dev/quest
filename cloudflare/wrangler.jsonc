@@ -15,7 +15,7 @@
 	"workers_dev": false,
 	"vars": {
 		"AUTH_URL": "https://quest.moq.dev",
-		"GITHUB_APP_ID": "",
+		"GITHUB_APP_ID": "5622964",
 		"GOOGLE_CLIENT_ID": "",
 		// The Web Push application server key; see README.md. Notifications stay off while it is empty.
 		"VAPID_PUBLIC_KEY": "",
@@ -54,8 +54,5 @@
 	"durable_objects": { "bindings": [{ "name": "RUNNERS", "class_name": "RunnerHub" }] },
 	"exports": {
 		"RunnerHub": { "type": "durable-object", "storage": "sqlite" },
-		// Deletes the legacy RepositoryCoordinator namespace and its storage if an earlier deploy
-		// provisioned it; a no-op otherwise. Remove this tombstone once every deploy has applied it.
-		"RepositoryCoordinator": { "type": "durable-object", "state": "deleted" },
 	},
 }
