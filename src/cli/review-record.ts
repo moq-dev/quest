@@ -52,7 +52,15 @@ export function reviewRecord(round: Round): string {
 /** `body` with `record` as its `## Review` section, which it gains when it has none; the rest stays as written. */
 export function withReview(body: string, record: string): string {
 	const section = reviewSection(body);
-	if (!section) return `${body.trimEnd()}${body.trim() ? "\n\n" : ""}## Review\n\n${record}\n`;
+	if (!section) {
+		const appended = `${body.trimEnd()}${body.trim() ? "\n\n" : ""}## Review\n\n${record}\n`;
+		// A body that ends inside an unclosed code fence or HTML comment would swallow the heading.
+		if (reviewSection(appended) === null)
+			throw new Error(
+				"the PR body ends inside an unclosed code fence or HTML comment; close it so the record can follow",
+			);
+		return appended;
+	}
 	const { start, end } = section;
 	return `${body.slice(0, start)}\n\n${record}\n${end < body.length ? "\n" : ""}${body.slice(end)}`;
 }

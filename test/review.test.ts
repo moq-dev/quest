@@ -1190,6 +1190,9 @@ test("the record replaces only a top-level Review section, never an example of o
 	expect(once).toBe("## Review\n\nnew\n\n## Models\n\n- Size: S\n");
 	expect(withReview(once, "new")).toBe(once);
 	expect(withReview("", "new")).toBe("## Review\n\nnew\n");
+	// A heading appended inside an unclosed construct would be no section, which the land gate never reads.
+	for (const open of ["```md\nunclosed", "<!-- unclosed"])
+		expect(() => withReview(open, "new")).toThrow("unclosed code fence or HTML comment");
 });
 
 fakes("a record GitHub refuses fails the command after printing the round", async () => {
