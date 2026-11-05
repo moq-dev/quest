@@ -45,9 +45,10 @@ quest init
 
 Init writes a stub per skill under both `.claude/skills/` and `.agents/skills/`
 without creating symbolic links. Claude Code's stub inlines `quest skill <name>`
-when the skill is invoked, pre-approving only that command; the
-`.agents/skills/` stub, which an existing linked layout shares, asks the agent
-to run it. Init also creates `quest/README.md` when missing, and appends a line
+when the skill is invoked, pre-approving only that command in Bash and
+PowerShell, and follows it with a setup pointer for when `quest` is missing; the
+`.agents/skills/` stub, which a skill both directories read through a link
+gets, asks the agent to run it. Init also creates `quest/README.md` when missing, and appends a line
 starting with `Quests: ` to the root `AGENTS.md`, or `CLAUDE.md` when only that
 exists. It also appends `quest/** merge=quest` to `.gitattributes` and sets
 `merge.quest.driver` in the clone's git config, so local merges resolve

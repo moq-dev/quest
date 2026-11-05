@@ -83,7 +83,7 @@ try {
 			assert(lstatSync(join(root, dir)).isDirectory(), `${dir} must not require symlink privileges`);
 			// Claude Code's stub inlines the skill; the one other agents read asks them to run it.
 			const call = (skill) =>
-				dir === ".claude/skills" ? `!\`quest skill ${skill} || echo "` : `Run \`quest skill ${skill}\``;
+				dir === ".claude/skills" ? `!\`quest skill ${skill}; echo "` : `Run \`quest skill ${skill}\``;
 			for (const skill of skills)
 				assert(read(root, `${dir}/quest-${skill}/SKILL.md`).includes(call(skill)), `${dir} stub of ${skill}`);
 		}

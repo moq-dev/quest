@@ -114,7 +114,7 @@ export function planInit(repo: Checkout, stubs: readonly Stub[], options: { goal
 		stubs.flatMap((skill): InitChange[] => {
 			const dir = `${skills}/${skill.installed}`;
 			const path = `${dir}/SKILL.md`;
-			const stub = skill.stubs[shared ? PORTABLE : skills];
+			const stub = skill.stubs[shared || sharedSkill(repo, skill.installed) ? PORTABLE : skills];
 			checkPath(repo, path, "file");
 			if (repo.stat(path) === "file") {
 				if (!isStub(repo, path, skill.installed)) refuse(path, "is not a Quest stub");
@@ -180,17 +180,29 @@ function skillDirs(repo: Checkout): { skills: SkillDir; shared: boolean }[] {
 }
 
 /**
+ * Whether every skill directory reads the skill installed as `installed`
+ * from one file, through a link to the skill or to its `SKILL.md`, so it
+ * needs the stub every agent can follow.
+ */
+function sharedSkill(repo: Checkout, installed: string): boolean {
+	const files = SKILL_DIRS.map((skills) => `${skills}/${installed}/SKILL.md`);
+	for (const file of files) checkPath(repo, file, "file");
+	if (files.some((file) => repo.stat(file) !== "file")) return false;
+	return new Set(files.map((file) => repo.real(file))).size === 1;
+}
+
+/**
  * Any version's stub: frontmatter naming the skill, then either the pointer
  * to `quest skill` or Claude Code's inline call of it. Descriptions and the
  * setup link change between versions, so only these shapes identify a file
  * Quest wrote. A pointer's frontmatter has only ever held `name` and
  * `description`, and an inline stub's also exactly the one `allowed-tools`
- * entry its call needs, so any other field marks an edited stub. Each capture
+ * line its call needs, so any other field marks an edited stub. Each capture
  * names the skill.
  */
 const STUBS = [
 	/^---\nname: (\S+)\n(?:(?:name|description): .*\n)*---\n\nRun `quest skill (\S+)` and follow its output\.\nIf `quest` is not installed, follow \S+ first\.\n$/,
-	/^---\nname: (\S+)\n(?:(?:name|description): .*\n)*allowed-tools: Bash\(quest skill (\S+)\)\n---\n\n!`quest skill (\S+) \|\| echo "[^"`\n]*"`\n$/,
+	/^---\nname: (\S+)\n(?:(?:name|description): .*\n)*allowed-tools: Bash\(quest skill (\S+)\) PowerShell\(quest skill (\S+)\)\n---\n\n!`quest skill (\S+); echo "[^"`\n]*"`\n$/,
 ];
 
 /**

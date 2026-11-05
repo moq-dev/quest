@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 
 import { SKILL_DIRS } from "../src/core";
 import { CONTEXT_LIMIT } from "../src/cli/hooks";
-import { CONTEXT, GUIDE_SECTIONS, SKILLS, guideSections, skill } from "../src/cli/skills";
+import { CONTEXT, GUIDE_SECTIONS, INLINE_LIMIT, SKILLS, guideSections, skill } from "../src/cli/skills";
 
 test.each(SKILLS.map((skill) => [skill.name, skill] as const))("%s frontmatter is complete", (_, skill) => {
 	expect(skill.description).not.toBe("");
@@ -46,10 +46,10 @@ test.each(SKILL_DIRS)("the repository's %s stubs are current", (path) => {
 	}
 });
 
-test("Claude Code's stub inlines the skill and pre-approves only its own call", () => {
+test("Claude Code's stub inlines the skill and pre-approves only its own call, in either shell", () => {
 	const start = skill("start")!;
 	expect(start.stubs[".claude/skills"]).toMatch(
-		/^---\nname: quest-start\ndescription: Start work on a quest\.\nallowed-tools: Bash\(quest skill start\)\n---\n\n!`quest skill start \|\| echo "[^"`]*SETUP\.md[^"`]*"`\n$/,
+		/^---\nname: quest-start\ndescription: Start work on a quest\.\nallowed-tools: Bash\(quest skill start\) PowerShell\(quest skill start\)\n---\n\n!`quest skill start; echo "[^"`$]*SETUP\.md[^"`$]*"`\n$/,
 	);
 	expect(start.stubs[".agents/skills"]).toContain("Run `quest skill start` and follow its output.");
 });
@@ -68,6 +68,26 @@ test("a skill prints its own instructions first, then what it builds on, each on
 	const sections = [...new Set([...skill("audit")!.guide, ...plan.guide, ...skill("grill")!.guide])];
 	expect(text.endsWith(`# Quest guide\n\n${guideSections(sections)}\n`)).toBe(true);
 	expect(text.split("\n## Questions\n").length).toBe(2);
+});
+
+test("a skill drops the skills and guide sections it omits from what it builds on", () => {
+	const afk = skill("afk")!;
+	expect(afk.omit).toEqual(["grill", "Creation", "Questions"]);
+	const text = afk.instructions;
+	expect(text).toContain(`# /quest-complete\n\n${skill("complete")!.body.trim()}`);
+	expect(text).toContain(`# /quest-merge\n\n${skill("merge")!.body.trim()}`);
+	expect(text).not.toContain("# /quest-grill");
+	expect(text).not.toContain("\n## Creation\n");
+	expect(text).not.toContain("\n## Questions\n");
+	expect(text).toContain("\n## Execution\n");
+	// The omission applies only when afk is the skill composed.
+	expect(skill("complete")!.instructions).toContain("# /quest-grill");
+});
+
+/** Claude Code inlines the stub's whole output: the composed skill, then the setup line it echoes. */
+test.each(SKILLS.map((skill) => [skill.name, skill] as const))("%s fits inline in Claude Code", (_, skill) => {
+	const echoed = /; echo "([^"]*)"`/.exec(skill.stubs[".claude/skills"])![1]!;
+	expect(skill.instructions.length + echoed.length + 1).toBeLessThanOrEqual(INLINE_LIMIT);
 });
 
 test("a skill that builds on nothing prints only its own instructions and guide sections", () => {
