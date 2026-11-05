@@ -75,6 +75,7 @@ Decision prompts, chosen options marked ✅:
 - [Base merges only when needed](/quest/m0/token-waste/base-merges.md) - a branch merges its base on a conflict, not before every queue attempt
 - [Mechanical rules become checks](/quest/m0/token-waste/rule-checks.md) - hooks enforce em dashes, push refspecs, no rebase or force-push, the footer, and `.tmp/`, and their prose leaves the always-loaded rules
 - [quest usage](/quest/m0/token-waste/usage.md) - per quest and PR: which models and efforts worked on it, their tokens and API-equal cost, and how the work went; the epic's re-measure runs it
+- [quest doctor](/quest/m0/token-waste/doctor.md) - replays transcripts against API pricing and recommends cache TTL, compaction, and Bash cap settings
 
 ## Related
 
