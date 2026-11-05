@@ -66,6 +66,15 @@ run in moq-dev/moq sent many merge-and-record iterates):
   `Implementer: Claude Code, claude-opus-5-5, low effort (iterate, XS)`, so
   the [model check](/quest/m1/model-check.md) can audit it. Not chosen:
   `quest` estimating it from those signals.
+- What if both models have written a PR? ✅ They never do: one writer per
+  PR (user, 2026-11-05, from a CodeRabbit finding on
+  [moq-dev/quest#507](https://github.com/moq-dev/quest/pull/507)). Each
+  review list holds only Sol and Opus, and `quest review` excludes every
+  model that wrote the PR, so a PR both wrote would have no reviewer. A PR's
+  iterates run on the model that first wrote it, waiting out its usage limit
+  rather than falling back; the fallback applies only when spawning a fresh
+  quest. Not chosen: a person reviews such a PR; the model that wrote fewer
+  lines reviews it.
 - Does the iterate's review shrink too? ✅ No: `quest review` reviews the
   whole branch, so it keeps the PR's size (user). A merge-only change is
   already exempt from review.
@@ -85,8 +94,10 @@ run in moq-dev/moq sent many merge-and-record iterates):
   next entry, resuming from the claim PR and checkout. With no entry left,
   skip the quest. Report each harness's outage once.
 - `/quest-complete`, `/quest-unblock`, and `/quest-merge`: size each
-  `/quest-iterate` they dispatch by its remaining work and start it down that
-  size's write list the same way, natively or through `quest agent`.
+  `/quest-iterate` they dispatch by its remaining work and start it on the
+  PR's writer (its first `Implementer:` model) at that size's effort,
+  natively or through `quest agent`; at that writer's usage limit, wait for
+  it rather than fall back.
 - Remove Grok from what ships: its line in `assets/CONTEXT.md`'s model and
   effort lookup, and any Grok harness code or test that exists by then.
 - Docs: the README documents the lists, the decision bump, iterate sizing,

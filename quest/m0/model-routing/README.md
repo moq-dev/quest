@@ -8,7 +8,8 @@ a ranked list `quest` builds in for the work's size, the same for every
 repository unless its `AGENTS.md` overrides it: Opus writes at every size,
 with Sol as the fallback through M, and a usage limit falls through to the
 next entry. An iterate is sized by the work left on its PR, not its quest's
-original size. Sol reviews, at an effort set by the PR's size, and Opus
+original size, and runs on the model that first wrote the PR, so the other
+can always review it. Sol reviews, at an effort set by the PR's size, and Opus
 reviews whatever Sol wrote, so no model reviews its own code. Every PR
 records the models and efforts behind it, and fixes link the PR that
 caused them, so the rankings can be audited and retuned. This epic's own

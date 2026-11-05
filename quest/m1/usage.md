@@ -32,7 +32,8 @@ Agent's choices, for the implementer to revisit:
 - Sources, read only, never printing prompt or reply text: Claude Code's
   session logs (`~/.claude*/projects/*/*.jsonl`, whose messages carry
   `usage` and the model), Codex's (`~/.codex/sessions`, token-count
-  events), and opencode's session storage, each found where its
+  events), opencode's session storage, and Grok's for sessions from before
+  it left routing on 2026-11-05, each found where its
   CLI keeps it, honoring `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. Sessions
   that `quest agent` and `quest review` start are found the same way, so
   nothing new is logged.
