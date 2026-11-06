@@ -10,18 +10,20 @@ import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
-import { delegated, nest, questScope, systemdScopes } from "./supervise";
+import { delegated, nest, questScope, startTime, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
  * the gate that runs it, which holds a slot until that command ends. `host` marks a command that
- * holds the whole host (see `Precedence`), from when it starts waiting until it ends.
+ * holds the whole host (see `Precedence`), from when it starts waiting until it ends, and `start`
+ * is when that gate started (see `processStart`), so a reused process ID never holds the host.
  */
 export interface Admission {
 	id: string;
 	at: number;
 	pid?: number;
 	host?: boolean;
+	start?: string;
 }
 
 /** One version of the host's admission ledger. Versions only grow; 0 is the empty ledger. */
@@ -253,7 +255,8 @@ function parse(text: string): Admission[] {
 				typeof entry?.id === "string" &&
 				Number.isFinite(entry?.at) &&
 				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)) &&
-				(entry.host === undefined || entry.host === true),
+				(entry.host === undefined || entry.host === true) &&
+				(entry.start === undefined || typeof entry.start === "string"),
 		);
 	return valid ? (value as Admission[]) : [];
 }
@@ -267,6 +270,25 @@ export function alive(pid: number): boolean {
 		// EPERM: it exists, but belongs to another user.
 		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
+}
+
+/**
+ * When a process started, so that a reused process ID never passes for the one recorded: on Linux
+ * the boot's ID and the start time in clock ticks since boot, on macOS the start date `ps` reports.
+ * Undefined once the process is gone, and on Windows, which offers neither cheaply.
+ */
+export function processStart(pid: number): string | undefined {
+	if (process.platform === "linux") {
+		try {
+			return `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()} ${startTime(pid)}`;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			throw error;
+		}
+	}
+	if (process.platform !== "darwin") return undefined;
+	const ps = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+	return (ps.status === 0 && ps.stdout.trim()) || undefined;
 }
 
 /**
@@ -321,7 +343,10 @@ export function fileHost(directory: string, now = Date.now): Host {
 					? linuxMemory().available
 					: process.availableMemory(),
 		now,
-		running: (admission) => admission.pid !== undefined && alive(admission.pid),
+		running: (admission) =>
+			admission.pid !== undefined &&
+			alive(admission.pid) &&
+			(admission.start === undefined || processStart(admission.pid) === admission.start),
 		ledger,
 		publish(base, admissions) {
 			mkdirSync(directory, { recursive: true });
@@ -425,7 +450,10 @@ export async function admit(
 		if (precedence.host) {
 			// Reserve the host first, so no other caller is admitted while this one waits for the rest.
 			if (!kept.some((admission) => admission.id === id))
-				host.publish(ledger, [...kept, { id, at: now, pid: process.pid, host: true }]);
+				host.publish(ledger, [
+					...kept,
+					{ id, at: now, pid: process.pid, host: true, start: processStart(process.pid) },
+				]);
 			else if (!kept.some((admission) => admission.id !== id && running.has(admission))) return;
 			else {
 				waiting?.("commands");

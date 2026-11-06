@@ -33,6 +33,7 @@ import {
 	linuxMemory,
 	type Owner,
 	owner,
+	processStart,
 	QUICK_MS,
 	RECENT_MS,
 	SETTLE_MS,
@@ -276,13 +277,18 @@ test("a caller holding the host reserves it, waits out gated commands, and holds
 	expect(held).toEqual(Array(4).fill(["host", "host"]));
 	expect(ledger.ledger().admissions).toEqual([
 		{ id: "build", at: 0, pid: build.pid },
-		{ id: expect.any(String), at: 0, pid: process.pid, host: true },
+		{ id: expect.any(String), at: 0, pid: process.pid, host: true, start: processStart(process.pid) },
 	]);
-	// A holder that died releases the host.
+	// A holder that died releases the host, as does one whose process ID another process now has.
 	const exited = spawnSync(process.execPath, ["-e", ""]).pid;
 	const released = tempDir();
 	const after = fileHost(released, () => 0);
-	expect(after.publish(after.ledger(), [{ id: "bench", at: 0, pid: exited, host: true }])).toBe(true);
+	expect(
+		after.publish(after.ledger(), [
+			{ id: "bench", at: 0, pid: exited, host: true },
+			{ id: "reused", at: 0, pid: process.pid, host: true, start: "an earlier process" },
+		]),
+	).toBe(true);
 	const reasons: string[] = [];
 	await admit(limits, testHost(released, { now: 0, load: 0, memory: Infinity }), signal, (reason) =>
 		reasons.push(reason),
