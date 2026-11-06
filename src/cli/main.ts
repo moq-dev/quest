@@ -133,7 +133,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"--host holds the whole host, for work such as a benchmark that other work would disturb: it " +
 				"reserves the host at once, starts once no other gated command runs, and every other gated " +
 				"command, quick or priority, waits until it ends. A nested --host runs immediately like any nested " +
-				"call.\n\n" +
+				"call. Windows refuses --host.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
 				"a systemd user scope, or inside a Quest scope through a child cgroup of its own. macOS, and Linux " +

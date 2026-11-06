@@ -1012,7 +1012,10 @@ command already running has ended, whatever the load and memory. Until it
 ends, every other gated command waits, quick and priority ones included, and a
 second `--host` caller queues behind it. Only gated work is held off: the
 command should still check for load from outside the gate. A `--host` call
-nested inside a gated command runs at once, like any nested call.
+nested inside a gated command runs at once, like any nested call. The
+reservation records when its gate started, so a holder whose process ID was
+reused, as after a reboot, holds nothing; Windows, which offers no cheap way to
+tell, refuses `--host`.
 
 Each admission records the gate's process ID, and counts as running until that
 process exits; a reused process ID only makes a command wait for the load

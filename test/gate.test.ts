@@ -615,6 +615,16 @@ test("a command runs in place with the given environment and its exact exit stat
 	expect(await direct([process.execPath, "-e", script], env, cancellation().cancel)).toBe(7);
 });
 
+test("Windows refuses --host, which it could not tell from a reused process ID", async () => {
+	const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+	Object.defineProperty(process, "platform", { value: "win32" });
+	try {
+		await expect(gate([process.execPath, "-e", ""], { host: true })).rejects.toThrow("unsupported on Windows");
+	} finally {
+		Object.defineProperty(process, "platform", platform);
+	}
+});
+
 test("a nested gate runs at once and keeps the exact exit status", async () => {
 	// A gated recipe that calls another one must not wait for admission twice.
 	vi.stubEnv("QUEST_GATE_ADMITTED", "1");

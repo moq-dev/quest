@@ -274,8 +274,9 @@ export function alive(pid: number): boolean {
 
 /**
  * When a process started, so that a reused process ID never passes for the one recorded: on Linux
- * the boot's ID and the start time in clock ticks since boot, on macOS the start date `ps` reports.
- * Undefined once the process is gone, and on Windows, which offers neither cheaply.
+ * the boot's ID and the start time in clock ticks since boot, on macOS the start date `ps` reports
+ * in UTC, whatever the caller's time zone and locale. Undefined once the process is gone, and on
+ * Windows, which offers neither cheaply.
  */
 export function processStart(pid: number): string | undefined {
 	if (process.platform === "linux") {
@@ -287,7 +288,10 @@ export function processStart(pid: number): string | undefined {
 		}
 	}
 	if (process.platform !== "darwin") return undefined;
-	const ps = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+	const ps = spawnSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+		encoding: "utf8",
+		env: { TZ: "UTC", LC_ALL: "C" },
+	});
 	return (ps.status === 0 && ps.stdout.trim()) || undefined;
 }
 
@@ -667,6 +671,8 @@ const notices: Record<Waiting, string> = {
 
 /** Run from the CLI. */
 export async function gate(command: string[], options: { quick?: boolean; host?: boolean } = {}): Promise<number> {
+	// Without a start time, a reused process ID could hold the host for good (see `processStart`).
+	if (options.host && process.platform === "win32") throw new Error("quest gate --host is unsupported on Windows");
 	const cancel = interrupts();
 	try {
 		const run = owner();
