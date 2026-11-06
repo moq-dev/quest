@@ -14,9 +14,9 @@ import { delegated, nest, questScope, startTime, systemdScopes } from "./supervi
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
- * the gate that runs it, which holds a slot until that command ends. `host` marks a command that
- * holds the whole host (see `Precedence`), from when it starts waiting until it ends, and `start`
- * is when that gate started (see `processStart`), so a reused process ID never holds the host.
+ * the gate that runs it, which holds a slot until that command ends, with when that gate started
+ * (see `processStart`), so a reused process ID holds nothing. `host` marks a command that holds the
+ * whole host (see `Precedence`), from when it starts waiting until it ends.
  */
 export interface Admission {
 	id: string;
@@ -426,6 +426,8 @@ export async function admit(
 	precedence: Precedence = {},
 ) {
 	const id = randomUUID();
+	// Every admission names its gate's start, so a reused process ID holds no slot, as for a host holder.
+	const self = { pid: process.pid, start: processStart(process.pid) };
 	const deadline = precedence.quick ? host.now() + QUICK_MS : Infinity;
 	for (;;) {
 		signal.throwIfAborted();
@@ -454,10 +456,7 @@ export async function admit(
 		if (precedence.host) {
 			// Reserve the host first, so no other caller is admitted while this one waits for the rest.
 			if (!kept.some((admission) => admission.id === id))
-				host.publish(ledger, [
-					...kept,
-					{ id, at: now, pid: process.pid, host: true, start: processStart(process.pid) },
-				]);
+				host.publish(ledger, [...kept, { id, at: now, ...self, host: true }]);
 			else if (!kept.some((admission) => admission.id !== id && running.has(admission))) return;
 			else {
 				waiting?.("commands");
@@ -467,7 +466,7 @@ export async function admit(
 		}
 		if (now >= deadline) {
 			// Recorded like any admission, so it still counts against the others' headroom.
-			if (host.publish(ledger, [...kept, { id, at: now, pid: process.pid }])) return;
+			if (host.publish(ledger, [...kept, { id, at: now, ...self }])) return;
 			continue;
 		}
 		// Priority ignores load, whether or not a gated command runs; memory still applies.
@@ -485,7 +484,7 @@ export async function admit(
 				// A caller descheduled since sampling would record a stale time, which lets the
 				// next one skip its spacing; decide again once the stall reaches that interval.
 				const at = host.now();
-				if (at - now < SETTLE_MS && host.publish(ledger, [...kept, { id, at, pid: process.pid }])) return;
+				if (at - now < SETTLE_MS && host.publish(ledger, [...kept, { id, at, ...self }])) return;
 				continue;
 			}
 		}
