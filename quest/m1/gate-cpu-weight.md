@@ -36,10 +36,29 @@ scopes.
 - Run gate-admitted commands in `background.slice`, or at a low `CPUWeight`,
   so the session keeps priority. Weight only matters under contention, so a
   lone gate on an idle host should keep its wall time.
-- Cover every Linux path a gated command takes. A gate nested inside a
-  delegated Quest scope runs in a child cgroup of that scope (`nest`), and a
-  child's weight competes only with its siblings, so the priority must apply
-  where the enclosing scope meets the user manager's slices.
+- Cover every Linux path a gated command takes, and lower only the gated
+  command, never the Quest scope around it. `quest worktree run` can hold a
+  whole agent session, so moving its scope into `background.slice` or
+  reweighting it would slow the session's non-gated work too.
+- A gate inside a delegated Quest scope runs its command in a child cgroup of
+  that scope (`nest`). A lower weight there would not help the desktop. A
+  child's weight competes only with its siblings, so the gated command would
+  still take the whole scope's share against the desktop. cgroup v2 also lets
+  the scope give its children a CPU weight only once no process sits in the
+  scope's own cgroup, where the session runs.
+- So the likely shape is a sibling scope. The gate runs its command in a scope
+  of its own in `background.slice`, as an unnested gate does, bound to the
+  enclosing scope with `BindsTo=` and `KillSignal=SIGKILL`, as
+  `systemdScopes.run` already binds a scope inside another. The enclosing
+  scope keeps its slice and weight, so the session's own work keeps its
+  priority and only the gated command yields. The same applies to a gate in a
+  Quest scope that predates delegation, which today runs its command in the
+  scope itself (`inside`).
+- Leaving the enclosing cgroup gives up what `nest` relies on: the enclosing
+  scope's `cgroup.kill`, and its owner's signal to every process in it. The
+  implementation must show that stopping the enclosing run, its liveness check
+  in `worktree.ts`, and a forwarded signal still reach the gated command. If
+  that cannot hold, pick another shape and say why in the PR.
 - Add `IOWeight` too only if the verification shows the session stalling on
   disk with CPU weight alone.
 - The process-group owner (Linux without systemd, macOS) and Windows have no
