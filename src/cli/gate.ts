@@ -14,12 +14,14 @@ import { delegated, nest, questScope, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
- * the gate that runs it, which holds a slot until that command ends.
+ * the gate that runs it, which holds a slot until that command ends. `host` marks a command that
+ * holds the whole host (see `Precedence`), from when it starts waiting until it ends.
  */
 export interface Admission {
 	id: string;
 	at: number;
 	pid?: number;
+	host?: boolean;
 }
 
 /** One version of the host's admission ledger. Versions only grow; 0 is the empty ledger. */
@@ -55,7 +57,7 @@ export interface Limits {
 	memory: number;
 }
 
-export type Waiting = "load" | "memory";
+export type Waiting = "load" | "memory" | "host" | "commands";
 
 /**
  * Admissions that only fit the host's raw load and memory, not its headroom,
@@ -85,10 +87,15 @@ export const QUICK_MS = RECENT_MS;
  * - `quick`: wait at most QUICK_MS, then start whatever the load and memory.
  *   For a command too cheap to be worth holding back, such as a formatter or a
  *   linter. Once started, it holds a slot like any admission.
+ * - `host`: hold the whole host, for work that other work would disturb, such
+ *   as a benchmark. It reserves the host at once, so no other caller is
+ *   admitted while it waits, then starts once no other gated command runs.
+ *   Every other caller, whatever its precedence, waits until it ends.
  */
 export interface Precedence {
 	priority?: boolean;
 	quick?: boolean;
+	host?: boolean;
 }
 
 /** The memory one gated build or test stack is assumed to need. */
@@ -245,7 +252,8 @@ function parse(text: string): Admission[] {
 			(entry: Partial<Admission>) =>
 				typeof entry?.id === "string" &&
 				Number.isFinite(entry?.at) &&
-				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)),
+				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)) &&
+				(entry.host === undefined || entry.host === true),
 		);
 	return valid ? (value as Admission[]) : [];
 }
@@ -372,6 +380,10 @@ export function fileHost(directory: string, now = Date.now): Host {
  * one, the load is work the gate cannot wait out, as on a freshly booted macOS
  * runner, so the raw load counts as having room.
  *
+ * A running command that holds the host keeps everyone else waiting; one that
+ * waits to hold it ignores load and memory, and waits only for the gated
+ * commands still running to end (see `Precedence`).
+ *
  * Each caller decides against the newest ledger and publishes its admission
  * atomically, so concurrent callers never exceed the rule and one always wins
  * while it has room. No fairness promise, and no admission timeout except a
@@ -402,6 +414,23 @@ export async function admit(
 				ledger,
 				kept.map((admission) => ({ ...admission, at: Math.min(admission.at, now) })),
 			);
+			continue;
+		}
+		// A command holding the host keeps every other caller out until it ends, quick or not.
+		if (kept.some((admission) => admission.host && admission.id !== id && running.has(admission))) {
+			waiting?.("host");
+			await host.sleep(SETTLE_MS, signal);
+			continue;
+		}
+		if (precedence.host) {
+			// Reserve the host first, so no other caller is admitted while this one waits for the rest.
+			if (!kept.some((admission) => admission.id === id))
+				host.publish(ledger, [...kept, { id, at: now, pid: process.pid, host: true }]);
+			else if (!kept.some((admission) => admission.id !== id && running.has(admission))) return;
+			else {
+				waiting?.("commands");
+				await host.sleep(SETTLE_MS, signal);
+			}
 			continue;
 		}
 		if (now >= deadline) {
@@ -604,10 +633,12 @@ export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
 const notices: Record<Waiting, string> = {
 	load: "quest gate: waiting for the load average to fall",
 	memory: "quest gate: waiting for free memory",
+	host: "quest gate: waiting for a command holding the whole host to end",
+	commands: "quest gate: holding the host, waiting for gated commands to end",
 };
 
 /** Run from the CLI. */
-export async function gate(command: string[], options: { quick?: boolean } = {}): Promise<number> {
+export async function gate(command: string[], options: { quick?: boolean; host?: boolean } = {}): Promise<number> {
 	const cancel = interrupts();
 	try {
 		const run = owner();
@@ -620,7 +651,11 @@ export async function gate(command: string[], options: { quick?: boolean } = {})
 					shown.add(reason);
 					process.stderr.write(`${notices[reason]}\n`);
 				};
-				const precedence = { priority: process.env[PRIORITY] === "1", quick: options.quick };
+				const precedence = {
+					priority: process.env[PRIORITY] === "1",
+					quick: options.quick,
+					host: options.host,
+				};
 				await admit(hostLimits(), fileHost(claimDirectory()), cancel.signal, notice, precedence);
 			} catch (error) {
 				if (cancel.signal.aborted) return cancelled(cancel.signal);

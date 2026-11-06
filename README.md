@@ -1005,6 +1005,15 @@ build's workflow or the land daemon's sandbox, rather than relying on a slot in
 the host's ledger: a container's gates keep a ledger of their own, yet wait on
 the host's load. `quest agent` drops the variable, as it drops an admission.
 
+`quest gate --host <command>` holds the whole host, for work that other work
+would disturb, such as a benchmark. It records a reservation at once, so no
+other caller is admitted while it waits; it then starts once every gated
+command already running has ended, whatever the load and memory. Until it
+ends, every other gated command waits, quick and priority ones included, and a
+second `--host` caller queues behind it. Only gated work is held off: the
+command should still check for load from outside the gate. A `--host` call
+nested inside a gated command runs at once, like any nested call.
+
 Each admission records the gate's process ID, and counts as running until that
 process exits; a reused process ID only makes a command wait for the load
 again. The gate holds no lock while the command runs, and it owns the
