@@ -38,6 +38,10 @@ queue, so it is the repository the own queue exists for.
   moq.pro PR adds the queue workflow and its queue-branch trigger, a
   kixelated/nixos PR switches the daemon, and the first queue builds may show
   gaps in the runner's environment, which are fixed in that PR or in moq.pro.
+- moq.pro's `queue.yml` is still its label queue's control workflow, which
+  `release` uses until moq.pro's Land release quest deletes it, so the own
+  queue's build workflow takes another name, or moq.pro renames the label
+  queue's first. The own queue's trigger must not depend on that name.
 - Drain or carry over the gate's queue before switching: picks already armed
   stay armed, so the watcher reads them in the same order.
 - The `moq-pro-gate` runner (`modules/ci-runners.nix` in kixelated/nixos)
