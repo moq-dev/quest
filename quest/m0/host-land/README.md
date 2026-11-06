@@ -3,10 +3,9 @@
 ## Goal
 
 The maintainer's host runs the land fixer in ephemeral nspawn containers for
-the [queue watcher](/quest/m0/queue-watcher/README.md), and keeps landing the
-repositories not yet on GitHub's merge queue (moq-dev/quest, moq.pro, rust2
-and rind) through the host gate until they
-[follow](/quest/m0/queue-watcher/follow.md). The gate is frozen: it gets only
+the [queue watcher](/quest/m0/queue-watcher/README.md), and keeps landing moq.pro,
+the one repository not yet on a serial queue, through the host gate until it
+moves to [the watcher's own queue](/quest/m0/queue-watcher/pro-cutover.md). The gate is frozen: it gets only
 fixes the switch needs, and is
 [retired](/quest/m0/queue-watcher/retire.md) once nothing lands through it.
 
