@@ -12,8 +12,3 @@ unconfined on their own machines.
 Moved from m0 on 2026-10-30 (user, /quest-plan): moq-dev's own repositories
 already carry Quest, are enrolled by the operator, and are worked on by their
 maintainers, so they need none of this first.
-
-## Required
-
-- [Contributor sandboxing](/quest/m1/kix/sandbox/README.md) - contributors' PR heads build in a VM, on stock Ubuntu and verified on macOS
-- [Onboarding guide](/quest/m1/kix/guide.md) - a complete maintainer path, from runner setup through a reviewed PR

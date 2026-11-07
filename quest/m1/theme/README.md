@@ -15,8 +15,7 @@ The pass also renames the "difficulty" leftovers to "size": the Worker's
 `Difficulty` component (`cloudflare/src/layout.tsx`, used by
 `cloudflare/src/home.tsx` and `cloudflare/src/board/pages.tsx`), the board's
 "weighted by difficulty" wording (`cloudflare/src/board/pages.tsx`,
-`cloudflare/src/board/model.ts`, `cloudflare/test/board.test.ts`), and the
-wording in this README's `Required` list.
+`cloudflare/src/board/model.ts`, `cloudflare/test/board.test.ts`).
 It also replaces the display aliases on the board, the home page, and
 `cloudflare/README.md` with format terms: Available and `?show=available`
 become ready, the Requires status and filter become blocked, Accepted by
@@ -109,10 +108,6 @@ Decided while planning on 2026-10-05, amended 2026-10-14 where noted:
 - Decided 2026-10-07 on the map's PR (moq-dev/quest#78): the map already
   uses these terms. A blocked waypoint's tooltip lists what it needs under
   "Required:".
-
-## Required
-
-- [Landing page](/quest/m1/theme/landing.md) - the home page's calls to action lead to sign-in, onboarding, and the setup paste
 
 ## Related
 

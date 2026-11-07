@@ -9,7 +9,6 @@ import {
 	branchQuest,
 	children,
 	comparePaths,
-	entries,
 	isEpic,
 	parse,
 	permanent,
@@ -45,7 +44,7 @@ export type Quest = {
 /** Finished work out of all work, by count and weighted by difficulty. */
 export type Progress = { done: number; total: number; weight: number; totalWeight: number };
 
-/** A milestone or epic: a directory of quests, listed in priority order. */
+/** A milestone or epic: a directory of quests, listed in path order. */
 export type Group = {
 	path: string;
 	href: string;
@@ -171,7 +170,7 @@ export function readBoard(project: Project, jobs: ReadonlyMap<string, string> = 
 
 	const progress = (path: string): Progress => {
 		const under = (p: string) => p.startsWith(`${dir(path)}/`);
-		const remaining = parsed.filter((doc) => under(doc.path) && !isEpic(doc));
+		const remaining = parsed.filter((doc) => under(doc.path) && !isEpic(parsed, doc));
 		const done = finishedUnder(path);
 		const weigh = (titles: string[]) => titles.reduce((sum, text) => sum + WEIGHTS[title(text).size ?? "XS"], 0);
 		const weight = weigh(done.map((c) => c.title));
@@ -183,21 +182,17 @@ export function readBoard(project: Project, jobs: ReadonlyMap<string, string> = 
 		};
 	};
 
-	// A group's items are its children in priority order, then anything under
-	// it that no README lists, so nothing in the tree goes unseen.
+	// A group's items are its children: the quests in its directory, in path order.
 	const seen = new Set<string>([ROOT]);
 	const group = (doc: Doc): Group => {
 		seen.add(doc.path);
-		const listed = children(doc).filter((path) => docs.has(path) && !seen.has(path));
-		const base = dir(doc.path);
-		const loose = parsed
-			.map((d) => d.path)
-			.filter((path) => !listed.includes(path) && !seen.has(path) && direct(base, path));
-		const items = [...listed, ...loose].flatMap((path): Item[] => {
+		const items = children(parsed, doc).flatMap((path): Item[] => {
 			if (seen.has(path)) return [];
 			seen.add(path);
 			const child = docs.get(path)!;
-			return isEpic(child) ? [{ kind: "epic", epic: group(child) }] : [{ kind: "quest", quest: quest(child) }];
+			return isEpic(parsed, child)
+				? [{ kind: "epic", epic: group(child) }]
+				: [{ kind: "quest", quest: quest(child) }];
 		});
 		return {
 			path: doc.path,
@@ -208,28 +203,26 @@ export function readBoard(project: Project, jobs: ReadonlyMap<string, string> = 
 		};
 	};
 
-	const root = docs.get(ROOT);
-	const milestonePaths = [...(root ? children(root) : []), ...parsed.map((doc) => doc.path)].filter(
-		(path, i, all) => path !== ROOT && permanent(path) && docs.has(path) && all.indexOf(path) === i,
-	);
-	const milestones = milestonePaths.map((path): Milestone => {
-		const segment = path.split("/")[1];
-		return {
-			...group(docs.get(path)!),
-			number: /^[a-z](\d+)$/.exec(segment)?.[1] ?? segment,
-			summary: lead(contents.get(path) ?? "", "Goal"),
-		};
-	});
+	const milestones = parsed
+		.filter((doc) => doc.path !== ROOT && permanent(doc.path))
+		.map((doc): Milestone => {
+			const segment = doc.path.split("/")[1];
+			return {
+				...group(doc),
+				number: /^[a-z](\d+)$/.exec(segment)?.[1] ?? segment,
+				summary: lead(contents.get(doc.path) ?? "", "Goal"),
+			};
+		});
 
 	// Quests outside every milestone still show, in a group of their own.
-	const rest = parsed.filter((doc) => !seen.has(doc.path) && !isEpic(doc)).map(quest);
+	const rest = parsed.filter((doc) => !seen.has(doc.path) && !isEpic(parsed, doc)).map(quest);
 	if (rest.length > 0) {
 		milestones.push({
 			path: "quest",
 			href: questHref(project, ROOT),
 			title: "Unsorted",
 			number: "",
-			summary: "Quests that no milestone lists.",
+			summary: "Quests outside every milestone.",
 			progress: { done: 0, total: rest.length, weight: 0, totalWeight: 0 },
 			items: rest.map((quest) => ({ kind: "quest", quest })),
 		});
@@ -261,14 +254,6 @@ export function readBoard(project: Project, jobs: ReadonlyMap<string, string> = 
 		docs,
 		quests: new Map(all.map((q) => [q.path, q])),
 	};
-}
-
-/** Whether `path` sits directly in `dir`: a quest file, or an epic's README one level down. */
-function direct(dir: string, path: string): boolean {
-	const rest = path.slice(dir.length + 1);
-	if (!path.startsWith(`${dir}/`)) return false;
-	const parts = rest.split("/");
-	return parts.length === 1 ? parts[0] !== "README.md" : parts.length === 2 && parts[1] === "README.md";
 }
 
 /** Only the quests with this status, dropping epics left empty. */

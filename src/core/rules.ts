@@ -6,9 +6,9 @@
 // tree.
 //
 // The whole tree is validated on every run, never just the changed files: the
-// link graph and the epic index are global, so completing one quest breaks
-// files the diff never mentions. That is not hypothetical - it is how the index
-// entry for a completed quest survived a rebase that produced no conflict at
+// link graph and the epic directories are global, so completing one quest
+// breaks files the diff never mentions. That is not hypothetical - it is how a
+// link to a completed quest survived a rebase that produced no conflict at
 // all.
 
 import {
@@ -16,11 +16,12 @@ import {
 	type Entry,
 	entries,
 	has,
+	holds,
 	isEpic,
-	children,
 	owner,
 	permanent,
 	questBranch,
+	requires,
 	resolve,
 	rooted,
 	size,
@@ -81,12 +82,12 @@ export function check(docs: Doc[], exists: (path: string) => boolean): Finding[]
 	const known = new Set(docs.map((d) => d.path));
 
 	for (const doc of docs) {
-		headings(found, doc);
+		headings(found, docs, doc);
 		links(found, exists, known, doc);
 	}
 
 	collisions(found, known, docs);
-	index(found, known, docs);
+	membership(found, known, docs);
 	milestones(found, docs);
 	cycles(found, docs);
 
@@ -115,8 +116,8 @@ function collisions(found: Finding[], known: Set<string>, docs: Doc[]) {
 	}
 }
 
-function headings(found: Finding[], doc: Doc) {
-	if (!isEpic(doc)) {
+function headings(found: Finding[], docs: Doc[], doc: Doc) {
+	if (!isEpic(docs, doc)) {
 		if (size(doc) === null)
 			found.push({ path: doc.path, line: null, message: "quest title must be '# [XS|S|M|L|XL] Title'" });
 	}
@@ -207,19 +208,27 @@ function links(found: Finding[], exists: (path: string) => boolean, known: Set<s
 }
 
 /**
- * Every document is listed by the epic it sits under, as a child in that
- * README's `Required`, and every `Required` entry is a quest, required once.
+ * Every document sits in an epic: its directory has a README, and so does
+ * each directory above it up to the root, so the tree reaches it. Every
+ * `Required` entry is a quest, required once, and an epic requires nothing it
+ * holds, since it already waits for everything in its directory.
  *
  * A condition outside the repository (a release, a customer, a person) is a
  * quest of its own rather than a plain-text bullet: a blocked quest drops out
  * of every ready listing, so the condition would be forgotten, while its own
  * quest keeps surfacing as ready until someone clears it.
  */
-function index(found: Finding[], known: Set<string>, docs: Doc[]) {
-	const listed = new Set<string>();
-
+function membership(found: Finding[], known: Set<string>, docs: Doc[]) {
 	for (const doc of docs) {
-		for (const child of children(doc)) listed.add(child);
+		const epic = join(owner(doc.path), "README.md");
+		// The root epic is permanent and has nothing above it.
+		if (doc.path !== ROOT && !known.has(epic)) {
+			found.push({
+				path: doc.path,
+				line: null,
+				message: `sits in ${owner(doc.path)}, which has no README.md; every directory under quest/ is an epic, so add its README or move the quest`,
+			});
+		}
 
 		const seen = new Set<string>();
 		for (const entry of entries(doc, "Required")) {
@@ -236,29 +245,26 @@ function index(found: Finding[], known: Set<string>, docs: Doc[]) {
 				found.push({ path: doc.path, line: entry.line, message: `requires ${entry.target} twice` });
 			}
 			seen.add(target);
+			if (holds(doc.path, target)) {
+				found.push({
+					path: doc.path,
+					line: entry.line,
+					message: `requires ${entry.target}, which this epic holds; an epic waits for everything in its directory, so remove the entry (quest check --fix does)`,
+				});
+			}
 		}
-	}
-
-	for (const doc of docs) {
-		// The root epic is permanent and has nothing above it to list it.
-		if (doc.path === ROOT || listed.has(doc.path)) continue;
-		found.push({
-			path: doc.path,
-			line: null,
-			message: `not listed in ${join(owner(doc.path), "README.md")}'s '## Required'; an unlisted quest is unreachable`,
-		});
 	}
 }
 
 /**
  * A link to a finished milestone is removed. Milestones are permanent, so
  * unlike a finished quest, which is deleted, the link would keep resolving and
- * block its quest forever. A milestone is finished once its README has no
- * `## Required`, which counts blockers outside its own directory too.
+ * block its quest forever. A milestone is finished once its directory holds no
+ * other quest and its README has no `## Required`.
  *
  * Readiness stays a grep for the heading; this rule is what keeps that answer
- * true once the milestone empties. The root's own listing of its milestones is
- * membership, not a blocker, so it is exempt.
+ * true once the milestone empties. A root entry naming a milestone is the
+ * membership rule's finding, not this one's.
  */
 function milestones(found: Finding[], docs: Doc[]) {
 	const finished = finishedMilestone(docs);
@@ -285,25 +291,18 @@ export function finishedMilestone(docs: Doc[]): (doc: Doc, entry: Entry) => bool
 		const target = rooted(entry.target);
 		if (target === null || target === ROOT || !permanent(target)) return false;
 		const milestone = byPath.get(target);
-		return milestone !== undefined && !has(milestone, "Required");
+		return milestone !== undefined && !has(milestone, "Required") && !docs.some((d) => holds(target, d.path));
 	};
 }
 
 /**
  * `Required` must be acyclic. A cycle is a set of quests none of which can ever
  * start, and walking the links to rule one out is exactly the manual step an
- * author would otherwise take before adding a blocker. An epic requires its
+ * author would otherwise take before adding a blocker. An epic waits for its
  * children, so a quest requiring the epic that holds it is a cycle too.
  */
 function cycles(found: Finding[], docs: Doc[]) {
-	const blockers = new Map<string, string[]>();
-	for (const doc of docs) {
-		const edges = doc.links
-			.filter((l) => l.section === "Required" && l.position === "entry")
-			.map((l) => rooted(l.target))
-			.filter((t): t is string => t !== null);
-		blockers.set(doc.path, [...(blockers.get(doc.path) ?? []), ...edges]);
-	}
+	const blockers = new Map(docs.map((doc) => [doc.path, requires(docs, doc)]));
 
 	const state = new Map<string, "open" | "done">();
 	const walk = (node: string, stack: string[]) => {

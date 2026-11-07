@@ -91,9 +91,3 @@ are mostly judgment.
   [Route by size](/quest/m0/model-routing/models.md).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
-
-## Required
-
-- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` and iterate dispatches start on the first entry of the size's ranked list that can run, an iterate sized by its remaining work
-- [kix records its follow-up sessions](/quest/m0/model-routing/kix-sessions.md) - kix `iterate` and `merge` jobs that change an existing PR record their `Implementer:` line in a PR comment
-- [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing

@@ -857,8 +857,9 @@ const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
 const PATH = process.env.PATH;
 
-const EPIC = (entries: string[]) =>
-	`# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
+/** The launch quest, which every quest the PRs plan or finish blocks: the list they all edit. */
+const LAUNCH = (entries: string[]) =>
+	`# [S] Launch\n\n## Goal\n\nLaunch.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
 
 /** github.com's `upstream/project` on disk: main, and each PR's branch `branch-<n>`, also at `refs/pull/<n>/head`. */
 function upstream() {
@@ -878,8 +879,9 @@ function upstream() {
 	commit(
 		{
 			".gitattributes": "quest/** merge=quest\n",
-			"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
-			"quest/m0/README.md": EPIC(["a"]),
+			"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n",
+			"quest/m0/README.md": "# M0\n\n## Goal\n\nA milestone.\n",
+			"quest/m0/launch.md": LAUNCH(["a"]),
 			"quest/m0/a.md": "# [S] A\n\n## Goal\n\nA.\n",
 			"code.txt": "one\ntwo\nthree\n",
 		},
@@ -1198,14 +1200,14 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 	test("a quest-file conflict is merged with the quest driver, and a code conflict goes to the fixer", async () => {
 		const { repo, state, fix, context } = setup(1);
 		const quests = repo.pull(3, {
-			"quest/m0/README.md": EPIC(["a", "c"]),
+			"quest/m0/launch.md": LAUNCH(["a", "c"]),
 			"quest/m0/c.md": "# [S] C\n\n## Goal\n\nC.\n",
 		});
 		const code = repo.pull(4, { "code.txt": "one\nII\nthree\n" });
 		const failing = repo.pull(6, { "feature.txt": "new\n" });
 		const built = repo.main();
 		const base = repo.advance({
-			"quest/m0/README.md": EPIC(["a", "b"]),
+			"quest/m0/launch.md": LAUNCH(["a", "b"]),
 			"quest/m0/b.md": "# [S] B\n\n## Goal\n\nB.\n",
 			"code.txt": "one\n2\nthree\n",
 		});
@@ -1272,7 +1274,7 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 			"fixing 4",
 			`requeued 3 ${merged()}`,
 		]);
-		expect(git(repo.origin, "show", `${merged()}:quest/m0/README.md`)).toBe(EPIC(["a", "b", "c"]).trim());
+		expect(git(repo.origin, "show", `${merged()}:quest/m0/launch.md`)).toBe(LAUNCH(["a", "b", "c"]).trim());
 		expect(git(repo.origin, "rev-parse", `${merged()}^1`, `${merged()}^2`).split("\n")).toEqual([quests, base]);
 		expect(github.mutations).toEqual([`enablePullRequestAutoMerge 3 ${merged()}`]);
 		expect(github.comments[3].at(-1)!.body).toContain(

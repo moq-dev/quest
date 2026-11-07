@@ -42,21 +42,24 @@ That file sits in your quest log, a tree under `quest/`:
 quest/
   README.md           # The roadmap
   m0/
-    README.md         # First milestone, in priority order
+    README.md         # The first milestone
     export.md         # Ready
     download.md       # Required: export.md
 ```
 
-Folders are **epics**. A README's `Required` lists its children in
-priority order, beside any other dependencies. The README is the epic's
+Folders are **epics**, and the quests in a folder are its children; its
+README lists only what blocks it, never its children. The README is the epic's
 own quest, and it becomes ready once its children have merged. The top folders
 (`m0`, `m1`, ...) are **milestones** that give the work a delivery horizon.
+Finishing a quest deletes its file and edits no README, so PRs that finish
+sibling quests do not conflict.
 
 When a quest is complete, its PR removes the plan and the links that depended
 on it, so the quests that required it can become ready. A PR that leaves work
 rewrites the plan to what remains. Milestones are never
-deleted, so a PR that finishes one (its README has no `Required` left) removes
-the links to that milestone too; `quest check` flags any it misses. The
+deleted, so a PR that finishes one (its folder holds no other quest and its
+README has no `Required` left) removes the links to that milestone too;
+`quest check` flags any it misses. The
 finished plan stays in Git history, beside the code that completed it.
 
 Work is taken through a live runner lock or an open change on the forge.
@@ -119,7 +122,8 @@ nonzero exit means the command failed.
 ## Prioritize ready work
 
 `quest unblocked` ranks ready quests by milestone priority, descending number
-of distinct transitive dependents, then existing tree order. Counts include
+of distinct transitive dependents, then path order, which compares numbers by
+value so `m10` follows `m9`. Counts include
 later milestones without moving their candidates ahead of earlier milestones.
 Structural root, milestone, and epic membership does not add to the count;
 real dependencies on an epic still reach its remaining work. Other prerequisites
@@ -280,11 +284,12 @@ quest rm -r quest/m1/drain
 under a moved epic. `rm` drops each `Required`, `Related`, or `Closes` entry
 that links to what it deleted, and the heading if that was the last entry.
 It also drops every `Required` link to a finished milestone, including one it
-just finished, but keeps the root's listing of the milestone.
+just finished, and every epic's `Required` link to a quest in its own folder.
 Both stage the change, print one line per file (`R from -> to`, `D path`, or
 `M path`), and report on stderr any other mention of the path, such as prose
 or files outside `quest/`, without editing it. They run `quest check` on the
-result and exit 1 if it fails, for example when a quest moved out of its epic.
+result and exit 1 if it fails, for example when a quest moved into a folder
+with no README.
 
 An epic is its directory or README; removing one that holds other quests needs
 `-r`. The root and milestones are never moved or removed. `mv` refuses a
@@ -295,8 +300,8 @@ Neither command touches branches or PRs.
 
 ## Merge quest lists
 
-Concurrent PRs edit the same link lists: the base branch deletes finished
-quests' lines while a branch inserts a new quest beside them. `quest init`
+Concurrent PRs can edit the same link list: the base branch deletes a finished
+blocker's line while a branch adds another blocker beside it. `quest init`
 routes `quest/**` through a merge driver in `.gitattributes` and registers it
 in the clone's git config, so a local `git merge` resolves those conflicts.
 
@@ -326,7 +331,10 @@ A clean merge can still leave this branch's list links to quests the base
 finished, which `quest check` then flags. `quest check --fix` drops every
 `Required`, `Related`, or `Closes` entry linking to a quest deleted in the
 history of `HEAD`, and of `MERGE_HEAD` during a merge, that the working tree
-lacks, and prints `M path` for each edited document. It leaves the edits
+lacks, and every epic's `Required` entry naming a quest in its own folder,
+which the epic already waits for, and prints `M path` for each edited
+document. That last part also migrates a tree from before epics stopped
+listing their children. It leaves the edits
 unstaged and refuses while a quest file has unresolved conflicts. A quest moved
 rather than deleted, a link that never named a quest, and a link in prose stay
 for `quest check` to report.
@@ -1649,7 +1657,7 @@ Automatic project history passes read updates since their prior issue/PR
 boundaries, including timestamp ties. Explicit Refresh starts or resumes a full
 history pass; successive refreshes repair cached issues deleted without a
 webhook. Open draft bodies are read only to classify `## Waiting`.
-[The first milestone](quest/m0/README.md) lists the quests that remain.
+[The first milestone](quest/m0/) holds the quests that remain.
 
 ## Contributing
 
