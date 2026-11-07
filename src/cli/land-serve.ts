@@ -21,7 +21,16 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
-import { forgetHeads, prepareHead, resolvePreparedQueue, landFallback, finishFallback } from "./land-head";
+import {
+	finishFallback,
+	forgetHeads,
+	landedCommit,
+	landFallback,
+	mergePinned,
+	prepareHead,
+	resolvePreparedQueue,
+	touchesWorkflows,
+} from "./land-head";
 import {
 	type BatchPolicy,
 	baseRemote,
@@ -31,7 +40,6 @@ import {
 	ejection,
 	git,
 	type LandMethod,
-	SETTLE_RETRIES,
 	readRemote,
 	type Overlap,
 	type RemoteRead,
@@ -87,28 +95,10 @@ export async function installationToken(
 	);
 }
 
-type Chain = Awaited<ReturnType<typeof build>>;
 /** Replace `path` atomically, readable only by the daemon's user. */
 export function save(path: string, value: unknown): void {
 	writeFileSync(`${path}.new`, JSON.stringify(value), { mode: 0o600 });
 	renameSync(`${path}.new`, path);
-}
-
-/**
- * The merge needs workflow write when this PR's landed commit changes a workflow, or when any commit the PR
- * brings changes one: GitHub refuses an App's merge of a PR whose commits touch workflows, such as a
- * merge of a base that changed one, whether the gate or the author made it.
- */
-export function touchesWorkflows(
-	root: string,
-	parent: string,
-	link: Chain["links"][number],
-	base: string,
-	head: string,
-): boolean {
-	if (git(root, ["diff", "--name-only", parent, link.commit, "--", ".github/workflows"]) !== "") return true;
-	// `-m` also lists a merge commit's changes against each parent, so a merged-in workflow change counts.
-	return git(root, ["log", "-m", "--format=", "--name-only", `${base}..${head}`, "--", ".github/workflows"]) !== "";
 }
 
 /** A fresh bare repository with no config, objects, or alternates inherited from the user's checkout. */
@@ -341,61 +331,6 @@ async function reportStalled(github: GitHub, plan: Plan, state: string, now: num
 	}
 	save(path, kept);
 	return output;
-}
-
-type MergeResult =
-	{ sha: string } | { reason: "head_moved" | "merge_conflict" | "merge_refused"; detail: string } | null;
-
-/**
- * Retry only GitHub's pending mergeability or base refresh. Any other refusal, such as `method` being
- * disabled or a rule the bot cannot bypass, would refuse every round after a full check, so it ejects.
- * `previous` is the head before the gate pushed its own base merge as `head`, if it did.
- */
-async function mergePinned(
-	github: GitHub,
-	path: string,
-	method: LandMethod,
-	head: string,
-	previous = head,
-): Promise<MergeResult> {
-	for (let attempt = 0; ; attempt++) {
-		const response = await github.request(`${path}/merge`, {
-			method: "PUT",
-			body: { merge_method: method, sha: head },
-			allow: [403, 405, 409],
-		});
-		// The client waits out a rate limit; any other 403 is GitHub refusing this PR, which stops this PR
-		// alone rather than failing the whole batch on every retry.
-		const result = object(await response.json());
-		if (response.ok && result.merged === true) return { sha: string(result.sha) };
-		const pull = object(await (await github.request(path)).json());
-		// A lost response or a manual merge is reconciled by rebuilding the remaining queue.
-		if (pull.merged === true) return null;
-		const detail = `GitHub refused ${path}: ${String(result.message)}`;
-		if (pull.state !== "open") return { reason: "merge_refused", detail };
-		// Right after the gate's own push, GitHub can still report the pin as the head and refuse the merge
-		// for it: a 409, or a 405 when the pin conflicts with the base that push merged. Neither is a writer.
-		const current = object(pull.head).sha;
-		if (previous !== head && (current === previous || (response.status === 409 && current === head))) {
-			if (attempt >= SETTLE_RETRIES) throw new Error(`${detail}; prepared head has not propagated`);
-			await github.pause(500 * 2 ** attempt);
-			continue;
-		}
-		if (current !== head) return { reason: "head_moved", detail };
-		const conflict = pull.mergeable === false || pull.mergeable_state === "dirty";
-		// Once GitHub shows the gate's own merge, it can still call it conflicting from the pin's stale
-		// mergeability, in its refusal or in the PR (moq-dev/quest#342). That merge already holds the
-		// base it was checked on, so it cannot conflict with it: wait. Only a base that moved since can
-		// conflict, and then the retries run out and the next round rebuilds on that base.
-		const stale = previous !== head && (conflict || /merge conflict/i.test(String(result.message)));
-		if (conflict && !stale) return { reason: "merge_conflict", detail };
-		if (stale || pull.mergeable === null || /base branch was modified/i.test(String(result.message))) {
-			if (attempt >= SETTLE_RETRIES) throw new Error(`${detail}; mergeability did not settle`);
-			await github.pause(500 * 2 ** attempt);
-			continue;
-		}
-		return { reason: "merge_refused", detail };
-	}
 }
 
 /** One batch: check once, then land through GitHub in order, verifying each resulting commit. */
@@ -675,7 +610,7 @@ export async function serveBatch(
 				? new GitHub(deps)
 				: new GitHub({
 						...deps,
-						token: await token(touchesWorkflows(root, parent, link, plan.base.sha, prepared.head)),
+						token: await token(touchesWorkflows(root, parent, link.commit, plan.base.sha, prepared.head)),
 					});
 		const result =
 			"reason" in prepared
@@ -714,9 +649,16 @@ export async function serveBatch(
 		const sha = result.sha;
 		forgetHeads(options.state, link.entry.number);
 		output.push(`landed ${link.entry.number} ${sha}`);
-		const commit = object(await (await merge.request(`/repos/${plan.repository}/git/commits/${sha}`)).json());
-		const parents = Array.isArray(commit.parents) ? commit.parents.map((parent) => string(object(parent).sha)) : [];
-		const actualParent = parents[0] ?? null;
+		// GitHub merged the head the gate pinned, so its merge commit's second parent is that head: the
+		// approved pin, or the gate's own base merge on it.
+		const { parent: actualParent, faults } = await landedCommit(
+			merge,
+			plan.repository,
+			plan.method,
+			sha,
+			link.tree,
+			"head" in prepared ? prepared.head : null,
+		);
 		if (actualParent !== expectedParent) {
 			const message = `quest land: base moved before ${plan.method} #${link.entry.number}: expected parent ${expectedParent}, got ${actualParent}; rebuilding the remaining queue`;
 			appendFileSync(log, `${message}\n`);
@@ -724,16 +666,6 @@ export async function serveBatch(
 			return output;
 		}
 		expectedParent = sha;
-		const tree = string(object(commit.tree).sha);
-		// GitHub merged the head the gate pinned, so its merge commit's second parent is that head: the
-		// approved pin, or the gate's own base merge on it.
-		const landed = "head" in prepared ? prepared.head : null;
-		const faults = [
-			tree !== link.tree && `has tree ${tree}, but the tested chain has ${link.tree}`,
-			plan.method === "merge" &&
-				(parents.length !== 2 || parents[1] !== landed) &&
-				`has parents ${parents.join(" ")}, but its second parent must be the landed head ${landed}`,
-		].filter((fault) => fault !== false);
 		if (faults.length === 0) continue;
 		// The PR is already merged, so there is nothing to eject. The rest of the batch stays queued and
 		// is rebuilt and checked on the base as it now is, like after a moved base.

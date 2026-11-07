@@ -2,9 +2,8 @@
 
 ## Goal
 
-moq-dev/moq.pro's `main` lands through
-[the watcher's own queue](/quest/m0/queue-watcher/own-queue.md) instead of
-the batching `quest land serve` gate:
+moq-dev/moq.pro's `main` lands through the watcher's own queue (the README's
+"The watcher's own queue") instead of the batching `quest land serve` gate:
 
 - moq.pro's queue workflow builds the watcher's queue branches on its private
   `moq-pro-gate` runner;
@@ -38,7 +37,17 @@ queue, so it is the repository the own queue exists for.
 - moq.pro's `queue.yml` is still its label queue's control workflow, which
   `release` uses until moq.pro's Land release quest deletes it, so the own
   queue's build workflow takes another name, or moq.pro renames the label
-  queue's first. The own queue's trigger must not depend on that name.
+  queue's first. The own queue's trigger must not depend on that name: it
+  builds `quest-queue/main/<number>` on push, as moq-dev/quest's `queue.yml`
+  header shows.
+- The watcher decides each build from `main`'s required checks other than
+  `quest land`, reported on the queue branch's commit, and refuses to run
+  while there are none. So `main`'s ruleset also requires the queue workflow's
+  result job, which reports skipped on pull requests, as moq-dev/quest's
+  `Queue` does.
+- The own queue's token asks moq-bot's App for `actions: write` (to cancel a
+  stale build) and `checks: write` (each pick's `quest queue` check run),
+  beyond what the gate uses; grant them on moq.pro's installation first.
 - Drain or carry over the gate's queue before switching: picks already armed
   stay armed, so the watcher reads them in the same order. Switch only once
   the gate has no fixer job running or uncollected: the gate records each in
@@ -50,7 +59,3 @@ queue, so it is the repository the own queue exists for.
   queue workflow, as
   [Harden the queue runners](/quest/m0/queue-watcher/runners.md) does for the
   public queues.
-
-## Required
-
-- [The watcher runs its own serial queue](/quest/m0/queue-watcher/own-queue.md) - `quest land watch` lands a base without GitHub's merge queue
