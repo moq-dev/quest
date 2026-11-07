@@ -34,21 +34,11 @@ export function world(): World {
 			{ path: "flake.nix", content: "{ outputs = _: { }; }\n" },
 			{
 				path: "quest/README.md",
-				content: quest("Quests", "Plan the rocket app.", [
-					"- [M0: Beta](/quest/m0/README.md) - the first public beta",
-					"- [M1: Later](/quest/m1/README.md) - after the beta",
-				]),
+				content: quest("Quests", "Plan the rocket app."),
 			},
 			{
 				path: "quest/m0/README.md",
-				content: quest("Beta", "Ship the first public beta.", [
-					"- [Landing page](/quest/m0/landing.md) - explain the app",
-					"- [Passkey sign-in](/quest/m0/sign-in.md) - sign in without a password",
-					"- [Getting started](/quest/m0/docs.md) - a first-run guide",
-					"- [Crash telemetry](/quest/m0/telemetry.md) - learn about crashes",
-					"- [ZIP export](/quest/m0/export.md) - take your data with you",
-					"- [ZIP import](/quest/m0/import.md) - bring your data back",
-				]),
+				content: quest("Beta", "Ship the first public beta."),
 			},
 			{ path: "quest/m0/import.md", content: quest("[S] Import a project from a ZIP archive", "Restore it.") },
 			{ path: "quest/m0/landing.md", content: quest("[S] Build the landing page", "Explain the app.") },
@@ -63,12 +53,7 @@ export function world(): World {
 			{ path: "quest/m0/export.md", content: quest("[S] Export a project as a ZIP archive", "Take your data.") },
 			{
 				path: "quest/m1/README.md",
-				content: quest("Later", "Work after the beta.", [
-					"- [Offline mode](/quest/m1/offline.md) - keep working without a network",
-					"- [Themes](/quest/m1/themes.md) - custom colors",
-					"- [Search](/quest/m1/search.md) - find anything",
-					"- [Fonts](/quest/m1/fonts.md) - choose the editor font",
-				]),
+				content: quest("Later", "Work after the beta."),
 			},
 			{ path: "quest/m1/fonts.md", content: quest("[S] Choose the editor font", "Read comfortably.") },
 			{ path: "quest/m1/search.md", content: quest("[S] Search across projects", "Find anything.") },
@@ -201,13 +186,11 @@ export function world(): World {
 		files: [
 			{
 				path: "quest/README.md",
-				content: quest("Quests", "Retire the old site.", ["- [M0: Retire](/quest/m0/README.md) - retire it"]),
+				content: quest("Quests", "Retire the old site."),
 			},
 			{
 				path: "quest/m0/README.md",
-				content: quest("Retire", "Retire the old site.", [
-					"- [Clean up](/quest/m0/cleanup.md) - remove old pages",
-				]),
+				content: quest("Retire", "Retire the old site."),
 			},
 			{ path: "quest/m0/cleanup.md", content: quest("[S] Remove the old pages", "Nothing links to them.") },
 		],

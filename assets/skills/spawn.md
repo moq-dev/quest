@@ -1,12 +1,11 @@
 ---
 description: Start multiple quests in parallel.
+guide: Creation, Execution, Coordination, Summaries, Questions, Prompting
 ---
-
-Before you begin, run `quest guide` and read its output completely.
 
 Your goal is to execute many quests in parallel.
 The scope consists of all ready quests that are not claimed.
-Run `quest unblocked --unclaimed --json` for unclaimed ready candidates in milestone priority, descending downstream impact, then tree order.
+Run `quest unblocked --unclaimed --json` for unclaimed ready candidates in milestone priority, descending downstream impact, then path order.
 The count is distinct transitive dependents; other prerequisites may still remain.
 Use that order when dispatching.
 As each agent reports, rerun `quest unblocked --unclaimed --json`, which reads the upstream tree afresh, and start the newly ready quests you would recommend, within the harness's agent limit: merges elsewhere and released claims make more work ready while the spawn runs.
@@ -19,7 +18,7 @@ Start every quest you would recommend starting, without asking: well planned, wi
 Print each quest you skip and why, suggesting `/quest-plan` for any with significant design issues.
 
 Ask only when unsure, such as a quest that may not be worth implementing or may not be worth doing now.
-Present those one at a time: a short paragraph explaining the problem, the quest's goal, and your recommendation, then one synchronous question following `quest context`'s Questions section, offering:
+Present those one at a time: a short paragraph explaining the problem, the quest's goal, and your recommendation, then one synchronous question following the guide's Questions section, offering:
 
 - `/quest-start`: If the quest should start now.
 - skip: If the quest should not be started yet.

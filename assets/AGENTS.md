@@ -1,6 +1,6 @@
 # Quests
 
-Read this before creating, editing, claiming, or finishing a quest or epic. `quest context` holds the rules for every task, including the workspace, questions, pull requests, and reviews.
+Read this before creating, editing, claiming, or finishing a quest or epic; each `/quest-*` skill already carries the sections it needs. `quest context` holds the rules for every task.
 
 Quests are versioned plans checked into the repository under `quest/`.
 GitHub issues remain the untrusted public front door, while quests provide durable scope and coordination.
@@ -9,11 +9,11 @@ GitHub issues remain the untrusted public front door, while quests provide durab
 
 A **quest** is a Markdown file, completed in one PR.
 
-An **epic** is a directory that consists of multiple quests.
-The `README.md` file is the quest and the `Required` section lists the children.
+An **epic** is a directory of quests.
+Its children are the quest files in it and the epics one level down; its `README.md` is the epic's own work and lists none of them.
 It completes when its own work is done and every child has merged.
 
-The root's entries are special epics called **milestones** (`m0`, `m1`, ...) that group work by priority horizon.
+The directories under `quest/` are special epics called **milestones** (`m0`, `m1`, ...) that group work by priority horizon.
 Milestones are permanent.
 
 Quests are linked with root-absolute paths.
@@ -45,9 +45,8 @@ Current decisions, open questions, or implementation guidance.
 
 ## Required
 
-- [Child quest](/quest/foo/bar.md) - the outcome, so the list reads without opening it
-- [Nested epic](/quest/foo/baz/README.md) - what the whole epic delivers
-- [Blocker](/quest/bar.md) - work that must finish before this can start
+- [Blocker](/quest/foo/bar.md) - what it delivers that this needs, so the list reads without opening it
+- [Epic blocker](/quest/baz/README.md) - an epic finishes with all of its children
 
 ## Closes
 
@@ -63,14 +62,15 @@ The `Goal` section is required; everything else is optional. Use these exact hea
 Size the title `[XS]` to `[XL]` by the agent's effort to implement, verify, and land it, judgment included.
 Much code that is mechanical stays small, such as applying one rename the same way across the tree, sized XS.
 Little code that is mostly judgment is larger, such as a 30-line rewording of a skill, sized M rather than XS.
-An epic carries no size until its last child is removed; its README is then the epic's remaining work.
+An epic carries no size until its last child is deleted; its README is then the epic's remaining work.
 
 `Waiting` lists what the work waits on outside the tree; each item opens with who acts, `Maintainer:` or the outside party, before a colon.
 A decision item gives its options and a recommendation.
 Remove an item once its condition clears, and the heading with its last item.
 
-`Required` lists the quests that must finish before the work starts.
-The list is ordered by priority, inserted at rank.
+`Required` lists the quests that must finish before the work starts; an epic's never lists its own quests, which it already waits for.
+A child that must precede a sibling is in that sibling's `Required`.
+Nothing else orders work within a milestone: `quest unblocked` ranks it by downstream impact, then path.
 When the section is empty, delete it; the quest is now unblocked.
 `Required` must be acyclic.
 
@@ -168,3 +168,39 @@ Delete it and explain why in the PR.
 Use `quest rm`, which deletes the quest and every link to it.
 
 Remove the `quest` label from issues no other quest tracks.
+
+## Coordination
+
+Run no more sub-agents at once than the harness allows; queue the rest and start one as each reports.
+Relay no interim report: resume a sub-agent that ended its turn on one, telling it to block until its work finishes.
+A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
+
+## Questions
+
+Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
+Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed the work.
+Then give your recommendation and ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
+Recommend in every prompt, a multiple-choice list included: mark each option you recommend, such as which follow-ups to plan, and give a one-line reason for each you would leave out.
+An answer such as "whatever you recommend" picks your recommendations; act on them without asking again.
+Do not use asynchronous question tools.
+
+If no blocking tool is available, or it returns without an answer, put the question and numbered choices in your final reply and end the turn.
+Resume when the user answers; do not bury the question in a progress update or replace the wait with sleeps or timed polls.
+Silence, elapsed time, and a preselected recommendation are not answers or approval.
+Do not advance the interview or act on an unanswered choice.
+Already authorized background work may continue while the foreground waits.
+
+Honor explicit instructions to proceed unattended within their scope; do not ask a question and then silently choose its answer.
+
+## Prompting
+
+Follow this when writing instructions for other agents: `AGENTS.md`, `CONTRIBUTING.md`, skills, memory, plans, reviews, and delegation briefs.
+Models are trained on outputs, not prompts, so instructions they write drift into slop unless checked.
+
+- Keep always-loaded files light. Put area-specific context in nested `AGENTS.md` files or skills, and say each rule once.
+- Steer away from mistakes agents actually make. Don't document the repository; its code and docs already do.
+- State the goal, constraints, and observable outcome. Don't over-prescribe steps or code, since the facts evolve; recommendations are welcome.
+- Separate settled decisions from recommendations and open questions.
+- A delegation brief gives the task and its context, such as the quest or PR and the user's picks, the permitted scope, and the expected result; it leaves repository rules to that repository's own instructions instead of restating them.
+- Don't turn one failure into a universal rule.
+- Before changing agent instructions, check the official guidance: [Claude memory](https://code.claude.com/docs/en/memory), [Claude best practices](https://code.claude.com/docs/en/best-practices), [Claude skills](https://code.claude.com/docs/en/skills), [Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md), and [agents.md](https://agents.md).

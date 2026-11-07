@@ -16,7 +16,15 @@ import { COLLECTION_ATTEMPTS, REQUEUE_LIMIT, history } from "../src/cli/land-fix
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
 import { type FixContext, HELD } from "../src/cli/land-watch-fix";
-import { type FlakyTest, RECENT, readFlaky, saveFlaky, writeKnownFlaky } from "../src/cli/land-watch-flaky";
+import {
+	type FlakyTest,
+	flakyName,
+	flakyQuest,
+	RECENT,
+	readFlaky,
+	saveFlaky,
+	writeKnownFlaky,
+} from "../src/cli/land-watch-flaky";
 import { FLAKY_INPUT, type KnownFlaky } from "../src/cli/land-fix";
 import { configure, GIT_SETTINGS, initRepository, tempDir } from "./fixture";
 
@@ -830,6 +838,7 @@ test("a round is told the most recently seen flaky tests not yet disabled, withi
 	// Long-lived flakes that never got a valid disable keep collecting verdicts.
 	const tests: FlakyTest[] = Array.from({ length: 200 }, (_, index) => ({
 		failure: `just test: flaky_${index}`,
+		quest: `quest/m0/flaky/flaky-${index}.md`,
 		verdicts: Array.from({ length: 30 }, (_, round) => ({
 			job: `watch-job-${index}-${round}.json`,
 			number: round + 1,
@@ -848,7 +857,7 @@ test("a round is told the most recently seen flaky tests not yet disabled, withi
 	const text = readFileSync(join(checkout, ".git", FLAKY_INPUT), "utf8");
 	expect(text.length).toBeLessThan(100_000);
 	const known = JSON.parse(text) as KnownFlaky[];
-	expect(known[0].failure).toBe("just test: flaky_199");
+	expect(known[0]).toMatchObject({ failure: "just test: flaky_199", quest: "quest/m0/flaky/flaky-199.md" });
 	expect(known.every((item) => item.jobs.length === RECENT)).toBe(true);
 	expect(known.some((item) => item.failure === "just test: flaky_0")).toBe(false);
 });
@@ -857,8 +866,9 @@ const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
 const PATH = process.env.PATH;
 
-const EPIC = (entries: string[]) =>
-	`# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
+/** The launch quest, which every quest the PRs plan or finish blocks: the list they all edit. */
+const LAUNCH = (entries: string[]) =>
+	`# [S] Launch\n\n## Goal\n\nLaunch.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
 
 /** github.com's `upstream/project` on disk: main, and each PR's branch `branch-<n>`, also at `refs/pull/<n>/head`. */
 function upstream() {
@@ -878,8 +888,9 @@ function upstream() {
 	commit(
 		{
 			".gitattributes": "quest/** merge=quest\n",
-			"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
-			"quest/m0/README.md": EPIC(["a"]),
+			"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n",
+			"quest/m0/README.md": "# M0\n\n## Goal\n\nA milestone.\n",
+			"quest/m0/launch.md": LAUNCH(["a"]),
 			"quest/m0/a.md": "# [S] A\n\n## Goal\n\nA.\n",
 			"code.txt": "one\ntwo\nthree\n",
 		},
@@ -1198,14 +1209,14 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 	test("a quest-file conflict is merged with the quest driver, and a code conflict goes to the fixer", async () => {
 		const { repo, state, fix, context } = setup(1);
 		const quests = repo.pull(3, {
-			"quest/m0/README.md": EPIC(["a", "c"]),
+			"quest/m0/launch.md": LAUNCH(["a", "c"]),
 			"quest/m0/c.md": "# [S] C\n\n## Goal\n\nC.\n",
 		});
 		const code = repo.pull(4, { "code.txt": "one\nII\nthree\n" });
 		const failing = repo.pull(6, { "feature.txt": "new\n" });
 		const built = repo.main();
 		const base = repo.advance({
-			"quest/m0/README.md": EPIC(["a", "b"]),
+			"quest/m0/launch.md": LAUNCH(["a", "b"]),
 			"quest/m0/b.md": "# [S] B\n\n## Goal\n\nB.\n",
 			"code.txt": "one\n2\nthree\n",
 		});
@@ -1272,7 +1283,7 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 			"fixing 4",
 			`requeued 3 ${merged()}`,
 		]);
-		expect(git(repo.origin, "show", `${merged()}:quest/m0/README.md`)).toBe(EPIC(["a", "b", "c"]).trim());
+		expect(git(repo.origin, "show", `${merged()}:quest/m0/launch.md`)).toBe(LAUNCH(["a", "b", "c"]).trim());
 		expect(git(repo.origin, "rev-parse", `${merged()}^1`, `${merged()}^2`).split("\n")).toEqual([quests, base]);
 		expect(github.mutations).toEqual([`enablePullRequestAutoMerge 3 ${merged()}`]);
 		expect(github.comments[3].at(-1)!.body).toContain(
@@ -1442,21 +1453,20 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 		async (held) => {
 			const { repo, state, fix, context } = setup();
 			const base = repo.main();
-			const heads = [5, 6, 7].map((number) => repo.pull(number, { [`feature-${number}.txt`]: "new\n" }));
+			const heads = [5, 6, 7, 8].map((number) => repo.pull(number, { [`feature-${number}.txt`]: "new\n" }));
 			const github = { ...world([], []), origin: repo.origin };
 			/** A flaky requeue naming render_timeout, disabling it at the checkout's HEAD after `script`. */
 			const flaky = (script: string) => `${script}
 printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","cause":"flaky","failure":"%s","disable":"%s"}]' "$2" "$FAILURE" "$(git rev-parse HEAD)" > quest-land-result.json
 `;
-			/** A disabling commit on base that skips the test, adds its follow-up quest, and writes `extra`. */
-			const disabling = (extra: string) => `grep -q 'just test: render_timeout' .git/quest-land-flaky.json
+			/** A disabling commit on base that skips the test, naming the quest it was told, and writes `extra`. */
+			const disabling = (
+				extra: string,
+			) => `grep -q '"quest":"quest/m0/flaky/render-timeout.md"' .git/quest-land-flaky.json
 git checkout -q -b disable base
-mkdir -p quest/m0/flaky
-printf '# [S] Fix or delete render_timeout\\n\\n## Goal\\n\\nFix the flaky test or delete it.\\n' > quest/m0/flaky/render-timeout.md
-printf '# Flaky tests\\n\\n## Goal\\n\\nFix or delete each disabled test.\\n\\n## Required\\n\\n- [Render timeout](/quest/m0/flaky/render-timeout.md)\\n' > quest/m0/flaky/README.md
-printf 'skip render_timeout\\n' > skip.txt
+printf 'skip render_timeout: /quest/m0/flaky/render-timeout.md\\n' > skip.txt
 ${extra}
-git add quest skip.txt ${extra ? "flake.nix" : ""}
+git add -A
 git commit -qm 'disable render_timeout'`;
 			// The first verdict's disable is ignored: one judgment alone never disables a test. The second's edits a
 			// protected path and is refused, and the third's is opened as its own pull request.
@@ -1466,9 +1476,15 @@ git commit -qm 'disable render_timeout'`;
 				6,
 				flaky(`${disabling("printf 'changed\\n' > flake.nix")}\nFAILURE='just  test: \\"render_timeout\\"'`),
 			);
-			fix.round(7, flaky(`${disabling("")}\nFAILURE='just test: render_timeout'`));
+			fix.round(
+				7,
+				flaky(
+					`${disabling("mkdir -p quest/m0/flaky\nprintf '# x\\n' > quest/m0/flaky/render-timeout.md")}\nFAILURE='just test: render_timeout'`,
+				),
+			);
+			fix.round(8, flaky(`${disabling("")}\nFAILURE='just test: render_timeout'`));
 			const said: string[][] = [];
-			for (const [index, number] of [5, 6, 7].entries()) {
+			for (const [index, number] of [5, 6, 7, 8].entries()) {
 				const minute = (index + 1) * 10;
 				github.pulls.push({
 					number,
@@ -1493,48 +1509,60 @@ git commit -qm 'disable render_timeout'`;
 				await exited(state);
 				github.now = Date.parse(at(minute + 2));
 				// A session takes the disable's pull request as soon as it opens.
-				if (held && number === 7)
+				if (held && number === 8)
 					github.onPull = (pull) => {
-						if (pull.number === 8) pull.labels = ["quest:active"];
+						if (pull.number === 9) pull.labels = ["quest:active"];
 					};
 				said.push(await watchPass(REPOSITORY, { state }, deps(github), context));
 			}
-			const branch = github.pulls.find((pull) => pull.number === 8)?.branch;
+			const branch = github.pulls.find((pull) => pull.number === 9)?.branch;
 			expect(branch).toMatch(/^quest-land\/flaky-[0-9a-f]{12}$/);
 			const head = git(repo.origin, "rev-parse", `refs/heads/${branch}`);
 			expect(said).toEqual([
 				["disable ignored 5: first flaky verdict", `requeued 5 ${heads[0]}`],
 				[expect.stringMatching(/^disable refused 6: Error: off-limits fixer edit/), `requeued 6 ${heads[1]}`],
 				[
-					`disable 7 ${head}`,
+					"disable refused 7: Error: a disable must leave quest/ as the base has it; quest land watch adds its quest",
 					`requeued 7 ${heads[2]}`,
-					held ? "disable held render-timeout 8" : "disabled render-timeout 8",
+				],
+				[
+					`disable 8 ${head}`,
+					`requeued 8 ${heads[3]}`,
+					held ? "disable held render-timeout 9" : "disabled render-timeout 9",
 				],
 			]);
 			if (held) {
 				// Left for a maintainer, even once the hold clears.
 				github.onPull = undefined;
-				github.pulls.find((pull) => pull.number === 8)!.labels = [];
-				expect(github.comments[8].map((comment) => comment.body)).toEqual([expect.stringContaining(HELD)]);
+				github.pulls.find((pull) => pull.number === 9)!.labels = [];
+				expect(github.comments[9].map((comment) => comment.body)).toEqual([expect.stringContaining(HELD)]);
 			}
-			// The disable is the fixer's commit on the base, enqueued like any other pull request with no pick.
-			expect(git(repo.origin, "rev-parse", `${head}^`)).toBe(base);
-			expect(git(repo.origin, "show", `${head}:quest/m0/flaky/render-timeout.md`)).toContain(
-				"Fix the flaky test",
-			);
+			// The disable is the fixer's skip on the base and the watcher's quest from its template on top, with
+			// the epic it creates, enqueued like any other pull request with no pick.
+			expect(git(repo.origin, "rev-parse", `${head}^^`)).toBe(base);
+			expect(git(repo.origin, "diff", "--name-only", base, `${head}^`)).toBe("skip.txt");
+			expect(git(repo.origin, "diff", "--name-only", `${head}^`, head).split("\n")).toEqual([
+				"quest/m0/flaky/README.md",
+				"quest/m0/flaky/render-timeout.md",
+			]);
+			const quest = git(repo.origin, "show", `${head}:quest/m0/flaky/render-timeout.md`);
+			expect(quest).toContain("# [S] Fix the flaky test render-timeout");
+			expect(quest).toContain("- [Job 1](https://github.com/upstream/project/actions/runs/50/job/71)");
+			expect(git(repo.origin, "show", `${head}:quest/m0/flaky/README.md`)).toContain("## Goal");
 			expect(github.mutations).toEqual([
 				`enqueuePullRequest 5 ${heads[0]}`,
 				`enqueuePullRequest 6 ${heads[1]}`,
 				`enqueuePullRequest 7 ${heads[2]}`,
-				...(held ? [] : [`enqueuePullRequest 8 ${head}`]),
+				`enqueuePullRequest 8 ${heads[3]}`,
+				...(held ? [] : [`enqueuePullRequest 9 ${head}`]),
 			]);
-			const opened = github.pulls.find((pull) => pull.number === 8)!;
+			const opened = github.pulls.find((pull) => pull.number === 9)!;
 			expect(opened.title).toBe("quest land: disable the flaky test render-timeout");
 			expect(opened.body).toContain(
-				"The land fixer judged `just test: render_timeout` flaky 3 times, most recently in",
+				"The land fixer judged `just test: render_timeout` flaky 4 times, most recently in",
 			);
 			expect(opened.body).toContain(
-				"#5 ([job 1](https://github.com/upstream/project/actions/runs/50/job/71)), #6 ([job 1](https://github.com/upstream/project/actions/runs/60/job/71))",
+				"#6 ([job 1](https://github.com/upstream/project/actions/runs/60/job/71)), #7 ([job 1](https://github.com/upstream/project/actions/runs/70/job/71))",
 			);
 			expect(opened.body).toContain("adds its follow-up quest, `quest/m0/flaky/render-timeout.md`");
 			expect(opened.body).toContain(`## Review\n\nmechanical fix by Codex: \``);
@@ -1542,11 +1570,12 @@ git commit -qm 'disable render_timeout'`;
 			expect(readFlaky(state)).toMatchObject([
 				{
 					failure: "just test: render_timeout",
-					verdicts: [{ number: 5 }, { number: 6 }, { number: 7 }],
+					quest: "quest/m0/flaky/render-timeout.md",
+					verdicts: [{ number: 5 }, { number: 6 }, { number: 7 }, { number: 8 }],
 					disable: {
 						head,
 						quest: "quest/m0/flaky/render-timeout.md",
-						number: 8,
+						number: 9,
 						done: held ? "held" : "enqueued",
 					},
 				},
@@ -1554,7 +1583,7 @@ git commit -qm 'disable render_timeout'`;
 
 			// A restart neither opens nor enqueues it again, and the disabled test is no longer offered as known.
 			expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
-			expect(github.mutations).toHaveLength(held ? 3 : 4);
+			expect(github.mutations).toHaveLength(held ? 4 : 5);
 		},
 	);
 
@@ -1901,4 +1930,29 @@ git commit -qm 'disable render_timeout'`;
 		expect(github.comments[8]).toHaveLength(2);
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([]);
 	});
+});
+
+test("a flaky test's follow-up quest is named for the test and written from a fixed template", () => {
+	expect(flakyName("cargo test -p moq-relay: interop::render_timeout")).toBe("render-timeout");
+	expect(flakyName("test/review.test.ts > a reviewer's usage limit exits 3")).toBe("a-reviewers-usage-limit-exits-3");
+	expect(flakyName("x".repeat(30) + " " + "y".repeat(40))).toBe("x".repeat(30));
+	expect(flakyName("::")).toBe("test");
+	const quest = flakyQuest("just test: `render_timeout`", [
+		"https://github.com/o/r/actions/runs/1/job/2",
+		"https://github.com/o/r/actions/runs/1/job/2",
+		"https://evil.example/x",
+		"https://github.com/o/r/actions/runs/1/job/3)[x](https://evil.example",
+	]);
+	expect(quest).toBe(`# [S] Fix the flaky test render-timeout
+
+## Goal
+
+Fix \`just test: render_timeout\` so it passes reliably, or delete it, and remove its skip.
+quest land watch disabled it after the land fixer judged it flaky in
+more than one \`merge_group\` build.
+
+Failing jobs:
+
+- [Job 1](https://github.com/o/r/actions/runs/1/job/2)
+`);
 });

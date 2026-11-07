@@ -115,7 +115,7 @@ rmSync(build, { recursive: true, force: true });
 mkdirSync(join(build, "public"), { recursive: true });
 writeFileSync(join(build, "docs.json"), JSON.stringify(rendered));
 writeFileSync(join(build, "board.json"), JSON.stringify(snapshot));
-writeFileSync(join(build, "stubs.json"), JSON.stringify(SKILLS.map(({ installed, stub }) => ({ installed, stub }))));
+writeFileSync(join(build, "stubs.json"), JSON.stringify(SKILLS.map(({ installed, stubs }) => ({ installed, stubs }))));
 cpSync(join(design, "theme"), join(build, "public", "theme"), { recursive: true });
 cpSync(join(worker, "src", "site.css"), join(build, "public", "site.css"));
 for (const file of ["passkey.js", "app.js", "sw.js", "manifest.webmanifest"])

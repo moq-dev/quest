@@ -157,24 +157,17 @@ A failure on the base or from the runner is not flaky: name its cause, never
 `disable`. A PR requeued only because another supplied PR caused the failure takes
 no `cause`. When you cannot tell why the failure happened, hand the PR back.
 The input may list the repository's known flaky tests, each by the
-`failure` an earlier round named and the `merge_group` jobs that showed it.
+`failure` an earlier round named, the `merge_group` jobs that showed it, and
+the `quest` path of the follow-up quest that tracks it once disabled.
 When the test you judge flaky is one of them, name it exactly as listed, and
 disable it in a commit of its own: create a `disable` branch from `base`, and
-commit on it only
+commit on it only the skip, in the test framework's own form, whose reason
+names that `quest` path, such as `#[ignore = "flaky: /quest/m0/flaky/<name>.md"]`
+in Rust, `test.skip` with that path in a comment in JavaScript, or
+`pytest.mark.skip(reason="flaky: /quest/m0/flaky/<name>.md")` in Python.
+Never edit `quest/`: quest land writes the follow-up quest itself.
 
-- the skip, in the test framework's own form, whose reason names the follow-up
-  quest, such as `#[ignore = "flaky: /quest/m0/flaky/<name>.md"]` in Rust,
-  `test.skip` with that path in a comment in JavaScript, or
-  `pytest.mark.skip(reason="flaky: /quest/m0/flaky/<name>.md")` in Python;
-- that follow-up quest, `quest/m0/flaky/<name>.md`, with `<name>` the test's
-  name in lowercase kebab-case, whose Goal says to fix the test or delete it
-  and links each listed job and this failure's, which the failure log names;
-- its link in the `Required` list of `quest/m0/flaky/README.md`, the epic
-  holding one quest per disabled test, created with a link in
-  `quest/m0/README.md`'s `Required` if it is missing.
-
-Follow the repository's quest format, and run `quest check` when the
-repository has it. A disabled test that is another quest's acceptance test
+A disabled test that is another quest's acceptance test
 leaves that quest as it is: the test still counts as its work. Run the
 [repository checks](#repository-checks) on the branch, and add its full SHA to the
 PR's entry:

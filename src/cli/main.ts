@@ -52,7 +52,7 @@ import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
-import { type Report, fixLinks, moveQuest, removeQuest } from "./move";
+import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { DEFAULT_SIZE, REVIEWERS } from "./models";
 import {
@@ -60,12 +60,14 @@ import {
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
 	review,
+	nextStep,
 	roundLines,
 } from "./review";
 import { type Recorded, pullModels, recordRound } from "./review-record";
-import { claudeSettings, heal, init, setup, uninstall } from "./setup";
+import { BASH_MAX_TIMEOUT_MS, HOOKS, hook, settingsPath, setup } from "./hooks";
+import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
-import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
+import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
 import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
 import { pullRequestStatus, statusLines } from "./status";
@@ -168,19 +170,24 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"first: a stale base can predate the quest and skip it.\n\n" +
 				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
 				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
-				"does, such as the quests a merged base finished, with any heading left empty. It prints M for each " +
-				"edited document and leaves the edits unstaged. A quest moved rather than deleted, a link that never " +
+				"does, such as the quests a merged base finished, with any heading left empty. It then promotes a " +
+				"section heading written below ## to ## where nothing but its own content follows it before the next " +
+				"## heading, and no ## section of that name exists. It prints M for each edited document and leaves " +
+				"the edits unstaged. A quest moved rather than deleted, a link that never " +
 				"named a quest, and a link in prose stay for the check to report. Refuses outside a git work tree " +
 				"and while a quest file has unresolved conflicts.",
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
-		.option("--fix", "First drop list links to quests the history deleted")
+		.option("--fix", "First drop list links to quests the history deleted, and promote misleveled section headings")
 		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
 			}
-			if (options.fix) for (const line of fixLinks(root())) print(line);
+			if (options.fix) {
+				const edited = new Set([...fixLinks(root()), ...fixHeadings(root())]);
+				for (const line of [...edited].sort()) print(line);
+			}
 			const tree = checkout(root(), warn);
 			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
@@ -250,7 +257,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("unblocked")
 		.summary("Rank ready quests, or print what blocks one quest")
 		.description(
-			"Rank ready quests by milestone priority, distinct transitive dependents, then tree order. " +
+			"Rank ready quests by milestone priority, distinct transitive dependents, then path order. " +
 				"Given a path, print what blocks that quest instead.\n\n" +
 				"Counts exclude structural epic membership. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
@@ -337,7 +344,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"List every quest with a ## Waiting section and every open draft PR handed back with one (or the " +
 				"older ## Decisions needed): those waiting on the maintainer first, then milestone priority, distinct " +
-				"transitive dependents as quest unblocked counts them, ready before blocked, then tree order, with " +
+				"transitive dependents as quest unblocked counts them, ready before blocked, then path order, with " +
 				"drafts after quests by PR number. A draft ranks as the quest its branch carries, or last when it " +
 				"carries none. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
 				"followed by the condition and how to check or advance it. A draft's item without a party, and every " +
@@ -696,9 +703,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	landCommand
 		.command("watch")
 		.description(
-			"Watch the base's GitHub merge queue as a daemon, one per repository: once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A PR whose auto-merge was armed, by a writer or by the watcher, that is ready (its required checks passed and it does not conflict) but that GitHub never added to the queue is enqueued at the head auto-merge was armed on, never at a head pushed since. A pick is the latest enqueue by anyone, the App included (as for Dependabot's PRs), except the App's enqueues of heads the watcher itself put back in the queue for the pick. With --fixer, a conflict is first merged with the base by the quest merge driver; otherwise the fixer runs in the background on the failure, at most --fixer-jobs at once, oldest removal first. A fixed or merged head is lease-pushed and recorded in Review, and each fixed, merged, or flaky head is re-enqueued at the back of the queue (or armed with auto-merge while its checks run). The pick keeps going while each round makes progress: a round with no new commit for a failure that isn't flaky, the failure a fix addressed recurring right after it, or three flaky rounds in a row hand it back, as does the fixer, with a comment. State keeps each removal handled, so a restart neither misses nor repeats one, each removal's full log, the fixer's jobs, and each pick's rounds. It shares `quest land serve`'s App key, state directory, private repository, and locks, so the two never run beside each other. The App needs `actions: read` for the logs, `merge_queues: write` to enqueue, and with a fixer `contents: write` to arm auto-merge and push, and `workflows: write` to push fixes that touch workflows.",
+			"Watch the base's queue as a daemon, one per repository: GitHub's merge queue where the base's rules have a merge_queue rule, otherwise the watcher's own serial queue, decided again each pass from GET /rules/branches/<base>, so enabling GitHub's queue switches the watcher with no host change; a pass that cannot read the rules does nothing. On GitHub's queue, once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A PR whose auto-merge was armed, by a writer or by the watcher, that is ready (its required checks passed and it does not conflict) but that GitHub never added to the queue is enqueued at the head auto-merge was armed on, never at a head pushed since. A pick is the latest enqueue by anyone, the App included (as for Dependabot's PRs), except the App's enqueues of heads the watcher itself put back in the queue for the pick. " +
+				`The own queue, for a base that requires the unreported \`${LAND_CHECK}\` check so GitHub never merges a pick itself, reads its picks as quest land serve does: PRs whose auto-merge \`quest merge --land\` armed pinned to their head, in arming order, with the same ejections. It tests one at a time: it merges the base into the pick with the quest merge driver, pushes that to quest-queue/<base>/<number>, which the repository's queue workflow builds on push, and waits for the base's required checks other than \`${LAND_CHECK}\` on it, at most --timeout minutes. A pass lands a passing pick through quest land serve's landing path with --method, only while the base is still the one it tested; a moved base rebuilds it. A failed or timed-out build, or a conflict, disarms the PR's auto-merge and comments with the failing jobs, as GitHub's queue removes a PR, and is recorded for the land fixer; a re-enqueue arms auto-merge again, at the back. A writer's push, a person disarming auto-merge, or a hold ends the build. Each pick carries an informational \`quest queue\` check run with its position, the build in progress and its run, and the outcome. Queue branches go once their pick lands or leaves, and those an earlier process left are pruned on its first pass. ` +
+				"With --fixer, a conflict is first merged with the base by the quest merge driver; otherwise the fixer runs in the background on the failure, at most --fixer-jobs at once, oldest removal first. A fixed or merged head is lease-pushed and recorded in Review, and each fixed, merged, or flaky head is re-enqueued at the back of the queue (or armed with auto-merge while its checks run). The pick keeps going while each round makes progress: a round with no new commit for a failure that isn't flaky, the failure a fix addressed recurring right after it, or three flaky rounds in a row hand it back, as does the fixer, with a comment. State keeps each removal handled, so a restart neither misses nor repeats one, each removal's full log, the fixer's jobs, each pick's rounds, and the own queue's build. It shares `quest land serve`'s App key, state directory, private repository, and locks, so the two never run beside each other. On GitHub's queue the App needs `actions: read` for the logs, `merge_queues: write` to enqueue, and with a fixer `contents: write` to arm auto-merge and push, and `workflows: write` to push fixes that touch workflows. The own queue's App needs `contents: write`, `pull_requests: write`, `actions: write` to read logs and cancel builds, `checks: write`, `administration: read`, `workflows: write` for heads that touch workflows, and a bypass of the base's ruleset.",
 		)
 		.option("--base <branch>", "Base branch (default: repository default)")
+		.addOption(
+			new Option("--method <method>", "On the own queue, land each PR as a squash commit or a merge commit")
+				.choices(["squash", "merge"])
+				.default("squash"),
+		)
+		.option(
+			"--timeout <minutes>",
+			"On the own queue, drop a build still running after this long",
+			positiveInteger("timeout"),
+			60,
+		)
 		.option("--state <path>", "Private daemon state directory (default: $STATE_DIRECTORY or the XDG state home)")
 		.requiredOption("--app-id <id>", "GitHub App id")
 		.option(
@@ -1026,7 +1046,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"unchanged line for a repeated round, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
 				"its one-sentence rationale, the finding count, each finding, then the last round's findings with " +
-				"their dispositions. A reply without a valid score " +
+				"their dispositions, then the `record` line below and a last `next` line naming the author's next step: " +
+				"`next finish` when every finding is low severity, to fix or refute them without another round, " +
+				"`next checkpoint` on every third round that reports other findings, to reconsider the approach " +
+				"before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
 				"the same as one object.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
@@ -1095,11 +1118,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						} catch (error) {
 							failure = error;
 						}
-						if (options.json) print(JSON.stringify({ ...round, record: record ?? null }));
+						if (options.json)
+							print(JSON.stringify({ ...round, record: record ?? null, next: nextStep(round) }));
 						else {
 							for (const line of roundLines(round)) print(line);
 							if (record !== undefined)
 								print("url" in record ? `record ${record.url}` : `record skipped: ${record.skipped}`);
+							print(nextStep(round));
 						}
 						if (failure === undefined) return 0;
 						warn(
@@ -1209,8 +1234,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"root-absolute link to it under quest/. The change is staged.\n\n" +
 				"Refuses the root epic and milestones, which are permanent. Refuses outside a git work tree, when " +
 				"the destination exists, and while a moved quest has a claim branch or open PR on origin, or on " +
-				"the upstream that holds origin's claims (see quest start), since the old branch would no longer name it. Moving a " +
-				"quest into or out of an epic changes which epic lists it; the check afterwards reports what to fix.\n\n" +
+				"the upstream that holds origin's claims (see quest start), since the old branch would no longer name it. A " +
+				"quest belongs to the epic whose directory holds it, so moving it into another directory moves it " +
+				"into that epic.\n\n" +
 				"Prints R for the move and M for each edited document. Mentions of the old path that are not links, " +
 				"or are outside quest/, are reported on stderr and left alone. Runs quest check on the result and " +
 				"exits 1 if it fails.",
@@ -1233,8 +1259,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Delete a quest, or an epic and the quests under it, with git rm, and drop every Required, Related, " +
 				"or Closes entry that links to it, with any heading left empty. It also drops every Required link to a " +
-				"finished milestone, one whose README has no Required left, except the root's own listing. The change " +
-				"is staged.\n\n" +
+				"finished milestone, one whose directory holds no other quest and whose README has no Required left, " +
+				"except the root's own listing. The change is staged.\n\n" +
 				"Refuses outside a git work tree. An epic is its directory or README; removing one that holds other " +
 				"quests requires -r. The root epic and milestones are permanent.\n\n" +
 				"Prints D for each deleted quest and M for each edited document. Mentions that are not list entries, " +
@@ -1277,12 +1303,32 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("guide")
-		.description("Print the quest guide: the format, workflow, and rules agents follow")
-		.action(() => out.stdout(GUIDE));
+		.summary("Print the quest guide: the format, workflow, and rules agents follow")
+		.description(
+			"Print the quest guide: the format, workflow, and rules agents follow. Each skill already carries the " +
+				`sections it needs. Name sections to print only those, in the guide's order: ${GUIDE_SECTIONS.join(", ")}.`,
+		)
+		.argument("[section...]", "Sections to print, ignoring case")
+		.action((sections: string[]) => {
+			if (sections.length === 0) return out.stdout(GUIDE);
+			for (const section of sections) {
+				try {
+					sectionHeading(section);
+				} catch (error) {
+					throw new UsageError(error instanceof Error ? error.message : String(error));
+				}
+			}
+			out.stdout(`${guideSections(sections)}\n`);
+		});
 
 	program
 		.command("context")
-		.description("Print the engineering rules agents follow in every task, before the repository's own")
+		.summary("Print the engineering rules agents follow in every task, before the repository's own")
+		.description(
+			"Print the engineering rules agents follow in every task, before the repository's own. The hook " +
+				"`quest setup` installs adds them to each Claude Code session in a repository that uses Quest, so " +
+				"its agents need not run this.",
+		)
 		.action(() => out.stdout(CONTEXT));
 
 	program
@@ -1290,20 +1336,55 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Print a skill's instructions, or list the skills with no name")
 		.description(
 			"Print a skill's instructions, or list the skills with no name.\n\n" +
-				"A repository installs only a stub per skill, which runs this, so the pinned binary decides what " +
-				"every agent follows.",
+				"A repository installs only a stub per skill, so the pinned binary decides what every agent follows. " +
+				"Claude Code's stub runs this when the skill is invoked and reads its output in place; the stub other " +
+				"agents read asks them to run it. It prints the skill's own instructions, then each skill it builds " +
+				"on, then the quest guide's sections any of them use, so one call holds everything the skill needs.",
 		)
 		.argument("[name]", "Skill to print")
-		.option("--stub", "Print the stub SKILL.md a repository installs instead")
-		.action((name: string | undefined, options: { stub?: boolean }) => {
+		.action((name: string | undefined) => {
 			if (name === undefined) {
-				if (options.stub) throw new UsageError("--stub requires a skill name");
 				for (const s of SKILLS) print(`${s.name} - ${s.description}`);
 				return;
 			}
 			const found = skill(name);
 			if (!found) throw new Error(`no skill named ${name} (have: ${SKILLS.map((s) => s.name).join(", ")})`);
-			out.stdout(options.stub ? found.stub : found.body);
+			out.stdout(found.instructions);
+		});
+
+	program
+		.command("setup")
+		.summary("Configure your own Claude Code settings for quest work")
+		.description(
+			"Configure your own Claude Code settings for quest work, in $CLAUDE_CONFIG_DIR/settings.json or else " +
+				"~/.claude/settings.json, keeping every other setting and hook. Touches no repository.\n\n" +
+				`Sets env.BASH_MAX_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a foreground command, such as a blocking ` +
+				"wait, may run 55 minutes: just under the 1h prompt-cache TTL. " +
+				`Installs ${HOOKS.map((h) => (h.matcher ? `${h.event} (${h.matcher})` : h.event)).join(" and ")} hooks, ` +
+				"which add `quest context` to each session and subagent in a repository that uses Quest, and again " +
+				"after compaction, so agents never run it themselves. Each runs `quest hook`, so `quest` must be on " +
+				"the PATH Claude Code starts with.\n\n" +
+				"Validates the whole file, then writes it once and prints each change; settings that are not a JSON " +
+				"object, or whose env or hooks are malformed, are an error and stay unchanged. Rerun it after " +
+				"upgrading Quest; it replaces Quest's earlier hooks and changes nothing when all is set.",
+		)
+		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
+		.action((options: { remove?: boolean }) => {
+			for (const line of setup(settingsPath(), options)) print(line);
+		});
+
+	program
+		.command("hook")
+		.summary("Handle a Claude Code hook event `quest setup` installed, read on stdin")
+		.description(
+			"Handle the Claude Code hook event whose JSON input arrives on stdin, for the entries `quest setup` " +
+				"installs. SessionStart and SubagentStart print `quest context` as the session's or subagent's " +
+				"additional context, when the root AGENTS.md or CLAUDE.md of the checkout holding the input's cwd " +
+				"has a line starting with `Quests: `, as `quest init` writes, and nothing otherwise. Exits 1 on " +
+				"malformed input or an event it does not handle.",
+		)
+		.action(() => {
+			out.stdout(hook(JSON.parse(readFileSync(0, "utf8"))));
 		});
 
 	program
@@ -1322,22 +1403,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			for (const line of theme ? theme.uninstall(changes) : changes) print(line);
 		});
 
-	program
-		.command("setup")
-		.description("Configure your own Claude Code settings for quest work, keeping your other settings")
-		.addHelpText(
-			"after",
-			"\nSets env.BASH_MAX_TIMEOUT_MS in the Claude Code user settings (CLAUDE_CONFIG_DIR's settings.json, or " +
-				"~/.claude/settings.json) to 3300000, so a foreground command, such as a blocking wait, may run 55 minutes: " +
-				"just under the 1h prompt-cache TTL. Prints each setting it changed, and is safe to rerun. Touches no repository.",
-		)
-		.action(() => {
-			for (const line of setup(claudeSettings())) print(line);
-		});
-
 	// Fresh clones and worktrees get the merge driver from whichever command runs first.
 	program.hook("preAction", (_program, action) => {
-		if (!["init", "uninstall", "setup"].includes(action.name())) heal(root());
+		// `setup` and `hook` act on the user's settings, and every session waits on `hook`.
+		if (action.parent !== program || !["init", "uninstall", "setup", "hook"].includes(action.name())) heal(root());
 	});
 
 	try {

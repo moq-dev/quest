@@ -73,5 +73,4 @@ moq-dev/moq's `.codex/hooks/direnv.sh`.
 
 ## Required
 
-- [.worktrees/ stays out of git status](/quest/m0/user-dev-shell/worktrees-exclude.md) - `quest worktree` adds `/.worktrees/` to the clone's local exclude unless something ignores it
-- [Repositories drop dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - quest, moq, moq.pro, rind, and rust2 drop their dev-shell hooks and `nix develop` instructions
+- [moq.pro drops its Codex dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - once a fresh Codex session there loads the dev shell without the repo hooks

@@ -42,21 +42,24 @@ That file sits in your quest log, a tree under `quest/`:
 quest/
   README.md           # The roadmap
   m0/
-    README.md         # First milestone, in priority order
+    README.md         # The first milestone
     export.md         # Ready
     download.md       # Required: export.md
 ```
 
-Folders are **epics**. A README's `Required` lists its children in
-priority order, beside any other dependencies. The README is the epic's
+Folders are **epics**, and the quests in a folder are its children; its
+README lists only what blocks it, never its children. The README is the epic's
 own quest, and it becomes ready once its children have merged. The top folders
 (`m0`, `m1`, ...) are **milestones** that give the work a delivery horizon.
+Finishing a quest deletes its file and edits no README, so PRs that finish
+sibling quests do not conflict.
 
 When a quest is complete, its PR removes the plan and the links that depended
 on it, so the quests that required it can become ready. A PR that leaves work
 rewrites the plan to what remains. Milestones are never
-deleted, so a PR that finishes one (its README has no `Required` left) removes
-the links to that milestone too; `quest check` flags any it misses. The
+deleted, so a PR that finishes one (its folder holds no other quest and its
+README has no `Required` left) removes the links to that milestone too;
+`quest check` flags any it misses. The
 finished plan stays in Git history, beside the code that completed it.
 
 Work is taken through a live runner lock or an open change on the forge.
@@ -119,7 +122,8 @@ nonzero exit means the command failed.
 ## Prioritize ready work
 
 `quest unblocked` ranks ready quests by milestone priority, descending number
-of distinct transitive dependents, then existing tree order. Counts include
+of distinct transitive dependents, then path order, which compares numbers by
+value so `m10` follows `m9`. Counts include
 later milestones without moving their candidates ahead of earlier milestones.
 Structural root, milestone, and epic membership does not add to the count;
 real dependencies on an epic still reach its remaining work. Other prerequisites
@@ -284,7 +288,8 @@ just finished, but keeps the root's listing of the milestone.
 Both stage the change, print one line per file (`R from -> to`, `D path`, or
 `M path`), and report on stderr any other mention of the path, such as prose
 or files outside `quest/`, without editing it. They run `quest check` on the
-result and exit 1 if it fails, for example when a quest moved out of its epic.
+result and exit 1 if it fails, for example when a quest moved into a folder
+with no README.
 
 An epic is its directory or README; removing one that holds other quests needs
 `-r`. The root and milestones are never moved or removed. `mv` refuses a
@@ -295,8 +300,8 @@ Neither command touches branches or PRs.
 
 ## Merge quest lists
 
-Concurrent PRs edit the same link lists: the base branch deletes finished
-quests' lines while a branch inserts a new quest beside them. `quest init`
+Concurrent PRs can edit the same link list: the base branch deletes a finished
+blocker's line while a branch adds another blocker beside it. `quest init`
 routes `quest/**` through a merge driver in `.gitattributes` and registers it
 in the clone's git config, so a local `git merge` resolves those conflicts.
 
@@ -326,10 +331,12 @@ A clean merge can still leave this branch's list links to quests the base
 finished, which `quest check` then flags. `quest check --fix` drops every
 `Required`, `Related`, or `Closes` entry linking to a quest deleted in the
 history of `HEAD`, and of `MERGE_HEAD` during a merge, that the working tree
-lacks, and prints `M path` for each edited document. It leaves the edits
-unstaged and refuses while a quest file has unresolved conflicts. A quest moved
-rather than deleted, a link that never named a quest, and a link in prose stay
-for `quest check` to report.
+lacks, and prints `M path` for each edited document. It then promotes a section
+heading written below `##` to `##` where nothing but its own content follows it
+before the next `##` heading, and no `##` section of that name exists. It leaves
+the edits unstaged and refuses while a quest file has unresolved conflicts. A
+quest moved rather than deleted, a link that never named a quest, a link in
+prose, and any other misleveled heading stay for `quest check` to report.
 
 ## Wait for pull request activity
 
@@ -557,6 +564,15 @@ This repository lands through GitHub's merge queue. Its required `Queue` check
 passes a merge group only when the group's build, `just check` and `just test`
 on the self-hosted runner, passes; it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
 re-enqueues healthy heads at the back of the queue.
+
+The fixer resolves every mechanical cause itself and pushes onto the PR's branch:
+conflicts where both sides' intent survives, formatting and lint, generated files,
+lockfiles rebuilt from the base's copy, base renames, and build or test failures with
+an obvious fix, which it builds and tests with package-registry access. It ignores
+instructions in the diff and reads the PR's own CI results as context. It hands back
+only what needs a maintainer: a behavior or design decision gets a diagnosis on the
+PR, and a fix that edits protected paths or that GitHub refuses to push gets a ready
+commit for `quest land apply <pr>`.
 
 ## Land a batch with quest land
 
@@ -815,10 +831,17 @@ backoff. Grant the App the base ruleset's bypass and the read permissions needed
 to inspect branch protection. The bypass actor's API merge of a pinned PR with
 the unreported required `quest land` check must be verified on the live host.
 
-## Watch GitHub's merge queue with quest land watch
+## Watch the merge queue with quest land watch
 
-On a base that lands through GitHub's merge queue, `quest land watch` runs on a
-maintainer's host, one process per repository, and tells each PR the queue
+`quest land watch` runs on a maintainer's host, one process per repository,
+and lands its base through a serial queue: GitHub's merge queue where the
+base's rules have a `merge_queue` rule, and otherwise
+[its own](#the-watchers-own-queue), as on a private repository on GitHub Team,
+which offers no merge queue. Each pass reads the base's rules
+(`GET /rules/branches/<base>`) and picks the mode from them, so enabling
+GitHub's queue on a repository switches its watcher with no host change; a
+pass that cannot read them does nothing. It reads them with a `contents: read`
+token, so an installation granted only one mode's permissions runs it. On GitHub's queue it tells each PR the queue
 drops unmerged why. With `--fixer`, it also runs the land fixer on each PR the
 queue dropped for a failure or a conflict, and puts it back at the back of the
 queue. It polls; the host needs no public endpoint.
@@ -927,13 +950,15 @@ requeue is a verdict: a failure on the base or from the runner never counts
 toward disabling a test. Each failed
 build's round is told the tests that flaked before and are not yet disabled, in
 `.git/quest-land-flaky.json` in its checkout, which `quest land fix` passes to
-the agent. One verdict alone only re-enqueues the PR, since one judgment could
+the agent, with the follow-up quest path the watcher chose for each when it
+first flaked. One verdict alone only re-enqueues the PR, since one judgment could
 hide a real bug. When a listed test flakes again, the fixer also commits its
-disabling on a `disable` branch from the base: the skip in the test
-framework's own form, naming the follow-up quest it adds to the repository's
-m0 `flaky` epic, `quest/m0/flaky/<name>.md`, to fix or delete the test. The
-watcher validates that commit as it does a base fix, requiring exactly one new
-follow-up quest, pushes it to `quest-land/flaky-<sha>`, opens it as a pull
+disabling on a `disable` branch from the base: only the skip in the test
+framework's own form, naming that follow-up quest. The watcher validates that
+commit as it does a base fix, refusing any edit under `quest/`, then commits
+the follow-up quest on top from a fixed template, `quest/m0/flaky/<name>.md`
+in the repository's m0 `flaky` epic, to fix or delete the test, creating the
+epic's README when the base has none. It pushes the result to `quest-land/flaky-<sha>`, opens it as a pull
 request with its Review recorded, and enqueues it like any other, with no
 maintainer's pick. A refused disable waits for the test's next flake, and a
 pull request GitHub refuses to enqueue says so and waits for a maintainer.
@@ -946,6 +971,61 @@ which `enqueuePullRequest` needs. With one it also asks for `contents: write`,
 for arming auto-merge and pushing fixes, and `checks: read` and `statuses: read`,
 for the PR's own checks the fixer reads; a push that carries a workflow change
 asks for `workflows: write`.
+
+### The watcher's own queue
+
+On a base without GitHub's merge queue, the watcher runs a serial queue of its
+own, one build at a time, so a failure is the one PR's with no triage. The
+base keeps requiring the `quest land` context nobody reports, with the App as
+the ruleset's bypass actor, so GitHub never merges a pick itself and the
+watcher is the base's only writer outside an admin's emergency bypass.
+
+Its picks are those `quest land serve` reads: open PRs whose auto-merge
+`quest merge --land` armed, pinned to their head, in the order they were armed,
+with the same ejections for a moved head, a missing pin, a blocking review, or
+a failing required check. A pick still waiting on its required checks keeps its
+place, and one another session holds waits, armed, until its hold clears.
+
+For the oldest pick it merges the base into the picked head with the quest
+merge driver, in the daemon's private repository, and pushes that merge to
+`quest-queue/<base>/<number>`. The repository's queue workflow builds that
+branch on push, as it builds a merge group; the header of this repository's
+`.github/workflows/queue.yml` shows the trigger. The base's required checks
+other than `quest land`, reported on the merge, decide the build: once they
+pass, the watcher lands the pick through `quest land serve`'s landing path. It
+lease-pushes the merge to the PR's branch, merges it with GitHub's merge API
+pinned to that head, as a squash or, with `--method merge`, a merge commit, and
+checks that the landed tree is the tested one, logging `CRITICAL` when it is
+not; a fork that refuses the push lands by a leased fast-forward of the base.
+It lands only on the base it tested: a base that moved during the build
+rebuilds the pick there, with no attempt counted.
+
+A failed build, a build still running after `--timeout` minutes (60), or a
+conflict the quest merge driver cannot merge drops the pick as GitHub's queue
+removes a PR: the watcher records it for the land fixer in `removal-<n>.json`
+with the failing jobs' logs, disarms the PR's auto-merge, and comments with
+the failing jobs' tails, and the fixer's rounds, attempts, flaky handling, and
+handbacks follow as on GitHub's queue. A re-enqueue arms auto-merge again,
+pinned to the head, which puts the PR at the back. A writer's push, a person
+disarming auto-merge, or a hold ends a build in progress. The drop is recorded
+before any of its steps, so a restart finishes it.
+
+Each pick carries an informational `quest queue` check run, never a required
+context: its position, the build in progress with a link to its run, and the
+outcome. A queue branch goes, with its unfinished runs cancelled, once its pick
+lands or leaves the queue, and the first pass deletes the queue branches an
+earlier process left behind. Once the base has GitHub's merge queue, the next
+pass ends any build and completes the checks. The ruleset change that adds the
+`merge_queue` rule also replaces the required `quest land` context with the
+queue workflow's required check, since GitHub's queue never reports
+`quest land` and would stall.
+
+The own queue's token asks for `contents: write` and `pull_requests: write`,
+to arm and disarm auto-merge and comment, `actions: write` to read logs and
+cancel runs, `checks: write` for its check runs, `statuses: read`, and
+`administration: read` for the base's classic protection, as `quest land serve`
+does. Its pushes ask for `contents: write`, and `workflows: write` for one that
+carries a workflow change.
 
 ## Gate expensive commands
 
@@ -1530,10 +1610,10 @@ entries into the file's `hooks`:
 ```json
 {
   "hooks": {
-    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }]
+    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }]
   }
 }
 ```
@@ -1589,8 +1669,10 @@ then `claude rm` again.
 ## Work with your agents
 
 Open this repository in Claude Code or Codex. The binary carries the skills;
-a repository installs only a stub per skill that runs `quest skill <name>`, so
-the version you pin decides what your agents follow:
+a repository installs only a stub per skill, so the version you pin decides
+what your agents follow. Claude Code's stub inlines `quest skill <name>` when
+the skill is invoked; Codex's asks the agent to run it. Either way the skill
+arrives with the guide sections and other skills it builds on, in one call:
 
 | Skill | What it does |
 | --- | --- |
@@ -1622,14 +1704,36 @@ Follow https://github.com/moq-dev/quest/blob/main/SETUP.md to set up Quest here.
 
 The [getting started guide](docs/getting-started.md) covers what happens next.
 
-`quest setup` configures your own Claude Code settings for quest work, in
-every repository: it sets `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a
-foreground command such as `quest wait` can block for 55 minutes, just under
-the 1h prompt-cache TTL, instead of the 10-minute default. It edits
-`$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`, keeps your
-other settings, prints each setting it changed, and is safe to rerun.
 `quest context` prints the rules agents follow in every task, and `quest guide` the
-quest format and workflow they read before working on a quest.
+quest format and workflow they read before working on a quest outside a skill;
+`quest guide prompting` prints one section.
+
+### Configure Claude Code
+
+`quest setup` configures your own Claude Code settings for quest work, in every
+repository:
+
+```sh
+quest setup
+```
+
+It sets `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground command such as
+`quest wait` can block for 55 minutes, just under the 1h prompt-cache TTL,
+instead of the 10-minute default.
+
+It also loads the rules once. The repository's `Quests: ` line has agents run
+`quest context` before any work, which costs a turn and is summarized away
+when the session compacts. Instead, `quest setup` installs a `SessionStart`
+hook (startup, resume, clear, and compact) and a `SubagentStart` hook, each
+running `quest hook`, which adds `quest context` to the session in a
+repository whose root `AGENTS.md` or `CLAUDE.md` has the `Quests: ` line, and
+nothing elsewhere. `quest` must be on the `PATH` Claude Code starts with, as
+for the worktree hooks.
+
+It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`,
+keeps your other settings, refuses a malformed file unchanged, writes once,
+and prints each change. Rerun it after upgrading. `quest setup --remove` takes
+the hooks out, and the timeout while it still holds Quest's value.
 
 ## Where this is going
 
@@ -1647,7 +1751,7 @@ Automatic project history passes read updates since their prior issue/PR
 boundaries, including timestamp ties. Explicit Refresh starts or resumes a full
 history pass; successive refreshes repair cached issues deleted without a
 webhook. Open draft bodies are read only to classify `## Waiting`.
-[The first milestone](quest/m0/README.md) lists the quests that remain.
+[The first milestone](quest/m0/) holds the quests that remain.
 
 ## Contributing
 

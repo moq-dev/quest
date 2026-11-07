@@ -51,6 +51,10 @@ Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
 
   The land work is what moq-dev's repositories use every day, and the
   maintainer ranked it first in the 2026-10-30 and 2026-11-01 sessions.
+  Superseded 2026-11-05 (user, /quest-plan, the
+  [token waste](/quest/m0/token-waste/README.md) audit): an epic's children
+  are its directory, so list order no longer ranks work within m0;
+  `quest unblocked` ranks by milestone, then downstream impact, then path.
 - How do moq-dev's repositories land? Decided 2026-11-01 (maintainer,
   /quest-plan), reversing the 2026-10-26 move to a batched gate:
   - ✅ Through GitHub's merge queue again, one PR at a time, with no batching
@@ -90,16 +94,13 @@ ownership-manifest design:
 
 ## Required
 
-- [Fix disabled flaky tests](/quest/m0/flaky/README.md) - fix or delete each disabled test
-
 - [Land through a serial merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue, or the watcher's own where GitHub has none, lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
-- [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - the docs listing what the fixer resolves and hands back
+- [quest review continues older sessions](/quest/m0/review-old-state.md) - a review session saved by an older quest continues, or is refused before the reviewer runs
 - [Review sessions keyed by upstream branch](/quest/m0/review-session-key.md) - a round from a local branch tracking the PR branch continues that branch's review session
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the first model of its size's ranked list that can run, reviews rank the same way, and PRs record size, implementer, and reviewer
 - [Repositories and hosts follow quest's main](/quest/m0/pin-sync.md) - every push to main reaches each enrolled repository and host through a bot-queued pin bump
 - [Cut agent token waste](/quest/m0/token-waste/README.md) - sessions stop paying for loading rules, a second review pass, polling, oversized coordinators, and merge churn
-- [quest check rejects a misleveled Waiting heading](/quest/m0/waiting-heading-level.md) - a `### Waiting` (or any non-`##` level) fails `quest check` with its file and line, so no wait drops out of `quest waiting`
 - [Model check](/quest/m0/model-check.md) - recurring: the first audit of the routed PRs retunes the built-in size lists
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config

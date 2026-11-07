@@ -104,6 +104,20 @@ test("skill lists every skill", () => {
 	expect(out.stdout).toMatch(/^start - /m);
 });
 
+test("skill prints what the skill builds on", () => {
+	const out = run("skill", "plan");
+	expect(out.code).toBe(0);
+	expect(out.stdout).toContain("\n# /quest-grill\n");
+	expect(out.stdout).toContain("\n# Quest guide\n\n## Model\n");
+});
+
+test("guide prints the named sections in the guide's order", () => {
+	const out = run("guide", "prompting", "FORMAT");
+	expect(out.code).toBe(0);
+	expect(out.stdout).toMatch(/^## Format\n[\s\S]*\n## Prompting\n/);
+	expect(out.stdout).not.toContain("## Model");
+});
+
 test("skill rejects an unknown name", () => {
 	const out = run("skill", "nope");
 	expect(out.code).toBe(1);
@@ -112,7 +126,7 @@ test("skill rejects an unknown name", () => {
 
 test("usage errors exit 2", () => {
 	expect(run("bogus").code).toBe(2);
-	expect(run("skill", "--stub").code).toBe(2);
+	expect(run("guide", "nope").code).toBe(2);
 	expect(run("unblocked", "a", "b").code).toBe(2);
 	expect(run().code).toBe(2);
 });
