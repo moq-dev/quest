@@ -1,4 +1,4 @@
-// Rank ready work without mistaking the epic index for downstream work.
+// Rank ready work without mistaking epic membership for downstream work.
 
 import { handBackWaits } from "./claim";
 import { type Doc, branchQuest, children, entries, permanent, rooted } from "./doc";
@@ -18,7 +18,7 @@ export interface RankedQuest {
  * structure; callers validate filesystem links.
  */
 export interface Ranking {
-	/** The root's subtree rank of `path`, lowest first; unindexed paths sort last. */
+	/** The rank of the root's child that holds `path`, lowest first; the root itself sorts last. */
 	priority(path: string): number;
 	/** Distinct transitive dependents of `path`, excluding epic membership and milestones. */
 	impact(path: string): number;
@@ -31,14 +31,19 @@ export function ranking(docs: Doc[]): Ranking {
 
 	const byPath = new Map(docs.map((doc) => [doc.path, doc]));
 	const reverse = new Map<string, { path: string; structural: boolean }[]>();
+	const depend = (target: string, path: string, structural: boolean) => {
+		const dependents = reverse.get(target) ?? [];
+		dependents.push({ path, structural });
+		reverse.set(target, dependents);
+	};
 	for (const doc of docs) {
-		const members = new Set(children(doc));
+		const kids = children(docs, doc);
 		for (const entry of entries(doc, "Required")) {
 			const target = rooted(entry.target!)!;
-			const dependents = reverse.get(target) ?? [];
-			dependents.push({ path: doc.path, structural: members.has(target) });
-			reverse.set(target, dependents);
+			// An old child list's entry is membership, which the children below record.
+			if (!kids.includes(target)) depend(target, doc.path, false);
 		}
+		for (const child of kids) depend(child, doc.path, true);
 	}
 
 	// Assign the root's subtrees their priority before scoring. In particular,
@@ -48,10 +53,10 @@ export function ranking(docs: Doc[]): Ranking {
 		if (priority.has(path)) return;
 		priority.set(path, rank);
 		const doc = byPath.get(path);
-		if (doc) for (const child of children(doc)) assign(child, rank);
+		if (doc) for (const child of children(docs, doc)) assign(child, rank);
 	};
 	const root = byPath.get(ROOT);
-	if (root) children(root).forEach(assign);
+	if (root) children(docs, root).forEach(assign);
 
 	const impact = (path: string): number => {
 		const visited = new Set([path]);

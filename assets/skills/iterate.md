@@ -30,4 +30,4 @@ Summarize the changes made.
 
 Once nothing is unfinished and no decisions need the user, run `/quest-review` with your token, which reviews the branch, pushes, and marks the PR ready.
 Hand it back with `quest release <pr> <token>`, using the latest token printed, whenever you stop, including to ask.
-Never merge; that is `/quest-merge`, once the user picks it.
+Never merge; that is `/quest-merge`, once the PR is picked.

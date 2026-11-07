@@ -29,10 +29,6 @@ export const ROOT_README = `# Quests
 ## Goal
 
 The permanent root epic.
-
-## Required
-
-- [M0](/quest/m0/README.md)
 `;
 
 export const M0_README = `# M0
@@ -40,10 +36,6 @@ export const M0_README = `# M0
 ## Goal
 
 A milestone.
-
-## Required
-
-- [Epic](/quest/m0/epic/README.md)
 `;
 
 export const EPIC_README = `# Epic
@@ -51,11 +43,6 @@ export const EPIC_README = `# Epic
 ## Goal
 
 An epic.
-
-## Required
-
-- [One](/quest/m0/epic/one.md)
-- [Two](/quest/m0/epic/two.md)
 `;
 
 export const ONE = `# [S] One
