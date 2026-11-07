@@ -135,8 +135,7 @@ Shared shape, for the children to follow:
   comments the fixer writes. A `quest land watch` subcommand beside
   `quest land serve` is the likely form; the first child settles it.
 - The fixer prompt (`assets/land-fix.md`) and its quality quests stay in
-  [the land fixer epic](/quest/m0/land-fixer/README.md); the host container
-  work stays in [the host gate epic](/quest/m0/host-land/README.md).
+  [the land fixer epic](/quest/m0/land-fixer/README.md).
 - The review policy is unchanged: a head the fixer pushed as a recorded
   mechanical fix lands without a new review (maintainer, 2026-10-30). A push
   by anyone else ends the pick, as does a person removing the PR from the
@@ -150,7 +149,6 @@ Shared shape, for the children to follow:
 
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
-- [Tests fit their timeout on the queue runner](/quest/m0/queue-watcher/queue-test-timeouts.md) - the root and Worker suites stop timing out or stalling in merge-group runs, so the queue stops ejecting PRs for them
 - [The watcher writes flaky quests](/quest/m0/queue-watcher/flaky-quest.md) - a disable's follow-up quest comes from a template in `quest land watch`, so the headless land fixer writes no quest
 - [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - moq.pro's `main` leaves the batching gate for the watcher's own queue
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
@@ -159,4 +157,3 @@ Shared shape, for the children to follow:
 ## Related
 
 - [The land fixer](/quest/m0/land-fixer/README.md) - the fixer the watcher runs
-- [Merge through a host gate](/quest/m0/host-land/README.md) - the gate the other repositories keep until they follow
