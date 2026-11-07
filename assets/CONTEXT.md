@@ -16,7 +16,7 @@ Engineering rules for every task. The repository's own instructions add to them 
 - Be adversarial: attack your own approach, reports, reviews, and other PRs as hard as anyone else's, and argue for the best approach over the first one that works.
 - Never add or change a rule in an `AGENTS.md`, `CONTRIBUTING.md`, or skill without being prompted. Follow [Prompting](#prompting) when you do.
 - No em dashes.
-- End every GitHub post you author with `(Written by <model>)`, naming the running model. Commit messages with a `Co-Authored-By:` trailer are exempt.
+- End every GitHub post you author with `(Written by <model> with <effort>)`, naming the running model and its reasoning effort. When the harness doesn't report the effort, write `(Written by <model>)`; never guess it. Commit messages with a `Co-Authored-By:` trailer are exempt.
 - In a public repository, never mention customers, partners, or prospects, or link to private repositories. Justify work on its merits.
 
 ## Important
