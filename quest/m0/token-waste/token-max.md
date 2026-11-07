@@ -19,10 +19,12 @@ Amended 2026-11-06 (maintainer, /quest-plan in token-max): first use should
 be one command. The maintainer delegated packaging and allowed TypeScript;
 token-max now plans Node-compatible TypeScript and npm distribution
 ([kixelated/token-max#2](https://github.com/kixelated/token-max/pull/2)).
-Use `npx --yes token-max@latest`, or `bunx --bun token-max@latest` for
+Use `npx --yes @kixelated/token-max@latest`, or `bunx --bun @kixelated/token-max@latest` for
 Bun-only execution. This supersedes the crates.io release dependency; it
-does not require a quest wrapper or Rust toolchain.
+does not require a quest wrapper or Rust toolchain. The scoped package
+keeps the `token-max` command while avoiding reliance on the unverified
+unscoped npm name.
 
 ## Waiting
 
-- kixelated/token-max: publish 0.1.0 on npm; check `npm view token-max@0.1.0 version repository.url` for that version and the kixelated/token-max repository
+- kixelated/token-max: publish 0.1.0 on npm; check `npm view @kixelated/token-max@0.1.0 version repository.url` for that version and the kixelated/token-max repository
