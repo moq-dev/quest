@@ -307,6 +307,11 @@ describe("epics", () => {
 		expect(listed.blockers(readme)).toEqual(tree().blockers(readme));
 	});
 
+	test("a held link to no quest still blocks", () => {
+		const t = tree().append("quest/m0/epic/README.md", "\n## Required\n\n- [Gone](/quest/m0/epic/gone.md)\n");
+		expect(t.blockers("quest/m0/epic/README.md")[0]).toBe("Gone");
+	});
+
 	test("a quest required twice", () => {
 		tree()
 			.append("quest/m0/epic/two.md", "- [One again](/quest/m0/epic/one.md)\n")

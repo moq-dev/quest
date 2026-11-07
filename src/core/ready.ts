@@ -95,8 +95,9 @@ function expand(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]
 		// A bullet that does not open with a link into the tree is invalid, and
 		// nothing here can clear it, so it is a blocker with nothing under it.
 		const target = entry.target === null ? null : rooted(entry.target);
-		// A link to a quest the epic holds is listed below, with its children.
-		if (target !== null && holds(doc.path, target)) continue;
+		// A link to a quest the epic holds is listed below, with its children; a
+		// broken one stays, since no child stands in for it.
+		if (target !== null && byPath.has(target) && holds(doc.path, target)) continue;
 		found.push(blocker(docs, byPath, target !== null && byPath.has(target) ? target : null, entry.text, stack));
 	}
 	for (const child of children(docs, doc)) found.push(blocker(docs, byPath, child, child, stack));
