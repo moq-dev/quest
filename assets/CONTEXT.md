@@ -16,7 +16,7 @@ Engineering rules for every task. The repository's own instructions add to them 
 - Be adversarial: attack your own approach, reports, reviews, and other PRs as hard as anyone else's, and argue for the best approach over the first one that works.
 - Never add or change a rule in an `AGENTS.md`, `CONTRIBUTING.md`, or skill without being prompted. Follow [Prompting](#prompting) when you do.
 - No em dashes.
-- End every GitHub post you author with `(Written by <model>)`, naming the running model. Commit messages with a `Co-Authored-By:` trailer are exempt.
+- End every GitHub post you author with `(Written by <model> with <effort>)`, naming the running model and its reasoning effort. When the harness doesn't report the effort, write `(Written by <model>)`; never guess it. Commit messages with a `Co-Authored-By:` trailer are exempt.
 - In a public repository, never mention customers, partners, or prospects, or link to private repositories. Justify work on its merits.
 
 ## Important
@@ -67,11 +67,16 @@ Run such a command in the foreground and read its exit code directly, not throug
 When it may outlast the tool's time limit, start it in the background and block on it in the same turn with the harness's wait for that task.
 Run no more sub-agents at once than the harness allows; queue the rest and start one as each reports.
 
-Wait on a PR's CI or reviews with `quest wait`, and on other background work with a blocking command that ends on its terminal state, not timed polls.
+Every turn re-sends the whole context, so spend turns on the work.
+Batch independent reads, searches, and checks into one turn, as parallel tool calls or one command.
+Wait on a PR's CI or reviews with `quest wait`, and on other background work with one blocking call that ends on its terminal state.
+Never poll: no `sleep`, no `until` or `while` loop re-checking a log or status, no wait with a timeout far below the tool's limit, and no repeated status checks or output reads of a running task.
 Bound each wait, not the work, under an hour so the prompt cache stays warm; `quest wait` has no deadline without `--timeout`.
 Re-run a wait that times out, passing the resume point a timed-out `quest wait` printed as its `--since`, so activity during the first wait is still reported.
 A sub-agent ends its turn only with a final result or a question, never with background work still running or an interim status report.
+Its final report holds only what its caller acts on, such as its PR's URL, state, and head, and each decision it needs with a recommendation; details go in the PR body.
 A coordinator relays no interim report: it resumes a sub-agent that ended its turn on one, telling it to block until its work finishes.
+A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
 Back out when progress stalls rather than burn tokens; a gate's queue or a long command still running is not a stall.
 
 ## Questions
@@ -103,7 +108,9 @@ A decision about an open PR never authorizes closing it. Confirm a close as its 
 
 Push with an explicit refspec: `git push <remote> refs/heads/<branch>:refs/heads/<branch>`.
 A bare branch name can push to the base branch instead, for example under `push.default=upstream` when the branch tracks it.
-Never rebase or force-push, even a branch only you hold; merge the base instead, and fix any merge conflicts.
+Never rebase or force-push, even a branch only you hold; merge the base instead.
+Merge it only when the branch conflicts with it or a landing step, such as `quest merge` or GitHub's merge queue, refuses the head, and resolve the conflicts in that merge.
+A branch that is only behind its base needs no merge: `quest review` covers only the branch's own change, a merge queue or `quest land` tests each PR on the current base, and every merge reruns CI.
 A PR that another session pushed to in the last hour is theirs: report its events instead of pushing to it.
 Before each push to a branch that already has a PR, confirm the PR is still open: a push after it merges brings the deleted branch back.
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.

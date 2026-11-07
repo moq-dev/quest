@@ -63,7 +63,7 @@ import {
 	roundLines,
 } from "./review";
 import { type Recorded, pullModels, recordRound } from "./review-record";
-import { heal, init, uninstall } from "./setup";
+import { claudeSettings, heal, init, setup, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
@@ -130,6 +130,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
 				"cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the environment, as a check " +
 				"that lands PRs should set, the command waits for memory but never for load.\n\n" +
+				"--host holds the whole host, for work such as a benchmark that other work would disturb: it " +
+				"reserves the host at once, starts once no other gated command runs, and every other gated " +
+				"command, quick or priority, waits until it ends. A nested --host runs immediately like any nested " +
+				"call. Windows refuses --host.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
 				"a systemd user scope, or inside a Quest scope through a child cgroup of its own. macOS, and Linux " +
@@ -139,10 +143,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"cancelled.",
 		)
 		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
+		.addOption(new Option("--host", "Hold the whole host, with no other gated command running").conflicts("quick"))
 		.argument("<command>", "Executable to run")
 		.argument("[args...]", "Arguments forwarded verbatim")
-		.action((command: string, args: string[], options: { quick?: boolean }) => {
-			pending = gate([command, ...args], { quick: options.quick }).catch((error: unknown) => {
+		.action((command: string, args: string[], options: { quick?: boolean; host?: boolean }) => {
+			pending = gate([command, ...args], options).catch((error: unknown) => {
 				warn(error instanceof Error ? error.message : String(error));
 				return 1;
 			});
@@ -1319,9 +1324,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			for (const line of theme ? theme.uninstall(changes) : changes) print(line);
 		});
 
+	program
+		.command("setup")
+		.description("Configure your own Claude Code settings for quest work, keeping your other settings")
+		.addHelpText(
+			"after",
+			"\nSets env.BASH_MAX_TIMEOUT_MS in the Claude Code user settings (CLAUDE_CONFIG_DIR's settings.json, or " +
+				"~/.claude/settings.json) to 3300000, so a foreground command, such as a blocking wait, may run 55 minutes: " +
+				"just under the 1h prompt-cache TTL. Prints each setting it changed, and is safe to rerun. Touches no repository.",
+		)
+		.action(() => {
+			for (const line of setup(claudeSettings())) print(line);
+		});
+
 	// Fresh clones and worktrees get the merge driver from whichever command runs first.
 	program.hook("preAction", (_program, action) => {
-		if (!["init", "uninstall"].includes(action.name())) heal(root());
+		if (!["init", "uninstall", "setup"].includes(action.name())) heal(root());
 	});
 
 	try {
@@ -1372,7 +1390,7 @@ function positiveSeconds(value: string): number {
 
 /**
  * Stop option parsing before a gated executable, keeping its own flags intact.
- * Quest's global options still apply on either side of `gate`, and its own `--quick` after it.
+ * Quest's global options still apply on either side of `gate`, and its own `--quick` and `--host` after it.
  */
 export function gateBoundary(argv: string[]): string[] {
 	const skip = (index: number, own: string[] = []) => {
@@ -1384,7 +1402,7 @@ export function gateBoundary(argv: string[]): string[] {
 	};
 	const index = skip(0);
 	if (argv[index] !== "gate") return argv;
-	const command = skip(index + 1, ["--quick"]);
+	const command = skip(index + 1, ["--quick", "--host"]);
 	if (!argv[command] || ["--", "-h", "--help", "-V", "--version"].includes(argv[command])) return argv;
 	return [...argv.slice(0, command), "--", ...argv.slice(command)];
 }

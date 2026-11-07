@@ -3,6 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # Bun 1.4.4, ahead of `nixpkgs`: 1.4.2 passes its non-blocking stderr to the
+    # commands it spawns, which uv aborts on (oven-sh/bun#43868). Drop this input
+    # once `nixpkgs` reaches 1.4.4; bumping `nixpkgs` now would also move opencode.
+    nixpkgs-bun.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     # A reviewed quest for the dev shell's merge driver, so local merges resolve
     # link lists without running the checkout's own, possibly unreviewed, code.
@@ -19,6 +23,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-bun,
       flake-utils,
       quest-pinned,
       ...
@@ -37,6 +42,7 @@
             inherit system;
             # Claude Code is unfree; the runner package pins it so adapters run a tested version.
             config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "claude-code";
+            overlays = [ (_: _: { inherit (nixpkgs-bun.legacyPackages.${system}) bun; }) ];
           };
           inherit (pkgs) opencode;
           sandboxRuntime = pkgs.callPackage ./nix/sandbox-runtime.nix { };
