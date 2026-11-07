@@ -33,6 +33,7 @@ import {
 	linuxMemory,
 	type Owner,
 	owner,
+	processStart,
 	QUICK_MS,
 	RECENT_MS,
 	SETTLE_MS,
@@ -45,6 +46,9 @@ import { questScope } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
 
 const GiB = 2 ** 30;
+
+/** How this process's gate records itself in an admission. */
+const me = { pid: process.pid, start: processStart(process.pid) };
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -114,7 +118,7 @@ test("load and memory pressure wait whatever the ledger holds", async () => {
 	const state = { now: 0, load: 9, memory: 0 };
 	const host = testHost(tempDir(), state, events);
 	// A build admitted long ago still runs, so the load is the gate's to wait out.
-	const build = { id: "build", at: -10 * RECENT_MS, pid: process.pid };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
 	expect(host.publish(host.ledger(), [build])).toBe(true);
 	const sleep = host.sleep;
 	host.sleep = async (ms, signal) => {
@@ -124,7 +128,7 @@ test("load and memory pressure wait whatever the ledger holds", async () => {
 	};
 	await admit({ load: 4, memory: GiB }, host, signal, (reason) => events.push(reason));
 	expect(events).toEqual(["load", `sleep ${SETTLE_MS}`, "memory", `sleep ${SETTLE_MS}`]);
-	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: 2 * SETTLE_MS, pid: process.pid }]);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: 2 * SETTLE_MS, ...me }]);
 });
 
 test("load from outside the gate admits one command at a time while none runs", async () => {
@@ -165,7 +169,7 @@ test("a running admission keeps its slot past the minute, and a finished one exp
 	expect(alive(process.pid)).toBe(true);
 	expect(alive(exited)).toBe(false);
 	host.publish(host.ledger(), [
-		{ id: "running", at: 0, pid: process.pid },
+		{ id: "running", at: 0, ...me },
 		{ id: "exited", at: 0, pid: exited },
 		{ id: "unknown", at: 0 },
 	]);
@@ -181,8 +185,8 @@ test("a running admission keeps its slot past the minute, and a finished one exp
 	await admit({ load: 1, memory: 1 }, busy, signal, (reason) => events.push(reason));
 	expect(events).toEqual(["load", `sleep ${SETTLE_MS}`]);
 	expect(host.ledger().admissions).toEqual([
-		{ id: "running", at: 0, pid: process.pid },
-		{ id: expect.any(String), at: now, pid: process.pid },
+		{ id: "running", at: 0, ...me },
+		{ id: expect.any(String), at: now, ...me },
 	]);
 	// A malformed process ID reads as a version cut short.
 	writeFileSync(join(directory, "100"), JSON.stringify([{ id: "a", at: 0, pid: -1 }]));
@@ -196,7 +200,7 @@ test("a priority caller waits for memory, never for load, even while a gated com
 	const events: string[] = [];
 	const host = testHost(directory, state, events);
 	// A build admitted long ago still runs, so an ordinary caller would wait out the load.
-	const build = { id: "build", at: -10 * RECENT_MS, pid: process.pid };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
 	expect(host.publish(host.ledger(), [build])).toBe(true);
 	const sleep = host.sleep;
 	host.sleep = async (ms, signal) => {
@@ -205,7 +209,7 @@ test("a priority caller waits for memory, never for load, even while a gated com
 	};
 	await admit(limits, host, signal, (reason) => events.push(reason), { priority: true });
 	expect(events).toEqual(["memory", `sleep ${SETTLE_MS}`]);
-	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: SETTLE_MS, pid: process.pid }]);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: SETTLE_MS, ...me }]);
 	// Its admission takes headroom from an ordinary caller once the load falls.
 	state.load = 3;
 	const ordinary: string[] = [];
@@ -219,12 +223,12 @@ test("a quick caller starts after at most QUICK_MS, and its admission is recorde
 	const events: string[] = [];
 	const host = testHost(directory, state, events);
 	// A build admitted long ago still runs: the load is the gate's own, and its slot survives.
-	const build = { id: "build", at: -10 * RECENT_MS, pid: process.pid };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
 	expect(host.publish(host.ledger(), [build])).toBe(true);
 	await admit({ load: 4, memory: GiB }, host, signal, undefined, { quick: true });
 	const sleeps = Array.from({ length: QUICK_MS / SETTLE_MS }, () => `sleep ${SETTLE_MS}`);
 	expect(events).toEqual(sleeps);
-	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: QUICK_MS, pid: process.pid }]);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: QUICK_MS, ...me }]);
 	// A sleep that overran shortens the last one, which ends at the deadline.
 	const late = { now: 0, load: 99, memory: 0 };
 	const overran: string[] = [];
@@ -236,7 +240,80 @@ test("a quick caller starts after at most QUICK_MS, and its admission is recorde
 	};
 	await admit({ load: 4, memory: GiB }, slow, signal, undefined, { quick: true });
 	expect(overran.at(-1)).toBe(`sleep ${SETTLE_MS - 3000}`);
-	expect(slow.ledger().admissions).toEqual([{ id: expect.any(String), at: QUICK_MS, pid: process.pid }]);
+	expect(slow.ledger().admissions).toEqual([{ id: expect.any(String), at: QUICK_MS, ...me }]);
+});
+
+test("a caller holding the host reserves it, waits out gated commands, and holds off every other caller", async () => {
+	const directory = tempDir();
+	const limits = { load: 4, memory: GiB };
+	// Load and memory never let an ordinary caller in; the holder ignores them.
+	const state = { now: 0, load: 99, memory: 0 };
+	const build = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
+	const ledger = fileHost(directory, () => state.now);
+	expect(ledger.publish(ledger.ledger(), [{ id: "build", at: 0, pid: build.pid }])).toBe(true);
+	const held: string[][] = [];
+	const events: string[] = [];
+	const holder = testHost(directory, state, events);
+	const sleep = holder.sleep;
+	holder.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		// Reserved while it waits: no caller gets in, whatever its precedence, even past a quick deadline.
+		for (const precedence of [{}, { quick: true }, { priority: true }, { host: true }]) {
+			const reasons: string[] = [];
+			const controller = new AbortController();
+			const clock = { now: state.now, load: 0, memory: Infinity };
+			const other = testHost(directory, clock);
+			other.sleep = async () => {
+				clock.now += QUICK_MS;
+				if (reasons.length > 1) controller.abort();
+			};
+			await expect(
+				admit(limits, other, controller.signal, (reason) => reasons.push(reason), precedence),
+			).rejects.toThrow();
+			held.push(reasons);
+		}
+		build.kill();
+		await once(build, "exit");
+	};
+	await admit(limits, holder, signal, (reason) => events.push(reason), { host: true });
+	expect(events).toEqual(["commands", `sleep ${SETTLE_MS}`]);
+	expect(held).toEqual(Array(4).fill(["host", "host"]));
+	expect(ledger.ledger().admissions).toEqual([
+		{ id: "build", at: 0, pid: build.pid },
+		{ id: expect.any(String), at: 0, ...me, host: true },
+	]);
+	// A holder that died releases the host, as does one whose process ID another process now has.
+	const exited = spawnSync(process.execPath, ["-e", ""]).pid;
+	const released = tempDir();
+	const after = fileHost(released, () => 0);
+	expect(
+		after.publish(after.ledger(), [
+			{ id: "bench", at: 0, pid: exited, host: true },
+			{ id: "reused", at: 0, pid: process.pid, host: true, start: "an earlier process" },
+		]),
+	).toBe(true);
+	const reasons: string[] = [];
+	await admit(limits, testHost(released, { now: 0, load: 0, memory: Infinity }), signal, (reason) =>
+		reasons.push(reason),
+	);
+	expect(reasons).toEqual([]);
+	expect(after.ledger().admissions.at(-1)).toEqual({ id: expect.any(String), at: 0, ...me });
+	// Nor does a holder wait on an ordinary admission whose process ID another process now has.
+	const reused = tempDir();
+	const ordinary = fileHost(reused, () => 0);
+	const earlier = { id: "build", at: -10 * RECENT_MS, pid: process.pid, start: "an earlier process" };
+	expect(ordinary.publish(ordinary.ledger(), [earlier])).toBe(true);
+	const waited: string[] = [];
+	await admit(
+		limits,
+		testHost(reused, { now: 0, load: 0, memory: Infinity }),
+		signal,
+		(reason) => waited.push(reason),
+		{
+			host: true,
+		},
+	);
+	expect(waited).toEqual([]);
 });
 
 test("a lone quick or priority caller starts at once on load from outside the gate", async () => {
@@ -249,7 +326,7 @@ test("a lone quick or priority caller starts at once on load from outside the ga
 			throw new Error("a lone command waited for load it cannot wait out");
 		};
 		await admit(limits, host, signal, undefined, precedence);
-		expect(host.ledger().admissions).toEqual([{ id: expect.any(String), at: 0, pid: process.pid }]);
+		expect(host.ledger().admissions).toEqual([{ id: expect.any(String), at: 0, ...me }]);
 	}
 });
 
@@ -288,7 +365,7 @@ test("a caller stalled after sampling the host decides again and records when it
 		return state.memory;
 	};
 	await admit(limits, stalled, signal);
-	expect(stalled.ledger().admissions).toEqual([{ id: expect.any(String), at: SETTLE_MS, pid: process.pid }]);
+	expect(stalled.ledger().admissions).toEqual([{ id: expect.any(String), at: SETTLE_MS, ...me }]);
 	// The next caller spaces itself from the publication, not from the stale sample.
 	const events: string[] = [];
 	await admit(limits, testHost(directory, state, events), signal);
@@ -360,7 +437,7 @@ test("a backward clock step dates future admissions now, and they expire a minut
 	expect(events).toEqual([`sleep ${SETTLE_MS}`]);
 	expect(host.ledger().admissions).toEqual([
 		{ id: "before", at: RECENT_MS },
-		{ id: expect.any(String), at: RECENT_MS + SETTLE_MS, pid: process.pid },
+		{ id: expect.any(String), at: RECENT_MS + SETTLE_MS, ...me },
 	]);
 	state.now += RECENT_MS + SETTLE_MS;
 	events.length = 0;
@@ -535,7 +612,7 @@ test("cancelling a waiting caller rejects admission", async () => {
 	const controller = new AbortController();
 	const file = fileHost(tempDir());
 	// A build still runs, so the load is the gate's to wait out.
-	file.publish(file.ledger(), [{ id: "build", at: 0, pid: process.pid }]);
+	file.publish(file.ledger(), [{ id: "build", at: 0, ...me }]);
 	const busy: Host = {
 		...file,
 		load: () => 9,
@@ -555,6 +632,16 @@ test("a command runs in place with the given environment and its exact exit stat
 	const script = "process.exit(process.env.QUEST_GATE_ADMITTED === '1' ? 7 : 1)";
 	const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
 	expect(await direct([process.execPath, "-e", script], env, cancellation().cancel)).toBe(7);
+});
+
+test("Windows refuses --host, which it could not tell from a reused process ID", async () => {
+	const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+	Object.defineProperty(process, "platform", { value: "win32" });
+	try {
+		await expect(gate([process.execPath, "-e", ""], { host: true })).rejects.toThrow("unsupported on Windows");
+	} finally {
+		Object.defineProperty(process, "platform", platform);
+	}
 });
 
 test("a nested gate runs at once and keeps the exact exit status", async () => {
@@ -1227,6 +1314,7 @@ test("the gated command keeps its own flags, even ones Quest also parses", () =>
 	expect(gateBoundary(["gate", "--version"])).toEqual(["gate", "--version"]);
 	// Gate's own option stays Quest's; the same flag after the executable is the command's.
 	expect(gateBoundary(["gate", "--quick", "ls", "--quick"])).toEqual(["gate", "--quick", "--", "ls", "--quick"]);
+	expect(gateBoundary(["gate", "--host", "ls", "--host"])).toEqual(["gate", "--host", "--", "ls", "--host"]);
 	expect(gateBoundary(["gate", "--root", "r", "--quick", "ls"])).toEqual([
 		"gate",
 		"--root",
