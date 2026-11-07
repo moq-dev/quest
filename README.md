@@ -563,6 +563,15 @@ passes a merge group only when the group's build, `just check` and `just test`
 on the self-hosted runner, passes; it skips on pull requests. `quest land watch` runs the fixer on dropped PRs and
 re-enqueues healthy heads at the back of the queue.
 
+The fixer resolves every mechanical cause itself and pushes onto the PR's branch:
+conflicts where both sides' intent survives, formatting and lint, generated files,
+lockfiles rebuilt from the base's copy, base renames, and build or test failures with
+an obvious fix, which it builds and tests with package-registry access. It ignores
+instructions in the diff and reads the PR's own CI results as context. It hands back
+only what needs a maintainer: a behavior or design decision gets a diagnosis on the
+PR, and a fix that edits protected paths or that GitHub refuses to push gets a ready
+commit for `quest land apply <pr>`.
+
 ## Land a batch with quest land
 
 `quest land serve` runs on a maintainer's host, with one process per repository.
