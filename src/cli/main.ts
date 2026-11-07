@@ -527,15 +527,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	const OWNERSHIP =
 		"Before a session pushes to an existing PR, it takes the PR with iterate, and hands it back with " +
 		"release. A taken PR carries the quest:active label; iterate prints a hold token, the ID of the timeline " +
-		"event that added it, since sessions often share an account. A command refuses while a quest:* label " +
-		"it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
+		"event that added it, since sessions often share an account. A command refuses while a quest:active or " +
+		"quest:kix label it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
 		"holds (one whose body has no Waiting heading). A refusal names the holder's label, age, and " +
 		"token; releasing a stale hold with that token is the user's choice. Given a token, a command refuses " +
 		"unless the token is still the latest add of its label. When two sessions add the label at once, the " +
 		"first added keeps the PR; GitHub records no event when a label already on the PR is added again, so two " +
-		"takes within the same moment are not told apart. Older quest versions' quest:iterate and quest:ready " +
-		"labels hold a PR like any quest:* label, and taking it with their token swaps them for quest:active; " +
-		"their quest:merge label holds nothing.\n\n" +
+		"takes within the same moment are not told apart.\n\n" +
 		"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 3 when refused, 2 for invalid " +
 		"arguments, and 1 for other failures.";
 	const printToken = (work: Promise<Hold>) => settle(work, (hold) => print(hold.token));

@@ -236,18 +236,15 @@ describe("taking a PR", () => {
 		expect(pull.labels).toEqual(["quest:active"]);
 	});
 
-	test.each(["quest:iterate", "quest:ready", "quest:kix"])(
-		"refuses while %s holds it, as an older quest version or kix adds",
-		async (label) => {
-			const pull = new FakePull();
-			const token = pull.label(label);
-			expect(await refused(take(PR, undefined, pull.deps()))).toContain(`held by ${label}`);
-			expect(pull.labels).toEqual([label]);
-			// Its token releases it.
-			expect(await release(PR, token!, pull.deps())).toBe(label);
-			expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
-		},
-	);
+	test("refuses while kix holds it, and its token releases it", async () => {
+		const pull = new FakePull();
+		const token = pull.label("quest:kix");
+		expect(await refused(take(PR, undefined, pull.deps()))).toContain("held by quest:kix");
+		expect(pull.labels).toEqual(["quest:kix"]);
+		// Its token releases it.
+		expect(await release(PR, token!, pull.deps())).toBe("quest:kix");
+		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
+	});
 
 	test("ignores the quest:merge label older quest versions left on queued PRs", async () => {
 		const pull = new FakePull();
@@ -260,10 +257,10 @@ describe("taking a PR", () => {
 		const pull = new FakePull();
 		pull.beforeAdd = () => {
 			pull.beforeAdd = undefined;
-			pull.label("quest:iterate");
+			pull.label("quest:kix");
 		};
-		expect(await refused(take(PR, undefined, pull.deps()))).toContain("held by quest:iterate");
-		expect(pull.labels).toEqual(["quest:iterate"]);
+		expect(await refused(take(PR, undefined, pull.deps()))).toContain("held by quest:kix");
+		expect(pull.labels).toEqual(["quest:kix"]);
 		expect(pull.writes).toEqual(["add quest:active", "remove quest:active"]);
 	});
 
@@ -271,24 +268,33 @@ describe("taking a PR", () => {
 		const pull = new FakePull();
 		pull.afterAdd = () => {
 			pull.afterAdd = undefined;
-			pull.label("quest:iterate");
+			pull.label("quest:kix");
 		};
 		expect(await take(PR, undefined, pull.deps())).toEqual({ label: "quest:active", token: "LabeledEvent_1" });
 		// The later session sees the earlier label and backs off.
-		expect(pull.labels).toEqual(["quest:active", "quest:iterate"]);
+		expect(pull.labels).toEqual(["quest:active", "quest:kix"]);
 	});
 
-	test("keeps the hold its token names, and swaps an older version's label for quest:active", async () => {
+	test("keeps the hold its token names", async () => {
 		const pull = new FakePull();
 		const hold = await take(PR, undefined, pull.deps());
 		expect(await take(PR, hold.token, pull.deps())).toEqual(hold);
 		expect(pull.writes).toEqual(["add quest:active"]);
+	});
 
-		const legacy = new FakePull();
-		const token = legacy.label("quest:ready")!;
-		expect(await take(PR, token, legacy.deps())).toEqual({ label: "quest:active", token: "LabeledEvent_2" });
-		expect(legacy.labels).toEqual(["quest:active"]);
-		expect(legacy.writes).toEqual(["add quest:active", "remove quest:ready"]);
+	test("refuses a token naming a label that holds nothing", async () => {
+		const pull = new FakePull();
+		const token = pull.label("quest:ready")!;
+		expect(await refused(take(PR, token, pull.deps()))).toContain("quest:ready is off");
+		expect(pull.writes).toEqual([]);
+	});
+
+	test("refuses a token naming kix's hold rather than taking it over", async () => {
+		const pull = new FakePull();
+		const token = pull.label("quest:kix")!;
+		expect(await refused(take(PR, token, pull.deps()))).toContain("names the quest:kix hold");
+		expect(pull.labels).toEqual(["quest:kix"]);
+		expect(pull.writes).toEqual([]);
 	});
 
 	test("refuses a token once another session holds the label", async () => {
@@ -343,9 +349,9 @@ describe("merge --land", () => {
 		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
 			`held by quest:active, added just now as token ${token}`,
 		);
-		pull.label("quest:iterate");
+		pull.label("quest:kix");
 		await release(PR, token, pull.deps());
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:iterate");
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:kix");
 		pull.labels = ["quest:merge"];
 		await land(PR, HEAD, "merge", pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
