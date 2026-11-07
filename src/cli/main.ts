@@ -189,8 +189,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				throw new UsageError("--branch requires --base");
 			}
 			if (options.fix) {
-				// Promote first: a promoted `Required` can hold links the cleanup then drops.
-				const edited = new Set([...fixHeadings(root()), ...fixLinks(root())]);
+				// fixLinks checks the repair preconditions before anything is written; it runs again
+				// after promotion, since a promoted `Required` can hold links it then drops.
+				const edited = new Set([...fixLinks(root()), ...fixHeadings(root()), ...fixLinks(root())]);
 				for (const line of [...edited].sort()) print(line);
 			}
 			const tree = checkout(root(), warn);
