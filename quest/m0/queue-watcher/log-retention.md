@@ -11,7 +11,7 @@ removal comment cites, stays until that's done.
 ## Plan
 
 Decided 2026-11-04 (coordinator, /quest-complete of kixelated/nixos, from
-the review of [kixelated/nixos#16](https://github.com/kixelated/nixos/pull/16),
+the review of the kixelated/nixos change that counts state directories against the CI disk quota,
 following the maintainer's standing rule to decide follow-ups from
 evidence): plan it, [S], m0, in this epic, since the watcher writes most of
 these logs and `serve` is retired after it.
@@ -32,7 +32,7 @@ Evidence, read on the nixos host on 2026-11-04:
   `fix-job-*.json.log` files (about 311 MiB), last written 2026-11-02. The
   same directories also hold unrelated `.log` files, such as
   `codex-repro-*/failure.log` in subdirectories.
-- [kixelated/nixos#16](https://github.com/kixelated/nixos/pull/16) now counts
+- kixelated/nixos now counts
   each daemon's state directory against the CI disk quota, so unbounded logs
   will eventually squeeze the merge-queue runners into ENOSPC. Pruning can't
   happen from NixOS, since the same directory holds the daemon's state.

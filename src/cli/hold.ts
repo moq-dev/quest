@@ -382,8 +382,8 @@ export async function release(pr: PullRequest, token: string, deps: GitHubDepend
 /**
  * Take `pr` with `quest:active`, refusing while it is merged or closed, while
  * another session holds a hold label, or while it is a draft its starter still
- * holds. With `token`, the hold it names is kept, or swapped for `quest:active`
- * when it names another label, such as one an older quest version added.
+ * holds. With `token`, the hold it names must be this session's own `quest:active`,
+ * which is kept; another hold label, such as kix's, is refused rather than taken over.
  */
 async function acquire(labels: Labels, token: string | undefined): Promise<{ hold: Hold; snapshot: Snapshot }> {
 	const label = ACTIVE_LABEL;
@@ -392,6 +392,9 @@ async function acquire(labels: Labels, token: string | undefined): Promise<{ hol
 	const mine = token === undefined ? undefined : held(snapshot, token);
 	unheld(snapshot, mine, labels.deps.now());
 	if (mine === label) return { hold: { label, token: token! }, snapshot };
+	if (mine !== undefined) {
+		throw new Refusal(`${token} names the ${mine} hold on ${snapshot.url}, which this session does not own`);
+	}
 
 	await labels.add(label);
 	const after = await labels.read();
@@ -399,7 +402,7 @@ async function acquire(labels: Labels, token: string | undefined): Promise<{ hol
 	if (!ours) throw new Error(`added ${label} to ${after.url}, but its timeline does not show it`);
 	// Another session took the PR at the same time: the first label added keeps it.
 	const rival = after.labels.find((name) => {
-		if (name === label || name === mine) return false;
+		if (name === label) return false;
 		const added = latestHold(after.events, name);
 		return !added || after.events.indexOf(added) < after.events.indexOf(ours);
 	});
@@ -407,7 +410,6 @@ async function acquire(labels: Labels, token: string | undefined): Promise<{ hol
 		await labels.remove(label);
 		throw new Refusal(holder(after, rival, labels.deps.now()));
 	}
-	if (mine !== undefined) await labels.remove(mine);
 	return { hold: { label, token: ours.id }, snapshot: { ...after, labels: [label] } };
 }
 
