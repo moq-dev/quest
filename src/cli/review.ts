@@ -1132,13 +1132,40 @@ export function sessionFile(common: string, branch: string): string {
 	return join(common, "quest", "review", `${digest(branch)}.json`);
 }
 
-function load(path: string): State | undefined {
+function load(path: string): unknown {
 	try {
-		return JSON.parse(readFileSync(path, "utf8")) as State;
+		return JSON.parse(readFileSync(path, "utf8"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
+}
+
+/**
+ * A saved session, read before its reviewer runs. A session saved before
+ * moq-dev/quest#508 kept only each round's finding count, which no round can
+ * settle: one with findings is refused, naming `--new`, rather than failing
+ * after the reviewer spent its round. One saved before moq-dev/quest#514 has
+ * no `last` round, so it never resumes and its next round reviews anew.
+ */
+export function parseState(value: unknown): State {
+	const state = value as Partial<State> | null;
+	const refuse = (why: string) =>
+		new ReviewInputError(`the saved review session ${why}; pass --new to start a new session`);
+	if (typeof state !== "object" || state === null || !Array.isArray(state.rounds)) {
+		throw refuse("is not one quest review reads");
+	}
+	const rounds = state.rounds.map((round) => {
+		const findings: unknown = round?.findings;
+		if (Array.isArray(findings)) return round;
+		if (findings === 0) return { ...round, findings: [] };
+		throw refuse(
+			typeof findings === "number"
+				? `was saved by an older quest and keeps only its last round's finding count (${findings}), not the findings to settle`
+				: "has a round with no findings list",
+		);
+	});
+	return { ...state, rounds } as State;
 }
 
 /**
@@ -1217,8 +1244,11 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const statePath = sessionFile(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
 	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
-	const stored = load(statePath);
-	const state = options.fresh || stored?.reviewer !== harness ? undefined : stored;
+	const stored = options.fresh ? undefined : load(statePath);
+	const state =
+		stored === undefined || (stored as Partial<State> | null)?.reviewer !== harness
+			? undefined
+			: parseState(stored);
 	const previous = state?.rounds.at(-1);
 	if (previous === undefined && options.responses !== undefined) {
 		throw new ResponsesError("--responses answers a previous round, and this branch has none to resume");
