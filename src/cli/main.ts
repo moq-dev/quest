@@ -1016,6 +1016,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
 				"repeats that round, marked unchanged. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
+				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
@@ -1063,7 +1065,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
-		.option("--branch <name>", "Branch whose review session to continue, instead of the checked-out one")
+		.option(
+			"--branch <name>",
+			"Branch whose review session to continue, instead of the checked-out one or its upstream",
+		)
 		.option("--json", "Print one JSON object")
 		.action(
 			(options: {
