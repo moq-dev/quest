@@ -184,7 +184,7 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		for (const { op, target } of simple.redirects) {
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op)) {
 				if (scratch(target)) found.add("tmp");
-				if (simple.stdin !== undefined) written.set(target, simple.stdin);
+				if (simple.stdin !== undefined && !simple.stdinExpanded) written.set(target, simple.stdin);
 			}
 		}
 		if (argv === null) continue;
@@ -196,12 +196,17 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		}
 		const asked = env.has(USER_ASKED);
 		const from = simple.redirects.find((redirect) => redirect.op === "<")?.target;
-		const stdin = simple.stdin ?? (from === undefined ? undefined : (written.get(from) ?? read(cwd, from)));
+		// Text the shell expands is unknown here, so it reads as unreadable.
+		const stdin = simple.stdinExpanded
+			? undefined
+			: (simple.stdin ?? (from === undefined ? undefined : (written.get(from) ?? read(cwd, from))));
 		const input = (file: string) => (file === "-" ? stdin : (written.get(file) ?? read(cwd, file)));
+		const literal = (value: string) => (simple.expanded?.some((word) => word.endsWith(value)) ? undefined : value);
 		if (name === "tee") {
 			if (args.some((arg) => !arg.startsWith("-") && scratch(arg))) found.add("tmp");
 			for (const arg of args)
-				if (!arg.startsWith("-") && simple.stdin !== undefined) written.set(arg, simple.stdin);
+				if (!arg.startsWith("-") && simple.stdin !== undefined && !simple.stdinExpanded)
+					written.set(arg, simple.stdin);
 		} else if (name === "mkdir" || name === "touch") {
 			if (args.some(scratch)) found.add("tmp");
 		} else if (["cp", "mv", "ln", "rsync"].includes(name!)) {
@@ -209,7 +214,7 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 			if (last !== undefined && scratch(last)) found.add("tmp");
 		} else if (name === "mktemp") mktemp(args, check);
 		else if (name === "git") git(args, asked, input, check);
-		else if (name === "gh") gh(args, input, check);
+		else if (name === "gh") gh(args, input, literal, check);
 	}
 }
 
@@ -250,9 +255,9 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 		const files = values(args, ["-F", "--file"], { attached: ["-F"] }).map(input);
 		if (adds("", [message, ...files].join("\n"))) check.found.add("emDash");
 	} else if (sub === "clone") {
-		// `git clone [options] <repository> [<directory>]`: only the directory is written.
-		const directory = positionals(args, CLONE_VALUE_OPTIONS)[1];
-		if (directory !== undefined && check.scratch(directory)) check.found.add("tmp");
+		// `git clone [options] <repository> [<directory>]` writes only the directory and a separate git directory.
+		const written = [positionals(args, CLONE_VALUE_OPTIONS)[1], ...values(args, ["--separate-git-dir"])];
+		if (written.some((path) => path !== undefined && check.scratch(path))) check.found.add("tmp");
 	} else if (sub === "worktree" && args[0] === "add") {
 		// `git worktree add [options] <path> [<commit-ish>]`.
 		const path = positionals(args.slice(1), new Set(["-b", "-B", "--reason"]))[0];
@@ -346,20 +351,31 @@ const POSTS: Record<string, Record<string, boolean>> = {
 	issue: { create: true, comment: true, edit: false },
 };
 
-function gh(args: string[], input: (file: string) => string | undefined, check: Check) {
+/**
+ * Check a `gh` command that posts text. `input` reads a body file (`-` for
+ * stdin), and `literal` gives a word's text, or `undefined` when the shell
+ * expands it; either way an unknown body passes.
+ */
+function gh(
+	args: string[],
+	input: (file: string) => string | undefined,
+	literal: (word: string) => string | undefined,
+	check: Check,
+) {
 	const [group, command, ...rest] = args;
+	const file = (path: string | undefined) => (path === undefined ? undefined : input(path));
 	let body: (string | undefined)[];
-	let titles: string[] = [];
+	let titles: (string | undefined)[] = [];
 	let authored: boolean;
 	if (group === "api") {
 		const fields = [command ?? "", ...rest];
-		const raw = values(fields, ["-f", "--raw-field"]).filter((field) => field.startsWith("body="));
-		const typed = values(fields, ["-F", "--field"]).filter((field) => field.startsWith("body="));
+		const field = (names: string[]) =>
+			values(fields, names)
+				.filter((value) => value.startsWith("body="))
+				.map((value) => literal(value)?.slice("body=".length));
 		body = [
-			...raw.map((field) => field.slice("body=".length)),
-			...typed
-				.map((field) => field.slice("body=".length))
-				.map((value) => (value.startsWith("@") ? input(value.slice(1)) : value)),
+			...field(["-f", "--raw-field"]),
+			...field(["-F", "--field"]).map((value) => (value?.startsWith("@") ? file(value.slice(1)) : value)),
 		];
 		const method = values(fields, ["-X", "--method"]).at(-1)?.toUpperCase();
 		authored = method !== "PATCH" && method !== "PUT";
@@ -367,15 +383,17 @@ function gh(args: string[], input: (file: string) => string | undefined, check: 
 		const post = POSTS[group ?? ""]?.[command ?? ""];
 		if (post === undefined) return;
 		authored = post;
-		body = [...values(rest, ["-b", "--body"]), ...values(rest, ["-F", "--body-file"]).map((file) => input(file))];
-		titles = values(rest, ["-t", "--title"]);
+		body = [
+			...values(rest, ["-b", "--body"]).map(literal),
+			...values(rest, ["-F", "--body-file"]).map((path) => file(literal(path))),
+		];
+		titles = values(rest, ["-t", "--title"]).map(literal);
 	}
 	if (body.length === 0) return;
-	// A body that cannot be read here, such as one piped in, is left to the prose.
-	// So is one holding an expansion, such as `"$body"` or an unquoted here-document's `$(cat f)`,
-	// since the shell rather than the hook knows its text.
-	if (body.some((text) => text === undefined || /\$[\w{(]|`/.test(text))) return;
+	// A body that cannot be read here, such as one piped in or expanded by the shell, is left to the prose.
+	if (body.some((text) => text === undefined)) return;
 	const text = body.join("\n");
-	if (authored && adds("", [...titles, text].join("\n"))) check.found.add("emDash");
+	if (authored && adds("", [...titles.filter((title) => title !== undefined), text].join("\n")))
+		check.found.add("emDash");
 	if (authored && !/^\(written by .+\)\s*$/im.test(text)) check.found.add("footer");
 }

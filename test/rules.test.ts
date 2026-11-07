@@ -36,7 +36,11 @@ test("parse splits commands and attaches redirections and here-documents", () =>
 		{ argv: ["cat"], redirects: [{ op: ">", target: ".tmp/body.md" }], stdin: "line $x\n" },
 		{ argv: ["gh", "x"], redirects: [] },
 	]);
-	expect(parse("echo $(git push) # git rebase")).toEqual([{ argv: ["echo", "$(git push)"], redirects: [] }]);
+	expect(parse("echo $(git push) # git rebase")).toEqual([
+		{ argv: ["echo", "$(git push)"], redirects: [], expanded: ["$(git push)"] },
+	]);
+	expect(parse("cat <<EOF\n$x\nEOF")).toEqual([{ argv: ["cat"], redirects: [], stdin: "$x\n", stdinExpanded: true }]);
+	expect(parse("echo '$x' \"a $y\"")).toEqual([{ argv: ["echo", "$x", "a $y"], redirects: [], expanded: ["a $y"] }]);
 	expect(parse("cat <<-END\n\tbody\n\tEND")).toEqual([{ argv: ["cat"], redirects: [], stdin: "body\n" }]);
 });
 
@@ -96,6 +100,7 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"git clone https://example.com/r /tmp/r",
 		"git clone -b main https://example.com/r /tmp/r",
 		"git worktree add -b x /tmp/x",
+		"git clone --separate-git-dir /tmp/repo.git /tmp/source .tmp/clone",
 		"mktemp -d",
 		"mktemp -t body.XXXX",
 		'cat > "$TMPDIR/body.md" <<EOF\nx\nEOF',
@@ -181,4 +186,8 @@ test("a new GitHub post needs the footer and no em dashes; edits and unreadable 
 	expect(bash("gh pr comment 5 --body-file missing.md")).toEqual([]);
 	expect(bash('gh pr comment 5 --body "$body"')).toEqual([]);
 	expect(bash("gh pr comment 5 --body-file - <<EOF\n$(cat .tmp/body.md)\nEOF")).toEqual([]);
+	writeFileSync(join(cwd, "code.md"), "Run `$HOME/bin/x` and `$(y)`.\n");
+	expect(bash("gh pr comment 5 --body-file code.md")).toEqual([RULES.footer]);
+	expect(bash("gh pr comment 5 --body-file - <<'EOF'\nRun `$(y)`.\nEOF")).toEqual([RULES.footer]);
+	expect(bash("gh pr comment 5 --body 'Run `$(y)`.'")).toEqual([RULES.footer]);
 });

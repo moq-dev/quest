@@ -14,7 +14,14 @@ export interface Simple {
 	argv: string[];
 	redirects: Redirect[];
 	stdin?: string;
+	/** The words in `argv` holding a parameter expansion or command substitution, whose text only the shell knows. */
+	expanded?: string[];
+	/** Whether `stdin` holds an expansion, from a here-string or a here-document with an unquoted delimiter. */
+	stdinExpanded?: boolean;
 }
+
+/** An expansion the shell performs in a word or an unquoted here-document. */
+const EXPANSION = /\$[\w{(@*#?$!-]|`/;
 
 const SEPARATORS = new Set([";", "&", "|", "(", ")", "\n"]);
 
@@ -24,21 +31,30 @@ const SEPARATORS = new Set([";", "&", "|", "(", ")", "\n"]);
  */
 export function parse(line: string): Simple[] {
 	const commands: Simple[] = [];
-	const heredocs: { command: Simple; delimiter: string; tabs: boolean }[] = [];
+	const heredocs: { command: Simple; delimiter: string; tabs: boolean; literal: boolean }[] = [];
 	let command: Simple = { argv: [], redirects: [] };
 	let word: string | null = null;
 	let redirect: string | null = null;
+	// Whether the current word holds an expansion, and whether any of it was quoted.
+	let expands = false;
+	let quoted = false;
 	let i = 0;
 
 	const endWord = () => {
 		if (word === null) return;
-		if (redirect === null) command.argv.push(word);
-		else if (redirect === "<<" || redirect === "<<-")
-			heredocs.push({ command, delimiter: word, tabs: redirect === "<<-" });
-		else if (redirect === "<<<") command.stdin = `${word}\n`;
-		else command.redirects.push({ op: redirect, target: word });
+		if (redirect === null) {
+			command.argv.push(word);
+			if (expands) (command.expanded ??= []).push(word);
+		} else if (redirect === "<<" || redirect === "<<-")
+			heredocs.push({ command, delimiter: word, tabs: redirect === "<<-", literal: quoted });
+		else if (redirect === "<<<") {
+			command.stdin = `${word}\n`;
+			if (expands) command.stdinExpanded = true;
+		} else command.redirects.push({ op: redirect, target: word });
 		word = null;
 		redirect = null;
+		expands = false;
+		quoted = false;
 	};
 	const endCommand = () => {
 		endWord();
@@ -66,6 +82,8 @@ export function parse(line: string): Simple[] {
 
 	while (i < line.length) {
 		const c = line[i]!;
+		if (c === "'" || c === '"' || c === "\\") quoted = true;
+		if ((c === "$" && line[i + 1] !== "'" && EXPANSION.test(line.slice(i, i + 2))) || c === "`") expands = true;
 		if (c === "\\") {
 			if (line[i + 1] === "\n") i += 2;
 			else {
@@ -84,10 +102,14 @@ export function parse(line: string): Simple[] {
 					if (line[i + 1] !== "\n") text += line[i + 1];
 					i += 2;
 				} else if (line[i] === "$" && line[i + 1] === "(") {
+					expands = true;
 					const end = closing(i + 2);
 					text += line.slice(i, end);
 					i = end;
-				} else text += line[i++];
+				} else {
+					if (EXPANSION.test(line.slice(i, i + 2))) expands = true;
+					text += line[i++];
+				}
 			}
 			append(text);
 			i++;
@@ -130,7 +152,7 @@ export function parse(line: string): Simple[] {
 	/** Read the bodies of the here-documents opened on the line just ended, returning the index after them. */
 	function readHeredocs(from: number): number {
 		let at = from;
-		for (const { command: owner, delimiter, tabs } of heredocs.splice(0)) {
+		for (const { command: owner, delimiter, tabs, literal } of heredocs.splice(0)) {
 			const body: string[] = [];
 			while (at < line.length) {
 				const end = line.indexOf("\n", at);
@@ -141,6 +163,7 @@ export function parse(line: string): Simple[] {
 				body.push(text);
 			}
 			owner.stdin = body.length > 0 ? `${body.join("\n")}\n` : "";
+			if (!literal && EXPANSION.test(owner.stdin)) owner.stdinExpanded = true;
 		}
 		return at;
 	}
