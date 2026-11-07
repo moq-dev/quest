@@ -103,7 +103,6 @@ ownership-manifest design:
 - [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the first model of its size's ranked list that can run, reviews rank the same way, and PRs record size, implementer, and reviewer
 - [Repositories and hosts follow quest's main](/quest/m0/pin-sync.md) - every push to main reaches each enrolled repository and host through a bot-queued pin bump
 - [Cut agent token waste](/quest/m0/token-waste/README.md) - sessions stop paying for loading rules, a second review pass, polling, oversized coordinators, and merge churn
-- [quest check rejects a misleveled Waiting heading](/quest/m0/waiting-heading-level.md) - a `### Waiting` (or any non-`##` level) fails `quest check` with its file and line, so no wait drops out of `quest waiting`
 - [Model check](/quest/m0/model-check.md) - recurring: the first audit of the routed PRs retunes the built-in size lists
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config

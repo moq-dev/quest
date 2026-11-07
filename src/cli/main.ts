@@ -52,7 +52,7 @@ import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
-import { type Report, fixLinks, moveQuest, removeQuest } from "./move";
+import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { DEFAULT_SIZE, REVIEWERS } from "./models";
 import {
@@ -168,19 +168,24 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"first: a stale base can predate the quest and skip it.\n\n" +
 				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
 				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
-				"does, such as the quests a merged base finished, with any heading left empty. It prints M for each " +
-				"edited document and leaves the edits unstaged. A quest moved rather than deleted, a link that never " +
+				"does, such as the quests a merged base finished, with any heading left empty. It then promotes a " +
+				"section heading written below ## to ## where nothing but its own content follows it before the next " +
+				"## heading, and no ## section of that name exists. It prints M for each edited document and leaves " +
+				"the edits unstaged. A quest moved rather than deleted, a link that never " +
 				"named a quest, and a link in prose stay for the check to report. Refuses outside a git work tree " +
 				"and while a quest file has unresolved conflicts.",
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
-		.option("--fix", "First drop list links to quests the history deleted")
+		.option("--fix", "First drop list links to quests the history deleted, and promote misleveled section headings")
 		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
 			}
-			if (options.fix) for (const line of fixLinks(root())) print(line);
+			if (options.fix) {
+				const edited = new Set([...fixLinks(root()), ...fixHeadings(root())]);
+				for (const line of [...edited].sort()) print(line);
+			}
 			const tree = checkout(root(), warn);
 			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));

@@ -35,7 +35,7 @@ import { MAINTAINER, WAITING, parseWait } from "./waiting";
  * literally, so a typo turns a blocked quest ready and fails nowhere else: the
  * closed vocabulary is what catches it.
  */
-const HEADINGS = ["Goal", "Plan", "Waiting", "Required", "Closes", "Related"];
+export const HEADINGS = ["Goal", "Plan", "Waiting", "Required", "Closes", "Related"];
 
 /**
  * Sections whose whole content is a list. A heading left standing after its
@@ -140,6 +140,18 @@ function headings(found: Finding[], docs: Doc[], doc: Doc) {
 				path: doc.path,
 				line: heading.line,
 				message: `unknown '## ${heading.text}' (allowed: ${HEADINGS.join(", ")})`,
+			});
+		}
+	}
+
+	// A section name at any other level is invisible to readiness and to `quest
+	// waiting`, so a `### Waiting` would drop its items out of the list silently.
+	for (const heading of doc.offLevel) {
+		if (HEADINGS.includes(heading.text)) {
+			found.push({
+				path: doc.path,
+				line: heading.line,
+				message: `'${"#".repeat(heading.depth)} ${heading.text}' must be '## ${heading.text}': readiness and quest waiting read only '## ' sections`,
 			});
 		}
 	}
