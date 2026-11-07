@@ -1532,10 +1532,10 @@ entries into the file's `hooks`:
 ```json
 {
   "hooks": {
-    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }]
+    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }]
   }
 }
 ```
