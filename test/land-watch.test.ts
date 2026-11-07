@@ -782,7 +782,7 @@ test("an armed pick withdrawn, retargeted, or held while the pass reads it is no
 		if (pull.number === 33) pull.base = "release";
 		// Disabled and armed again: a new pick, which the next pass weighs on its own.
 		if (pull.number === 34) pull.armed = at(3);
-		if (pull.number === 36) pull.labels = ["quest:iterate"];
+		if (pull.number === 36) pull.labels = ["quest:kix"];
 	};
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
 	expect(github.mutations).toEqual([]);
@@ -1867,7 +1867,7 @@ git commit -qm 'disable render_timeout'`;
 			reads.set(pull.number, read);
 			if (takeAt.get(pull.number) === read) pull.labels = [...(pull.labels ?? []), "quest:active"];
 		};
-		pulls[3].labels = ["quest:iterate"];
+		pulls[3].labels = ["quest:kix"];
 		pulls[4].labels = ["quest:active"];
 		github.refuse = ["#7 quest land watch: Another session holds"];
 		github.now = Date.parse(at(7));
