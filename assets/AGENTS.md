@@ -184,7 +184,7 @@ Start it on the PR's writer, the model of its first `Implementer:` line, at the 
 It prints the session id, then the outcome and the agent's final reply, and exits 3 at the account's usage limit, or 4 when the CLI is logged out, printing the login command.
 Tell the agent that it cannot prompt, so it ends with its decisions and recommendations in its final reply, and that ending its turn kills its background commands, so it waits in the foreground.
 Answer it in the background with `quest agent resume`, passing the same options, the worktree, the session id, and the answer.
-Stop one with `quest agent stop <worktree>`, and the rest with `quest agent stop --all` before you finish.
+Stop one with `quest agent stop <worktree>`, and each you started that still runs before you finish; `--all` would stop other sessions' agents too.
 
 ## Questions
 
