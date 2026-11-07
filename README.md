@@ -331,10 +331,12 @@ A clean merge can still leave this branch's list links to quests the base
 finished, which `quest check` then flags. `quest check --fix` drops every
 `Required`, `Related`, or `Closes` entry linking to a quest deleted in the
 history of `HEAD`, and of `MERGE_HEAD` during a merge, that the working tree
-lacks, and prints `M path` for each edited document. It leaves the edits
-unstaged and refuses while a quest file has unresolved conflicts. A quest moved
-rather than deleted, a link that never named a quest, and a link in prose stay
-for `quest check` to report.
+lacks, and prints `M path` for each edited document. It then promotes a section
+heading written below `##` to `##` where nothing but its own content follows it
+before the next `##` heading, and no `##` section of that name exists. It leaves
+the edits unstaged and refuses while a quest file has unresolved conflicts. A
+quest moved rather than deleted, a link that never named a quest, a link in
+prose, and any other misleveled heading stay for `quest check` to report.
 
 ## Wait for pull request activity
 
