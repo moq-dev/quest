@@ -36,9 +36,6 @@ This quest is the second PR:
   no history to read. #518's commit caa32fc3 has both, with tests.
 - Run `quest check --fix` on this tree and on prose that describes the lists.
 - Turn `requires X, which this epic holds` into a `quest check` error.
-- `assets/land-fix.md` stops adding the flaky quest's link to
-  `quest/m0/flaky/README.md`, and
-  [the flaky quest](/quest/m0/queue-watcher/flaky-quest.md) says so.
 - The PR is breaking: other repositories migrate with `quest check --fix` on
   their pin bump past it, as
   [moq-dev pins](/quest/m0/model-routing/pins.md) describes.

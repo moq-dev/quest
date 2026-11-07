@@ -95,3 +95,4 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 ## Required
 
 - [Per-job opencode saved output](/quest/m0/kix/sandbox/opencode-data.md) - each opencode job saves its tool output and shell captures beside its checkout, so no job reads another's, while sessions and the credential stay in the account's database
+- [Boundary tests on agent-moving PRs](/quest/m0/kix/sandbox/pr-trigger.md) - PRs that bump flake.lock or change the runner run the live sandbox tests before landing

@@ -3,8 +3,8 @@
 ## Goal
 
 quest.moq.dev shows each enrolled repository's landing queue, whether GitHub's
-merge queue or the watcher's [own queue](/quest/m0/queue-watcher/own-queue.md)
-runs it:
+merge queue or the watcher's own queue (the README's "The watcher's own
+queue") runs it:
 
 - the queued PRs in landing order;
 - the build in progress, with a link to its run;
@@ -38,10 +38,6 @@ Sources, per mode:
   check run and the queue-branch run it links.
 - Drops and fixer results: `RemovedFromMergeQueueEvent` and the watcher's
   comments, which name the reason and the fixer's outcome.
-
-## Required
-
-- [The watcher runs its own serial queue](/quest/m0/queue-watcher/own-queue.md) - the own queue's per-PR check run the page reads
 
 ## Related
 
