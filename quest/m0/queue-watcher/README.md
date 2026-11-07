@@ -134,8 +134,8 @@ Shared shape, for the children to follow:
   handback that `quest land apply` rebuilds, and the daemon posting the
   comments the fixer writes. A `quest land watch` subcommand beside
   `quest land serve` is the likely form; the first child settles it.
-- The fixer prompt (`assets/land-fix.md`) and its quality quests stay in
-  [the land fixer epic](/quest/m0/land-fixer/README.md); the host container
+- The fixer prompt (`assets/land-fix.md`) stays as the finished land fixer epic left it;
+  the host container
   work stays in [the host gate epic](/quest/m0/host-land/README.md).
 - The review policy is unchanged: a head the fixer pushed as a recorded
   mechanical fix lands without a new review (maintainer, 2026-10-30). A push
@@ -160,5 +160,4 @@ Shared shape, for the children to follow:
 
 ## Related
 
-- [The land fixer](/quest/m0/land-fixer/README.md) - the fixer the watcher runs
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the gate the other repositories keep until they follow
