@@ -449,7 +449,7 @@ export async function resolveQueue(
  * Every check run and commit status on `head`: from `rollup`, the first page already read with it,
  * when there is one, then the rest by the SHA.
  */
-async function contexts(
+export async function contexts(
 	github: GitHub,
 	repository: Repository,
 	head: string,

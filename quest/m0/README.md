@@ -98,7 +98,7 @@ ownership-manifest design:
 - [Review sessions keyed by upstream branch](/quest/m0/review-session-key.md) - a round from a local branch tracking the PR branch continues that branch's review session
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the first model of its size's ranked list that can run, reviews rank the same way, and PRs record size, implementer, and reviewer
-- [Repositories and hosts follow quest's main](/quest/m0/pin-sync.md) - every push to main reaches each enrolled repository and host through a bot-queued pin bump
+- [Hosts run quest's pin bumps](/quest/m0/pin-sync.md) - the host runs the watcher's pin bumps for every repository pinning quest, and each host upgrades from kixelated/nixos's main
 - [Cut agent token waste](/quest/m0/token-waste/README.md) - sessions stop paying for loading rules, a second review pass, polling, oversized coordinators, and merge churn
 - [quest check rejects a misleveled Waiting heading](/quest/m0/waiting-heading-level.md) - a `### Waiting` (or any non-`##` level) fails `quest check` with its file and line, so no wait drops out of `quest waiting`
 - [Model check](/quest/m0/model-check.md) - recurring: the first audit of the routed PRs retunes the built-in size lists
