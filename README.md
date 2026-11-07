@@ -747,7 +747,7 @@ and comments with the reason and the failing log, bounded by
 size. When GitHub refuses to merge one PR, only that PR stops: a conflict is
 parked for the fixer, a moved head or refusal is ejected, and the rest of the batch
 stays queued. `quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
-`$STATE_DIRECTORY` or the XDG state home, never inside the checkout. A check
+`$STATE_DIRECTORY` or the XDG state home, never inside the checkout. Each daemon pass deletes a log 7 days after its last write once no job, waiting removal, or replayed failure reads it. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
 Every chain commit the daemon builds, and every base it merges into a PR head, drops

@@ -97,4 +97,3 @@ and moq.pro adds an entry such as `moq-pro-release` with `repository = "moq-dev/
 takes a unique `id`. Both instances share the host's three fixer slots, so
 each keeps the default `--fixer-jobs`; `release` lands rarely. That host PR
 belongs to moq.pro's Land release quest, which consumes this one.
-
