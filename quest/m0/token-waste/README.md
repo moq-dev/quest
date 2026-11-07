@@ -41,7 +41,8 @@ Decision prompts, chosen options marked ✅:
   (Theo's tstack, jdx's jouet, Matt Pocock's skills, HumanLayer, Mitchell
   Hashimoto), chosen ✅ and rejected listed:
   - ✅ Mechanical rules become hooks or lint, so their prose leaves the
-    always-loaded rules ([rule checks](/quest/m0/token-waste/rule-checks.md)).
+    always-loaded rules, done in
+    [moq-dev/quest#553](https://github.com/moq-dev/quest/pull/553).
   - ✅ A review round budget by severity, after Theo's `sol-loop`
     ([moq-dev/quest#514](https://github.com/moq-dev/quest/pull/514)).
   - ✅ `quest usage` moves from m1 into this epic, so its closing
@@ -69,7 +70,6 @@ Decision prompts, chosen options marked ✅:
 ## Required
 
 - [Epics list no children](/quest/m0/token-waste/child-lists.md) - an epic's children are its directory, so finishing a quest edits no README
-- [Mechanical rules become checks](/quest/m0/token-waste/rule-checks.md) - hooks enforce em dashes, push refspecs, no rebase or force-push, the footer, and `.tmp/`, and their prose leaves the always-loaded rules
 - [quest usage](/quest/m0/token-waste/usage.md) - per quest and PR: which models and efforts worked on it, their tokens and API-equal cost, and how the work went; the epic's re-measure runs it
 - [Point to token-max](/quest/m0/token-waste/token-max.md) - `SETUP.md` recommends the standalone settings doctor, and the re-measure runs it
 

@@ -15,8 +15,6 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Every test runs in CI. The merge gate holds only fast, high-signal tests; slow ones run nightly.
 - Be adversarial: attack your own approach, reports, reviews, and other PRs as hard as anyone else's, and argue for the best approach over the first one that works.
 - Never add or change a rule in an `AGENTS.md`, `CONTRIBUTING.md`, or skill without being prompted. When you do, follow `quest guide prompting`.
-- No em dashes.
-- End every GitHub post you author with `(Written by <model> with <effort>)`, naming the running model and its reasoning effort, or `(Written by <model>)` when the harness doesn't report the effort; never guess it. Commit messages with a `Co-Authored-By:` trailer are exempt.
 - In a public repository, never mention customers, partners, or prospects, or link to private repositories. Justify work on its merits.
 
 ## Important
@@ -56,7 +54,7 @@ Work in your own worktree, reusing a suitable one you already own.
 Read-only discovery needs no new checkout when your context or own checkout answers it.
 Put PR bodies, review drafts, logs, patches, helper scripts, and temporary clones in its `.tmp/`, so they disappear with the worktree.
 If the repository doesn't ignore `.tmp/`, add it to the file `git rev-parse --git-path info/exclude` names.
-Never write them to `/tmp`, elsewhere in or beside the checkout, or in a directory other agents share, such as a session scratchpad.
+Never write them elsewhere in or beside the checkout, or in a directory other agents share.
 Pass PR bodies to `gh` on stdin (`--body-file -`).
 
 Before ending a task, pausing for a decision, or handing off, commit a checkpoint and report what remains and which checks passed or did not run.
@@ -87,9 +85,7 @@ A decision about an open PR never authorizes closing it. Confirm a close as its 
 
 ## Pull requests
 
-Push with an explicit refspec: `git push <remote> refs/heads/<branch>:refs/heads/<branch>`.
-A bare branch name can push to the base instead, as under `push.default=upstream` when the branch tracks it.
-Never rebase or force-push, even a branch only you hold; merge the base instead, only when the branch conflicts with it or a landing step, such as `quest merge` or a merge queue, refuses the head, and resolve the conflicts in that merge; a branch only behind needs none, since landing tests it on the current base.
+Merge the base only when the branch conflicts with it or a landing step, such as `quest merge` or a merge queue, refuses the head, and resolve the conflicts in that merge; a branch only behind needs none, since landing tests it on the current base.
 A PR that another session pushed to in the last hour is theirs: report its events instead of pushing to it.
 Before each push to a PR's branch, confirm the PR is still open, since a push after it merges restores the deleted branch.
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.

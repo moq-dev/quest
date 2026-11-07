@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { CHECKED_CONTEXT } from "../cli/rules";
 import { CONTEXT, compose, guideSections, skill } from "../cli/skills";
 import type { Job, Prompt, Question } from "./protocol";
 
@@ -107,7 +108,8 @@ function task(job: Job): string {
 /** The workflow's own instructions, from the skills this binary ships, with what each builds on. */
 function workflow(job: Job): string {
 	const name = { start: "start", iterate: "iterate", merge: "merge", plan: "plan", bootstrap: null }[job.workflow];
-	const parts = [`# Engineering context\n\n${CONTEXT.trim()}`];
+	// The runner's agents run no `quest setup` hooks, so the checked rules stay prose for them.
+	const parts = [`# Engineering context\n\n${CONTEXT.trim()}\n\n${CHECKED_CONTEXT.trim()}`];
 	// Every workflow's work reaches the runner's review, whose rounds follow /quest-review.
 	if (name) parts.push(`# The ${name} workflow\n\n${compose([skill(name)!, skill("review")!]).trim()}`);
 	// Without `quest`, a merge checks the changed quest files against the guide itself.
