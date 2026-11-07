@@ -63,7 +63,7 @@ import {
 	roundLines,
 } from "./review";
 import { type Recorded, recordRound } from "./review-record";
-import { heal, init, uninstall } from "./setup";
+import { claudeSettings, heal, init, setup, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, SKILLS, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
@@ -1304,9 +1304,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			for (const line of theme ? theme.uninstall(changes) : changes) print(line);
 		});
 
+	program
+		.command("setup")
+		.description("Configure your own Claude Code settings for quest work, keeping your other settings")
+		.addHelpText(
+			"after",
+			"\nSets env.BASH_MAX_TIMEOUT_MS in the Claude Code user settings (CLAUDE_CONFIG_DIR's settings.json, or " +
+				"~/.claude/settings.json) to 3300000, so a foreground command, such as a blocking wait, may run 55 minutes: " +
+				"just under the 1h prompt-cache TTL. Prints each setting it changed, and is safe to rerun. Touches no repository.",
+		)
+		.action(() => {
+			for (const line of setup(claudeSettings())) print(line);
+		});
+
 	// Fresh clones and worktrees get the merge driver from whichever command runs first.
 	program.hook("preAction", (_program, action) => {
-		if (!["init", "uninstall"].includes(action.name())) heal(root());
+		if (!["init", "uninstall", "setup"].includes(action.name())) heal(root());
 	});
 
 	try {
