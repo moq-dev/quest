@@ -103,7 +103,9 @@ A decision about an open PR never authorizes closing it. Confirm a close as its 
 
 Push with an explicit refspec: `git push <remote> refs/heads/<branch>:refs/heads/<branch>`.
 A bare branch name can push to the base branch instead, for example under `push.default=upstream` when the branch tracks it.
-Never rebase or force-push, even a branch only you hold; merge the base instead, and fix any merge conflicts.
+Never rebase or force-push, even a branch only you hold; merge the base instead.
+Merge it only when the branch conflicts with it or a landing step, such as `quest merge` or GitHub's merge queue, refuses the head, and resolve the conflicts in that merge.
+A branch that is only behind its base needs no merge: `quest review` covers only the branch's own change, a merge queue or `quest land` tests each PR on the current base, and every merge reruns CI.
 A PR that another session pushed to in the last hour is theirs: report its events instead of pushing to it.
 Before each push to a branch that already has a PR, confirm the PR is still open: a push after it merges brings the deleted branch back.
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
