@@ -22,7 +22,3 @@ repository uses the same settings, so nothing in them changes but the pin.
   epic READMEs that still list their children, and its `--fix` strips them
   (coordinator, 2026-11-05; [Pin sync](/quest/m0/pin-sync.md) does the same for
   its automated bumps).
-
-## Required
-
-- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` reads the built-in size table

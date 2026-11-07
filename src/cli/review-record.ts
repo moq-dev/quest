@@ -1,7 +1,7 @@
 // `quest review` rewrites the `## Review` section of its branch's open PR after each round, so the head
 // it reviewed counts without an agent copying the round into the body by hand.
 import { reviewSection } from "../core";
-import { recorded } from "../github/models";
+import { type Comment, recorded, sessionsComment } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { git } from "./git";
 import { requireRemote, string } from "./github";
@@ -85,7 +85,14 @@ async function openPull(root: string, baseRef: string, branch: string, deps: Cla
 	const [pull] = await client.all(`${repositoryPath(repository)}/pulls?${query}`);
 	if (pull === undefined) return { skipped: `no open PR from ${from} into ${base}` };
 	const path = `${repositoryPath(repository)}/pulls/${Number(pull.number)}`;
-	return { client, path, url: string(pull.html_url), body: typeof pull.body === "string" ? pull.body : "" };
+	return {
+		client,
+		path,
+		number: Number(pull.number),
+		repository,
+		url: string(pull.html_url),
+		body: typeof pull.body === "string" ? pull.body : "",
+	};
 }
 
 /** The `## Models` record of `branch`'s open PR into `baseRef`, or null when it has no PR. */
@@ -96,7 +103,14 @@ export async function pullModels(
 	deps: ClaimDependencies,
 ): Promise<ReturnType<typeof recorded> | null> {
 	const pull = await openPull(root, baseRef, branch, deps);
-	return "skipped" in pull ? null : recorded(pull.body);
+	if ("skipped" in pull) return null;
+	// Sessions that published to the PR after it opened are on kix's sessions comment rather than in the body.
+	const comments = (await pull.client.all(
+		`${repositoryPath(pull.repository)}/issues/${pull.number}/comments?per_page=100`,
+	)) as Comment[];
+	const own = recorded(pull.body);
+	const later = recorded(sessionsComment(comments)?.body ?? "");
+	return { sizes: own.sizes, implementers: [...own.implementers, ...later.implementers] };
 }
 
 /** Record `round` in the `## Review` section of its branch's open PR. The edit is the token's user's, which the land gate counts only when that user wrote the PR. */

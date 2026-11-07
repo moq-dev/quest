@@ -374,6 +374,12 @@ export class Attempt {
 		if (outcome !== "limited") await this.#workspace?.remove();
 	}
 
+	/** This session's `## Models` line, from what the CLI reports. */
+	async #implementer() {
+		const ran = (await this.#agent?.ran()) ?? { model: "unknown", effort: "unknown" };
+		return `Implementer: ${field(this.#harness)}, ${field(ran.model)}, ${field(ran.effort)} effort`;
+	}
+
 	/**
 	 * Publish what the worktree changed, with the pull request on delivery.
 	 * Returns null when kix paused the job on a decision instead.
@@ -386,6 +392,8 @@ export class Attempt {
 		const next = this.#publishing.then(async () => {
 			const workspace = this.#workspace!;
 			let snapshot = await workspace.snapshot();
+			// kix records the session on a pull request it commits to without writing its text.
+			const implementer = await this.#implementer();
 
 			const idle = () => !snapshot.changes.length && !snapshot.merge && !pull && !land;
 			if (idle()) return { head: workspace.head };
@@ -402,6 +410,7 @@ export class Attempt {
 					...(snapshot.merge && snapshot.submodules.length && { submodules: snapshot.submodules }),
 					...(pull && { pull }),
 					...(land && { land }),
+					...((snapshot.changes.length || snapshot.merge) && { implementer }),
 				});
 			let { status, body } = await send();
 			// An earlier publication landed but its reply was lost: continue from the head kix reports.
@@ -750,8 +759,7 @@ export class Attempt {
 					if (closed) return closed;
 					const text = string(args.summary, "summary", 4000);
 					// kix names this session in the body's `## Models` record, from what the CLI reports.
-					const ran = (await this.#agent?.ran()) ?? { model: "unknown", effort: "unknown" };
-					const implementer = `Implementer: ${field(this.#harness)}, ${field(ran.model)}, ${field(ran.effort)} effort`;
+					const implementer = await this.#implementer();
 					const pull = pulled
 						? undefined
 						: {

@@ -5,16 +5,16 @@
 `/quest-spawn` starts each ready quest, and each coordinator its
 `/quest-iterate` dispatches, on the first harness and model that can run from
 a ranked list `quest` builds in for the work's size, the same for every
-repository unless its `AGENTS.md` overrides it: Opus writes at every size,
-with Sol as the fallback through M, and a usage limit falls through to the
-next entry. An iterate is sized by the work left on its PR, not its quest's
+repository unless its `AGENTS.md` overrides it: Haiku writes XS and Opus
+the rest, with Sol as the fallback through L, and a usage limit falls through
+to the next entry. An iterate is sized by the work left on its PR, not its quest's
 original size, and runs on the model that first wrote the PR, so the other
 can always review it. Sol reviews, at an effort set by the PR's size, and Opus
 reviews whatever Sol wrote, so no model reviews its own code. Every PR
 records the models and efforts behind it, and fixes link the PR that
 caused them, so the rankings can be audited and retuned. This epic's own
 work is one live spawn in moq-dev/quest from Claude Code that starts an XS
-and an S quest on Opus, each recorded and reviewed by Sol.
+quest on Haiku and an S quest on Opus, each recorded and reviewed by Sol.
 
 Non-goals: routing kix.quest's runner jobs, which pick their own accounts
 and models (their PRs still record their models); billing agents to API
@@ -81,13 +81,14 @@ are mostly judgment.
 - Revised 2026-11-05 (user, /quest-plan): Grok leaves routing and the
   council, so XS starts on Opus low; Sol reviews at the effort it would
   write at (XS medium, S high, M xhigh, L and XL xhigh); and coordinators
-  size each `/quest-iterate` by its remaining work. The tables and the
-  iterate decisions are in [Route by size](/quest/m0/model-routing/models.md).
+  size each `/quest-iterate` by its remaining work, starting it on the PR's
+  first writer, which waits out its own usage limit rather than fall back.
 - Revised again 2026-11-05 evening (user, /quest-plan): xhigh is XL's
   alone. Haiku high writes XS; Opus writes S low, M medium, L high, XL
   xhigh; Sol falls back one rung lower, now through L; Sol reviews follow
   [Single-pass review](https://github.com/moq-dev/quest/pull/514)'s
-  table. The tables and the benchmark evidence are in
-  [Route by size](/quest/m0/model-routing/models.md).
+  table. The lists live in `src/cli/models.ts` (`quest models`), and the
+  benchmark evidence in
+  [moq-dev/quest#555](https://github.com/moq-dev/quest/pull/555).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
