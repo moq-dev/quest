@@ -22,6 +22,7 @@ export {
 	parse,
 	permanent,
 	questBranch,
+	requires,
 	resolve,
 	rooted,
 	SIZES,

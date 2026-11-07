@@ -1,17 +1,18 @@
-# [L] Epics list no children
+# [S] Epics list no children
 
 ## Goal
 
-An epic's children are the quests in its directory, and its `Required`
-section lists only the work that blocks it. Finishing a quest deletes its
-file and edits no epic or milestone README, so PRs that finish sibling
-quests stop conflicting. `quest check --fix` strips the old child lists from
-a repository's tree.
+This repository's epic and milestone READMEs no longer list their children,
+and `quest check` rejects a README `Required` entry naming a quest in its own
+directory. Finishing a quest then deletes its file and edits no README, so
+PRs that finish sibling quests stop conflicting there.
 
 ## Plan
 
 Decided 2026-11-05 (user, /quest-plan, the
-[token waste](/quest/m0/token-waste/README.md) audit).
+[token waste](/quest/m0/token-waste/README.md) audit): an epic's children are
+the quests in its directory, its `Required` lists only what blocks it, and
+path order replaces list order.
 
 Measured, moq-dev PRs created 2026-10-06 to 11-05:
 
@@ -19,26 +20,25 @@ Measured, moq-dev PRs created 2026-10-06 to 11-05:
   milestone READMEs as a group by 45%; in moq-dev/rust2, `quest/m3/README.md`
   by 290 of 585.
 - GitHub's merge queue cannot run quest's merge driver and ejected 723 PRs
-  for conflicts. The [queue watcher](/quest/m0/queue-watcher/README.md)
-  re-merges such a PR with the driver since
-  [moq-dev/quest#389](https://github.com/moq-dev/quest/pull/389), but each
-  ejection still costs a requeue and a CI run, and the rate after 11-01
-  stayed at 0.13 per merged PR.
+  for conflicts.
 
-Decision prompts, chosen options marked ✅:
+Decided 2026-11-07 (user): ✅ stage it in two PRs (rejected: admin-bypass
+merge once; skip; delete). The merge queue checks a PR with the CLI built
+from its base, which rejected the migrated tree.
+[moq-dev/quest#518](https://github.com/moq-dev/quest/pull/518) shipped
+directory membership with a validator that accepts both formats: an epic's
+`Required` link to a quest it holds is allowed and counts once, as a child.
+This quest is the second PR:
 
-- Ordering: ✅ drop the ordering. The maintainer proposed it.
-  `quest unblocked` already ranks by milestone, then downstream impact, and
-  only then by list order (`src/core/unblocked.ts`), so order is only a
-  tiebreak. Path order replaces it.
-- Scope: ✅ every epic (rejected: milestones only; unordered lists). The
-  directory already is the tree and `Required` already holds blockers, so
-  epics stay the graph they are minus the copy of the directory. A child
-  that must precede a sibling becomes an explicit blocker in `Required`.
-  Parallel siblings spawned from one epic conflict on its README today, as
-  milestones do.
-
-The guide's Model, Format, and Creation sections, the skills that rank or
-place work (`/quest-plan`, `/quest-audit`, `/quest-spawn`,
-`/quest-recurring`, `/quest-import`), and `quest tree`'s output change with
-it. The merge driver keeps resolving the blocker lists that remain.
+- Make `remove()` (`src/core/edit.ts`) drop every epic's `Required` link to a
+  quest it holds, so `quest check --fix`, `quest rm`, and the land daemon's
+  base-merge prune strip old child lists, and let `quest check --fix` run with
+  no history to read. #518's commit caa32fc3 has both, with tests.
+- Run `quest check --fix` on this tree and on prose that describes the lists.
+- Turn `requires X, which this epic holds` into a `quest check` error.
+- `assets/land-fix.md` stops adding the flaky quest's link to
+  `quest/m0/flaky/README.md`, and
+  [the flaky quest](/quest/m0/queue-watcher/flaky-quest.md) says so.
+- The PR is breaking: other repositories migrate with `quest check --fix` on
+  their pin bump past it, as
+  [moq-dev pins](/quest/m0/model-routing/pins.md) describes.

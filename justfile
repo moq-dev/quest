@@ -20,18 +20,17 @@ _check:
     bun run --silent quest check
     bun run --silent quest --root examples/export check
     actionlint
-    shellcheck .claude/hooks/*.sh scripts/*.sh
-    shfmt -d .claude/hooks/*.sh scripts/*.sh
+    shellcheck scripts/*.sh
+    shfmt -d scripts/*.sh
     nixfmt --check flake.nix nix/*.nix
     just worker-check
 
-# Run tests, including the shell hooks and the lifecycle of both builds.
+# Run tests, including the install scripts and the lifecycle of both builds.
 test:
     {{gate}} _test
 
 _test:
     bun run test
-    bash .claude/hooks/direnv.test.sh
     bash scripts/install-check.test.sh
     bash scripts/installer.test.sh
     bun run build
@@ -47,15 +46,15 @@ review-sandbox *args:
     QUEST_LIVE=1 bun run vitest run test/live/review-sandbox {{args}}
 
 # Check that a runner job's commands cannot escape its sandbox, with the pinned
-# opencode and sandbox-runtime and a scripted model, on Linux. Needs no login;
-# CI runs it nightly (.github/workflows/sandbox.yml). Run it after bumping either.
+# Claude Code, opencode, and sandbox-runtime and a scripted model, on Linux. Needs
+# no login; CI runs it nightly (.github/workflows/sandbox.yml). Run it after bumping any.
 runner-sandbox *args:
     QUEST_LIVE=1 bun run vitest run test/live/runner-sandbox {{args}}
 
 # Apply formatters without changing program behavior.
 fix:
     bun run fix
-    shfmt -w .claude/hooks/*.sh scripts/*.sh
+    shfmt -w scripts/*.sh
     nixfmt flake.nix nix/*.nix
     bun run --cwd cloudflare fix
 

@@ -15,8 +15,7 @@ just build
 ```
 
 For automatic shell loading, install direnv and approve this checkout with
-`direnv allow`. The Claude SessionStart hook loads an already-approved environment;
-it does not grant approval. No background garbage collection runs on entry.
+`direnv allow`. No background garbage collection runs on entry.
 
 `flake.lock` pins Bun and the developer tools; `bun.lock` pins the
 dependencies. `packageManager` in `package.json` names the same Bun for CI
@@ -35,7 +34,9 @@ problem, resulting behavior, validation, and any limitations. Start PRs as draft
 and mark them ready after checks pass. Merge only within the user's authorized
 scope and after required repository checks and reviews pass. Never block on a
 CodeRabbit review; it is optional.
-Quest execution stops at PR creation; it merges only when the user picks /quest-merge.
+Quest execution stops at PR creation; it merges only on a /quest-merge pick.
+`/quest-complete` picks a maintainer's PR that changes no user-facing behavior
+without asking.
 
 On a PR whose author has write access, the PR body's `## Review` record of a
 local `quest review` round satisfies the guide's required review when it names
@@ -51,8 +52,10 @@ need no review.
 PRs land on `main` through GitHub's merge queue, one PR at a time, as squash commits.
 Queue the reviewed head with `quest merge <pr> --land <sha>` (`/quest-merge` does this).
 The required `Queue` check skips on pull requests; the merge group runs `just check` and `just test` on the self-hosted runner.
+That build lives in `.github/workflows/queue-build.yml`, which the merge group calls from `main`, so a PR's edit to it runs only after the PR lands.
 The host's `quest land watch` daemon runs the Codex fixer when the queue drops a PR for a failed build or a conflict, and re-enqueues healthy heads at the back of the queue.
-A fix that needs a maintainer decision is handed back with a diagnosis on the PR.
+The fixer resolves mechanical causes itself and pushes the fix onto the PR's branch: conflicts that keep both sides' intent, formatting and lint, generated files, lockfiles rebuilt from the base's copy, and build or test failures with an obvious fix, built and tested with registry access.
+It hands back, with a diagnosis on the PR, anything that needs a behavior or design decision; a fix that edits protected paths (`flake.nix`, `.github/`, ...) or that GitHub refuses to push comes back as a ready commit for `quest land apply <pr>`.
 The admin bypass of `main`'s ruleset is for emergencies.
 
 Every AI-authored GitHub post must end with `(written by <model> with <effort>)`,

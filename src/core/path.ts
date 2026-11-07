@@ -60,14 +60,25 @@ export function escapes(path: string): boolean {
 }
 
 /**
- * Order paths component by component, so `a/b.md` sorts before `a-b.md` the
- * way a directory listing walks them, rather than by raw characters.
+ * Path order, which is also the quest tree's order: component by component, so
+ * `a/b.md` sorts before `a-b.md` the way a directory listing walks them, with a
+ * directory's `README.md` first, since an epic precedes its children, and each
+ * run of digits compared by value, so the milestone `m10` follows `m9`.
  */
 export function comparePaths(a: string, b: string): number {
 	const left = a.split("/");
 	const right = b.split("/");
 	for (let i = 0; i < Math.min(left.length, right.length); i++) {
-		if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
+		if (left[i] === right[i]) continue;
+		if (left[i] === "README.md" || right[i] === "README.md") return left[i] === "README.md" ? -1 : 1;
+		const [x, y] = [numbered(left[i]), numbered(right[i])];
+		if (x !== y) return x < y ? -1 : 1;
+		return left[i] < right[i] ? -1 : 1;
 	}
 	return left.length - right.length;
+}
+
+/** A name with each run of digits zero-padded, so comparing two compares their numbers by value. */
+function numbered(name: string): string {
+	return name.replace(/\d+/g, (digits) => digits.padStart(20, "0"));
 }

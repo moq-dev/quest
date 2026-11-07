@@ -1113,18 +1113,11 @@ describe("job routes", () => {
 	});
 
 	it("starts an epic on its README branch while a child's branch is claimed", async () => {
-		// The epic's last listed child merged, leaving its own work; another quest under it is claimed.
+		// The epic's last child merged, leaving its own work, and that child's branch still holds a claim.
 		const documents = [
-			{
-				path: "quest/README.md",
-				content: "# Project\n\n## Goal\n\nBuild it.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
-			},
-			{
-				path: "quest/m0/README.md",
-				content: "# First\n\n## Goal\n\nShip.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md)\n",
-			},
+			{ path: "quest/README.md", content: "# Project\n\n## Goal\n\nBuild it.\n" },
+			{ path: "quest/m0/README.md", content: "# First\n\n## Goal\n\nShip.\n" },
 			{ path: "quest/m0/epic/README.md", content: "# [S] Epic\n\n## Goal\n\nThe epic's own work.\n" },
-			{ path: "quest/m0/epic/child.md", content: "# [S] Child\n\n## Goal\n\nClaimed.\n" },
 		];
 		await db
 			.prepare(
@@ -1132,7 +1125,6 @@ describe("job routes", () => {
 			)
 			.bind(JSON.stringify(documents), JSON.stringify(["quest/m0/epic/child"]))
 			.run();
-		expect((await post("", { workflow: "start", target: "quest/m0/epic/child.md" })).status).toBe(409);
 		expect((await post("", { workflow: "start", target: "quest/m0/epic/README.md" })).status).toBe(201);
 		const [job] = await store.listJobs(db, 10);
 		expect(job).toMatchObject({

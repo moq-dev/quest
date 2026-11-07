@@ -1,4 +1,4 @@
-import { type Doc, entries, rooted } from "quest/core";
+import { type Doc, requires } from "quest/core";
 import {
 	type Milestone,
 	type Board,
@@ -30,15 +30,14 @@ export type Region = { milestone: Milestone; href: string; paths: Path[] };
  * as everything it still holds.
  */
 function steps(docs: Map<string, Doc>): (path: string) => number {
+	const all = [...docs.values()];
 	const memo = new Map<string, number>();
 	const step = (path: string): number => {
 		const known = memo.get(path);
 		if (known !== undefined) return known;
 		// A cycle is a `quest check` failure; it must not hang the page.
 		memo.set(path, 0);
-		const required = entries(docs.get(path)!, "Required")
-			.map((entry) => (entry.target === null ? null : rooted(entry.target)))
-			.filter((target): target is string => target !== null && docs.has(target));
+		const required = requires(all, docs.get(path)!).filter((target) => docs.has(target));
 		const value = required.length === 0 ? 0 : 1 + Math.max(...required.map(step));
 		memo.set(path, value);
 		return value;
@@ -46,7 +45,7 @@ function steps(docs: Map<string, Doc>): (path: string) => number {
 	return step;
 }
 
-/** The board's milestones as map regions, each path ordered by step, then priority. */
+/** The board's milestones as map regions, each path ordered by step, then path order. */
 export function chart(board: Board): Region[] {
 	const step = steps(board.docs);
 	const ordered = (quests: Quest[]): Quest[] =>
@@ -56,8 +55,8 @@ export function chart(board: Board): Region[] {
 			.map(({ quest }) => quest);
 
 	return board.milestones.map((milestone) => {
-		// Paths keep the milestone's priority order. The quests it lists directly share
-		// one main path, placed where the first of them is listed.
+		// Paths keep the milestone's path order. The quests directly in it share one
+		// main path, placed where the first of them sorts.
 		const loose = milestone.items.flatMap((item) => (item.kind === "quest" ? [item.quest] : []));
 		const main: Path = { title: "Main path", href: null, progress: null, waypoints: ordered(loose) };
 		const paths = milestone.items.flatMap((item): Path[] => {

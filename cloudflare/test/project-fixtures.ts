@@ -13,10 +13,7 @@ const db = env.DB;
 export const commit = "a".repeat(40);
 export const head = "d".repeat(40);
 export const documents = [
-	{
-		path: "quest/README.md",
-		content: "# Project\n\n## Goal\n\nBuild it.\n\n## Required\n\n- [First](/quest/first.md)\n",
-	},
+	{ path: "quest/README.md", content: "# Project\n\n## Goal\n\nBuild it.\n" },
 	{ path: "quest/first.md", content: "# [S] First\n\n## Goal\n\nBuild first.\n" },
 ];
 

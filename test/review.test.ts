@@ -461,27 +461,29 @@ fakes.each([
 	},
 );
 
-// flaky: /quest/m0/flaky/a-reviewers-usage-limit-exits-3-with-its-reset-and-records-no-round.md
-test.skip("a reviewer's usage limit exits 3 with its reset, and records no round", async () => {
-	// Codex prints its reset in the local time zone, which this process shares.
-	const codex = new Date(2026, 10, 5, 15, 15).toISOString().replace(".000Z", "Z");
-	for (const [host, variant, message] of [
-		["CLAUDECODE", "reset", `codex hit its usage limit; resets ${codex}`],
-		["CLAUDECODE", "unknown", "codex hit its usage limit; resets unknown"],
-		["CODEX_THREAD_ID", "reset", "claude hit its usage limit; resets 2030-03-17T17:46:40Z"],
-		["CODEX_THREAD_ID", "unknown", "claude hit its usage limit; resets unknown"],
-	] as const) {
+// Codex prints its reset in the local time zone, which this process shares.
+const codexReset = new Date(2026, 10, 5, 15, 15).toISOString().replace(".000Z", "Z");
+
+// One test per case: each runs two full reviews, and all four in one test outran its timeout on loaded runners.
+fakes.for([
+	["CLAUDECODE", "reset", `codex hit its usage limit; resets ${codexReset}`],
+	["CLAUDECODE", "unknown", "codex hit its usage limit; resets unknown"],
+	["CODEX_THREAD_ID", "reset", "claude hit its usage limit; resets 2030-03-17T17:46:40Z"],
+	["CODEX_THREAD_ID", "unknown", "claude hit its usage limit; resets unknown"],
+] as const)(
+	"a reviewer's usage limit exits 3 with its reset, and records no round (%s, %s)",
+	async ([host, variant, message]) => {
 		const s = setup(host);
 		vi.stubEnv("FAKE_LIMITED", variant);
 		const result = await quest("--root", s.repo, "review");
-		expect(result.stderr, `${host} ${variant}`).toBe(`error: ${message}\n`);
-		expect(result.code, `${host} ${variant}`).toBe(3);
+		expect(result.stderr).toBe(`error: ${message}\n`);
+		expect(result.code).toBe(3);
 		expect(result.stdout).toBe("");
 		vi.stubEnv("FAKE_LIMITED", undefined);
 		// No round was recorded, so the next one needs no responses.
 		expect((await quest("--root", s.repo, "review")).code).toBe(0);
-	}
-});
+	},
+);
 
 fakes("a reviewer with no stored login reviews with the credential its CLI reads from the environment", async () => {
 	const s = setup();
