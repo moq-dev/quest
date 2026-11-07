@@ -4,7 +4,18 @@
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, relative, resolve, sep } from "node:path";
 
-import { check, formatFinding, isQuest, move, normalize, permanent, questBranch, relocate, remove } from "../core";
+import {
+	check,
+	formatFinding,
+	isQuest,
+	move,
+	normalize,
+	permanent,
+	promote,
+	questBranch,
+	relocate,
+	remove,
+} from "../core";
 import { type ClaimDependencies, claims } from "./claims";
 import { GitError, git } from "./git";
 import { checkout, exists, sources, under } from "./tree";
@@ -149,6 +160,16 @@ export function fixLinks(root: string): string[] {
 			.filter(isQuest),
 	);
 	const edited = remove(sources(root), (path) => deleted.has(path) && !exists(root, path));
+	for (const [path, text] of edited) writeFileSync(join(root, path), text);
+	return modified(edited);
+}
+
+/**
+ * Promote the section headings `promote` can, as `quest check --fix` does after `fixLinks`. Writes
+ * the documents without staging them, and returns `M path` for each.
+ */
+export function fixHeadings(root: string): string[] {
+	const edited = promote(sources(root));
 	for (const [path, text] of edited) writeFileSync(join(root, path), text);
 	return modified(edited);
 }

@@ -124,8 +124,37 @@ export type Repo = {
 	rules?: Record<string, unknown>[];
 	/** The default branch's classic protection, as `GET /branches/<default>/protection` returns it; none when absent. */
 	protection?: Record<string, any>;
-	/** Check runs the App wrote through `POST /check-runs`, oldest first. */
-	checkRuns?: { name: string; head_sha: string; conclusion: string; app: number; output: Record<string, unknown> }[];
+	/** Check runs the App wrote through `POST /check-runs`, oldest first; `status` is set while one is unfinished. */
+	checkRuns?: {
+		name: string;
+		head_sha: string;
+		conclusion?: string;
+		status?: string;
+		details_url?: string;
+		app: number;
+		output: Record<string, unknown>;
+	}[];
+	/** The check runs reported on commits that are no pull request's head, such as a queue build's. */
+	commitRuns?: Record<string, NonNullable<Pull["runs"]>>;
+	/** GitHub Actions workflow runs, as `GET /actions/runs` lists them, with their jobs and each job's log. */
+	actionRuns?: {
+		id: number;
+		name: string;
+		head_branch: string;
+		head_sha: string;
+		status: string;
+		conclusion: string | null;
+		html_url: string;
+		jobs: {
+			id: number;
+			name: string;
+			status: string;
+			conclusion: string | null;
+			html_url: string;
+			steps?: { name: string; conclusion: string | null }[];
+			log?: string;
+		}[];
+	}[];
 	/** Rulesets by ID, as `GET /rulesets/<id>` shows them to the App. */
 	rulesets?: Record<number, { current_user_can_bypass: "always" | "pull_requests_only" | "never" }>;
 };
@@ -411,7 +440,7 @@ const UNAPPROVED = new Set(["BUSL-1.1", "SSPL-1.0", "Elastic-2.0"]);
 export const ACTIONS_APP = 15368;
 
 /** One page of a head's check runs and commit statuses, as `statusCheckRollup.contexts` pages them. */
-function contextPage(pull: Pull, after: unknown) {
+function contextPage(pull: Pick<Pull, "runs">, after: unknown) {
 	const start = typeof after === "string" ? Number(after) : 0;
 	const all = (pull.runs ?? []).map((run, index) =>
 		run.context
@@ -510,6 +539,13 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 		return { data: { repository: { pullRequest: pull ? holdsTarget(repo, pull) : null } } };
 	}
 	if (query.includes("object(oid: $oid)")) {
+		const runs = repo.commitRuns?.[variables.oid as string];
+		if (runs)
+			return {
+				data: {
+					repository: { object: { statusCheckRollup: { contexts: contextPage({ runs }, variables.after) } } },
+				},
+			};
 		const pull = repo.pulls.find(
 			(p) => headOf(repo, p) === variables.oid || p.autoMerge?.commitBody === `Quest-Land-Head: ${variables.oid}`,
 		);
@@ -873,7 +909,11 @@ export function fakeGitHub(world: World) {
 									data: {
 										node: {
 											state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
+											baseRefName: pull.base ?? defaultOf(repo),
 											headRefOid: headOf(repo, pull),
+											mergeStateStatus: mergeState(pull),
+											mergeQueueEntry: pull.queued ? { enqueuedAt: updatedAt } : null,
+											labels: { nodes: (pull.labels ?? []).map((name) => ({ name })) },
 											autoMergeRequest: pull.landing
 												? { enabledAt: pull.autoMerge?.enabledAt ?? updatedAt }
 												: null,
@@ -1010,18 +1050,73 @@ export function fakeGitHub(world: World) {
 			const found = repo.rulesets?.[Number(ruleset[1])];
 			return found ? json({ id: Number(ruleset[1]), ...found }) : notFound();
 		}
+		const statuses = ["queued", "in_progress", "completed"];
 		if (tail === "/check-runs" && method === "POST") {
 			if (!writes("checks")) return forbidden();
-			if (body.status !== "completed" || typeof body.head_sha !== "string" || !repo.commits[body.head_sha])
+			const known =
+				typeof body.head_sha === "string" &&
+				(repo.commits[body.head_sha] || repo.pulls.some((pull) => headOf(repo, pull) === body.head_sha));
+			if (!statuses.includes(body.status) || (body.status === "completed") !== !!body.conclusion || !known)
 				return json({ message: "Validation Failed" }, 422);
 			(repo.checkRuns ??= []).push({
 				name: body.name,
 				head_sha: body.head_sha,
 				conclusion: body.conclusion,
+				status: body.status === "completed" ? undefined : body.status,
+				details_url: body.details_url,
 				app: world.app.id,
 				output: body.output,
 			});
 			return json({ id: repo.checkRuns.length, name: body.name, head_sha: body.head_sha }, 201);
+		}
+		const checkRun = tail.match(/^\/check-runs\/(\d+)$/);
+		if (checkRun && method === "PATCH") {
+			if (!writes("checks")) return forbidden();
+			const run = repo.checkRuns?.[Number(checkRun[1]) - 1];
+			if (!run) return notFound();
+			if (!statuses.includes(body.status) || (body.status === "completed") !== !!body.conclusion)
+				return json({ message: "Validation Failed" }, 422);
+			Object.assign(run, {
+				conclusion: body.conclusion,
+				status: body.status === "completed" ? undefined : body.status,
+				details_url: body.details_url ?? run.details_url,
+				output: body.output,
+			});
+			return json({ id: Number(checkRun[1]), name: run.name, head_sha: run.head_sha });
+		}
+		if (tail === "/actions/runs" && method === "GET") {
+			if (!scope.permissions.actions) return forbidden();
+			const sha = url.searchParams.get("head_sha");
+			const branch = url.searchParams.get("branch");
+			const workflow_runs = (repo.actionRuns ?? [])
+				.filter((run) => (!sha || run.head_sha === sha) && (!branch || run.head_branch === branch))
+				.map(({ jobs: _, ...run }) => run);
+			return json({ total_count: workflow_runs.length, workflow_runs });
+		}
+		const actionRun = tail.match(/^\/actions\/runs\/(\d+)\/(jobs|cancel)$/);
+		if (actionRun) {
+			const run = repo.actionRuns?.find((item) => item.id === Number(actionRun[1]));
+			if (!run) return notFound();
+			if (actionRun[2] === "jobs" && method === "GET")
+				return scope.permissions.actions
+					? json({ total_count: run.jobs.length, jobs: run.jobs.map(({ log: _, ...job }) => job) })
+					: forbidden();
+			if (actionRun[2] === "cancel" && method === "POST") {
+				if (!writes("actions")) return forbidden();
+				if (run.status === "completed")
+					return json({ message: "Cannot cancel a workflow run that is completed." }, 409);
+				run.status = "completed";
+				run.conclusion = "cancelled";
+				return json({}, 202);
+			}
+		}
+		const jobLog = tail.match(/^\/actions\/jobs\/(\d+)\/logs$/);
+		if (jobLog && method === "GET") {
+			if (!scope.permissions.actions) return forbidden();
+			const job = (repo.actionRuns ?? [])
+				.flatMap((run) => run.jobs)
+				.find((item) => item.id === Number(jobLog[1]));
+			return job?.log === undefined ? notFound() : new Response(job.log);
 		}
 		const runs = tail.match(/^\/commits\/([0-9a-f]{40})\/check-runs$/);
 		if (runs && method === "GET") {
@@ -1044,7 +1139,7 @@ export function fakeGitHub(world: World) {
 				.filter((run) => run.head_sha === runs[1])
 				.reverse()
 				.filter((run, i, all) => all.findIndex((other) => other.name === run.name) === i)
-				.map((run) => ({ ...run, status: "completed", app: { id: run.app } }));
+				.map((run) => ({ ...run, status: run.status ?? "completed", app: { id: run.app } }));
 			const check_runs = [...written, ...found].filter(
 				(run) => (!name || run.name === name) && (!app || String(run.app.id) === app),
 			);
