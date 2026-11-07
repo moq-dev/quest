@@ -39,6 +39,8 @@ export type Publication = {
 	pull: { title: string; body: string; draft: boolean } | null;
 	/** A merge job lands its pull request at the published head, with the merge method its instructions name. */
 	land: { method: MergeMethod | null } | null;
+	/** The publishing session's `Implementer:` line, which a commit to an existing pull request records. */
+	implementer: string | null;
 };
 
 /** Whether `path` names a file inside a work tree, never Git's own directory. */
@@ -149,6 +151,12 @@ export function parsePublication(body: Record<string, unknown>): Publication {
 		pull = { title, body: description, draft: input!.draft !== false };
 	}
 	if (!changes.length && !merge && !pull && !land) throw new JobError("Nothing to publish");
+	let implementer: Publication["implementer"] = null;
+	if (body.implementer !== undefined) {
+		implementer = text(body.implementer, 256);
+		if (!implementer || !/^Implementer: [^\r\n]+$/.test(implementer))
+			throw new JobError("An Implementer: line required");
+	}
 	return {
 		job,
 		attempt,
@@ -160,6 +168,7 @@ export function parsePublication(body: Record<string, unknown>): Publication {
 		submodules: submodules as Publication["submodules"],
 		pull,
 		land,
+		implementer,
 	};
 }
 
@@ -270,6 +279,10 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 	if (refused.length) return decide(db, runner, input, { type: "publication", refused });
 	const github = new GitHubService(env);
 	const upstream: GitHubRepository = { owner: job.owner, name: job.name, id: job.repository };
+	// Work on an existing pull request writes none of its text, so its sessions comment records who changes it,
+	// before the commit, so a commit whose reply is lost never leaves its session unrecorded.
+	if ((input.changes.length || input.merge) && input.implementer && onPull(job.workflow))
+		await github.recordSession(upstream, job.actor, pullOf(job.target), input.implementer);
 	let head: string | null;
 	try {
 		// A pull request opens from the branch, so a delivery alone still checks where it is.

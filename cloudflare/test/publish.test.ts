@@ -1086,6 +1086,54 @@ describe("runner publication", () => {
 		});
 	});
 
+	it("records each session that commits to an iterated pull request in the App's one sessions comment", async () => {
+		const id = await running({
+			workflow: "iterate",
+			target: "pulls/2",
+			revision: prHead,
+			branch: "contributor/fix",
+			trusted: true,
+		});
+		// Anyone can copy the marker; only the App's own comment is kix's record.
+		project.pulls[0]!.comments = [
+			{ author: "mallory", body: "<!-- quest:sessions -->\n- Implementer: x, y, z", at },
+		];
+		const body = project.pulls[0]!.body;
+		const one = "Implementer: claude, claude-opus-5-5, high effort";
+		const two = "Implementer: codex, gpt-6.1-sol, high effort";
+		let head = prHead;
+		const send = async (implementer: string, changes = [file("a", head.slice(0, 4))]) => {
+			const response = await publish({ job: id, attempt: 1, head, message: "m", changes, implementer });
+			expect(response.status).toBe(200);
+			head = ((await response.json()) as { head: string }).head;
+		};
+		await send(one);
+		await send(one);
+		await send(two);
+		const sessions = project.pulls[0]!.comments!.filter((c) => c.author === "quest-test[bot]");
+		expect(sessions.map((c) => c.body)).toEqual([
+			`<!-- quest:sessions -->\nThe sessions that published to this pull request after it opened.\n\n## Models\n\n- ${one}\n- ${two}\n`,
+		]);
+		// The body, which holds the author's own review record, is untouched.
+		expect(project.pulls[0]!.body).toBe(body);
+
+		const before = requests().length;
+		const forged = await publish({
+			job: id,
+			attempt: 1,
+			head,
+			message: "m",
+			changes: [file("a", "x")],
+			implementer: "nope",
+		});
+		expect(await forged.json()).toEqual({ error: "An Implementer: line required" });
+		expect(
+			requests()
+				.slice(before)
+				.some((r) => r.path.includes("/comments")),
+		).toBe(false);
+	});
+
 	it("rechecks the trust of a job requeued while its publication moved the head", async () => {
 		const id = await running({
 			workflow: "iterate",

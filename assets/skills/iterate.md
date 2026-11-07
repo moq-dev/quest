@@ -9,6 +9,7 @@ Parse the arguments to determine the PR number. Any other text is the user's fee
 Take it with `quest iterate <pr>` before acting, passing a token you already hold for it to keep that hold, and keep the hold token it prints; `quest iterate --help` explains holds.
 If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
 If you cannot push to the PR's branch, stop and report.
+Your `Implementer:` line ends with the size your brief gives the work, as `Implementer: Claude Code, claude-opus-5-5, low effort (iterate, XS)`.
 
 Read the PR, its linked issues and quest, the reviews and comments posted on it, and the surrounding code.
 `quest status <pr>` reports its checks, reviews by head, and unresolved threads in one call.
