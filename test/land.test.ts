@@ -3330,7 +3330,11 @@ ${requeueScript}
 
 		// The daemon's known flaky tests, in the checkout's .git, follow the PRs as data.
 		const known = [
-			{ failure: "cargo test: render_timeout", jobs: ["https://github.com/o/r/actions/runs/1/job/2"] },
+			{
+				failure: "cargo test: render_timeout",
+				quest: "quest/m0/flaky/render-timeout.md",
+				jobs: ["https://github.com/o/r/actions/runs/1/job/2"],
+			},
 		];
 		writeFileSync(join(dir, ".git", FLAKY_INPUT), JSON.stringify(known));
 		await fix(dir, log, [1], agent, ["-"]);

@@ -150,7 +150,6 @@ Shared shape, for the children to follow:
 
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
-- [The watcher writes flaky quests](/quest/m0/queue-watcher/flaky-quest.md) - a disable's follow-up quest comes from a template in `quest land watch`, so the headless land fixer writes no quest
 - [Daemons prune their logs](/quest/m0/queue-watcher/log-retention.md) - the watcher and gate delete their finished logs after a window, so state stays bounded (4.1 GiB on nixos on 2026-11-04)
 - [The watcher runs its own serial queue](/quest/m0/queue-watcher/own-queue.md) - `quest land watch` lands a base without GitHub's merge queue, testing one pick at a time in the repository's queue workflow
 - [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - moq.pro's `main` leaves the batching gate for the watcher's own queue
