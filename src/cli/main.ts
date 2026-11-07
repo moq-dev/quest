@@ -168,15 +168,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"first: a stale base can predate the quest and skip it.\n\n" +
 				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
 				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
-				"does, such as the quests a merged base finished, and every epic's Required entry naming a quest in " +
-				"its own directory, which the epic already waits for, with any heading left empty. It prints M for " +
-				"each edited document and leaves the edits unstaged. A quest moved rather than deleted, a link that " +
-				"never named a quest, and a link in prose stay for the check to report. Refuses outside a git work " +
-				"tree and while a quest file has unresolved conflicts.",
+				"does, such as the quests a merged base finished, with any heading left empty. It prints M for each " +
+				"edited document and leaves the edits unstaged. A quest moved rather than deleted, a link that never " +
+				"named a quest, and a link in prose stay for the check to report. Refuses outside a git work tree " +
+				"and while a quest file has unresolved conflicts.",
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
-		.option("--fix", "First drop list links to quests the history deleted, and epics' links to their own quests")
+		.option("--fix", "First drop list links to quests the history deleted")
 		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
@@ -1238,7 +1237,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Delete a quest, or an epic and the quests under it, with git rm, and drop every Required, Related, " +
 				"or Closes entry that links to it, with any heading left empty. It also drops every Required link to a " +
 				"finished milestone, one whose directory holds no other quest and whose README has no Required left, " +
-				"and every epic's Required entry naming a quest in its own directory. The change is staged.\n\n" +
+				"except the root's own listing. The change is staged.\n\n" +
 				"Refuses outside a git work tree. An epic is its directory or README; removing one that holds other " +
 				"quests requires -r. The root epic and milestones are permanent.\n\n" +
 				"Prints D for each deleted quest and M for each edited document. Mentions that are not list entries, " +

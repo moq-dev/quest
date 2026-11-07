@@ -13,3 +13,8 @@ Split from [the m0 sandbox epic](/quest/m0/kix/sandbox/README.md) on
 2026-10-30 (user, /quest-plan): moq-dev's maintainers run their jobs on
 trusted or approved heads, so untrusted heads stay refused until m1. The
 design decisions for the whole sandbox stay in the m0 epic's Plan.
+
+## Required
+
+- [macOS sandbox](/quest/m1/kix/sandbox/macos.md) - the boundary verified under Seatbelt, then the answer-approval gate removed
+- [Untrusted devShells](/quest/m1/kix/sandbox/vm.md) - untrusted PR heads build their devShell in a per-job VM

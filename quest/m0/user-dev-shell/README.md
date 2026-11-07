@@ -70,3 +70,8 @@ The user-level hooks live in [kixelated/dotfiles](https://github.com/kixelated/d
 installed into each Claude profile's `settings.json` and Codex's user
 config, and generalize this repository's `.claude/hooks/direnv.sh` and
 moq-dev/moq's `.codex/hooks/direnv.sh`.
+
+## Required
+
+- [.worktrees/ stays out of git status](/quest/m0/user-dev-shell/worktrees-exclude.md) - `quest worktree` adds `/.worktrees/` to the clone's local exclude unless something ignores it
+- [Repositories drop dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - quest, moq, moq.pro, rind, and rust2 drop their dev-shell hooks and `nix develop` instructions

@@ -27,7 +27,8 @@ run is in m0 once routing lands, then each milestone.
   compare findings per round by effort across the routed PRs, with the
   misses later rounds, CI, or follow-ups found, and recommend restoring a
   higher effort where a lower one misses findings.
-- m1's run already exists in [m1](/quest/m1/README.md), requiring m0. The PR that finishes this run creates no new run: it
+- m1's run already exists, listed in [m1](/quest/m1/README.md)'s `Required`
+  and requiring m0. The PR that finishes this run creates no new run: it
   carries the tallies and any table changes into m1's Plan as its baseline.
 
 ## Required

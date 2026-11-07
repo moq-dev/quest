@@ -47,6 +47,12 @@ test("deduplicates diamonds and counts work that still has another prerequisite"
 	]);
 });
 
+test("an epic's list of its own children is membership, not dependents", () => {
+	const spec = { "m0/epic/a.md": [], "m0/epic/b.md": ["m0/epic/a.md"], "m0/zero.md": [] };
+	const listed = graph({ ...spec, "m0/epic/README.md": ["m0/epic/a.md", "m0/epic/b.md"] });
+	expect(unblocked(listed)).toEqual(unblocked(graph(spec)));
+});
+
 test("does not score membership, but reaches real dependents of nested epics", () => {
 	const docs = graph({
 		"m0/epic/nested/a.md": [],

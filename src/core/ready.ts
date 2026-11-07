@@ -7,7 +7,7 @@
 // coherent, and already done by some other PR - and answering it means asking
 // the forge, so it belongs to the flow that is already talking to it.
 
-import { type Doc, children, entries, has, isEpic, rooted } from "./doc";
+import { type Doc, children, entries, has, holds, isEpic, rooted } from "./doc";
 import { comparePaths, normalize } from "./path";
 
 /** One thing standing between a quest and being started. */
@@ -95,6 +95,8 @@ function expand(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]
 		// A bullet that does not open with a link into the tree is invalid, and
 		// nothing here can clear it, so it is a blocker with nothing under it.
 		const target = entry.target === null ? null : rooted(entry.target);
+		// A link to a quest the epic holds is listed below, with its children.
+		if (target !== null && holds(doc.path, target)) continue;
 		found.push(blocker(docs, byPath, target !== null && byPath.has(target) ? target : null, entry.text, stack));
 	}
 	for (const child of children(docs, doc)) found.push(blocker(docs, byPath, child, child, stack));

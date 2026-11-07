@@ -293,19 +293,18 @@ describe("epics", () => {
 			.rejects("quest/m0/loose/deeper/README.md: sits in quest/m0/loose, which has no README.md");
 	});
 
-	// An epic already waits for everything in its directory, so a link to any of
-	// it is the child list this format retired; `quest check --fix` drops it.
+	// Trees from before directory membership still list each epic's children.
+	// A link to a quest the epic holds is membership, so it counts once.
 	test.each([
 		["quest/README.md", "/quest/m0/README.md"],
 		["quest/m0/README.md", "/quest/m0/epic/README.md"],
 		["quest/m0/README.md", "/quest/m0/epic/one.md"],
 		["quest/m0/epic/README.md", "/quest/m0/epic/one.md"],
 	])("%s requiring %s, which it holds", (readme, target) => {
-		const t = tree().append(readme, `\n## Required\n\n- [Held](${target})\n`);
-		expect(t.findings()).toHaveLength(1);
-		t.rejects(
-			`requires ${target}, which this epic holds; an epic waits for everything in its directory, so remove the entry (quest check --fix does)`,
-		);
+		const listed = tree().append(readme, `\n## Required\n\n- [Held](${target})\n`);
+		listed.accepts();
+		expect(listed.ready()).toEqual(tree().ready());
+		expect(listed.blockers(readme)).toEqual(tree().blockers(readme));
 	});
 
 	test("a quest required twice", () => {
@@ -386,14 +385,12 @@ describe("finished milestones", () => {
 			.accepts();
 	});
 
-	// The root holds every milestone, so its link to one is that finding alone.
-	test("the root's link to a finished milestone is one finding", () => {
-		const t = tree()
+	// The root's listing of its milestones is membership, not a blocker.
+	test("the root's link to a finished milestone is allowed", () => {
+		tree()
 			.append("quest/README.md", "\n## Required\n\n- [M0](/quest/m0/README.md)\n")
-			.remove("quest/m0/epic");
-		expect(t.findings()).toEqual([
-			"quest/README.md:9: requires /quest/m0/README.md, which this epic holds; an epic waits for everything in its directory, so remove the entry (quest check --fix does)",
-		]);
+			.remove("quest/m0/epic")
+			.accepts();
 	});
 
 	test("removing the link readies the quest", () => {

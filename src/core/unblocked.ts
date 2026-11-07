@@ -1,7 +1,7 @@
 // Rank ready work without mistaking epic membership for downstream work.
 
 import { handBackWaits } from "./claim";
-import { type Doc, branchQuest, children, entries, permanent, rooted } from "./doc";
+import { type Doc, branchQuest, children, entries, holds, permanent, rooted } from "./doc";
 import { ready, treeOrder } from "./ready";
 import { ROOT, check, formatFinding } from "./rules";
 import { type Wait, onMaintainer, waits } from "./waiting";
@@ -37,7 +37,11 @@ export function ranking(docs: Doc[]): Ranking {
 		reverse.set(target, dependents);
 	};
 	for (const doc of docs) {
-		for (const entry of entries(doc, "Required")) depend(rooted(entry.target!)!, doc.path, false);
+		for (const entry of entries(doc, "Required")) {
+			const target = rooted(entry.target!)!;
+			// An old child list's entry is membership, which the children below record.
+			if (!holds(doc.path, target)) depend(target, doc.path, false);
+		}
 		for (const child of children(docs, doc)) depend(child, doc.path, true);
 	}
 
