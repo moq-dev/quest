@@ -88,7 +88,3 @@ Implementation guidance:
   start prune stale ones the daemon left behind.
 - Update `quest land watch`'s description in `src/cli/main.ts`, the README's
   landing section, and `CONTRIBUTING.md` in the same change.
-
-## Related
-
-- [Merge through a host gate](/quest/m0/host-land/README.md) - the gate whose landing path this reuses

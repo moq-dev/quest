@@ -29,7 +29,6 @@ earlier "Later work" milestone became m2.
 - [Quest log theme](/quest/m1/theme/README.md) - an MMO-style identity, copy, board, landing page, and CLI output for the demo and launch
 - [Launch material](/quest/m1/launch.md) - README, quickstart, demo, comparison, and launch-post drafts
 - [Gate CPU weight](/quest/m1/gate-cpu-weight.md) - gated commands run at a lower CPU weight than the interactive session, so concurrent gates no longer starve the desktop
-- [Workers in a 5-minute cache](/quest/m1/worker-cache.md) - re-plan #276's worker/coordinator split and gate tickets, after confirming the cache premise
 - [Retire Decisions needed](/quest/m1/decisions-needed.md) - only `## Waiting` hands a draft back, once no open draft uses the old heading
 - [Bun EFAULT report](/quest/m1/bun-efault.md) - report concurrent `rmSync` `EFAULT` on Windows, and drop the workaround once Bun fixes it
 - [Model check](/quest/m1/model-check.md) - recurring each milestone: the built-in implementation and review tables use the newest models at efforts retuned from outcomes, and the live sandbox test passes

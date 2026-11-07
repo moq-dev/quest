@@ -156,4 +156,3 @@ Workflow permission, was deleted (/quest-unblock).
 ## Related
 
 - [Queue watcher](/quest/m0/queue-watcher/README.md) - runs this fixer on each PR the merge queue drops
-- [Merge through a host gate](/quest/m0/host-land/README.md) - the gate that runs it for the repositories not yet switched

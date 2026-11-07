@@ -250,7 +250,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("unblocked")
 		.summary("Rank ready quests, or print what blocks one quest")
 		.description(
-			"Rank ready quests by milestone priority, distinct transitive dependents, then tree order. " +
+			"Rank ready quests by milestone priority, distinct transitive dependents, then path order. " +
 				"Given a path, print what blocks that quest instead.\n\n" +
 				"Counts exclude structural epic membership. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
@@ -337,7 +337,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"List every quest with a ## Waiting section and every open draft PR handed back with one (or the " +
 				"older ## Decisions needed): those waiting on the maintainer first, then milestone priority, distinct " +
-				"transitive dependents as quest unblocked counts them, ready before blocked, then tree order, with " +
+				"transitive dependents as quest unblocked counts them, ready before blocked, then path order, with " +
 				"drafts after quests by PR number. A draft ranks as the quest its branch carries, or last when it " +
 				"carries none. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
 				"followed by the condition and how to check or advance it. A draft's item without a party, and every " +
@@ -527,15 +527,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	const OWNERSHIP =
 		"Before a session pushes to an existing PR, it takes the PR with iterate, and hands it back with " +
 		"release. A taken PR carries the quest:active label; iterate prints a hold token, the ID of the timeline " +
-		"event that added it, since sessions often share an account. A command refuses while a quest:* label " +
-		"it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
+		"event that added it, since sessions often share an account. A command refuses while a quest:active or " +
+		"quest:kix label it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
 		"holds (one whose body has no Waiting heading). A refusal names the holder's label, age, and " +
 		"token; releasing a stale hold with that token is the user's choice. Given a token, a command refuses " +
 		"unless the token is still the latest add of its label. When two sessions add the label at once, the " +
 		"first added keeps the PR; GitHub records no event when a label already on the PR is added again, so two " +
-		"takes within the same moment are not told apart. Older quest versions' quest:iterate and quest:ready " +
-		"labels hold a PR like any quest:* label, and taking it with their token swaps them for quest:active; " +
-		"their quest:merge label holds nothing.\n\n" +
+		"takes within the same moment are not told apart.\n\n" +
 		"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 3 when refused, 2 for invalid " +
 		"arguments, and 1 for other failures.";
 	const printToken = (work: Promise<Hold>) => settle(work, (hold) => print(hold.token));
@@ -1211,8 +1209,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"root-absolute link to it under quest/. The change is staged.\n\n" +
 				"Refuses the root epic and milestones, which are permanent. Refuses outside a git work tree, when " +
 				"the destination exists, and while a moved quest has a claim branch or open PR on origin, or on " +
-				"the upstream that holds origin's claims (see quest start), since the old branch would no longer name it. Moving a " +
-				"quest into or out of an epic changes which epic lists it; the check afterwards reports what to fix.\n\n" +
+				"the upstream that holds origin's claims (see quest start), since the old branch would no longer name it. A " +
+				"quest belongs to the epic whose directory holds it, so moving it into another directory moves it " +
+				"into that epic.\n\n" +
 				"Prints R for the move and M for each edited document. Mentions of the old path that are not links, " +
 				"or are outside quest/, are reported on stderr and left alone. Runs quest check on the result and " +
 				"exits 1 if it fails.",
@@ -1235,8 +1234,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Delete a quest, or an epic and the quests under it, with git rm, and drop every Required, Related, " +
 				"or Closes entry that links to it, with any heading left empty. It also drops every Required link to a " +
-				"finished milestone, one whose README has no Required left, except the root's own listing. The change " +
-				"is staged.\n\n" +
+				"finished milestone, one whose directory holds no other quest and whose README has no Required left, " +
+				"except the root's own listing. The change is staged.\n\n" +
 				"Refuses outside a git work tree. An epic is its directory or README; removing one that holds other " +
 				"quests requires -r. The root epic and milestones are permanent.\n\n" +
 				"Prints D for each deleted quest and M for each edited document. Mentions that are not list entries, " +
