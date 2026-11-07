@@ -43,7 +43,7 @@ Decision prompts, chosen options marked ✅:
   - ✅ Mechanical rules become hooks or lint, so their prose leaves the
     always-loaded rules ([rule checks](/quest/m0/token-waste/rule-checks.md)).
   - ✅ A review round budget by severity, after Theo's `sol-loop`
-    ([single-pass review](/quest/m0/token-waste/review-single-pass.md)).
+    ([moq-dev/quest#514](https://github.com/moq-dev/quest/pull/514)).
   - ✅ `quest usage` moves from m1 into this epic, so its closing
     re-measure is one command instead of a multi-agent audit (this audit took
     four agents about 650k tokens). Try jdx's `jouet audit` first and say why
@@ -68,7 +68,6 @@ Decision prompts, chosen options marked ✅:
 
 ## Required
 
-- [Single-pass review](/quest/m0/token-waste/review-single-pass.md) - a review round explores the change once, with the diff and REVIEW.md given up front
 - [Rules load once](/quest/m0/token-waste/rule-loading.md) - skills and rules arrive in the first turn and survive compaction
 - [Epics list no children](/quest/m0/token-waste/child-lists.md) - an epic's children are its directory, so finishing a quest edits no README
 - [Mechanical rules become checks](/quest/m0/token-waste/rule-checks.md) - hooks enforce em dashes, push refspecs, no rebase or force-push, the footer, and `.tmp/`, and their prose leaves the always-loaded rules

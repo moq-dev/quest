@@ -78,7 +78,7 @@ marked ✅:
   Opus if Haiku's review scores lag.
 - Sol fallbacks: ✅ one rung lower, XS low, S medium, M high, and a new L
   fallback at xhigh; XL keeps none (the user's pick; rejected: unchanged).
-- Review efforts: ✅ [Single-pass review](/quest/m0/token-waste/review-single-pass.md)'s
+- Review efforts: ✅ [Single-pass review](https://github.com/moq-dev/quest/pull/514)'s
   Sol column (XS low, S medium, M medium, L high, XL xhigh) replaces the
   rule that a review runs at the effort Sol would write at, since that
   decision ([moq-dev/quest#509](https://github.com/moq-dev/quest/pull/509))
