@@ -74,12 +74,15 @@ export async function moveQuest(
 	mkdirSync(join(root, posix.dirname(to)), { recursive: true });
 	git(root, ["mv", "--", from, to]);
 	write(root, edited.texts);
+	// The move can put a required quest inside the epic requiring it, which then holds it.
+	const holding = remove(sources(root), () => false);
+	write(root, holding);
 	const warnings = edited.missed.map(
 		(link) =>
 			`${relocate(link.path, from, to) ?? link.path}:${link.line}: links ${link.target} in a form mv cannot rewrite; update it by hand`,
 	);
 	return {
-		changes: [`R ${from} -> ${to}`, ...modified(edited.texts)],
+		changes: [`R ${from} -> ${to}`, ...modified(new Map([...edited.texts, ...holding]))],
 		warnings: [...warnings, ...mentions(root, from)],
 		findings: findings(root),
 	};

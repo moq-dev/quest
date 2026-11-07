@@ -187,6 +187,20 @@ describe("quest mv", () => {
 		tree.accepts();
 	});
 
+	test("drops a Required link the move puts inside the requiring epic", async () => {
+		const tree = committed(
+			Tree.baseline()
+				.write("quest/m0/a.md", "# [S] A\n\n## Goal\n\nG.\n")
+				.write("quest/m0/epic/README.md", `${EPIC_README.trimEnd()}\n\n## Required\n\n- [A](/quest/m0/a.md)\n`),
+		);
+		const out = await quest(tree, "mv", "quest/m0/a.md", "quest/m0/epic/a.md");
+		expect(out.code).toBe(0);
+		expect(out.stdout).toBe("R quest/m0/a.md -> quest/m0/epic/a.md\nM quest/m0/epic/README.md\n");
+		expect(tree.read("quest/m0/epic/README.md")).not.toContain("a.md");
+		expect(staged(tree)).toEqual(["M  quest/m0/epic/README.md", "R  quest/m0/a.md -> quest/m0/epic/a.md"]);
+		tree.accepts();
+	});
+
 	test("moves an epic into a new directory", async () => {
 		const tree = Tree.committed();
 		const out = await quest(tree, "mv", "quest/m0/epic", "quest/m1/later/epic");
