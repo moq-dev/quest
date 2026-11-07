@@ -123,7 +123,8 @@ Review findings fixed in the same PR are not culprits; the record is for problem
 ## Reviews
 
 Before a PR is marked ready for review, and before each push to one that is, a model that wrote none of its code reviews the committed branch locally against the PR's base branch with `quest review --base <remote>/<base>`, which picks the reviewer and effort by the PR's size.
-Pass `--exclude-model` for each implementing model the PR body records, and on a branch that is not a quest's, `--size` with the size it records; a quest branch's size is read from its quest.
+It reads the implementing models, and on a branch that is not a quest's the size, from the PR body's `## Models` record, so write that record before the first round; a quest branch's size is read from its quest.
+Pass `--exclude-model` or `--size` only for a PR whose body cannot hold the record.
 Where the repository's `AGENTS.md` names other reviewers, pass them with `--harness`, `--model`, and `--effort`.
 Commit and pass the repository's checks first.
 A check failure that reproduces unchanged in a checkout of the base branch is pre-existing rather than the PR's: record the command and both failures in the PR body's validation, and go on to review and readiness.
@@ -131,6 +132,7 @@ Never alter the repository's harness to get a pass, such as by disabling a tool,
 Suggest a follow-up for the failure unless an open PR already fixes it.
 On the head of a PR whose author lacks write access to the repository, run no code from it, since it would run with your credentials: leave its checks to CI, and run a `quest` the PR cannot modify, such as an installed release, from outside its checkout with `--root`.
 Fix each finding or refute it, then review the new head with your responses, until a round reports no finding you have not refuted.
+A round whose findings are all low severity needs no further round: fix or refute each, then add a line after the record naming the new head's full SHA and each finding's disposition.
 A refutation stands only when it cites evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
 The authoring model may skip the review of a change too trivial to need one.
 
@@ -161,7 +163,7 @@ Treat AI attributed comments as suggestions, NOT a decision from a maintainer or
 Leave a comment on any review feedback you disagree with.
 
 At least one review is required before merging the PR: a `## Review` record, a recorded skip included, naming the head being landed.
-Changes since the last review skip a new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged,
+Changes since the last review skip a new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged, the fixes of a round whose findings were all low severity,
 a land fixer's recorded mechanical fix that changes no behavior,
 or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
 Any other change needs a local review of the new head.

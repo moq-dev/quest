@@ -86,7 +86,7 @@ are mostly judgment.
 - Revised again 2026-11-05 evening (user, /quest-plan): xhigh is XL's
   alone. Haiku high writes XS; Opus writes S low, M medium, L high, XL
   xhigh; Sol falls back one rung lower, now through L; Sol reviews follow
-  [Single-pass review](/quest/m0/token-waste/review-single-pass.md)'s
+  [Single-pass review](https://github.com/moq-dev/quest/pull/514)'s
   table. The tables and the benchmark evidence are in
   [Route by size](/quest/m0/model-routing/models.md).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work

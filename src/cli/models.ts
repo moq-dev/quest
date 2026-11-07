@@ -1,7 +1,7 @@
 // The harnesses, models, and efforts `quest` runs for each size, the same for
 // every repository; a repository's AGENTS.md may override them in prose, which
 // the session following it passes as flags. The model check
-// (quest/m1/model-check.md) audits these lists each milestone.
+// (quest/m0/model-check.md) audits these lists each milestone.
 import type { Size } from "../core";
 import type { HarnessName } from "./agent";
 
@@ -26,7 +26,7 @@ const opus = (effort: string): Model => ({ harness: "claude", model: "claude-opu
 export const REVIEWERS: Record<Size, readonly Model[]> = {
 	XS: [sol("low"), opus("low")],
 	S: [sol("medium"), opus("low")],
-	M: [sol("high"), opus("medium")],
-	L: [sol("xhigh"), opus("high")],
+	M: [sol("medium"), opus("medium")],
+	L: [sol("high"), opus("high")],
 	XL: [sol("xhigh"), opus("high")],
 };
