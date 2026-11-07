@@ -1171,6 +1171,7 @@ function recordedSize(record: ModelsRecord, options: ReviewOptions): Size | null
 	const [size, ...more] = record.sizes;
 	if (more.length > 0) throw new ReviewInputError(`the PR's ## Models record names ${record.sizes.length} sizes`);
 	if (size === undefined) return null;
+	if (size === "") throw new ReviewInputError("the PR's ## Models record has a Size: line that names no size");
 	if (!SIZES.includes(size as Size)) {
 		throw new ReviewInputError(`the PR's ## Models record names size ${size}, not one of ${SIZES.join(", ")}`);
 	}

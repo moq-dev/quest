@@ -22,7 +22,7 @@ export function implementers(body: string): string[] {
 }
 
 /**
- * What `body`'s `## Models` section records: each `Size:` item's size, and each
+ * What `body`'s `## Models` section records: each `Size:` item's whole value, even a blank or malformed one, and each
  * `Implementer: <harness>, <model>, <effort> effort` item with the model it names, or null when it names none.
  * The caller checks only the fields it uses, so a flag that replaces one is not blocked by a malformed one.
  */
@@ -34,7 +34,7 @@ export function recorded(body: string): { sizes: string[]; implementers: { item:
 		.split(/\r?\n/)
 		.map((line) => line.replace(/^\s*[-*]\s+/, "").trim());
 	return {
-		sizes: items.flatMap((item) => /^Size:\s*(\S+)$/.exec(item)?.[1] ?? []),
+		sizes: items.filter((item) => item.startsWith("Size:")).map((item) => item.slice("Size:".length).trim()),
 		implementers: items
 			.filter((item) => item.startsWith("Implementer:"))
 			.map((item) => ({ item, model: item.slice("Implementer:".length).split(",")[1]?.trim() || null })),

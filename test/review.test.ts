@@ -1315,6 +1315,22 @@ fakes("the PR's Models record sizes the review and names the models that wrote i
 		expect(both.stdout).toContain("reviewer claude claude-opus-5-5 low\nsize S --size\n");
 		pull.body = body("- Size: S", "- Size: M");
 		expect((await quest("--root", s.repo, "review", "--new")).stderr).toContain("names 2 sizes");
+
+		// A blank, multi-token, or malformed duplicate Size line fails too, rather than falling back to M.
+		pull.body = body("- Size:");
+		const blank = await quest("--root", s.repo, "review", "--new");
+		expect(blank.code).toBe(2);
+		expect(blank.stderr).toContain("has a Size: line that names no size");
+		pull.body = body("- Size: L extra");
+		const extra = await quest("--root", s.repo, "review", "--new");
+		expect(extra.code).toBe(2);
+		expect(extra.stderr).toContain("names size L extra, not one of");
+		pull.body = body("- Size: S", "- Size: S extra");
+		const duplicate = await quest("--root", s.repo, "review", "--new");
+		expect(duplicate.code).toBe(2);
+		expect(duplicate.stderr).toContain("names 2 sizes");
+		pull.body = body("- Size:");
+		expect((await quest("--root", s.repo, "review", "--new", "--size", "S")).stdout).toContain("size S --size\n");
 	} finally {
 		vi.unstubAllGlobals();
 	}
@@ -1331,6 +1347,7 @@ test("a Models record reads its size and every implementing model", () => {
 		],
 	});
 	expect(recorded("No record.")).toEqual({ sizes: [], implementers: [] });
+	expect(recorded("## Models\n\n- Size:\n- Size: L extra\n- Size:  M \n").sizes).toEqual(["", "L extra", "M"]);
 	expect(recorded("## Models\n\n- Implementer: Codex\n").implementers).toEqual([
 		{ item: "Implementer: Codex", model: null },
 	]);
