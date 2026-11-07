@@ -1,4 +1,5 @@
-// The merge queue watcher: notice each PR GitHub's merge queue drops unmerged, record why, and say so on it.
+// The merge queue watcher: notice each PR GitHub's merge queue drops unmerged, record why, and say so on it,
+// or, on a base without GitHub's merge queue, run the watcher's own serial queue (`land-queue.ts`).
 import { accessSync, constants, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -13,7 +14,7 @@ import {
 	type Repository,
 	string,
 } from "./github";
-import type { Entry, Plan } from "./land";
+import type { Entry, LandMethod, Plan } from "./land";
 import { authenticatedRead } from "./land-git";
 import { jobLog } from "./land-checks";
 import { fixerText, post } from "./land-fixer";
@@ -38,12 +39,17 @@ import {
 	readRemoval,
 	requeuedHeads,
 } from "./land-watch-fix";
+import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
 import { enabledHead, headBefore } from "./status";
 
 export { readRemoval } from "./land-watch-fix";
 
 export interface WatchOptions {
 	base?: string;
+	/** How the own queue lands each PR; GitHub's merge queue applies its own method. */
+	method: LandMethod;
+	/** Minutes an own-queue build may run before it is dropped as timed out. */
+	timeout: number;
 	/** Empty for the default, `defaultState`, which `quest land serve` shares. */
 	state: string;
 	appId: string;
@@ -173,8 +179,8 @@ const ENQUEUES = `query($id: ID!) {
 }`;
 
 /** GraphQL names a bot `name` as an actor and `name[bot]` as a user, as REST does. */
-const account = (login: string) => login.replace(/\[bot\]$/, "");
-const login = (value: unknown) => (value == null ? "" : string(object(value).login));
+export const account = (login: string) => login.replace(/\[bot\]$/, "");
+export const login = (value: unknown) => (value == null ? "" : string(object(value).login));
 
 /** Every removal on `pull` since `since`, oldest first: its first page, then the rest by node. */
 async function removalsOf(github: GitHub, pull: ObjectValue, since: string): Promise<ObjectValue[]> {
@@ -299,7 +305,7 @@ async function enqueueArmed(
 }
 
 /** Every page of an Actions listing, whose rows are the response's `field`. */
-async function listed(github: GitHub, path: string, field: string): Promise<ObjectValue[]> {
+export async function listed(github: GitHub, path: string, field: string): Promise<ObjectValue[]> {
 	const rows: ObjectValue[] = [];
 	for (let next: string | undefined = path; next;) {
 		const response = await github.request(next);
@@ -336,8 +342,24 @@ async function failedBuild(
 	const last = runs.at(-1);
 	if (!last) return { jobs: [] };
 	const group = string(last.head_branch);
+	const jobs = await failingJobs(
+		github,
+		repository,
+		runs.filter((item) => item.head_sha === last.head_sha),
+		timedOut,
+	);
+	return { jobs, base: group.slice(prefix.length) };
+}
+
+/** The failing jobs of `runs`, and with `timedOut` those still running, each with its log. */
+export async function failingJobs(
+	github: GitHub,
+	repository: string,
+	runs: ObjectValue[],
+	timedOut: boolean,
+): Promise<(FailedJob & { log: string })[]> {
 	const jobs: (FailedJob & { log: string })[] = [];
-	for (const run of runs.filter((item) => item.head_sha === last.head_sha)) {
+	for (const run of runs) {
 		const path = `/repos/${repository}/actions/runs/${Number(run.id)}/jobs?filter=latest&per_page=100`;
 		for (const job of await listed(github, path, "jobs")) {
 			const conclusion = typeof job.conclusion === "string" ? job.conclusion : null;
@@ -357,16 +379,16 @@ async function failedBuild(
 			});
 		}
 	}
-	return { jobs, base: group.slice(prefix.length) };
+	return jobs;
 }
 
-/** Why the queue dropped the PR, as the comment's first sentence ends. */
-function because(reason: string, actor: string, base: string): string {
+/** Why the queue dropped the PR, as the comment's first sentence ends; `build` names the queue's build. */
+export function because(reason: string, actor: string, base: string, build = "`merge_group`"): string {
 	switch (reason) {
 		case "failed_checks":
-			return "its `merge_group` build failed";
+			return `its ${build} build failed`;
 		case "checks_timed_out":
-			return "its `merge_group` checks timed out";
+			return `its ${build} checks timed out`;
 		case "merge_conflict":
 			return `it conflicts with ${fixerText(base)}`;
 		case "manual":
@@ -393,7 +415,7 @@ export function jobsSection(blocks: string[], room: number): string {
 }
 
 /** What the watcher does about it, if anything it needs to say; `fixing` when a land fixer is configured. */
-const AFTER: Record<Verdict, (current: string, fixing: boolean) => string> = {
+export const AFTER: Record<Verdict, (current: string, fixing: boolean) => string> = {
 	fix: (_, fixing) =>
 		fixing
 			? "\n\nThe land fixer works on it in the background, and the watcher re-enqueues it at the back of the queue once it is fixed or judged flaky, or hands it back here with what it needs."
@@ -587,20 +609,7 @@ export async function watchPass(
 		? (JSON.parse(readFileSync(path, "utf8")) as Progress)
 		: { since: started, handled: {} };
 	const since = new Date(Date.parse(progress.since) - SETTLE).toISOString();
-	const ref =
-		options.base ??
-		string(
-			object(
-				object(
-					(
-						await github.graphql(
-							"query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name } } }",
-							{ owner: repository.owner, name: repository.repo },
-						)
-					).repository,
-				).defaultBranchRef,
-			).name,
-		);
+	const ref = options.base ?? (await defaultBranch(github, repository));
 	const app = account(string(object((await github.graphql("query { viewer { login } }", {})).viewer).login));
 
 	const pulls: ObjectValue[] = [];
@@ -664,28 +673,67 @@ export async function watchPass(
 	}
 	progress.since = started;
 	save(path, progress);
-	if (fix) output.push(...(await advanceFixes(name, { ref, sha: sha! }, options.state, fix, deps)));
+	if (fix)
+		output.push(...(await advanceFixes(name, { ref, sha: sha! }, options.state, fix, deps, { kind: "github" })));
 	return output;
+}
+
+/** The repository's default branch. */
+async function defaultBranch(github: GitHub, repository: Repository): Promise<string> {
+	const data = await github.graphql(
+		"query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name } } }",
+		{ owner: repository.owner, name: repository.repo },
+	);
+	return string(object(object(data.repository).defaultBranchRef).name);
+}
+
+/**
+ * Whether `base` lands through the watcher's own queue, since its rules have no `merge_queue` rule.
+ * Rules GitHub does not answer with fail the pass, which then does nothing.
+ */
+export async function ownQueue(github: GitHub, repository: Repository, base: string): Promise<boolean> {
+	const path = `/repos/${repository.owner}/${repository.repo}/rules/branches/${encodeURIComponent(base)}?per_page=100`;
+	return !(await github.all(path)).some((rule) => rule.type === "merge_queue");
 }
 
 type Permissions = Record<string, "read" | "write">;
 
 /**
- * The installation token permissions the watcher asks for. `api` reads the queue's events, comments,
- * and the `merge_group` logs (`actions: read`), and enqueues the armed picks GitHub left out of the
- * queue, which `enqueuePullRequest` needs `merge_queues: write` for; with a fixer it also re-enqueues,
- * which needs `contents: write` for arming auto-merge, edits the PR body's Review, and reads the PR's
- * own checks for the fixer (`checks: read` and `statuses: read`). `push` lease-pushes a fix or merge,
- * and `pushWorkflows` one that carries a workflow change, as `quest land serve` does; `read` fetches.
+ * The installation token permissions the watcher asks for. On GitHub's merge queue, `api` reads the
+ * queue's events, comments, and the `merge_group` logs (`actions: read`), and enqueues the armed picks
+ * GitHub left out of the queue, which `enqueuePullRequest` needs `merge_queues: write` for; with a fixer
+ * it also re-enqueues, which needs `contents: write` for arming auto-merge, edits the PR body's Review,
+ * and reads the PR's own checks for the fixer (`checks: read` and `statuses: read`). The `own` queue
+ * also disarms and arms auto-merge, cancels a build's runs (`actions: write`), posts each pick's queue
+ * check (`checks: write`), and reads the base's classic protection (`administration: read`), as
+ * `quest land serve` does. `push` lease-pushes a fix, a merge, a queue branch, or a landing, and
+ * `pushWorkflows` one that carries a workflow change; `read` fetches.
  */
-export function watchPermissions(fixing: boolean): {
+export function watchPermissions(
+	fixing: boolean,
+	own = false,
+): {
 	api: Permissions;
 	push?: Permissions;
 	pushWorkflows?: Permissions;
 	read?: Permissions;
 } {
-	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" } };
 	const push: Permissions = { contents: "write", pull_requests: "write" };
+	if (own)
+		return {
+			api: {
+				contents: "write",
+				pull_requests: "write",
+				actions: "write",
+				checks: "write",
+				statuses: "read",
+				administration: "read",
+			},
+			push,
+			pushWorkflows: { ...push, workflows: "write" },
+			read: { contents: "read" },
+		};
+	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" } };
 	return {
 		api: {
 			contents: "write",
@@ -702,8 +750,9 @@ export function watchPermissions(fixing: boolean): {
 }
 
 /**
- * Watch the merge queue of `repository`'s base, one pass a minute, until the process stops. With a
- * fixer, the PRs it drops are fixed from the daemon's private repository in the state directory.
+ * Watch the queue of `repository`'s base, one pass a minute, until the process stops: GitHub's merge
+ * queue where the base's rules have one, otherwise the watcher's own, each pass deciding from the rules.
+ * With a fixer, the PRs a queue drops are fixed from the daemon's private repository in the state directory.
  */
 export async function watch(
 	root: string,
@@ -719,22 +768,45 @@ export async function watch(
 	const unlock = await startDaemon(root, repository, options);
 	try {
 		const now = { fetch, now: Date.now };
-		const permissions = watchPermissions(options.fixer !== undefined);
+		const fixing = options.fixer !== undefined;
+		const github = watchPermissions(fixing);
+		const own = watchPermissions(fixing, true);
 		const mint = (wanted: Permissions) => installationToken(repository, options, wanted, now);
-		const deps = apiDependencies(() => mint(permissions.api), { ...now, sleep, warn });
+		// Each mode's token is minted only once a pass needs it.
+		const deps = apiDependencies(() => mint(github.api), { ...now, sleep, warn });
+		const ownDeps = apiDependencies(() => mint(own.api), { ...now, sleep, warn });
+		const token = (workflows: boolean) => mint(workflows ? own.pushWorkflows! : own.push!);
+		const read = authenticatedRead(() => mint(own.read!));
+		const trusted = privateRepository(options.state);
 		const fix: FixContext | undefined = options.fixer
 			? {
-					root: privateRepository(options.state),
+					root: trusted,
 					fixer: options.fixer,
 					jobs: options.fixerJobs,
 					effort: options.fixerEffort,
 					timeout: 60,
-					token: (workflows) => mint(workflows ? permissions.pushWorkflows! : permissions.push!),
-					read: authenticatedRead(() => mint(permissions.read!)),
+					token,
+					read,
 				}
 			: undefined;
+		const queue: OwnQueue = {
+			root: trusted,
+			state: options.state,
+			method: options.method,
+			timeout: options.timeout,
+			token,
+			read,
+		};
 		await daemonLoop(async () => {
-			for (const line of await watchPass(repository, options, deps, fix)) warn(line);
+			const api = new GitHub(deps);
+			const base = options.base ?? (await defaultBranch(api, repository));
+			if (await ownQueue(api, repository, base)) {
+				const pass = await ownPass(repository, base, queue, ownDeps, fix);
+				for (const line of pass.lines) warn(line);
+				return pass.again;
+			}
+			for (const line of await leaveOwnQueue(repository, base, queue, ownDeps, fixing)) warn(line);
+			for (const line of await watchPass(repository, { ...options, base }, deps, fix)) warn(line);
 			return false;
 		}, deps);
 	} finally {
