@@ -16,7 +16,14 @@ import {
 } from "./worktree";
 
 /** The Claude Code events `quest worktree hook` handles. */
-export const HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove", "SubagentStart", "SubagentStop"] as const;
+export const HOOK_EVENTS = [
+	"WorktreeCreate",
+	"WorktreeRemove",
+	"SubagentStart",
+	"SubagentStop",
+	"SessionStart",
+	"SessionEnd",
+] as const;
 
 /**
  * The guide's workspace, which holds an agent's reports and logs. Its parent reads them after it stops,
@@ -34,6 +41,10 @@ interface HookInput {
 	worktree_path?: string;
 	/** SubagentStart and SubagentStop: the subagent's ID. */
 	agent_id?: string;
+	/** Every event: the Claude Code session it fires in, a subagent's parent session included. */
+	session_id?: string;
+	/** SessionEnd: why the session ended, such as `clear` when `/clear` starts a new one in its place. */
+	reason?: string;
 }
 
 function parse(input: unknown): HookInput {
@@ -43,7 +54,7 @@ function parse(input: unknown): HookInput {
 	return value as HookInput;
 }
 
-function field(input: HookInput, key: "name" | "worktree_path" | "agent_id"): string {
+function field(input: HookInput, key: "name" | "worktree_path" | "agent_id" | "session_id"): string {
 	const value = input[key];
 	if (typeof value !== "string" || value === "") throw new Error(`${input.hook_event_name} input lacks ${key}`);
 	return value;
@@ -129,6 +140,21 @@ function superproject(checkout: string): string | undefined {
 /** Claude's name for a workflow agent's worktree, `<run ID>-<agent number>`, which carries no agent ID. */
 const WORKFLOW_CHECKOUT = /^wf_[0-9a-f]{8}-[0-9a-f]{3}-[0-9]+$/;
 
+/** Whether Claude made the checkout named `name` for a subagent or workflow agent rather than a session. */
+function forSubagent(name: string): boolean {
+	return name.startsWith("agent-") || WORKFLOW_CHECKOUT.test(name);
+}
+
+/** The context telling an agent that a release deleted `scratch` from its checkout while it was stopped. */
+function reinstall(event: string, scratch: readonly string[]): string | undefined {
+	const deleted = scratch.filter((path) => path !== WORKSPACE);
+	if (!deleted.length) return undefined;
+	const additionalContext =
+		`Quest released this checkout while you were stopped, deleting its ignored scratch (${deleted.join(", ")}). ` +
+		"Reinstall or rebuild what you need before using it.";
+	return `${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext } })}\n`;
+}
+
 /**
  * The checkout Claude created for this subagent. Claude names a subagent's worktree `agent-<agent_id>`,
  * so a subagent that runs without isolation in another agent's checkout never matches it. A workflow
@@ -157,7 +183,9 @@ async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise
  * `.worktrees/`, with derived defaults, and prints its path; an existing checkout of that name in the
  * repository is restored instead.
  * WorktreeRemove removes the checkout after recursive safety checks. SubagentStop releases the subagent's own
- * checkout, and SubagentStart restores it, telling the subagent when its scratch was deleted.
+ * checkout, and SubagentStart restores it, telling the subagent when its scratch was deleted. A checkout made
+ * for a session rather than a subagent is held by each session that creates it or starts in it, and SessionEnd
+ * releases it once the last ends; SessionStart claims it again, likewise telling the session.
  */
 export async function claudeHook(
 	input: unknown,
@@ -188,11 +216,14 @@ export async function claudeHook(
 			if (existing?.name === name) {
 				// Claude reuses a name, such as a resumed workflow run's, for an agent that binds afresh.
 				await waiting(() => worktrees.bind(existing.id));
+				if (!forSubagent(name)) await waiting(() => worktrees.attach(existing.id, field(hook, "session_id")));
 				return `${(await waiting(() => worktrees.restore(existing.id))).path}\n`;
 			}
 			const { reserve, scratch } = derivedDefaults(main);
 			const ref = pullRequest(cwd, name) ?? base(cwd);
-			return `${(await waiting(() => worktrees.create(main, name, reserve, ref, scratch))).path}\n`;
+			const created = await waiting(() => worktrees.create(main, name, reserve, ref, scratch));
+			if (!forSubagent(name)) await waiting(() => worktrees.attach(created.id, field(hook, "session_id")));
+			return `${created.path}\n`;
 		}
 		case "WorktreeRemove": {
 			const path = canonical(field(hook, "worktree_path"));
@@ -206,19 +237,33 @@ export async function claudeHook(
 		case "SubagentStart": {
 			const record = await subagentCheckout(worktrees, hook);
 			if (!record) return undefined;
-			const deleted = record.phase === "released" ? record.scratch.filter((path) => path !== WORKSPACE) : [];
 			await waiting(() => worktrees.restore(record.id));
-			if (!deleted.length) return undefined;
-			const additionalContext =
-				`Quest released this checkout while you were stopped, deleting its ignored scratch (${deleted.join(", ")}). ` +
-				"Reinstall or rebuild what you need before using it.";
-			return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext } })}\n`;
+			return record.phase === "released" ? reinstall("SubagentStart", record.scratch) : undefined;
 		}
 		case "SubagentStop": {
 			const record = await subagentCheckout(worktrees, hook);
 			if (record) await waiting(() => worktrees.release(record.id, [WORKSPACE]));
 			return undefined;
 		}
+		case "SessionStart": {
+			const session = field(hook, "session_id");
+			// Resuming starts in the directory Claude was launched from before it enters the session's checkout.
+			const ids = new Set((await waiting(() => worktrees.held(session))).map((record) => record.id));
+			const path = toplevel(hook.cwd);
+			const here = path === undefined ? undefined : await waiting(() => worktrees.registered(path));
+			if (here?.sessions) ids.add(here.id);
+			const deleted = new Set<string>();
+			for (const id of ids) {
+				const before = await waiting(() => worktrees.attach(id, session));
+				// A failure means a release may have deleted part of the scratch before it failed or was cut short.
+				if (before.phase === "released" || before.failure) for (const item of before.scratch) deleted.add(item);
+			}
+			return reinstall("SessionStart", [...deleted]);
+		}
+		case "SessionEnd":
+			// `/clear` ends the session only to start another in the same checkout, which claims it then.
+			await worktrees.detach(field(hook, "session_id"), hook.reason !== "clear", [WORKSPACE]);
+			return undefined;
 		default:
 			throw new Error(`unsupported hook event: ${hook.hook_event_name}`);
 	}

@@ -1547,7 +1547,9 @@ entries into the file's `hooks`:
     "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
     "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
     "SubagentStart": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }]
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "quest worktree hook", "timeout": 60 }] }]
   }
 }
 ```
@@ -1585,9 +1587,17 @@ agent ID, and a workflow agent's for its workflow run, so the hook binds a
 workflow agent's checkout to the first subagent that starts in it, the workflow
 agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it. A session's checkout, from
-`--worktree`, `EnterWorktree`, a background session, or remote control, is not
-released when the session stops; release it with `quest worktree release`.
+without its scratch until it reinstalls it.
+
+A session's checkout, from `--worktree`, `EnterWorktree`, a background session,
+or remote control, is held by the session that created it and by each session
+that starts in it, and released the same way once the last of them ends, except
+when `/clear` starts a new session in its place. A session that held it restores
+it on resuming, as does any session starting in it, with the same note. A background session that sits idle never
+ends, so its checkout stays held. Claude Code gives `SessionEnd` hooks at most a
+minute, which the entry's `timeout` asks for; a release cut short or failed
+leaves the checkout reserved with the failure in `quest worktree status`, until
+a session starts in it or `quest worktree release` finishes it.
 
 Claude never removes a subagent's or workflow agent's checkout itself, so
 remove a finished one with `quest worktree remove`, which also recovers one

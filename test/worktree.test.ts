@@ -321,14 +321,14 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		// Git checks text out with CRLF where core.autocrlf is set, as on Windows runners.
 		expect(readFileSync(join(nested, "file"), "utf8").replaceAll("\r\n", "\n")).toBe("original\n");
 		const direct = (await claudeHook(
-			{ hook_event_name: "WorktreeCreate", cwd: nested, name: "direct" },
+			{ hook_event_name: "WorktreeCreate", session_id: "session", cwd: nested, name: "direct" },
 			worktrees,
 			async () => false,
 			nested,
 		))!.trim();
 		expect(direct).toBe(join(canonical(nested), ".worktrees", "direct"));
 		const child = (await claudeHook(
-			{ hook_event_name: "WorktreeCreate", cwd: nested, name: "agent-child" },
+			{ hook_event_name: "WorktreeCreate", session_id: "session", cwd: nested, name: "agent-child" },
 			worktrees,
 			async () => false,
 			repo,
@@ -350,7 +350,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		// A workflow agent that starts inside a submodule of its checkout binds it there too.
 		const flow = "wf_04c8d372-2e7-1";
 		const workflow = (await claudeHook(
-			{ hook_event_name: "WorktreeCreate", cwd: nested, name: flow },
+			{ hook_event_name: "WorktreeCreate", session_id: "session", cwd: nested, name: flow },
 			worktrees,
 			async () => false,
 			repo,
@@ -386,7 +386,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		vi.stubEnv("GIT_WORK_TREE", module);
 		vi.stubEnv("GIT_INDEX_FILE", join(store, "index"));
 		const path = (await claudeHook(
-			{ hook_event_name: "WorktreeCreate", cwd: module, name: "agent-located" },
+			{ hook_event_name: "WorktreeCreate", session_id: "session", cwd: module, name: "agent-located" },
 			worktrees,
 			async () => false,
 			repo,
@@ -896,7 +896,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		git(repo, "worktree", "add", "--detach", session);
 		writeFileSync(join(session, "file"), "session\n");
 		git(session, "commit", "-am", "session work");
-		const created = { hook_event_name: "WorktreeCreate", cwd: session, name: "agent-1" };
+		const created = { hook_event_name: "WorktreeCreate", session_id: "session", cwd: session, name: "agent-1" };
 		const path = (await claudeHook(created, worktrees, noForge))!.trim();
 		expect(path).toBe(join(canonical(repo), ".worktrees", "agent-1"));
 		expect(git(path, "rev-parse", "HEAD")).toBe(git(session, "rev-parse", "HEAD"));
@@ -925,7 +925,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		mkdirSync(join(repo, "cache"));
 		mkdirSync(join(repo, ".tmp"));
 		appendFileSync(join(repo, ".git", "info", "exclude"), ".tmp/\n");
-		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-abc" };
+		const create = { hook_event_name: "WorktreeCreate", session_id: "session", cwd: repo, name: "agent-abc" };
 		const path = (await claudeHook(create, worktrees, noForge))!.trim();
 		mkdirSync(join(path, "cache", "nested"), { recursive: true });
 		mkdirSync(join(path, ".tmp"));
@@ -956,10 +956,87 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		expect(existsSync(path)).toBe(false);
 		expect(worktrees.status().records).toHaveLength(0);
 	});
+	it("holds a session's checkout while a session uses it and releases it when the last ends", async () => {
+		const { repo, worktrees } = fixture();
+		mkdirSync(join(repo, "cache"));
+		mkdirSync(join(repo, ".tmp"));
+		appendFileSync(join(repo, ".git", "info", "exclude"), ".tmp/\n");
+		const event = (hook_event_name: string, cwd: string, session_id: string, extra = {}) =>
+			claudeHook({ hook_event_name, cwd, session_id, ...extra }, worktrees, noForge);
+		const path = (await event("WorktreeCreate", repo, "a", { name: "feature" }))!.trim();
+		const record = () => worktrees.status().records.find((item) => item.name === "feature")!;
+		const scratch = () => {
+			mkdirSync(join(path, "cache", "deep"), { recursive: true });
+			mkdirSync(join(path, ".tmp"), { recursive: true });
+			writeFileSync(join(path, ".tmp", "log"), "kept\n");
+		};
+		scratch();
+		expect(record().sessions).toEqual({ a: true });
+		// The session that created it starts in it, and a second one joins.
+		expect(await event("SessionStart", join(path, "cache"), "a")).toBeUndefined();
+		expect(await event("SessionStart", path, "b")).toBeUndefined();
+		expect(record().sessions).toEqual({ a: true, b: true });
+		// Ending a session that holds nothing, or one of two, keeps the scratch.
+		await event("SessionEnd", repo, "other");
+		await event("SessionEnd", repo, "a");
+		expect(existsSync(join(path, "cache"))).toBe(true);
+		// /clear hands the checkout to the session it starts, without a release.
+		await event("SessionEnd", path, "b", { reason: "clear" });
+		expect(existsSync(join(path, "cache"))).toBe(true);
+		expect(await event("SessionStart", path, "c", { source: "clear" })).toBeUndefined();
+		// The last session's end releases it from wherever it ended, keeping the workspace.
+		await event("SessionEnd", repo, "c", { reason: "prompt_input_exit" });
+		expect(existsSync(join(path, "cache"))).toBe(false);
+		expect(readFileSync(join(path, ".tmp", "log"), "utf8")).toBe("kept\n");
+		expect(record()).toMatchObject({ phase: "released", sessions: { a: false, b: false, c: false } });
+		expect(record().failure).toBeUndefined();
+		// Resuming starts where Claude was launched, then claims it again and says what to reinstall.
+		const resumed = await event("SessionStart", repo, "c", { source: "resume" });
+		expect(JSON.parse(resumed!).hookSpecificOutput).toMatchObject({
+			hookEventName: "SessionStart",
+			additionalContext: expect.stringContaining("(cache)"),
+		});
+		expect(record().phase).toBe("active");
+		expect(record().sessions?.c).toBe(true);
+		// A release cut short leaves its failure recorded and the checkout reserved; the next session finishes it.
+		scratch();
+		const registry = join(worktrees.home, "registry.json");
+		const saved = JSON.parse(readFileSync(registry, "utf8"));
+		const cut = saved.records.find((item: { name: string }) => item.name === "feature");
+		cut.sessions = { c: false };
+		cut.failure = "release was cut short";
+		writeFileSync(registry, JSON.stringify(saved));
+		rmSync(join(path, "cache", "deep"), { recursive: true });
+		expect(record().phase).toBe("active");
+		const finished = await event("SessionStart", path, "d");
+		expect(JSON.parse(finished!).hookSpecificOutput.additionalContext).toContain("(cache)");
+		expect(record().failure).toBeUndefined();
+		// A session in a checkout the hook did not make for a session holds nothing.
+		const sub = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", session_id: "session", cwd: repo, name: "agent-x" },
+			worktrees,
+			noForge,
+		))!.trim();
+		const manual = (await worktrees.create(repo, "manual", 1_000_000, "HEAD", ["cache"])).path;
+		for (const checkout of [sub, manual]) {
+			mkdirSync(join(checkout, "cache"), { recursive: true });
+			expect(await event("SessionStart", checkout, "e")).toBeUndefined();
+			await event("SessionEnd", checkout, "e");
+			expect(existsSync(join(checkout, "cache"))).toBe(true);
+		}
+		expect(worktrees.status().records.filter((item) => item.sessions)).toHaveLength(1);
+		// Its last session ending releases it again.
+		await event("SessionEnd", path, "d");
+		expect(record().phase).toBe("released");
+	});
 	it("checks out a pull request's head from origin for Claude's pr-<number> names", async () => {
 		const { root, repo, worktrees } = fixture();
 		const create = (name: string) =>
-			claudeHook({ hook_event_name: "WorktreeCreate", cwd: repo, name }, worktrees, noForge);
+			claudeHook(
+				{ hook_event_name: "WorktreeCreate", session_id: "session", cwd: repo, name },
+				worktrees,
+				noForge,
+			);
 		// Without an origin, a pr- name is only a name.
 		const plain = (await create("pr-1"))!.trim();
 		expect(git(plain, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", "HEAD"));
@@ -991,7 +1068,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		const { repo, worktrees } = fixture();
 		mkdirSync(join(repo, "cache"));
 		const name = "wf_04c8d372-2e7-1";
-		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name };
+		const create = { hook_event_name: "WorktreeCreate", session_id: "session", cwd: repo, name };
 		const path = (await claudeHook(create, worktrees, noForge))!.trim();
 		mkdirSync(join(path, "cache"));
 		await claudeHook(subagent("SubagentStart", path, "a79f"), worktrees, noForge);
@@ -1017,7 +1094,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 	});
 	it("removes a finished checkout, never forcing, and refuses one it does not own", async () => {
 		const { root, repo, worktrees } = fixture();
-		const create = { hook_event_name: "WorktreeCreate", cwd: repo, name: "session" };
+		const create = { hook_event_name: "WorktreeCreate", session_id: "session", cwd: repo, name: "session" };
 		const path = (await claudeHook(create, worktrees, noForge))!.trim();
 		const remove = { hook_event_name: "WorktreeRemove", cwd: repo, worktree_path: path };
 		writeFileSync(join(path, "new"), "untracked work");
@@ -1038,9 +1115,9 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		await expect(claudeHook({ hook_event_name: "Stop", cwd: repo }, worktrees, noForge)).rejects.toThrow(
 			"unsupported hook event",
 		);
-		await expect(claudeHook({ hook_event_name: "WorktreeCreate", cwd: repo }, worktrees, noForge)).rejects.toThrow(
-			"lacks name",
-		);
+		await expect(
+			claudeHook({ hook_event_name: "WorktreeCreate", session_id: "session", cwd: repo }, worktrees, noForge),
+		).rejects.toThrow("lacks name");
 	});
 	it("waits out another holder of the registry lock instead of failing", async () => {
 		const { repo, home, worktrees } = fixture();
@@ -1049,7 +1126,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		writeFileSync(join(lock, "live.json"), JSON.stringify(currentOwner()));
 		let settled = false;
 		const created = claudeHook(
-			{ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-wait" },
+			{ hook_event_name: "WorktreeCreate", session_id: "session", cwd: repo, name: "agent-wait" },
 			worktrees,
 			noForge,
 		);
@@ -1082,12 +1159,21 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 					env: { ...process.env, QUEST_WORKTREE_HOME: home },
 				},
 			);
-		const created = cli(JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-cli" }));
+		const created = cli(
+			JSON.stringify({ hook_event_name: "WorktreeCreate", session_id: "session", cwd: repo, name: "agent-cli" }),
+		);
 		expect(created.status).toBe(0);
 		expect(created.stdout).toBe(`${join(canonical(repo), ".worktrees", "agent-cli")}\n`);
 		expect(cli("not json").status).toBe(1);
-		expect(cli(JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-cli/x" })).status).toBe(
-			1,
-		);
+		expect(
+			cli(
+				JSON.stringify({
+					hook_event_name: "WorktreeCreate",
+					session_id: "session",
+					cwd: repo,
+					name: "agent-cli/x",
+				}),
+			).status,
+		).toBe(1);
 	});
 });
