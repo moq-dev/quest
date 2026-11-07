@@ -119,9 +119,9 @@ queues on private repositories only under Enterprise Cloud and moq-dev is on
 GitHub Team: moq.pro leaves the host gate for an own serial queue in
 `quest land watch`, rather than a plan upgrade, making moq.pro public, or a
 third-party queue. The maintainer expects the own queue to become every
-repository's, for visibility. The decisions are recorded in
-[the own queue](/quest/m0/queue-watcher/own-queue.md),
-[moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
+repository's, for visibility. The own queue landed in
+[moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540); the rest is
+recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
 [the queue page](/quest/m0/queue-watcher/queue-page.md).
 
 Shared shape, for the children to follow:
@@ -153,7 +153,6 @@ Shared shape, for the children to follow:
 - [Tests fit their timeout on the queue runner](/quest/m0/queue-watcher/queue-test-timeouts.md) - the root and Worker suites stop timing out or stalling in merge-group runs, so the queue stops ejecting PRs for them
 - [The watcher writes flaky quests](/quest/m0/queue-watcher/flaky-quest.md) - a disable's follow-up quest comes from a template in `quest land watch`, so the headless land fixer writes no quest
 - [Daemons prune their logs](/quest/m0/queue-watcher/log-retention.md) - the watcher and gate delete their finished logs after a window, so state stays bounded (4.1 GiB on nixos on 2026-11-04)
-- [The watcher runs its own serial queue](/quest/m0/queue-watcher/own-queue.md) - `quest land watch` lands a base without GitHub's merge queue, testing one pick at a time in the repository's queue workflow
 - [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - moq.pro's `main` leaves the batching gate for the watcher's own queue
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 - [kix.quest shows each repository's landing queue](/quest/m0/queue-watcher/queue-page.md) - one page per repository with its queue order, current build, and recent drops, in both modes

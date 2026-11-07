@@ -10,6 +10,20 @@ name: Queue
 # also runs, as skipped, on main pull requests; a skipped job satisfies the
 # requirement. Only the merge group build runs code, and only a maintainer's
 # pick enters the queue.
+#
+# A repository without GitHub's merge queue, such as a private one on GitHub
+# Team, lands through the watcher's own queue instead. Its base keeps requiring
+# the unreported `quest land` context, and its queue workflow, under any name,
+# also builds the watcher's queue branches:
+#
+#   push:
+#     branches: ["quest-queue/**"]
+#
+# The watcher pushes `quest-queue/<base>/<number>`, the base merged into PR
+# <number>'s picked head: a merge commit whose second parent (`HEAD^2`) is the
+# base it tested. The build runs as for a merge group, and the base's required
+# checks besides `quest land`, reported on that commit, decide whether the PR
+# lands, so the required job reports the build's result there.
 on:
   pull_request:
     branches: [main]
