@@ -75,7 +75,9 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
   `/etc/opencode` loads above the runner's and could replace the sandboxed
   `shell`.
   `test/live/runner-sandbox.test.ts` checks that boundary with the pinned
-  opencode and srt and a scripted model. It runs in `just runner-sandbox`
+  opencode and srt and a scripted model, and
+  `test/live/runner-sandbox-claude.test.ts` checks Claude Code's the same way,
+  its scripted model set as the account's endpoint in its settings. It runs in `just runner-sandbox`
   and a nightly GitHub-hosted workflow (`.github/workflows/sandbox.yml`),
   not in `just test` or the merge queue, whose container can't mount
   `/proc` for bwrap, so a bump that weakens the boundary fails the next
@@ -93,4 +95,3 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 ## Required
 
 - [Per-job opencode saved output](/quest/m0/kix/sandbox/opencode-data.md) - each opencode job saves its tool output and shell captures beside its checkout, so no job reads another's, while sessions and the credential stay in the account's database
-- [Claude Code boundary test](/quest/m0/kix/sandbox/claude-boundary.md) - the same hostile-repository test for Claude Code jobs, with a fake model set in the account's settings
