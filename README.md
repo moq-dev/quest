@@ -1414,7 +1414,8 @@ repository runs a scripted model through the pinned Claude Code, and through
 the pinned opencode and sandbox-runtime, in a checkout that tries to read
 credentials, write outside its sandbox, plant its own agent config and hooks,
 reach the network, and connect to the Nix daemon's or another Unix socket, and
-fails if any attempt gets through. CI runs it nightly, outside the merge queue.
+fails if any attempt gets through. CI runs it nightly and on pull requests that change the pins or the runner,
+outside the merge queue.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
 pins both) and unprivileged user namespaces, including the nested one the

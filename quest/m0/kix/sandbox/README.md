@@ -78,10 +78,11 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
   opencode and srt and a scripted model, and
   `test/live/runner-sandbox-claude.test.ts` checks Claude Code's the same way,
   its scripted model set as the account's endpoint in its settings. It runs in `just runner-sandbox`
-  and a nightly GitHub-hosted workflow (`.github/workflows/sandbox.yml`),
-  not in `just test` or the merge queue, whose container can't mount
-  `/proc` for bwrap, so a bump that weakens the boundary fails the next
-  nightly run. Decided 2026-11-03 (user, /quest-complete), after the merge
+  and a GitHub-hosted workflow (`.github/workflows/sandbox.yml`), nightly
+  and on PRs that touch the flake, `nix/`, the dependencies, the runner, or
+  these tests, not in `just test` or the merge queue, whose container can't
+  mount `/proc` for bwrap, so a bump that weakens the boundary fails on its
+  own PR. Decided 2026-11-03 (user, /quest-complete), after the merge
   queue dropped [moq-dev/quest#404](https://github.com/moq-dev/quest/pull/404):
   its own CI, nightly, so landing never blocks on it.
 - Decided 2026-10-24 (user) in `/quest-plan`: split the remaining work into
@@ -91,7 +92,3 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 - Sources:
   [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing)
   and [sandbox-runtime](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime).
-
-## Required
-
-- [Boundary tests on agent-moving PRs](/quest/m0/kix/sandbox/pr-trigger.md) - PRs that bump flake.lock or change the runner run the live sandbox tests before landing
