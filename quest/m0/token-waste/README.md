@@ -68,7 +68,6 @@ Decision prompts, chosen options marked ✅:
 
 ## Required
 
-- [Rules load once](/quest/m0/token-waste/rule-loading.md) - skills and rules arrive in the first turn and survive compaction
 - [Epics list no children](/quest/m0/token-waste/child-lists.md) - an epic's children are its directory, so finishing a quest edits no README
 - [Mechanical rules become checks](/quest/m0/token-waste/rule-checks.md) - hooks enforce em dashes, push refspecs, no rebase or force-push, the footer, and `.tmp/`, and their prose leaves the always-loaded rules
 - [quest usage](/quest/m0/token-waste/usage.md) - per quest and PR: which models and efforts worked on it, their tokens and API-equal cost, and how the work went; the epic's re-measure runs it

@@ -135,8 +135,7 @@ Shared shape, for the children to follow:
   handback that `quest land apply` rebuilds, and the daemon posting the
   comments the fixer writes. A `quest land watch` subcommand beside
   `quest land serve` is the likely form; the first child settles it.
-- The fixer prompt (`assets/land-fix.md`) and its quality quests stay in
-  [the land fixer epic](/quest/m0/land-fixer/README.md).
+- The fixer prompt (`assets/land-fix.md`) stays as the finished land fixer epic left it.
 - The review policy is unchanged: a head the fixer pushed as a recorded
   mechanical fix lands without a new review (maintainer, 2026-10-30). A push
   by anyone else ends the pick, as does a person removing the PR from the
@@ -155,7 +154,3 @@ Shared shape, for the children to follow:
 - [The watcher runs one instance per base branch](/quest/m0/queue-watcher/per-base.md) - each base of a repository gets its own watcher, clone, locks, state and `--method`, so moq.pro's `release` can follow `main`
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 - [kix.quest shows each repository's landing queue](/quest/m0/queue-watcher/queue-page.md) - one page per repository with its queue order, current build, and recent drops, in both modes
-
-## Related
-
-- [The land fixer](/quest/m0/land-fixer/README.md) - the fixer the watcher runs

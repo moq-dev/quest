@@ -214,6 +214,34 @@ describe("headings", () => {
 	test("an empty Closes section", () => {
 		tree().append("quest/m0/epic/one.md", "\n## Closes\n").rejects("'## Closes' is empty");
 	});
+
+	// Readiness and `quest waiting` read only `## ` sections, so a section name
+	// one level down would drop its items out silently.
+	test("a Waiting section one level too deep", () => {
+		tree()
+			.append("quest/m0/epic/one.md", "\n### Waiting\n\n- Maintainer: pick the name\n")
+			.rejects("'### Waiting' must be '## Waiting'");
+	});
+
+	test("a Waiting heading above the title", () => {
+		tree()
+			.write("quest/m0/epic/one.md", "# Waiting\n\n" + ONE)
+			.rejects("'# Waiting' must be '## Waiting'");
+	});
+
+	test("a Required section one level too deep", () => {
+		tree()
+			.append("quest/m0/epic/one.md", "\n### Required\n\n- [Two](/quest/m0/epic/two.md) - must finish first\n")
+			.rejects("'### Required' must be '## Required'");
+	});
+
+	test("a Goal one level too deep does not satisfy the Goal rule", () => {
+		tree().write("quest/m0/epic/one.md", ONE.replace("## Goal", "### Goal")).rejects("missing '## Goal'");
+	});
+
+	test("a free-form heading below ## is prose", () => {
+		tree().append("quest/m0/epic/one.md", "\n### Notes\n\nAny structure here.\n").accepts();
+	});
 });
 
 describe("epics", () => {

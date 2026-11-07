@@ -6,8 +6,10 @@ import { afterEach, expect, test, vi } from "vitest";
 import { type Output, main } from "../src/cli/main";
 import { REVIEWERS } from "../src/cli/models";
 import {
+	type Round,
 	authored,
 	baseInstructions,
+	nextStep,
 	pickReviewer,
 	review,
 	runningHarness,
@@ -461,27 +463,29 @@ fakes.each([
 	},
 );
 
-// flaky: /quest/m0/flaky/a-reviewers-usage-limit-exits-3-with-its-reset-and-records-no-round.md
-test.skip("a reviewer's usage limit exits 3 with its reset, and records no round", async () => {
-	// Codex prints its reset in the local time zone, which this process shares.
-	const codex = new Date(2026, 10, 5, 15, 15).toISOString().replace(".000Z", "Z");
-	for (const [host, variant, message] of [
-		["CLAUDECODE", "reset", `codex hit its usage limit; resets ${codex}`],
-		["CLAUDECODE", "unknown", "codex hit its usage limit; resets unknown"],
-		["CODEX_THREAD_ID", "reset", "claude hit its usage limit; resets 2030-03-17T17:46:40Z"],
-		["CODEX_THREAD_ID", "unknown", "claude hit its usage limit; resets unknown"],
-	] as const) {
+// Codex prints its reset in the local time zone, which this process shares.
+const codexReset = new Date(2026, 10, 5, 15, 15).toISOString().replace(".000Z", "Z");
+
+// One test per case: each runs two full reviews, and all four in one test outran its timeout on loaded runners.
+fakes.for([
+	["CLAUDECODE", "reset", `codex hit its usage limit; resets ${codexReset}`],
+	["CLAUDECODE", "unknown", "codex hit its usage limit; resets unknown"],
+	["CODEX_THREAD_ID", "reset", "claude hit its usage limit; resets 2030-03-17T17:46:40Z"],
+	["CODEX_THREAD_ID", "unknown", "claude hit its usage limit; resets unknown"],
+] as const)(
+	"a reviewer's usage limit exits 3 with its reset, and records no round (%s, %s)",
+	async ([host, variant, message]) => {
 		const s = setup(host);
 		vi.stubEnv("FAKE_LIMITED", variant);
 		const result = await quest("--root", s.repo, "review");
-		expect(result.stderr, `${host} ${variant}`).toBe(`error: ${message}\n`);
-		expect(result.code, `${host} ${variant}`).toBe(3);
+		expect(result.stderr).toBe(`error: ${message}\n`);
+		expect(result.code).toBe(3);
 		expect(result.stdout).toBe("");
 		vi.stubEnv("FAKE_LIMITED", undefined);
 		// No round was recorded, so the next one needs no responses.
 		expect((await quest("--root", s.repo, "review")).code).toBe(0);
-	}
-});
+	},
+);
 
 fakes("a reviewer with no stored login reviews with the credential its CLI reads from the environment", async () => {
 	const s = setup();
@@ -837,6 +841,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 			"  average([3]) is 0.",
 			// The fixture's origin is a local path, which can have no PR.
 			"record skipped: origin is not on GitHub",
+			"next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number",
 			"",
 		].join("\n"),
 	);
@@ -964,6 +969,7 @@ fakes("a later round resumes the session with the new head and the author's resp
 	expect(later.code).toBe(0);
 	expect(later.stdout).toContain("round 2\n");
 	expect(later.stdout).toContain("findings 0\n");
+	expect(later.stdout).toMatch(/\nnext done: no findings remain on this head\n$/);
 	// The round settles the last round's finding, by its number in the prompt.
 	const first = git(s.repo, "rev-parse", "HEAD~1");
 	expect(later.stdout).toContain(
@@ -1486,4 +1492,15 @@ test("each changed directory keeps its own instructions, and a directory's symli
 		{ path: "b/AGENTS.md", text: "same" },
 		{ path: "c/AGENTS.md", text: "c rules" },
 	]);
+});
+
+test("the next step stops for the design checkpoint on every third round that reports findings", () => {
+	const round = (number: number, findings: number, severity = "medium") =>
+		({ round: number, findings: Array.from({ length: findings }, () => ({ severity })) }) as unknown as Round;
+	expect(nextStep(round(3, 1))).toMatch(/^next checkpoint: /);
+	expect(nextStep(round(6, 2))).toMatch(/^next checkpoint: /);
+	expect(nextStep(round(4, 1))).toMatch(/^next respond: /);
+	expect(nextStep(round(3, 0))).toMatch(/^next done: /);
+	expect(nextStep(round(3, 2, "low"))).toMatch(/^next finish: /);
+	expect(nextStep(round(4, 1, "low"))).toMatch(/^next finish: /);
 });

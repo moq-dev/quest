@@ -20,7 +20,9 @@ nix flake, run `quest init`, and fit Quest into your root `AGENTS.md` or
 `CLAUDE.md`. Init writes a stub per skill under both `.claude/skills/` and
 `.agents/skills/` without requiring symbolic links, and one line
 starting with `Quests: ` in your root instructions; reword the rest of that
-line freely, since init and uninstall recognize it by the prefix.
+line freely, since init and uninstall recognize it by the prefix. In Claude
+Code, `quest setup` then loads the rules that line points at into every
+session from your own settings, so agents never spend a turn on them.
 
 For native Windows installation and removal, see [the Windows guide](windows.md).
 

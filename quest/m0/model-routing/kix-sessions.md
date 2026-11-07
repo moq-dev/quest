@@ -6,8 +6,8 @@ When a kix `iterate` or `merge` job publishes changes to an existing PR,
 kix posts or updates one PR comment carrying that session's `Implementer:`
 line (harness, model, and effort), so every session that changed the PR is on
 record. Whatever reads the PR's implementers reads the PR body's `## Models`
-section plus that comment: the `--exclude-model` rule in `quest context`'s
-Reviews section, so a local review never picks a model a kix session coded
+section plus that comment: the `--exclude-model` rule in `/quest-review`,
+so a local review never picks a model a kix session coded
 with, the [model check](/quest/m1/model-check.md), and
 [`quest usage`](/quest/m0/token-waste/usage.md). The PR body and its `## Review` record
 stay untouched.
@@ -45,6 +45,6 @@ Implementation guidance:
 - Readers take the marked comment only when a GitHub App wrote it, since
   any commenter can copy a hidden marker.
 - Update `quest/m1/model-check.md` and `quest/m0/token-waste/usage.md` to read the
-  comment too, and `quest context`'s `## Models` rule and its
-  `--exclude-model` rule ("each implementing model the PR body records")
-  to name it.
+  comment too, and `quest context`'s `## Models` rule and `/quest-review`'s
+  `--exclude-model` rule ("each implementing model the PR body's `## Models`
+  records") to name it.

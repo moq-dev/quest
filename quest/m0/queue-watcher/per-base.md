@@ -28,7 +28,7 @@ moq.pro's release landing. Decision prompts, selected options marked ✅:
 
 - Goal:
   - ✅ Plan it, with the goal as stated
-  - Fold it into [the own queue](/README.md#the-watchers-own-queue)
+  - Fold it into the own queue (the README's "The watcher's own queue")
   - Drop it
 - Milestone:
   - ✅ m0, inside this epic
@@ -74,7 +74,7 @@ What per-base separation needs:
   [the retire quest](/quest/m0/queue-watcher/retire.md)'s log pruning rely on.
 - Each instance keeps its own private repository, so a second base costs a
   second clone's disk rather than a shared object store with its own locking.
-- `--method` comes from [the own queue](/README.md#the-watchers-own-queue)
+- `--method` comes from the own queue (the README's "The watcher's own queue")
   and is already per process; check that nothing the method affects, such as
   the landed-tree verification or a fixer's base merge, reads state outside
   the instance's directory.

@@ -1,8 +1,8 @@
 ---
 description: Audit and fix outstanding quests for disagreements, conflicts, misaligned priorities, and stale plans. Use when the user invokes /quest-audit or asks to audit and fix the quest tree.
+guide: Model, Format, Creation, Deletion, Summaries
+skills: plan
 ---
-
-Before you begin, run `quest guide` and `quest skill plan`, and read their output completely.
 
 The goal is a quest tree that agrees with itself and the code, with each quest in the milestone its priority calls for.
 The scope is every outstanding quest; the argument (if provided) filters it to specific quests or epics.
