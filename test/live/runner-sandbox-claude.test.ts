@@ -390,6 +390,7 @@ const RUN_BOUND = 4 * 60_000;
 async function run(adapter: Claude, sandbox: Sandbox, output: (line: string) => void) {
 	const running = adapter.launch({
 		cwd: paths.checkout,
+		data: `${paths.checkout}.data`,
 		home: paths.account,
 		session: crypto.randomUUID(),
 		resume: false,

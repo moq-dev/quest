@@ -40,6 +40,8 @@ export interface Launch {
 	cwd: string;
 	/** The account's isolated home, which holds its CLI login and sessions. */
 	home: string;
+	/** A directory for the CLI's files only this job may see, which commands cannot reach and which goes with the checkout. */
+	data: string;
 	session: string;
 	/** Resume `session` rather than starting it. */
 	resume: boolean;

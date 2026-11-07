@@ -4,7 +4,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { privateDirectory } from "../cli/agent";
 import { type Owner, alive, currentOwner } from "../cli/supervise";
@@ -55,7 +55,8 @@ export class RunnerHome {
 	readonly dir: string;
 
 	constructor(dir: string) {
-		this.dir = privateDirectory(dir);
+		// Absolute, since the sandbox and opencode's OPENCODE_DB take the paths under it as they are.
+		this.dir = privateDirectory(resolve(dir));
 	}
 
 	login(): Login | undefined {
