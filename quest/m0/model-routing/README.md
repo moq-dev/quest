@@ -1,4 +1,4 @@
-# Route quests to models by size
+# [S] Route quests to models by size
 
 ## Goal
 
@@ -92,7 +92,3 @@ are mostly judgment.
   [moq-dev/quest#555](https://github.com/moq-dev/quest/pull/555).
 - Which milestone? ✅ m0 (rejected: m1). It ranks first among m0's work
   after Kix, by the 2026-11-01 order: land work, then Kix, then the rest.
-
-## Required
-
-- [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing
