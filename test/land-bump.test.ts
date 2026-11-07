@@ -77,7 +77,9 @@ interface World {
 	/** Each check on a head, as `statusCheckRollup` contexts. */
 	checks: Record<string, Record<string, unknown>[]>;
 	/** Each check suite on a head. */
-	suites: Record<string, { status: string; latest_check_runs_count: number }[]>;
+	suites: Record<string, { status: string; latest_check_runs_count: number; app: { slug: string } }[]>;
+	/** Each workflow run on a head. */
+	runs: Record<string, { status: string; conclusion: string | null }[]>;
 	requests: string[];
 	/** The flake.lock GitHub serves on `main`, when it differs from the remote's. */
 	lock?: string;
@@ -124,6 +126,10 @@ function deps(world: World): GitHubDependencies {
 					world.lock ??
 					git(world.remote.slice("file://".length), "show", `${url.searchParams.get("ref")}:flake.lock`);
 				return json({ content: Buffer.from(text).toString("base64") });
+			}
+			if (url.pathname === `${path}/actions/runs`) {
+				const listed = world.runs[url.searchParams.get("head_sha")!] ?? [];
+				return json({ total_count: listed.length, workflow_runs: listed });
 			}
 			const suites = new RegExp(`^${path}/commits/(\\w+)/check-suites$`).exec(url.pathname);
 			if (suites) {
@@ -217,6 +223,7 @@ function world(overrides: Partial<World> = {}): World {
 		allowAutoMerge: true,
 		checks: {},
 		suites: {},
+		runs: {},
 		requests: [],
 		...overrides,
 	};
@@ -360,13 +367,18 @@ describe("bumpPass", () => {
 			{ __typename: "CheckRun", databaseId: 1, name: "check", status: "COMPLETED", conclusion: "SUCCESS" },
 		];
 		target.suites[head] = [
-			{ status: "in_progress", latest_check_runs_count: 1 },
-			{ status: "queued", latest_check_runs_count: 0 },
+			{ status: "in_progress", latest_check_runs_count: 1, app: { slug: "ci-app" } },
+			{ status: "queued", latest_check_runs_count: 0, app: { slug: "never-reports" } },
 		];
+		expect(await bumpPass(ctx, NEW)).toEqual([]);
+		target.suites[head][0].status = "completed";
+		// A queued workflow with no check run yet still holds it.
+		target.suites[head].push({ status: "queued", latest_check_runs_count: 0, app: { slug: "github-actions" } });
+		target.runs[head] = [{ status: "queued", conclusion: null }];
 		expect(await bumpPass(ctx, NEW)).toEqual([]);
 		expect(landed).not.toHaveBeenCalled();
 
-		target.suites[head][0].status = "completed";
+		target.runs[head] = [{ status: "completed", conclusion: "success" }];
 		expect(await bumpPass(ctx, NEW)).toEqual(["bump landing moq-dev/widget 7"]);
 		expect(landed).toHaveBeenCalledExactlyOnceWith(
 			{ ...target.target, number: 7 },

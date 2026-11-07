@@ -67,15 +67,19 @@ export interface BumpContext {
 	tools: BumpTools;
 }
 
-/** The installation permissions a target's bump API calls need: `land` reads the base's protection and the head's checks. */
+/** The installation permissions a target's bump API calls need: `land` reads the base's protection, and an ungated bump the head's checks and workflow runs. */
 export const BUMP_PERMISSIONS = {
 	contents: "write",
 	pull_requests: "write",
 	merge_queues: "write",
+	actions: "read",
 	administration: "read",
 	checks: "read",
 	statuses: "read",
 } as const;
+
+/** Workflow run conclusions that do not fail. */
+const PASSING = ["success", "neutral", "skipped"];
 
 const name = (repository: Repository) => `${repository.owner}/${repository.repo}`;
 
@@ -385,15 +389,25 @@ async function settle(target: Repository, record: Bump, connection: BumpConnecti
 		const found = await contexts(github, target, head);
 		const state = found.length === 0 ? "PENDING" : checksState(found);
 		if (state === "FAILURE") return fail(`a check failed on its head ${head}`);
-		// A workflow's later jobs report only once they start; its suite stays incomplete until they finish.
-		// Suites of apps that never ran a check stay queued forever, and count for nothing.
+		// A workflow's later jobs report only once they start, and a queued workflow may have no check run yet,
+		// so Actions is judged by its workflow runs. Another app's suite that never ran a check stays queued
+		// forever, and counts for nothing.
+		const runs = object(await (await github.request(`${path}/actions/runs?head_sha=${head}&per_page=100`)).json());
+		const workflows = array(runs.workflow_runs);
 		const suites = object(await (await github.request(`${path}/commits/${head}/check-suites?per_page=100`)).json());
 		const listed = array(suites.check_suites);
-		if (Number(suites.total_count) > listed.length)
-			throw new Error(`${head} has more than ${listed.length} check suites, more than a bump reads`);
-		const running = listed.some(
-			(suite) => Number(suite.latest_check_runs_count) > 0 && suite.status !== "completed",
-		);
+		if (Number(runs.total_count) > workflows.length || Number(suites.total_count) > listed.length)
+			throw new Error(`${head} has more workflow runs or check suites than one page, more than a bump reads`);
+		if (workflows.some((run) => run.status === "completed" && !PASSING.includes(String(run.conclusion))))
+			return fail(`a workflow failed on its head ${head}`);
+		const running =
+			workflows.some((run) => run.status !== "completed") ||
+			listed.some(
+				(suite) =>
+					object(suite.app ?? {}).slug !== "github-actions" &&
+					Number(suite.latest_check_runs_count) > 0 &&
+					suite.status !== "completed",
+			);
 		if (state === "PENDING" || running) return record;
 		direct = object(await (await github.request(path)).json()).allow_auto_merge !== true;
 	}

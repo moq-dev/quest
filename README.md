@@ -1043,8 +1043,9 @@ not pin yet, it opens or updates that target's one `quest-bump` PR as the App:
    `## Waiting` item quoting them. Otherwise it lands like any PR there, through
    `quest merge`'s path: into GitHub's merge queue, the target's own queue, or
    auto-merge. A base that requires no check would merge at once, so there the
-   bump first waits for every check on its head to pass and every check suite
-   that ran one to complete, then merges directly
+   bump first waits for every check and workflow run on its head to pass, and
+   for every other app's check suite that ran a check to complete, then merges
+   directly
    when the repository has no auto-merge, as on a private repository on GitHub
    Free, whose rules GitHub does not serve. A failed check, or a landing
    `quest merge` refuses, is commented on and left for a maintainer.
@@ -1055,7 +1056,7 @@ directory records each target's last bump, so a restart repeats nothing and a
 closed bump is not reopened for the same commit. A target's failure is logged
 and retried on the next pass without holding up the others. Each target gets
 its own tokens: `contents: write`, `pull_requests: write`, `merge_queues:
-write`, and reads of `administration`, `checks`, and `statuses` for its API
+write`, and reads of `actions`, `administration`, `checks`, and `statuses` for its API
 calls, and `workflows: write` for a push whose diff from the branch's old head
 carries a workflow change. Nix reads GitHub with the watched repository's
 `contents: read` token.
