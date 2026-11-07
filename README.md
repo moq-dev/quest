@@ -1617,6 +1617,13 @@ Follow https://github.com/moq-dev/quest/blob/main/SETUP.md to set up Quest here.
 ```
 
 The [getting started guide](docs/getting-started.md) covers what happens next.
+
+`quest setup` configures your own Claude Code settings for quest work, in
+every repository: it sets `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a
+foreground command such as `quest wait` can block for 55 minutes, just under
+the 1h prompt-cache TTL, instead of the 10-minute default. It edits
+`$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`, keeps your
+other settings, prints each setting it changed, and is safe to rerun.
 `quest context` prints the rules agents follow in every task, and `quest guide` the
 quest format and workflow they read before working on a quest.
 

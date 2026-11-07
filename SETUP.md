@@ -56,6 +56,15 @@ removes the unmodified stubs of skills the new version no longer ships.
 If init refuses, it names the conflicting path. Report it and ask the user how
 to proceed; never delete or rename their files to get past it.
 
+## Configure the user's agent
+
+`quest setup` configures the user's own Claude Code settings, not the
+repository's: it sets `env.BASH_MAX_TIMEOUT_MS` in
+`$CLAUDE_CONFIG_DIR/settings.json` (or `~/.claude/settings.json`) to 55
+minutes, so agents can block on a long wait in one call instead of polling.
+Offer it, explaining that it applies in every repository, and run it with
+consent. It keeps the file's other settings and prints what it changed.
+
 ## Opt into worktree hooks
 
 Quest can create and reclaim Claude Code's worktrees, sharing one disk budget

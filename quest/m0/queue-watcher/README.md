@@ -1,14 +1,17 @@
-# Land through GitHub's merge queue with an async fixer
+# Land through a serial merge queue with an async fixer
 
 ## Goal
 
-Each repository lands through GitHub's merge queue again, one PR at a time,
-with no batching and no pre-checks. When the queue drops a PR for a failure
-or a conflict, a watcher on the maintainer's host runs the existing Codex land
+Each repository lands through a serial merge queue, one PR at a time, with no
+batching and no pre-checks: GitHub's merge queue where the repository has one,
+and otherwise the watcher's own queue, such as on private moq-dev/moq.pro,
+where GitHub Team offers none. When the queue drops a PR for a failure or a
+conflict, a watcher on the maintainer's host runs the existing Codex land
 fixer in the background and re-enqueues the PR at the back of the queue. Only
 a decision the fixer can't make reaches a person. moq-dev/moq moves first;
-moq-dev/quest, moq.pro, rust2 and rind follow once moq proves it, and the
-batching host gate (`quest land serve`) is then retired.
+moq-dev/quest, rust2 and rind follow once moq proves it, then moq.pro through
+the own queue, and the batching host gate (`quest land serve`) is then
+retired. kix.quest shows every repository's queue.
 
 The epic finishes with an end-to-end run on moq-dev/moq: a PR the queue drops
 for a failing build is fixed and re-enqueued, a PR dropped for a conflict is
@@ -110,6 +113,16 @@ Decision prompts, selected options marked ✅:
   See `quest land watch` (`src/cli/land-watch.ts`, `enqueueArmed`).
 - Milestone:
   - ✅ m0, at the top
+
+Decided 2026-11-06 (maintainer, /quest-plan), since GitHub offers merge
+queues on private repositories only under Enterprise Cloud and moq-dev is on
+GitHub Team: moq.pro leaves the host gate for an own serial queue in
+`quest land watch`, rather than a plan upgrade, making moq.pro public, or a
+third-party queue. The maintainer expects the own queue to become every
+repository's, for visibility. The decisions are recorded in
+[the own queue](/quest/m0/queue-watcher/own-queue.md),
+[moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
+[the queue page](/quest/m0/queue-watcher/queue-page.md).
 
 Shared shape, for the children to follow:
 
