@@ -279,15 +279,16 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 	if (refused.length) return decide(db, runner, input, { type: "publication", refused });
 	const github = new GitHubService(env);
 	const upstream: GitHubRepository = { owner: job.owner, name: job.name, id: job.repository };
+	// Work on an existing pull request writes none of its text, so its sessions comment records who changes it,
+	// before the commit, so a commit whose reply is lost never leaves its session unrecorded.
+	if ((input.changes.length || input.merge) && input.implementer && onPull(job.workflow))
+		await github.recordSession(upstream, job.actor, pullOf(job.target), input.implementer);
 	let head: string | null;
-	let committed = false;
 	try {
 		// A pull request opens from the branch, so a delivery alone still checks where it is.
 		head = await github.contribute(upstream, job.actor, job, async (branch) => {
 			const head = await verify(db, job, input, branch);
-			if (!input.changes.length && !input.merge) return head;
-			committed = true;
-			return commit(db, runner, job, input, branch, head);
+			return input.changes.length || input.merge ? commit(db, runner, job, input, branch, head) : head;
 		});
 	} catch (error) {
 		if (!(error instanceof PublicationBlocked)) throw error;
@@ -306,9 +307,6 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 			...(continuation && { continuation }),
 		});
 	}
-	// Work on an existing pull request writes none of its text, so its sessions comment records who changed it.
-	if (committed && input.implementer && onPull(job.workflow))
-		await github.recordSession(upstream, job.actor, pullOf(job.target), input.implementer);
 	if (input.land) {
 		// The attempt may have ended, or been asked to stop, while the branch was written.
 		const current = await store.publishing(db, runner, input.job, input.attempt);
