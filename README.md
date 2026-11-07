@@ -1577,8 +1577,10 @@ then `claude rm` again.
 ## Work with your agents
 
 Open this repository in Claude Code or Codex. The binary carries the skills;
-a repository installs only a stub per skill that runs `quest skill <name>`, so
-the version you pin decides what your agents follow:
+a repository installs only a stub per skill, so the version you pin decides
+what your agents follow. Claude Code's stub inlines `quest skill <name>` when
+the skill is invoked; Codex's asks the agent to run it. Either way the skill
+arrives with the guide sections and other skills it builds on, in one call:
 
 | Skill | What it does |
 | --- | --- |
@@ -1610,7 +1612,27 @@ Follow https://github.com/moq-dev/quest/blob/main/SETUP.md to set up Quest here.
 
 The [getting started guide](docs/getting-started.md) covers what happens next.
 `quest context` prints the rules agents follow in every task, and `quest guide` the
-quest format and workflow they read before working on a quest.
+quest format and workflow they read before working on a quest outside a skill;
+`quest guide prompting` prints one section.
+
+### Load the rules once
+
+The repository's `Quests: ` line has agents run `quest context` before any
+work, which costs a turn and is summarized away when the session compacts. In
+Claude Code, add the rules to every session instead with hooks in your own
+settings:
+
+```sh
+quest setup
+```
+
+It installs a `SessionStart` hook (startup, resume, clear, and compact) and a
+`SubagentStart` hook in `$CLAUDE_CONFIG_DIR/settings.json`, or
+`~/.claude/settings.json`, keeping your other settings. Each runs `quest hook`,
+which adds `quest context` to the session in a repository whose root
+`AGENTS.md` or `CLAUDE.md` has the `Quests: ` line, and nothing elsewhere.
+`quest` must be on the `PATH` Claude Code starts with, as for the worktree
+hooks. Rerun it after upgrading; `quest setup --remove` takes the hooks out.
 
 ## Where this is going
 

@@ -212,6 +212,9 @@ test.skipIf(process.platform === "win32")("existing linked skills install once a
 	symlinkSync("../.claude/skills", join(dir, ".agents/skills"));
 	const changed = init(dir);
 	expect(changed.filter((path) => path.endsWith("SKILL.md"))).toHaveLength(SKILLS.length);
+	// Claude Code and other agents read the same file, so it gets the stub every agent follows.
+	const start = SKILLS.find((skill) => skill.name === "start")!;
+	expect(read(dir, ".claude/skills/quest-start/SKILL.md")).toBe(start.stubs[".agents/skills"]);
 	expect(init(dir)).toEqual([]);
 	uninstall(dir);
 	expect(existsSync(join(dir, ".claude"))).toBe(false);
@@ -262,6 +265,10 @@ const READY_STUB =
 const OLD_AUDIT_STUB =
 	"---\nname: quest-audit\ndescription: Audit outstanding quests for disagreements, then resolve them with /quest-plan.\n---\n\nRun `quest skill audit` and follow its output.\nIf `quest` is not installed, follow https://github.com/kixelated/quest/blob/main/SETUP.md first.\n";
 
+/** Claude Code's inline stub of a current skill, with another description and fallback text. */
+const OLD_INLINE_AUDIT_STUB =
+	'---\nname: quest-audit\ndescription: Audit the quest tree.\nallowed-tools: Bash(quest skill audit) PowerShell(quest skill audit)\n---\n\n!`quest skill audit; echo "install quest if that failed"`\n';
+
 function write(dir: string, path: string, content: string) {
 	mkdirSync(dirname(join(dir, path)), { recursive: true });
 	writeFileSync(join(dir, path), content);
@@ -284,8 +291,10 @@ test("init removes stubs of retired skills and refreshes older stubs of current 
 	]);
 	expect(existsSync(join(dir, ".claude/skills/quest-ready"))).toBe(false);
 	expect(existsSync(join(dir, ".agents/skills/quest-ready"))).toBe(false);
-	expect(read(dir, ".claude/skills/quest-audit/SKILL.md")).toBe(audit.stub);
-	expect(read(dir, ".agents/skills/quest-audit/SKILL.md")).toBe(audit.stub.replaceAll("\n", "\r\n"));
+	expect(read(dir, ".claude/skills/quest-audit/SKILL.md")).toBe(audit.stubs[".claude/skills"]);
+	expect(read(dir, ".agents/skills/quest-audit/SKILL.md")).toBe(
+		audit.stubs[".agents/skills"].replaceAll("\n", "\r\n"),
+	);
 	expect(init(dir)).toEqual([]);
 });
 
@@ -330,9 +339,61 @@ for (const [name, content] of [
 		expect(read(dir, ".claude/skills/quest-ready/SKILL.md")).toBe(content);
 	});
 
+test("init refreshes an inline stub, and moves each directory to its own kind", () => {
+	const dir = tempDir();
+	const audit = SKILLS.find((skill) => skill.name === "audit")!;
+	write(dir, ".claude/skills/quest-audit/SKILL.md", OLD_INLINE_AUDIT_STUB);
+	write(dir, ".agents/skills/quest-audit/SKILL.md", OLD_INLINE_AUDIT_STUB);
+	init(dir);
+	expect(read(dir, ".claude/skills/quest-audit/SKILL.md")).toBe(audit.stubs[".claude/skills"]);
+	expect(read(dir, ".agents/skills/quest-audit/SKILL.md")).toBe(audit.stubs[".agents/skills"]);
+	write(dir, ".claude/skills/quest-audit/SKILL.md", OLD_AUDIT_STUB);
+	expect(init(dir)).toEqual([".claude/skills/quest-audit/SKILL.md"]);
+	expect(read(dir, ".claude/skills/quest-audit/SKILL.md")).toBe(audit.stubs[".claude/skills"]);
+});
+
+for (const [layout, link] of [
+	[
+		"a linked skill directory",
+		(dir: string) => symlinkSync("../../.claude/skills/quest-audit", join(dir, ".agents/skills/quest-audit")),
+	],
+	[
+		"a linked SKILL.md",
+		(dir: string) => {
+			mkdirSync(join(dir, ".agents/skills/quest-audit"));
+			symlinkSync(
+				"../../../.claude/skills/quest-audit/SKILL.md",
+				join(dir, ".agents/skills/quest-audit/SKILL.md"),
+			);
+		},
+	],
+] as const)
+	test.skipIf(process.platform === "win32")(
+		`init gives ${layout} shared by both directories the stub every agent follows`,
+		() => {
+			const dir = tempDir();
+			const audit = SKILLS.find((skill) => skill.name === "audit")!;
+			write(dir, ".claude/skills/quest-audit/SKILL.md", OLD_INLINE_AUDIT_STUB);
+			mkdirSync(join(dir, ".agents/skills"), { recursive: true });
+			link(dir);
+			expect(init(dir)).toContain(".claude/skills/quest-audit/SKILL.md");
+			expect(read(dir, ".agents/skills/quest-audit/SKILL.md")).toBe(audit.stubs[".agents/skills"]);
+			expect(init(dir)).toEqual([]);
+		},
+	);
+
 for (const [name, content] of [
 	["a stub with added instructions", `${OLD_AUDIT_STUB}Then tell the team.\n`],
 	["a stub with an added frontmatter field", OLD_AUDIT_STUB.replace("\n---\n\n", "\nallowed-tools: Bash\n---\n\n")],
+	[
+		"an inline stub allowing more",
+		OLD_INLINE_AUDIT_STUB.replace("PowerShell(quest skill audit)", "PowerShell(quest skill audit) Bash"),
+	],
+	[
+		"an inline stub calling another skill",
+		OLD_INLINE_AUDIT_STUB.replace("`quest skill audit;", "`quest skill plan;"),
+	],
+	["an inline stub with added instructions", `${OLD_INLINE_AUDIT_STUB}Then tell the team.\n`],
 ] as const)
 	test(`init keeps ${name} of a current skill`, () => {
 		const dir = tempDir();

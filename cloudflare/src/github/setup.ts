@@ -136,7 +136,7 @@ export function setupPull(changes: InitChange[], options: { flake: boolean }) {
 		"",
 		...(stubs.length
 			? [
-					`- ${stubs.length} skill stubs under ${[...new Set(stubs.map((change) => `\`${change.path.split("/").slice(0, 2).join("/")}/\``))].join(" and ")}: each asks the agent to run \`quest skill <name>\``,
+					`- ${stubs.length} skill stubs under ${[...new Set(stubs.map((change) => `\`${change.path.split("/").slice(0, 2).join("/")}/\``))].join(" and ")}: each loads \`quest skill <name>\`, inline in Claude Code and by asking other agents to run it`,
 				]
 			: []),
 		...others.map((change) => `- \`${change.path}\`: ${purpose(change)}`),

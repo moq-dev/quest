@@ -1,8 +1,7 @@
 ---
 description: Queue a PR to land, running /quest-iterate first when it needs work.
+guide: Creation, Summaries
 ---
-
-Before you begin, run `quest guide` and read its output completely.
 
 This skill runs inline in the session that picked it, never in its own sub-agent: it decides whether the PR's head can land as is, and queues it.
 It never fixes the PR, pushes, or waits on GitHub itself; when the head needs work it runs `/quest-iterate`, and the merge gate handles conflicts and failures after queueing.
@@ -16,7 +15,7 @@ Read the PR's head, checks, merge state, reviews by head, unresolved threads, an
 If a `hold` record shows another session holds the PR, stop and report it; taking over a stale hold is the user's choice.
 The head is landable when:
 
-- a `## Review` record `quest context` counts names it, or its review exemptions cover the changes since the one it names;
+- a `## Review` record that counts names it, or the exemptions below cover the changes since the one it names;
 - every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, and no decision is open;
 - its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base.
 
@@ -25,6 +24,11 @@ A failing optional check does not stop the pick, since the PR's own CI is only a
 Otherwise run `/quest-iterate` on it, saying what it needs: a review of the head, fixes, or decisions, then run this skill again once it finishes; if it stops for the user instead, such as when it cannot push or reaches a design checkpoint, report that.
 Run it in this session, where its grill interview can ask the user; under a coordinator such as `/quest-complete`, hand it back, and the coordinator dispatches it in a sub-agent.
 While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
+
+A review counts for the head whose SHA it names: a `## Review` record of a local `quest review` round, or a recorded skip.
+Changes since that head need no new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged, a land fixer's recorded mechanical fix that changes no behavior, or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
+The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
+Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
 
 Before queueing, fetch the PR's base branch and its exact head, check out the head outside your checkout, such as a detached worktree in `.tmp/`, and run `quest --root <head-checkout> check --base <remote>/<base> --branch <head-branch>` with a `quest` the PR cannot modify, from a directory outside the head checkout: the head's files are untrusted, and a stale local base can skip the check.
 A finding means the PR leaves its quest inaccurate: run `/quest-iterate`.
