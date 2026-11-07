@@ -950,13 +950,15 @@ requeue is a verdict: a failure on the base or from the runner never counts
 toward disabling a test. Each failed
 build's round is told the tests that flaked before and are not yet disabled, in
 `.git/quest-land-flaky.json` in its checkout, which `quest land fix` passes to
-the agent. One verdict alone only re-enqueues the PR, since one judgment could
+the agent, with the follow-up quest path the watcher chose for each when it
+first flaked. One verdict alone only re-enqueues the PR, since one judgment could
 hide a real bug. When a listed test flakes again, the fixer also commits its
-disabling on a `disable` branch from the base: the skip in the test
-framework's own form, naming the follow-up quest it adds to the repository's
-m0 `flaky` epic, `quest/m0/flaky/<name>.md`, to fix or delete the test. The
-watcher validates that commit as it does a base fix, requiring exactly one new
-follow-up quest, pushes it to `quest-land/flaky-<sha>`, opens it as a pull
+disabling on a `disable` branch from the base: only the skip in the test
+framework's own form, naming that follow-up quest. The watcher validates that
+commit as it does a base fix, refusing any edit under `quest/`, then commits
+the follow-up quest on top from a fixed template, `quest/m0/flaky/<name>.md`
+in the repository's m0 `flaky` epic, to fix or delete the test, creating the
+epic's README when the base has none. It pushes the result to `quest-land/flaky-<sha>`, opens it as a pull
 request with its Review recorded, and enqueues it like any other, with no
 maintainer's pick. A refused disable waits for the test's next flake, and a
 pull request GitHub refuses to enqueue says so and waits for a maintainer.
@@ -1608,10 +1610,10 @@ entries into the file's `hooks`:
 ```json
 {
   "hooks": {
-    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "quest worktree hook" }] }]
+    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }]
   }
 }
 ```
