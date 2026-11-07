@@ -5,11 +5,9 @@ import { type Board, blobHref, findDoc, findGroup, only, questHref, readBoard, t
 import type { Project } from "../src/board/project";
 
 const docs: Record<string, string> = {
-	"quest/README.md": "# Quests\n\n## Goal\n\nShip it.\n\n## Required\n\n- [M0](/quest/m0/README.md) - first\n",
-	"quest/m0/README.md":
-		"# First release\n\n## Goal\n\nThe *first* release.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md) - grouped\n- [Solo](/quest/m0/solo.md) - alone\n",
-	"quest/m0/epic/README.md":
-		"# An epic\n\n## Goal\n\nGrouped work.\n\n## Required\n\n- [Ready](/quest/m0/epic/ready.md) - first\n- [Blocked](/quest/m0/epic/blocked.md) - second\n- [Taken](/quest/m0/epic/taken.md) - third\n- [Turned](/quest/m0/epic/turned.md) - fourth\n",
+	"quest/README.md": "# Quests\n\n## Goal\n\nShip it.\n",
+	"quest/m0/README.md": "# First release\n\n## Goal\n\nThe *first* release.\n",
+	"quest/m0/epic/README.md": "# An epic\n\n## Goal\n\nGrouped work.\n",
 	"quest/m0/epic/ready.md": "# [S] Ready quest\n\n## Goal\n\nDo it.\n",
 	"quest/m0/epic/blocked.md":
 		"# [M] Blocked quest\n\n## Goal\n\nLater.\n\n## Required\n\n- [Ready](/quest/m0/epic/ready.md) - needs it\n",
@@ -17,7 +15,7 @@ const docs: Record<string, string> = {
 		"# [XL] Taken quest\n\n## Goal\n\nMine.\n\n## Claim\n\n- Jane Doe (github:jdoe) on https://example.com/jdoe/repo since 2026-10-02\n",
 	"quest/m0/epic/turned.md": "# [XS] Turned-in quest\n\n## Goal\n\nDone soon.\n",
 	"quest/m0/solo.md": "# [L] Solo quest\n\n## Goal\n\nAlone.\n",
-	"quest/m0/loose.md": "# [S] Loose quest\n\n## Goal\n\nListed nowhere.\n",
+	"quest/m0/loose.md": "# [S] Loose quest\n\n## Goal\n\nNo blockers either.\n",
 };
 
 function project(overrides: Partial<Project> = {}): Project {
@@ -53,13 +51,13 @@ describe("board model", () => {
 		expect(board.counts).toEqual({ available: 4, pending: 0, blocked: 1, "turn-in": 1, accepted: 0 });
 	});
 
-	it("groups milestones and epics in priority order, then unlisted quests", () => {
+	it("groups milestones and epics by their directories, in path order", () => {
 		const [milestone] = board.milestones;
 		expect(milestone).toMatchObject({ number: "0", title: "First release", summary: "The first release." });
 		expect(milestone.items.map((item) => (item.kind === "quest" ? item.quest.path : item.epic.path))).toEqual([
 			"quest/m0/epic/README.md",
-			"quest/m0/solo.md",
 			"quest/m0/loose.md",
+			"quest/m0/solo.md",
 		]);
 		expect(trail(board, "quest/m0/epic/ready.md").map((group) => group.title)).toEqual([
 			"First release",

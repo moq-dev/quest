@@ -5,13 +5,12 @@ export const HOLD_PREFIX = "quest:";
 export const ACTIVE_LABEL = `${HOLD_PREFIX}active`;
 
 /**
- * Compatibility with older quest versions, which repositories pin: delete once
- * they have upgraded. Their `quest:iterate` and `quest:ready` still hold a PR,
- * as every other `quest:*` label does, so nothing here names them. Their
- * `quest:merge` stayed on a queued PR after its session ended, and the pinned
- * auto-merge is the queue signal, so that label holds nothing.
+ * The label a merge job holds its pull request with, from the pick until the
+ * job ends without landing or a landing it started ends unmerged. It is kix's
+ * own, apart from local sessions' `quest:active`, since it stays on while the
+ * job's landing is queued; local sessions respect it.
  */
-const LEGACY_IGNORED = `${HOLD_PREFIX}merge`;
+export const KIX_LABEL = `${HOLD_PREFIX}kix`;
 
 export interface HoldEvent {
 	id: string;
@@ -25,7 +24,7 @@ export interface HoldSnapshot {
 }
 
 export function isHoldLabel(label: string): boolean {
-	return label.startsWith(HOLD_PREFIX) && label !== LEGACY_IGNORED;
+	return label === ACTIVE_LABEL || label === KIX_LABEL;
 }
 
 /** Preserve a caller's extra event fields, such as its timestamp. */

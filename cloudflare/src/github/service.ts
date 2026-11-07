@@ -1,7 +1,7 @@
 import { createHash, createPrivateKey, sign } from "node:crypto";
 import {
-	HOLD_PREFIX,
 	InitRefused,
+	KIX_LABEL,
 	isHoldLabel,
 	latestHold,
 	heldToken,
@@ -2594,14 +2594,6 @@ type Holds = {
 	/** Oldest first; `label` is null for a landing that started. */
 	events: { id: string; label: string | null }[];
 };
-
-/**
- * The label a merge job holds its pull request with, from the pick until the
- * job ends without landing or a landing it started ends unmerged. It is kix's
- * own, apart from local sessions' `quest:active`, since it stays on while the
- * job's landing is queued; as a `quest:*` label, local sessions respect it.
- */
-export const KIX_LABEL = `${HOLD_PREFIX}kix`;
 
 function heldBy(label: string) {
 	return `Another session holds this pull request with ${label}; pick it again once it is released`;

@@ -42,21 +42,24 @@ That file sits in your quest log, a tree under `quest/`:
 quest/
   README.md           # The roadmap
   m0/
-    README.md         # First milestone, in priority order
+    README.md         # The first milestone
     export.md         # Ready
     download.md       # Required: export.md
 ```
 
-Folders are **epics**. A README's `Required` lists its children in
-priority order, beside any other dependencies. The README is the epic's
+Folders are **epics**, and the quests in a folder are its children; its
+README lists only what blocks it, never its children. The README is the epic's
 own quest, and it becomes ready once its children have merged. The top folders
 (`m0`, `m1`, ...) are **milestones** that give the work a delivery horizon.
+Finishing a quest deletes its file and edits no README, so PRs that finish
+sibling quests do not conflict.
 
 When a quest is complete, its PR removes the plan and the links that depended
 on it, so the quests that required it can become ready. A PR that leaves work
 rewrites the plan to what remains. Milestones are never
-deleted, so a PR that finishes one (its README has no `Required` left) removes
-the links to that milestone too; `quest check` flags any it misses. The
+deleted, so a PR that finishes one (its folder holds no other quest and its
+README has no `Required` left) removes the links to that milestone too;
+`quest check` flags any it misses. The
 finished plan stays in Git history, beside the code that completed it.
 
 Work is taken through a live runner lock or an open change on the forge.
@@ -119,7 +122,8 @@ nonzero exit means the command failed.
 ## Prioritize ready work
 
 `quest unblocked` ranks ready quests by milestone priority, descending number
-of distinct transitive dependents, then existing tree order. Counts include
+of distinct transitive dependents, then path order, which compares numbers by
+value so `m10` follows `m9`. Counts include
 later milestones without moving their candidates ahead of earlier milestones.
 Structural root, milestone, and epic membership does not add to the count;
 real dependencies on an epic still reach its remaining work. Other prerequisites
@@ -284,7 +288,8 @@ just finished, but keeps the root's listing of the milestone.
 Both stage the change, print one line per file (`R from -> to`, `D path`, or
 `M path`), and report on stderr any other mention of the path, such as prose
 or files outside `quest/`, without editing it. They run `quest check` on the
-result and exit 1 if it fails, for example when a quest moved out of its epic.
+result and exit 1 if it fails, for example when a quest moved into a folder
+with no README.
 
 An epic is its directory or README; removing one that holds other quests needs
 `-r`. The root and milestones are never moved or removed. `mv` refuses a
@@ -295,8 +300,8 @@ Neither command touches branches or PRs.
 
 ## Merge quest lists
 
-Concurrent PRs edit the same link lists: the base branch deletes finished
-quests' lines while a branch inserts a new quest beside them. `quest init`
+Concurrent PRs can edit the same link list: the base branch deletes a finished
+blocker's line while a branch adds another blocker beside it. `quest init`
 routes `quest/**` through a merge driver in `.gitattributes` and registers it
 in the clone's git config, so a local `git merge` resolves those conflicts.
 
@@ -510,16 +515,13 @@ quest merge 128 --land <sha> # auto-merge bound to that head; takes no label
 A taken PR carries the `quest:active` label while an agent works on it.
 Sessions often share a GitHub account, so taking it prints a hold token: the
 ID of the timeline event that added the label. Every command refuses while a
-`quest:*` label it holds no token for is on the PR, including another
-session's `quest:active`; a draft its starter still holds, one without a
+`quest:active` or `quest:kix` label it holds no token for is on the PR,
+including another session's `quest:active`; a draft its starter still holds, one without a
 `## Waiting` (or older `## Decisions needed`) section; and a merged or closed PR, since a push after
 the merge brings the branch back. The refusal names the holder's label, age,
 and token, so you can decide whether to release a stale hold. When two
 sessions add labels at once, the first label added keeps the PR and the other
-backs off. Older quest versions add `quest:iterate` and `quest:ready`, which
-hold a PR like any `quest:*` label; passing their token to `quest iterate`
-swaps them for `quest:active`. Their `quest:merge` holds nothing and is
-ignored.
+backs off.
 
 `quest merge` takes no label: the head-pinned auto-merge or merge-queue entry
 it creates is the queue signal, so a queued PR shows no hold. It refuses while
@@ -1395,10 +1397,11 @@ commands start from a minimal environment, so its login, the opencode server's
 password, and the kix tools' token stay out of their reach. This is an OS
 sandbox, not a VM, and it narrows rather than removes the risk of running
 agent commands on your machine. On Linux, `just runner-sandbox` in this
-repository runs a scripted model through the pinned opencode and
-sandbox-runtime in a checkout that tries to read credentials, write outside its
-sandbox, plant opencode config, reach the network, and connect to the Nix
-daemon's or another Unix socket, and fails if any attempt gets through. CI runs it nightly, outside the merge queue.
+repository runs a scripted model through the pinned Claude Code, and through
+the pinned opencode and sandbox-runtime, in a checkout that tries to read
+credentials, write outside its sandbox, plant its own agent config and hooks,
+reach the network, and connect to the Nix daemon's or another Unix socket, and
+fails if any attempt gets through. CI runs it nightly, outside the merge queue.
 
 On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
 pins both) and unprivileged user namespaces, including the nested one the
@@ -1711,7 +1714,7 @@ Automatic project history passes read updates since their prior issue/PR
 boundaries, including timestamp ties. Explicit Refresh starts or resumes a full
 history pass; successive refreshes repair cached issues deleted without a
 webhook. Open draft bodies are read only to classify `## Waiting`.
-[The first milestone](quest/m0/README.md) lists the quests that remain.
+[The first milestone](quest/m0/) holds the quests that remain.
 
 ## Contributing
 
