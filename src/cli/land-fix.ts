@@ -23,6 +23,8 @@ export const FLAKY_INPUT = "quest-land-flaky.json";
 /** A test the fixer judged flaky before, by the `failure` it named, with the `merge_group` jobs that showed it. */
 export interface KnownFlaky {
 	failure: string;
+	/** The follow-up quest quest land watch adds when it is disabled, for the skip's reason to name. */
+	quest: string;
 	jobs: string[];
 }
 
@@ -53,6 +55,7 @@ function knownFlaky(root: string): KnownFlaky[] {
 			(item) =>
 				item &&
 				typeof item.failure === "string" &&
+				typeof item.quest === "string" &&
 				Array.isArray(item.jobs) &&
 				item.jobs.every((job: unknown) => typeof job === "string"),
 		)
