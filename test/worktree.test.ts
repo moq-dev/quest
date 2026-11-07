@@ -21,7 +21,7 @@ import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from 
 import { GitHub, mergedHead } from "../src/cli/github";
 import { main } from "../src/cli/main";
 import { Worktrees, canonical, derivedDefaults, diskUsage } from "../src/cli/worktree";
-import { claudeHook } from "../src/cli/worktree-hook";
+import { HOOK_EVENTS, claudeHook } from "../src/cli/worktree-hook";
 import { initRepository, run, template } from "./fixture";
 
 const source = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -83,6 +83,19 @@ afterEach(() => {
 // Cases that create checkouts with submodules clone each nested repository, running
 // 100-300 Git processes, so they get 60 s.
 describe("worktrees", { timeout: 20_000 }, () => {
+	it("excludes .worktrees/ locally once, only when nothing ignores it", async () => {
+		const { repo, worktrees } = fixture();
+		const exclude = join(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"), "info", "exclude");
+		const lines = () => (existsSync(exclude) ? readFileSync(exclude, "utf8") : "").split("\n");
+		await worktrees.create(repo, "listed", 1_000_000);
+		expect(lines()).not.toContain("/.worktrees/");
+		writeFileSync(join(repo, ".gitignore"), "cache/\n.env\n");
+		git(repo, "commit", "-qam", "unignore");
+		await worktrees.create(repo, "first", 1_000_000);
+		await worktrees.create(repo, "second", 1_000_000);
+		expect(lines().filter((line) => line === "/.worktrees/")).toHaveLength(1);
+		expect(git(repo, "status", "--porcelain=v1")).toBe("");
+	});
 	it("prunes declared scratch in place and keeps source, Git state, and untracked files", async () => {
 		const { repo, worktrees } = fixture();
 		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache/", "cache/nested", "missing"]);
@@ -1210,5 +1223,35 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 				}),
 			).status,
 		).toBe(1);
+	});
+	it.skipIf(process.platform === "win32")("the documented entries say so when quest is not on PATH", () => {
+		const readme = readFileSync(join(source, "README.md"), "utf8");
+		const json = [...readme.matchAll(/```json\n(.*?)```/gs)]
+			.map((match) => match[1])
+			.find((text) => text.includes('"WorktreeCreate"'));
+		if (json === undefined) throw new Error("README has no hook settings block");
+		const { hooks } = JSON.parse(json) as { hooks: Record<string, { hooks: { command: string }[] }[]> };
+		const commands = HOOK_EVENTS.map((event) => hooks[event][0].hooks[0].command);
+		expect(new Set(commands).size).toBe(1);
+		const [command] = commands;
+		const run = (path: string, input = "") =>
+			spawnSync("/bin/sh", ["-c", command], { input, encoding: "utf8", env: { PATH: path } });
+		const dir = (): string => {
+			const root = mkdtempSync(join(tmpdir(), "quest-hook-"));
+			roots.push(root);
+			return root;
+		};
+		const missing = run(dir());
+		expect(missing.status).toBe(1);
+		expect(missing.stdout).toBe("");
+		expect(missing.stderr).toBe(
+			"quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH\n",
+		);
+		const bin = dir();
+		writeFileSync(join(bin, "quest"), '#!/bin/sh\necho "quest $*"\ncat\n', { mode: 0o755 });
+		const input = JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: "/repo", name: "agent-1" });
+		const present = run(`${bin}:${process.env.PATH}`, input);
+		expect(present.status).toBe(0);
+		expect(present.stdout).toBe(`quest worktree hook\n${input}`);
 	});
 });
