@@ -38,4 +38,4 @@ This quest is the second PR:
 - Turn `requires X, which this epic holds` into a `quest check` error.
 - The PR is breaking: other repositories migrate with `quest check --fix` on
   their pin bump past it, as
-  [moq-dev pins](/quest/m0/model-routing/pins.md) describes.
+  the moq-dev pin bumps did.
