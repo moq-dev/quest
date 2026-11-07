@@ -54,7 +54,7 @@ import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
-import { DEFAULT_SIZE, REVIEWERS } from "./models";
+import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
 import {
 	ReviewInputError,
 	ReviewLimitError,
@@ -261,7 +261,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Given a path, print what blocks that quest instead.\n\n" +
 				"Counts exclude structural epic membership. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
-				"ordered array of {path, dependents} objects.\n\n" +
+				"ordered array of {path, dependents, models} objects, where models ranks the {harness, model, effort} " +
+				"entries that write the quest: its size's list, or the next size's while a Maintainer: item under its " +
+				"## Waiting leaves a decision open (quest models lists them).\n\n" +
 				"--unclaimed ranks the fetched upstream default branch's tree instead of the checkout, then drops " +
 				"quests someone holds: a quest branch upstream, or an open PR from that branch in any repository. A " +
 				"branch whose tip is a merged PR's head holds nothing; a closed, unmerged PR's branch still does. A " +
@@ -294,10 +296,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					explain(docs, find(docs, path), path);
 					return;
 				}
-				const show = (quests: RankedQuest[]) => {
+				const show = (quests: RankedQuest[], docs: Doc[]) => {
 					const shown = quests.slice(0, options.limit);
 					if (options.json) {
-						print(JSON.stringify(shown));
+						const byPath = new Map(docs.map((doc) => [doc.path, doc]));
+						print(
+							JSON.stringify(
+								shown.map((quest) => ({ ...quest, models: questWriters(byPath.get(quest.path)!) })),
+							),
+						);
 						return;
 					}
 					if (theme)
@@ -306,7 +313,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				};
 				if (!options.unclaimed) {
 					const tree = checkout(root(), warn);
-					if (valid(tree)) show(unblocked(tree.docs));
+					if (valid(tree)) show(unblocked(tree.docs), tree.docs);
 					return;
 				}
 				// Readiness comes from the upstream default branch, so a stale checkout cannot offer
@@ -321,7 +328,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						const ranked = unblocked(tree.docs);
 						const branches = ranked.map((quest) => questBranch(quest.path));
 						const holdings = up === null ? [] : (await held(root(), up, branches, refs?.branches)).claims;
-						return { ranked, holdings };
+						return { ranked, holdings, docs: tree.docs };
 					})(),
 					(result) => {
 						if (result === null) return 1;
@@ -332,7 +339,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 							if (claim)
 								warn(`skipped ${quest.path}: held by ${describe(claim.branch, claim.pull, now)}`);
 						}
-						show(result.ranked.filter((quest) => !byBranch.has(questBranch(quest.path))));
+						show(
+							result.ranked.filter((quest) => !byBranch.has(questBranch(quest.path))),
+							result.docs,
+						);
 					},
 				);
 			},
@@ -877,7 +887,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.action((id: string) => record(state().restore(id)));
 	worktree
 		.command("hook")
-		.summary("Handle a Claude Code worktree or subagent hook event read on stdin")
+		.summary("Handle a Claude Code worktree, subagent, or session hook event read on stdin")
 		.description(
 			"Handle the Claude Code hook event whose JSON input arrives on stdin, for " +
 				HOOK_EVENTS.join(", ") +
@@ -891,7 +901,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
 				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
 				"or a workflow agent's, named for its run and bound to the first subagent that starts in it, " +
-				"when it finishes or stops to wait, keeping its .tmp/ workspace for the parent to read until removal, and SubagentStart restores it. Other checkouts are left alone. " +
+				"when it finishes or stops to wait, keeping its .tmp/ workspace for the parent to read until removal, and SubagentStart restores it. " +
+				"Every other checkout WorktreeCreate makes is a session's: SessionEnd releases it the same way once no session that " +
+				"created it or started in it is left, except when /clear starts another in its place, and SessionStart restores it. " +
+				"Other checkouts are left alone. " +
 				"Exits 1 on failure, never 2, which would keep a subagent running.",
 		)
 		.action(() => {
@@ -994,6 +1007,37 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			);
 		});
 
+	program
+		.command("models")
+		.summary("Print the harnesses, models, and efforts that write work of a size, ranked")
+		.description(
+			"Print the ranked entries that write work of a size, the same for every repository unless its AGENTS.md " +
+				"names others: " +
+				SIZES.map(
+					(size) =>
+						`${size} ${WRITERS[size].map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}`,
+				).join("; ") +
+				". A spawn starts a quest on the first entry that can run, as quest unblocked --json lists them. " +
+				"--writer prints the one entry that runs that model on the work instead, for an iterate, which stays " +
+				"on its PR's writer: the size's own entry for the model, else its entry at the nearest size that " +
+				"lists it, the larger on a tie, so an XS iterate on an Opus PR runs Opus at S's effort. A model no " +
+				"list names is an error. Prints harness, model, and effort per line, tab-separated; --json prints an " +
+				"array of {harness, model, effort} objects.",
+		)
+		.addArgument(new Argument("<size>", "The work's size").choices(SIZES))
+		.option("--writer <model>", "Print only the entry that runs this model, the PR's first Implementer")
+		.option("--json", "Print a JSON array")
+		.action((size: Size, options: { writer?: string; json?: boolean }) => {
+			let entries = WRITERS[size];
+			if (options.writer !== undefined) {
+				const entry = writerAt(size, options.writer);
+				if (entry === null) throw new UsageError(`no write list names ${options.writer}`);
+				entries = [entry];
+			}
+			if (options.json) print(JSON.stringify(entries));
+			else for (const e of entries) print(`${e.harness}\t${e.model}\t${e.effort}`);
+		});
+
 	const reviewers = SIZES.map(
 		(size) => `${size} ${REVIEWERS[size].map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}`,
 	).join("; ");
@@ -1004,7 +1048,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never a model " +
 				`that wrote the code. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The first ` +
 				"whose model wrote none of the code reviews. The models that wrote it are --exclude-model's; without " +
-				"it, they are those the Implementer lines of the `## Models` record in the body of the branch's open PR " +
+				"it, they are those the Implementer lines of the `## Models` record in the body of the branch's open PR, and of kix's sessions comment on it, " +
 				"name and, unless those name every one with no `unknown` model or --harness names the reviewer, any " +
 				"model of the harness running this command, detected from the variables each sets, so Codex reviews " +
 				"from Claude Code and Claude Code from Codex. " +
@@ -1034,6 +1078,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
 				"repeats that round, marked unchanged. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
+				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
@@ -1081,7 +1127,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
-		.option("--branch <name>", "Branch whose review session to continue, instead of the checked-out one")
+		.option(
+			"--branch <name>",
+			"Branch whose review session to continue, instead of the checked-out one or its upstream",
+		)
 		.option("--json", "Print one JSON object")
 		.action(
 			(options: {

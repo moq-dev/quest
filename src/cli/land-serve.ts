@@ -1,4 +1,5 @@
 // Host orchestration: PR code runs only through the configured sandbox.
+import { pruneLogs } from "./land-prune";
 import { authenticatedRead } from "./land-git";
 import { startFixer, startBaseFixer, collectFixers } from "./land-fixer";
 import { closeFix, fixing, haltNotice, readHalt, resume, saveHalt } from "./land-halt";
@@ -820,6 +821,7 @@ export async function serve(
 			},
 		};
 		await daemonLoop(async () => {
+			pruneLogs(options.state, deps.now(), deps.warn);
 			// Without `collect`: this check runs inside a collection, which must not start another.
 			const checkCollected = (base: Plan["base"]) => checkBase(trusted, name, base, options, deps, read);
 			for (const line of await collectFixers(trusted, options.state, deps, mint, undefined, read, checkCollected))

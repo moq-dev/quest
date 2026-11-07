@@ -24,7 +24,3 @@ repository uses the same settings, so nothing in them changes but the pin.
   [moq-dev/quest#518](https://github.com/moq-dev/quest/pull/518), which
   accepts both formats; [Pin sync](/quest/m0/pin-sync.md) does the same for
   its automated bumps).
-
-## Required
-
-- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` reads the built-in size table

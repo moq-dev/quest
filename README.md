@@ -134,12 +134,14 @@ $ quest --root examples/export unblocked
 1	quest/m0/export.md
 
 $ quest --root examples/export unblocked --json --limit 1
-[{"path":"quest/m0/export.md","dependents":1}]
+[{"path":"quest/m0/export.md","dependents":1,"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"low"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
 ```
 
 Each plain output line contains the count, a tab, and the path. On a terminal,
 a heading explains the count. `--json` prints an ordered array, including `[]`
-when no quests are ready; `--limit <count>` requires a positive integer.
+when no quests are ready, and gives each quest the ranked `models` that write
+it, as [Route work by size](#route-work-by-size) describes; `--limit <count>`
+requires a positive integer.
 Invalid trees fail with diagnostics and no ranking.
 `quest-spawn` uses the ranking unless you explicitly select work in another order.
 
@@ -742,7 +744,7 @@ and comments with the reason and the failing log, bounded by
 size. When GitHub refuses to merge one PR, only that PR stops: a conflict is
 parked for the fixer, a moved head or refusal is ejected, and the rest of the batch
 stays queued. `quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
-`$STATE_DIRECTORY` or the XDG state home, never inside the checkout. A check
+`$STATE_DIRECTORY` or the XDG state home, never inside the checkout. Each daemon pass deletes a log 7 days after its last write once no job, waiting removal, or replayed failure reads it. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
 Every chain commit the daemon builds, and every base it merges into a PR head, drops
@@ -1162,6 +1164,50 @@ arrive together, it takes a third; a repeated Ctrl-C, which Just does not
 forward, kills at the second. There is no fairness guarantee, and no timeout except
 `--quick`'s: any other command waits as long as the host stays busy.
 
+## Route work by size
+
+`quest` ranks the harnesses, models, and efforts that write work of each size,
+the same for every repository unless its `AGENTS.md` names others:
+
+| Size | Writer | Fallback |
+|---|---|---|
+| XS | Claude Code `claude-haiku-5-5` high | Codex `gpt-6.1-sol` low |
+| S | Claude Code `claude-opus-5-5` low | Codex `gpt-6.1-sol` medium |
+| M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
+| L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
+| XL | Claude Code `claude-opus-5-5` xhigh | none |
+
+`quest unblocked --json` lists each ready quest's ranked `models`: its size's
+list, or the next size's while a `Maintainer:` item under its `## Waiting`
+leaves a decision open, since settling it is part of the work; an XL stays
+XL. `/quest-spawn` starts a quest on the first entry that can run, and falls
+to the next only while nothing is written: when the CLI is missing or logged
+out, or the agent stops at its usage limit with nothing beyond the claim
+commit. Once a model writes, the PR is its own.
+
+A `/quest-iterate` stays on the PR's writer, the model its `## Models`
+record's first `Implementer:` line names, so the other model can always
+review it. The coordinator dispatching it sizes the work left on the PR, not
+the quest's original size, so a merge-and-record iterate on an L quest runs at
+XS, and `quest models` prints the entry to run:
+
+```console
+$ quest models XS
+claude	claude-haiku-5-5	high
+codex	gpt-6.1-sol	low
+
+$ quest models XS --writer claude-opus-5-5
+claude	claude-opus-5-5	low
+```
+
+`--writer` prints the size's entry for that model, or else its entry at the
+nearest size that lists it, the larger on a tie; a model no list names is an
+error. `--json` prints an array of `{harness, model, effort}` objects. The
+iterate records the size it was given in its `Implementer:` line, as
+`Implementer: Claude Code, claude-opus-5-5, low effort (iterate, XS)`, so
+the model check can audit the routing. `quest review` still reviews the
+whole branch at the PR's size.
+
 ## Review locally
 
 `quest review` has a model that wrote none of the code review the checkout's
@@ -1174,7 +1220,7 @@ size. Each size ranks its reviewers, the same for every repository:
 | S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
 | M, or none | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` medium |
 | L | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` high |
-| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
+| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` xhigh |
 
 A quest branch takes its quest's size, read from the base branch's tip so a
 change cannot lower its own review; any other PR, such as a skill's own, takes
@@ -1526,7 +1572,7 @@ repository; where several repositories use one, the other commands take the ID. 
 checkout, runs the command there, and once it exits kills any descendants it
 left behind. The command gets Quest's environment without Git's
 repository-location variables, such as `GIT_DIR` and `GIT_INDEX_FILE`, which a
-Git hook would otherwise point at the repository it ran in; `-c` config is kept. When no other run remains in the checkout, it releases it: the
+Git hook would otherwise point at the repository it ran in; `-c` config is kept. When no other run, nor a Claude Code session holding the checkout (see [Claude Code checkouts](#claude-code-checkouts)), remains, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
 job, such as an agent session or a script that installs, builds, and tests, in
 one run, since the next run starts without scratch.
@@ -1614,7 +1660,9 @@ entries into the file's `hooks`:
     "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
     "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
     "SubagentStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }]
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook", "timeout": 60 }] }]
   }
 }
 ```
@@ -1652,9 +1700,17 @@ agent ID, and a workflow agent's for its workflow run, so the hook binds a
 workflow agent's checkout to the first subagent that starts in it, the workflow
 agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it. A session's checkout, from
-`--worktree`, `EnterWorktree`, a background session, or remote control, is not
-released when the session stops; release it with `quest worktree release`.
+without its scratch until it reinstalls it.
+
+A session's checkout, from `--worktree`, `EnterWorktree`, a background session,
+or remote control, is held by the session that created it and by each session
+that starts in it, and released the same way once the last of them ends, except
+when `/clear` starts a new session in its place. A session that held it restores
+it on resuming, as does any session starting in it, with the same note. A background session that sits idle never
+ends, so its checkout stays held. Claude Code gives `SessionEnd` hooks at most a
+minute, which the entry's `timeout` asks for; a release cut short or failed
+leaves the checkout reserved with the failure in `quest worktree status`, until
+a session starts in it or `quest worktree release` finishes it.
 
 Claude never removes a subagent's or workflow agent's checkout itself, so
 remove a finished one with `quest worktree remove`, which also recovers one

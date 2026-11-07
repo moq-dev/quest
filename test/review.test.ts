@@ -306,13 +306,13 @@ test("each size's reviewer is the first whose model wrote none of the code", () 
 	expect(at("S", codex)).toBe("claude claude-opus-5-5 low");
 	expect(at("M", codex)).toBe("claude claude-opus-5-5 medium");
 	expect(at("L", codex)).toBe("claude claude-opus-5-5 high");
-	expect(at("XL", codex)).toBe("claude claude-opus-5-5 high");
+	expect(at("XL", codex)).toBe("claude claude-opus-5-5 xhigh");
 
 	// The PR's recorded implementers replace the running harness: Sol reviews Opus's code from Claude Code.
 	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
 	// No harness need be detected once the implementers are named.
-	expect(at("M", authored({ exclude: ["grok-4.7"] }, {}))).toBe("codex gpt-6.1-sol medium");
+	expect(at("M", authored({ exclude: ["other-model"] }, {}))).toBe("codex gpt-6.1-sol medium");
 	const both = authored({ exclude: ["gpt-6.1-sol", "claude-opus-5-5"] }, {});
 	expect(() => pickReviewer("M", {}, both)).toThrow("wrote the code; pass --harness and --model");
 
@@ -790,6 +790,35 @@ fakes("a differently named branch continues the session --branch names, and with
 	expect(own.stderr).toContain("has none to resume");
 });
 
+fakes("a branch tracking the PR's branch continues its session, and one tracking the base has its own", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).stdout).toContain("round 1\n");
+	write(s.repo, ".tmp/responses.md", "Fixed at src/lib.ts:1.\n");
+	const responses = join(s.repo, ".tmp", "responses.md");
+	git(s.repo, "checkout", "-qb", "temp");
+	git(s.repo, "config", "branch.temp.remote", "origin");
+	git(s.repo, "config", "branch.temp.merge", "refs/heads/feature");
+	const tracking = await quest("--root", s.repo, "review", "--responses", responses);
+	expect(tracking.stderr).toBe("");
+	expect(tracking.stdout).toContain("round 2\n");
+	git(s.repo, "checkout", "-qb", "other");
+	git(s.repo, "config", "branch.other.remote", "origin");
+	git(s.repo, "config", "branch.other.merge", "refs/heads/main");
+	const base = await quest("--root", s.repo, "review", "--responses", responses);
+	expect(base.code).toBe(2);
+	expect(base.stderr).toContain("has none to resume");
+});
+
+fakes("a detached checkout names the branches at its head to pass as --branch", async () => {
+	const s = setup();
+	git(s.repo, "checkout", "-q", "--detach");
+	const detached = await quest("--root", s.repo, "review");
+	expect(detached.code).toBe(2);
+	expect(detached.stderr).toContain(
+		"pass --branch to name the branch whose review session this continues, such as --branch feature",
+	);
+});
+
 fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
 	"a branch behind its base is reviewed from its merge base (host %s)",
 	async (host) => {
@@ -1079,7 +1108,8 @@ fakes("a change to the applicable instructions starts a new session that weighs 
  * `upstream/widget`, whose root holds the quest tree, and the PRs are upstream's. Returns the PR bodies
  * each PATCH wrote.
  */
-function onGitHub(repo: string, pulls: { number: number; body: string | null }[], fork = false): { body: string }[] {
+type FakePull = { number: number; body: string | null; comments?: unknown[] };
+function onGitHub(repo: string, pulls: FakePull[], fork = false): { body: string }[] {
 	const local = git(repo, "remote", "get-url", "origin");
 	git(repo, "remote", "set-url", "origin", "https://github.com/acme/widget.git");
 	git(repo, "config", `url.${local}.insteadOf`, "https://github.com/acme/widget.git");
@@ -1112,6 +1142,8 @@ function onGitHub(repo: string, pulls: { number: number; body: string | null }[]
 					: [],
 			);
 		}
+		const comments = new RegExp(`^/repos/${owner}/widget/issues/(\\d+)/comments$`).exec(url.pathname);
+		if (comments) return json(pulls.find((p) => p.number === Number(comments[1]))!.comments ?? []);
 		const patched = new RegExp(`^/repos/${owner}/widget/pulls/(\\d+)$`).exec(url.pathname);
 		if (patched && init?.method === "PATCH") {
 			const { body } = JSON.parse(String(init.body)) as { body: string };
@@ -1290,13 +1322,29 @@ fakes("a later round checks only what changed since the reviewed head, and the o
 fakes("the PR's Models record sizes the review and names the models that wrote it", async () => {
 	const s = setup();
 	const body = (...lines: string[]) => ["Body.", "", "## Models", "", ...lines].join("\n");
-	const pull = { number: 9, body: body("- Size: L", "- Implementer: Codex, gpt-6.1-sol, high effort") };
+	const pull: FakePull = { number: 9, body: body("- Size: L", "- Implementer: Codex, gpt-6.1-sol, high effort") };
 	onGitHub(s.repo, [pull]);
 	try {
 		// Sol wrote it, so Opus reviews it at L's effort, though Claude Code runs the command.
 		const sol = await quest("--root", s.repo, "review");
 		expect(sol.stderr).toBe("");
 		expect(sol.stdout).toContain("reviewer claude claude-opus-5-5 high\nsize L ## Models\n");
+
+		// A kix session that pushed later is on the App's sessions comment, so no L reviewer is left;
+		// a forged copy of the comment is ignored.
+		const sessions = (app: { id: number } | null) => ({
+			body: "<!-- quest:sessions -->\n\n## Models\n\n- Implementer: Claude Code, claude-opus-5-5, high effort\n",
+			performed_via_github_app: app,
+		});
+		pull.comments = [sessions({ id: 1 })];
+		const covered = await quest("--root", s.repo, "review", "--new");
+		expect(covered.code).toBe(2);
+		expect(covered.stderr).toContain("claude-opus-5-5");
+		pull.comments = [sessions(null)];
+		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
+			"reviewer claude claude-opus-5-5 high\n",
+		);
+		pull.comments = [];
 
 		// Flags override the record.
 		const flagged = await quest("--root", s.repo, "review", "--new", "--size", "XS", "--exclude-model", "x");

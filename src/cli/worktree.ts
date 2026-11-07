@@ -46,6 +46,12 @@ export interface WorktreeRecord {
 	failure?: string;
 	/** The Claude Code subagent bound to this checkout by `quest worktree hook`, when Claude's name for it carries none. */
 	agent?: string;
+	/**
+	 * The Claude Code sessions that created or started in a checkout `quest worktree hook` made for a session
+	 * rather than a subagent, by ID, and whether each still runs; absent on every other checkout. The last
+	 * one to end releases it. An ended one stays, since resuming it starts outside the checkout.
+	 */
+	sessions?: Record<string, boolean>;
 }
 interface Registry {
 	version: 1;
@@ -186,6 +192,11 @@ function footprint(path: string): number {
 	const admin = adminDir(path);
 	const seen = new Set<string>();
 	return diskUsage(path, seen) + (admin ? diskUsage(join(admin, "modules"), seen) : 0);
+}
+
+/** Whether a Claude Code session still runs in the checkout. */
+function inSession(record: WorktreeRecord): boolean {
+	return Object.values(record.sessions ?? {}).some(Boolean);
 }
 
 function interrupted(record: WorktreeRecord): void {
@@ -496,12 +507,12 @@ export class Worktrees {
 			return true;
 		}
 	}
-	/** Drops finished runs a crashed supervisor left behind, and releases a checkout none remain in. */
+	/** Drops finished runs a crashed supervisor left behind, and releases a checkout no run or session remains in. */
 	private reconcile(registry: Registry): void {
 		for (const record of [...registry.records]) {
 			if (!record.runs.length) continue;
 			record.runs = record.runs.filter((run) => this.running(run));
-			if (!record.runs.length) this.settle(registry, record);
+			if (!record.runs.length && !inSession(record)) this.settle(registry, record);
 		}
 	}
 	private idle(record: WorktreeRecord): void {
@@ -510,10 +521,10 @@ export class Worktrees {
 				`supervised runs are live in this checkout: ${record.runs.map((run) => run.unit).join(", ")}`,
 			);
 	}
-	/** Releases a checkout whose last run stopped, keeping it charged and noting why on failure. */
-	private settle(registry: Registry, record: WorktreeRecord): void {
+	/** Releases a checkout whose last run or session stopped, keeping it charged and noting why on failure. */
+	private settle(registry: Registry, record: WorktreeRecord, keep: readonly string[] = []): void {
 		try {
-			this.prune(registry, record);
+			this.prune(registry, record, keep);
 			delete record.failure;
 		} catch (error) {
 			record.failure = `release failed; the checkout stays reserved: ${message(error)}`;
@@ -860,6 +871,52 @@ export class Worktrees {
 			return record;
 		});
 	}
+	/** The checkouts a Claude Code session created or started in. */
+	held(session: string): WorktreeRecord[] {
+		return this.locked((registry) => registry.records.filter((record) => record.sessions?.[session] !== undefined));
+	}
+	/**
+	 * Marks a Claude Code session running in the checkout, which makes it a session's checkout, and reserves
+	 * it again. Returns the record as it was, whose phase and failure tell whether a release deleted scratch.
+	 */
+	attach(id: string, session: string): WorktreeRecord {
+		return this.locked((registry) => {
+			const record = this.find(registry, id);
+			if (!this.owned(record)) throw new Error(`checkout is missing; release drops its record: ${record.path}`);
+			const before = structuredClone(record);
+			this.activate(registry, record);
+			record.sessions = { ...record.sessions, [session]: true };
+			delete record.failure;
+			return before;
+		});
+	}
+	/**
+	 * Marks a session ended in every checkout it runs in. Unless `release` is false, a checkout no session or
+	 * supervised run still uses is then released, keeping `keep`. The release is recorded as a failure
+	 * first, so one cut short leaves the checkout reserved and saying so until a release or session finishes it.
+	 */
+	async detach(session: string, release: boolean, keep: readonly string[] = []): Promise<void> {
+		const pending = await this.lockedWait((registry) =>
+			registry.records.flatMap((record) => {
+				if (!record.sessions?.[session]) return [];
+				record.sessions[session] = false;
+				if (!release || inSession(record) || record.runs.length || record.phase !== "active") return [];
+				record.failure =
+					"release was cut short when its last Claude Code session ended; the checkout stays reserved until " +
+					"`quest worktree release` or a session starting in it finishes";
+				return [record.id];
+			}),
+		);
+		// One lock per checkout, so concurrent hooks wait out a short critical section rather than every release.
+		for (const id of pending)
+			await this.lockedWait((registry) => {
+				const record = registry.records.find((item) => item.id === id);
+				// A session or supervised run that started in between keeps the checkout.
+				if (!record) return;
+				if (!inSession(record) && !record.runs.length) this.settle(registry, record, keep);
+				else delete record.failure;
+			});
+	}
 	private activate(registry: Registry, record: WorktreeRecord): void {
 		if (record.phase === "active") return;
 		if (record.phase !== "released") throw new Error(`cannot use a ${record.phase} checkout`);
@@ -897,7 +954,8 @@ export class Worktrees {
 				retained.failure = result.error.message;
 			else current.runs = current.runs.filter((item) => item.unit !== run.unit);
 			// A command that never started, such as on a host without a user manager, keeps its scratch.
-			if (!current.runs.length && "code" in result) this.settle(registry, current);
+			// A Claude Code session still in the checkout keeps its scratch; the session's end releases it.
+			if (!current.runs.length && !inSession(current) && "code" in result) this.settle(registry, current);
 			return current.failure;
 		});
 		if ("error" in result) throw result.error;

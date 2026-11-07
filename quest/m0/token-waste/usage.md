@@ -50,7 +50,8 @@ Agent's choices, for the implementer to revisit:
 - When `ccusage` is not installed, say how to install it and still report
   the review record.
 - Accuracy comes from the PR record: the body's `## Models` size and
-  implementers, and each `## Review` round's reviewer, score, and findings
+  implementers, plus those on the sessions comment a GitHub App wrote
+  (marked `<!-- quest:sessions -->`, as `quest review` reads it), and each `## Review` round's reviewer, score, and findings
   with their dispositions; follow-up fixes are later PRs that list it under
   `## Caused by` (`quest context`'s Pull requests section).
 - Output: a table per quest or PR, a rollup by size, role, and model, and

@@ -96,7 +96,6 @@ ownership-manifest design:
 
 - [Land through a serial merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue, or the watcher's own where GitHub has none, lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [quest review continues older sessions](/quest/m0/review-old-state.md) - a review session saved by an older quest continues, or is refused before the reviewer runs
-- [Review sessions keyed by upstream branch](/quest/m0/review-session-key.md) - a round from a local branch tracking the PR branch continues that branch's review session
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the first model of its size's ranked list that can run, reviews rank the same way, and PRs record size, implementer, and reviewer
 - [Repositories and hosts follow quest's main](/quest/m0/pin-sync.md) - every push to main reaches each enrolled repository and host through a bot-queued pin bump
@@ -105,6 +104,5 @@ ownership-manifest design:
 - [Codex cloud off](/quest/m0/codex-cloud-off.md) - automatic Codex cloud reviews stop once no open PR relies on them
 - [Codex project-config skip](/quest/m0/codex-project-config.md) - once Codex keeps a supported way to skip a project's `.codex/` layer, reviews keep the user's config
 - [Agents get the dev shell from user settings](/quest/m0/user-dev-shell/README.md) - maintainers' own Claude and Codex settings load the dev shell; repositories drop dev-shell hooks, Quest worktree hooks, and `nix develop` instructions, and `quest init` writes no hooks
-- [Session checkouts released](/quest/m0/session-checkouts.md) - a Claude session's own checkout is released when the session ends and reclaimed on resume
 - [claude rm upstream report](/quest/m0/claude-rm-upstream.md) - posting approved: ask Claude Code to run `WorktreeRemove` instead of advising an unlock
 - [Three generic rules in the shared context](/quest/m0/context-rules.md) - `quest context` adds matching conventions, never loosening a flaky test, and short names under a namespace

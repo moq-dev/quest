@@ -1970,7 +1970,14 @@ describe("quest runner", () => {
 		expect(r.hub.of("status").some((s) => s.attempts.length === 1 && s.slots === 1)).toBe(true);
 		expect(r.hub.of("checkpoint")).toMatchObject([{ summary: "Wrote a.txt", session: expect.any(String) }]);
 		const [checkpoint, delivery] = r.publishes;
-		expect(checkpoint).toMatchObject({ job: "job1", attempt: 1, head: null, message: "Wrote a.txt" });
+		expect(checkpoint).toMatchObject({
+			job: "job1",
+			attempt: 1,
+			head: null,
+			message: "Wrote a.txt",
+			// kix records the session from each publication on a pull request whose text it does not write.
+			implementer: "Implementer: claude, claude-test, high effort",
+		});
 		expect(checkpoint!.changes).toEqual([{ path: "a.txt", content: Buffer.from("first\n").toString("base64") }]);
 		expect(delivery).toMatchObject({
 			head: "0".repeat(39) + "1",
