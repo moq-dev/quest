@@ -40,6 +40,7 @@ import {
 	requeuedHeads,
 } from "./land-watch-fix";
 import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
+import { pruneLogs } from "./land-prune";
 import { enabledHead, headBefore } from "./status";
 
 export { readRemoval } from "./land-watch-fix";
@@ -817,6 +818,7 @@ export async function watch(
 			read,
 		};
 		await daemonLoop(async () => {
+			pruneLogs(options.state, deps.now());
 			const api = new GitHub(probe);
 			const base = options.base ?? (await defaultBranch(api, repository));
 			if (await ownQueue(api, repository, base)) {
