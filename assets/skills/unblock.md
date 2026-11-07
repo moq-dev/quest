@@ -1,6 +1,6 @@
 ---
 description: Walk the maintainer through every quest and draft PR waiting on them, and clear waits that have resolved.
-guide: Format, Creation, Deletion, Summaries
+guide: Format, Creation, Deletion, Coordination, Summaries
 skills: grill, plan
 ---
 

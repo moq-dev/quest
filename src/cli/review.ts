@@ -272,7 +272,7 @@ export type ReviewOptions = BaseOptions & {
 	fresh?: boolean;
 	/**
 	 * The branch whose session the round continues, instead of the checked-out
-	 * one; required on a detached `HEAD`.
+	 * one or its upstream; required on a detached `HEAD`.
 	 */
 	branch?: string;
 	/** Stops the reviewer CLI, failing the round; the session keeps its earlier rounds. */
@@ -1170,10 +1170,13 @@ export function parseState(value: unknown): State {
 
 /**
  * The branch whose session a round continues: `name`, checked as a branch
- * name, or else the checked-out branch. A detached `HEAD`, such as a checkout
- * of a branch another worktree holds, has none of its own.
+ * name, or else the checked-out branch's upstream branch, without its remote,
+ * so a temporary branch tracking the PR's head continues the head's session.
+ * An upstream that is the base `baseBranch` names no PR, so such a branch keys
+ * by its own name. A detached `HEAD`, such as a checkout of a branch another
+ * worktree holds, has none of its own.
  */
-function sessionBranch(root: string, name: string | undefined): string {
+function sessionBranch(root: string, name: string | undefined, baseBranch: string): string {
 	if (name !== undefined) {
 		try {
 			return git(root, ["check-ref-format", "--branch", name]);
@@ -1181,13 +1184,46 @@ function sessionBranch(root: string, name: string | undefined): string {
 			throw new ReviewInputError(`--branch is not a valid branch name: ${name}`);
 		}
 	}
+	let local: string;
 	try {
-		return git(root, ["symbolic-ref", "--short", "HEAD"]);
+		local = git(root, ["symbolic-ref", "--short", "HEAD"]);
 	} catch {
-		throw new ReviewInputError(
-			"HEAD is detached; pass --branch to name the branch whose review session this continues",
-		);
+		throw new ReviewInputError(detachedMessage(root, baseBranch));
 	}
+	let merge = "";
+	try {
+		merge = git(root, ["config", "--get", `branch.${local}.merge`]);
+	} catch {
+		// No upstream.
+	}
+	const upstream = merge.startsWith("refs/heads/") ? merge.slice("refs/heads/".length) : "";
+	return upstream === "" || upstream === baseBranch ? local : upstream;
+}
+
+/** The detached-`HEAD` refusal, naming the branches whose tip is `HEAD` so the next call can pass one. */
+function detachedMessage(root: string, baseBranch: string): string {
+	const message = "HEAD is detached; pass --branch to name the branch whose review session this continues";
+	const remotes = git(root, ["remote"]).split("\n").filter(Boolean);
+	const names = new Set<string>();
+	const refs = git(root, [
+		"for-each-ref",
+		"--points-at",
+		"HEAD",
+		"--format=%(refname)",
+		"refs/heads",
+		"refs/remotes",
+	]);
+	for (const ref of refs.split("\n").filter(Boolean)) {
+		let branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
+		if (branch === undefined) {
+			const rest = ref.slice("refs/remotes/".length);
+			const remote = remotes.filter((r) => rest.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
+			if (remote !== undefined) branch = rest.slice(remote.length + 1);
+		}
+		if (branch !== undefined && branch !== "HEAD" && branch !== baseBranch) names.add(branch);
+	}
+	if (names.size === 0) return message;
+	return `${message}, such as ${[...names].map((n) => `--branch ${n}`).join(" or ")}`;
 }
 
 type ModelsRecord = ReturnType<typeof recorded> | null | undefined;
@@ -1221,7 +1257,6 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		throw new ReviewInputError("quest review does not support native Windows yet; use WSL");
 	const root = git(options.root, ["rev-parse", "--show-toplevel"]);
 
-	const branch = sessionBranch(root, options.branch);
 	if (git(root, ["status", "--porcelain"]) !== "") {
 		throw new ReviewInputError(
 			"the checkout has uncommitted changes; commit them, since only the committed branch is reviewed",
@@ -1231,6 +1266,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	// The reviewer's sandbox has no network, so the base is fetched first, and the size is read from it.
 	const baseRef = options.fetched ? options.base : await fetchBase(root, options.base);
 	const { remote, branch: baseBranch } = parseBase(root, baseRef);
+	const branch = sessionBranch(root, options.branch, baseBranch);
 	const tracking = `refs/remotes/${remote}/${baseBranch}`;
 	const baseSha = git(root, ["rev-parse", "--verify", `${tracking}^{commit}`]);
 	// The PR's own record names its size and implementers, so the author passes neither as a flag.

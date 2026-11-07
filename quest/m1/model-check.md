@@ -27,7 +27,7 @@ the size tables of [model routing](/quest/m0/model-routing/README.md):
 
 Audit the routing from the records of the PRs merged since the last run,
 with [`quest usage`](/quest/m0/token-waste/usage.md) once it lands: each body's
-`## Models` size and implementers and its `## Review` reviewer. Tally each implementer by the size
+`## Models` size and implementers, plus those on kix's sessions comment, and its `## Review` reviewer. Tally each implementer by the size
 on its own `Implementer:` line where it carries one, such as `(iterate, XS)`,
 not the PR's `## Models` size, so a small iterate on a large PR counts as the
 work it was routed for:

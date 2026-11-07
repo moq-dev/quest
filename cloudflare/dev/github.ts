@@ -1268,7 +1268,29 @@ export function fakeGitHub(world: World) {
 		if (comment && method === "GET") {
 			const item = [...repo.pulls, ...repo.issues].find((i) => String(i.number) === comment[1]);
 			if (!item) return notFound();
-			return json((item.comments ?? []).map((c) => ({ body: c.body, user: { login: c.author } })));
+			const bot = `${world.app.slug}[bot]`;
+			const page = Number(url.searchParams.get("page") ?? 1);
+			const size = Number(url.searchParams.get("per_page") ?? 30);
+			return json(
+				(item.comments ?? [])
+					.map((c, i) => ({
+						id: item.number * 1000 + i,
+						body: c.body,
+						user: { login: c.author },
+						performed_via_github_app: c.author === bot ? { id: world.app.id } : null,
+					}))
+					.slice((page - 1) * size, page * size),
+			);
+		}
+		const edited = tail.match(/^\/issues\/comments\/(\d+)$/);
+		if (edited && method === "PATCH") {
+			if (!writes("issues") && !writes("pull_requests")) return forbidden();
+			const id = Number(edited[1]);
+			const item = [...repo.pulls, ...repo.issues].find((i) => i.number === Math.floor(id / 1000));
+			const found = item?.comments?.[id % 1000];
+			if (!found || found.author !== `${world.app.slug}[bot]`) return notFound();
+			found.body = String(body.body);
+			return json({ id, body: found.body });
 		}
 		if (comment && method === "POST") {
 			if (!writes("issues") && !writes("pull_requests")) return forbidden();
