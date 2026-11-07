@@ -10,16 +10,20 @@ import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
-import { delegated, nest, questScope, systemdScopes } from "./supervise";
+import { delegated, nest, questScope, startTime, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
- * the gate that runs it, which holds a slot until that command ends.
+ * the gate that runs it, which holds a slot until that command ends, with when that gate started
+ * (see `processStart`), so a reused process ID holds nothing. `host` marks a command that holds the
+ * whole host (see `Precedence`), from when it starts waiting until it ends.
  */
 export interface Admission {
 	id: string;
 	at: number;
 	pid?: number;
+	host?: boolean;
+	start?: string;
 }
 
 /** One version of the host's admission ledger. Versions only grow; 0 is the empty ledger. */
@@ -55,7 +59,7 @@ export interface Limits {
 	memory: number;
 }
 
-export type Waiting = "load" | "memory";
+export type Waiting = "load" | "memory" | "host" | "commands";
 
 /**
  * Admissions that only fit the host's raw load and memory, not its headroom,
@@ -85,10 +89,15 @@ export const QUICK_MS = RECENT_MS;
  * - `quick`: wait at most QUICK_MS, then start whatever the load and memory.
  *   For a command too cheap to be worth holding back, such as a formatter or a
  *   linter. Once started, it holds a slot like any admission.
+ * - `host`: hold the whole host, for work that other work would disturb, such
+ *   as a benchmark. It reserves the host at once, so no other caller is
+ *   admitted while it waits, then starts once no other gated command runs.
+ *   Every other caller, whatever its precedence, waits until it ends.
  */
 export interface Precedence {
 	priority?: boolean;
 	quick?: boolean;
+	host?: boolean;
 }
 
 /** The memory one gated build or test stack is assumed to need. */
@@ -245,7 +254,9 @@ function parse(text: string): Admission[] {
 			(entry: Partial<Admission>) =>
 				typeof entry?.id === "string" &&
 				Number.isFinite(entry?.at) &&
-				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)),
+				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)) &&
+				(entry.host === undefined || entry.host === true) &&
+				(entry.start === undefined || typeof entry.start === "string"),
 		);
 	return valid ? (value as Admission[]) : [];
 }
@@ -259,6 +270,29 @@ export function alive(pid: number): boolean {
 		// EPERM: it exists, but belongs to another user.
 		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
+}
+
+/**
+ * When a process started, so that a reused process ID never passes for the one recorded: on Linux
+ * the boot's ID and the start time in clock ticks since boot, on macOS the start date `ps` reports
+ * in UTC, whatever the caller's time zone and locale. Undefined once the process is gone, and on
+ * Windows, which offers neither cheaply.
+ */
+export function processStart(pid: number): string | undefined {
+	if (process.platform === "linux") {
+		try {
+			return `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()} ${startTime(pid)}`;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			throw error;
+		}
+	}
+	if (process.platform !== "darwin") return undefined;
+	const ps = spawnSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+		encoding: "utf8",
+		env: { TZ: "UTC", LC_ALL: "C" },
+	});
+	return (ps.status === 0 && ps.stdout.trim()) || undefined;
 }
 
 /**
@@ -313,7 +347,10 @@ export function fileHost(directory: string, now = Date.now): Host {
 					? linuxMemory().available
 					: process.availableMemory(),
 		now,
-		running: (admission) => admission.pid !== undefined && alive(admission.pid),
+		running: (admission) =>
+			admission.pid !== undefined &&
+			alive(admission.pid) &&
+			(admission.start === undefined || processStart(admission.pid) === admission.start),
 		ledger,
 		publish(base, admissions) {
 			mkdirSync(directory, { recursive: true });
@@ -372,6 +409,10 @@ export function fileHost(directory: string, now = Date.now): Host {
  * one, the load is work the gate cannot wait out, as on a freshly booted macOS
  * runner, so the raw load counts as having room.
  *
+ * A running command that holds the host keeps everyone else waiting; one that
+ * waits to hold it ignores load and memory, and waits only for the gated
+ * commands still running to end (see `Precedence`).
+ *
  * Each caller decides against the newest ledger and publishes its admission
  * atomically, so concurrent callers never exceed the rule and one always wins
  * while it has room. No fairness promise, and no admission timeout except a
@@ -385,6 +426,8 @@ export async function admit(
 	precedence: Precedence = {},
 ) {
 	const id = randomUUID();
+	// Every admission names its gate's start, so a reused process ID holds no slot, as for a host holder.
+	const self = { pid: process.pid, start: processStart(process.pid) };
 	const deadline = precedence.quick ? host.now() + QUICK_MS : Infinity;
 	for (;;) {
 		signal.throwIfAborted();
@@ -404,9 +447,26 @@ export async function admit(
 			);
 			continue;
 		}
+		// A command holding the host keeps every other caller out until it ends, quick or not.
+		if (kept.some((admission) => admission.host && admission.id !== id && running.has(admission))) {
+			waiting?.("host");
+			await host.sleep(SETTLE_MS, signal);
+			continue;
+		}
+		if (precedence.host) {
+			// Reserve the host first, so no other caller is admitted while this one waits for the rest.
+			if (!kept.some((admission) => admission.id === id))
+				host.publish(ledger, [...kept, { id, at: now, ...self, host: true }]);
+			else if (!kept.some((admission) => admission.id !== id && running.has(admission))) return;
+			else {
+				waiting?.("commands");
+				await host.sleep(SETTLE_MS, signal);
+			}
+			continue;
+		}
 		if (now >= deadline) {
 			// Recorded like any admission, so it still counts against the others' headroom.
-			if (host.publish(ledger, [...kept, { id, at: now, pid: process.pid }])) return;
+			if (host.publish(ledger, [...kept, { id, at: now, ...self }])) return;
 			continue;
 		}
 		// Priority ignores load, whether or not a gated command runs; memory still applies.
@@ -424,7 +484,7 @@ export async function admit(
 				// A caller descheduled since sampling would record a stale time, which lets the
 				// next one skip its spacing; decide again once the stall reaches that interval.
 				const at = host.now();
-				if (at - now < SETTLE_MS && host.publish(ledger, [...kept, { id, at, pid: process.pid }])) return;
+				if (at - now < SETTLE_MS && host.publish(ledger, [...kept, { id, at, ...self }])) return;
 				continue;
 			}
 		}
@@ -604,10 +664,14 @@ export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
 const notices: Record<Waiting, string> = {
 	load: "quest gate: waiting for the load average to fall",
 	memory: "quest gate: waiting for free memory",
+	host: "quest gate: waiting for a command holding the whole host to end",
+	commands: "quest gate: holding the host, waiting for gated commands to end",
 };
 
 /** Run from the CLI. */
-export async function gate(command: string[], options: { quick?: boolean } = {}): Promise<number> {
+export async function gate(command: string[], options: { quick?: boolean; host?: boolean } = {}): Promise<number> {
+	// Without a start time, a reused process ID could hold the host for good (see `processStart`).
+	if (options.host && process.platform === "win32") throw new Error("quest gate --host is unsupported on Windows");
 	const cancel = interrupts();
 	try {
 		const run = owner();
@@ -620,7 +684,11 @@ export async function gate(command: string[], options: { quick?: boolean } = {})
 					shown.add(reason);
 					process.stderr.write(`${notices[reason]}\n`);
 				};
-				const precedence = { priority: process.env[PRIORITY] === "1", quick: options.quick };
+				const precedence = {
+					priority: process.env[PRIORITY] === "1",
+					quick: options.quick,
+					host: options.host,
+				};
 				await admit(hostLimits(), fileHost(claimDirectory()), cancel.signal, notice, precedence);
 			} catch (error) {
 				if (cancel.signal.aborted) return cancelled(cancel.signal);

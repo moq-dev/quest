@@ -30,6 +30,14 @@ Recommendations for the implementer:
   case each in `quest hook` (`src/cli/hooks.ts`), beside its `SessionStart`
   and `SubagentStart` entries, since repositories write no hooks. Give Codex
   the equivalent `hooks.json` entries where its hooks can match.
+- Codex parity for the always-on rules too (coordinator, 2026-11-05,
+  follow-up of [moq-dev/quest#517](https://github.com/moq-dev/quest/pull/517),
+  which gave Claude Code the `SessionStart` rules hook and Codex none):
+  `quest setup` writes the same `SessionStart` entry (`compact` included)
+  to `~/.codex/hooks.json`, with an `additionalContextLimit` that fits the
+  rules. `quest review` runs Codex with `--ignore-user-config`; confirm in
+  a review transcript that this keeps the user hook out of reviews, and
+  keep it out if not. Codex asks to trust each hook once through `/hooks`.
 - Keep a check narrow enough that it never blocks legitimate work: a force
   push the user asked for, an em dash quoted from someone else, `/tmp` used
   by a tool rather than for agent scratch. A check that cannot tell these

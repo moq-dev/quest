@@ -31,7 +31,7 @@ export interface Owner {
 }
 
 /** Field 22 of /proc/<pid>/stat; the command name in parentheses may hold spaces. */
-function startTime(pid: number): string | undefined {
+export function startTime(pid: number): string | undefined {
 	if (process.platform !== "linux") return undefined;
 	const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
 	return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
