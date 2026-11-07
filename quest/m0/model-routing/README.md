@@ -95,5 +95,4 @@ are mostly judgment.
 
 ## Required
 
-- [kix records its follow-up sessions](/quest/m0/model-routing/kix-sessions.md) - kix `iterate` and `merge` jobs that change an existing PR record their `Implementer:` line in a PR comment
 - [moq-dev pins](/quest/m0/model-routing/pins.md) - moq-dev/moq and moq-dev/moq.pro bump their `quest` pin to pick up the routing

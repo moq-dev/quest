@@ -13,7 +13,13 @@ import {
 } from "quest/core";
 import { checksState, latestContexts } from "../../../src/github/checks";
 import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../../../src/github/merge";
-import { implementers, withModels } from "../../../src/github/models";
+import {
+	type Comment as RestComment,
+	implementers,
+	sessionsComment,
+	withModels,
+	withSession,
+} from "../../../src/github/models";
 import { BODY_LIMIT } from "../jobs/trail";
 import { osiApproved } from "../licenses";
 import { CI_PERMISSIONS, type CIPermission, ciProblems } from "./ci";
@@ -1888,6 +1894,33 @@ export class GitHubService {
 				body: approvedBody,
 			}),
 		);
+	}
+
+	/**
+	 * Add `line`, a session's `Implementer:` item, to the App's sessions comment on `pull`, posting it on first use.
+	 * Editing the body instead would make the App its last editor, which voids the author's `## Review` record.
+	 */
+	recordSession(repo: GitHubRepository, userId: string, pull: number, line: string) {
+		return this.#authorized(repo, userId, { issues: "write" }, async (token) => {
+			const path = `${repositoryPath(repo)}/issues/${number(pull)}/comments`;
+			const app = Number(this.#env.GITHUB_APP_ID);
+			let found: (RestComment & { id: number }) | undefined;
+			for (let page = 1; !found; page++) {
+				const comments = await this.#api<(RestComment & { id: number })[]>(
+					token,
+					`${path}?per_page=100&page=${page}`,
+				);
+				found = sessionsComment(comments, app);
+				if (comments.length < 100) break;
+			}
+			const body = withSession(found?.body ?? null, line);
+			if (body === null) return;
+			if (found)
+				await this.#api(token, `${repositoryPath(repo)}/issues/comments/${number(found.id)}`, "PATCH", {
+					body,
+				});
+			else await this.#api(token, path, "POST", { body });
+		});
 	}
 
 	/**

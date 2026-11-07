@@ -1045,7 +1045,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never a model " +
 				`that wrote the code. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The first ` +
 				"whose model wrote none of the code reviews. The models that wrote it are --exclude-model's; without " +
-				"it, they are those the Implementer lines of the `## Models` record in the body of the branch's open PR " +
+				"it, they are those the Implementer lines of the `## Models` record in the body of the branch's open PR, and of kix's sessions comment on it, " +
 				"name and, unless those name every one with no `unknown` model or --harness names the reviewer, any " +
 				"model of the harness running this command, detected from the variables each sets, so Codex reviews " +
 				"from Claude Code and Claude Code from Codex. " +

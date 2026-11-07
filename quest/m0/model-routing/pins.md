@@ -24,7 +24,3 @@ repository uses the same settings, so nothing in them changes but the pin.
   [moq-dev/quest#518](https://github.com/moq-dev/quest/pull/518), which
   accepts both formats; [Pin sync](/quest/m0/pin-sync.md) does the same for
   its automated bumps).
-
-## Required
-
-- [kix records its follow-up sessions](/quest/m0/model-routing/kix-sessions.md) - the last other quest in the epic, which the bumped commit must hold
