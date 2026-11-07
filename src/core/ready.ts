@@ -7,7 +7,7 @@
 // coherent, and already done by some other PR - and answering it means asking
 // the forge, so it belongs to the flow that is already talking to it.
 
-import { type Doc, children, entries, has, holds, isEpic, rooted } from "./doc";
+import { type Doc, children, entries, has, isEpic, rooted } from "./doc";
 import { comparePaths, normalize } from "./path";
 
 /** One thing standing between a quest and being started. */
@@ -84,6 +84,7 @@ function expand(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]
 	// everything that greps for it, including `quest check`, which reports it.
 	// Calling it ready here would make this the one tool that disagrees.
 	const required = entries(doc, "Required");
+	const kids = children(docs, doc);
 	if (has(doc, "Required") && required.length === 0) {
 		found.push({
 			path: null,
@@ -95,12 +96,11 @@ function expand(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]
 		// A bullet that does not open with a link into the tree is invalid, and
 		// nothing here can clear it, so it is a blocker with nothing under it.
 		const target = entry.target === null ? null : rooted(entry.target);
-		// A link to a quest the epic holds is listed below, with its children; a
-		// broken one stays, since no child stands in for it.
-		if (target !== null && byPath.has(target) && holds(doc.path, target)) continue;
+		// An old child list's entry is listed below, with the children.
+		if (target !== null && kids.includes(target)) continue;
 		found.push(blocker(docs, byPath, target !== null && byPath.has(target) ? target : null, entry.text, stack));
 	}
-	for (const child of children(docs, doc)) found.push(blocker(docs, byPath, child, child, stack));
+	for (const child of kids) found.push(blocker(docs, byPath, child, child, stack));
 	return found;
 }
 

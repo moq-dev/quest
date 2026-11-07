@@ -206,14 +206,15 @@ export function isEpic(docs: readonly Doc[], doc: Doc): boolean {
 
 /**
  * What must finish before `doc`: its `Required` quests, then, for an epic, its
- * children. An epic's `Required` link to a quest it holds, left from a tree
- * that listed children, is one of those children rather than a blocker.
+ * children. An epic's `Required` link to one of its children, left from a tree
+ * that listed them, counts once.
  */
 export function requires(docs: readonly Doc[], doc: Doc): string[] {
+	const kids = children(docs, doc);
 	const required = entries(doc, "Required")
 		.map((entry) => (entry.target === null ? null : rooted(entry.target)))
-		.filter((target): target is string => target !== null && !holds(doc.path, target));
-	return [...required, ...children(docs, doc)];
+		.filter((target): target is string => target !== null && !kids.includes(target));
+	return [...required, ...kids];
 }
 
 /**

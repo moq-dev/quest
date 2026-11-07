@@ -210,9 +210,8 @@ function links(found: Finding[], exists: (path: string) => boolean, known: Set<s
 /**
  * Every document sits in an epic: its directory has a README, and so does
  * each directory above it up to the root, so the tree reaches it. Every
- * `Required` entry is a quest, required once. An epic may still list quests it
- * holds, as trees from before directory membership do; they count once, as its
- * children.
+ * `Required` entry is a quest, required once. An epic may still list its
+ * children, as trees from before directory membership do; each counts once.
  *
  * A condition outside the repository (a release, a customer, a person) is a
  * quest of its own rather than a plain-text bullet: a blocked quest drops out

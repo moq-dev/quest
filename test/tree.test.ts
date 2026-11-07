@@ -294,22 +294,26 @@ describe("epics", () => {
 	});
 
 	// Trees from before directory membership still list each epic's children.
-	// A link to a quest the epic holds is membership, so it counts once.
+	// Such a link is membership, so it counts once.
 	test.each([
 		["quest/README.md", "/quest/m0/README.md"],
 		["quest/m0/README.md", "/quest/m0/epic/README.md"],
-		["quest/m0/README.md", "/quest/m0/epic/one.md"],
 		["quest/m0/epic/README.md", "/quest/m0/epic/one.md"],
-	])("%s requiring %s, which it holds", (readme, target) => {
+	])("%s requiring its child %s", (readme, target) => {
 		const listed = tree().append(readme, `\n## Required\n\n- [Held](${target})\n`);
 		listed.accepts();
 		expect(listed.ready()).toEqual(tree().ready());
 		expect(listed.blockers(readme)).toEqual(tree().blockers(readme));
 	});
 
-	test("a held link to no quest still blocks", () => {
-		const t = tree().append("quest/m0/epic/README.md", "\n## Required\n\n- [Gone](/quest/m0/epic/gone.md)\n");
-		expect(t.blockers("quest/m0/epic/README.md")[0]).toBe("Gone");
+	// Only a child stands in for a link: a deeper quest, or a link to no quest,
+	// stays a blocker, as on a tree that listed children.
+	test.each([
+		["/quest/m0/epic/one.md", "quest/m0/epic/one.md"],
+		["/quest/m0/gone.md", "Gone"],
+	])("quest/m0/README.md requiring %s, which is not its child", (target, rendered) => {
+		const t = tree().append("quest/m0/README.md", `\n## Required\n\n- [Gone](${target})\n`);
+		expect(t.blockers("quest/m0/README.md")[0]).toBe(rendered);
 	});
 
 	test("a quest required twice", () => {
