@@ -65,7 +65,3 @@ Earlier guidance:
 - Cover the real prompt loop in integration tests, including simultaneous
   starts, a stale PR head, a blocked decision, an exhausted account, and a
   runner going offline mid-job.
-
-## Required
-
-- [Job sandbox](/quest/m0/kix/sandbox/README.md) - iterate and merge jobs on approved kix-pushed heads, with opencode sandboxed
