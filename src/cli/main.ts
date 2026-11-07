@@ -887,7 +887,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.action((id: string) => record(state().restore(id)));
 	worktree
 		.command("hook")
-		.summary("Handle a Claude Code worktree or subagent hook event read on stdin")
+		.summary("Handle a Claude Code worktree, subagent, or session hook event read on stdin")
 		.description(
 			"Handle the Claude Code hook event whose JSON input arrives on stdin, for " +
 				HOOK_EVENTS.join(", ") +
@@ -901,7 +901,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"restored instead. WorktreeRemove removes the checkout as `remove` does, so Claude keeps one holding " +
 				"unpreserved work. SubagentStop releases the subagent's own checkout, named agent-<agent_id> by Claude, " +
 				"or a workflow agent's, named for its run and bound to the first subagent that starts in it, " +
-				"when it finishes or stops to wait, keeping its .tmp/ workspace for the parent to read until removal, and SubagentStart restores it. Other checkouts are left alone. " +
+				"when it finishes or stops to wait, keeping its .tmp/ workspace for the parent to read until removal, and SubagentStart restores it. " +
+				"Every other checkout WorktreeCreate makes is a session's: SessionEnd releases it the same way once no session that " +
+				"created it or started in it is left, except when /clear starts another in its place, and SessionStart restores it. " +
+				"Other checkouts are left alone. " +
 				"Exits 1 on failure, never 2, which would keep a subagent running.",
 		)
 		.action(() => {
