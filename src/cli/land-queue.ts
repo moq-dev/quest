@@ -255,13 +255,17 @@ class Queue {
 		rmSync(buildPath(this.queue.state), { force: true });
 	}
 
-	/** Delete the queue branches of this base that no build holds, as a crashed daemon leaves them. */
+	/**
+	 * Clear the queue branches of this base that no build holds, as a daemon that crashed between a push
+	 * and its record leaves them, cancelling their runs so none holds the queue runner.
+	 */
 	async prune(keep?: string): Promise<void> {
 		const prefix = `refs/heads/${queuePrefix(this.base)}`;
 		const listing = await this.queue.read(this.queue.root, ["ls-remote", this.remote, `${prefix}*`]);
 		for (const line of listing.split("\n").filter(Boolean)) {
 			const ref = line.split("\t")[1];
-			if (ref.startsWith(prefix) && ref !== `refs/heads/${keep}`) await this.delete(ref);
+			if (ref.startsWith(prefix) && ref !== `refs/heads/${keep}`)
+				await this.clear(ref.slice("refs/heads/".length));
 		}
 	}
 

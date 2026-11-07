@@ -4486,13 +4486,25 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(queued(forge, 1)).toBeNull();
 	});
 
-	test("a held pick keeps its place unbuilt, and stale queue branches are pruned on the first pass", async () => {
+	test("a held pick keeps its place unbuilt, and stale queue branches and their runs are cleared on the first pass", async () => {
 		const { forge, pass } = setup();
 		const one = forge.pull("One", { "one.txt": "1\n" });
 		forge.pull("Two", { "two.txt": "2\n" });
 		one.labels = ["quest:active"];
+		// A build a crashed daemon pushed but never recorded, still running.
 		git(forge.origin, "update-ref", `refs/heads/${queueBranch("main", 9)}`, forge.main());
+		(forge.repo.actionRuns ??= []).push({
+			id: 99,
+			name: "Queue",
+			head_branch: queueBranch("main", 9),
+			head_sha: forge.main(),
+			status: "in_progress",
+			conclusion: null,
+			html_url: "https://github.com/upstream/project/actions/runs/99",
+			jobs: [],
+		});
 		expect(await pass()).toEqual(["building 2"]);
+		expect(forge.repo.actionRuns![0].conclusion).toBe("cancelled");
 		expect(
 			spawnSync("git", ["-C", forge.origin, "rev-parse", `refs/heads/${queueBranch("main", 9)}`]).status,
 		).not.toBe(0);

@@ -789,7 +789,9 @@ export async function watch(
 		const github = watchPermissions(fixing);
 		const own = watchPermissions(fixing, true);
 		const mint = (wanted: Permissions) => installationToken(repository, options, wanted, now);
-		// Each mode's token is minted only once a pass needs it.
+		// Each mode's token is minted only once a pass needs it, and the mode is read with neither, so an
+		// installation granted only one mode's permissions still runs it.
+		const probe = apiDependencies(() => mint({ contents: "read" }), { ...now, sleep, warn });
 		const deps = apiDependencies(() => mint(github.api), { ...now, sleep, warn });
 		const ownDeps = apiDependencies(() => mint(own.api), { ...now, sleep, warn });
 		const token = (workflows: boolean) => mint(workflows ? own.pushWorkflows! : own.push!);
@@ -815,7 +817,7 @@ export async function watch(
 			read,
 		};
 		await daemonLoop(async () => {
-			const api = new GitHub(deps);
+			const api = new GitHub(probe);
 			const base = options.base ?? (await defaultBranch(api, repository));
 			if (await ownQueue(api, repository, base)) {
 				const pass = await ownPass(repository, base, queue, ownDeps, fix);

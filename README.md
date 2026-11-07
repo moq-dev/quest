@@ -827,7 +827,8 @@ base's rules have a `merge_queue` rule, and otherwise
 which offers no merge queue. Each pass reads the base's rules
 (`GET /rules/branches/<base>`) and picks the mode from them, so enabling
 GitHub's queue on a repository switches its watcher with no host change; a
-pass that cannot read them does nothing. On GitHub's queue it tells each PR the queue
+pass that cannot read them does nothing. It reads them with a `contents: read`
+token, so an installation granted only one mode's permissions runs it. On GitHub's queue it tells each PR the queue
 drops unmerged why. With `--fixer`, it also runs the land fixer on each PR the
 queue dropped for a failure or a conflict, and puts it back at the back of the
 queue. It polls; the host needs no public endpoint.
