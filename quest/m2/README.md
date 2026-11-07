@@ -17,4 +17,3 @@ additional login providers. This milestone does not gate the public release.
 - [Donor isolation](/quest/m2/donor-isolation.md) - stronger boundaries for untrusted shared jobs
 - [ChatGPT hosted runs](/quest/m2/chatgpt-hosted.md) - conditional on provider approval and current terms
 - [ChatGPT approval](/quest/m2/chatgpt-waitlist.md) - resolve hosted-use approval before implementation
-- [Worktree hook PATH error](/quest/m2/hook-path-error.md) - a worktree hook without `quest` on `PATH` says so and names the dev-shell launch route

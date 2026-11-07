@@ -21,7 +21,7 @@ import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from 
 import { GitHub, mergedHead } from "../src/cli/github";
 import { main } from "../src/cli/main";
 import { Worktrees, canonical, derivedDefaults, diskUsage } from "../src/cli/worktree";
-import { claudeHook } from "../src/cli/worktree-hook";
+import { HOOK_EVENTS, claudeHook } from "../src/cli/worktree-hook";
 import { initRepository, run, template } from "./fixture";
 
 const source = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -1089,5 +1089,35 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		expect(cli(JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: repo, name: "agent-cli/x" })).status).toBe(
 			1,
 		);
+	});
+	it.skipIf(process.platform === "win32")("the documented entries say so when quest is not on PATH", () => {
+		const readme = readFileSync(join(source, "README.md"), "utf8");
+		const json = [...readme.matchAll(/```json\n(.*?)```/gs)]
+			.map((match) => match[1])
+			.find((text) => text.includes('"WorktreeCreate"'));
+		if (json === undefined) throw new Error("README has no hook settings block");
+		const { hooks } = JSON.parse(json) as { hooks: Record<string, { hooks: { command: string }[] }[]> };
+		const commands = HOOK_EVENTS.map((event) => hooks[event][0].hooks[0].command);
+		expect(new Set(commands).size).toBe(1);
+		const [command] = commands;
+		const run = (path: string, input = "") =>
+			spawnSync("/bin/sh", ["-c", command], { input, encoding: "utf8", env: { PATH: path } });
+		const dir = (): string => {
+			const root = mkdtempSync(join(tmpdir(), "quest-hook-"));
+			roots.push(root);
+			return root;
+		};
+		const missing = run(dir());
+		expect(missing.status).toBe(1);
+		expect(missing.stdout).toBe("");
+		expect(missing.stderr).toBe(
+			"quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH\n",
+		);
+		const bin = dir();
+		writeFileSync(join(bin, "quest"), '#!/bin/sh\necho "quest $*"\ncat\n', { mode: 0o755 });
+		const input = JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: "/repo", name: "agent-1" });
+		const present = run(`${bin}:${process.env.PATH}`, input);
+		expect(present.status).toBe(0);
+		expect(present.stdout).toBe(`quest worktree hook\n${input}`);
 	});
 });
