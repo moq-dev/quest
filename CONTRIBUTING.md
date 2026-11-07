@@ -15,8 +15,7 @@ just build
 ```
 
 For automatic shell loading, install direnv and approve this checkout with
-`direnv allow`. The Claude SessionStart hook loads an already-approved environment;
-it does not grant approval. No background garbage collection runs on entry.
+`direnv allow`. No background garbage collection runs on entry.
 
 `flake.lock` pins Bun and the developer tools; `bun.lock` pins the
 dependencies. `packageManager` in `package.json` names the same Bun for CI

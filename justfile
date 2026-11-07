@@ -20,18 +20,17 @@ _check:
     bun run --silent quest check
     bun run --silent quest --root examples/export check
     actionlint
-    shellcheck .claude/hooks/*.sh scripts/*.sh
-    shfmt -d .claude/hooks/*.sh scripts/*.sh
+    shellcheck scripts/*.sh
+    shfmt -d scripts/*.sh
     nixfmt --check flake.nix nix/*.nix
     just worker-check
 
-# Run tests, including the shell hooks and the lifecycle of both builds.
+# Run tests, including the install scripts and the lifecycle of both builds.
 test:
     {{gate}} _test
 
 _test:
     bun run test
-    bash .claude/hooks/direnv.test.sh
     bash scripts/install-check.test.sh
     bash scripts/installer.test.sh
     bun run build
@@ -55,7 +54,7 @@ runner-sandbox *args:
 # Apply formatters without changing program behavior.
 fix:
     bun run fix
-    shfmt -w .claude/hooks/*.sh scripts/*.sh
+    shfmt -w scripts/*.sh
     nixfmt flake.nix nix/*.nix
     bun run --cwd cloudflare fix
 
