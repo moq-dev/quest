@@ -510,16 +510,13 @@ quest merge 128 --land <sha> # auto-merge bound to that head; takes no label
 A taken PR carries the `quest:active` label while an agent works on it.
 Sessions often share a GitHub account, so taking it prints a hold token: the
 ID of the timeline event that added the label. Every command refuses while a
-`quest:*` label it holds no token for is on the PR, including another
-session's `quest:active`; a draft its starter still holds, one without a
+`quest:active` or `quest:kix` label it holds no token for is on the PR,
+including another session's `quest:active`; a draft its starter still holds, one without a
 `## Waiting` (or older `## Decisions needed`) section; and a merged or closed PR, since a push after
 the merge brings the branch back. The refusal names the holder's label, age,
 and token, so you can decide whether to release a stale hold. When two
 sessions add labels at once, the first label added keeps the PR and the other
-backs off. Older quest versions add `quest:iterate` and `quest:ready`, which
-hold a PR like any `quest:*` label; passing their token to `quest iterate`
-swaps them for `quest:active`. Their `quest:merge` holds nothing and is
-ignored.
+backs off.
 
 `quest merge` takes no label: the head-pinned auto-merge or merge-queue entry
 it creates is the queue signal, so a queued PR shows no hold. It refuses while
