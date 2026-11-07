@@ -1116,7 +1116,7 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		const bin = dir();
 		writeFileSync(join(bin, "quest"), '#!/bin/sh\necho "quest $*"\ncat\n', { mode: 0o755 });
 		const input = JSON.stringify({ hook_event_name: "WorktreeCreate", cwd: "/repo", name: "agent-1" });
-		const present = run(`${bin}:/bin:/usr/bin`, input);
+		const present = run(`${bin}:${process.env.PATH}`, input);
 		expect(present.status).toBe(0);
 		expect(present.stdout).toBe(`quest worktree hook\n${input}`);
 	});
