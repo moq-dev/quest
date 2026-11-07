@@ -1603,8 +1603,10 @@ then `claude rm` again.
 ## Work with your agents
 
 Open this repository in Claude Code or Codex. The binary carries the skills;
-a repository installs only a stub per skill that runs `quest skill <name>`, so
-the version you pin decides what your agents follow:
+a repository installs only a stub per skill, so the version you pin decides
+what your agents follow. Claude Code's stub inlines `quest skill <name>` when
+the skill is invoked; Codex's asks the agent to run it. Either way the skill
+arrives with the guide sections and other skills it builds on, in one call:
 
 | Skill | What it does |
 | --- | --- |
@@ -1636,14 +1638,36 @@ Follow https://github.com/moq-dev/quest/blob/main/SETUP.md to set up Quest here.
 
 The [getting started guide](docs/getting-started.md) covers what happens next.
 
-`quest setup` configures your own Claude Code settings for quest work, in
-every repository: it sets `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a
-foreground command such as `quest wait` can block for 55 minutes, just under
-the 1h prompt-cache TTL, instead of the 10-minute default. It edits
-`$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`, keeps your
-other settings, prints each setting it changed, and is safe to rerun.
 `quest context` prints the rules agents follow in every task, and `quest guide` the
-quest format and workflow they read before working on a quest.
+quest format and workflow they read before working on a quest outside a skill;
+`quest guide prompting` prints one section.
+
+### Configure Claude Code
+
+`quest setup` configures your own Claude Code settings for quest work, in every
+repository:
+
+```sh
+quest setup
+```
+
+It sets `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground command such as
+`quest wait` can block for 55 minutes, just under the 1h prompt-cache TTL,
+instead of the 10-minute default.
+
+It also loads the rules once. The repository's `Quests: ` line has agents run
+`quest context` before any work, which costs a turn and is summarized away
+when the session compacts. Instead, `quest setup` installs a `SessionStart`
+hook (startup, resume, clear, and compact) and a `SubagentStart` hook, each
+running `quest hook`, which adds `quest context` to the session in a
+repository whose root `AGENTS.md` or `CLAUDE.md` has the `Quests: ` line, and
+nothing elsewhere. `quest` must be on the `PATH` Claude Code starts with, as
+for the worktree hooks.
+
+It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`,
+keeps your other settings, refuses a malformed file unchanged, writes once,
+and prints each change. Rerun it after upgrading. `quest setup --remove` takes
+the hooks out, and the timeout while it still holds Quest's value.
 
 ## Where this is going
 

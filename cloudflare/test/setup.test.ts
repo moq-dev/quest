@@ -109,8 +109,8 @@ describe("the setup pull request", () => {
 
 		const files = await published();
 		for (const skill of STUBS) {
-			expect(files.get(`.claude/skills/${skill.installed}/SKILL.md`)).toBe(skill.stub);
-			expect(files.get(`.agents/skills/${skill.installed}/SKILL.md`)).toBe(skill.stub);
+			expect(files.get(`.claude/skills/${skill.installed}/SKILL.md`)).toBe(skill.stubs[".claude/skills"]);
+			expect(files.get(`.agents/skills/${skill.installed}/SKILL.md`)).toBe(skill.stubs[".agents/skills"]);
 		}
 		expect(files.get("quest/README.md")).toBe("# Quests\n\n## Goal\n\nShip a fast parser.\n\\# Not a heading\n");
 		expect(files.get("AGENTS.md")).toBe(`# Agents\n\nRun the tests.\n\n${REFERENCE_LINE}\n`);

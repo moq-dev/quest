@@ -6,8 +6,10 @@ import { afterEach, expect, test, vi } from "vitest";
 import { type Output, main } from "../src/cli/main";
 import { REVIEWERS } from "../src/cli/models";
 import {
+	type Round,
 	authored,
 	baseInstructions,
+	nextStep,
 	pickReviewer,
 	review,
 	runningHarness,
@@ -839,6 +841,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 			"  average([3]) is 0.",
 			// The fixture's origin is a local path, which can have no PR.
 			"record skipped: origin is not on GitHub",
+			"next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number",
 			"",
 		].join("\n"),
 	);
@@ -966,6 +969,7 @@ fakes("a later round resumes the session with the new head and the author's resp
 	expect(later.code).toBe(0);
 	expect(later.stdout).toContain("round 2\n");
 	expect(later.stdout).toContain("findings 0\n");
+	expect(later.stdout).toMatch(/\nnext done: no findings remain on this head\n$/);
 	// The round settles the last round's finding, by its number in the prompt.
 	const first = git(s.repo, "rev-parse", "HEAD~1");
 	expect(later.stdout).toContain(
@@ -1488,4 +1492,15 @@ test("each changed directory keeps its own instructions, and a directory's symli
 		{ path: "b/AGENTS.md", text: "same" },
 		{ path: "c/AGENTS.md", text: "c rules" },
 	]);
+});
+
+test("the next step stops for the design checkpoint on every third round that reports findings", () => {
+	const round = (number: number, findings: number, severity = "medium") =>
+		({ round: number, findings: Array.from({ length: findings }, () => ({ severity })) }) as unknown as Round;
+	expect(nextStep(round(3, 1))).toMatch(/^next checkpoint: /);
+	expect(nextStep(round(6, 2))).toMatch(/^next checkpoint: /);
+	expect(nextStep(round(4, 1))).toMatch(/^next respond: /);
+	expect(nextStep(round(3, 0))).toMatch(/^next done: /);
+	expect(nextStep(round(3, 2, "low"))).toMatch(/^next finish: /);
+	expect(nextStep(round(4, 1, "low"))).toMatch(/^next finish: /);
 });

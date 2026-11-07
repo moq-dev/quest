@@ -44,13 +44,17 @@ quest init
 ```
 
 Init writes a stub per skill under both `.claude/skills/` and `.agents/skills/`
-without creating symbolic links (existing linked layouts continue to work), creates `quest/README.md` when missing, and appends a line
+without creating symbolic links. Claude Code's stub inlines `quest skill <name>`
+when the skill is invoked, pre-approving only that command in Bash and
+PowerShell, and follows it with a setup pointer for when `quest` is missing; the
+`.agents/skills/` stub, which a skill both directories read through a link
+gets, asks the agent to run it. Init also creates `quest/README.md` when missing, and appends a line
 starting with `Quests: ` to the root `AGENTS.md`, or `CLAUDE.md` when only that
 exists. It also appends `quest/** merge=quest` to `.gitattributes` and sets
 `merge.quest.driver` in the clone's git config, so local merges resolve
 concurrent edits to quest link lists. It writes no Claude Code hooks. It
 prints each path it changed and is safe to rerun. Rerun after an upgrade, it
-also rewrites the unmodified stubs whose description or setup link changed and
+also rewrites the unmodified stubs the new version writes differently and
 removes the unmodified stubs of skills the new version no longer ships.
 
 If init refuses, it names the conflicting path. Report it and ask the user how
@@ -59,11 +63,15 @@ to proceed; never delete or rename their files to get past it.
 ## Configure the user's agent
 
 `quest setup` configures the user's own Claude Code settings, not the
-repository's: it sets `env.BASH_MAX_TIMEOUT_MS` in
-`$CLAUDE_CONFIG_DIR/settings.json` (or `~/.claude/settings.json`) to 55
-minutes, so agents can block on a long wait in one call instead of polling.
-Offer it, explaining that it applies in every repository, and run it with
-consent. It keeps the file's other settings and prints what it changed.
+repository's, in `$CLAUDE_CONFIG_DIR/settings.json` (or
+`~/.claude/settings.json`). It sets `env.BASH_MAX_TIMEOUT_MS` to 55 minutes, so
+agents can block on a long wait in one call instead of polling. It also adds
+the rules the `Quests: ` line points at to every session and subagent, and
+again after compaction, which would otherwise summarize them away, through
+hooks that need `quest` on the `PATH` Claude Code runs hooks with. Offer it,
+explaining that it applies in every repository the user opens in Claude Code
+(the hooks only in those with the `Quests: ` line), and run it with consent. It
+keeps the file's other settings and prints what it changed.
 
 ## Opt into worktree hooks
 
@@ -127,6 +135,8 @@ work or `/quest-import` to bring in open GitHub issues.
    chosen Windows install directory). Remove any PATH entry you added. If the
    user opted into Quest's worktree hooks and Claude Code no longer finds
    `quest`, remove those entries from `~/.claude/settings.json`, since without
-   it they stop Claude Code making worktrees.
+   it they stop Claude Code making worktrees. Before removing the binary, run
+   `quest setup --remove` if the user ran `quest setup` and uses Quest in no
+   other repository.
 4. Ask the user whether to delete `quest/`. Git history keeps the plans either
    way.
