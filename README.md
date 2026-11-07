@@ -1575,7 +1575,7 @@ repository; where several repositories use one, the other commands take the ID. 
 checkout, runs the command there, and once it exits kills any descendants it
 left behind. The command gets Quest's environment without Git's
 repository-location variables, such as `GIT_DIR` and `GIT_INDEX_FILE`, which a
-Git hook would otherwise point at the repository it ran in; `-c` config is kept. When no other run remains in the checkout, it releases it: the
+Git hook would otherwise point at the repository it ran in; `-c` config is kept. When no other run, nor a Claude Code session holding the checkout (see [Claude Code checkouts](#claude-code-checkouts)), remains, it releases it: the
 declared scratch is deleted and the checkout keeps only its source. Put a whole
 job, such as an agent session or a script that installs, builds, and tests, in
 one run, since the next run starts without scratch.
@@ -1663,7 +1663,9 @@ entries into the file's `hooks`:
     "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
     "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
     "SubagentStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }]
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook", "timeout": 60 }] }]
   }
 }
 ```
@@ -1701,9 +1703,17 @@ agent ID, and a workflow agent's for its workflow run, so the hook binds a
 workflow agent's checkout to the first subagent that starts in it, the workflow
 agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it. A session's checkout, from
-`--worktree`, `EnterWorktree`, a background session, or remote control, is not
-released when the session stops; release it with `quest worktree release`.
+without its scratch until it reinstalls it.
+
+A session's checkout, from `--worktree`, `EnterWorktree`, a background session,
+or remote control, is held by the session that created it and by each session
+that starts in it, and released the same way once the last of them ends, except
+when `/clear` starts a new session in its place. A session that held it restores
+it on resuming, as does any session starting in it, with the same note. A background session that sits idle never
+ends, so its checkout stays held. Claude Code gives `SessionEnd` hooks at most a
+minute, which the entry's `timeout` asks for; a release cut short or failed
+leaves the checkout reserved with the failure in `quest worktree status`, until
+a session starts in it or `quest worktree release` finishes it.
 
 Claude never removes a subagent's or workflow agent's checkout itself, so
 remove a finished one with `quest worktree remove`, which also recovers one
