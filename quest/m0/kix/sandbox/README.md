@@ -91,7 +91,3 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 - Sources:
   [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing)
   and [sandbox-runtime](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime).
-
-## Required
-
-- [Per-job opencode saved output](/quest/m0/kix/sandbox/opencode-data.md) - each opencode job saves its tool output and shell captures beside its checkout, so no job reads another's, while sessions and the credential stay in the account's database

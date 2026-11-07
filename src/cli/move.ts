@@ -76,7 +76,8 @@ export async function moveQuest(
 
 /**
  * Delete a quest, or an epic with the quests under it, and drop every list
- * entry that links to what was deleted. The root and milestones are permanent.
+ * entry that links to what was deleted, as `remove` does. The root and
+ * milestones are permanent.
  */
 export function removeQuest(root: string, arg: string, recursive: boolean): Report {
 	workTree(root);
@@ -113,10 +114,11 @@ export function removeQuest(root: string, arg: string, recursive: boolean): Repo
 /**
  * Drop every list entry that links to a quest deleted in the history of `HEAD`, and of
  * `MERGE_HEAD` during a merge, that the working tree lacks, as `quest rm` drops the links to a
- * quest it deletes. Merging the base brings in the quests it finished as deletions, which leaves
- * this branch's links to them dangling. A quest the history moved is a rename, not a deletion, and
- * a link to a path that never held a quest is a mistake; both stay for `quest check` to report, as
- * does a link in prose. Writes the edited documents without staging them, and refuses while a
+ * quest it deletes, and every epic's `Required` entry naming a quest in its own directory, which
+ * the epic already waits for. Merging the base brings in the quests it finished as deletions, which
+ * leaves this branch's links to them dangling. A quest the history moved is a rename, not a deletion,
+ * and a link to a path that never held a quest is a mistake; both stay for `quest check` to report,
+ * as does a link in prose. Writes the edited documents without staging them, and refuses while a
  * quest file is unmerged, since its conflict markers are not yet a document. Returns `M path` for
  * each.
  */
@@ -130,23 +132,24 @@ export function fixLinks(root: string): string[] {
 		throw new Error(`resolve the merge conflicts in ${[...new Set(unmerged)].join(", ")} before quest check --fix`);
 	}
 	const heads = ["HEAD", "MERGE_HEAD"].filter((ref) => verified(root, ref));
-	if (heads.length === 0) return [];
 	const deleted = new Set(
-		// `--relative` names paths from `root`, as the tree's links do, when the tree is nested in its repository.
-		git(root, [
-			"log",
-			"--relative",
-			"--diff-filter=D",
-			"--find-renames",
-			"--name-only",
-			"--format=",
-			"-z",
-			...heads,
-			"--",
-			"quest",
-		])
-			.split("\0")
-			.filter(isQuest),
+		heads.length === 0
+			? []
+			: // `--relative` names paths from `root`, as the tree's links do, when the tree is nested in its repository.
+				git(root, [
+					"log",
+					"--relative",
+					"--diff-filter=D",
+					"--find-renames",
+					"--name-only",
+					"--format=",
+					"-z",
+					...heads,
+					"--",
+					"quest",
+				])
+					.split("\0")
+					.filter(isQuest),
 	);
 	const edited = remove(sources(root), (path) => deleted.has(path) && !exists(root, path));
 	for (const [path, text] of edited) writeFileSync(join(root, path), text);

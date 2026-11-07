@@ -15,8 +15,8 @@ only by a coordinator (`/quest-complete`, `/quest-spawn`) on Opus, never by a
 sub-agent. The skills already follow it: only `/quest-merge` and
 `/quest-complete` plan follow-ups, and `/quest-plan` refuses to run in an
 agent that cannot prompt. The land fixer, a headless Codex agent, is the one
-exception: `assets/land-fix.md` has it write the flaky quest and its
-`quest/m0/flaky/README.md` link in the disable commit, and
+exception: `assets/land-fix.md` has it write the flaky quest, and the
+`quest/m0/flaky/README.md` epic when missing, in the disable commit, and
 `src/cli/land-watch-flaky.ts` requires exactly one added quest file.
 
 Decision prompts, chosen options marked ✅:
@@ -37,7 +37,6 @@ Recommendations for the implementer:
 - The template's Goal says to fix the test or delete it and links each job.
   Its size is a fixed guess, such as `[S]`, for the next coordinator to
   correct.
-- [Epics list no children](/quest/m0/token-waste/child-lists.md) is in
-  flight and drops the epic README links; follow whichever format the base
-  has when this lands.
+- Epic READMEs list no children, so the quest file is the only tree edit
+  besides creating the epic's README when missing.
 - `validateFix` then rejects a disable commit that touches `quest/` at all.

@@ -16,6 +16,7 @@ export {
 	children,
 	entries,
 	has,
+	holds,
 	isQuest,
 	isEpic,
 	owner,
