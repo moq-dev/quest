@@ -29,12 +29,8 @@ function commit(tree: Tree, message: string) {
 
 test("a quest branch that deletes its quest passes", () => {
 	const tree = repo("quest/m0/epic/one");
-	tree.remove("quest/m0/epic/one.md")
-		.write(
-			"quest/m0/epic/README.md",
-			"# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n- [Two](/quest/m0/epic/two.md)\n",
-		)
-		.write("quest/m0/epic/two.md", "# [S] Two\n\n## Goal\n\nAnother quest.\n");
+	// Finishing a quest edits only what it blocked, never its epic's README.
+	tree.remove("quest/m0/epic/one.md").write("quest/m0/epic/two.md", "# [S] Two\n\n## Goal\n\nAnother quest.\n");
 	commit(tree, "finish one");
 	expect(tree.run("check", "--base", "main")).toEqual({ code: 0, stdout: "quest: 4 documents ok\n", stderr: "" });
 });
@@ -88,7 +84,6 @@ test("a branch that is not a quest branch adds no finding", () => {
 test("a branch naming no quest at the merge base adds no finding", () => {
 	const tree = repo("quest/m0/epic/three");
 	tree.write("quest/m0/epic/three.md", "# [S] Three\n\n## Goal\n\nNew.\n");
-	tree.append("quest/m0/epic/README.md", "- [Three](/quest/m0/epic/three.md)\n");
 	commit(tree, "plan three");
 	expect(tree.run("check", "--base", "main").code).toBe(0);
 });

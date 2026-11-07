@@ -17,11 +17,7 @@ function sizes(): Tree {
 	return new Tree()
 		.write("quest/README.md", ROOT_README)
 		.write("quest/m0/README.md", M0_README)
-		.write(
-			"quest/m0/epic/README.md",
-			"# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n" +
-				["xs", "s", "m", "l", "xl"].map((name) => `- [${name}](/quest/m0/epic/${name}.md)\n`).join(""),
-		)
+		.write("quest/m0/epic/README.md", "# Epic\n\n## Goal\n\nAn epic.\n")
 		.write("quest/m0/epic/xs.md", "# [XS] Tiny\n\n## Goal\n\nA quest.\n")
 		.write("quest/m0/epic/s.md", "# [S] Small\n\n## Goal\n\nA quest.\n")
 		.write("quest/m0/epic/m.md", "# [M] Medium\n\n## Goal\n\nA quest.\n")

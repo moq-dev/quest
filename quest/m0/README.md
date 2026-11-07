@@ -51,6 +51,10 @@ Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
 
   The land work is what moq-dev's repositories use every day, and the
   maintainer ranked it first in the 2026-10-30 and 2026-11-01 sessions.
+  Superseded 2026-11-05 (user, /quest-plan, the
+  [token waste](/quest/m0/token-waste/README.md) audit): an epic's children
+  are its directory, so list order no longer ranks work within m0;
+  `quest unblocked` ranks by milestone, then downstream impact, then path.
 - How do moq-dev's repositories land? Decided 2026-11-01 (maintainer,
   /quest-plan), reversing the 2026-10-26 move to a batched gate:
   - ✅ Through GitHub's merge queue again, one PR at a time, with no batching
