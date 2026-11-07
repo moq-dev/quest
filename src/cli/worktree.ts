@@ -140,7 +140,8 @@ function ignored(root: string, paths: string[]): Set<string> {
 /** Keep `.worktrees/` out of the main checkout's status via the clone-local exclude, unless something already ignores it. */
 function exclude(repository: string): void {
 	if (ignored(repository, [".worktrees/"]).size) return;
-	const file = canonical(git(repository, ["rev-parse", "--path-format=absolute", "--git-common-dir"])) + "/info/exclude";
+	const file =
+		canonical(git(repository, ["rev-parse", "--path-format=absolute", "--git-common-dir"])) + "/info/exclude";
 	mkdirSync(dirname(file), { recursive: true });
 	const old = existsSync(file) ? readFileSync(file, "utf8") : "";
 	writeFileSync(file, `${old}${old && !old.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
