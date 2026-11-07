@@ -6,7 +6,7 @@ import { isHoldLabel } from "../core";
 import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
 import { type Queued, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
-import { baseRemote, type Entry, mergeBase, type RemoteRead } from "./land";
+import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";
 import { type Cause, EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "./land-fix";
@@ -100,6 +100,12 @@ interface WatchJob extends Process {
 	/** Passes that failed to collect it, so one that keeps failing is set aside rather than holding a fixer slot. */
 	failures?: number;
 }
+
+/**
+ * The queue a pass puts PRs back in: GitHub's merge queue, or the watcher's own, whose picks are
+ * auto-merge requests pinned to their heads, as `quest merge --land` arms them, with `method`.
+ */
+export type QueueMode = { kind: "github" } | { kind: "own"; method: LandMethod };
 
 const JOB = /^watch-job-.*\.json$/;
 const REMOVAL = /^removal-\d+\.json$/;
@@ -218,10 +224,11 @@ export async function advanceFixes(
 	state: string,
 	context: FixContext,
 	deps: GitHubDependencies,
+	queue: QueueMode,
 ): Promise<string[]> {
 	const github = new GitHub(deps);
 	// Collect first, so a finished job's slot is free, and a clean merge once it is made.
-	const output = await collectAll(github, state, context, deps);
+	const output = await collectAll(github, state, context, deps, queue);
 	const waiting = readdirSync(state)
 		.filter((name) => REMOVAL.test(name))
 		.map((name) => JSON.parse(readFileSync(join(state, name), "utf8")) as Removal)
@@ -233,8 +240,8 @@ export async function advanceFixes(
 		if (line?.startsWith("fixing ")) running++;
 		if (line) output.push(line);
 	}
-	output.push(...(await collectAll(github, state, context, deps, true)));
-	output.push(...(await advanceDisables(github, repository, state, context, deps)));
+	output.push(...(await collectAll(github, state, context, deps, queue, true)));
+	output.push(...(await advanceDisables(github, repository, state, context, deps, queue)));
 	return output;
 }
 
@@ -247,6 +254,7 @@ async function collectAll(
 	state: string,
 	context: FixContext,
 	deps: GitHubDependencies,
+	queue: QueueMode,
 	merges = false,
 ): Promise<string[]> {
 	const output: string[] = [];
@@ -254,7 +262,7 @@ async function collectAll(
 		if (merges && !job.merged) continue;
 		const path = join(state, name);
 		try {
-			output.push(...(await collect(github, state, path, job, context, deps)));
+			output.push(...(await collect(github, state, path, job, context, deps, queue)));
 		} catch (error) {
 			// A round that keeps failing, as when GitHub refuses its handback, is set aside, so it frees its
 			// fixer slot for the other dropped PRs. Only the pass's full collection counts, once.
@@ -278,7 +286,7 @@ async function collectAll(
 			job.handback ??= `fixer collection failed: ${String(error)}`;
 			try {
 				save(path, job);
-				output.push(...(await collect(github, state, path, job, context, deps)));
+				output.push(...(await collect(github, state, path, job, context, deps, queue)));
 			} catch (failure) {
 				deps.warn(`quest land watch: handback pending for ${name}: ${String(failure)}`);
 			}
@@ -463,6 +471,7 @@ async function collect(
 	job: WatchJob,
 	context: FixContext,
 	deps: GitHubDependencies,
+	queue: QueueMode,
 ): Promise<string[]> {
 	const { entry } = job;
 	const number = entry.number;
@@ -642,7 +651,7 @@ async function collect(
 				job.requeuing = head;
 				save(path, job);
 			}
-			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped);
+			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped, queue);
 			save(path, job);
 		} catch (failure) {
 			if (failure instanceof Held) return [...said, ...(await leave())];
@@ -686,12 +695,19 @@ async function collect(
 }
 
 /**
- * Put `head` back in `base`'s merge queue, at the back. A PR queued or armed at it since the queue
- * dropped it, at `dropped`, needs nothing more: a restart finds its own request, and a workflow may pick
- * the fixer's push first. A refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves
- * it to the session that holds it.
+ * Put `head` back in `base`'s queue, at the back: GitHub's merge queue, or the watcher's own, by arming
+ * auto-merge pinned to it. A PR queued or armed at it since the queue dropped it, at `dropped`, needs
+ * nothing more: a restart finds its own request, and a workflow may pick the fixer's push first. A
+ * refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves it to the session that holds it.
  */
-async function requeue(github: GitHub, id: string, head: string, base: string, dropped: string): Promise<Queued> {
+async function requeue(
+	github: GitHub,
+	id: string,
+	head: string,
+	base: string,
+	dropped: string,
+	queue: QueueMode,
+): Promise<Queued> {
 	const how = (pull: ObjectValue): Queued => (pull.mergeQueueEntry != null ? "enqueued" : "armed");
 	let pull = await readPull(github, id);
 	if (string(pull.baseRefName) !== base) throw new FixerRefusal(`retargeted from ${base} before it was re-enqueued`);
@@ -699,13 +715,15 @@ async function requeue(github: GitHub, id: string, head: string, base: string, d
 	if (!queued(pull, dropped)) {
 		if (isHeld(pull)) throw new Held();
 		try {
-			await queueHead(
-				(query, variables) => github.graphql(query, variables),
-				id,
-				head,
-				string(pull.mergeStateStatus),
-				"merge",
-			);
+			if (queue.kind === "own") await enqueue(github, id, head, queue.method);
+			else
+				await queueHead(
+					(query, variables) => github.graphql(query, variables),
+					id,
+					head,
+					string(pull.mergeStateStatus),
+					"merge",
+				);
 		} catch (error) {
 			if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 				throw error;
@@ -730,6 +748,7 @@ async function advanceDisables(
 	state: string,
 	context: FixContext,
 	deps: GitHubDependencies,
+	queue: QueueMode,
 ): Promise<string[]> {
 	const output: string[] = [];
 	const tests = readFlaky(state);
@@ -745,6 +764,7 @@ async function advanceDisables(
 					test.disable,
 					() => saveFlaky(state, tests),
 					deps.warn,
+					queue,
 				),
 			);
 		} catch (error) {
@@ -774,6 +794,7 @@ async function openDisable(
 	disable: Disable,
 	record: () => void,
 	warn: (text: string) => void,
+	queue: QueueMode,
 ): Promise<string> {
 	const name = questName(disable.quest);
 	if (disable.id === undefined) {
@@ -813,7 +834,7 @@ async function openDisable(
 	}
 	const entry = { number: disable.number!, enabledAt: disable.head };
 	try {
-		disable.done = await requeue(github, disable.id, disable.head, disable.base.ref, "");
+		disable.done = await requeue(github, disable.id, disable.head, disable.base.ref, "", queue);
 	} catch (error) {
 		if (error instanceof Held) {
 			// Left for a maintainer, as a refused one is, once recorded.
