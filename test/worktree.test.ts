@@ -365,6 +365,21 @@ describe("worktrees", { timeout: 20_000 }, () => {
 			phase: "released",
 			agent: "flow",
 		});
+		// A session starting inside a submodule of a session's checkout holds the checkout too.
+		const owned = (await claudeHook(
+			{ hook_event_name: "WorktreeCreate", session_id: "a", cwd: repo, name: "owned" },
+			worktrees,
+			async () => false,
+		))!.trim();
+		await claudeHook(
+			{ hook_event_name: "SessionStart", session_id: "b", cwd: join(owned, "sub", "nested", "inner") },
+			worktrees,
+			async () => false,
+		);
+		expect(worktrees.status().records.find((record) => record.name === "owned")?.sessions).toEqual({
+			a: true,
+			b: true,
+		});
 		writeFileSync(join(nested, "file"), "local work");
 		mkdirSync(join(nested, "cache"));
 		writeFileSync(join(nested, "cache", "output"), "build output");
@@ -678,6 +693,26 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 		expect(await second).toEqual({ code: 7, failure: undefined });
 		expect(existsSync(join(record.path, "cache"))).toBe(false);
 		expect(worktrees.status().records[0]).toMatchObject({ phase: "released", runs: [] });
+	});
+	it("leaves a checkout a Claude Code session holds to the session's end", async () => {
+		const { finish, live, scopes } = fakeScopes();
+		const { repo, home, worktrees } = fixture(scopes);
+		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
+		worktrees.attach(record.id, "session");
+		mkdirSync(join(record.path, "cache"));
+		const running = worktrees.run(record.id, ["build"]);
+		const [{ unit }] = worktrees.status().records[0].runs;
+		finish.get(unit)!(0);
+		await running;
+		// A crashed supervisor's run, once its scope empties, leaves it held too.
+		orphan(home, "crashed.scope");
+		live.add("crashed.scope");
+		worktrees.status();
+		live.delete("crashed.scope");
+		expect(worktrees.status().records[0]).toMatchObject({ phase: "active", runs: [] });
+		expect(existsSync(join(record.path, "cache"))).toBe(true);
+		await worktrees.detach("session", true);
+		expect(existsSync(join(record.path, "cache"))).toBe(false);
 	});
 	it("reconciles a crashed supervisor only once its scope is empty", async () => {
 		const { live, scopes } = fakeScopes();

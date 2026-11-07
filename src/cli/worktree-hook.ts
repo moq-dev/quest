@@ -137,6 +137,18 @@ function superproject(checkout: string): string | undefined {
 	return path ? canonical(path) : undefined;
 }
 
+/** The registered checkout holding `cwd`, looking through the submodules it sits in. */
+async function enclosing(worktrees: Worktrees, cwd: string): Promise<WorktreeRecord | undefined> {
+	let path = toplevel(cwd);
+	let record: WorktreeRecord | undefined;
+	while (path && !record) {
+		const checkout = path;
+		record = await waiting(() => worktrees.registered(checkout));
+		path = superproject(checkout);
+	}
+	return record;
+}
+
 /** Claude's name for a workflow agent's worktree, `<run ID>-<agent number>`, which carries no agent ID. */
 const WORKFLOW_CHECKOUT = /^wf_[0-9a-f]{8}-[0-9a-f]{3}-[0-9]+$/;
 
@@ -162,13 +174,7 @@ function reinstall(event: string, scratch: readonly string[]): string | undefine
  * it, which is the workflow agent itself; one that later runs there without isolation never matches.
  */
 async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise<WorktreeRecord | undefined> {
-	let path = toplevel(input.cwd);
-	let record: WorktreeRecord | undefined;
-	while (path && !record) {
-		const checkout = path;
-		record = await waiting(() => worktrees.registered(checkout));
-		path = superproject(checkout);
-	}
+	const record = await enclosing(worktrees, input.cwd);
 	const agent = field(input, "agent_id");
 	if (record?.name === `agent-${agent}`) return record;
 	if (record === undefined || !WORKFLOW_CHECKOUT.test(record.name)) return undefined;
@@ -249,8 +255,7 @@ export async function claudeHook(
 			const session = field(hook, "session_id");
 			// Resuming starts in the directory Claude was launched from before it enters the session's checkout.
 			const ids = new Set((await waiting(() => worktrees.held(session))).map((record) => record.id));
-			const path = toplevel(hook.cwd);
-			const here = path === undefined ? undefined : await waiting(() => worktrees.registered(path));
+			const here = await enclosing(worktrees, hook.cwd);
 			if (here?.sessions) ids.add(here.id);
 			const deleted = new Set<string>();
 			for (const id of ids) {

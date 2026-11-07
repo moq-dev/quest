@@ -497,12 +497,12 @@ export class Worktrees {
 			return true;
 		}
 	}
-	/** Drops finished runs a crashed supervisor left behind, and releases a checkout none remain in. */
+	/** Drops finished runs a crashed supervisor left behind, and releases a checkout no run or session remains in. */
 	private reconcile(registry: Registry): void {
 		for (const record of [...registry.records]) {
 			if (!record.runs.length) continue;
 			record.runs = record.runs.filter((run) => this.running(run));
-			if (!record.runs.length) this.settle(registry, record);
+			if (!record.runs.length && !inSession(record)) this.settle(registry, record);
 		}
 	}
 	private idle(record: WorktreeRecord): void {
@@ -943,7 +943,8 @@ export class Worktrees {
 				retained.failure = result.error.message;
 			else current.runs = current.runs.filter((item) => item.unit !== run.unit);
 			// A command that never started, such as on a host without a user manager, keeps its scratch.
-			if (!current.runs.length && "code" in result) this.settle(registry, current);
+			// A Claude Code session still in the checkout keeps its scratch; the session's end releases it.
+			if (!current.runs.length && !inSession(current) && "code" in result) this.settle(registry, current);
 			return current.failure;
 		});
 		if ("error" in result) throw result.error;
