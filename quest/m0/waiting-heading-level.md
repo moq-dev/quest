@@ -16,8 +16,7 @@ Decided 2026-11-06 (maintainer, moq-dev/moq.pro /quest-complete):
   - Drop it
 
 Evidence: moq-dev/moq.pro had 38 `### Waiting` headings nested under Plan
-that `quest waiting` never listed.
-[moq-dev/moq.pro#3579](https://github.com/moq-dev/moq.pro/pull/3579)
+that `quest waiting` never listed. A moq.pro PR
 promoted them, and main gained three more while it was open.
 
 The cause: `Doc.headings` in `src/core/doc.ts` keeps only `#` and `##`

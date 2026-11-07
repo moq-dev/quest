@@ -17,12 +17,12 @@ The cutover was done on 2026-11-03 (user, /quest-complete):
 - Workflows: [moq-dev/quest#397](https://github.com/moq-dev/quest/pull/397),
   [moq-dev/rind#266](https://github.com/moq-dev/rind/pull/266) and
   [moq-dev/rust2#457](https://github.com/moq-dev/rust2/pull/457).
-- Host: [kixelated/nixos#19](https://github.com/kixelated/nixos/pull/19)
+- Host: the kixelated/nixos change adding the queue runners
   was deployed through the host's `deploy/quest-land` branch, adding the
   `nixos-{quest,rind,rust2}-ci` runners in their own org runner groups and
   switching each daemon to `quest land watch`. The first merge group showed
   the runner's read-only cgroupfs refusing `quest gate`'s `cgroup.kill`,
-  fixed in #19.
+  fixed in that change.
 - Rulesets: each `main` requires only `Queue`, with a squash merge queue
   that builds and merges one entry at a time (`ALLGREEN`, 90-minute
   timeout). The moq-bot bypass is gone; role bypasses stay.

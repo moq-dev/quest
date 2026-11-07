@@ -51,7 +51,7 @@ Implementation guidance:
 
 - It looks environmental, and specific to the queue runner. The queue build
   runs on `nixos-quest-ci`, which
-  [kixelated/nixos#19](https://github.com/kixelated/nixos/pull/19) added to
+  a kixelated/nixos change added to
   the maintainer's host
   ([the cutover](/quest/m0/queue-watcher/follow.md));
   [Harden the queue runners](/quest/m0/queue-watcher/runners.md) only
