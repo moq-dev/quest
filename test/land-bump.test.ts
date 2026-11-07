@@ -1,7 +1,7 @@
 // The pin bump pass against a fake GitHub and a local target repository, with the host's Nix and quest faked.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -76,6 +76,8 @@ interface World {
 	allowAutoMerge: boolean;
 	/** Each check on a head, as `statusCheckRollup` contexts. */
 	checks: Record<string, Record<string, unknown>[]>;
+	/** Each check suite on a head. */
+	suites: Record<string, { status: string; latest_check_runs_count: number }[]>;
 	requests: string[];
 	/** The flake.lock GitHub serves on `main`, when it differs from the remote's. */
 	lock?: string;
@@ -122,6 +124,11 @@ function deps(world: World): GitHubDependencies {
 					world.lock ??
 					git(world.remote.slice("file://".length), "show", `${url.searchParams.get("ref")}:flake.lock`);
 				return json({ content: Buffer.from(text).toString("base64") });
+			}
+			const suites = new RegExp(`^${path}/commits/(\\w+)/check-suites$`).exec(url.pathname);
+			if (suites) {
+				const listed = world.suites[suites[1]] ?? [];
+				return json({ total_count: listed.length, check_suites: listed });
 			}
 			if (url.pathname === `${path}/branches/main`) return json({ protection: { enabled: false } });
 			if (url.pathname === `${path}/rules/branches/main`) {
@@ -209,6 +216,7 @@ function world(overrides: Partial<World> = {}): World {
 		rules: [{ type: "merge_queue" }],
 		allowAutoMerge: true,
 		checks: {},
+		suites: {},
 		requests: [],
 		...overrides,
 	};
@@ -244,6 +252,10 @@ describe("questInput", () => {
 describe("unpin", () => {
 	test("drops the revision from the source's URL", () => {
 		expect(unpin(flakeNix(OLD), SOURCE, OLD)).toBe(flakeNix());
+	});
+
+	test("matches the source's name in any case", () => {
+		expect(unpin(flakeNix(OLD).replace("moq-dev/quest", "Moq-Dev/Quest"), SOURCE, OLD)).toBe(flakeNix());
 	});
 
 	test("fails unless the pinned URL appears exactly once", () => {
@@ -343,9 +355,18 @@ describe("bumpPass", () => {
 		expect(await bumpPass(ctx, NEW)).toEqual([]);
 		expect(landed).not.toHaveBeenCalled();
 
+		// A workflow whose later job has not started yet shows only its passing first job.
 		target.checks[head] = [
 			{ __typename: "CheckRun", databaseId: 1, name: "check", status: "COMPLETED", conclusion: "SUCCESS" },
 		];
+		target.suites[head] = [
+			{ status: "in_progress", latest_check_runs_count: 1 },
+			{ status: "queued", latest_check_runs_count: 0 },
+		];
+		expect(await bumpPass(ctx, NEW)).toEqual([]);
+		expect(landed).not.toHaveBeenCalled();
+
+		target.suites[head][0].status = "completed";
 		expect(await bumpPass(ctx, NEW)).toEqual(["bump landing moq-dev/widget 7"]);
 		expect(landed).toHaveBeenCalledExactlyOnceWith(
 			{ ...target.target, number: 7 },
@@ -370,6 +391,23 @@ describe("bumpPass", () => {
 		expect(await bumpPass(ctx, NEW)).toEqual([]);
 		expect(target.requests).toEqual([]);
 		expect(landed).not.toHaveBeenCalled();
+	});
+
+	test("refuses a target whose tree has a symlink out of the checkout", async () => {
+		const target = world();
+		const work = tempDir();
+		git(work, "clone", "--quiet", bare(target), ".");
+		configure(work, GIT_SETTINGS);
+		// The checkout's parent, the daemon's own directory, exists; the dangling link would be created on write.
+		symlinkSync("..", join(work, "AGENTS.md"));
+		symlinkSync("../../nothing", join(work, "CLAUDE.md"));
+		symlinkSync("flake.nix", join(work, "inside"));
+		git(work, "add", ".");
+		git(work, "commit", "--quiet", "-m", "link");
+		git(work, "push", "--quiet", "origin", "HEAD:main");
+		target.base = git(work, "rev-parse", "HEAD");
+		await expect(bumpPass(context(target), NEW)).rejects.toThrow("AGENTS.md is a symlink out of the repository");
+		expect(target.pulls).toEqual([]);
 	});
 
 	test("a target that fails does not hold up the others, and the pass reports it", async () => {

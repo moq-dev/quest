@@ -1023,11 +1023,15 @@ not pin yet, it opens or updates that target's one `quest-bump` PR as the App:
 1. It reads the target's `flake.lock` on its default branch for the one root
    input that locks the watched repository on GitHub; a target already at the
    commit gets nothing, and an open bump PR there is closed.
-2. In a fresh shallow checkout it drops a revision from that input's URL in
+2. In a fresh shallow checkout, which it refuses when a tracked symlink leaves
+   the checkout or dangles, since the tools write through symlinks, it drops a
+   revision from that input's URL in
    `flake.nix`, so `flake.lock` alone pins it from then on, and locks the input
    at the commit with `nix flake lock --override-input`.
 3. It builds the watched repository's `quest` at that commit with `nix build`,
-   and runs its `quest init` and `quest check --fix` in the checkout.
+   and runs its `quest init` and `quest check --fix` on the checkout with
+   `--root`, from a directory of its own, so the target's `bunfig.toml` never
+   loads.
 4. It commits the result as moq-bot and lease-pushes it to `quest-bump`. An open
    bump PR's head becomes the new commit's first parent, beside the target's
    base, so the branch never rewinds; any other `quest-bump` branch, left by a
@@ -1039,7 +1043,8 @@ not pin yet, it opens or updates that target's one `quest-bump` PR as the App:
    `## Waiting` item quoting them. Otherwise it lands like any PR there, through
    `quest merge`'s path: into GitHub's merge queue, the target's own queue, or
    auto-merge. A base that requires no check would merge at once, so there the
-   bump first waits for every check on its head to pass, then merges directly
+   bump first waits for every check on its head to pass and every check suite
+   that ran one to complete, then merges directly
    when the repository has no auto-merge, as on a private repository on GitHub
    Free, whose rules GitHub does not serve. A failed check, or a landing
    `quest merge` refuses, is commented on and left for a maintainer.

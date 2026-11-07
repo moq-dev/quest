@@ -1,10 +1,11 @@
 // Pin bumps: the source repository's watcher keeps each target repository's flake input on the source at the
 // source's base, through one bot PR per target that lands like any other PR there.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { checksState } from "../github/checks";
 import {
+	array,
 	GitHub,
 	type GitHubDependencies,
 	object,
@@ -43,7 +44,7 @@ export interface BumpTools {
 	lock(checkout: string, input: string, url: string, token: string): void;
 	/** The `quest` executable of the source at `sha`. */
 	quest(sha: string, token: string): string;
-	/** Run `quest` with `args` in `checkout`. */
+	/** Run `quest` with `args` on the repository at `checkout`. */
 	run(quest: string, checkout: string, args: string[]): { status: number | null; output: string };
 }
 
@@ -112,9 +113,33 @@ export function questInput(lock: ObjectValue, source: Repository): { input: stri
  */
 export function unpin(flake: string, source: Repository, rev: string): string {
 	const url = `github:${name(source)}/${rev}`;
-	const found = flake.split(`"${url}"`).length - 1;
+	// GitHub names are case-insensitive, as `questInput` matches them.
+	const pattern = new RegExp(`"${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "gi");
+	const found = flake.match(pattern)?.length ?? 0;
 	if (found !== 1) throw new Error(`flake.nix names "${url}" ${found} times, where a bump can unpin exactly one`);
-	return flake.replace(`"${url}"`, `"github:${name(source)}"`);
+	return flake.replace(pattern, `"github:${name(source)}"`);
+}
+
+/**
+ * Refuse a checkout with a tracked symlink that leaves it or dangles: the tools write through symlinks,
+ * which would let the target's tree overwrite the daemon's own files.
+ */
+export function contained(checkout: string): void {
+	const root = realpathSync(checkout);
+	const entries = git(checkout, ["ls-files", "--stage", "-z"]).split("\0").filter(Boolean);
+	for (const entry of entries) {
+		const [meta, file] = entry.split("\t");
+		if (!meta.startsWith("120000 ")) continue;
+		let target: string;
+		try {
+			target = realpathSync(join(checkout, file));
+		} catch {
+			throw new Error(`${file} is a symlink to nothing, which a bump refuses to write through`);
+		}
+		const outside = relative(root, target);
+		if (outside === ".." || outside.startsWith(`..${sep}`) || isAbsolute(outside))
+			throw new Error(`${file} is a symlink out of the repository, which a bump refuses to write through`);
+	}
 }
 
 /** The bump PR's body, with a `## Waiting` item for findings, and the recorded review skip. */
@@ -243,6 +268,7 @@ async function bump(
 		git(checkout, ["init", "--quiet"]);
 		await connection.read(checkout, ["fetch", "--quiet", "--no-tags", "--depth=1", remote, baseSha]);
 		git(checkout, ["checkout", "--quiet", "--detach", baseSha]);
+		contained(checkout);
 		// The open PR's head stays in the branch's history; a branch left by a merged or closed PR is replaced.
 		const previous = open ? string(object(open.head).sha) : "";
 		const lease = previous || ((await remoteHead(checkout, remote, ref, connection.read)) ?? "");
@@ -358,8 +384,17 @@ async function settle(target: Repository, record: Bump, connection: BumpConnecti
 	if (!gated) {
 		const found = await contexts(github, target, head);
 		const state = found.length === 0 ? "PENDING" : checksState(found);
-		if (state === "PENDING") return record;
 		if (state === "FAILURE") return fail(`a check failed on its head ${head}`);
+		// A workflow's later jobs report only once they start; its suite stays incomplete until they finish.
+		// Suites of apps that never ran a check stay queued forever, and count for nothing.
+		const suites = object(await (await github.request(`${path}/commits/${head}/check-suites?per_page=100`)).json());
+		const listed = array(suites.check_suites);
+		if (Number(suites.total_count) > listed.length)
+			throw new Error(`${head} has more than ${listed.length} check suites, more than a bump reads`);
+		const running = listed.some(
+			(suite) => Number(suite.latest_check_runs_count) > 0 && suite.status !== "completed",
+		);
+		if (state === "PENDING" || running) return record;
 		direct = object(await (await github.request(path)).json()).allow_auto_merge !== true;
 	}
 	try {
@@ -409,8 +444,11 @@ export function hostTools(source: Repository, state: string): BumpTools {
 			return path;
 		},
 		run: (quest, checkout, args) => {
-			const result = spawnSync(quest, args, {
-				cwd: checkout,
+			// Bun reads bunfig.toml, whose preload runs code, from its working directory: never the target's.
+			const trusted = join(state, "bump", "run");
+			mkdirSync(trusted, { recursive: true, mode: 0o700 });
+			const result = spawnSync(quest, ["--root", checkout, ...args], {
+				cwd: trusted,
 				encoding: "utf8",
 				env: { ...commandEnvironment(), HOME: join(state, "bump"), NO_COLOR: "1" },
 				maxBuffer: 1 << 30,
