@@ -470,17 +470,20 @@ fakes.for([
 	["CLAUDECODE", "unknown", "codex hit its usage limit; resets unknown"],
 	["CODEX_THREAD_ID", "reset", "claude hit its usage limit; resets 2030-03-17T17:46:40Z"],
 	["CODEX_THREAD_ID", "unknown", "claude hit its usage limit; resets unknown"],
-] as const)("a reviewer's usage limit exits 3 with its reset, and records no round (%s, %s)", async ([host, variant, message]) => {
-	const s = setup(host);
-	vi.stubEnv("FAKE_LIMITED", variant);
-	const result = await quest("--root", s.repo, "review");
-	expect(result.stderr).toBe(`error: ${message}\n`);
-	expect(result.code).toBe(3);
-	expect(result.stdout).toBe("");
-	vi.stubEnv("FAKE_LIMITED", undefined);
-	// No round was recorded, so the next one needs no responses.
-	expect((await quest("--root", s.repo, "review")).code).toBe(0);
-});
+] as const)(
+	"a reviewer's usage limit exits 3 with its reset, and records no round (%s, %s)",
+	async ([host, variant, message]) => {
+		const s = setup(host);
+		vi.stubEnv("FAKE_LIMITED", variant);
+		const result = await quest("--root", s.repo, "review");
+		expect(result.stderr).toBe(`error: ${message}\n`);
+		expect(result.code).toBe(3);
+		expect(result.stdout).toBe("");
+		vi.stubEnv("FAKE_LIMITED", undefined);
+		// No round was recorded, so the next one needs no responses.
+		expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	},
+);
 
 fakes("a reviewer with no stored login reviews with the credential its CLI reads from the environment", async () => {
 	const s = setup();
