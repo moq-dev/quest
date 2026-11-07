@@ -5,7 +5,7 @@ guide: Creation, Execution, Coordination, Summaries, Questions, Prompting
 
 Your goal is to execute many quests in parallel.
 The scope consists of all ready quests that are not claimed.
-Run `quest unblocked --unclaimed --json` for unclaimed ready candidates in milestone priority, descending downstream impact, then tree order.
+Run `quest unblocked --unclaimed --json` for unclaimed ready candidates in milestone priority, descending downstream impact, then path order.
 The count is distinct transitive dependents; other prerequisites may still remain.
 Use that order when dispatching.
 As each agent reports, rerun `quest unblocked --unclaimed --json`, which reads the upstream tree afresh, and start the newly ready quests you would recommend, within the harness's agent limit: merges elsewhere and released claims make more work ready while the spawn runs.

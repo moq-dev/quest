@@ -4,15 +4,13 @@ import type { Project } from "../src/board/project";
 import { QuestMap, chart } from "../src/map";
 
 const docs: Record<string, string> = {
-	"quest/README.md": "# Quests\n\n## Goal\n\nShip it.\n\n## Required\n\n- [M0](/quest/m0/README.md) - first\n",
-	"quest/m0/README.md":
-		"# First release\n\n## Goal\n\nShip.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md) - grouped\n- [Finale](/quest/m0/finale.md) - last\n- [Solo](/quest/m0/solo.md) - alone\n",
-	// The epic lists its blocked quest first; the map still puts it after its blocker.
-	"quest/m0/epic/README.md":
-		"# An epic\n\n## Goal\n\nGrouped.\n\n## Required\n\n- [Later](/quest/m0/epic/later.md) - second\n- [First](/quest/m0/epic/first.md) - first\n- [Other](/quest/m0/epic/other.md) - third\n",
+	"quest/README.md": "# Quests\n\n## Goal\n\nShip it.\n",
+	"quest/m0/README.md": "# First release\n\n## Goal\n\nShip.\n",
+	"quest/m0/epic/README.md": "# An epic\n\n## Goal\n\nGrouped.\n",
+	// The blocked quest sorts first by path; the map still puts it after its blocker.
 	"quest/m0/epic/later.md":
-		"# [M] Later\n\n## Goal\n\nLater.\n\n## Required\n\n- [First](/quest/m0/epic/first.md) - needs it\n",
-	"quest/m0/epic/first.md": "# [S] First\n\n## Goal\n\nFirst.\n",
+		"# [M] Later\n\n## Goal\n\nLater.\n\n## Required\n\n- [First](/quest/m0/epic/start.md) - needs it\n",
+	"quest/m0/epic/start.md": "# [S] First\n\n## Goal\n\nFirst.\n",
 	"quest/m0/epic/other.md": "# [XS] Other\n\n## Goal\n\nOther.\n",
 	"quest/m0/solo.md": "# [L] Solo\n\n## Goal\n\nAlone.\n",
 	// Requiring an epic puts a quest after everything the epic still holds.
@@ -39,15 +37,15 @@ describe("quest map", () => {
 		expect(region.href).toBe("/repos/demo#m0");
 	});
 
-	it("draws epics and the milestone's own quests as paths in priority order", () => {
+	it("draws epics and the milestone's own quests as paths in path order", () => {
 		expect(region.paths.map((path) => path.title)).toEqual(["An epic", "Main path"]);
 		expect(region.paths[0].href).toBe("/repos/demo/quest/m0/epic/README");
 	});
 
-	it("orders each path by what it requires, then by priority", () => {
+	it("orders each path by what it requires, then by path", () => {
 		const titles = region.paths.map((path) => path.waypoints.map((quest) => quest.title));
 		expect(titles).toEqual([
-			["First", "Other", "Later"],
+			["Other", "First", "Later"],
 			["Solo", "Finale"],
 		]);
 	});
@@ -89,9 +87,9 @@ describe("waypoint status", () => {
 	it("survives a Required cycle", async () => {
 		const html = await render({
 			documents: [
-				...project.documents.filter((doc) => doc.path !== "quest/m0/epic/first.md"),
+				...project.documents.filter((doc) => doc.path !== "quest/m0/epic/start.md"),
 				{
-					path: "quest/m0/epic/first.md",
+					path: "quest/m0/epic/start.md",
 					content:
 						"# [S] First\n\n## Goal\n\nFirst.\n\n## Required\n\n- [Later](/quest/m0/epic/later.md) - loop\n",
 				},

@@ -62,6 +62,9 @@ job whose runner goes offline; check it for a live runner lock before starting.
 You review each change: `/quest-review` has a model that wrote none of it review a
 draft locally and marks it ready, and `/quest-merge` (`$quest-merge` in Codex)
 queues it to land once a review covers its head and checks pass.
+`/quest-complete` queues a writer's PR that changes no user-facing behavior,
+such as one editing only quests or tests, without asking, unless your
+`CONTRIBUTING.md` opts out.
 The quest is complete, its plan leaves the tree, and the quests that required it
 can become ready.
 

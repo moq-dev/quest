@@ -431,11 +431,6 @@ export function QuestPage(props: { board: Board; doc: Doc; content: string; user
 	const heading = title(doc.title?.text ?? doc.path);
 	const markdown = blobHref(project, doc.path);
 	const required = entries(doc, "Required");
-	const childPaths = new Set(group?.items.map((item) => (item.kind === "quest" ? item.quest.path : item.epic.path)));
-	const external = required.filter((entry) => {
-		const path = entry.target === null ? null : rooted(entry.target);
-		return path === null || !childPaths.has(path);
-	});
 
 	return (
 		<div class="wrap quest-view">
@@ -457,11 +452,11 @@ export function QuestPage(props: { board: Board; doc: Doc; content: string; user
 					if (section.heading === "Required") {
 						return (
 							<>
-								{external.length > 0 && (
+								{required.length > 0 && (
 									<>
 										<h2>Requires</h2>
 										<ul class="log">
-											{external.map((entry) => (
+											{required.map((entry) => (
 												<RequiredRow board={board} text={entry.text} target={entry.target} />
 											))}
 										</ul>

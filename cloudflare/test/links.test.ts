@@ -10,11 +10,7 @@ const project: Project = {
 	commit: "a".repeat(40),
 	date: "2026-10-07",
 	documents: [
-		{
-			path: "quest/README.md",
-			content:
-				"# Quests\n\n## Goal\n\nShip it.\n\n## Required\n\n- [One](/quest/x%23y.md)\n- [Two](/quest/two.md)\n",
-		},
+		{ path: "quest/README.md", content: "# Quests\n\n## Goal\n\nShip it.\n" },
 		{ path: "quest/x#y.md", content: "# [S] One\n\n## Goal\n\nFirst.\n" },
 		{
 			path: "quest/two.md",

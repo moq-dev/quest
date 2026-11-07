@@ -28,7 +28,7 @@ Once complete, create, update, or delete the relevant quests and epics.
 Record each settled decision and its reason in the quest's Plan, so later sessions don't ask it again, and the decision prompts in the PR.
 A fix quest's Plan names the PR that caused the problem when it is known, so its implementer lists it under `## Caused by` without searching again.
 When the PR deletes the quest, record its decisions in the PR body's `## Decisions` section instead, since the deletion takes the Plan with it.
-New work joins the milestone the user picked, at its rank; an epic groups related quests, and its README holds the work no child owns (the end-to-end test, the docs page).
+New work joins the milestone the user picked, in its directory or an epic's there; an epic groups related quests, and its README holds the work no child owns (the end-to-end test, the docs page).
 
 When done, commit, open the PR as a draft, and run `/quest-review` on it, which reviews the branch, records the `## Review` section, and marks the PR ready.
 Quests planned as follow-ups of an open PR may be committed to that PR instead, whose next push is reviewed as `/quest-review` describes.

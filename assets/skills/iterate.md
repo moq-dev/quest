@@ -28,4 +28,4 @@ Once nothing is unfinished and no decisions need the user, run `/quest-review` w
 Otherwise, before pushing to a PR that is ready for review, review the new head locally with `quest review --base <remote>/<base>`, following each round's `next` line; then push and update the PR's summary.
 Summarize the changes made.
 Hand it back with `quest release <pr> <token>`, using the latest token printed, whenever you stop, including to ask.
-Never merge; that is `/quest-merge`, once the user picks it.
+Never merge; that is `/quest-merge`, once the PR is picked.
