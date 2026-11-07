@@ -95,6 +95,7 @@ ownership-manifest design:
 - [Land through a serial merge queue with an async fixer](/quest/m0/queue-watcher/README.md) - GitHub's merge queue, or the watcher's own where GitHub has none, lands one PR at a time, and a host watcher fixes and re-enqueues each PR it drops
 - [Merge through a host gate](/quest/m0/host-land/README.md) - the host's fixer containers, and the frozen batched gate for moq.pro until it switches, with merge-commit landing as its one exception
 - [The land fixer resolves every mechanical failure](/quest/m0/land-fixer/README.md) - the docs listing what the fixer resolves and hands back
+- [quest review continues older sessions](/quest/m0/review-old-state.md) - a review session saved by an older quest continues, or is refused before the reviewer runs
 - [Review sessions keyed by upstream branch](/quest/m0/review-session-key.md) - a round from a local branch tracking the PR branch continues that branch's review session
 - [Kix decision UI](/quest/m0/kix/README.md) - planning and implementation through prompts and summaries, run on the maintainer's own runners
 - [Route quests to models by size](/quest/m0/model-routing/README.md) - `/quest-spawn` starts each quest on the first model of its size's ranked list that can run, reviews rank the same way, and PRs record size, implementer, and reviewer
