@@ -1,7 +1,7 @@
 // The watcher's own serial queue, for a base without GitHub's merge queue, such as a private repository on
 // GitHub Team: test one pick at a time on top of the base in the repository's queue workflow, then land
 // exactly the tested tree with the App.
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
 	GitHub,
@@ -26,7 +26,7 @@ import {
 	requiredChecks,
 	tryGit,
 } from "./land";
-import { fixerText, post } from "./land-fixer";
+import { post } from "./land-fixer";
 import { gitAuthentication } from "./land-git";
 import {
 	finishFallback,
@@ -46,20 +46,25 @@ import {
 	because,
 	type FailedJob,
 	failingJobs,
+	jobBlocks,
 	jobsSection,
 	listed,
 	login,
 	type QueuePick,
 	type Removal,
+	removalLog,
 } from "./land-watch";
-import { EXCERPT, excerpt, save } from "./land-serve";
+import { excerpt, save } from "./land-serve";
 import { advanceFixes, type FixContext, isHeld, readPull, readRemoval, requeuedHeads } from "./land-watch-fix";
 
 /** The check run each pick in the own queue carries, showing its place; informational, never a required context. */
 export const QUEUE_CHECK = "quest queue";
 
-/** The branch each build is pushed to, outside the reserved `quest/` namespace, which the queue workflow builds. */
-export const queueBranch = (base: string, number: number) => `quest-queue/${base}/${number}`;
+/** Where a base's builds are pushed, outside the reserved `quest/` namespace, for the queue workflow to build. */
+const queuePrefix = (base: string) => `quest-queue/${base}/`;
+
+/** The branch PR `number`'s build on `base` is pushed to. */
+export const queueBranch = (base: string, number: number) => `${queuePrefix(base)}${number}`;
 
 /** What the own queue needs beyond the API: the daemon's private repository, its pushes, and its reads. */
 export interface OwnQueue {
@@ -107,6 +112,7 @@ interface Shown {
 	id: number;
 	status: View["status"];
 	title: string;
+	url?: string;
 }
 
 const buildPath = (state: string) => join(state, "queue.json");
@@ -129,6 +135,10 @@ class Queue {
 	readonly name: string;
 	readonly remote: string;
 	readonly lines: string[] = [];
+	/** The PRs this pass dropped or tried to land, which its plan still lists as picks. */
+	readonly ended = new Set<number>();
+	/** Whether this pass tried to land a pick, which moves the base the next build needs. */
+	landing = false;
 	private shown: Record<number, Shown>;
 
 	constructor(
@@ -149,7 +159,13 @@ class Queue {
 	/** Show `view` on PR `number`'s head `head`, writing only a change, and a new check run once one completed. */
 	async show(number: number, head: string, view: View): Promise<void> {
 		const shown = this.shown[number];
-		if (shown?.head === head && shown.status === view.status && shown.title === view.title) return;
+		if (
+			shown?.head === head &&
+			shown.status === view.status &&
+			shown.title === view.title &&
+			shown.url === view.url
+		)
+			return;
 		// A head the PR left, as for the queue's own base merge before it lands, keeps no unfinished check.
 		if (shown && shown.head !== head && shown.status !== "completed")
 			await this.github.request(`/repos/${this.name}/check-runs/${shown.id}`, {
@@ -176,7 +192,13 @@ class Queue {
 			});
 			id = Number(object(await response.json()).id);
 		}
-		this.shown[number] = { head, id, status: view.status, title: view.title };
+		this.shown[number] = {
+			head,
+			id,
+			status: view.status,
+			title: view.title,
+			...(view.url ? { url: view.url } : {}),
+		};
 		save(shownPath(this.queue.state), this.shown);
 	}
 
@@ -235,7 +257,7 @@ class Queue {
 
 	/** Delete the queue branches of this base that no build holds, as a crashed daemon leaves them. */
 	async prune(keep?: string): Promise<void> {
-		const prefix = `refs/heads/${queueBranch(this.base, 0).replace(/0$/, "")}`;
+		const prefix = `refs/heads/${queuePrefix(this.base)}`;
 		const listing = await this.queue.read(this.queue.root, ["ls-remote", this.remote, `${prefix}*`]);
 		for (const line of listing.split("\n").filter(Boolean)) {
 			const ref = line.split("\t")[1];
@@ -310,19 +332,12 @@ class Queue {
 		const { entry } = build;
 		const number = entry.number;
 		const head = entry.head;
-		const log = join(this.queue.state, `removal-${number}-${at.replace(/[^0-9TZ]/g, "")}.log`);
-		writeFileSync(
-			log,
-			[
-				`The queue removed ${entry.url} at ${head} for ${reason}, on ${this.base} at ${build.base}.`,
-				...(detail ? [`\n${detail}`] : []),
-				...jobs.map(
-					(job) =>
-						`\n== ${job.workflow} / ${job.name}: ${job.conclusion}${job.step ? ` at step ${job.step}` : ""} (${job.url}) ==\n${job.log}`,
-				),
-				"",
-			].join("\n"),
-			{ mode: 0o600 },
+		const log = removalLog(
+			this.queue.state,
+			number,
+			at,
+			`The queue removed ${entry.url} at ${head} for ${reason}, on ${this.base} at ${build.base}.${detail ? `\n\n${detail}` : ""}`,
+			jobs,
 		);
 		const fixed: Entry = { ...entry, enabledAt: build.pick.at, approved: head };
 		const removal: Removal = {
@@ -348,17 +363,14 @@ class Queue {
 				blame: [number],
 			},
 		};
-		const share = Math.floor(EXCERPT / Math.max(1, jobs.length));
-		const blocks = jobs.map(
-			(job) =>
-				`\n\n${fixerText(`${job.workflow} / ${job.name}`)} ([job](${job.url})) ${job.conclusion}${job.step ? ` at step ${fixerText(job.step)}` : ""}${job.log ? `:\n\n<pre>${excerpt(job.log.trimEnd(), share)}</pre>` : "."}`,
-		);
+		const blocks = jobBlocks(jobs);
 		const missing =
 			jobs.length === 0 && reason !== "merge_conflict"
 				? "\n\nThe watcher found no failing job in the queue build's runs."
 				: "";
 		const comment = `quest land watch: the queue removed this pull request at ${head} because ${because(reason, this.app, this.base, "queue")} (\`${reason}\`).${AFTER.fix(head, this.fixing)}${missing}`;
 		build.drop = { removal, comment, blocks };
+		this.ended.add(number);
 		save(buildPath(this.queue.state), build);
 		await this.finishDrop(build);
 	}
@@ -404,6 +416,8 @@ class Queue {
 	async land(build: Build, plan: Plan, entry: Entry): Promise<void> {
 		const { root, state, method, token, read } = this.queue;
 		const number = entry.number;
+		this.ended.add(number);
+		this.landing = true;
 		const test = build.test!;
 		const prepared = await prepareHead(root, state, plan, entry, build.base, test.tree, token, read);
 		if ("fallback" in prepared) {
@@ -627,10 +641,11 @@ export async function ownPass(
 		}
 	}
 
-	// The next pick waits for the next pass once one landed, since the base it builds on moved.
-	if (!build && !own.lines.some((line) => line.startsWith("landed "))) {
+	// After a landing, the next pick waits for the next pass, which reads the base it moved to, and
+	// rebuilds first a pick whose landing found the base moved.
+	if (!build && !own.landing) {
 		for (const entry of plan.queue) {
-			if (held.has(entry.number)) continue;
+			if (held.has(entry.number) || own.ended.has(entry.number)) continue;
 			build = await own.start(plan, entry);
 			if (build) break;
 			again = true;
@@ -638,8 +653,9 @@ export async function ownPass(
 	}
 
 	const open = new Set<number>();
-	const picks = plan.queue.filter((entry) => !held.has(entry.number));
+	const picks = plan.queue.filter((entry) => !held.has(entry.number) && !own.ended.has(entry.number));
 	for (const entry of plan.queue) {
+		if (own.ended.has(entry.number)) continue;
 		open.add(entry.number);
 		if (entry.number === build?.entry.number) {
 			if (own.lines.some((line) => line.startsWith(`building ${entry.number} `)))

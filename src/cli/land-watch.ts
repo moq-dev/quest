@@ -399,6 +399,35 @@ export function because(reason: string, actor: string, base: string, build = "`m
 }
 
 /**
+ * Write a removal's full log, `removal-<number>-<at>.log` in `state`: `summary`, then each failing job's
+ * log, which the land fixer reads. Returns its path.
+ */
+export function removalLog(
+	state: string,
+	number: number,
+	at: string,
+	summary: string,
+	jobs: (FailedJob & { log: string })[],
+): string {
+	const path = join(state, `removal-${number}-${at.replace(/[^0-9TZ]/g, "")}.log`);
+	const sections = jobs.map(
+		(job) =>
+			`\n== ${job.workflow} / ${job.name}: ${job.conclusion}${job.step ? ` at step ${job.step}` : ""} (${job.url}) ==\n${job.log}`,
+	);
+	writeFileSync(path, [summary, ...sections, ""].join("\n"), { mode: 0o600 });
+	return path;
+}
+
+/** Each failing job's block for a removal's comment, its log's tail sharing the excerpt's room with the others. */
+export function jobBlocks(jobs: (FailedJob & { log: string })[]): string[] {
+	const share = Math.floor(EXCERPT / Math.max(1, jobs.length));
+	return jobs.map(
+		(job) =>
+			`\n\n${fixerText(`${job.workflow} / ${job.name}`)} ([job](${job.url})) ${job.conclusion}${job.step ? ` at step ${fixerText(job.step)}` : ""}${job.log ? `:\n\n<pre>${excerpt(job.log.trimEnd(), share)}</pre>` : "."}`,
+	);
+}
+
+/**
  * The failing jobs' blocks that fit in `room`, in order, so a PR whose workflow names many jobs, or
  * long ones, cannot make the comment too long to post and stall the watcher on it.
  */
@@ -500,26 +529,14 @@ async function handle(
 			: { jobs: [] };
 	const built = /^[0-9a-f]{40}$/.test(build.base ?? "") ? build.base! : base.sha;
 
-	const log = join(state, `removal-${number}-${at.replace(/[^0-9TZ]/g, "")}.log`);
-	const summary = `The merge queue removed ${string(pull.url)} at ${head} for ${reason} (${actor || "unknown"}), on ${base.ref} at ${built}.`;
-	writeFileSync(
-		log,
-		[
-			summary,
-			...build.jobs.map(
-				(job) =>
-					`\n== ${job.workflow} / ${job.name}: ${job.conclusion}${job.step ? ` at step ${job.step}` : ""} (${job.url}) ==\n${job.log}`,
-			),
-			"",
-		].join("\n"),
-		{ mode: 0o600 },
+	const log = removalLog(
+		state,
+		number,
+		at,
+		`The merge queue removed ${string(pull.url)} at ${head} for ${reason} (${actor || "unknown"}), on ${base.ref} at ${built}.`,
+		build.jobs,
 	);
-
-	const share = Math.floor(EXCERPT / Math.max(1, build.jobs.length));
-	const blocks = build.jobs.map(
-		(job) =>
-			`\n\n${fixerText(`${job.workflow} / ${job.name}`)} ([job](${job.url})) ${job.conclusion}${job.step ? ` at step ${fixerText(job.step)}` : ""}${job.log ? `:\n\n<pre>${excerpt(job.log.trimEnd(), share)}</pre>` : "."}`,
-	);
+	const blocks = jobBlocks(build.jobs);
 	const missing =
 		build.jobs.length === 0 && reason !== "merge_conflict" && FIXABLE.includes(reason)
 			? `\n\nThe watcher found no failing \`merge_group\` job for it before ${at}.`
