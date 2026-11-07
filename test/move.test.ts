@@ -10,7 +10,7 @@ import { move, remove } from "../src/core";
 import { openPullRequests } from "../src/cli/claims";
 import { GitHub, type GitHubDependencies } from "../src/cli/github";
 import { main } from "../src/cli/main";
-import { EPIC_README, M0_README, ROOT_README, Tree, initRepository, tempDir } from "./fixture";
+import { EPIC_README, M0_README, ROOT_README, TWO, Tree, initRepository, tempDir } from "./fixture";
 
 // Each test spawns git up to a dozen times, which a busy Windows runner can stretch past 5 s.
 vi.setConfig({ testTimeout: 30_000 });
@@ -401,6 +401,36 @@ describe("quest check --fix", () => {
 			});
 		});
 	}
+
+	test("promotes a section heading below ## that only its own content follows", async () => {
+		const tree = Tree.committed();
+		tree.append("quest/m0/epic/two.md", "\n### Waiting\n\n- Maintainer: pick the name\n");
+
+		expect(await quest(tree, "check", "--fix")).toEqual({
+			code: 0,
+			stdout: "M quest/m0/epic/two.md\nquest: 5 documents ok\n",
+			stderr: "",
+		});
+		expect(tree.read("quest/m0/epic/two.md")).toBe(TWO + "\n## Waiting\n\n- Maintainer: pick the name\n");
+	});
+
+	test("leaves a misleveled heading for the check when text follows it or its section exists", async () => {
+		const tree = Tree.committed();
+		tree.append("quest/m0/epic/one.md", "\n### Waiting\n\n- Maintainer: pick the name\n\n### Notes\n\nMore.\n");
+		tree.append(
+			"quest/m0/epic/two.md",
+			"\n## Waiting\n\n- Maintainer: pick a name\n\n### Waiting\n\n- Maintainer: pick\n",
+		);
+
+		const out = await quest(tree, "check", "--fix");
+		expect(out.code).toBe(1);
+		expect(out.stdout).toBe("");
+		expect(out.stderr).toContain("quest/m0/epic/one.md:");
+		expect(out.stderr).toContain("'### Waiting' must be '## Waiting'");
+		expect(out.stderr).toContain("quest/m0/epic/two.md:");
+		expect(tree.read("quest/m0/epic/one.md")).toContain("\n### Waiting\n");
+		expect(tree.read("quest/m0/epic/two.md")).toContain("\n### Waiting\n");
+	});
 
 	test("leaves a link to a moved quest, a mistyped link, and a prose link for the check", async () => {
 		const tree = await diverged((tree) => {

@@ -5,8 +5,8 @@
 // dependency graph. Anything else that mentions a path is prose, which the
 // caller reports rather than rewriting.
 
-import { type Doc, type Entry, holds, parse, rooted, withoutFragment } from "./doc";
-import { LIST_SECTIONS, finishedMilestone } from "./rules";
+import { type Doc, type Entry, type Heading, has, holds, parse, rooted, withoutFragment } from "./doc";
+import { HEADINGS, LIST_SECTIONS, finishedMilestone } from "./rules";
 
 /** One quest document as loaded: its repository-relative path and source text. */
 export interface Source {
@@ -65,6 +65,41 @@ export function move(sources: Source[], from: string, to: string): Moved {
 		if (edits.size > 0) texts.set(relocate(source.path, from, to) ?? source.path, splice(source.text, edits));
 	}
 	return { texts, missed };
+}
+
+/**
+ * Promote each section heading below `## ` whose name the rules read, where
+ * that moves no other text into the section: the heading is literal, the
+ * document has no `## ` section of that name yet, and nothing but its own
+ * content follows it before the next `## ` heading or the end. Anything else
+ * stays for `quest check` to report. Returns the new text of every document
+ * that changed.
+ */
+export function promote(sources: Source[]): Map<string, string> {
+	const texts = new Map<string, string>();
+	for (const source of sources) {
+		const doc = parse(source.path, source.text);
+		const lines = source.text.split("\n");
+		let changed = false;
+		for (const heading of doc.offLevel) {
+			if (heading.depth < 3 || !heading.literal || !HEADINGS.includes(heading.text) || has(doc, heading.text)) {
+				continue;
+			}
+			const next = following(doc, heading)[0];
+			if (next !== undefined && next.depth !== 2) continue;
+			lines[heading.line - 1] = lines[heading.line - 1].replace(/^#+/, "##");
+			changed = true;
+		}
+		if (changed) texts.set(source.path, lines.join("\n"));
+	}
+	return texts;
+}
+
+/** The headings after `heading` in source order. */
+function following(doc: Doc, heading: Heading): Heading[] {
+	return [...doc.headings, ...doc.offLevel]
+		.filter((other) => other.line > heading.line)
+		.sort((a, b) => a.line - b.line);
 }
 
 /**

@@ -333,11 +333,13 @@ finished, which `quest check` then flags. `quest check --fix` drops every
 history of `HEAD`, and of `MERGE_HEAD` during a merge, that the working tree
 lacks, and every epic's `Required` entry naming a quest in its own folder,
 which the epic already waits for, and prints `M path` for each edited
-document. That last part also migrates a tree from before epics stopped
-listing their children. It leaves the edits
-unstaged and refuses while a quest file has unresolved conflicts. A quest moved
-rather than deleted, a link that never named a quest, and a link in prose stay
-for `quest check` to report.
+document. That part also migrates a tree from before epics stopped listing
+their children. It then promotes a section heading written below `##` to `##`
+where nothing but its own content follows it before the next `##` heading, and
+no `##` section of that name exists. It leaves the edits unstaged and refuses
+while a quest file has unresolved conflicts. A quest moved rather than deleted,
+a link that never named a quest, a link in prose, and any other misleveled
+heading stay for `quest check` to report.
 
 ## Wait for pull request activity
 
