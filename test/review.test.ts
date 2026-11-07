@@ -306,13 +306,13 @@ test("each size's reviewer is the first whose model wrote none of the code", () 
 	expect(at("S", codex)).toBe("claude claude-opus-5-5 low");
 	expect(at("M", codex)).toBe("claude claude-opus-5-5 medium");
 	expect(at("L", codex)).toBe("claude claude-opus-5-5 high");
-	expect(at("XL", codex)).toBe("claude claude-opus-5-5 high");
+	expect(at("XL", codex)).toBe("claude claude-opus-5-5 xhigh");
 
 	// The PR's recorded implementers replace the running harness: Sol reviews Opus's code from Claude Code.
 	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
 	// No harness need be detected once the implementers are named.
-	expect(at("M", authored({ exclude: ["grok-4.7"] }, {}))).toBe("codex gpt-6.1-sol medium");
+	expect(at("M", authored({ exclude: ["other-model"] }, {}))).toBe("codex gpt-6.1-sol medium");
 	const both = authored({ exclude: ["gpt-6.1-sol", "claude-opus-5-5"] }, {});
 	expect(() => pickReviewer("M", {}, both)).toThrow("wrote the code; pass --harness and --model");
 

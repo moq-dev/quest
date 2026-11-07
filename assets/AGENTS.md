@@ -175,6 +175,17 @@ Run no more sub-agents at once than the harness allows; queue the rest and start
 Relay no interim report: resume a sub-agent that ended its turn on one, telling it to block until its work finishes.
 A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
 
+Run each agent at an entry of `quest`'s ranked lists unless the repository's `AGENTS.md` names other models: as a native sub-agent on this session's harness, else through `quest agent`.
+Size each `/quest-iterate` you dispatch as a quest, by the work left on its PR, and name that size in its brief.
+Start it on the PR's writer, the model of its first `Implementer:` line, at the entry `quest models <size> --writer <model>` prints, waiting out its usage limit so the other model can review; a PR with no known writer takes its size's first entry that can run.
+
+`quest agent start --harness <claude|codex> --model <model> --effort <level> --permission-mode <mode> <worktree> <prompt>` runs a headless agent on that CLI's own login; start it as a background command in its own isolated worktree, so the harness reports its exit as it would a sub-agent's.
+`--permission-mode` is Claude Code's permission mode, or Codex's sandbox mode.
+It prints the session id, then the outcome and the agent's final reply, and exits 3 at the account's usage limit, or 4 when the CLI is logged out, printing the login command.
+Tell the agent that it cannot prompt, so it ends with its decisions and recommendations in its final reply, and that ending its turn kills its background commands, so it waits in the foreground.
+Answer it in the background with `quest agent resume`, passing the same options, the worktree, the session id, and the answer.
+Stop one with `quest agent stop <worktree>`, and the rest with `quest agent stop --all` before you finish.
+
 ## Questions
 
 Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
