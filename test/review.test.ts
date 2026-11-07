@@ -790,6 +790,35 @@ fakes("a differently named branch continues the session --branch names, and with
 	expect(own.stderr).toContain("has none to resume");
 });
 
+fakes("a branch tracking the PR's branch continues its session, and one tracking the base has its own", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).stdout).toContain("round 1\n");
+	write(s.repo, ".tmp/responses.md", "Fixed at src/lib.ts:1.\n");
+	const responses = join(s.repo, ".tmp", "responses.md");
+	git(s.repo, "checkout", "-qb", "temp");
+	git(s.repo, "config", "branch.temp.remote", "origin");
+	git(s.repo, "config", "branch.temp.merge", "refs/heads/feature");
+	const tracking = await quest("--root", s.repo, "review", "--responses", responses);
+	expect(tracking.stderr).toBe("");
+	expect(tracking.stdout).toContain("round 2\n");
+	git(s.repo, "checkout", "-qb", "other");
+	git(s.repo, "config", "branch.other.remote", "origin");
+	git(s.repo, "config", "branch.other.merge", "refs/heads/main");
+	const base = await quest("--root", s.repo, "review", "--responses", responses);
+	expect(base.code).toBe(2);
+	expect(base.stderr).toContain("has none to resume");
+});
+
+fakes("a detached checkout names the branches at its head to pass as --branch", async () => {
+	const s = setup();
+	git(s.repo, "checkout", "-q", "--detach");
+	const detached = await quest("--root", s.repo, "review");
+	expect(detached.code).toBe(2);
+	expect(detached.stderr).toContain(
+		"pass --branch to name the branch whose review session this continues, such as --branch feature",
+	);
+});
+
 fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
 	"a branch behind its base is reviewed from its merge base (host %s)",
 	async (host) => {
