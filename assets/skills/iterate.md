@@ -23,11 +23,9 @@ Fix merge conflicts and failing CI checks.
 Address the automated review findings already posted, without waiting on optional reviewers: fix those you agree with and comment on any you decline.
 One round only; never request a review, including by toggling a ready PR to draft and back.
 
-Before pushing to a PR that is ready for review, review the new head locally with `/quest-review`.
 If `quest status <pr>` shows auto-merge enabled, disable it with `gh pr merge <pr> --disable-auto` before any push: GitHub keeps it across a writer's push and would land the new head unreviewed.
-Push your changes to the PR and update its summary.
-Summarize the changes made.
-
 Once nothing is unfinished and no decisions need the user, run `/quest-review` with your token, which reviews the branch, pushes, and marks the PR ready.
+Otherwise, before pushing to a PR that is ready for review, review the new head locally with `quest review --base <remote>/<base>`, following each round's `next` line; then push and update the PR's summary.
+Summarize the changes made.
 Hand it back with `quest release <pr> <token>`, using the latest token printed, whenever you stop, including to ask.
 Never merge; that is `/quest-merge`, once the user picks it.
