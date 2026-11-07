@@ -79,6 +79,8 @@ test("a rebase is blocked unless the user asked, or it ends one", () => {
 	expect(bash("git rebase origin/main")).toEqual([DENIED_REWRITE]);
 	expect(bash("git pull --rebase origin main")).toEqual([DENIED_REWRITE]);
 	expect(bash(`${USER_ASKED} git rebase origin/main`)).toEqual([]);
+	expect(bash(`${USER_ASKED} bash -c 'git rebase origin/main'`)).toEqual([]);
+	expect(bash("bash -c 'git rebase origin/main'")).toEqual([DENIED_REWRITE]);
 	expect(bash("git rebase --abort")).toEqual([]);
 	expect(bash("git pull --no-rebase origin main")).toEqual([]);
 	expect(bash("gh pr merge 5 --rebase")).toEqual([]);
@@ -92,6 +94,8 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"mkdir -p /tmp/work",
 		"cp a.txt /tmp/",
 		"git clone https://example.com/r /tmp/r",
+		"git clone -b main https://example.com/r /tmp/r",
+		"git worktree add -b x /tmp/x",
 		"mktemp -d",
 		"mktemp -t body.XXXX",
 		'cat > "$TMPDIR/body.md" <<EOF\nx\nEOF',
@@ -104,6 +108,9 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"mktemp -p .tmp",
 		"mktemp .tmp/body.XXXX",
 		"cp /tmp/a .tmp/a",
+		"git clone /tmp/source .tmp/clone",
+		"git clone --depth 1 /tmp/source",
+		"git worktree add -b x .worktrees/x /tmp/ignored",
 	])
 		expect(bash(command), command).toEqual([]);
 	expect(broken({ tool: "Write", input: { file_path: "/tmp/x.md", content: "x" }, cwd })).toEqual([RULES.tmp]);
@@ -172,4 +179,6 @@ test("a new GitHub post needs the footer and no em dashes; edits and unreadable 
 	expect(bash("gh pr review 5 --approve")).toEqual([]);
 	expect(bash("cat .tmp/body.md | gh pr comment 5 --body-file -")).toEqual([]);
 	expect(bash("gh pr comment 5 --body-file missing.md")).toEqual([]);
+	expect(bash('gh pr comment 5 --body "$body"')).toEqual([]);
+	expect(bash("gh pr comment 5 --body-file - <<EOF\n$(cat .tmp/body.md)\nEOF")).toEqual([]);
 });

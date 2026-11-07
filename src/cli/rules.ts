@@ -171,12 +171,15 @@ function dropOptions(args: string[]): string[] {
 	return args.slice(i);
 }
 
-/** Check each simple command in a shell command line, following `sh -c` into its script. */
-function shell(line: string, check: Check) {
+/**
+ * Check each simple command in a shell command line, following `sh -c` into
+ * its script, which inherits the assignments in `inherited`.
+ */
+function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set()) {
 	const { found, scratch, cwd } = check;
 	const written = new Map<string, string>();
 	for (const simple of parse(line)) {
-		const env = new Set<string>();
+		const env = new Set(inherited);
 		const argv = unwrap(simple.argv, env);
 		for (const { op, target } of simple.redirects) {
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op)) {
@@ -188,7 +191,7 @@ function shell(line: string, check: Check) {
 		const [name, ...args] = argv;
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
-			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check);
+			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env);
 			continue;
 		}
 		const asked = env.has(USER_ASKED);
@@ -246,9 +249,51 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 		const message = values(args, ["-m", "--message"], { attached: ["-m"] }).join("\n");
 		const files = values(args, ["-F", "--file"], { attached: ["-F"] }).map(input);
 		if (adds("", [message, ...files].join("\n"))) check.found.add("emDash");
-	} else if (sub === "clone" || (sub === "worktree" && args[0] === "add")) {
-		if (args.some((arg) => !arg.startsWith("-") && check.scratch(arg))) check.found.add("tmp");
+	} else if (sub === "clone") {
+		// `git clone [options] <repository> [<directory>]`: only the directory is written.
+		const directory = positionals(args, CLONE_VALUE_OPTIONS)[1];
+		if (directory !== undefined && check.scratch(directory)) check.found.add("tmp");
+	} else if (sub === "worktree" && args[0] === "add") {
+		// `git worktree add [options] <path> [<commit-ish>]`.
+		const path = positionals(args.slice(1), new Set(["-b", "-B", "--reason"]))[0];
+		if (path !== undefined && check.scratch(path)) check.found.add("tmp");
 	}
+}
+
+/** `git clone` options that take the next word. */
+const CLONE_VALUE_OPTIONS = new Set([
+	"-b",
+	"--branch",
+	"-o",
+	"--origin",
+	"-c",
+	"--config",
+	"-u",
+	"--upload-pack",
+	"-j",
+	"--jobs",
+	"--depth",
+	"--reference",
+	"--reference-if-able",
+	"--template",
+	"--separate-git-dir",
+	"--filter",
+	"--shallow-since",
+	"--shallow-exclude",
+	"--server-option",
+	"--bundle-uri",
+	"--ref-format",
+]);
+
+/** The words in `args` that are not options, nor the values of the options in `valued`. */
+function positionals(args: string[], valued: ReadonlySet<string>): string[] {
+	const found: string[] = [];
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] === "--") return [...found, ...args.slice(i + 1)];
+		if (valued.has(args[i]!)) i++;
+		else if (!args[i]!.startsWith("-")) found.push(args[i]!);
+	}
+	return found;
 }
 
 /** `git push` options that take the next word. */
@@ -327,7 +372,9 @@ function gh(args: string[], input: (file: string) => string | undefined, check: 
 	}
 	if (body.length === 0) return;
 	// A body that cannot be read here, such as one piped in, is left to the prose.
-	if (body.some((text) => text === undefined)) return;
+	// So is one holding an expansion, such as `"$body"` or an unquoted here-document's `$(cat f)`,
+	// since the shell rather than the hook knows its text.
+	if (body.some((text) => text === undefined || /\$[\w{(]|`/.test(text))) return;
 	const text = body.join("\n");
 	if (authored && adds("", [...titles, text].join("\n"))) check.found.add("emDash");
 	if (authored && !/^\(written by .+\)\s*$/im.test(text)) check.found.add("footer");
