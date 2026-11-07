@@ -170,7 +170,11 @@ commit on it only
   name in lowercase kebab-case, whose Goal says to fix the test or delete it
   and links each listed job and this failure's, which the failure log names;
 - `quest/m0/flaky/README.md`, the epic holding one quest per disabled test,
-  if it is missing.
+  if it is missing;
+- only when the repository's own `quest check` demands it (an older Quest
+  that still requires epics to list their children), the link to the new
+  quest in that epic and, for a new epic, the epic's link in
+  `quest/m0/README.md`.
 
 Follow the repository's quest format, and run `quest check` when the
 repository has it. A disabled test that is another quest's acceptance test

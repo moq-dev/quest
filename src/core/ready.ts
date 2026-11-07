@@ -97,7 +97,11 @@ function expand(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]
 		const target = entry.target === null ? null : rooted(entry.target);
 		found.push(blocker(docs, byPath, target !== null && byPath.has(target) ? target : null, entry.text, stack));
 	}
-	for (const child of children(docs, doc)) found.push(blocker(docs, byPath, child, child, stack));
+	// An unmigrated epic may still list a child under `Required`; name it once.
+	const listed = new Set(found.map((b) => b.path));
+	for (const child of children(docs, doc)) {
+		if (!listed.has(child)) found.push(blocker(docs, byPath, child, child, stack));
+	}
 	return found;
 }
 
