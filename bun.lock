@@ -5,7 +5,7 @@
     "": {
       "name": "quest",
       "dependencies": {
-        "@opencode/client": "2.1.1",
+        "@opencode/client": "2.2.1",
         "commander": "15.0.0",
         "mdast-util-from-markdown": "2.1.0",
         "mdast-util-gfm-strikethrough": "2.0.1",
@@ -202,11 +202,11 @@
 
     "@noble/hashes": ["@noble/hashes@2.4.0", "", {}, "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA=="],
 
-    "@opencode/client": ["@opencode/client@2.1.1", "", { "dependencies": { "@opencode/protocol": "2.1.1", "@opencode/schema": "2.1.1" }, "peerDependencies": { "effect": "4.0.1", "solid-js": ">=1.9.0" }, "optionalPeers": ["effect", "solid-js"] }, "sha512-0/JTWitCw2gkr4o+ra+76UeeSpsq7mTFUUtKMPMt4aFu+rYgZw9Lkw4EJgxYK7p3sefiiKBA8KnX0a3LbxIjkw=="],
+    "@opencode/client": ["@opencode/client@2.2.1", "", { "dependencies": { "@opencode/protocol": "2.2.1", "@opencode/schema": "2.2.1" }, "peerDependencies": { "effect": "4.0.1", "solid-js": ">=1.9.0" }, "optionalPeers": ["effect", "solid-js"] }, "sha512-7QWtocDRR9eUsCJpyaj6k+aAEVDWO2CIzn9lwDNBJhiyt2hMf+yOyV/BKeK/9R7qKcXEOZ0tlGDvQC8HEtyjQg=="],
 
-    "@opencode/protocol": ["@opencode/protocol@2.1.1", "", { "dependencies": { "@opencode/schema": "2.1.1", "effect": "4.0.1" } }, "sha512-rFsaileXP/W7GNpt2C8GcF8WtLYzyoiaq/xMLkHfAk8xnH5jMNaWJL8DRawUM2FvCaI6H6SKeX4gw6eDGhyl6A=="],
+    "@opencode/protocol": ["@opencode/protocol@2.2.1", "", { "dependencies": { "@opencode/schema": "2.2.1", "effect": "4.0.1" } }, "sha512-lqkkRhrckEKmiSJi249rvfX/fXX8JeiMS7adtXonO1Ol3IqnEqY4uSZgvQiQ11SBR5RyDQaRW9KGoOjaTY4PAQ=="],
 
-    "@opencode/schema": ["@opencode/schema@2.1.1", "", { "dependencies": { "@standard-schema/spec": "1.1.0", "effect": "4.0.1" } }, "sha512-Qh8EmvNeE/4UzSbkvvwQ2DHOOFZMk8dteeIsX//+qMhjTXJ+xGoWo5bsoauv6pYnqaQYtEwwpMaqk2N0rO4QaA=="],
+    "@opencode/schema": ["@opencode/schema@2.2.1", "", { "dependencies": { "@standard-schema/spec": "1.1.0", "effect": "4.0.1" } }, "sha512-TicxPQC1UKqq954X1yUKmBlXfJYl5CRr52FKwLZbYOfTxJd406Hoqt2arM4YI3c+abs17b9sumoq5uqFLhiGFA=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.152.0", "", {}, "sha512-oM/5rLBm2tPkg0iBgkH/FOeR3PCDpY19GTgAZjMFM8h9WI9VW7cLgzp6nwtarYKmovavIQZ+Fe/RKX/8C8O/Rw=="],
 
