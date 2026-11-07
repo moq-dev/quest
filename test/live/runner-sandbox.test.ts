@@ -1,6 +1,7 @@
 // The opencode sandbox's boundary, with the real opencode and sandbox-runtime
 // (`srt`): a scripted model drives one runner job through `Opencode.launch` in
-// a checkout that tries to escape, and each attempt is refused.
+// a checkout that tries to escape, and each attempt is refused. A second job on
+// the same account and repository then tries to read the output the first saved.
 //
 // `test/runner.test.ts` checks only the settings the runner hands opencode and
 // srt; whether they confine anything is those programs' behavior, which can
@@ -18,6 +19,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -27,11 +29,17 @@ import {
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createNetServer, type Server as NetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { requireProgram } from "../../src/cli/program";
-import { accountDirectories, Opencode, PROJECT_CONFIG, projectConfig } from "../../src/runner/opencode";
+import {
+	accountDatabase,
+	accountDirectories,
+	Opencode,
+	PROJECT_CONFIG,
+	projectConfig,
+} from "../../src/runner/opencode";
 import { binaryPath } from "../../src/runner/cli";
 import { closeSandbox, openSandbox, quote, type Sandbox, unixSocketRefusal } from "../../src/runner/sandbox";
 
@@ -45,6 +53,8 @@ const TOOLS_TOKEN = "quest-boundary-tools-token";
 interface Paths {
 	/** The job's checkout: a worktree of `repository`. */
 	checkout: string;
+	/** Another job's checkout of the same repository, on the same account. */
+	second: string;
 	/** The bare clone, which commands read but must not write, such as a hook git would run on the host. */
 	repository: string;
 	/** The runner's state, which commands can neither read nor write. */
@@ -70,8 +80,10 @@ interface Attempt {
 }
 
 /** The database opencode keeps the account's credentials in. */
-const credentialStore = (paths: Paths) =>
-	join(accountDirectories(paths.account).XDG_DATA_HOME, "opencode", "opencode.db");
+const credentialStore = (paths: Paths) => accountDatabase(paths.account);
+
+/** The runner's data directory for the job in `checkout`. */
+const dataDirectory = (checkout: string) => `${checkout}.data`;
 
 /** Commands avoid `cd` and the like, whose directory opencode's own path check refuses before srt sees it. */
 const ATTEMPTS: Attempt[] = [
@@ -196,6 +208,14 @@ const bash = (command: string): Call => ({ tool: "shell", args: { command } });
 
 /** A command inside the sandbox that must work, so the refusals above are not every command failing. */
 const ALLOWED = bash(`printf allowed > allowed.txt && printf ok > "$TMPDIR/allowed" && echo ALLOWED-$((6 * 7))`);
+/**
+ * A command whose output opencode truncates, saving it whole as a shell
+ * capture: what the second job tries to read. opencode saves other tools'
+ * output whole only for tools that bound none of their own, such as the kix
+ * tools, so the test puts that file where opencode would.
+ */
+const SAVED = "first-job-saved-output";
+const TRUNCATED = bash(`printf '%s-%s\\n' first-job saved-output; seq 3000`);
 /** The command's environment, which must hold none of the server's secrets. */
 const ENVIRONMENT = bash("env");
 /**
@@ -220,8 +240,9 @@ const missing = new Set<string>();
 
 /**
  * Every tool the job offers the model, so a release adding one fails here
- * until it is reviewed: the questions, WebFetch, web search, and Code Mode it
- * denies are absent, and so are the kix tools, at a port nothing listens on.
+ * until it is reviewed: the questions, WebFetch, web search, Code Mode, and
+ * opencode's own tools it denies are absent, and so are the kix tools, at a
+ * port nothing listens on.
  */
 const OFFERED = ["edit", "glob", "grep", "read", "shell", "skill", "subagent", "write"];
 /** Standing instructions for the job, which must reach the model. */
@@ -242,13 +263,15 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 		const repository = join(runner, "repos", "fixture.git");
 		const seed = join(scratch, "seed");
 		git(scratch, "init", "-q", "-b", "main", seed);
-		symlinkSync(join(accountDirectories(account).XDG_DATA_HOME, "opencode", "opencode.db"), join(seed, "leak"));
+		symlinkSync(accountDatabase(account), join(seed, "leak"));
 		writeFileSync(join(seed, "README.md"), "fixture\n");
 		git(seed, "add", ".");
 		git(seed, "commit", "-qm", "base");
 		git(scratch, "clone", "-q", "--bare", seed, repository);
 		const checkout = join(runner, "checkouts", "job");
 		git(repository, "worktree", "add", "-q", "--detach", checkout, "main");
+		const second = join(runner, "checkouts", "second");
+		git(repository, "worktree", "add", "-q", "--detach", second, "main");
 
 		server = await listen(model);
 		const socket = join(repository, "host.sock");
@@ -257,6 +280,7 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 		if (!address || typeof address === "string") throw new Error("the scripted model has no port");
 		paths = {
 			checkout,
+			second,
 			repository,
 			runner,
 			account,
@@ -286,7 +310,6 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 
 	test("an opencode job's commands cannot escape", { timeout: 5 * 60_000 }, async () => {
 		const srt = binaryPath("srt", process.env);
-		const opencode = binaryPath("opencode", process.env);
 		const sandbox = openSandbox({
 			cwd: paths.checkout,
 			repository: paths.repository,
@@ -301,11 +324,17 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 			DESCRIPTORS,
 			...ATTEMPTS.map((attempt) => bash(attempt.command(paths))),
 			...FILE_ATTEMPTS.map((attempt) => attempt.call),
+			TRUNCATED,
 		];
 		let output = "";
 		let exit: Awaited<ReturnType<typeof run>>;
 		try {
-			exit = await run(new Opencode(opencode, srt, process.env), sandbox, (line) => (output += line));
+			exit = await run({
+				checkout: paths.checkout,
+				sandbox,
+				session: "boundary",
+				output: (line) => (output += line),
+			});
 		} finally {
 			closeSandbox(sandbox);
 		}
@@ -324,7 +353,7 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 
 		const [allowed, environment, descriptors, ...rest] = results;
 		const attempts = rest.slice(0, ATTEMPTS.length);
-		const files = rest.slice(ATTEMPTS.length);
+		const files = rest.slice(ATTEMPTS.length, ATTEMPTS.length + FILE_ATTEMPTS.length);
 		expect(allowed, "a permitted command failed, so every refusal would pass vacuously").toContain("ALLOWED-42");
 		expect(readFileSync(join(paths.checkout, "allowed.txt"), "utf8")).toBe("allowed");
 		for (const secret of [KEY, TOOLS_TOKEN, "OPENCODE_", "XDG_DATA_HOME"])
@@ -359,7 +388,58 @@ describe.skipIf(!linux)("opencode's sandbox", () => {
 		for (const name of PROJECT_CONFIG) expect(existsSync(join(paths.checkout, name)), name).toBe(false);
 		expect(git(paths.checkout, "status", "--porcelain", "--ignored")).toBe("?? allowed.txt\n");
 	});
+
+	test("another job on the repository cannot read the output the first saved", { timeout: 5 * 60_000 }, async () => {
+		// The first job's saved output, in its own data directory.
+		const data = join(dataDirectory(paths.checkout), "opencode");
+		const capture = readdirSync(join(data, "shell"), { recursive: true, encoding: "utf8" })
+			.filter((name) => name.endsWith(".out"))
+			.map((name) => join(data, "shell", name))
+			.find((file) => readFileSync(file, "utf8").includes(SAVED));
+		expect(capture, "the first job saved no shell capture to read").toBeDefined();
+		const output = join(data, "tool-output", "tool_000000000000first");
+		mkdirSync(dirname(output), { recursive: true });
+		writeFileSync(output, `${SAVED}\n`);
+
+		const sandbox = openSandbox({
+			cwd: paths.second,
+			repository: paths.repository,
+			runnerHome: paths.runner,
+			devShell: null,
+			trusted: false,
+		});
+		const reads = [output, capture!].flatMap((path) => [
+			{ tool: "read", args: { path } },
+			bash(`cat ${quote(path)}`),
+		]);
+		script = reads;
+		requests.length = 0;
+		let log = "";
+		let exit: Awaited<ReturnType<typeof run>>;
+		try {
+			exit = await run({ checkout: paths.second, sandbox, session: "second", output: (line) => (log += line) });
+		} finally {
+			closeSandbox(sandbox);
+		}
+		const results = toolResults();
+		const context = `exit ${JSON.stringify(exit)}\n${log.slice(-4000)}`;
+		expect(exit.failed, context).toBe(false);
+		expect(results, `the model saw ${results.length} of ${script.length} results\n${context}`).toHaveLength(
+			script.length,
+		);
+		results.forEach((result, index) =>
+			expect(result, `${JSON.stringify(reads[index])} read the first job's output`).not.toContain(SAVED),
+		);
+	});
 });
+
+/** One job on the account, in its own checkout and sandbox. */
+interface Job {
+	checkout: string;
+	sandbox: Sandbox;
+	session: string;
+	output(line: string): void;
+}
 
 /** How long the job may run before it is stopped, within the test's timeout and the stop's grace. */
 const RUN_BOUND = 4 * 60_000;
@@ -369,11 +449,13 @@ const RUN_BOUND = 4 * 60_000;
  * listens on. A turn that runs past `RUN_BOUND` is stopped and awaited, so a
  * hung opencode or srt never outlives the test.
  */
-async function run(adapter: Opencode, sandbox: Sandbox, output: (line: string) => void) {
+async function run({ checkout, sandbox, session, output }: Job) {
+	const adapter = new Opencode(binaryPath("opencode", process.env), binaryPath("srt", process.env), process.env);
 	const running = adapter.launch({
-		cwd: paths.checkout,
+		cwd: checkout,
 		home: paths.account,
-		session: "boundary",
+		data: dataDirectory(checkout),
+		session,
 		resume: false,
 		prompt: "Run the commands you are given.",
 		system: SYSTEM,
@@ -434,7 +516,7 @@ function signIn(account: string, baseURL: string) {
 	);
 	const imported = spawnSync(binaryPath("opencode", process.env), ["auth", "import", "--standalone", exported], {
 		cwd: account,
-		env: { PATH: process.env.PATH, HOME: account, ...dirs },
+		env: { PATH: process.env.PATH, HOME: account, ...dirs, OPENCODE_DB: accountDatabase(account) },
 		encoding: "utf8",
 	});
 	rmSync(exported);

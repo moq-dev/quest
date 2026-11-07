@@ -393,12 +393,17 @@ export class Workspace {
 		return { root: dir, base };
 	}
 
+	/** A directory beside the checkout for the agent CLI's own per-job files, outside what the agent's sandbox can reach. */
+	get data(): string {
+		return `${this.dir}.data`;
+	}
+
 	/** The branch `reviewCheckout` checks out, one per job. */
 	get reviewBranch(): string {
 		return `kix-review/${basename(this.dir)}`;
 	}
 
-	/** Delete the checkout, its review checkout and session, and its record once the job is done with this runner. */
+	/** Delete the checkout, its review checkout and session, its data, and its record once the job is done with this runner. */
 	async remove(): Promise<void> {
 		await locked(this.#git, async () => {
 			await remove(this.#git, this.dir);
@@ -406,6 +411,7 @@ export class Workspace {
 			await run("git", ["-C", this.#git, "branch", "--quiet", "-D", this.reviewBranch]).catch(() => {});
 			rmSync(sessionFile(this.#git, this.reviewBranch), { force: true });
 		});
+		rmSync(this.data, { recursive: true, force: true });
 		rmSync(this.#file, { force: true });
 	}
 }

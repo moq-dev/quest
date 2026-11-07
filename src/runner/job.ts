@@ -279,6 +279,7 @@ export class Attempt {
 				this.#agent = adapter.launch({
 					cwd: this.#workspace.dir,
 					home: ctx.home(account),
+					data: this.#workspace.data,
 					session: this.#session,
 					resume,
 					prompt: resume ? resumePrompt(job) : startPrompt(job, this.instructions, this.#workspace.dir),

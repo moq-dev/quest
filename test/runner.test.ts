@@ -870,15 +870,29 @@ describe("opencode", () => {
 		const { default: plugin } = await import(pathToFileURL(file).href);
 		const config = ["opencode.json", ".opencode"].map((name) => join(checkout, name));
 		let hook: ((event: { tool: string; input: unknown }) => unknown) | undefined;
+		let tools = [
+			{ id: "read", options: { codemode: false } },
+			{ id: "opencode_session_move", options: { namespace: "opencode" } },
+			{ id: "opencode_worktree_remove", options: { namespace: "opencode", permission: "edit" } },
+			{ id: "kix_ask", options: { namespace: "kix" } },
+		];
 		await plugin.setup({
 			options: { cwd: checkout, writes: [checkout, tmp], reads: [output], config },
 			tool: {
+				transform: async (callback: (editor: unknown) => void) => {
+					callback({
+						list: () => tools,
+						remove: (id: string) => (tools = tools.filter((tool) => tool.id !== id)),
+					});
+				},
 				hook: async (name: string, callback: typeof hook) => {
 					expect(name).toBe("execute.before");
 					hook = callback;
 				},
 			},
 		});
+		// opencode's own tools run in the server, one checking its permission under another tool's name.
+		expect(tools.map((tool) => tool.id)).toEqual(["read", "kix_ask"]);
 		const call = async (tool: string, input: unknown) => hook!({ tool, input });
 		const patch = (...headers: string[]) => ({
 			patchText: ["*** Begin Patch", ...headers, "+x", "*** End Patch"].join("\n"),
@@ -1534,7 +1548,7 @@ const plugin = config && (async () => {
 	const { package: dir, options } = config.plugins[0];
 	const { default: definition } = await import(pathToFileURL(join(dir, "server.js")).href);
 	let hooked = false;
-	await definition.setup({ options, tool: { hook: async () => (hooked = true) } });
+	await definition.setup({ options, tool: { transform: async (edit) => edit({ list: () => [], remove() {} }), hook: async () => (hooked = true) } });
 	return { id: definition.id, source: { type: "local", path: dir }, features: {}, state: hooked ? { status: "active" } : { status: "failed", error: "no hook" } };
 })();
 const body = (request) => new Promise((resolve) => {
@@ -1548,7 +1562,7 @@ async function turn(session, text) {
 	const resume = fs.existsSync(logFile) && fs.readFileSync(logFile, "utf8").includes('"prompted":"' + session + '"');
 	log({
 		argv, cwd: process.cwd(), stdin: text, system: fs.readFileSync(config.instructions[0], "utf8"), session, prompted: session,
-		xdg: process.env.XDG_DATA_HOME, home: process.env.HOME, devShell: process.env.IN_DEVSHELL ?? null,
+		xdg: process.env.XDG_DATA_HOME, db: process.env.OPENCODE_DB ?? null, home: process.env.HOME, devShell: process.env.IN_DEVSHELL ?? null,
 		gh: process.env.GH_TOKEN ?? null, projectConfig: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null, config,
 	});
 	await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake", version: "0" } });
@@ -2135,15 +2149,18 @@ describe("quest runner", () => {
 		const [nix, first, srt, shell] = r.calls();
 		expect(nix.nix.slice(0, 3)).toEqual(["print-dev-env", "--accept-flake-config", "--no-write-lock-file"]);
 		const home = r.home.accountHome("acct1");
+		const checkout = r.home.path("jobs", "job1");
+		const data = `${checkout}.data`;
 		// The server runs outside the devShell, in the account's own homes, and loads nothing from the checkout.
 		expect(first.argv).toEqual(["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"]);
 		expect(first.devShell).toBeNull();
-		expect(first.xdg).toBe(join(home, "data"));
+		// It saves output in the job's own data directory, but keeps sessions and the credential in the account's database.
+		expect(first.xdg).toBe(data);
+		expect(first.db).toBe(join(home, "data", "opencode", "opencode.db"));
 		expect(first.home).toBe(home);
 		expect(first.projectConfig).toBe("1");
 		expect(first.gh).toBeNull();
 		// Its commands run through sandbox-runtime with the policy Claude Code's sandbox gets.
-		const checkout = r.home.path("jobs", "job1");
 		const repository = srt.settings.filesystem.allowRead[1];
 		const [tmp] = srt.settings.filesystem.allowWrite.slice(1);
 		expect(srt.srt[0]).toBe("--settings");
@@ -2181,9 +2198,11 @@ describe("quest runner", () => {
 					resource: "*",
 					effect: "deny",
 				})),
-				...[tmp, join(home, "data", "opencode", "tool-output"), join(home, "data", "opencode", "shell")].map(
-					(dir) => ({ action: "external_directory", resource: `${dir}/*`, effect: "allow" }),
-				),
+				...[tmp, join(data, "opencode", "tool-output"), join(data, "opencode", "shell")].map((dir) => ({
+					action: "external_directory",
+					resource: `${dir}/*`,
+					effect: "allow",
+				})),
 			],
 			lsp: false,
 			formatter: false,
@@ -2200,11 +2219,12 @@ describe("quest runner", () => {
 		expect(first.config.plugins[0].options).toEqual({
 			cwd: checkout,
 			writes: [checkout, tmp],
-			reads: [join(home, "data", "opencode", "tool-output"), join(home, "data", "opencode", "shell")],
+			reads: [join(data, "opencode", "tool-output"), join(data, "opencode", "shell")],
 			config: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
 		});
-		// The launch's shell, plugin, and settings are gone once it ends.
+		// The launch's shell, plugin, and settings are gone once it ends, but the job's data stays for its next attempt.
 		expect(existsSync(dirname(first.config.shell))).toBe(false);
+		expect(existsSync(data)).toBe(true);
 		// The server's own output and its events stream as raw output.
 		const output = r.hub
 			.of("output")
@@ -2242,6 +2262,9 @@ describe("quest runner", () => {
 		// The kix session maps to the opencode session that asked.
 		expect(resumed[1].session).toBe(first.session);
 		expect(resumed[1].stdin).toContain("Q: Which?\nA: A");
+		// The job's data goes with its checkout.
+		expect(existsSync(checkout)).toBe(false);
+		expect(existsSync(data)).toBe(false);
 		await r.runner.shutdown();
 	});
 
