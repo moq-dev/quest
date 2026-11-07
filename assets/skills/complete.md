@@ -21,7 +21,8 @@ A PR whose author has write access and that changes no user-facing behavior carr
 That covers changes only to quests, tests, benchmarks, CI, internal docs or comments, or code whose behavior stays the same, such as a refactor.
 A change to what users or other repositories get, such as CLI behavior or output, shipped skills or rules, user-facing docs, dependencies, or release artifacts, needs the user's pick.
 Judge from the diff, not the title or body, and ask when unsure.
-The standing pick ends once a person takes the PR out of the queue.
+Judge each head again before every `/quest-merge` run on it, since `/quest-iterate` or a later push can add such a change: the standing pick ends at the first head that does not qualify, and the PR needs the user's pick from then on.
+It also ends once a person takes the PR out of the queue.
 
 Ask about every other PR synchronously with one question per PR, following `quest context`'s Questions section and including your recommendation:
 - `/quest-merge`: Are landable as `/quest-merge` defines it.
