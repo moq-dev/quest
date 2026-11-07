@@ -9,9 +9,11 @@ land through its own watcher beside `main`'s.
 Two instances on different bases of one repository start and run side by
 side, whether from one checkout and user or from two host units, while two
 daemons on the same base, `quest land serve` included, still refuse to run
-beside each other. Neither instance reads, enqueues, fixes, prunes, or posts
-about the other's PRs. `quest land watch --help`, the README's landing section
-and `CONTRIBUTING.md` say one daemon per base rather than per repository.
+beside each other: from one checkout or state directory by their locks, and
+as two host units by the host module refusing the configuration. Neither
+instance reads, enqueues, fixes, prunes, or posts about the other's PRs.
+`quest land watch --help`, the README's landing section and `CONTRIBUTING.md`
+say one daemon per base rather than per repository.
 
 Non-goals: declaring moq.pro's second instance on the host and moving its
 `release` onto it, which moq.pro's own Land release quest does once
@@ -59,11 +61,16 @@ What per-base separation needs:
 - Key both locks and the default state directory by repository and base: the
   checkout's lock becomes one file per base, such as
   `quest-land-<base>.lock` with `/` in a base name escaped, and the default
-  state directory gains the base, such as `<owner>-<repo>-<base>`. Nothing is
-  in production, so the default branch's directory moves too, with no
-  migration. Since `serve` and `watch` keep sharing `startDaemon`, a gate and a
-  watcher on one base still share a state directory and exclude each other,
-  which [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
+  state directory gains the base, such as `<owner>-<repo>@<base>`, with a
+  separator no repository name contains so no two pairs share a directory.
+  `AGENTS.md` skips migrations of on-disk state, so the default branch's
+  directory moves too and each deployed watcher restarts with fresh progress
+  (`since` falls back to its start less `SETTLE`, and `handled` is empty):
+  deploy it while no fixer job runs and no PR left the queue in the last
+  `SETTLE`, so no job is orphaned and no removal is handled twice. Since
+  `serve` and `watch` keep sharing `startDaemon`, a gate and a watcher on one
+  base still share a state directory and exclude each other, which
+  [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
   [the retire quest](/quest/m0/queue-watcher/retire.md)'s log pruning rely on.
 - Each instance keeps its own private repository, so a second base costs a
   second clone's disk rather than a shared object store with its own locking.
@@ -82,8 +89,10 @@ How the host would declare a second instance: the host module (kixelated/nixos
 `StateDirectory`, and `$STATE_DIRECTORY/checkout`, so two entries naming the
 same `repository` already get separate clones, locks and state. The module
 needs a `base` option (null for the default branch) and a `method` option,
-passed as `--base` and `--method` to `quest land watch`, and moq.pro adds an
-entry such as `moq-pro-release` with `repository = "moq-dev/moq.pro"`,
+passed as `--base` and `--method` to `quest land watch`, and an assertion
+that no two entries share a `repository` and `base`, since two units never
+share a checkout or state directory and so never see each other's locks,
+and moq.pro adds an entry such as `moq-pro-release` with `repository = "moq-dev/moq.pro"`,
 `watch = true`, `base = "release"` and `method = "merge"`. Each entry still
 takes a unique `id`. Both instances share the host's three fixer slots, so
 each keeps the default `--fixer-jobs`; `release` lands rarely. That host PR
