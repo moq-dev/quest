@@ -1,6 +1,6 @@
 ---
 description: Decide which open PRs to merge, then queue them.
-guide: Creation, Execution, Summaries, Questions, Prompting
+guide: Creation, Execution, Coordination, Summaries, Questions, Prompting
 skills: grill, merge
 ---
 
@@ -42,6 +42,7 @@ Consider ordering, queuing any merges if they would result in conflicts.
 Run each `/quest-review` or `/quest-iterate` in its own sub-agent with its own isolated worktree.
 A sub-agent cannot prompt, so settle a PR's decisions for the user here with the grill skill's rounds before dispatching `/quest-iterate` for it, whatever dispatches it.
 Each sub-agent reports back only when done or blocked, and never waits on GitHub CI, reviews, or merges.
+Its brief names the PR's standing pick, if any, and its report repeats it, so the pick outlasts compaction.
 
 Do not watch the queue or wait for merges.
 An open PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`.

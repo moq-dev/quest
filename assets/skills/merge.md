@@ -26,7 +26,7 @@ Run it in this session, where its grill interview can ask the user; under a coor
 While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
 
 A review counts for the head whose SHA it names: a `## Review` record of a local `quest review` round, or a recorded skip.
-Changes since that head need no new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged, a land fixer's recorded mechanical fix that changes no behavior, or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
+Changes since that head need no new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged, the fixes of a round whose findings were all low severity, a land fixer's recorded mechanical fix that changes no behavior, or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
 

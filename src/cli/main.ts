@@ -63,8 +63,8 @@ import {
 	nextStep,
 	roundLines,
 } from "./review";
-import { type Recorded, recordRound } from "./review-record";
-import { HOOKS, hook, settingsPath, setup } from "./hooks";
+import { type Recorded, pullModels, recordRound } from "./review-record";
+import { BASH_MAX_TIMEOUT_MS, HOOKS, hook, settingsPath, setup } from "./hooks";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -987,13 +987,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never a model " +
 				`that wrote the code. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The first ` +
-				"whose model wrote none of the code reviews. --exclude-model names the models that wrote it, such as " +
-				"from the PR's record; without it, the harness running this command is taken to have written it, " +
-				"detected from the variables each sets, so Codex reviews from Claude Code and Claude Code from Codex. " +
+				"whose model wrote none of the code reviews. The models that wrote it are --exclude-model's; without " +
+				"it, they are those the Implementer lines of the `## Models` record in the body of the branch's open PR " +
+				"name and, unless those name every one with no `unknown` model or --harness names the reviewer, any " +
+				"model of the harness running this command, detected from the variables each sets, so Codex reviews " +
+				"from Claude Code and Claude Code from Codex. " +
 				"--harness names the reviewer instead, at its entry's model and effort, and --model and --effort " +
 				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
-				`change cannot lower its own review, else ${DEFAULT_SIZE}. ` +
+				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
 				"The reviewer reaches its model as the user's own CLI " +
 				"does: Claude Code keeps ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, and its cloud providers' " +
 				"CLAUDE_CODE_USE_* switches and settings, and Codex keeps CODEX_CA_CERTIFICATE. It uses the CLI's own " +
@@ -1004,26 +1006,34 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider.\n\n" +
 				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
 				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
-				"reviewer's own review (`codex exec review --base <merge-base>`, or Claude Code's " +
-				"`/code-review <effort> <merge-base>...HEAD`), then resumes that session for one turn that applies the base's " +
-				"REVIEW.md, if any, and reports the findings in one JSON schema. Later rounds on the branch resume the " +
-				"same session with the new head and --responses, the author's fixes and refutations of the last " +
-				"round's findings, required while that round reported any; the reply settles each of those findings, by " +
-				"its number in the prompt, as fixed, refuted, or still open. A resumed session keeps the instructions it " +
-				"started with, so when the applicable AGENTS.md or CLAUDE.md files change, the round starts a new " +
-				"session that still weighs --responses. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"reviewer's own review (`codex exec review` with custom instructions, or Claude Code's " +
+				"`/code-review <effort> <merge-base>...HEAD` with text after it), given the range, the base's REVIEW.md, if " +
+				"any, and any responses up front, then resumes that session for one turn that reports the review in one " +
+				"JSON schema without reading anything again. --responses gives the author's fixes and refutations of " +
+				"the last round's findings, required while that round reported any; the reply settles each of those " +
+				"findings, by its number in the prompt, as fixed, refuted, or still open. A later round resumes the " +
+				"session and checks only what changed since the last round's head and those findings when nothing " +
+				"but the head changed: the same model, effort, and base, a merge base the last round's covers, as " +
+				"when the base moved on, and the same applicable AGENTS.md, CLAUDE.md, and REVIEW.md. Otherwise it " +
+				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
+				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
+				"repeats that round, marked unchanged. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
-				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules or user config, Claude Code with " +
+				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
+				"skills catalog, Claude Code with " +
 				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
-				"reviewer. The base is fetched first, since the sandbox has no network.\n\n" +
-				"Prints the reviewer, model, and effort, the size and where it came from, session, round, base, head, a usage line per turn (input tokens, the " +
+				"reviewer, and is told to disregard other instructions and run no builds, tests, or quest commands. " +
+				"The base is fetched first, since the sandbox has no network.\n\n" +
+				"Prints the reviewer, model, and effort, the size and where it came from, session, round, base, head, an " +
+				"unchanged line for a repeated round, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
 				"its one-sentence rationale, the finding count, each finding, then the last round's findings with " +
 				"their dispositions, then the `record` line below and a last `next` line naming the author's next step: " +
-				"`next respond` to fix or refute the findings, `next checkpoint` on every third round that reports " +
-				"findings, to reconsider the approach before fixing them, or `next done`. A reply without a valid score " +
+				"`next finish` when every finding is low severity, to fix or refute them without another round, " +
+				"`next checkpoint` on every third round that reports other findings, to reconsider the approach " +
+				"before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
 				"the same as one object.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
@@ -1032,7 +1042,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"such PR, or a remote off GitHub, it prints `record skipped: <why>` and changes nothing.\n\n" +
 				"Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when the reviewer's " +
-				"account hit its usage limit, and 1 for other failures, including a record GitHub refuses. A usage limit prints one line, " +
+				"account hit its usage limit, and 1 for other failures, including a PR GitHub will not show or a record it " +
+				"refuses. A malformed `## Models` field the round reads, such as a Size line naming no size or an " +
+				"Implementer line naming no model, is a usage error, unless --size or --exclude-model replaces it. A usage limit prints one line, " +
 				"`error: <harness> hit its usage limit; resets <time>`, where <time> is the reset as an ISO 8601 UTC " +
 				"timestamp, or `unknown` when the CLI named none.",
 		)
@@ -1042,10 +1054,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option(
 			"--exclude-model <model>",
-			"A model that wrote the code, never picked to review it; repeat for each",
+			"A model that wrote the code, never picked to review it, instead of the PR's record; repeat for each",
 			(value: string, previous: string[] = []) => [...previous, value],
 		)
-		.addOption(new Option("--size <size>", "The PR's size, instead of its quest's or the default").choices(SIZES))
+		.addOption(
+			new Option(
+				"--size <size>",
+				"The PR's size, instead of its quest's, its PR record's, or the default",
+			).choices(SIZES),
+		)
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
 		.option("--branch <name>", "Branch whose review session to continue, instead of the checked-out one")
@@ -1067,9 +1084,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					options.responses === undefined
 						? undefined
 						: readFileSync(options.responses === "-" ? 0 : options.responses, "utf8");
+				const github = { github: () => gitHubDependencies(warn), warn };
 				const run = review(
 					{ ...options, root: root(), exclude: options.excludeModel, responses, fresh: options.new },
-					reviewDependencies(),
+					{
+						...reviewDependencies(),
+						models: (dir, base, branch) => pullModels(dir, base, branch, github),
+					},
 				);
 				pending = run.then(
 					async (round) => {
@@ -1077,7 +1098,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						let record: Recorded | undefined;
 						let failure: unknown;
 						try {
-							record = await recordRound(root(), round, { github: () => gitHubDependencies(warn), warn });
+							record = await recordRound(root(), round, github);
 						} catch (error) {
 							failure = error;
 						}
@@ -1316,20 +1337,23 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("setup")
-		.summary("Install Quest's hooks in your own Claude Code settings")
+		.summary("Configure your own Claude Code settings for quest work")
 		.description(
-			"Install Quest's hooks in your own Claude Code settings, $CLAUDE_CONFIG_DIR/settings.json or else " +
-				"~/.claude/settings.json, keeping every other setting and hook, and print the file's path when it " +
-				"changed. Each hook runs `quest hook`, so `quest` must be on the PATH Claude Code starts with. " +
-				`It installs ${HOOKS.map((h) => (h.matcher ? `${h.event} (${h.matcher})` : h.event)).join(" and ")}, ` +
+			"Configure your own Claude Code settings for quest work, in $CLAUDE_CONFIG_DIR/settings.json or else " +
+				"~/.claude/settings.json, keeping every other setting and hook. Touches no repository.\n\n" +
+				`Sets env.BASH_MAX_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a foreground command, such as a blocking ` +
+				"wait, may run 55 minutes: just under the 1h prompt-cache TTL. " +
+				`Installs ${HOOKS.map((h) => (h.matcher ? `${h.event} (${h.matcher})` : h.event)).join(" and ")} hooks, ` +
 				"which add `quest context` to each session and subagent in a repository that uses Quest, and again " +
-				"after compaction, so agents never run it themselves. Rerun it after upgrading Quest; it replaces " +
-				"Quest's earlier entries. A settings file that is not valid JSON is an error and stays unchanged.",
+				"after compaction, so agents never run it themselves. Each runs `quest hook`, so `quest` must be on " +
+				"the PATH Claude Code starts with.\n\n" +
+				"Validates the whole file, then writes it once and prints each change; settings that are not a JSON " +
+				"object, or whose env or hooks are malformed, are an error and stay unchanged. Rerun it after " +
+				"upgrading Quest; it replaces Quest's earlier hooks and changes nothing when all is set.",
 		)
-		.option("--remove", "Remove Quest's hooks instead")
+		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
 		.action((options: { remove?: boolean }) => {
-			const path = settingsPath();
-			if (setup(path, options)) print(path);
+			for (const line of setup(settingsPath(), options)) print(line);
 		});
 
 	program

@@ -1,6 +1,6 @@
 ---
 description: Start multiple quests in parallel.
-guide: Creation, Execution, Summaries, Questions, Prompting
+guide: Creation, Execution, Coordination, Summaries, Questions, Prompting
 ---
 
 Your goal is to execute many quests in parallel.

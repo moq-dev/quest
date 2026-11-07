@@ -22,7 +22,8 @@ If a `## Review` record that `/quest-merge` counts names the committed head, or 
 If you judge the change too trivial to review, skip the review instead and record the skip and its reason in `## Review`.
 
 Otherwise, review the committed branch with `quest review --base <remote>/<base>`, which picks a reviewer that wrote none of the code, and its effort, by the PR's size; `quest review --help` explains the round.
-Pass `--exclude-model` for each implementing model the PR body's `## Models` records, and on a branch that is not a quest's, `--size` with the size it records; a quest branch's size is read from its quest.
+It reads the implementing models, and on a branch that is not a quest's the size, from the PR body's `## Models` record, so write that record before the first round; a quest branch's size is read from its quest.
+Pass `--exclude-model` or `--size` only for a PR whose body cannot hold the record.
 Where the repository's root instructions name other reviewers, pass them with `--harness`, `--model`, and `--effort`.
 Run it in the foreground; a round takes minutes.
 Open the draft PR before the first round: each round rewrites the PR body's `## Review` section with its reviewer, session and round, base and head, score, and each finding's disposition, naming the head's full SHA only once a round reports no findings.
@@ -34,6 +35,7 @@ Refute a finding only with evidence the reviewer cannot rebut: a `path:line`, a 
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding by its number, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted; never block on the score.
 A finding the reviewer keeps against such a refutation is a decision for the user; a background agent lists it under `## Waiting`.
+A round whose findings are all low severity needs no further round: fix or refute each, then add a line after the record naming the new head's full SHA and each finding's disposition.
 
 Checkpoint the design: a round is one `quest review` round, numbered within the branch's review session, and when a round whose number is a multiple of three reports findings, stop before fixing them and reconsider the approach; a clean round needs no checkpoint.
 Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.

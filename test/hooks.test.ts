@@ -1,4 +1,4 @@
-// `quest setup`'s user-level Claude Code hooks, and `quest hook`, which handles them.
+// `quest setup`'s user-level Claude Code settings, and `quest hook`, which handles its hooks.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { REFERENCE_LINE } from "../src/core";
-import { HOOKS, HOOK_COMMAND, hook, settingsPath, setup } from "../src/cli/hooks";
+import { BASH_MAX_TIMEOUT_MS, HOOKS, HOOK_COMMAND, hook, settingsPath, setup } from "../src/cli/hooks";
 import { CONTEXT } from "../src/cli/skills";
 import { tempDir } from "./fixture";
 
@@ -18,16 +18,36 @@ test("settings live in CLAUDE_CONFIG_DIR when set, else ~/.claude", () => {
 	expect(settingsPath({})).toMatch(/[/\\]\.claude[/\\]settings\.json$/);
 });
 
-test("setup creates the settings file with every hook, then changes nothing", () => {
+test("setup creates the settings file with the timeout and every hook, then changes nothing", () => {
 	const path = join(tempDir(), "profile", "settings.json");
-	expect(setup(path)).toBe(true);
+	expect(setup(path)).toEqual([
+		`${path}: installed Quest's hooks`,
+		`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS}`,
+	]);
 	const settings = read(path);
+	expect(settings.env).toEqual({ BASH_MAX_TIMEOUT_MS });
 	for (const { event, matcher } of HOOKS)
 		expect(settings.hooks[event]).toEqual([{ ...(matcher ? { matcher } : {}), hooks: [ours] }]);
 	const written = readFileSync(path, "utf8");
 	expect(written.endsWith("}\n")).toBe(true);
-	expect(setup(path)).toBe(false);
+	expect(setup(path)).toEqual([]);
 	expect(readFileSync(path, "utf8")).toBe(written);
+});
+
+test("setup replaces a different timeout, and removal leaves the user's own", () => {
+	const path = join(tempDir(), "settings.json");
+	writeFileSync(path, JSON.stringify({ env: { FOO: "1", BASH_MAX_TIMEOUT_MS: "600000" } }));
+	expect(setup(path)).toContain(`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS} (was "600000")`);
+	expect(read(path).env).toEqual({ FOO: "1", BASH_MAX_TIMEOUT_MS });
+	expect(setup(path, { remove: true })).toEqual([
+		`${path}: removed Quest's hooks`,
+		`${path}: removed env.BASH_MAX_TIMEOUT_MS`,
+	]);
+	expect(read(path)).toEqual({ env: { FOO: "1" } });
+
+	writeFileSync(path, JSON.stringify({ env: { BASH_MAX_TIMEOUT_MS: "600000" } }));
+	expect(setup(path, { remove: true })).toEqual([]);
+	expect(read(path)).toEqual({ env: { BASH_MAX_TIMEOUT_MS: "600000" } });
 });
 
 test("setup keeps other settings and hooks in place", () => {
@@ -39,7 +59,7 @@ test("setup keeps other settings and hooks in place", () => {
 	expect(Object.keys(settings)).toEqual(["theme", "hooks", "env"]);
 	expect(settings.hooks.SessionStart[0]).toEqual(theirs);
 	expect(settings.hooks.SessionStart).toHaveLength(2);
-	expect(setup(path, { remove: true })).toBe(true);
+	expect(setup(path, { remove: true })).toHaveLength(2);
 	expect(read(path)).toEqual({ theme: "dark", hooks: { SessionStart: [theirs] }, env: { A: "1" } });
 });
 
@@ -55,33 +75,37 @@ test("setup replaces an earlier version's entries, including one sharing a group
 			},
 		}),
 	);
-	expect(setup(path)).toBe(true);
+	expect(setup(path)).toContain(`${path}: installed Quest's hooks`);
 	const settings = read(path);
 	expect(settings.hooks.PreToolUse).toEqual([{ matcher: "Bash", hooks: [theirs] }]);
 	expect(settings.hooks.SessionStart).toEqual([{ matcher: HOOKS[0]!.matcher, hooks: [ours] }]);
-	expect(setup(path, { entries: [{ event: "Stop" }] })).toBe(true);
+	expect(setup(path, { entries: [{ event: "Stop" }] })).toEqual([`${path}: installed Quest's hooks`]);
 	expect(Object.keys(read(path).hooks)).toEqual(["PreToolUse", "Stop"]);
 });
 
-test("removing Quest's only hooks drops the hooks key", () => {
+test("removing Quest's only settings drops the hooks and env keys", () => {
 	const path = join(tempDir(), "settings.json");
 	writeFileSync(path, JSON.stringify({ theme: "dark" }));
 	setup(path);
 	setup(path, { remove: true });
 	expect(read(path)).toEqual({ theme: "dark" });
-	expect(setup(path, { remove: true })).toBe(false);
+	expect(setup(path, { remove: true })).toEqual([]);
 });
 
 test.each([
 	["invalid JSON", "{ nope"],
 	["a JSON array", "[]"],
+	["env that is not an object", '{"env": "x"}'],
+	["env that is not an object, with valid hooks", '{"env": [], "hooks": {}}'],
 	["hooks that are not an object", '{"hooks": []}'],
+	["hooks that are malformed, with a valid env", '{"env": {}, "hooks": {"SessionStart": [1]}}'],
 	["an event that is not an array", '{"hooks": {"SessionStart": {}}}'],
 	["a group without handlers", '{"hooks": {"SessionStart": [{"matcher": "startup"}]}}'],
 ])("setup refuses settings with %s and leaves them unchanged", (_, content) => {
 	const path = join(tempDir(), "settings.json");
 	writeFileSync(path, content);
 	expect(() => setup(path)).toThrow(path);
+	expect(() => setup(path, { remove: true })).toThrow(path);
 	expect(readFileSync(path, "utf8")).toBe(content);
 });
 

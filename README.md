@@ -1095,16 +1095,18 @@ size. Each size ranks its reviewers, the same for every repository:
 |---|---|---|
 | XS | Codex `gpt-6.1-sol` low | Claude Code `claude-opus-5-5` low |
 | S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
-| M, or none | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` medium |
-| L | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
+| M, or none | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` medium |
+| L | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` high |
 | XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
 
 A quest branch takes its quest's size, read from the base branch's tip so a
-change cannot lower its own review; `--size` sizes any other PR, such as a
-skill's own, and a PR with neither gets M's reviewers. The first reviewer
-whose model wrote none of the code reviews: `--exclude-model` names each model
-that did, from the PR's record, and without it the harness running the command
-is taken to have written it, so Codex reviews from Claude Code and Claude Code
+change cannot lower its own review; any other PR, such as a skill's own, takes
+the `Size:` line of the `## Models` record in its open PR's body, and a PR with
+neither gets M's reviewers. `--size` overrides both. The first reviewer whose
+model wrote none of the code reviews: the record's `Implementer:` lines name
+the models that did, or `--exclude-model` names each instead. Unless the record
+names every one, with no `unknown` model, the harness running the command is
+taken to have written it too, so Codex reviews from Claude Code and Claude Code
 from Codex. `--harness` names the reviewer instead, at its entry's model and
 effort, and `--model` and `--effort` override those, as a repository whose
 `AGENTS.md` names other reviewers needs. An unknown harness, a size whose
@@ -1128,30 +1130,38 @@ A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
-quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, reviewed by Opus
+quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, with no record in its body
 quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
 ```
 
 Every turn reviews only the branch's own change, from the merge base of `HEAD`
 with the base's tip, so a branch behind its base draws no findings on code the
 base gained since, which a diff against its tip shows as reverted.
-The first round runs the reviewer's own review, `codex exec review --base
-<merge-base>` or Claude Code's `/code-review <effort> <merge-base>...HEAD`, then resumes that session for
-one turn that applies the base's `REVIEW.md`, if any, and reports the findings
-in one JSON schema, with a score from 0 to 10 for how ready the head is to land
-and one sentence on why: 10 lands as is, 7 to 9 lands after the findings are
-fixed, 4 to 6 needs rework, and 0 to 3 is the wrong approach. A head with no
-findings can still score below 10. A reply without a valid score fails like any
-malformed reply. The score informs; the findings and their refutations still
-decide when the loop ends. Later rounds resume the same session with the new head and
-`--responses`, the author's free-text fixes and refutations, which a round that
-reported findings requires. A refutation stands only when it cites evidence the
+The first round explores the change once. It runs the reviewer's own review,
+`codex exec review` with custom instructions or Claude Code's `/code-review
+<effort> <merge-base>...HEAD` with text after the target, given the range, the
+base's `REVIEW.md`, if any, and any earlier findings and responses up front.
+Neither returns a JSON schema itself, so the round resumes that session for one
+turn that reads nothing and reports the review in one schema, with a score from
+0 to 10 for how ready the head is to land and one sentence on why: 10 lands as
+is, 7 to 9 lands after the findings are fixed, 4 to 6 needs rework, and 0 to 3
+is the wrong approach. A head with no findings can still score below 10. A
+reply without a valid score fails like any malformed reply. Each finding is
+high, medium, or low severity; low is anything that would not block landing.
+The score informs; the findings and their refutations still decide when the
+loop ends. Later rounds take `--responses`, the author's free-text fixes and
+refutations, which a round that reported findings requires. A later round
+resumes the session and checks only what changed since the last round's head
+and its findings when nothing but the head changed: the same model, effort, and
+base, a merge base the last round's covers, as when the base moved on, and the
+same applicable `AGENTS.md`, `CLAUDE.md`, and `REVIEW.md`. Otherwise it starts a
+new session that reviews the whole change and still weighs the responses. A
+round that would resume on the head the last round reviewed, when that round
+found nothing, runs no reviewer and repeats that round, marked `unchanged`. A refutation stands only when it cites evidence the
 reviewer can check. The prompt numbers the last round's findings, and the reply
 settles each by its number as fixed, refuted, or still open, with a one-sentence
 reason; a reply that skips or repeats one, or keeps more open than it reports,
-fails like any malformed reply. A first round's schema has no such list. A resumed session keeps the instructions it started with,
-so a round whose applicable `AGENTS.md` or `CLAUDE.md` files changed starts a
-new session instead, which still weighs the responses. Resuming keeps the
+fails like any malformed reply. A first round's schema has no such list. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. The session is kept per branch in the clone's
 common Git directory, so any worktree of the clone resumes it; `--new` starts
@@ -1161,7 +1171,11 @@ holds, so its rounds continue that branch's session.
 
 The reviewer is read-only: Codex in its `read-only` sandbox, ignoring
 execpolicy rules, and Claude Code with only read tools and the Bash commands it
-judges read-only, in `dontAsk` mode. Claude Code loads no settings files, so no
+judges read-only, in `dontAsk` mode. Its instructions say the base's files and
+`REVIEW.md` are all it needs, and that it runs no builds, tests, or `quest`
+commands. Codex leaves out its skills catalog; it still loads the user's
+`$CODEX_HOME/AGENTS.md`, which no setting skips and a separate home would
+split the login, so the reviewer is told to disregard it. Claude Code loads no settings files, so no
 allow rule, even the user's own, widens that. Codex skips the user's config,
 whose project trust would load the checkout's `.codex/config.toml` and start its
 MCP servers outside the sandbox. Whether those flags isolate is up to each
@@ -1177,10 +1191,10 @@ after upgrading either CLI. The base is fetched first, since
 the sandbox has no network. The reviewer follows the base's `AGENTS.md` and `CLAUDE.md`, at the
 root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
-given every round, and chooses the review's stance, such as adversarial.
+given at the start of each session, and chooses the review's stance, such as adversarial.
 
-It prints the reviewer, model, and effort, the size and its source, session, round, base, head, a
-`usage` line per turn (input tokens, the part read from the prompt cache, and output), the
+It prints the reviewer, model, and effort, the size and its source, session, round, base, head,
+an `unchanged` line for a repeated round, a `usage` line per turn (input tokens, the part read from the prompt cache, and output), the
 finding count, then each finding as severity, `path:line`, and title over its
 indented body, then `earlier` with the last round's head and its findings, each
 as its disposition, severity, `path:line`, and title over its reason, and last
@@ -1611,28 +1625,37 @@ Follow https://github.com/moq-dev/quest/blob/main/SETUP.md to set up Quest here.
 ```
 
 The [getting started guide](docs/getting-started.md) covers what happens next.
+
 `quest context` prints the rules agents follow in every task, and `quest guide` the
 quest format and workflow they read before working on a quest outside a skill;
 `quest guide prompting` prints one section.
 
-### Load the rules once
+### Configure Claude Code
 
-The repository's `Quests: ` line has agents run `quest context` before any
-work, which costs a turn and is summarized away when the session compacts. In
-Claude Code, add the rules to every session instead with hooks in your own
-settings:
+`quest setup` configures your own Claude Code settings for quest work, in every
+repository:
 
 ```sh
 quest setup
 ```
 
-It installs a `SessionStart` hook (startup, resume, clear, and compact) and a
-`SubagentStart` hook in `$CLAUDE_CONFIG_DIR/settings.json`, or
-`~/.claude/settings.json`, keeping your other settings. Each runs `quest hook`,
-which adds `quest context` to the session in a repository whose root
-`AGENTS.md` or `CLAUDE.md` has the `Quests: ` line, and nothing elsewhere.
-`quest` must be on the `PATH` Claude Code starts with, as for the worktree
-hooks. Rerun it after upgrading; `quest setup --remove` takes the hooks out.
+It sets `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground command such as
+`quest wait` can block for 55 minutes, just under the 1h prompt-cache TTL,
+instead of the 10-minute default.
+
+It also loads the rules once. The repository's `Quests: ` line has agents run
+`quest context` before any work, which costs a turn and is summarized away
+when the session compacts. Instead, `quest setup` installs a `SessionStart`
+hook (startup, resume, clear, and compact) and a `SubagentStart` hook, each
+running `quest hook`, which adds `quest context` to the session in a
+repository whose root `AGENTS.md` or `CLAUDE.md` has the `Quests: ` line, and
+nothing elsewhere. `quest` must be on the `PATH` Claude Code starts with, as
+for the worktree hooks.
+
+It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`,
+keeps your other settings, refuses a malformed file unchanged, writes once,
+and prints each change. Rerun it after upgrading. `quest setup --remove` takes
+the hooks out, and the timeout while it still holds Quest's value.
 
 ## Where this is going
 

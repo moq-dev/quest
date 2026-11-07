@@ -16,7 +16,7 @@ of the shared rules with `quest context`, dropping these because `assets/CONTEXT
 no equivalent. Word each to fit its neighbors, such as "Name by role" under Public API and
 the root-cause rule under Required, and follow `quest guide prompting`.
 The context is hook context, capped at `CONTEXT_LIMIT` (10,000 characters, `src/cli/hooks.ts`),
-and had about 230 to spare when [moq-dev/quest#517](https://github.com/moq-dev/quest/pull/517)
+and had about 10 to spare when [moq-dev/quest#517](https://github.com/moq-dev/quest/pull/517)
 merged, so make room in the same PR where the three rules do not fit.
 
 Decided 2026-11-07 (maintainer, moq-dev/rust2 /quest-complete):

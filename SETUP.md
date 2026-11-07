@@ -60,16 +60,18 @@ removes the unmodified stubs of skills the new version no longer ships.
 If init refuses, it names the conflicting path. Report it and ask the user how
 to proceed; never delete or rename their files to get past it.
 
-## Opt into the rules hook
+## Configure the user's agent
 
-The `Quests: ` line has agents run `quest context` before any work, and
-compaction summarizes its output away. In Claude Code, `quest setup` instead
-adds those rules to every session and subagent, and again after compaction,
-through hooks in the user's own settings. Offer it, explaining that it edits
-`~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), applies in
-every repository the user opens in Claude Code that has the `Quests: ` line,
-and needs `quest` on the `PATH` Claude Code runs hooks with. With consent, run
-`quest setup`.
+`quest setup` configures the user's own Claude Code settings, not the
+repository's, in `$CLAUDE_CONFIG_DIR/settings.json` (or
+`~/.claude/settings.json`). It sets `env.BASH_MAX_TIMEOUT_MS` to 55 minutes, so
+agents can block on a long wait in one call instead of polling. It also adds
+the rules the `Quests: ` line points at to every session and subagent, and
+again after compaction, which would otherwise summarize them away, through
+hooks that need `quest` on the `PATH` Claude Code runs hooks with. Offer it,
+explaining that it applies in every repository the user opens in Claude Code
+(the hooks only in those with the `Quests: ` line), and run it with consent. It
+keeps the file's other settings and prints what it changed.
 
 ## Opt into worktree hooks
 

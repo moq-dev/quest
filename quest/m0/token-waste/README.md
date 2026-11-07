@@ -43,7 +43,7 @@ Decision prompts, chosen options marked ✅:
   - ✅ Mechanical rules become hooks or lint, so their prose leaves the
     always-loaded rules ([rule checks](/quest/m0/token-waste/rule-checks.md)).
   - ✅ A review round budget by severity, after Theo's `sol-loop`
-    ([single-pass review](/quest/m0/token-waste/review-single-pass.md)).
+    ([moq-dev/quest#514](https://github.com/moq-dev/quest/pull/514)).
   - ✅ `quest usage` moves from m1 into this epic, so its closing
     re-measure is one command instead of a multi-agent audit (this audit took
     four agents about 650k tokens). Try jdx's `jouet audit` first and say why
@@ -68,10 +68,7 @@ Decision prompts, chosen options marked ✅:
 
 ## Required
 
-- [Single-pass review](/quest/m0/token-waste/review-single-pass.md) - a review round explores the change once, with the diff and REVIEW.md given up front
-- [Coordinators and waits](/quest/m0/token-waste/coordinator-waits.md) - coordinators lean on compaction, children report briefly, and waits block
 - [Epics list no children](/quest/m0/token-waste/child-lists.md) - an epic's children are its directory, so finishing a quest edits no README
-- [Base merges only when needed](/quest/m0/token-waste/base-merges.md) - a branch merges its base on a conflict, not before every queue attempt
 - [Mechanical rules become checks](/quest/m0/token-waste/rule-checks.md) - hooks enforce em dashes, push refspecs, no rebase or force-push, the footer, and `.tmp/`, and their prose leaves the always-loaded rules
 - [quest usage](/quest/m0/token-waste/usage.md) - per quest and PR: which models and efforts worked on it, their tokens and API-equal cost, and how the work went; the epic's re-measure runs it
 - [Point to token-max](/quest/m0/token-waste/token-max.md) - `SETUP.md` recommends the standalone settings doctor, and the re-measure runs it

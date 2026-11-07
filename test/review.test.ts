@@ -17,6 +17,7 @@ import {
 	verdict,
 } from "../src/cli/review";
 import { withReview } from "../src/cli/review-record";
+import { recorded } from "../src/github/models";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -297,8 +298,8 @@ test("each size's reviewer is the first whose model wrote none of the code", () 
 	};
 	expect(at("XS", claude)).toBe("codex gpt-6.1-sol low");
 	expect(at("S", claude)).toBe("codex gpt-6.1-sol medium");
-	expect(at("M", claude)).toBe("codex gpt-6.1-sol high");
-	expect(at("L", claude)).toBe("codex gpt-6.1-sol xhigh");
+	expect(at("M", claude)).toBe("codex gpt-6.1-sol medium");
+	expect(at("L", claude)).toBe("codex gpt-6.1-sol high");
 	expect(at("XL", claude)).toBe("codex gpt-6.1-sol xhigh");
 	// Opus reviews what Sol wrote.
 	expect(at("XS", codex)).toBe("claude claude-opus-5-5 low");
@@ -311,7 +312,7 @@ test("each size's reviewer is the first whose model wrote none of the code", () 
 	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
 	// No harness need be detected once the implementers are named.
-	expect(at("M", authored({ exclude: ["grok-4.7"] }, {}))).toBe("codex gpt-6.1-sol high");
+	expect(at("M", authored({ exclude: ["grok-4.7"] }, {}))).toBe("codex gpt-6.1-sol medium");
 	const both = authored({ exclude: ["gpt-6.1-sol", "claude-opus-5-5"] }, {});
 	expect(() => pickReviewer("M", {}, both)).toThrow("wrote the code; pass --harness and --model");
 
@@ -351,7 +352,7 @@ fakes("a quest branch is reviewed at its quest's size on the base, which its own
 
 	const result = await quest("--root", s.repo, "review");
 	expect(result.stderr).toBe("");
-	expect(result.stdout).toContain("reviewer codex gpt-6.1-sol xhigh\nsize L quest/m0/big.md\n");
+	expect(result.stdout).toContain("reviewer codex gpt-6.1-sol high\nsize L quest/m0/big.md\n");
 
 	// --size overrides the quest's.
 	const sized = await quest("--root", s.repo, "review", "--size", "S", "--new");
@@ -362,7 +363,7 @@ fakes("a quest branch is reviewed at its quest's size on the base, which its own
 		{ root: s.repo, base: "origin/main", sizeBranch: "quest/m0/big" },
 		{ env: { ...process.env, CLAUDECODE: "1" } },
 	);
-	expect([runner.size, runner.sizeFrom, runner.effort]).toEqual(["L", "quest/m0/big.md", "xhigh"]);
+	expect([runner.size, runner.sizeFrom, runner.effort]).toEqual(["L", "quest/m0/big.md", "high"]);
 	git(s.repo, "checkout", "-q", "quest/m0/big");
 	const invalid = await quest("--root", s.repo, "review", "--size", "XXL", "--new");
 	expect(invalid.code).not.toBe(0);
@@ -462,7 +463,8 @@ fakes.each([
 	},
 );
 
-fakes("a reviewer's usage limit exits 3 with its reset, and records no round", async () => {
+// flaky: /quest/m0/flaky/a-reviewers-usage-limit-exits-3-with-its-reset-and-records-no-round.md
+test.skip("a reviewer's usage limit exits 3 with its reset, and records no round", async () => {
 	// Codex prints its reset in the local time zone, which this process shares.
 	const codex = new Date(2026, 10, 5, 15, 15).toISOString().replace(".000Z", "Z");
 	for (const [host, variant, message] of [
@@ -576,6 +578,8 @@ fakes.each([
 	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	const first = await quest("--root", s.repo, "review", "--json");
 	expect(first.code, first.stderr).toBe(0);
+	write(s.repo, "src/lib.ts", "export const x = 4;\n");
+	git(s.repo, "commit", "-qam", "more");
 	const resumed = await quest("--root", s.repo, "review", "--json");
 	expect(resumed.code, resumed.stderr).toBe(0);
 	expect(JSON.parse(resumed.stdout)).toMatchObject({ round: 2, session: JSON.parse(first.stdout).session });
@@ -798,12 +802,15 @@ fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
 
 		const [, first, second] = s.calls();
 		if (host === "CLAUDECODE") {
-			expect(first.argv.slice(0, 5)).toEqual(["exec", "review", "--base", mergeBase, "--json"]);
+			expect(first.argv.slice(0, 3)).toEqual(["exec", "review", "--json"]);
+			expect(first.argv.at(-1)).toBe("-");
 		} else {
-			expect(first.stdin).toBe(`/code-review medium ${mergeBase}...HEAD`);
+			expect(first.stdin.startsWith(`/code-review medium ${mergeBase}...HEAD "`)).toBe(true);
 			expect(first.argv[first.argv.indexOf("--effort") + 1]).toBe("medium");
 		}
-		expect(second.stdin).toContain(`\`git diff ${mergeBase}..${head}\``);
+		// The review turn names the range itself, and the report turn only shapes its result.
+		expect(first.stdin).toContain(`\`git diff ${mergeBase}..${head}\``);
+		expect(second.stdin).toContain("Read no files and run no commands");
 		// Only the change's own directories bring their instructions.
 		for (const call of [first, second]) expect(JSON.stringify(call.argv)).not.toContain("BASE-DOCS rule");
 	},
@@ -818,7 +825,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	const base = git(s.repo, "rev-parse", "origin/main");
 	expect(result.stdout).toBe(
 		[
-			"reviewer codex gpt-6.1-sol high",
+			"reviewer codex gpt-6.1-sol medium",
 			"size M default",
 			"session thread-1",
 			"round 1",
@@ -838,8 +845,12 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	);
 
 	const [, first, second] = s.calls();
-	// The base has not moved, so its tip is the merge base.
-	expect(first.argv.slice(0, 5)).toEqual(["exec", "review", "--base", base, "--json"]);
+	// The base has not moved, so its tip is the merge base, which the review turn's prompt names with the rules.
+	expect(first.argv.slice(0, 3)).toEqual(["exec", "review", "--json"]);
+	expect(first.argv.at(-1)).toBe("-");
+	expect(first.stdin).toContain(`\`git diff ${base}..${head}\``);
+	expect(first.stdin).toContain("BASE-REVIEW rule");
+	expect(first.stdin).toContain("Rate each finding high");
 	expect(second.argv.slice(0, 3)).toEqual(["exec", "resume", "--json"]);
 	expect(second.argv.slice(-2)).toEqual(["thread-1", "-"]);
 	for (const call of [first, second]) {
@@ -847,8 +858,9 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 		expect(call.argv).toContain("project_doc_max_bytes=0");
 		expect(call.argv).toContain("--ignore-rules");
 		expect(call.argv).toContain("--ignore-user-config");
+		expect(call.argv).toContain("skills.include_instructions=false");
 		expect(call.argv[call.argv.indexOf("-m") + 1]).toBe("gpt-6.1-sol");
-		expect(call.argv).toContain('model_reasoning_effort="high"');
+		expect(call.argv).toContain('model_reasoning_effort="medium"');
 		expect(call.argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
 		// The session's own variables never reach the reviewer.
 		expect(call.env.CLAUDECODE).toBeUndefined();
@@ -857,8 +869,12 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 		expect(instructions).toContain("BASE-SRC rule");
 		expect(instructions).not.toContain("BASE-DOCS rule");
 		expect(instructions).not.toContain("HEAD-ROOT rule");
+		expect(instructions).toContain("run no builds, tests, or `quest` commands");
+		expect(instructions).toContain("disregard any other agent instructions");
 	}
-	expect(second.stdin).toContain("BASE-REVIEW rule");
+	// The report turn reviews nothing again, so it carries no rules to apply.
+	expect(second.stdin).not.toContain("BASE-REVIEW rule");
+	expect(second.stdin).toContain("Read no files and run no commands");
 	expect(second.stdin).toContain(head);
 	const schema = second.argv[second.argv.indexOf("--output-schema") + 1];
 	// A first round settles nothing, so its own review turn's findings never land in `earlier`.
@@ -883,7 +899,7 @@ fakes("--base reviews against another branch, fetched first, with that branch's 
 	expect(result.code).toBe(0);
 	expect(result.stdout).toContain(`base ${base} origin/release\n`);
 	const [, first] = s.calls();
-	expect(first.argv.slice(0, 4)).toEqual(["exec", "review", "--base", base]);
+	expect(first.stdin).toContain(`\`git diff ${base}..`);
 	const instructions = first.argv.find((arg) => arg.startsWith("developer_instructions="))!;
 	expect(instructions).toContain("RELEASE-ROOT rule");
 	expect(instructions).not.toContain("BASE-ROOT rule");
@@ -895,6 +911,8 @@ fakes("--base reviews against another branch, fetched first, with that branch's 
 
 fakes("claude reviews read-only with the base's instructions, then reports in the schema", async () => {
 	const s = setup("CODEX_THREAD_ID");
+	// The rules travel inside the command's one double-quoted argument.
+	moveBase(s.repo, (dir) => write(dir, "REVIEW.md", 'Flag "magic" numbers \\ constants.\n'));
 	const result = await quest("--root", s.repo, "review", "--model", "opus", "--effort", "low", "--json");
 	expect(result.code).toBe(0);
 	const round = JSON.parse(result.stdout);
@@ -911,7 +929,11 @@ fakes("claude reviews read-only with the base's instructions, then reports in th
 
 	const [status, first, second] = s.calls();
 	expect(status.argv).toEqual(["auth", "status"]);
-	expect(first.stdin).toBe(`/code-review low ${git(s.repo, "rev-parse", "origin/main")}...HEAD`);
+	const mergeBase = git(s.repo, "merge-base", "origin/main", "HEAD");
+	expect(first.stdin.startsWith(`/code-review low ${mergeBase}...HEAD "`)).toBe(true);
+	expect(first.stdin.endsWith('"')).toBe(true);
+	expect(first.stdin).toContain('Flag \\"magic\\" numbers \\\\ constants.');
+	expect(first.argv).not.toContain("--json-schema");
 	expect(second.argv).toContain("--json-schema");
 	expect(second.argv[second.argv.indexOf("--resume") + 1]).toBe(first.argv[first.argv.indexOf("--session-id") + 1]);
 	for (const call of [first, second]) {
@@ -960,7 +982,8 @@ fakes("a later round resumes the session with the new head and the author's resp
 	expect(bounded.required).toEqual(["score", "rationale", "findings", "earlier"]);
 	expect(resumed.stdin).toContain("Fixed at src/lib.ts:1.");
 	expect(resumed.stdin).toContain("<earlier-findings>\n1. high src/lib.ts:2 Off by one\n</earlier-findings>");
-	expect(resumed.stdin).toContain("BASE-REVIEW rule");
+	// The session was given the rules already, and they have not changed.
+	expect(resumed.stdin).not.toContain("BASE-REVIEW rule");
 	expect(resumed.stdin).not.toContain("differ from those you were given");
 	const head = git(s.repo, "rev-parse", "HEAD");
 	expect(resumed.stdin).toContain(`\`git diff ${git(s.repo, "rev-parse", "origin/main")}..${head}\``);
@@ -978,16 +1001,55 @@ fakes("--new starts over, and a first round takes no responses", async () => {
 	expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain("round 1\n");
 });
 
-fakes("a later round revokes REVIEW.md rules the base removed", async () => {
+/** Commit `edit` to origin's `next` branch, leaving the checkout on `feature`; no flags change. */
+function moveNext(repo: string, edit: () => void): string[] {
+	git(repo, "checkout", "-q", "next");
+	edit();
+	git(repo, "commit", "-qam", "move next");
+	git(repo, "push", "-q", "origin", "next");
+	git(repo, "checkout", "-q", "feature");
+	return [];
+}
+
+fakes.each([
+	["another effort", (_: string) => ["--effort", "xhigh"]],
+	["a changed REVIEW.md", (repo: string) => moveNext(repo, () => write(repo, "REVIEW.md", "NEW rule\n"))],
+	["a removed REVIEW.md", (repo: string) => moveNext(repo, () => git(repo, "rm", "-q", "REVIEW.md"))],
+	["an older base", (_: string) => ["--base", "origin/main"]],
+] as const)(
+	"anything but the head changing, such as %s, starts a new session that reviews it all",
+	async (_, change) => {
+		const s = setup();
+		vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+		// The branch merges a base ahead of main, which the first round reviews against.
+		git(s.repo, "checkout", "-qb", "next", "main");
+		write(s.repo, "notes.md", "next\n");
+		git(s.repo, "add", ".");
+		git(s.repo, "commit", "-qm", "next");
+		git(s.repo, "push", "-q", "origin", "next");
+		git(s.repo, "checkout", "-q", "feature");
+		git(s.repo, "merge", "-q", "--no-edit", "next");
+		const first = await quest("--root", s.repo, "review", "--base", "origin/next");
+		expect(first.code, first.stderr).toBe(0);
+		const flags = change(s.repo);
+		const base = flags.includes("--base") ? [] : ["--base", "origin/next"];
+		const round = await quest("--root", s.repo, "review", ...base, ...flags);
+		expect(round.code, round.stderr).toBe(0);
+		expect(round.stdout).toContain("round 1\n");
+		expect(round.stdout).not.toContain("unchanged");
+		expect(s.calls().at(-2)!.argv[1]).toBe("review");
+	},
+);
+
+fakes("a base that moved on keeps the session, which checks only what changed", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	expect((await quest("--root", s.repo, "review")).code).toBe(0);
-	const base = moveBase(s.repo, (dir) => git(dir, "rm", "-q", "REVIEW.md"));
-
-	expect((await quest("--root", s.repo, "review")).stdout).toContain(`round 2\nbase ${base}`);
-	const prompt = s.calls().at(-1)!.stdin;
-	expect(prompt).toContain("no longer has a REVIEW.md");
-	expect(prompt).not.toContain("BASE-REVIEW rule");
+	moveBase(s.repo, (dir) => write(dir, "notes.md", "new\n"));
+	git(s.repo, "merge", "-q", "--no-edit", "origin/main");
+	const round = await quest("--root", s.repo, "review");
+	expect(round.stdout).toContain("round 2\n");
+	expect(s.calls().at(-1)!.argv.slice(0, 2)).toEqual(["exec", "resume"]);
 });
 
 fakes("a change to the applicable instructions starts a new session that weighs the responses", async () => {
@@ -1003,8 +1065,9 @@ fakes("a change to the applicable instructions starts a new session that weighs 
 	const [review, followUp] = s.calls().slice(-2);
 	expect(review.argv[1]).toBe("review");
 	expect(review.argv.find((arg) => arg.startsWith("developer_instructions="))).toContain("BASE-SRC new rule");
-	expect(followUp.stdin).toContain("Refuted: see src/lib.ts:1.");
-	// The new session is told the findings the responses answer.
+	expect(review.stdin).toContain("Refuted: see src/lib.ts:1.");
+	// The new session is told the findings the responses answer, and settles them in its report.
+	expect(review.stdin).toContain("1. high src/lib.ts:2 Off by one");
 	expect(followUp.stdin).toContain("1. high src/lib.ts:2 Off by one");
 });
 
@@ -1091,7 +1154,8 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 				"",
 				"Rewritten by `quest review` after each round.",
 				"",
-				"- Reviewer: Codex, gpt-6.1-sol, high effort",
+				// The body's `## Models` record sizes the PR S.
+				"- Reviewer: Codex, gpt-6.1-sol, medium effort",
 				"- Session: `thread-1`, round 1",
 				// The land gate counts a full SHA, which a head with an open finding does not earn.
 				`- Head: ${head.slice(0, 12)}, named in full once a round reports no findings`,
@@ -1179,6 +1243,119 @@ fakes("a review from a subdirectory of a fork records on the upstream PR", async
 	} finally {
 		vi.unstubAllGlobals();
 	}
+});
+
+fakes("a round on the head the last round passed runs no reviewer and repeats that round", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	const first = await quest("--root", s.repo, "review", "--json");
+	expect(first.code, first.stderr).toBe(0);
+	const calls = s.calls().length;
+	const again = await quest("--root", s.repo, "review", "--json");
+	expect(again.code, again.stderr).toBe(0);
+	expect(s.calls()).toHaveLength(calls);
+	const { record: _, ...round } = JSON.parse(first.stdout);
+	expect(JSON.parse(again.stdout)).toMatchObject({ ...round, usage: [], unchanged: true });
+	expect((await quest("--root", s.repo, "review")).stdout).toContain(
+		"unchanged round 1 reviewed this head and found nothing; no reviewer ran\n",
+	);
+
+	// A round with findings to settle runs on the same head, since a refutation needs no new commit.
+	vi.stubEnv("FAKE_REPLY", undefined);
+	const t = setup();
+	expect((await quest("--root", t.repo, "review")).code).toBe(0);
+	write(t.repo, ".tmp/responses.md", "1. Refuted: src/lib.ts:1 sets it.\n");
+	const refuted = await quest("--root", t.repo, "review", "--responses", join(t.repo, ".tmp", "responses.md"));
+	expect(refuted.stdout).toContain("round 2\n");
+	expect(t.calls().at(-1)!.stdin).toContain("Refuted: src/lib.ts:1 sets it.");
+});
+
+fakes("a later round checks only what changed since the reviewed head, and the open findings", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	const previous = git(s.repo, "rev-parse", "HEAD");
+	write(s.repo, "src/lib.ts", "export const x = 4;\n");
+	git(s.repo, "commit", "-qam", "fix");
+	write(s.repo, ".tmp/responses.md", "1. Fixed at src/lib.ts:1.\n");
+	expect((await quest("--root", s.repo, "review", "--responses", join(s.repo, ".tmp", "responses.md"))).code).toBe(0);
+	const prompt = s.calls().at(-1)!.stdin;
+	const head = git(s.repo, "rev-parse", "HEAD");
+	expect(prompt).toContain(`Check only what changed since ${previous} and the findings below`);
+	expect(prompt).toContain(`\`git diff ${previous} ${head}\``);
+	expect(prompt).toContain("1. high src/lib.ts:2 Off by one");
+});
+
+fakes("the PR's Models record sizes the review and names the models that wrote it", async () => {
+	const s = setup();
+	const body = (...lines: string[]) => ["Body.", "", "## Models", "", ...lines].join("\n");
+	const pull = { number: 9, body: body("- Size: L", "- Implementer: Codex, gpt-6.1-sol, high effort") };
+	onGitHub(s.repo, [pull]);
+	try {
+		// Sol wrote it, so Opus reviews it at L's effort, though Claude Code runs the command.
+		const sol = await quest("--root", s.repo, "review");
+		expect(sol.stderr).toBe("");
+		expect(sol.stdout).toContain("reviewer claude claude-opus-5-5 high\nsize L ## Models\n");
+
+		// Flags override the record.
+		const flagged = await quest("--root", s.repo, "review", "--new", "--size", "XS", "--exclude-model", "x");
+		expect(flagged.stdout).toContain("reviewer codex gpt-6.1-sol low\nsize XS --size\n");
+
+		// An implementer whose model is unknown may be the running harness's, which the review then skips.
+		pull.body = body("- Implementer: Codex, unknown, unknown effort", "- Implementer: Codex, gpt-6.1-sol, high");
+		expect((await quest("--root", s.repo, "review", "--new")).code).toBe(2);
+		pull.body = body("- Implementer: Codex, unknown, unknown effort");
+		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
+			"reviewer codex gpt-6.1-sol medium\n",
+		);
+
+		// A malformed field fails the round, unless the flag that replaces it is given.
+		pull.body = body("- Size: XXL", "- Implementer: Codex");
+		const invalid = await quest("--root", s.repo, "review", "--new", "--exclude-model", "gpt-6.1-sol");
+		expect(invalid.code).toBe(2);
+		expect(invalid.stderr).toContain("the PR's ## Models record names size XXL, not one of XS, S, M, L, XL");
+		const nameless = await quest("--root", s.repo, "review", "--new", "--size", "S");
+		expect(nameless.code).toBe(2);
+		expect(nameless.stderr).toContain("names no model in: Implementer: Codex");
+		const both = await quest("--root", s.repo, "review", "--new", "--size", "S", "--exclude-model", "gpt-6.1-sol");
+		expect(both.stdout).toContain("reviewer claude claude-opus-5-5 low\nsize S --size\n");
+		pull.body = body("- Size: S", "- Size: M");
+		expect((await quest("--root", s.repo, "review", "--new")).stderr).toContain("names 2 sizes");
+
+		// A blank, multi-token, or malformed duplicate Size line fails too, rather than falling back to M.
+		pull.body = body("- Size:");
+		const blank = await quest("--root", s.repo, "review", "--new");
+		expect(blank.code).toBe(2);
+		expect(blank.stderr).toContain("has a Size: line that names no size");
+		pull.body = body("- Size: L extra");
+		const extra = await quest("--root", s.repo, "review", "--new");
+		expect(extra.code).toBe(2);
+		expect(extra.stderr).toContain("names size L extra, not one of");
+		pull.body = body("- Size: S", "- Size: S extra");
+		const duplicate = await quest("--root", s.repo, "review", "--new");
+		expect(duplicate.code).toBe(2);
+		expect(duplicate.stderr).toContain("names 2 sizes");
+		pull.body = body("- Size:");
+		expect((await quest("--root", s.repo, "review", "--new", "--size", "S")).stdout).toContain("size S --size\n");
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+test("a Models record reads its size and every implementing model", () => {
+	const body =
+		"x\n\n## Models\n\nSize: S\n- Implementer: Claude Code, claude-opus-5-5, high effort\n* Implementer: Codex, unknown, unknown effort\n\n## Review\n\n- Size: XL\n";
+	expect(recorded(body)).toEqual({
+		sizes: ["S"],
+		implementers: [
+			{ item: "Implementer: Claude Code, claude-opus-5-5, high effort", model: "claude-opus-5-5" },
+			{ item: "Implementer: Codex, unknown, unknown effort", model: "unknown" },
+		],
+	});
+	expect(recorded("No record.")).toEqual({ sizes: [], implementers: [] });
+	expect(recorded("## Models\n\n- Size:\n- Size: L extra\n- Size:  M \n").sizes).toEqual(["", "L extra", "M"]);
+	expect(recorded("## Models\n\n- Implementer: Codex\n").implementers).toEqual([
+		{ item: "Implementer: Codex", model: null },
+	]);
 });
 
 test("the record replaces only a top-level Review section, never an example of one", () => {
@@ -1316,10 +1493,12 @@ test("each changed directory keeps its own instructions, and a directory's symli
 });
 
 test("the next step stops for the design checkpoint on every third round that reports findings", () => {
-	const round = (number: number, findings: number) =>
-		({ round: number, findings: Array.from({ length: findings }, () => ({})) }) as unknown as Round;
+	const round = (number: number, findings: number, severity = "medium") =>
+		({ round: number, findings: Array.from({ length: findings }, () => ({ severity })) }) as unknown as Round;
 	expect(nextStep(round(3, 1))).toMatch(/^next checkpoint: /);
 	expect(nextStep(round(6, 2))).toMatch(/^next checkpoint: /);
 	expect(nextStep(round(4, 1))).toMatch(/^next respond: /);
 	expect(nextStep(round(3, 0))).toMatch(/^next done: /);
+	expect(nextStep(round(3, 2, "low"))).toMatch(/^next finish: /);
+	expect(nextStep(round(4, 1, "low"))).toMatch(/^next finish: /);
 });

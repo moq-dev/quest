@@ -169,6 +169,12 @@ Use `quest rm`, which deletes the quest and every link to it.
 
 Remove the `quest` label from issues no other quest tracks.
 
+## Coordination
+
+Run no more sub-agents at once than the harness allows; queue the rest and start one as each reports.
+Relay no interim report: resume a sub-agent that ended its turn on one, telling it to block until its work finishes.
+A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
+
 ## Questions
 
 Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.

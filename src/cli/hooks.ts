@@ -1,9 +1,9 @@
-// Quest's user-level Claude Code hooks: the entries `quest setup` installs in
-// the user's own settings, and `quest hook`, which handles every one of them.
-// Repositories write no hooks, since their settings would bind every
-// contributor, so a user opts in once for all their repositories. Every entry
-// runs the same command and the handler dispatches on the event, so a new hook
-// is one more row in `HOOKS` and one more case in `hook`.
+// Quest's settings in the user's own Claude Code settings: what `quest setup`
+// writes, and `quest hook`, which handles every hook it installs. Repositories
+// write no hooks, since their settings would bind every contributor, so a user
+// opts in once for all their repositories. Every hook runs the same command and
+// the handler dispatches on the event, so a new hook is one more row in `HOOKS`
+// and one more case in `hook`.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -35,6 +35,12 @@ export const HOOKS: readonly HookEntry[] = [
 	{ event: "SubagentStart" },
 ];
 
+/**
+ * Claude Code's cap on a foreground command's timeout: 55 minutes, just under the
+ * 1h prompt-cache TTL, so a blocking wait returns while the session's cache is warm.
+ */
+export const BASH_MAX_TIMEOUT_MS = "3300000";
+
 /** The user settings file Claude Code reads: in `CLAUDE_CONFIG_DIR` when set, else `~/.claude`. */
 export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
 	const dir = env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
@@ -44,12 +50,14 @@ export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
 type Json = Record<string, unknown>;
 
 /**
- * Install `entries` as Quest's hooks in the settings file at `path`, or with
- * `remove`, take Quest's hooks out, keeping every other setting and hook.
- * Returns whether the file changed. A file that is not a JSON object, or whose
- * `hooks` is malformed, throws before anything is written.
+ * Set Quest's settings in the Claude Code settings file at `path`: the
+ * foreground timeout cap and `entries` as Quest's hooks. With `remove`, take
+ * Quest's hooks out, and the cap while it still holds Quest's value. Keeps
+ * every other setting and hook, and writes once. Returns a line per change. A
+ * file that is not a JSON object, or whose `env` or `hooks` is malformed,
+ * throws before anything is written.
  */
-export function setup(path: string, options: { remove?: boolean; entries?: readonly HookEntry[] } = {}): boolean {
+export function setup(path: string, options: { remove?: boolean; entries?: readonly HookEntry[] } = {}): string[] {
 	const original = existsSync(path) ? readFileSync(path, "utf8") : null;
 	let settings: unknown = {};
 	if (original !== null) {
@@ -60,12 +68,31 @@ export function setup(path: string, options: { remove?: boolean; entries?: reado
 		}
 	}
 	if (!isObject(settings)) throw new Error(`${path} does not hold a JSON object`);
-	const updated = withHooks(settings, options.remove ? [] : (options.entries ?? HOOKS), path);
-	if (updated === settings) return false;
+	const env = settings.env ?? {};
+	if (!isObject(env)) throw new Error(`${path}: env is not an object`);
+	const hooked = withHooks(settings, options.remove ? [] : (options.entries ?? HOOKS), path);
+
+	const changes: string[] = [];
+	let updated = hooked;
+	if (hooked !== settings) changes.push(`${path}: ${options.remove ? "removed" : "installed"} Quest's hooks`);
+	const cap = env.BASH_MAX_TIMEOUT_MS;
+	if (options.remove) {
+		if (cap === BASH_MAX_TIMEOUT_MS) {
+			const { BASH_MAX_TIMEOUT_MS: _, ...rest } = env;
+			updated = { ...updated, env: rest };
+			if (Object.keys(rest).length === 0) delete updated.env;
+			changes.push(`${path}: removed env.BASH_MAX_TIMEOUT_MS`);
+		}
+	} else if (cap !== BASH_MAX_TIMEOUT_MS) {
+		updated = { ...updated, env: { ...env, BASH_MAX_TIMEOUT_MS } };
+		const was = cap === undefined ? "" : ` (was ${JSON.stringify(cap)})`;
+		changes.push(`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS}${was}`);
+	}
+	if (changes.length === 0) return [];
 	mkdirSync(dirname(path), { recursive: true });
 	// Written in place, so a settings file linked from dotfiles stays linked.
 	writeFileSync(path, `${JSON.stringify(updated, null, 2)}\n`);
-	return true;
+	return changes;
 }
 
 /**
