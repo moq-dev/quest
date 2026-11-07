@@ -18,13 +18,10 @@ moq.pro's `main` ruleset keeps requiring the unreported `quest land` check
 with moq-bot as a bypass actor, since the own queue relies on GitHub never
 merging a pick itself.
 
-Non-goals: moq.pro's `release` branch, which moq.pro's
-[Land release](https://github.com/moq-dev/moq.pro/blob/main/quest/m0/land-release.md)
+Non-goals: moq.pro's `release` branch, which moq.pro's own Land release
 quest moves onto a second watcher instance once `main` works, and the Nix
-store isolation moq.pro's
-[CI host quest](https://github.com/moq-dev/moq.pro/blob/main/quest/m0/ci-host.md)
-requires from public moq jobs, which that quest owns and this cutover leaves
-no worse.
+store isolation that moq.pro's CI host quest requires from public moq jobs,
+which that quest owns and this cutover leaves no worse.
 
 ## Plan
 
@@ -43,7 +40,11 @@ queue, so it is the repository the own queue exists for.
   queue's build workflow takes another name, or moq.pro renames the label
   queue's first. The own queue's trigger must not depend on that name.
 - Drain or carry over the gate's queue before switching: picks already armed
-  stay armed, so the watcher reads them in the same order.
+  stay armed, so the watcher reads them in the same order. Switch only once
+  the gate has no fixer job running or uncollected: the gate records each in
+  a `fix-job-*.json` file (`src/cli/land-fixer.ts`), while the watcher
+  collects only its own `watch-job-*.json` files
+  (`src/cli/land-watch-fix.ts`), so a gate fixer's result would be lost.
 - The `moq-pro-gate` runner (`modules/ci-runners.nix` in kixelated/nixos)
   already serves moq.pro's Actions. Its runner group should admit only the
   queue workflow, as

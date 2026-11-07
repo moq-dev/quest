@@ -45,7 +45,10 @@ options marked ✅:
   - ✅ Detected each pass from the base's rules
     (`GET /repos/{owner}/{repo}/rules/branches/{base}`): a `merge_queue` rule
     means GitHub's queue, none means the own queue. A pass that cannot read
-    the rules does nothing.
+    the rules does nothing. Switching a base to GitHub's queue also replaces
+    its required unreported context (`quest land`) with the queue workflow's
+    required check, since GitHub's queue never reports `quest land` and
+    would stall; the ruleset change makes both edits at once.
   - An explicit `--queue github|own` flag
 - Concurrency stays 1, as the [epic](/quest/m0/queue-watcher/README.md)
   decided: each build holds one PR on the base, so a failure blames that PR
@@ -70,9 +73,13 @@ Implementation guidance:
 - Land through `quest land serve`'s landing path (`src/cli/land-head.ts`):
   lease-push the tested head, merge it with GitHub's merge API pinned to that
   head, verify the landed tree against the tested one, and fall back to a
-  leased fast-forward of the base when the branch push is refused. If the
-  base moved while building, rebuild on the new base without counting an
-  attempt. Move these helpers out of serve's files so the retire quest can
+  leased fast-forward of the base when the branch push is refused. Land only
+  while the base is still the tested base: if it moved while building or
+  before the merge, rebuild on the new base without counting an attempt.
+  GitHub's merge API takes no expected base, so the ruleset closes the gap
+  between that check and the merge: its unreported required context, with
+  moq-bot as bypass actor, leaves the watcher the base's only writer outside
+  an admin's emergency bypass, and the landed-tree check catches that case. Move these helpers out of serve's files so the retire quest can
   delete serve without touching them.
 - The check run is informational and never the required context. moq-bot's
   App posts it with `checks: write`, which `watchPermissions` adds only in
