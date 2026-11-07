@@ -119,9 +119,9 @@ queues on private repositories only under Enterprise Cloud and moq-dev is on
 GitHub Team: moq.pro leaves the host gate for an own serial queue in
 `quest land watch`, rather than a plan upgrade, making moq.pro public, or a
 third-party queue. The maintainer expects the own queue to become every
-repository's, for visibility. The decisions are recorded in
-[the own queue](/quest/m0/queue-watcher/own-queue.md),
-[moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
+repository's, for visibility. The own queue landed in
+[moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540); the rest is
+recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
 [the queue page](/quest/m0/queue-watcher/queue-page.md).
 
 Shared shape, for the children to follow:

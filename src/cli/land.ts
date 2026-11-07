@@ -423,7 +423,10 @@ export async function resolveQueue(
 		} else if (resolution && (await unresolved(github, entry.id)) > 0) {
 			eject("unresolved_conversations", "it has unresolved review threads; resolve them and land it again");
 		} else {
-			const unmet = checks(await contexts(github, repository, { ...node, headRefOid: approved }), required);
+			// The queue's first page holds the head's checks, unless the head moved from the pin since.
+			const commit = object(object(array(object(node.commits).nodes)[0]).commit);
+			const rollup = commit.oid === approved ? commit.statusCheckRollup : undefined;
+			const unmet = checks(await contexts(github, repository, approved, rollup), required);
 			if (unmet.failing.length > 0) {
 				eject("failed_checks", `required checks failed on its head: ${unmet.failing.join(", ")}`);
 			} else if (unmet.pending.length > 0) {
@@ -443,14 +446,16 @@ export async function resolveQueue(
 }
 
 /**
- * Every check run and commit status on a PR node's head: the queue's first page, then the rest by
- * the head's SHA, which also reads them all when the head moved between the queue's fields.
+ * Every check run and commit status on `head`: from `rollup`, the first page already read with it,
+ * when there is one, then the rest by the SHA.
  */
-async function contexts(github: GitHub, repository: Repository, node: ObjectValue): Promise<ObjectValue[]> {
-	const head = string(node.headRefOid);
-	const commit = object(object(array(object(node.commits).nodes)[0]).commit);
+async function contexts(
+	github: GitHub,
+	repository: Repository,
+	head: string,
+	rollup?: unknown,
+): Promise<ObjectValue[]> {
 	const found: ObjectValue[] = [];
-	let rollup = commit.oid === head ? commit.statusCheckRollup : undefined;
 	let after: string | null = null;
 	for (;;) {
 		if (rollup === undefined) {
@@ -461,7 +466,7 @@ async function contexts(github: GitHub, repository: Repository, node: ObjectValu
 				after,
 			});
 			const target = object(data.repository).object;
-			if (target === null) throw new Error(`${string(node.url)}'s head ${head} is missing`);
+			if (target === null) throw new Error(`commit ${head} is missing`);
 			rollup = object(target).statusCheckRollup;
 		}
 		if (rollup === null) return found;
@@ -472,6 +477,16 @@ async function contexts(github: GitHub, repository: Repository, node: ObjectValu
 		after = string(info.endCursor);
 		rollup = undefined;
 	}
+}
+
+/** The checks of `required` that commit `sha` failed, and those still pending or not yet reported. */
+export async function requiredChecks(
+	github: GitHub,
+	repository: Repository,
+	sha: string,
+	required: RequiredCheck[],
+): Promise<{ failing: string[]; pending: string[] }> {
+	return checks(await contexts(github, repository, sha), required);
 }
 
 /**

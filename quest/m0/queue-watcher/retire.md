@@ -26,9 +26,10 @@ shared state directory still expire.
 moq, moq-dev/quest, rind and rust2 land through the merge queue (2026-11-03).
 moq.pro is the last: it is private and moq-dev is on GitHub Team, where GitHub
 offers merge queues on private repositories only under Enterprise Cloud. On
-2026-11-06 the maintainer chose to move it to
-[the watcher's own queue](/quest/m0/queue-watcher/own-queue.md), whose
-landing helpers move out of serve's files there, so this deletion leaves them.
+2026-11-06 the maintainer chose to move it to the watcher's own queue, whose
+landing helpers ([moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540))
+moved out of serve's files into `src/cli/land-head.ts`, so this deletion
+leaves them.
 Its `main` ruleset keeps requiring the unreported `quest land` check, which
 the own queue relies on so GitHub never merges a pick itself.
 
