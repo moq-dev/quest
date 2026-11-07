@@ -137,6 +137,15 @@ function ignored(root: string, paths: string[]): Set<string> {
 	}
 }
 
+/** Keep `.worktrees/` out of the main checkout's status via the clone-local exclude, unless something already ignores it. */
+function exclude(repository: string): void {
+	if (ignored(repository, [".worktrees/"]).size) return;
+	const file = canonical(git(repository, ["rev-parse", "--path-format=absolute", "--git-common-dir"])) + "/info/exclude";
+	mkdirSync(dirname(file), { recursive: true });
+	const old = existsSync(file) ? readFileSync(file, "utf8") : "";
+	writeFileSync(file, `${old}${old && !old.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
+}
+
 /** The first linked worktree of any repository, marked by a `.git` file, at or under `path`; symlinks are never followed. */
 function linkedWorktree(path: string): string | undefined {
 	if (!entry(path)?.isDirectory()) return undefined;
@@ -583,6 +592,7 @@ export class Worktrees {
 				);
 			const path = join(repository, ".worktrees", name);
 			mkdirSync(dirname(path), { recursive: true });
+			exclude(repository);
 			if (existsSync(path)) throw new Error(`refusing to adopt an existing checkout: ${path}`);
 			this.admit(registry, reserve, dirname(path));
 			const record: WorktreeRecord = {

@@ -83,6 +83,19 @@ afterEach(() => {
 // Cases that create checkouts with submodules clone each nested repository, running
 // 100-300 Git processes, so they get 60 s.
 describe("worktrees", { timeout: 20_000 }, () => {
+	it("excludes .worktrees/ locally once, only when nothing ignores it", async () => {
+		const { repo, worktrees } = fixture();
+		const exclude = join(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"), "info", "exclude");
+		const lines = () => (existsSync(exclude) ? readFileSync(exclude, "utf8") : "").split("\n");
+		await worktrees.create(repo, "listed", 1_000_000);
+		expect(lines()).not.toContain("/.worktrees/");
+		writeFileSync(join(repo, ".gitignore"), "cache/\n.env\n");
+		git(repo, "commit", "-qam", "unignore");
+		await worktrees.create(repo, "first", 1_000_000);
+		await worktrees.create(repo, "second", 1_000_000);
+		expect(lines().filter((line) => line === "/.worktrees/")).toHaveLength(1);
+		expect(git(repo, "status", "--porcelain=v1")).toBe("");
+	});
 	it("prunes declared scratch in place and keeps source, Git state, and untracked files", async () => {
 		const { repo, worktrees } = fixture();
 		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache/", "cache/nested", "missing"]);
