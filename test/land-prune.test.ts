@@ -55,7 +55,7 @@ test("prunes expired logs of both daemons and keeps every cited or unrelated fil
 		write(join("codex-repro-1", "failure.log"));
 		mkdirSync(join(state, "batch-1730000000004-5.log"));
 
-		expect(pruneLogs(state, now).sort()).toEqual([...gone].sort());
+		expect(pruneLogs(state, now, (message) => expect.fail(message)).sort()).toEqual([...gone].sort());
 		const left = readdirSync(state);
 		for (const name of gone) expect(left).not.toContain(name);
 		for (const name of [
@@ -75,6 +75,21 @@ test("prunes expired logs of both daemons and keeps every cited or unrelated fil
 		])
 			expect(left).toContain(name);
 		expect(readdirSync(join(state, "codex-repro-1"))).toEqual(["failure.log"]);
+	} finally {
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("an unreadable record warns and deletes nothing", () => {
+	const state = mkdtempSync(join(tmpdir(), "land-prune-"));
+	try {
+		writeFileSync(join(state, "check-1730000000000-12.log"), "");
+		utimesSync(join(state, "check-1730000000000-12.log"), 0, 0);
+		writeFileSync(join(state, "fix-job-fix-AAAAAA.json"), "{");
+		const warnings: string[] = [];
+		expect(pruneLogs(state, Date.now(), (message) => warnings.push(message))).toEqual([]);
+		expect(warnings).toHaveLength(1);
+		expect(readdirSync(state)).toContain("check-1730000000000-12.log");
 	} finally {
 		rmSync(state, { recursive: true, force: true });
 	}

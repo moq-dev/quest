@@ -821,7 +821,7 @@ export async function serve(
 			},
 		};
 		await daemonLoop(async () => {
-			pruneLogs(options.state, deps.now());
+			pruneLogs(options.state, deps.now(), deps.warn);
 			// Without `collect`: this check runs inside a collection, which must not start another.
 			const checkCollected = (base: Plan["base"]) => checkBase(trusted, name, base, options, deps, read);
 			for (const line of await collectFixers(trusted, options.state, deps, mint, undefined, read, checkCollected))

@@ -818,7 +818,7 @@ export async function watch(
 			read,
 		};
 		await daemonLoop(async () => {
-			pruneLogs(options.state, deps.now());
+			pruneLogs(options.state, deps.now(), deps.warn);
 			const api = new GitHub(probe);
 			const base = options.base ?? (await defaultBranch(api, repository));
 			if (await ownQueue(api, repository, base)) {

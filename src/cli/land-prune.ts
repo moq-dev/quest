@@ -41,9 +41,19 @@ function inUse(state: string, names: string[]): Set<string> {
 /**
  * Delete the land daemons' logs in `state` that no record reads and that were last written over
  * `LOG_RETENTION` before `now`. Both daemons share the directory, so either prunes every family.
- * Returns the names deleted.
+ * Returns the names deleted. Failing to prune, such as on an unreadable record, warns and deletes
+ * nothing, so it never blocks the queue.
  */
-export function pruneLogs(state: string, now: number): string[] {
+export function pruneLogs(state: string, now: number, warn: (message: string) => void): string[] {
+	try {
+		return prune(state, now);
+	} catch (error) {
+		warn(`quest land: pruning logs failed: ${error instanceof Error ? error.message : String(error)}`);
+		return [];
+	}
+}
+
+function prune(state: string, now: number): string[] {
 	const names = readdirSync(state);
 	const used = inUse(state, names);
 	const pruned: string[] = [];
