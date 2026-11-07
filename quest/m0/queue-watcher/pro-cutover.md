@@ -18,7 +18,9 @@ with moq-bot as a bypass actor, since the own queue relies on GitHub never
 merging a pick itself.
 
 Non-goals: moq.pro's `release` branch, which moq.pro's own Land release
-quest moves onto a second watcher instance once `main` works, and the Nix
+quest moves onto a second watcher instance
+([per-base instances](/quest/m0/queue-watcher/per-base.md)) once `main`
+works, and the Nix
 store isolation that moq.pro's CI host quest requires from public moq jobs,
 which that quest owns and this cutover leaves no worse.
 

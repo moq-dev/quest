@@ -12,7 +12,7 @@ import { basename } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { collect } from "../src/cli/tree";
-import { EPIC_README, ONE, TWO, Tree } from "./fixture";
+import { ONE, TWO, Tree } from "./fixture";
 
 const tree = Tree.baseline;
 
@@ -216,9 +216,9 @@ describe("headings", () => {
 	});
 });
 
-describe("index", () => {
+describe("epics", () => {
 	test("a quest and an epic cannot share a page and branch path", () => {
-		const t = tree().write("quest/m0/epic.md", ONE).append("quest/m0/README.md", "- [Quest](/quest/m0/epic.md)\n");
+		const t = tree().write("quest/m0/epic.md", ONE);
 		const finding =
 			"quest/m0/epic.md: quest path collides with quest/m0/epic/README.md; rename one of these documents";
 		expect(t.findings()).toEqual([finding]);
@@ -228,7 +228,6 @@ describe("index", () => {
 	test("a collision persists after the epic's last child completes", () => {
 		tree()
 			.write("quest/m0/epic/one/README.md", ONE)
-			.append("quest/m0/epic/README.md", "- [Remaining epic](/quest/m0/epic/one/README.md)\n")
 			.rejects("quest/m0/epic/one.md: quest path collides with quest/m0/epic/one/README.md");
 	});
 
@@ -238,7 +237,6 @@ describe("index", () => {
 	test("a README-named directory collides with its parent README", () => {
 		tree()
 			.write("quest/m0/epic/README/README.md", ONE)
-			.append("quest/m0/epic/README.md", "- [Nested](/quest/m0/epic/README/README.md)\n")
 			.rejects("quest/m0/epic/README.md: quest path collides with quest/m0/epic/README/README.md");
 	});
 
@@ -249,15 +247,21 @@ describe("index", () => {
 			.rejects("quest/m0/epic/one/README.md: quest path collides with quest/m0/epic/one/README/two.md");
 	});
 
+	// The directory is the epic's list of children: a new quest needs no link
+	// anywhere to be part of it.
+	test("a quest joins the epic whose directory holds it", () => {
+		const t = tree().write("quest/m0/epic/three.md", "# [S] Three\n\n## Goal\n\nA new child.\n");
+		t.accepts();
+		expect(t.ready()).toEqual(["quest/m0/epic/one.md", "quest/m0/epic/three.md"]);
+	});
+
 	// A README whose last child merged is the epic's own remaining work: a leaf
 	// quest, sized and listed as ready like any other.
-	test("a README without an index is a quest", () => {
-		const t = tree()
-			.write(
-				"quest/m0/epic/sub/README.md",
-				"# Sub\n\n## Goal\n\nThe end-to-end test once every child has merged.\n",
-			)
-			.append("quest/m0/epic/README.md", "- [Sub](/quest/m0/epic/sub/README.md)\n");
+	test("a README whose directory holds no other quest is a quest", () => {
+		const t = tree().write(
+			"quest/m0/epic/sub/README.md",
+			"# Sub\n\n## Goal\n\nThe end-to-end test once every child has merged.\n",
+		);
 		t.rejects("quest title must be");
 		t.write(
 			"quest/m0/epic/sub/README.md",
@@ -267,90 +271,92 @@ describe("index", () => {
 		expect(t.ready()).toContain("quest/m0/epic/sub/README.md");
 	});
 
-	// Completing an epic's last quest removes its heading with the entry, or
-	// deletes the directory. A bare `## Required` would block the husk forever.
-	test("an empty epic index", () => {
+	// Completing a quest's last blocker removes its heading with the entry. A
+	// bare `## Required` would block it forever.
+	test("an empty Required section", () => {
+		tree().append("quest/m0/epic/one.md", "\n## Required\n").rejects("'## Required' is empty");
 		tree()
-			.write("quest/m0/husk/README.md", "# Husk\n\n## Goal\n\nIts last quest was completed.\n\n## Required\n")
-			.append("quest/m0/README.md", "- [Husk](/quest/m0/husk/README.md)\n")
+			.write("quest/m0/husk/README.md", "# [S] Husk\n\n## Goal\n\nIts last blocker merged.\n\n## Required\n")
 			.rejects("'## Required' is empty");
 	});
 
-	// The absence of `## Required` means ready. A heading left behind by its last
-	// blocker reads as blocked to every readiness check, forever.
-	test("an empty Required section", () => {
-		tree().append("quest/m0/epic/one.md", "\n## Required\n").rejects("'## Required' is empty");
-	});
-
-	test("an unlisted quest", () => {
+	// Nothing above such a quest reaches it, so nothing would ever rank or
+	// render it.
+	test("a quest in a directory without a README", () => {
 		tree()
-			.write("quest/m0/epic/three.md", "# [S] Three\n\n## Goal\n\nA quest nobody indexed.\n")
-			.rejects("not listed in quest/m0/epic/README.md's '## Required'");
-	});
-
-	// Children are the entries that sit directly under the epic, so a milestone
-	// requiring a grandchild only waits on it; the epic still owns it.
-	test("requiring a grandchild is a blocker", () => {
-		const t = tree().append("quest/m0/README.md", "- [One](/quest/m0/epic/one.md)\n");
-		t.accepts();
-		expect(t.ready()).toEqual(["quest/m0/epic/one.md"]);
-	});
-
-	test("a quest listed twice", () => {
+			.write("quest/m0/loose/three.md", ONE)
+			.rejects(
+				"quest/m0/loose/three.md: sits in quest/m0/loose, which has no README.md; every directory under quest/ is an epic, so add its README or move the quest",
+			);
 		tree()
-			.append("quest/m0/epic/README.md", "- [One again](/quest/m0/epic/one.md)\n")
+			.write("quest/m0/loose/deeper/README.md", ONE)
+			.rejects("quest/m0/loose/deeper/README.md: sits in quest/m0/loose, which has no README.md");
+	});
+
+	// Trees from before directory membership still list each epic's children.
+	// Such a link is membership, so it counts once.
+	test.each([
+		["quest/README.md", "/quest/m0/README.md"],
+		["quest/m0/README.md", "/quest/m0/epic/README.md"],
+		["quest/m0/epic/README.md", "/quest/m0/epic/one.md"],
+	])("%s requiring its child %s", (readme, target) => {
+		const listed = tree().append(readme, `\n## Required\n\n- [Held](${target})\n`);
+		listed.accepts();
+		expect(listed.ready()).toEqual(tree().ready());
+		expect(listed.blockers(readme)).toEqual(tree().blockers(readme));
+	});
+
+	// Only a child stands in for a link: a deeper quest, or a link to no quest,
+	// stays a blocker, as on a tree that listed children.
+	test.each([
+		["/quest/m0/epic/one.md", "quest/m0/epic/one.md"],
+		["/quest/m0/gone.md", "Gone"],
+	])("quest/m0/README.md requiring %s, which is not its child", (target, rendered) => {
+		const t = tree().append("quest/m0/README.md", `\n## Required\n\n- [Gone](${target})\n`);
+		expect(t.blockers("quest/m0/README.md")[0]).toBe(rendered);
+	});
+
+	test("a quest required twice", () => {
+		tree()
+			.append("quest/m0/epic/two.md", "- [One again](/quest/m0/epic/one.md)\n")
 			.rejects("requires /quest/m0/epic/one.md twice");
 	});
 
-	test("a relative index entry", () => {
+	test("a relative Required entry", () => {
 		tree()
-			.write("quest/m0/epic/README.md", EPIC_README.replace("(/quest/m0/epic/one.md)", "(one.md)"))
+			.write("quest/m0/epic/two.md", TWO.replace("(/quest/m0/epic/one.md)", "(one.md)"))
 			.rejects("link to a quest must be root-absolute: one.md");
 	});
 
 	// A target that merely exists is not enough: quest/AGENTS.md is a file under
 	// quest/ that nothing can finish.
-	test("an index entry that is not a quest", () => {
+	test("a Required entry that is not a quest", () => {
 		tree()
 			.write("quest/AGENTS.md", "# Contract\n")
-			.append("quest/README.md", "- [Contract](/quest/AGENTS.md)\n")
+			.append("quest/m0/epic/two.md", "- [Contract](/quest/AGENTS.md)\n")
 			.rejects("requires /quest/AGENTS.md, which is not a quest document");
 	});
 
-	// The index is a list of entries, not prose that happens to link.
-	test("prose under the index", () => {
-		tree().append("quest/m0/epic/README.md", "\nSee also [One](/quest/m0/epic/one.md).\n").rejects("mid-sentence");
+	// `Required` is a list of entries, not prose that happens to link.
+	test("prose under Required", () => {
+		tree().append("quest/m0/epic/two.md", "\nSee also [One](/quest/m0/epic/one.md).\n").rejects("mid-sentence");
 	});
 
-	// A blocker outside the epic's directory is not a child, so a README holding
-	// only one is a quest and needs a size like any other.
-	test("an epic listing no quest", () => {
+	// A blocker is not a child, so a README holding only blockers is a quest
+	// and needs a size like any other.
+	test("a README with only blockers is a quest", () => {
 		tree()
 			.write(
 				"quest/m0/husk/README.md",
 				"# Husk\n\n## Goal\n\nIts last quest was completed.\n\n## Required\n\n- [One](/quest/m0/epic/one.md)\n",
 			)
-			.append("quest/m0/README.md", "- [Husk](/quest/m0/husk/README.md)\n")
 			.rejects("quest title must be");
-	});
-
-	// A LOOSE list - blank lines between entries - wraps every item in a
-	// paragraph. Treating that paragraph as text would classify every entry in
-	// the list as mid-sentence prose, which is a false positive on ordinary
-	// Markdown and would fire on every blocker and every index entry at once.
-	test("a loose index list", () => {
-		tree()
-			.write(
-				"quest/m0/epic/README.md",
-				"# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n- [One](/quest/m0/epic/one.md)\n\n- [Two](/quest/m0/epic/two.md)\n",
-			)
-			.accepts();
 	});
 
 	// A milestone with nothing left is not its own work, so it needs no size and
 	// never lists as ready.
 	test("a milestone may be empty", () => {
-		const t = tree().write("quest/m0/README.md", "# m0\n\n## Goal\n\nEmpty for now.\n").remove("quest/m0/epic");
+		const t = tree().remove("quest/m0/epic");
 		t.accepts();
 		expect(t.ready()).toEqual([]);
 	});
@@ -359,18 +365,11 @@ describe("index", () => {
 // Milestones are permanent, so a link to one keeps resolving after it
 // finishes. Check forces its removal; readiness stays a grep for the heading.
 describe("finished milestones", () => {
-	const EMPTY_M0 = "# M0\n\n## Goal\n\nA milestone.\n";
 	const GATE = "# [S] Gate\n\n## Goal\n\nRuns once m0 finishes.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n";
 
 	/** The baseline plus m1, whose gate requires m0. */
 	const gated = () =>
-		tree()
-			.append("quest/README.md", "- [M1](/quest/m1/README.md)\n")
-			.write(
-				"quest/m1/README.md",
-				"# M1\n\n## Goal\n\nThe next milestone.\n\n## Required\n\n- [Gate](/quest/m1/gate.md)\n",
-			)
-			.write("quest/m1/gate.md", GATE);
+		tree().write("quest/m1/README.md", "# M1\n\n## Goal\n\nThe next milestone.\n").write("quest/m1/gate.md", GATE);
 
 	test("a link to an open milestone blocks", () => {
 		const t = gated();
@@ -379,7 +378,7 @@ describe("finished milestones", () => {
 	});
 
 	test("a link to a finished milestone", () => {
-		const t = gated().write("quest/m0/README.md", EMPTY_M0).remove("quest/m0/epic");
+		const t = gated().remove("quest/m0/epic");
 		expect(t.findings()).toEqual([
 			"quest/m1/gate.md:9: requires /quest/m0/README.md, a finished milestone; remove the link, and the '## Required' heading with its last entry",
 		]);
@@ -387,22 +386,24 @@ describe("finished milestones", () => {
 	});
 
 	// moq-dev/moq's m1 lists m0 quests: those blockers keep it open.
-	test("a milestone with only non-child blockers left is open", () => {
+	test("a milestone with only blockers left is open", () => {
 		gated()
-			.write("quest/m0/README.md", `${EMPTY_M0}\n## Required\n\n- [Other](/quest/m1/other.md)\n`)
+			.append("quest/m0/README.md", "\n## Required\n\n- [Other](/quest/m1/other.md)\n")
 			.remove("quest/m0/epic")
 			.write("quest/m1/other.md", "# [S] Other\n\n## Goal\n\nOpen work m0 waits on.\n")
-			.append("quest/m1/README.md", "- [Other](/quest/m1/other.md)\n")
 			.accepts();
 	});
 
-	test("the root's listing of a finished milestone is membership", () => {
-		tree().write("quest/m0/README.md", EMPTY_M0).remove("quest/m0/epic").accepts();
+	// The root's listing of its milestones is membership, not a blocker.
+	test("the root's link to a finished milestone is allowed", () => {
+		tree()
+			.append("quest/README.md", "\n## Required\n\n- [M0](/quest/m0/README.md)\n")
+			.remove("quest/m0/epic")
+			.accepts();
 	});
 
 	test("removing the link readies the quest", () => {
 		const t = gated()
-			.write("quest/m0/README.md", EMPTY_M0)
 			.remove("quest/m0/epic")
 			.write("quest/m1/gate.md", "# [S] Gate\n\n## Goal\n\nRuns once m0 finishes.\n");
 		t.accepts();
@@ -424,12 +425,10 @@ describe("Required", () => {
 	// only thing that can close it.
 	test("a cycle through an epic", () => {
 		tree()
-			.append("quest/m0/README.md", "- [Outer](/quest/m0/outer.md)\n")
 			.write(
 				"quest/m0/outer.md",
 				"# [S] Outer\n\n## Goal\n\nBlocked on a whole epic.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md) - the whole epic must finish\n",
 			)
-			.append("quest/m0/epic/README.md", "- [Three](/quest/m0/epic/three.md)\n")
 			.write(
 				"quest/m0/epic/three.md",
 				"# [S] Three\n\n## Goal\n\nInside the epic that blocks it.\n\n## Required\n\n- [Outer](/quest/m0/outer.md) - must finish first\n",
@@ -582,12 +581,10 @@ describe("ready", () => {
 	// useful answer is which of its quests are still open - all of them, since a
 	// completed quest is deleted.
 	test("blocked by an epic", () => {
-		const t = tree()
-			.append("quest/m0/README.md", "- [Outer](/quest/m0/outer.md)\n")
-			.write(
-				"quest/m0/outer.md",
-				"# [S] Outer\n\n## Goal\n\nBlocked on a whole epic.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md) - the whole epic must finish\n",
-			);
+		const t = tree().write(
+			"quest/m0/outer.md",
+			"# [S] Outer\n\n## Goal\n\nBlocked on a whole epic.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md) - the whole epic must finish\n",
+		);
 		expect(t.blockers("quest/m0/outer.md")).toEqual([
 			"quest/m0/epic/README.md",
 			"  quest/m0/epic/one.md",
@@ -599,12 +596,10 @@ describe("ready", () => {
 	// running this on it is how you ask. Expanding buried the entries that were
 	// asked for under a subtree repeated once per path through it.
 	test("a required quest is not expanded", () => {
-		const t = tree()
-			.append("quest/m0/epic/README.md", "- [Three](/quest/m0/epic/three.md)\n")
-			.write(
-				"quest/m0/epic/three.md",
-				"# [S] Three\n\n## Goal\n\nLast in the chain.\n\n## Required\n\n- [Two](/quest/m0/epic/two.md) - must finish first\n",
-			);
+		const t = tree().write(
+			"quest/m0/epic/three.md",
+			"# [S] Three\n\n## Goal\n\nLast in the chain.\n\n## Required\n\n- [Two](/quest/m0/epic/two.md) - must finish first\n",
+		);
 		expect(t.blockers("quest/m0/epic/three.md")).toEqual(["quest/m0/epic/two.md"]);
 	});
 
@@ -619,15 +614,12 @@ describe("ready", () => {
 	});
 
 	// The listing is the query the start flow reproduces by grepping. An
-	// epic is absent while it still indexes children, and `two.md` is
+	// epic is absent while its directory holds other quests, and `two.md` is
 	// blocked.
 	test("the listing", () => {
 		const t = tree();
 		expect(t.ready()).toEqual(["quest/m0/epic/one.md"]);
-		t.append("quest/m0/README.md", "- [Outer](/quest/m0/outer.md)\n").write(
-			"quest/m0/outer.md",
-			"# [S] Outer\n\n## Goal\n\nReady too.\n",
-		);
+		t.write("quest/m0/outer.md", "# [S] Outer\n\n## Goal\n\nReady too.\n");
 		expect(t.ready()).toEqual(["quest/m0/epic/one.md", "quest/m0/outer.md"]);
 	});
 
@@ -636,38 +628,36 @@ describe("ready", () => {
 	// cycle there has to print rather than recurse forever.
 	test("a cycle terminates", () => {
 		const t = tree()
-			.append("quest/m0/epic/README.md", "- [Itself](/quest/m0/epic/README.md)\n")
-			.append("quest/m0/README.md", "- [Outer](/quest/m0/outer.md)\n")
+			.append("quest/m0/epic/README.md", "\n## Required\n\n- [Itself](/quest/m0/epic/README.md)\n")
 			.write(
 				"quest/m0/outer.md",
-				"# [S] Outer\n\n## Goal\n\nBlocked on an epic that lists itself.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md) - the whole epic must finish\n",
+				"# [S] Outer\n\n## Goal\n\nBlocked on an epic that requires itself.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md) - the whole epic must finish\n",
 			);
 		expect(t.blockers("quest/m0/outer.md")).toEqual([
 			"quest/m0/epic/README.md",
+			"  quest/m0/epic/README.md",
 			"  quest/m0/epic/one.md",
 			"  quest/m0/epic/two.md",
-			"  quest/m0/epic/README.md",
 		]);
 	});
 
-	test("the listing follows nested priority and terminates cycles", () => {
+	// Path order: an epic before its children, and milestone numbers by value.
+	test("the listing is in path order", () => {
 		const t = tree()
 			.write("quest/m0/epic/two.md", "# [S] Two\n\n## Goal\n\nReady.\n")
-			.write(
-				"quest/m0/epic/README.md",
-				"# Epic\n\n## Required\n\n- [Two](/quest/m0/epic/two.md)\n- [Self](/quest/m0/epic/README.md)\n- [One](/quest/m0/epic/one.md)\n",
-			);
-		expect(t.ready()).toEqual(["quest/m0/epic/two.md", "quest/m0/epic/one.md"]);
-	});
-
-	test("the listing appends unindexed quests", () => {
-		const t = tree()
-			.write("quest/m0/aaa.md", "# [S] Unindexed\n\n## Goal\n\nDiscover me.\n")
-			.write(
-				"quest/m0/blocked.md",
-				"# [S] Blocked\n\n## Goal\n\nWait.\n\n## Required\n\n- [One](/quest/m0/epic/one.md)\n",
-			);
-		expect(t.ready()).toEqual(["quest/m0/epic/one.md", "quest/m0/aaa.md"]);
+			.write("quest/m0/aaa.md", "# [S] First\n\n## Goal\n\nSorts before the epic.\n")
+			.write("quest/m10/README.md", "# M10\n\n## Goal\n\nLater.\n")
+			.write("quest/m10/one.md", ONE)
+			.write("quest/m2/README.md", "# M2\n\n## Goal\n\nSooner.\n")
+			.write("quest/m2/one.md", ONE);
+		t.accepts();
+		expect(t.ready()).toEqual([
+			"quest/m0/aaa.md",
+			"quest/m0/epic/one.md",
+			"quest/m0/epic/two.md",
+			"quest/m2/one.md",
+			"quest/m10/one.md",
+		]);
 	});
 });
 

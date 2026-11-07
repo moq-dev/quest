@@ -18,9 +18,11 @@ repository uses the same settings, so nothing in them changes but the pin.
 - Neither repository's `AGENTS.md` overrides the tables.
 - Each bump runs `quest check --fix` with the new `quest` and commits the
   result, since a `quest` past
-  [moq-dev/quest#518](https://github.com/moq-dev/quest/pull/518) rejects
-  epic READMEs that still list their children (coordinator, 2026-11-05,
-  follow-up of #518; [Pin sync](/quest/m0/pin-sync.md) does the same for
+  [Epics list no children](/quest/m0/token-waste/child-lists.md) rejects
+  epic READMEs that still list their children, and its `--fix` strips them
+  (coordinator, 2026-11-05, follow-up of
+  [moq-dev/quest#518](https://github.com/moq-dev/quest/pull/518), which
+  accepts both formats; [Pin sync](/quest/m0/pin-sync.md) does the same for
   its automated bumps).
 
 ## Required

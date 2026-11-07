@@ -37,7 +37,7 @@ people retry a failed download.
 const tree = `quest/
   README.md      # The roadmap
   m0/
-    README.md    # First milestone, in priority order
+    README.md    # The first milestone
     export.md    # Available
     download.md  # Requires: export.md`;
 
@@ -204,7 +204,7 @@ export function Home(props: { setup: string; board: Board }) {
 						<h3>Plan with your agent</h3>
 						<p>
 							<code>/quest-plan</code> asks the questions that turn an idea into scoped quests, with
-							dependencies, in priority order.
+							dependencies, in milestones by priority.
 						</p>
 					</li>
 					<li>

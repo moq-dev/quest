@@ -108,8 +108,9 @@ function git(cwd: string, ...args: string[]): string {
 
 const QUEST = (title: string) => `# [S] ${title}\n\n## Goal\n\n${title}.\n`;
 
-const EPIC = (entries: string[]) =>
-	`# Epic\n\n## Goal\n\nAn epic.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
+/** The launch quest, which every quest the PRs plan or finish blocks: the list they all edit. */
+const LAUNCH = (entries: string[]) =>
+	`# [S] Launch\n\n## Goal\n\nLaunch.\n\n## Required\n\n${entries.map((entry) => `- [${entry}](/quest/m0/${entry}.md)`).join("\n")}\n`;
 
 /** The tip of every forge's main, which the template sets. */
 let forgeBase: string | undefined;
@@ -123,8 +124,9 @@ const forge = template((dir) => {
 	const work = initRepository(join(dir, "work"));
 	const files: Record<string, string> = {
 		".gitattributes": "quest/** merge=quest\n",
-		"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
-		"quest/m0/README.md": EPIC(["a"]),
+		"quest/README.md": "# Quests\n\n## Goal\n\nRoot.\n",
+		"quest/m0/README.md": "# M0\n\n## Goal\n\nA milestone.\n",
+		"quest/m0/launch.md": LAUNCH(["a"]),
 		"quest/m0/a.md": "# [S] A\n\n## Goal\n\nA.\n",
 		"code.txt": "one\ntwo\nthree\n",
 	};
@@ -513,8 +515,8 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 	test("lands a batch as merge commits that keep each head's ancestry and the tested tree", async () => {
 		const forge = new Forge();
 		const base = forge.main();
-		const one = forge.pull("Add b", { "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
-		const two = forge.pull("Add c", { "quest/m0/README.md": EPIC(["a", "c"]), "quest/m0/c.md": QUEST("C") });
+		const one = forge.pull("Add b", { "quest/m0/launch.md": LAUNCH(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		const two = forge.pull("Add c", { "quest/m0/launch.md": LAUNCH(["a", "c"]), "quest/m0/c.md": QUEST("C") });
 		const heads = [one.head!, two.head!];
 		const deps = await forge.deps();
 		const plan = await resolveQueue(REPOSITORY, MERGE, deps);
@@ -539,15 +541,15 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(git(forge.origin, "show", "-s", "--format=%P", "main")).toBe(`${one.squash} ${two.head}`);
 		expect(git(forge.origin, "rev-parse", `${one.squash}^{tree}`)).toBe(chain.links[0].tree);
 		expect(git(forge.origin, "rev-parse", "main^{tree}")).toBe(chain.links[1].tree);
-		expect(git(forge.origin, "show", "main:quest/m0/README.md")).toBe(EPIC(["a", "b", "c"]).trim());
+		expect(git(forge.origin, "show", "main:quest/m0/launch.md")).toBe(LAUNCH(["a", "b", "c"]).trim());
 	});
 
 	test("prepares a behind-base PR with quest resolve and the exact tested tree", async () => {
 		const forge = new Forge();
-		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
-		const pull = forge.pull("Remove a", { "quest/m0/README.md": EPIC(["b"]), "quest/m0/a.md": null });
+		forge.advance({ "quest/m0/launch.md": LAUNCH(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		const pull = forge.pull("Remove a", { "quest/m0/launch.md": LAUNCH(["b"]), "quest/m0/a.md": null });
 		const pin = pull.head!;
-		forge.advance({ "quest/m0/README.md": EPIC(["a", "b", "c"]), "quest/m0/c.md": QUEST("C") });
+		forge.advance({ "quest/m0/launch.md": LAUNCH(["a", "b", "c"]), "quest/m0/c.md": QUEST("C") });
 		const base = forge.main();
 		const deps = await forge.deps();
 		const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
@@ -566,22 +568,22 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		const adding = mode === "adding";
 		if (!adding)
 			forge.advance({
-				"quest/m0/README.md": EPIC(["a", "b", "c"]),
+				"quest/m0/launch.md": LAUNCH(["a", "b", "c"]),
 				"quest/m0/b.md": QUEST("B"),
 				"quest/m0/c.md": QUEST("C"),
 			});
 		// Each PR adds or finishes its own quest, so each passes `quest check` alone on the base.
 		const one = forge.pull("Change b", {
-			"quest/m0/README.md": EPIC(adding ? ["a", "b"] : ["a", "c"]),
+			"quest/m0/launch.md": LAUNCH(adding ? ["a", "b"] : ["a", "c"]),
 			"quest/m0/b.md": adding ? QUEST("B") : null,
 		});
 		const two = forge.pull("Change c", {
-			"quest/m0/README.md": EPIC(adding ? ["a", "c"] : ["a", "b"]),
+			"quest/m0/launch.md": LAUNCH(adding ? ["a", "c"] : ["a", "b"]),
 			"quest/m0/c.md": adding ? QUEST("C") : null,
 		});
 		expect((await forge.round()).landing).toEqual([`landed 1 ${one.squash}`, `landed 2 ${two.squash}`]);
-		expect(git(forge.origin, "show", "main:quest/m0/README.md")).toBe(
-			EPIC(adding ? ["a", "b", "c"] : ["a"]).trim(),
+		expect(git(forge.origin, "show", "main:quest/m0/launch.md")).toBe(
+			LAUNCH(adding ? ["a", "b", "c"] : ["a"]).trim(),
 		);
 	});
 
@@ -991,11 +993,11 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			"bunfig.toml": 'preload = ["./evil.ts"]\n',
 			".env": "BUN_OPTIONS=--preload=./evil.ts\n",
 			"evil.ts": "throw new Error('PR code ran');\n",
-			"quest/m0/README.md": EPIC(["a", "b"]),
+			"quest/m0/launch.md": LAUNCH(["a", "b"]),
 			"quest/m0/b.md": "# [S] B\n\n## Goal\n\nB.\n",
 		});
 		forge.pull("Add c quest", {
-			"quest/m0/README.md": EPIC(["a", "c"]),
+			"quest/m0/launch.md": LAUNCH(["a", "c"]),
 			"quest/m0/c.md": "# [S] C\n\n## Goal\n\nC.\n",
 		});
 		const { landing } = await forge.round();
@@ -1378,7 +1380,7 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 
 	test("ejects alone a PR that fails quest check on the current base, before batching", async () => {
 		const forge = new Forge();
-		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		forge.advance({ "quest/m0/launch.md": LAUNCH(["a", "b"]), "quest/m0/b.md": QUEST("B") });
 		// A mistyped link never named a quest, so nothing the base did explains it.
 		forge.pull("Link b", {
 			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/bb.md) - b\n`,
@@ -1394,15 +1396,15 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 
 	test("drops a queued PR's list links to a quest the base finished, in the chain and the landed head", async () => {
 		const forge = new Forge();
-		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		forge.advance({ "quest/m0/launch.md": LAUNCH(["a", "b"]), "quest/m0/b.md": QUEST("B") });
 		const pull = forge.pull("Plan c", {
-			"quest/m0/README.md": EPIC(["a", "b", "c"]),
+			"quest/m0/launch.md": LAUNCH(["a", "b", "c"]),
 			"quest/m0/c.md": `${QUEST("C")}\n## Required\n\n- [B](/quest/m0/b.md) - b first\n`,
 			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n- [C](/quest/m0/c.md) - c\n`,
 		});
 		const pin = pull.head!;
 		// The base finishes b after the PR was queued, leaving both of its links to b dangling.
-		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
+		forge.advance({ "quest/m0/launch.md": LAUNCH(["a"]), "quest/m0/b.md": null });
 		const base = forge.main();
 		const { checked, landing } = await forge.round();
 		expect(checked).toEqual([[1]]);
@@ -1421,28 +1423,28 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 	test("two sibling PRs land together when one finishes a quest the other links", async () => {
 		const forge = new Forge();
 		forge.advance({
-			"quest/m0/README.md": EPIC(["a", "b", "c"]),
+			"quest/m0/launch.md": LAUNCH(["a", "b", "c"]),
 			"quest/m0/b.md": QUEST("B"),
 			"quest/m0/c.md": QUEST("C"),
 		});
 		// Each passes `quest check` alone on the base; chained, the first leaves the second's link dangling.
-		const one = forge.pull("Finish b", { "quest/m0/README.md": EPIC(["a", "c"]), "quest/m0/b.md": null });
+		const one = forge.pull("Finish b", { "quest/m0/launch.md": LAUNCH(["a", "c"]), "quest/m0/b.md": null });
 		const two = forge.pull("Finish c", {
-			"quest/m0/README.md": EPIC(["a", "b"]),
+			"quest/m0/launch.md": LAUNCH(["a", "b"]),
 			"quest/m0/c.md": null,
 			"quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n`,
 		});
 		const { checked, landing } = await forge.round();
 		expect(checked).toEqual([[1, 2]]);
 		expect(landing).toEqual([`landed 1 ${one.squash}`, `landed 2 ${two.squash}`]);
-		expect(git(forge.origin, "show", "main:quest/m0/README.md")).toBe(EPIC(["a"]).trim());
+		expect(git(forge.origin, "show", "main:quest/m0/launch.md")).toBe(LAUNCH(["a"]).trim());
 		expect(git(forge.origin, "show", "main:quest/m0/a.md")).toBe(QUEST("A").trim());
 	});
 
 	test("ejects a PR whose prose links a quest the base finished, and keeps links to a quest the base moved", async () => {
 		const forge = new Forge();
 		forge.advance({
-			"quest/m0/README.md": EPIC(["a", "b", "c"]),
+			"quest/m0/launch.md": LAUNCH(["a", "b", "c"]),
 			"quest/m0/b.md": QUEST("B"),
 			"quest/m0/c.md": `${QUEST("C")}\nMore about c, so a move keeps enough of it to read as a rename.\n`,
 		});
@@ -1452,7 +1454,7 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		});
 		// The base finishes b and moves c to d.
 		forge.advance({
-			"quest/m0/README.md": EPIC(["a", "d"]),
+			"quest/m0/launch.md": LAUNCH(["a", "d"]),
 			"quest/m0/b.md": null,
 			"quest/m0/c.md": null,
 			"quest/m0/d.md": `${QUEST("C")}\nMore about c, so a move keeps enough of it to read as a rename.\n`,
@@ -1465,11 +1467,11 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 
 	test("screens only the PRs a batch reaches, leaving the rest of a long queue for later", async () => {
 		const forge = new Forge();
-		forge.advance({ "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		forge.advance({ "quest/m0/launch.md": LAUNCH(["a", "b"]), "quest/m0/b.md": QUEST("B") });
 		for (let i = 0; i < 4; i++) forge.pull(`PR ${i}`, { [`${i}.txt`]: "ok" });
 		forge.pull("Link b", { "quest/m0/a.md": `${QUEST("A")}\n## Related\n\n- [B](/quest/m0/b.md) - b\n` });
 		// The base finishes b, so the last PR's link dangles, but an oldest-first batch of three never reaches it.
-		forge.advance({ "quest/m0/README.md": EPIC(["a"]), "quest/m0/b.md": null });
+		forge.advance({ "quest/m0/launch.md": LAUNCH(["a"]), "quest/m0/b.md": null });
 		const { checked, landing } = await forge.round();
 		expect(checked).toEqual([[1, 2, 3]]);
 		expect(landing.map((line) => line.split(" ")[0])).toEqual(["landed", "landed", "landed"]);
@@ -2094,8 +2096,8 @@ mv '${result}.new' '${result}'
 	test("a prepared tree mismatch ejects only that PR, and the next round rebuilds the rest on the new base", async () => {
 		const forge = new Forge();
 		// Both PRs edit the epic, so preparing PR 2 on PR 1's squash runs the quest merge driver.
-		forge.pull("Add b", { "quest/m0/README.md": EPIC(["a", "b"]), "quest/m0/b.md": QUEST("B") });
-		forge.pull("Add c", { "quest/m0/README.md": EPIC(["a", "c"]), "quest/m0/c.md": QUEST("C") });
+		forge.pull("Add b", { "quest/m0/launch.md": LAUNCH(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		forge.pull("Add c", { "quest/m0/launch.md": LAUNCH(["a", "c"]), "quest/m0/c.md": QUEST("C") });
 		forge.pull("Three", { "3.txt": "yes" });
 		forge.pull("Four", { "4.txt": "yes" });
 		const deps = await forge.deps();
