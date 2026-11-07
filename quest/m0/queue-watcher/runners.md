@@ -3,7 +3,7 @@
 ## Goal
 
 The self-hosted `quest-queue`, `rind-queue` and `rust2-queue` runners that
-[kixelated/nixos#19](https://github.com/kixelated/nixos/pull/19) adds run only
+the kixelated/nixos runner change adds run only
 their own repository's merge-queue builds, and nothing else on the host
 reaches them:
 
@@ -17,7 +17,7 @@ reaches them:
 ## Plan
 
 Decided 2026-11-02 (user, /quest-plan of the follow-ups from Claude's review
-of kixelated/nixos#19 in that day's `/quest-complete` session): ✅ all three
+of the kixelated/nixos runner change in that day's `/quest-complete` session): ✅ all three
 items, m0, ranked right after the [cutover](/quest/m0/queue-watcher/follow.md).
 
 Decided 2026-11-03 (user, /quest-complete grill round), since GitHub matches a
@@ -40,8 +40,7 @@ Done in [moq-dev/quest#439](https://github.com/moq-dev/quest/pull/439):
   `fork-pr-contributor-approval` policy went from `first_time_contributors`
   to `all_external_contributors`.
 - Watch-mode cleanup:
-  [kixelated/nixos#20](https://github.com/kixelated/nixos/pull/20), stacked on
-  #19, generates check launchers, users, networks, staging, KVM grants and
+  a kixelated/nixos change, stacked on the runner change, generates check launchers, users, networks, staging, KVM grants and
   storage tagging only for repositories on `quest land serve`, and adds the
   `quest-land-watch` flake check.
 - Reusable build, first step: each repository's self-hosted job moved into
@@ -52,7 +51,7 @@ Done in [moq-dev/quest#439](https://github.com/moq-dev/quest/pull/439):
   [moq-dev/rind#289](https://github.com/moq-dev/rind/pull/289) and
   [moq-dev/rust2#536](https://github.com/moq-dev/rust2/pull/536).
 
-Deployed 2026-11-04 (/quest-unblock): kixelated/nixos#20 is live on the
+Deployed 2026-11-04 (/quest-unblock): the watch-mode cleanup is live on the
 land host (generation 80, deploy/quest-land b5d46f3); only
 `quest-land-moq-pro-check.socket` remains and `/dev/kvm`'s ACL names no
 check UID.

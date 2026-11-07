@@ -126,7 +126,8 @@ repository's, for visibility. The decisions are recorded in
 
 Shared shape, for the children to follow:
 
-- The watcher is a long-running host daemon, one per repository, that reuses
+- The watcher is a long-running host daemon, one per repository (one per
+  base once [per-base instances](/quest/m0/queue-watcher/per-base.md) land), that reuses
   the host gate's fixer infrastructure rather than a new one: moq-bot's App
   key through systemd `LoadCredential`, the ephemeral nspawn fixer container
   and its launcher, the detached fixer supervisor and its collection in
@@ -134,9 +135,7 @@ Shared shape, for the children to follow:
   handback that `quest land apply` rebuilds, and the daemon posting the
   comments the fixer writes. A `quest land watch` subcommand beside
   `quest land serve` is the likely form; the first child settles it.
-- The fixer prompt (`assets/land-fix.md`) stays as the finished land fixer epic left it;
-  the host container
-  work stays in [the host gate epic](/quest/m0/host-land/README.md).
+- The fixer prompt (`assets/land-fix.md`) stays as the finished land fixer epic left it.
 - The review policy is unchanged: a head the fixer pushed as a recorded
   mechanical fix lands without a new review (maintainer, 2026-10-30). A push
   by anyone else ends the pick, as does a person removing the PR from the
@@ -150,14 +149,10 @@ Shared shape, for the children to follow:
 
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
-- [Tests fit their timeout on the queue runner](/quest/m0/queue-watcher/queue-test-timeouts.md) - the root and Worker suites stop timing out or stalling in merge-group runs, so the queue stops ejecting PRs for them
 - [The watcher writes flaky quests](/quest/m0/queue-watcher/flaky-quest.md) - a disable's follow-up quest comes from a template in `quest land watch`, so the headless land fixer writes no quest
 - [Daemons prune their logs](/quest/m0/queue-watcher/log-retention.md) - the watcher and gate delete their finished logs after a window, so state stays bounded (4.1 GiB on nixos on 2026-11-04)
 - [The watcher runs its own serial queue](/quest/m0/queue-watcher/own-queue.md) - `quest land watch` lands a base without GitHub's merge queue, testing one pick at a time in the repository's queue workflow
 - [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - moq.pro's `main` leaves the batching gate for the watcher's own queue
+- [The watcher runs one instance per base branch](/quest/m0/queue-watcher/per-base.md) - each base of a repository gets its own watcher, clone, locks, state and `--method`, so moq.pro's `release` can follow `main`
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 - [kix.quest shows each repository's landing queue](/quest/m0/queue-watcher/queue-page.md) - one page per repository with its queue order, current build, and recent drops, in both modes
-
-## Related
-
-- [Merge through a host gate](/quest/m0/host-land/README.md) - the gate the other repositories keep until they follow
