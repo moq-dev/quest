@@ -134,12 +134,14 @@ $ quest --root examples/export unblocked
 1	quest/m0/export.md
 
 $ quest --root examples/export unblocked --json --limit 1
-[{"path":"quest/m0/export.md","dependents":1}]
+[{"path":"quest/m0/export.md","dependents":1,"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"low"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
 ```
 
 Each plain output line contains the count, a tab, and the path. On a terminal,
 a heading explains the count. `--json` prints an ordered array, including `[]`
-when no quests are ready; `--limit <count>` requires a positive integer.
+when no quests are ready, and gives each quest the ranked `models` that write
+it, as [Route work by size](#route-work-by-size) describes; `--limit <count>`
+requires a positive integer.
 Invalid trees fail with diagnostics and no ranking.
 `quest-spawn` uses the ranking unless you explicitly select work in another order.
 
@@ -1160,6 +1162,50 @@ arrive together, it takes a third; a repeated Ctrl-C, which Just does not
 forward, kills at the second. There is no fairness guarantee, and no timeout except
 `--quick`'s: any other command waits as long as the host stays busy.
 
+## Route work by size
+
+`quest` ranks the harnesses, models, and efforts that write work of each size,
+the same for every repository unless its `AGENTS.md` names others:
+
+| Size | Writer | Fallback |
+|---|---|---|
+| XS | Claude Code `claude-haiku-5-5` high | Codex `gpt-6.1-sol` low |
+| S | Claude Code `claude-opus-5-5` low | Codex `gpt-6.1-sol` medium |
+| M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
+| L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
+| XL | Claude Code `claude-opus-5-5` xhigh | none |
+
+`quest unblocked --json` lists each ready quest's ranked `models`: its size's
+list, or the next size's while a `Maintainer:` item under its `## Waiting`
+leaves a decision open, since settling it is part of the work; an XL stays
+XL. `/quest-spawn` starts a quest on the first entry that can run, and falls
+to the next only while nothing is written: when the CLI is missing or logged
+out, or the agent stops at its usage limit with nothing beyond the claim
+commit. Once a model writes, the PR is its own.
+
+A `/quest-iterate` stays on the PR's writer, the model its `## Models`
+record's first `Implementer:` line names, so the other model can always
+review it. The coordinator dispatching it sizes the work left on the PR, not
+the quest's original size, so a merge-and-record iterate on an L quest runs at
+XS, and `quest models` prints the entry to run:
+
+```console
+$ quest models XS
+claude	claude-haiku-5-5	high
+codex	gpt-6.1-sol	low
+
+$ quest models XS --writer claude-opus-5-5
+claude	claude-opus-5-5	low
+```
+
+`--writer` prints the size's entry for that model, or else its entry at the
+nearest size that lists it, the larger on a tie; a model no list names is an
+error. `--json` prints an array of `{harness, model, effort}` objects. The
+iterate records the size it was given in its `Implementer:` line, as
+`Implementer: Claude Code, claude-opus-5-5, low effort (iterate, XS)`, so
+the model check can audit the routing. `quest review` still reviews the
+whole branch at the PR's size.
+
 ## Review locally
 
 `quest review` has a model that wrote none of the code review the checkout's
@@ -1172,7 +1218,7 @@ size. Each size ranks its reviewers, the same for every repository:
 | S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
 | M, or none | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` medium |
 | L | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` high |
-| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
+| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` xhigh |
 
 A quest branch takes its quest's size, read from the base branch's tip so a
 change cannot lower its own review; any other PR, such as a skill's own, takes

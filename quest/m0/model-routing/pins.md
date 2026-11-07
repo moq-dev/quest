@@ -27,4 +27,4 @@ repository uses the same settings, so nothing in them changes but the pin.
 
 ## Required
 
-- [Route by size](/quest/m0/model-routing/models.md) - `/quest-spawn` reads the built-in size table
+- [kix records its follow-up sessions](/quest/m0/model-routing/kix-sessions.md) - the last other quest in the epic, which the bumped commit must hold
