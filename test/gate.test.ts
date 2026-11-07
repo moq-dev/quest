@@ -650,6 +650,25 @@ test("a nested gate runs at once and keeps the exact exit status", async () => {
 	expect(await gate([process.execPath, "-e", "process.exit(23)"])).toBe(23);
 });
 
+// Bun 1.4.2 marked the gate's own piped output O_NONBLOCK, a flag its command shares, and uv
+// aborts on the EAGAIN that follows (astral-sh/uv#22170). Bun 1.4.4 clears it before spawning.
+test.runIf(process.platform === "linux")("a gated command's piped output blocks", () => {
+	const O_NONBLOCK = 0o4000;
+	const fds = ["/proc/self/fdinfo/1", "/proc/self/fdinfo/2"];
+	const result = spawnSync(process.execPath, [config, bin, "gate", "--", "grep", "-h", "^flags:", ...fds], {
+		env: { ...process.env, QUEST_GATE_ADMITTED: "1" },
+		stdio: ["ignore", "pipe", "pipe"],
+		encoding: "utf8",
+	});
+	expect(result.status, result.stderr).toBe(0);
+	const flags = result.stdout
+		.trim()
+		.split("\n")
+		.map((line) => parseInt(line.split(/\s+/)[1]!, 8));
+	expect(flags).toHaveLength(2);
+	for (const flag of flags) expect(flag & O_NONBLOCK).toBe(0);
+});
+
 test("a command cancelled before listener registration still stops", async () => {
 	const { stop, cancel } = cancellation();
 	stop.abort();
