@@ -57,20 +57,22 @@ land host (generation 80, deploy/quest-land b5d46f3); only
 `quest-land-moq-pro-check.socket` remains and `/dev/kvm`'s ACL names no
 check UID.
 
-What remains:
+Second step, 2026-11-07: `queue.yml` calls
+`moq-dev/<repo>/.github/workflows/queue-build.yml@main`, and each contributing
+guide says a PR's edit to `queue-build.yml` runs only after it lands. This is
+moq-dev/quest#538, [moq-dev/rind#491](https://github.com/moq-dev/rind/pull/491)
+and [moq-dev/rust2#650](https://github.com/moq-dev/rust2/pull/650).
 
-- Once a repository's first step is on main, switch its `queue.yml` call to
-  `moq-dev/<repo>/.github/workflows/queue-build.yml@main`. It can't be one
-  step: a merge group calling `@main` before the file is there finds no
-  workflow and fails. Say in that repository's contributing guide that a PR's
-  edit to `queue-build.yml` runs only after it lands.
-- Then restrict each group (see Waiting).
-- Verify that a fork PR's workflow waits for approval.
+What remains: restrict each group, and verify that a fork PR's workflow waits
+for approval (see Waiting).
 
 ## Waiting
 
+- moq-dev/rind, moq-dev/rust2: merge moq-dev/rind#491 and moq-dev/rust2#650.
+  Check with `gh pr view <n> --repo moq-dev/<repo> --json state`.
 - Maintainer: once a repository's `queue.yml` calls `queue-build.yml@main` on
-  main, restrict its runner group to that workflow. Not before: the group
+  main, restrict its runner group to that workflow. An agent can't: the
+  runner-group admin API needs org-admin scope the agents' tokens lack. Not before: the group
   would then admit no merge-group job and stall the queue. For moq-dev/quest
   (group 8; rind-queue is 9 and rust2-queue is 10, each with its own name and repository):
   `gh api -X PATCH orgs/moq-dev/actions/runner-groups/8 -f name=quest-queue -F restricted_to_workflows=true -f 'selected_workflows[]=moq-dev/quest/.github/workflows/queue-build.yml@refs/heads/main'`.
