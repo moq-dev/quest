@@ -16,7 +16,7 @@
 	"bin": {
 		"quest": "dist/quest.js"
 	},
-	"packageManager": "bun@1.4.2",
+	"packageManager": "bun@1.4.4",
 	"scripts": {
 		"build": "bun build src/cli/bin.ts --target=bun --banner \"#!/usr/bin/env -S bun --no-env-file\" --outfile dist/quest.js && bun scripts/executable.mjs dist/quest.js",
 		"compile": "bun build src/cli/bin.ts --compile --no-compile-autoload-dotenv --outfile dist/quest",
