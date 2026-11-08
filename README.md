@@ -1364,6 +1364,52 @@ and Codex, sent to `OPENAI_BASE_URL`, gives up on the gateway's 429 after its
 own retries, which also counts as the limit there.
 `/quest-review` runs the rounds and marks the PR ready.
 
+## Audit cost and accuracy
+
+`quest usage` reports `origin`'s PRs updated since `--since` (a local
+`YYYY-MM-DD`, by default 7 days ago) and the agent sessions this host ran
+since then: which harness, model, and effort worked on each PR, in which role,
+at what token cost, and how the work went.
+
+```console
+$ quest usage --pr 569
+moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) estimate API list prices
+
+#569 S merged: quest: finish model routing (quest/m0/model-routing/README)
+  implementer: Claude Code, claude-opus-5-5, unknown effort
+  review: Codex, gpt-6.1-sol, medium effort; round 1, score 10/10, 0 open, last round 0 fixed and 0 refuted
+  land fixes: codex, gpt-6.1-sol, medium effort
+  sessions:
+     implementing  claude  claude-opus-5-5  low     in 50, cache 36.2k written 1.1M read, out 6.1k, ~$0.63
+     reviewing     codex   gpt-6.1-sol      medium  in 14.7k, cache 0 written 39.8k read, out 421, ~$0.04
+```
+
+[ccusage](https://github.com/ccusage/ccusage)'s `session --json` reads and
+prices the sessions, at each model's API list price, which subscriptions do
+not bill, so the cost is an estimate. `quest usage` ties each Claude Code or
+Codex session to the PR whose head branch its log last names, reading only the
+branch, directory, remote, start time, and effort from `$CLAUDE_CONFIG_DIR` (or
+`~/.config/claude` and `~/.claude`) and `$CODEX_HOME` (or `~/.codex`), never a
+prompt or reply. Since another repository may use the same branch name, the
+session must also be this repository's, as its Codex log, its checkout's
+remotes, or, once the checkout is deleted, a Codex log for that exact directory
+names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
+it or Codex marks it a review, implementing when it began before the PR opened,
+and iterating otherwise. Each PR shows its `## Models` size and implementers,
+with those on kix's sessions comment; its latest `quest review` round's
+reviewer, round, score, open findings, and the last round's findings fixed or
+refuted; the land fixer's fixes; and the later PRs that list it under
+`## Caused by`.
+
+Rollups follow: spend by size, role, harness, model, and effort, and accuracy
+by size and implementer, where an `Implementer:` line's own size, as
+`(iterate, XS)`, counts over the PR's. Sessions on no PR here, from any
+repository or agent ccusage reads, total on an `Unattributed` line. `--pr` and
+`--quest` narrow the report to one PR or one quest's branch, and `--json`
+prints it as one object. Without `ccusage` on `PATH`, it says how to install it
+and reports the PRs' records alone. Each host reports its own sessions; the
+land fixer's container keeps no session log, so its fixes show without tokens.
+
 ## Headless agents
 
 `quest agent` runs one headless agent turn per call on the agent CLI's own

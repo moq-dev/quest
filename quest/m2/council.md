@@ -56,6 +56,9 @@ Agent's choices, for the implementer to revisit:
   automatically.
 - The `## Review` record lists each member (harness, model, effort), its
   score, and each finding's agreement count and disposition.
+- `quest usage` (`src/cli/usage.ts`) parses that record too: it counts a
+  member's session as reviewing by the session ID the record names, as it
+  does `quest review`'s, and tallies the members' scores and findings.
 - Online reviewers such as Pullfrog and CodeRabbit stay outside the
   council: they see the PR, so they are not blind. Their findings are
   answered as usual.
