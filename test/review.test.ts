@@ -148,7 +148,9 @@ if (rejected) {
 	process.exit(1);
 }
 if (process.env.FAKE_LIMITED) {
-	const message = process.env.FAKE_LIMITED === "unknown"
+	const message = process.env.FAKE_LIMITED === "retried"
+		? "exceeded retry limit, last status: 429 Too Many Requests"
+		: process.env.FAKE_LIMITED === "unknown"
 		? "You've hit your usage limit."
 		: "You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 5th, 2026 3:15 PM.";
 	event({ type: "thread.started", thread_id: "thread-1" });
@@ -503,6 +505,29 @@ fakes.for([
 		expect((await quest("--root", s.repo, "review")).code).toBe(0);
 	},
 );
+
+fakes("Codex reaches a gateway at OPENAI_BASE_URL, whose persistent 429 is the pool's usage limit", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("CODEX_API_KEY", "proxy-key");
+	vi.stubEnv("FAKE_LIMITED", "retried");
+	// From the provider itself, giving up on a 429 may be a brief throttle, so it is no limit.
+	const direct = await quest("--root", s.repo, "review");
+	expect(direct.code).toBe(1);
+	expect(direct.stderr).toContain("exceeded retry limit, last status: 429");
+	vi.stubEnv("OPENAI_BASE_URL", "http://127.0.0.1:4000/v1");
+	const pooled = await quest("--root", s.repo, "review");
+	expect(pooled.stderr).toBe("error: codex hit its usage limit; resets unknown\n");
+	expect(pooled.code).toBe(3);
+	vi.stubEnv("FAKE_LIMITED", undefined);
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	// Codex reads no OPENAI_BASE_URL itself, so the review sets its openai_base_url.
+	for (const call of s
+		.calls()
+		.filter((c) => c.argv[0] === "exec")
+		.slice(-2))
+		expect(call.argv.join(" ")).toContain('-c openai_base_url="http://127.0.0.1:4000/v1"');
+});
 
 fakes("a reviewer with no stored login reviews with the credential its CLI reads from the environment", async () => {
 	const s = setup();

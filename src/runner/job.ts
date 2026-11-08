@@ -5,18 +5,18 @@
 // attempt reports nothing, since the job is no longer this attempt's.
 import { randomUUID } from "node:crypto";
 
-import { type Round, ResponsesError } from "../cli/review";
+import { type Round, ResponsesError, ReviewLimitError } from "../cli/review";
 import { withModels } from "../github/models";
 
 import type { Adapter, Exit, Running } from "./adapter";
 import { Refused } from "./connection";
-import type { Account } from "./home";
+import type { Seat } from "./home";
 import type { Tool } from "./mcp";
 import { serveTools } from "./mcp";
 import { OutputUploader } from "./output";
 import { resumePrompt, startPrompt, systemPrompt } from "./prompt";
 import { type Job, type Message, type Outcome, clip } from "./protocol";
-import { formatFindings, type ReviewRequest, reviewerFor, Unreviewable } from "./review";
+import { formatFindings, type Pools, type ReviewRequest, reviewerFor, Unreviewable } from "./review";
 import { type Sandbox, closeSandbox, openSandbox } from "./sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "./wait";
 import { Workspace } from "./workspace";
@@ -25,10 +25,13 @@ import { Workspace } from "./workspace";
 export interface Context {
 	/** The runner's home, where checkouts live. */
 	root: string;
-	accounts(): Account[];
-	/** The account's isolated CLI home. */
-	home(account: Account): string;
-	adapter(account: Account): Adapter;
+	/** What jobs run on: the opencode accounts and the Claude pool. */
+	seats(): Seat[];
+	/** The seat's private CLI home. */
+	home(seat: Seat): string;
+	adapter(seat: Seat): Adapter;
+	/** The runner's pools, which review the heads jobs publish. */
+	pools(): Pools;
 	/**
 	 * The job's devShell as a script for its sandboxed commands to source,
 	 * evaluated from the job's revision in the bare clone `repository`, or
@@ -47,8 +50,12 @@ export interface Context {
 	reviewed(body: unknown): Promise<{ status: number; body: Record<string, unknown> }>;
 	/** `GET /api/runner/context`: the job's issue or pull request as kix reads it from GitHub. */
 	context(job: string, attempt: number): Promise<unknown>;
-	/** Record that the provider refused `account` until `until`, or for an unknown time. */
-	limited(account: Account, until: number | null): void;
+	/**
+	 * Record that the provider refused a seat or pool until `until`, or for an
+	 * unknown time, and return the reset it recorded. A pool's unknown reset is
+	 * the proxy's, for `model`, the model it refused.
+	 */
+	limited(id: string, until: number | null, model?: string): Promise<number>;
 	log(line: string): void;
 }
 
@@ -109,7 +116,7 @@ export class Attempt {
 
 	#session: string;
 	#workspace: Workspace | undefined;
-	#account: Account | undefined;
+	#seat: Seat | undefined;
 	/** Heads this attempt's reviews passed, which a delivery of the same head does not review again. */
 	#passed = new Set<string>();
 	/** A delivered head whose review found something the agent has not answered yet. */
@@ -210,13 +217,12 @@ export class Attempt {
 					"failed",
 					"kix sent an answer that this runner's owner has not approved; the runner acts only on answers its owner gave or approved.",
 				);
-			const account = ctx.accounts().find((a) => a.id === job.account);
-			if (!account)
-				return await this.#finish("failed", `The account ${job.account} is no longer on this runner.`);
+			const seat = ctx.seats().find((a) => a.id === job.account);
+			if (!seat) return await this.#finish("failed", `The account ${job.account} is no longer on this runner.`);
 			// Before any checkout: an account added while the runner runs may lack its CLI or sandbox.
-			const adapter = ctx.adapter(account);
+			const adapter = ctx.adapter(seat);
 			this.#harness = adapter.name;
-			this.#account = account;
+			this.#seat = seat;
 			this.#workspace = await Workspace.prepare(ctx.root, job, ctx.remote(job));
 			if (this.#workspace.preserved)
 				ctx.log(
@@ -252,14 +258,14 @@ export class Attempt {
 				this.wake();
 				return;
 			}
-			if (this.#ended()) return await this.#conclude(null, account);
+			if (this.#ended()) return await this.#conclude(null, seat);
 			const devShell = await ctx
 				.devShell(job, this.#workspace.repository, this.#preparing.signal)
 				.catch((error: unknown) => {
 					if (this.#ended()) return null;
 					throw error;
 				});
-			if (this.#ended()) return await this.#conclude(null, account);
+			if (this.#ended()) return await this.#conclude(null, seat);
 			const resume = job.session !== null;
 			const output = new OutputUploader(
 				(seq, text) => ctx.request({ type: "output", job: job.id, attempt: job.attempt, seq, text }),
@@ -278,7 +284,7 @@ export class Attempt {
 				});
 				this.#agent = adapter.launch({
 					cwd: this.#workspace.dir,
-					home: ctx.home(account),
+					home: ctx.home(seat),
 					data: this.#workspace.data,
 					session: this.#session,
 					resume,
@@ -299,7 +305,7 @@ export class Attempt {
 				await output.close();
 				if (sandbox) closeSandbox(sandbox);
 			}
-			await this.#conclude(exit, account);
+			await this.#conclude(exit, seat);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			ctx.log(`${job.id}: ${message}`);
@@ -313,8 +319,12 @@ export class Attempt {
 		return this.#cancelled || this.#stopped || this.#abandoned || this.#paused;
 	}
 
-	async #conclude(exit: Exit | null, account: Account): Promise<void> {
-		if (exit?.limited) this.ctx.limited(account, exit.limited.until);
+	async #conclude(exit: Exit | null, seat: Seat): Promise<void> {
+		let until: number | undefined;
+		if (exit?.limited) {
+			const model = (await this.#agent?.ran())?.model;
+			until = await this.ctx.limited(seat.id, exit.limited.until, model === "unknown" ? undefined : model);
+		}
 		// A review the agent left running when it exited ends before its checkout can go.
 		this.#reviewing.abort();
 		await this.#reviewRun;
@@ -331,13 +341,11 @@ export class Attempt {
 			const { summary, ...result } = this.#delivered;
 			return this.#finish("completed", `${summary}${unsaved}`, result);
 		}
-		if (exit?.limited) {
-			const until = exit.limited.until;
+		if (until !== undefined)
 			return this.#finish(
 				"limited",
-				`${account.label} hit its usage limit${until ? ` until ${new Date(until).toISOString()}` : ""}.${unsaved}`,
+				`${seat.label} hit its usage limit until ${new Date(until).toISOString()}.${unsaved}`,
 			);
-		}
 		const reply = exit?.reply?.trim();
 		if (this.#outstanding)
 			return this.#finish(
@@ -470,7 +478,7 @@ export class Attempt {
 		};
 		let round: Round;
 		try {
-			const reviewer = reviewerFor(this.#account!, ctx.accounts(), (a) => ctx.home(a), ctx.env);
+			const reviewer = reviewerFor(this.#seat!, ctx.pools(), ctx.env);
 			const running = ctx.review({
 				workspace: this.#workspace!,
 				head,
@@ -488,6 +496,12 @@ export class Attempt {
 						? "The last review round reported findings: deliver again with `responses`, saying how you fixed or refuted each one."
 						: "There is no earlier review round to answer: deliver again without `responses`.",
 				);
+			if (error instanceof ReviewLimitError) {
+				const until = await ctx.limited(error.harness, error.until, error.model);
+				return unreviewed(
+					`its reviewer's ${error.harness} pool hit its usage limit until ${new Date(until).toISOString()}`,
+				);
+			}
 			return unreviewed(
 				error instanceof Unreviewable ? error.message : `its review failed: ${(error as Error).message}`,
 			);

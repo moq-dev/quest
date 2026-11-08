@@ -1,6 +1,6 @@
 // How a runner drives one agent CLI, Claude Code or opencode. The interface
-// stays small: sign an account in, start or resume a session with the kix
-// tools attached, stream its raw output, stop it, and read how it ended.
+// stays small: start or resume a session with the kix tools attached, stream
+// its raw output, stop it, and read how it ended.
 // Questions, checkpoints, and delivery reach kix through those tools, not
 // through anything CLI-specific.
 import { strippedEnvironment } from "../cli/agent";
@@ -38,7 +38,7 @@ export function baseEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export interface Launch {
 	/** The job's checkout, where the agent works. */
 	cwd: string;
-	/** The account's isolated home, which holds its CLI login and sessions. */
+	/** The seat's private home: an opencode account's, with its login, or the Claude pool's, with only sessions. */
 	home: string;
 	/** A directory for the CLI's files only this job may see, which commands cannot reach and which goes with the checkout. */
 	data: string;
@@ -75,6 +75,7 @@ export interface Running {
 	ran(): Promise<{ model: string; effort: string }>;
 }
 
+/** An opencode account its sign-in added. */
 export interface SignedIn {
 	/** The provider kix shows for the account, such as anthropic or openai. */
 	provider: string;
@@ -85,9 +86,5 @@ export interface SignedIn {
 
 export interface Adapter {
 	readonly name: AdapterName;
-	/** Run the CLI's own interactive sign-in in `home`. `console` picks Claude Code's Console billing. */
-	login(home: string, options: { console: boolean }): Promise<void>;
-	/** Whether `home` holds a signed-in account, and what kind. */
-	status(home: string): Promise<SignedIn | null>;
 	launch(launch: Launch): Running;
 }
