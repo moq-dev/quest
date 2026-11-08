@@ -1,6 +1,6 @@
 // The rules `quest hook` checks on a tool call, and the shell parsing they rest on.
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, expect, test } from "vitest";
@@ -184,6 +184,12 @@ test("a new GitHub post needs the footer and no em dashes; edits and unreadable 
 	expect(bash("echo x | tee stale.md && gh pr comment 5 --body-file - < stale.md")).toEqual([]);
 	expect(bash("cp other.md stale.md; gh pr comment 5 --body-file stale.md")).toEqual([]);
 	expect(bash("gh pr comment 5 --body-file stale.md; cat > stale.md <<'EOF'\nx\nEOF")).toEqual([RULES.footer]);
+	// After a `cd`, a relative body file may be another one of the same name, so it passes.
+	mkdirSync(join(cwd, "sub"), { recursive: true });
+	writeFileSync(join(cwd, "sub", "stale.md"), `Body\n\n${FOOTER}\n`);
+	expect(bash("cd sub && gh pr comment 5 --body-file stale.md")).toEqual([]);
+	expect(bash("cd sub && gh pr comment 5 --body-file - < stale.md")).toEqual([]);
+	expect(bash(`cd sub && gh pr comment 5 --body-file ${join(cwd, "stale.md")}`)).toEqual([RULES.footer]);
 	expect(bash("gh pr create --title t --body-file body.md")).toEqual([]);
 	expect(bash("gh pr create --title t --body-file - < body.md")).toEqual([]);
 	expect(bash("gh api repos/o/r/issues/5/comments -f body=Done")).toEqual([RULES.footer]);

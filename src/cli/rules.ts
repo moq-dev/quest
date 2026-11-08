@@ -4,7 +4,7 @@
 // call itself shows, and lets through what it cannot tell apart.
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { parse } from "./shell";
 
@@ -175,12 +175,14 @@ function dropOptions(args: string[]): string[] {
  * Check each simple command in a shell command line, following `sh -c` into
  * its script, which inherits the assignments in `inherited`. A file an earlier
  * command on the line writes holds what the shell will put there, not what is
- * on disk, so it reads as unknown.
+ * on disk, so it reads as unknown, as does any relative path once a command
+ * on the line may have changed the directory.
  */
 function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set()) {
 	const { found, scratch, cwd } = check;
 	const written = new Set<string>();
 	const write = (path: string) => written.add(resolve(cwd, path));
+	let moved = false;
 	for (const simple of parse(line)) {
 		const env = new Set(inherited);
 		const argv = unwrap(simple.argv, env);
@@ -192,6 +194,7 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		}
 		if (argv === null) continue;
 		const [name, ...args] = argv;
+		if (["cd", "pushd", "popd"].includes(name!)) moved = true;
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
 			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env);
@@ -200,7 +203,8 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		const asked = env.has(USER_ASKED);
 		const from = simple.redirects.find((redirect) => redirect.op === "<")?.target;
 		// Text the shell expands is unknown here, so it reads as unreadable.
-		const disk = (file: string) => (written.has(resolve(cwd, file)) ? undefined : read(cwd, file));
+		const disk = (file: string) =>
+			(moved && !isAbsolute(file)) || written.has(resolve(cwd, file)) ? undefined : read(cwd, file);
 		const stdin = simple.stdinExpanded
 			? undefined
 			: (simple.stdin ?? (from === undefined ? undefined : disk(from)));
