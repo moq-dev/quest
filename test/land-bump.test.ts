@@ -1,7 +1,7 @@
 // The pin bump pass against a fake GitHub and a local target repository, with the host's Nix and quest faked.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -72,7 +72,15 @@ interface World {
 	target: { owner: string; repo: string };
 	remote: string;
 	base: string;
-	pulls: { number: number; head: string; state: string; draft: boolean; auto_merge: unknown; body?: string }[];
+	pulls: {
+		number: number;
+		head: string;
+		state: string;
+		draft: boolean;
+		auto_merge: unknown;
+		body?: string;
+		base?: string;
+	}[];
 	rules: { type: string }[] | "free";
 	allowAutoMerge: boolean;
 	/** Each check on a head, as `statusCheckRollup` contexts. */
@@ -153,7 +161,7 @@ function deps(world: World): GitHubDependencies {
 				draft: pull.draft,
 				auto_merge: pull.auto_merge,
 				head: { sha: pull.head },
-				base: { ref: "main" },
+				base: { ref: pull.base ?? "main" },
 			});
 			if (url.pathname === `${path}/pulls` && method === "GET") {
 				expect(url.searchParams.get("head")).toBe(`${world.target.owner}:${BUMP_BRANCH}`);
@@ -170,6 +178,7 @@ function deps(world: World): GitHubDependencies {
 			if (pull && url.pathname === `${path}/pulls/${number}`) {
 				if (method === "PATCH") {
 					if (body.state) pull.state = body.state;
+					if (body.base) pull.base = body.base;
 					if (body.body) pull.body = body.body;
 					if (body.body) pull.head = git(world.remote.slice("file://".length), "rev-parse", BUMP_BRANCH);
 				}
@@ -474,6 +483,65 @@ describe("bumpPass", () => {
 		target.base = git(work, "rev-parse", "HEAD");
 		await expect(bumpPass(context(target), NEW)).rejects.toThrow("AGENTS.md is a symlink out of the repository");
 		expect(target.pulls).toEqual([]);
+	});
+
+	test("refuses an escaping symlink whose name holds a tab", async () => {
+		const target = world();
+		const work = tempDir();
+		git(work, "clone", "--quiet", bare(target), ".");
+		configure(work, GIT_SETTINGS);
+		mkdirSync(join(work, "quest"));
+		symlinkSync("../..", join(work, "quest", "\tescape.md"));
+		git(work, "add", ".");
+		git(work, "commit", "--quiet", "-m", "link");
+		git(work, "push", "--quiet", "origin", "HEAD:main");
+		target.base = git(work, "rev-parse", "HEAD");
+		await expect(bumpPass(context(target), NEW)).rejects.toThrow("escape.md is a symlink out of the repository");
+	});
+
+	test("runs quest check --fix on the base's whole history, which names deleted quests", async () => {
+		const target = world();
+		const work = tempDir();
+		git(work, "clone", "--quiet", bare(target), ".");
+		configure(work, GIT_SETTINGS);
+		writeFileSync(join(work, "second.md"), "second\n");
+		git(work, "add", ".");
+		git(work, "commit", "--quiet", "-m", "second");
+		git(work, "push", "--quiet", "origin", "HEAD:main");
+		target.base = git(work, "rev-parse", "HEAD");
+		const faked = tools();
+		const counts: string[] = [];
+		const run = faked.run;
+		faked.run = (quest, checkout, args) => {
+			if (args[0] === "check") counts.push(git(checkout, "rev-list", "--count", "HEAD"));
+			return run(quest, checkout, args);
+		};
+		const ctx = context(target, faked);
+		await bumpPass(ctx, NEW);
+		expect(counts).toEqual(["2"]);
+	});
+
+	test("starts over when the open bump PR closes while the bump is prepared", async () => {
+		const target = world();
+		const ctx = context(target);
+		await bumpPass(ctx, OLD.replace(/1/g, "3"));
+		const first = git(bare(target), "rev-parse", BUMP_BRANCH);
+		const lock = ctx.tools.lock;
+		ctx.tools.lock = (...args) => {
+			target.pulls[0].state = "closed";
+			lock(...args);
+		};
+		await expect(bumpPass(ctx, NEW)).rejects.toThrow("bump PR 7 closed while the bump was prepared");
+		expect(git(bare(target), "rev-parse", BUMP_BRANCH)).toBe(first);
+	});
+
+	test("retargets an open bump PR at the target's current default branch", async () => {
+		const target = world();
+		const ctx = context(target);
+		await bumpPass(ctx, OLD.replace(/1/g, "3"));
+		target.pulls[0].base = "old";
+		await bumpPass(ctx, NEW);
+		expect(target.pulls[0].base).toBe("main");
 	});
 
 	test("a target that fails does not hold up the others, and the pass reports it", async () => {

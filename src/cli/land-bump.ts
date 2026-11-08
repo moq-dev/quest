@@ -132,7 +132,10 @@ export function contained(checkout: string): void {
 	const root = realpathSync(checkout);
 	const entries = git(checkout, ["ls-files", "--stage", "-z"]).split("\0").filter(Boolean);
 	for (const entry of entries) {
-		const [meta, file] = entry.split("\t");
+		// The path is everything after the first tab, which a file name may itself contain.
+		const tab = entry.indexOf("\t");
+		const meta = entry.slice(0, tab);
+		const file = entry.slice(tab + 1);
 		if (!meta.startsWith("120000 ")) continue;
 		let target: string;
 		try {
@@ -267,16 +270,27 @@ async function bump(
 	const remote = connection.remote;
 	const ref = `refs/heads/${BUMP_BRANCH}`;
 	mkdirSync(join(context.state, "bump"), { recursive: true, mode: 0o700 });
+	// A bare cache per target keeps the base's whole history, which `quest check --fix` reads for deleted
+	// quests, and makes each later bump's fetch incremental. Its refs keep the fetched commits.
+	const cache = join(context.state, "bump", "repos", `${target.owner}-${target.repo}.git`);
+	if (!existsSync(join(cache, "HEAD"))) {
+		mkdirSync(cache, { recursive: true, mode: 0o700 });
+		git(cache, ["init", "--quiet", "--bare"]);
+	}
 	const checkout = mkdtempSync(join(context.state, "bump", "checkout-"));
 	try {
+		await connection.read(cache, ["fetch", "--quiet", "--no-tags", remote, `+${baseSha}:refs/bump/base`]);
 		git(checkout, ["init", "--quiet"]);
-		await connection.read(checkout, ["fetch", "--quiet", "--no-tags", "--depth=1", remote, baseSha]);
+		writeFileSync(
+			join(checkout, ".git", "objects", "info", "alternates"),
+			`${join(realpathSync(cache), "objects")}\n`,
+		);
 		git(checkout, ["checkout", "--quiet", "--detach", baseSha]);
 		contained(checkout);
 		// The open PR's head stays in the branch's history; a branch left by a merged or closed PR is replaced.
 		const previous = open ? string(object(open.head).sha) : "";
 		const lease = previous || ((await remoteHead(checkout, remote, ref, connection.read)) ?? "");
-		if (lease) await connection.read(checkout, ["fetch", "--quiet", "--no-tags", "--depth=1", remote, lease]);
+		if (lease) await connection.read(cache, ["fetch", "--quiet", "--no-tags", remote, `+${lease}:refs/bump/lease`]);
 
 		const reader = await context.reader();
 		if (found.pinned !== undefined) {
@@ -314,6 +328,14 @@ async function bump(
 				"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 				{ id },
 			);
+		if (open) {
+			// The PR may have merged or closed during the Nix work, leaving its branch for the lease to match.
+			const now = object(await (await github.request(`${path}/pulls/${Number(open.number)}`)).json());
+			if (now.state !== "open")
+				throw new Error(
+					`bump PR ${Number(open.number)} closed while the bump was prepared; the next pass starts over`,
+				);
+		}
 		const pushed = await push(checkout, remote, baseSha, commit, ref, connection.token, lease);
 		if (pushed.status !== 0) throw new Error(`push failed: ${pushed.stderr.trim()}`);
 
@@ -330,7 +352,9 @@ async function bump(
 		let number: number;
 		if (open) {
 			number = Number(open.number);
-			await github.request(`${path}/pulls/${number}`, { method: "PATCH", body: { title, body } });
+			// A target whose default branch moved gets its open bump retargeted, since the bump is built on the new one.
+			const retarget = string(object(open.base).ref) === base ? {} : { base };
+			await github.request(`${path}/pulls/${number}`, { method: "PATCH", body: { title, body, ...retarget } });
 			if (open.draft !== draft)
 				await github.graphql(
 					`mutation($id: ID!) { ${draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview"}(input: { pullRequestId: $id }) { clientMutationId } }`,
