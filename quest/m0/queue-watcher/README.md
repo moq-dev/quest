@@ -121,8 +121,8 @@ GitHub Team: moq.pro leaves the host gate for an own serial queue in
 third-party queue. The maintainer expects the own queue to become every
 repository's, for visibility. The own queue landed in
 [moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540); the rest is
-recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
-[the queue page](/quest/m0/queue-watcher/queue-page.md).
+recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md), and
+kix.quest shows each base's queue at `/projects/github/<owner>/<name>/queue`.
 
 Shared shape, for the children to follow:
 
@@ -152,4 +152,3 @@ Shared shape, for the children to follow:
 - [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - moq.pro's `main` leaves the batching gate for the watcher's own queue
 - [The watcher runs one instance per base branch](/quest/m0/queue-watcher/per-base.md) - each base of a repository gets its own watcher, clone, locks, state and `--method`, so moq.pro's `release` can follow `main`
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
-- [kix.quest shows each repository's landing queue](/quest/m0/queue-watcher/queue-page.md) - one page per repository with its queue order, current build, and recent drops, in both modes

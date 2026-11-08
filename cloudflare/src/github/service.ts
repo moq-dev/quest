@@ -23,6 +23,16 @@ import {
 import { BODY_LIMIT } from "../jobs/trail";
 import { osiApproved } from "../licenses";
 import { CI_PERMISSIONS, type CIPermission, ciProblems } from "./ci";
+import {
+	type Comment as QueueComment,
+	DROP_WINDOW,
+	DROPPED_FIELDS,
+	type DroppedPull,
+	droppedNumbers,
+	landingQueues,
+	OPEN_PULLS,
+	type OpenPull,
+} from "./queue";
 import { OBSERVED, type Observed, observedGap, REVIEW_CHECK, unreviewed } from "./review";
 import { GOAL_LIMIT, SETUP_BRANCH, STUBS, planCheck, planned, setupGoal, setupPull, treeCheckout } from "./setup";
 import { positiveId } from "./webhook";
@@ -1683,6 +1693,58 @@ export class GitHubService {
 				`${repositoryPath(repo)}/commits/${sha(commit)}/status?per_page=100&page=${page}`,
 			),
 		}));
+	}
+	/**
+	 * Each base's landing queue (`./queue.ts`): its open pull requests in landing order with their
+	 * builds, and the watcher's drops in the last day with their outcomes.
+	 */
+	readQueues(repo: GitHubRepository, userId: string, now: number) {
+		const permissions: Permissions = { pull_requests: "read", issues: "read", checks: "read", statuses: "read" };
+		return this.#authorized(repo, userId, permissions, async (token) => {
+			const graphql = async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
+				const result = await this.#api<{ data?: { repository: T | null }; errors?: unknown[] }>(
+					token,
+					"/graphql",
+					"POST",
+					{ query, variables },
+				);
+				if (result.errors?.length || !result.data?.repository)
+					throw new GitHubError("The repository's pull requests are unavailable");
+				return result.data.repository;
+			};
+			const variables = { owner: repo.owner, name: repo.name };
+			const open: OpenPull[] = [];
+			for (let after: string | null = null; ;) {
+				type Page = {
+					pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: OpenPull[] };
+				};
+				const { pullRequests }: Page = await graphql<Page>(OPEN_PULLS, { ...variables, after });
+				open.push(...pullRequests.nodes);
+				if (!pullRequests.pageInfo.hasNextPage) break;
+				after = pullRequests.pageInfo.endCursor;
+			}
+			const since = now - DROP_WINDOW;
+			const comments: QueueComment[] = [];
+			const path = `${repositoryPath(repo)}/issues/comments?since=${new Date(since).toISOString()}&sort=created&direction=asc&per_page=100`;
+			for (let page = 1; ; page++) {
+				const items = await this.#api<QueueComment[]>(token, `${path}&page=${page}`);
+				comments.push(...items);
+				if (items.length < 100) break;
+			}
+			const known = new Set(open.map((pull) => pull.number));
+			const missing = droppedNumbers(comments).filter((n) => !known.has(n));
+			const dropped = missing.length
+				? Object.values(
+						await graphql<Record<string, DroppedPull>>(
+							`query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${missing
+								.map((n) => `p${number(n)}: pullRequest(number: ${n}) { ${DROPPED_FIELDS} }`)
+								.join(" ")} } }`,
+							variables,
+						),
+					)
+				: [];
+			return landingQueues(open, dropped, comments, since);
+		});
 	}
 	/**
 	 * What a job's agent reads about its issue or pull request, which its

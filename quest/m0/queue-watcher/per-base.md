@@ -18,8 +18,7 @@ say one daemon per base rather than per repository.
 Non-goals: declaring moq.pro's second instance on the host and moving its
 `release` onto it, which moq.pro's own Land release quest does once
 [its `main` cutover](/quest/m0/queue-watcher/pro-cutover.md) works, and
-showing each base's queue on kix.quest, which
-[the queue page](/quest/m0/queue-watcher/queue-page.md) owns.
+showing each base's queue on kix.quest, which its queue page already does.
 
 ## Plan
 
