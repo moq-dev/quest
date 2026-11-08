@@ -1110,10 +1110,13 @@ describe("runner publication", () => {
 		await send(one);
 		await send(one);
 		await send(two);
-		const sessions = project.pulls[0]!.comments!.filter((c) => c.author === "quest-test[bot]");
-		expect(sessions.map((c) => c.body)).toEqual([
-			`<!-- quest:sessions -->\nThe sessions that published to this pull request after it opened.\n\n## Models\n\n- ${one}\n- ${two}\n`,
-		]);
+		const sessions = () => project.pulls[0]!.comments!.filter((c) => c.author === "quest-test[bot]");
+		const record = (...lines: string[]) =>
+			`<!-- quest:sessions -->\nThe sessions that published to this pull request after it opened.\n\n## Models\n\n${lines.map((l) => `- ${l}\n`).join("")}`;
+		expect(sessions().map((c) => c.body)).toEqual([record(one, two)]);
+		// A session that pushes again moves to the end, so the last line names the latest writer.
+		await send(one);
+		expect(sessions().map((c) => c.body)).toEqual([record(two, one)]);
 		// The body, which holds the author's own review record, is untouched.
 		expect(project.pulls[0]!.body).toBe(body);
 

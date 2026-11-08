@@ -1217,11 +1217,11 @@ whole branch at the PR's size.
 
 ## Review locally
 
-`quest review` has a model that wrote none of the code review the checkout's
+`quest review` has a model other than the latest writer review the checkout's
 committed branch before it is pushed for review, at an effort set by the PR's
 size. Each size ranks its reviewers, the same for every repository:
 
-| PR size | Reviewer | When Sol wrote the code |
+| PR size | Reviewer | When Sol changed it last |
 |---|---|---|
 | XS | Codex `gpt-6.1-sol` low | Claude Code `claude-opus-5-5` low |
 | S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
@@ -1233,14 +1233,17 @@ A quest branch takes its quest's size, read from the base branch's tip so a
 change cannot lower its own review; any other PR, such as a skill's own, takes
 the `Size:` line of the `## Models` record in its open PR's body, and a PR with
 neither gets M's reviewers. `--size` overrides both. The first reviewer whose
-model wrote none of the code reviews: the record's `Implementer:` lines name
-the models that did, or `--exclude-model` names each instead. Unless the record
-names every one, with no `unknown` model, the harness running the command is
-taken to have written it too, so Codex reviews from Claude Code and Claude Code
-from Codex. `--harness` names the reviewer instead, at its entry's model and
+model is not the latest writer's reviews: the record's last `Implementer:` line
+names it, since each session moves its line last whenever it pushes, or
+`--exclude-model` names each model to avoid instead. Earlier writers may review.
+Without a record, or when its last line names an `unknown` model, or when the
+body's and kix's sessions comment's last lines name different models, whose
+order cannot be told, the harness running the command, usually the session that
+just pushed, is taken to be the latest writer, so Codex reviews from Claude Code
+and Claude Code from Codex. `--harness` names the reviewer instead, at its entry's model and
 effort, and `--model` and `--effort` override those, as a repository whose
 `AGENTS.md` names other reviewers needs. An unknown harness, a size whose
-every reviewer wrote the code, or a missing or logged-out CLI, is an error
+every reviewer is avoided, or a missing or logged-out CLI, is an error
 rather than a same-model review, as is a login the API rejects mid-round, such
 as an expired or revoked token. The reviewer reaches its model as the user's own CLI does:
 Claude Code keeps `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, and its
@@ -1747,7 +1750,7 @@ arrives with the guide sections and other skills it builds on, in one call:
 | `quest-start` | Claim a ready quest, complete it, and open a PR. |
 | `quest-spawn` | Triage ready quests and send several agents out in parallel. |
 | `quest-iterate` | Iterate on an open PR to settle its open decisions, fix CI and review findings, and push. |
-| `quest-review` | Review a PR's branch locally with a model that wrote none of it, then mark it ready for review. |
+| `quest-review` | Review a PR's branch locally with a model other than its latest writer, then mark it ready for review. |
 | `quest-merge` | Queue a PR to land, running `quest-iterate` first when it needs work. |
 | `quest-complete` | Decide which open PRs to merge, then queue them. |
 | `quest-afk` | Keep starting agreed work while you are away, leaving every decision for your return. |

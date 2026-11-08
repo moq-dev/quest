@@ -1,6 +1,6 @@
 ---
 name: quest-review
-description: Review a PR's branch locally with a model that wrote none of it, then mark it ready for review.
+description: Review a PR's branch locally with a model other than its latest writer, then mark it ready for review.
 allowed-tools: Bash(quest skill review) PowerShell(quest skill review)
 ---
 
