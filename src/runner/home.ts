@@ -1,6 +1,7 @@
-// A runner's state on disk: its kix sign-in, its agent accounts, the
-// repositories it fetched, and its jobs' checkouts. Everything lives in one
-// user-only directory, so two runners on one machine just use two homes.
+// A runner's state on disk: its kix sign-in, its agent accounts and their
+// limits, its CLIProxyAPI's pool, the repositories it fetched, and its jobs'
+// checkouts. Everything lives in one user-only directory, so two runners on one
+// machine just use two homes.
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -23,17 +24,49 @@ export interface Login {
 
 export type AccountKind = "subscription" | "api-key";
 
-/** One agent account, signed in by its CLI in its own home under `accounts/<id>`. */
+/** The CLI an account signs in for: Claude Code and Codex pool their accounts, and opencode keeps a home per account. */
+export type Cli = AdapterName | "codex";
+
+/** The vendors whose accounts pool behind the runner's CLIProxyAPI, one pool each. */
+export type Pool = Exclude<Cli, "opencode">;
+
+/** The provider each pool's models come from, as accounts report it. */
+export const POOL_PROVIDER: Record<Pool, string> = { claude: "anthropic", codex: "openai" };
+
+/** One account the user added: an opencode home under `accounts/<id>`, or a credential in the proxy's pool. */
 export interface Account {
-	/** Opaque and stable across restarts, so kix keeps its preference rank and paused sessions. */
+	/** Opaque and stable across restarts. */
 	id: string;
-	/** The CLI that drives it. */
+	cli: Cli;
+	provider: string;
+	kind: AccountKind;
+	label: string;
+	/** A pooled OAuth login's file in the proxy's auth directory. */
+	credential?: string;
+	/** A pooled Anthropic Console API key, which the proxy's config lists. */
+	key?: string;
+}
+
+/**
+ * What kix routes a job to: one opencode account, or the Claude pool as a
+ * whole. Codex's pool only reviews, since no adapter runs Codex jobs.
+ */
+export interface Seat {
+	/** An opencode account's id, or the pool's name; kix keeps its preference rank and paused sessions. */
+	id: string;
 	adapter: AdapterName;
 	provider: string;
 	kind: AccountKind;
 	label: string;
-	/** While the provider refuses the account, until this time in milliseconds. */
-	limitedUntil?: number;
+}
+
+/** The longest label kix stores. */
+const LABEL = 100;
+
+/** The Claude pool's label: its accounts' labels, cut to fit. */
+function poolLabel(accounts: Account[]): string {
+	const label = `Claude pool: ${accounts.map((account) => account.label).join(", ")}`;
+	return label.length <= LABEL ? label : `${label.slice(0, LABEL - 1)}…`;
 }
 
 function load<T>(path: string): T | undefined {
@@ -68,21 +101,64 @@ export class RunnerHome {
 	}
 
 	accounts(): Account[] {
-		return load<Account[]>(join(this.dir, "accounts.json")) ?? [];
+		const path = join(this.dir, "accounts.json");
+		const accounts = load<Account[]>(path) ?? [];
+		if (accounts.some((account) => typeof account.cli !== "string"))
+			throw new Error(
+				`${path} is from an earlier quest runner, before Claude Code accounts pooled in the runner's own CLIProxyAPI; delete it and ${join(this.dir, "accounts")}, then add each account again with \`quest runner account add\``,
+			);
+		return accounts;
 	}
 
 	saveAccounts(accounts: Account[]): void {
 		save(join(this.dir, "accounts.json"), accounts);
 	}
 
-	/** A new account's id and its empty, user-only home. */
-	newAccount(): { id: string; home: string } {
-		const id = randomBytes(8).toString("hex");
-		return { id, home: this.accountHome(id) };
+	/** What kix routes jobs to, in the order the accounts were added: the Claude pool where its first account was. */
+	seats(): Seat[] {
+		const accounts = this.accounts();
+		const claude = accounts.filter((account) => account.cli === "claude");
+		const seats: Seat[] = [];
+		for (const account of accounts) {
+			if (account.cli === "opencode") {
+				const { id, provider, kind, label } = account;
+				seats.push({ id, adapter: "opencode", provider, kind, label });
+			} else if (account === claude[0]) {
+				seats.push({
+					id: "claude",
+					adapter: "claude",
+					provider: POOL_PROVIDER.claude,
+					kind: claude.some((a) => a.kind === "subscription") ? "subscription" : "api-key",
+					label: poolLabel(claude),
+				});
+			}
+		}
+		return seats;
 	}
 
+	/** A new account's id. */
+	newId(): string {
+		return randomBytes(8).toString("hex");
+	}
+
+	/** An opencode account's user-only home. */
 	accountHome(id: string): string {
 		return privateDirectory(join(this.dir, "accounts", id));
+	}
+
+	/** The CLI home a seat's jobs run in: its opencode account's, or its pool's, which holds sessions but no login. */
+	seatHome(seat: Seat): string {
+		return seat.adapter === "opencode" ? this.accountHome(seat.id) : this.poolHome(seat.adapter);
+	}
+
+	/** The pool's CLI home, `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, which keeps sessions and never a login. */
+	poolHome(pool: Pool): string {
+		return privateDirectory(join(this.dir, "pools", pool));
+	}
+
+	/** Where the runner's CLIProxyAPI keeps its config, client key, logs, and pooled credentials. */
+	proxyDir(): string {
+		return privateDirectory(join(this.dir, "proxy"));
 	}
 
 	removeAccount(id: string): Account | undefined {
@@ -90,8 +166,23 @@ export class RunnerHome {
 		const found = accounts.find((account) => account.id === id);
 		if (!found) return undefined;
 		this.saveAccounts(accounts.filter((account) => account !== found));
-		rmSync(join(this.dir, "accounts", id), { recursive: true, force: true });
+		if (found.cli === "opencode") {
+			rmSync(join(this.dir, "accounts", id), { recursive: true, force: true });
+			this.limit(id, null);
+		}
+		if (found.credential) rmSync(join(this.proxyDir(), "auth", found.credential), { force: true });
 		return found;
+	}
+
+	/** When each seat or pool the provider refused resets, in milliseconds. */
+	limits(): Record<string, number> {
+		return load<Record<string, number>>(join(this.dir, "limits.json")) ?? {};
+	}
+
+	/** Record that a seat or pool is limited until `until`, or no longer limited. */
+	limit(id: string, until: number | null): void {
+		const { [id]: _, ...limits } = this.limits();
+		save(join(this.dir, "limits.json"), until === null ? limits : { ...limits, [id]: until });
 	}
 
 	/**

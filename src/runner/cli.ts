@@ -1,5 +1,7 @@
 // The `quest runner` commands: sign the machine in to kix, sign agent
-// accounts in with their own CLIs, and run jobs in the foreground.
+// accounts in (Claude and Codex subscriptions into the runner's CLIProxyAPI
+// pool, opencode accounts with opencode's own flow), and run jobs in the
+// foreground.
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
@@ -11,8 +13,9 @@ import { promisify } from "node:util";
 import type { Adapter, AdapterName } from "./adapter";
 import { Claude } from "./claude";
 import { Opencode } from "./opencode";
-import { type Account, type Login, RunnerHome, defaultHome } from "./home";
+import { type Account, type Cli, type Login, POOL_PROVIDER, RunnerHome, defaultHome } from "./home";
 import type { Job } from "./protocol";
+import { type Endpoint, poolLogin, readCredential, startProxy, writeProxyConfig } from "./proxy";
 import { Runner } from "./runner";
 import { sandboxRefusal, unixSocketRefusal } from "./sandbox";
 import { which } from "../cli/program";
@@ -37,11 +40,15 @@ function platform(): "linux" | "darwin" {
 	throw new RunnerInputError("quest runner runs on Linux and macOS only");
 }
 
-/** The programs a runner runs: each agent CLI, and sandbox-runtime, which runs opencode's commands. */
-const BINARIES: Record<AdapterName | "srt", { binary: string; variable: string; product: string }> = {
+/**
+ * The programs a runner runs: each agent CLI, sandbox-runtime, which runs
+ * opencode's commands, and CLIProxyAPI, which pools Claude and Codex accounts.
+ */
+const BINARIES: Record<AdapterName | "srt" | "cliproxy", { binary: string; variable: string; product: string }> = {
 	claude: { binary: "claude", variable: "QUEST_RUNNER_CLAUDE", product: "Claude Code" },
 	opencode: { binary: "opencode", variable: "QUEST_RUNNER_OPENCODE", product: "opencode" },
 	srt: { binary: "srt", variable: "QUEST_RUNNER_SRT", product: "sandbox-runtime (@anthropic-ai/sandbox-runtime)" },
+	cliproxy: { binary: "cliproxyapi", variable: "QUEST_RUNNER_CLIPROXY", product: "CLIProxyAPI" },
 };
 
 /**
@@ -61,10 +68,17 @@ export function binaryPath(name: keyof typeof BINARIES, env: NodeJS.ProcessEnv):
 	return found;
 }
 
-/** opencode's adapter needs sandbox-runtime too, since that runs its jobs' commands. */
-export function adapterFor(name: AdapterName, env: NodeJS.ProcessEnv): Adapter {
+/**
+ * opencode's adapter needs sandbox-runtime too, since that runs its jobs'
+ * commands, and Claude Code's the proxy its pool is behind.
+ */
+export function adapterFor(
+	name: AdapterName,
+	env: NodeJS.ProcessEnv,
+	proxy: Pick<Endpoint, "origin" | "keyFile">,
+): Adapter {
 	const binary = binaryPath(name, env);
-	return name === "opencode" ? new Opencode(binary, binaryPath("srt", env), env) : new Claude(binary, env);
+	return name === "opencode" ? new Opencode(binary, binaryPath("srt", env), env) : new Claude(binary, proxy, env);
 }
 
 /**
@@ -74,7 +88,10 @@ export function adapterFor(name: AdapterName, env: NodeJS.ProcessEnv): Adapter {
  * checked then; macOS has Seatbelt built in. Claude Code runs them itself, and
  * sandbox-runtime for opencode, which on Linux must also refuse Unix sockets.
  */
-export function runnerAdapters(env: NodeJS.ProcessEnv): (name: AdapterName) => Adapter {
+export function runnerAdapters(
+	env: NodeJS.ProcessEnv,
+	proxy: Pick<Endpoint, "origin" | "keyFile">,
+): (name: AdapterName) => Adapter {
 	const adapters = new Map<AdapterName, Adapter>();
 	let sandboxed = process.platform !== "linux";
 	return (name) => {
@@ -91,7 +108,7 @@ export function runnerAdapters(env: NodeJS.ProcessEnv): (name: AdapterName) => A
 			if (refusal) throw new RunnerInputError(refusal);
 			sandboxed = true;
 		}
-		adapter = adapterFor(name, env);
+		adapter = adapterFor(name, env, proxy);
 		if (adapter instanceof Opencode && process.platform === "linux") {
 			const refusal = unixSocketRefusal(adapter.srt, env);
 			if (refusal) throw new RunnerInputError(refusal);
@@ -147,61 +164,116 @@ export async function login(
 	return 1;
 }
 
-/** Sign a new account in with its CLI's own flow, in its own home. */
+/**
+ * Add an account: a Claude or Codex subscription signs in to the pool through
+ * the proxy's own flow, a Console API key from ANTHROPIC_API_KEY joins the
+ * Claude pool, and an opencode account signs in with opencode's flow in its
+ * own home.
+ */
 export async function addAccount(
 	io: RunnerIO,
-	options: { cli: AdapterName; console: boolean; label?: string; model?: string },
+	options: { cli: Cli; console: boolean; label?: string; model?: string },
 ): Promise<number> {
 	platform();
 	const label = options.label?.trim();
 	if (label !== undefined && (!label || label.length > 100))
 		throw new RunnerInputError("--label must be 1 to 100 characters");
 	if (options.console && options.cli !== "claude")
-		throw new RunnerInputError("--console is for Claude Code; opencode asks how to sign in");
+		throw new RunnerInputError("--console adds an Anthropic Console API key to the Claude pool");
 	const model = options.model?.trim();
 	if (model !== undefined && options.cli !== "opencode")
-		throw new RunnerInputError("--model is for opencode; Claude Code picks its own");
+		throw new RunnerInputError("--model is for opencode; the pool serves the model each CLI asks for");
 	if (model !== undefined && !/^[^/\s]+\/\S+$/.test(model))
 		throw new RunnerInputError("--model must be provider/model, such as openai/gpt-5.5");
 	const state = home(io);
-	const adapter = adapterFor(options.cli, io.env);
-	const { id, home: dir } = state.newAccount();
-	try {
-		await adapter.login(dir, { console: options.console });
-		const signedIn = await adapter.status(dir);
-		if (!signedIn) throw new Error("the account did not finish signing in");
-		if (model) Opencode.setModel(dir, model);
-		const account: Account = {
-			id,
-			adapter: adapter.name,
-			provider: signedIn.provider,
-			kind: signedIn.kind,
-			label: label ?? signedIn.label.slice(0, 100),
-		};
-		state.saveAccounts([...state.accounts(), account]);
+	const accounts = state.accounts();
+	const id = state.newId();
+	const added = (account: Account) => {
+		state.saveAccounts([...accounts, account]);
 		io.stdout(`Added ${account.label} (${account.kind}) as ${id}.\n`);
 		return 0;
-	} catch (error) {
-		rmSync(dir, { recursive: true, force: true });
-		throw error;
+	};
+	if (options.cli === "opencode") {
+		const adapter = new Opencode(binaryPath("opencode", io.env), binaryPath("srt", io.env), io.env);
+		const dir = state.accountHome(id);
+		try {
+			await adapter.login(dir);
+			const signedIn = await adapter.status(dir);
+			if (!signedIn) throw new Error("the account did not finish signing in");
+			if (model) Opencode.setModel(dir, model);
+			const { provider, kind } = signedIn;
+			return added({ id, cli: "opencode", provider, kind, label: label ?? signedIn.label.slice(0, 100) });
+		} catch (error) {
+			rmSync(dir, { recursive: true, force: true });
+			throw error;
+		}
 	}
+	if (options.console) {
+		const key = io.env.ANTHROPIC_API_KEY?.trim();
+		if (!key) throw new RunnerInputError("--console reads the Console API key from ANTHROPIC_API_KEY");
+		if (!/^sk-ant-[\w-]+$/.test(key))
+			throw new RunnerInputError("ANTHROPIC_API_KEY is not an Anthropic API key (sk-ant-...)");
+		if (accounts.some((account) => account.key === key))
+			throw new RunnerInputError("this Console API key is already in the Claude pool");
+		added({
+			id,
+			cli: "claude",
+			provider: POOL_PROVIDER.claude,
+			kind: "api-key",
+			label: label ?? `Console API key ...${key.slice(-4)}`,
+			key,
+		});
+		writeProxyConfig(state);
+		return 0;
+	}
+	const pool = options.cli;
+	// Over SSH the browser is elsewhere: Claude's link is pasted back, and Codex takes a device code.
+	const credential = await poolLogin(binaryPath("cliproxy", io.env), state, pool, {
+		remote: Boolean(io.env.SSH_CONNECTION),
+		env: io.env,
+	});
+	const signedIn = readCredential(state, credential);
+	if (signedIn.pool !== pool || !signedIn.email)
+		throw new Error(`the sign-in saved ${credential}, which is not a ${pool} login`);
+	const existing = accounts.find((account) => account.credential === credential);
+	if (existing) {
+		if (label) existing.label = label;
+		state.saveAccounts(accounts);
+		io.stdout(`Signed ${existing.label} in again as ${existing.id}.\n`);
+		return 0;
+	}
+	return added({
+		id,
+		cli: pool,
+		provider: POOL_PROVIDER[pool],
+		kind: "subscription",
+		label: label ?? signedIn.email.slice(0, 100),
+		credential,
+	});
 }
 
 export function listAccounts(io: RunnerIO): number {
-	const accounts = home(io).accounts();
+	const state = home(io);
+	const accounts = state.accounts();
+	const limits = state.limits();
 	if (!accounts.length) io.stdout("No accounts; add one with `quest runner account add`.\n");
 	for (const account of accounts) {
-		const limited = account.limitedUntil && account.limitedUntil > Date.now();
-		io.stdout(
-			`${account.id}\t${account.kind}\t${account.label}${limited ? `\tlimited until ${new Date(account.limitedUntil!).toISOString()}` : ""}\n`,
-		);
+		// A pooled account sits out with its pool.
+		const until = limits[account.cli === "opencode" ? account.id : account.cli] ?? 0;
+		const limited = until > Date.now() ? `\tlimited until ${new Date(until).toISOString()}` : "";
+		io.stdout(`${account.id}\t${account.cli}\t${account.kind}\t${account.label}${limited}\n`);
 	}
 	return 0;
 }
 
 export function removeAccount(io: RunnerIO, id: string): number {
-	const removed = home(io).removeAccount(id);
+	const state = home(io);
+	const removed = state.removeAccount(id);
 	if (!removed) throw new RunnerInputError(`no account ${id}; \`quest runner account list\` shows them`);
+	if (removed.cli !== "opencode") {
+		writeProxyConfig(state);
+		if (!state.accounts().some((account) => account.cli === removed.cli)) state.limit(removed.cli, null);
+	}
 	io.stdout(`Removed ${removed.label}.\n`);
 	return 0;
 }
@@ -237,17 +309,18 @@ export async function devShell(
 	}
 }
 
-/** Run jobs in the foreground until interrupted. */
+/** Run jobs in the foreground, with the runner's CLIProxyAPI, until interrupted. */
 export async function runRunner(io: RunnerIO, options: { slots: number }): Promise<number> {
 	platform();
 	const state = home(io);
 	const current = state.login();
 	if (!current) throw new RunnerInputError("this machine is not signed in; run `quest runner login` first");
-	const accounts = state.accounts();
-	if (!accounts.length) throw new RunnerInputError("no accounts; add one with `quest runner account add`");
-	// Only the CLIs some account uses, resolved before any job enters a devShell.
-	const adapter = runnerAdapters(io.env);
-	for (const account of accounts) adapter(account.adapter);
+	const seats = state.seats();
+	if (!seats.length)
+		throw new RunnerInputError(
+			"no account runs jobs; add a Claude or opencode account with `quest runner account add`",
+		);
+	const cliproxy = binaryPath("cliproxy", io.env);
 	if (!which("nix", io.env))
 		throw new RunnerInputError("nix is not installed; every job runs in its project's devShell");
 	try {
@@ -259,36 +332,57 @@ export async function runRunner(io: RunnerIO, options: { slots: number }): Promi
 	if ((await whoami(current, fetcher)) === null)
 		throw new RunnerInputError("kix no longer accepts this runner's token; run `quest runner login` again");
 	const log = (line: string) => io.stderr(`${new Date().toISOString()} ${line}\n`);
-	const runner = new Runner({
-		home: state,
-		login: current,
-		slots: options.slots,
-		// An account added while the runner runs uses a CLI resolved, and a sandbox checked, then.
-		adapter: (account) => adapter(account.adapter),
-		devShell: (job, repository, signal) => devShell(job, repository, io.env, signal),
-		remote: (job) => `https://github.com/${job.owner}/${job.name}.git`,
-		env: io.env,
-		fetch: fetcher,
-		log,
-	});
 	const held = state.hold();
+	let proxy: Awaited<ReturnType<typeof startProxy>> | undefined;
 	const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-	const stop = () => {
-		log("stopping: publishing running work so it moves to another runner");
-		void runner.shutdown();
-	};
-	for (const signal of signals) process.on(signal, stop);
-	log(`${current.name} running up to ${options.slots} job${options.slots === 1 ? "" : "s"} for ${current.url}`);
-	runner.start();
+	let stop = () => {};
 	try {
+		proxy = await startProxy(cliproxy, state, io.env);
+		log(`CLIProxyAPI pools this runner's Claude and Codex accounts at ${proxy.origin}`);
+		// Only the CLIs some seat uses, resolved before any job enters a devShell.
+		const adapter = runnerAdapters(io.env, proxy);
+		for (const seat of seats) adapter(seat.adapter);
+		const runner = new Runner({
+			home: state,
+			login: current,
+			slots: options.slots,
+			// An account added while the runner runs uses a CLI resolved, and a sandbox checked, then.
+			adapter: (seat) => adapter(seat.adapter),
+			proxy,
+			devShell: (job, repository, signal) => devShell(job, repository, io.env, signal),
+			remote: (job) => `https://github.com/${job.owner}/${job.name}.git`,
+			env: io.env,
+			fetch: fetcher,
+			log,
+		});
+		stop = () => {
+			log("stopping: publishing running work so it moves to another runner");
+			void runner.shutdown();
+		};
+		for (const signal of signals) process.on(signal, stop);
+		// Without its proxy no Claude job or review can run, so the runner hands its jobs on and exits.
+		let lost: string | undefined;
+		void proxy.exited.then((reason) => {
+			if (proxy?.stopping) return;
+			lost = reason;
+			log(reason);
+			stop();
+		});
+		log(`${current.name} running up to ${options.slots} job${options.slots === 1 ? "" : "s"} for ${current.url}`);
+		runner.start();
 		const end = await runner.done;
 		if (end === "replaced") {
 			io.stderr("quest: another `quest runner` took over this runner's connection\n");
 			return 1;
 		}
+		if (lost !== undefined) {
+			io.stderr("quest: the runner's CLIProxyAPI exited, so the runner stopped\n");
+			return 1;
+		}
 		return 0;
 	} finally {
 		for (const signal of signals) process.off(signal, stop);
+		await proxy?.stop();
 		held.release();
 	}
 }

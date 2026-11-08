@@ -41,7 +41,7 @@ import {
 	removeAccount,
 	runRunner,
 } from "../runner/cli";
-import type { AdapterName } from "../runner/adapter";
+import type { Cli } from "../runner/home";
 import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { gate, QUICK_MS } from "./gate";
 import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, readRemote, remoteRepository } from "./github";
@@ -1070,7 +1070,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
 				"The reviewer reaches its model as the user's own CLI " +
 				"does: Claude Code keeps ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, and its cloud providers' " +
-				"CLAUDE_CODE_USE_* switches and settings, and Codex keeps CODEX_CA_CERTIFICATE. It uses the CLI's own " +
+				"CLAUDE_CODE_USE_* switches and settings, and Codex keeps CODEX_CA_CERTIFICATE and sends its requests to " +
+				"OPENAI_BASE_URL, if set, as its openai_base_url setting. It uses the CLI's own " +
 				"stored login; the credential the CLI reads from the environment (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, " +
 				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
 				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
@@ -1230,18 +1231,21 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Run kix jobs on this machine with its own agent accounts")
 		.description(
 			"Turn this Linux or macOS machine into a kix runner. `quest runner login` connects it to your kix " +
-				"account, `quest runner account add` signs agent accounts in with their own CLIs, and `quest runner` " +
-				"runs routed jobs in the foreground until interrupted.\n\n" +
-				"Each account signs in through its CLI's own flow, Claude Code or opencode, in an isolated home; kix " +
-				"stores only an opaque account id, its kind, and its label, and never sees its tokens. Every job runs " +
-				"inside its project's `nix develop` shell. State lives in $QUEST_RUNNER_HOME, by default " +
-				"$XDG_DATA_HOME/quest/runner.",
+				"account, `quest runner account add` signs agent accounts in, and `quest runner` runs routed jobs in " +
+				"the foreground until interrupted.\n\n" +
+				"Claude and Codex subscriptions sign in to the pool of the runner's own CLIProxyAPI, which `quest " +
+				"runner` starts on loopback and which rotates between them; every Claude Code job and review and every " +
+				"Codex review goes through it, and kix sees the Claude pool as one account. opencode accounts sign in " +
+				"through opencode's own flow, each in an isolated home. kix stores only an opaque account id, its " +
+				"kind, and its label, and never sees a token. Every job runs inside its project's `nix develop` " +
+				"shell. State lives in $QUEST_RUNNER_HOME, by default $XDG_DATA_HOME/quest/runner.",
 		);
 	runner
 		.command("run", { isDefault: true })
 		.description(
-			"Connect to kix and run assigned jobs until interrupted. On SIGINT or SIGTERM, running agents stop, " +
-				"their work is published to their job branches, and their jobs move to another runner.",
+			"Start the runner's CLIProxyAPI, connect to kix, and run assigned jobs until interrupted. On SIGINT or " +
+				"SIGTERM, or if the proxy exits, running agents stop, their work is published to their job branches, " +
+				"and their jobs move to another runner.",
 		)
 		.option("--slots <count>", "Jobs to run at once", positiveInteger("slots"), 1)
 		.action((options: { slots: number }) => runnerAction(() => runRunner(runnerIO(), options)));
@@ -1258,25 +1262,28 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	account
 		.command("add")
 		.description(
-			"Sign an account in with its CLI's own flow in a new isolated home: `claude auth login` for Claude " +
-				"Code, or `opencode auth login` for an OpenCode Go plan, a ChatGPT plan, or any provider's API key",
+			"Sign an account in. `claude` signs a Claude subscription in to the runner's pool through CLIProxyAPI's " +
+				"own OAuth flow, and `codex` a ChatGPT plan, which only reviews; over SSH, Claude's flow prints its " +
+				"link and takes the pasted callback URL, and Codex's takes a device code. `opencode` runs `opencode " +
+				"auth login` in a new isolated home for an OpenCode Go plan, a ChatGPT plan, or any provider's API key. " +
+				"Signing a pooled subscription in again refreshes its credential.",
 		)
-		.addArgument(new Argument("[cli]", "The agent CLI").choices(["claude", "opencode"]).default("claude"))
-		.option("--console", "Claude Code: sign in with an Anthropic Console account (API billing)")
+		.addArgument(new Argument("[cli]", "The agent CLI").choices(["claude", "codex", "opencode"]).default("claude"))
+		.option("--console", "claude: add the Anthropic Console API key in ANTHROPIC_API_KEY to the pool instead")
 		.option("--model <provider/model>", "opencode: the model this account's jobs use (default: opencode's)")
-		.option("--label <label>", "The name kix shows for the account (default: its email or providers)")
-		.action((cli: AdapterName, options: { console?: boolean; model?: string; label?: string }) =>
+		.option("--label <label>", "The name the account shows (default: its email or providers)")
+		.action((cli: Cli, options: { console?: boolean; model?: string; label?: string }) =>
 			runnerAction(() =>
 				addAccount(runnerIO(), { cli, console: !!options.console, model: options.model, label: options.label }),
 			),
 		);
 	account
 		.command("list")
-		.description("Print each account's id, kind, and label")
+		.description("Print each account's id, CLI, kind, and label, and when a limited account resets")
 		.action(() => runnerAction(() => listAccounts(runnerIO())));
 	account
 		.command("remove <id>")
-		.description("Remove an account and delete its home, signing it out of this machine")
+		.description("Remove an account and delete its home or pooled credential, signing it out of this machine")
 		.action((id: string) => runnerAction(() => removeAccount(runnerIO(), id)));
 
 	/** Changes on stdout; mentions and check findings on stderr, which fail the command. */

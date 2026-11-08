@@ -74,7 +74,8 @@ export function RunnersPage(props: { runners: RunnerView[]; connect: Connect | n
 			<h1>Runners</h1>
 			<p class="intro">
 				Runners are your own Linux and macOS machines running <code>quest runner</code>. Each one drives the
-				official agent CLIs with the accounts signed in on it; kix never holds their tokens.
+				official agent CLIs with the accounts signed in on it; kix never holds their tokens. A runner pools its
+				Claude subscriptions behind its own proxy, which rotates between them, so they show here as one account.
 			</p>
 			{props.connected && (
 				<p class="note" role="status">

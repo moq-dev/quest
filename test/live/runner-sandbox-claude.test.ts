@@ -1,5 +1,5 @@
 // The Claude Code sandbox's boundary, with the pinned Claude Code: a scripted
-// model, set as the account's endpoint in its home, drives one runner job
+// model, standing in for the runner's CLIProxyAPI, drives one runner job
 // through `Claude.launch` in a checkout that tries to escape, and each
 // attempt is refused.
 //
@@ -34,12 +34,10 @@ import { Claude } from "../../src/runner/claude";
 import { binaryPath } from "../../src/runner/cli";
 import { closeSandbox, openSandbox, quote, type Sandbox } from "../../src/runner/sandbox";
 
-/**
- * A credential planted in the account's home, which no command may read. The
- * scripted model's API key is no secret: Claude Code passes its settings'
- * `env` to commands.
- */
+/** A credential planted in the pool's home, which no command may read. */
 const SECRET = "quest-boundary-account-credential";
+/** The proxy's client key, which Claude Code reads through apiKeyHelper and no command may see. */
+const PROXY_KEY = "quest-boundary-proxy-key";
 /** A pattern matching the credential without holding it, since a command's own text reaches the model. */
 const SECRET_PATTERN = quote(`${SECRET.slice(0, -1)}[${SECRET.at(-1)}]`);
 /** The kix tools' bearer token, which no command may see. */
@@ -54,7 +52,7 @@ interface Paths {
 	repository: string;
 	/** The runner's state, which commands can neither read nor write. */
 	runner: string;
-	/** The account's home under it: its `CLAUDE_CONFIG_DIR`. */
+	/** The pool's home under it: its `CLAUDE_CONFIG_DIR`. */
 	account: string;
 	/** A shared temporary directory, outside both the checkout and the attempt's directory. */
 	outside: string;
@@ -74,14 +72,22 @@ interface Attempt {
 	clean?(paths: Paths): void;
 }
 
-/** The credential file planted in the account's home, where Claude Code keeps its own login. */
+/** The credential file planted in the pool's home, where Claude Code would keep a login. */
 const credentialStore = (paths: Paths) => join(paths.account, ".credentials.json");
 /** Where the hook the checkout commits would write, outside the sandbox. */
 const hookMark = (runner: string) => join(runner, "hooked");
 /** The hook's command, which the checkout's `.claude/settings.json` runs before every tool. */
 const hookCommand = (runner: string) => `printf x > ${quote(hookMark(runner))}`;
 
+/** Where the runner keeps the proxy's client key. */
+const keyFile = (paths: Paths) => join(paths.runner, "client-key");
+
 const ATTEMPTS: Attempt[] = [
+	{
+		name: "reads the proxy's client key",
+		command: (paths) => `cat ${quote(keyFile(paths))}`,
+		escaped: (_paths, output) => output.includes(PROXY_KEY),
+	},
 	{
 		name: "reads the account's credentials by absolute path",
 		command: (paths) => `grep -o ${SECRET_PATTERN} ${quote(credentialStore(paths))}`,
@@ -224,6 +230,8 @@ let bun: string;
 const escapes: string[] = [];
 /** Every request Claude Code sent the model, which carries each command's output back. */
 const requests: MessagesRequest[] = [];
+/** The keys Claude Code sent the scripted model, which stands in for the proxy. */
+const keys = new Set<string>();
 /** The tool calls the scripted model makes, one per step, in order. */
 let script: Call[] = [];
 /** Tools the script calls that Claude Code did not offer. */
@@ -277,7 +285,7 @@ describe.skipIf(!linux)("Claude Code's sandbox", () => {
 		const socket = join(repository, "host.sock");
 		host = await listenUnix(socket);
 		paths = { checkout, repository, runner, account, outside, url, socket };
-		signIn(account, url);
+		signIn(paths);
 	});
 
 	afterAll(async () => {
@@ -315,7 +323,11 @@ describe.skipIf(!linux)("Claude Code's sandbox", () => {
 		let exit: Awaited<ReturnType<typeof run>>;
 		try {
 			exit = await run(
-				new Claude(binaryPath("claude", process.env), process.env),
+				new Claude(
+					binaryPath("claude", process.env),
+					{ origin: paths.url, keyFile: keyFile(paths) },
+					process.env,
+				),
 				sandbox,
 				(line) => (output += line),
 			);
@@ -339,8 +351,10 @@ describe.skipIf(!linux)("Claude Code's sandbox", () => {
 		const files = rest.slice(ATTEMPTS.length);
 		expect(allowed, "a permitted command failed, so every refusal would pass vacuously").toContain("ALLOWED-42");
 		expect(readFileSync(join(paths.checkout, "allowed.txt"), "utf8")).toBe("allowed");
-		for (const secret of [SECRET, TOOLS_TOKEN])
+		for (const secret of [SECRET, TOOLS_TOKEN, PROXY_KEY])
 			expect(environment, `a command's environment holds ${secret}`).not.toContain(secret);
+		// Claude Code itself reached the proxy with its key.
+		expect([...keys]).toEqual([PROXY_KEY]);
 		expect(environment).toContain(`HOME=${join(sandbox.tmp, "home")}\n`);
 		// Claude Code's sandbox exports its own TMPDIR inside the one the runner gives it, and ALLOWED wrote there.
 		const tmp = /^TMPDIR=(.*)$/m.exec(environment!)?.[1] ?? "";
@@ -372,7 +386,7 @@ describe.skipIf(!linux)("Claude Code's sandbox", () => {
 		);
 		expect(existsSync(hookMark(paths.runner)), "the checkout's hook ran").toBe(false);
 
-		for (const secret of [SECRET, TOOLS_TOKEN])
+		for (const secret of [SECRET, TOOLS_TOKEN, PROXY_KEY])
 			expect(JSON.stringify(requests), `${secret} reached the model`).not.toContain(secret);
 		// Nothing left behind: not even the sandbox's empty mount points, and no stray file.
 		expect(git(paths.checkout, "status", "--porcelain", "--ignored")).toBe("?? allowed.txt\n");
@@ -412,18 +426,12 @@ async function run(adapter: Claude, sandbox: Sandbox, output: (line: string) => 
 }
 
 /**
- * Point the account at the scripted model in its home, as a maintainer would
- * set a custom endpoint: `ANTHROPIC_BASE_URL` and a key in its settings' `env`,
- * which `--setting-sources user` loads. The environment the runner passes
- * keeps only its allowlist, so an ambient endpoint would never reach Claude
- * Code. The planted credentials stand in for its login.
+ * Plant a login in the pool's home, which holds none in a real runner, and the
+ * proxy's client key in the runner's state, where the runner keeps it.
  */
-function signIn(account: string, url: string) {
-	writeFileSync(
-		join(account, "settings.json"),
-		JSON.stringify({ env: { ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: "quest-boundary-api-key" } }),
-	);
-	writeFileSync(join(account, ".credentials.json"), JSON.stringify({ secret: SECRET }), { mode: 0o600 });
+function signIn(paths: Paths) {
+	writeFileSync(credentialStore(paths), JSON.stringify({ secret: SECRET }), { mode: 0o600 });
+	writeFileSync(keyFile(paths), PROXY_KEY, { mode: 0o600 });
 }
 
 interface ContentBlock {
@@ -481,6 +489,8 @@ function model(req: IncomingMessage, res: ServerResponse) {
 		}
 		const request = JSON.parse(body) as MessagesRequest & { model: string };
 		requests.push(request);
+		const key = req.headers["x-api-key"] ?? req.headers.authorization?.replace(/^Bearer /, "");
+		if (typeof key === "string") keys.add(key);
 		res.writeHead(200, { "content-type": "text/event-stream" });
 		const send = (type: string, data: object) =>
 			res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
