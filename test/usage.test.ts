@@ -272,14 +272,15 @@ describe("usage", () => {
 			lines(claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: join(other, "sub") })),
 		);
 		mkdirSync(join(other, "sub"));
-		// Two sessions in checkouts since deleted: one below the directory a Codex log names, one nothing names.
+		// Two sessions in checkouts since deleted: one in the directory a Codex log names, and one in a clone nested
+		// below it, which may be another repository's and so is not charged to this one.
 		writeFileSync(
 			join(claudeHome, "projects", "-work", `${OWNED}.jsonl`),
-			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/work/.tmp" })),
+			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/work" })),
 		);
 		writeFileSync(
 			join(claudeHome, "projects", "-work", `${GONE}.jsonl`),
-			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/nowhere" })),
+			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/work/nested" })),
 		);
 		const codexHome = join(dir, "codex");
 		const day = join(codexHome, "sessions", "2026", "11", "06");

@@ -4,7 +4,7 @@
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { type Size, SIZES, handedBack, questBranch } from "../core";
 import { type Comment, implementer, recorded, sessionsComment } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
@@ -465,8 +465,9 @@ function checkoutRepositories(cwd: string): string[] | null {
 
 /**
  * Which repositories the directory `cwd` belongs to: its checkout's remotes while it exists, else the remote a
- * Codex log names for it or a directory above it, as a reviewer run in the same checkout records; null when
- * nothing tells, since a branch name alone may be another repository's.
+ * Codex log names for that exact directory, as a reviewer run in the same checkout records; null when nothing
+ * tells, since a branch name alone may be another repository's. A directory above it never tells, since a
+ * nested clone may be another repository's.
  */
 function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
 	const logged = new Map<string, Set<string>>();
@@ -477,13 +478,8 @@ function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
 	const cache = new Map<string, string[] | null>();
 	return (cwd) => {
 		if (!cache.has(cwd)) {
-			let found = checkoutRepositories(cwd);
-			for (let dir = cwd; found === null; dir = dirname(dir)) {
-				const names = logged.get(dir);
-				if (names) found = [...names];
-				if (dirname(dir) === dir) break;
-			}
-			cache.set(cwd, found);
+			const names = logged.get(cwd);
+			cache.set(cwd, checkoutRepositories(cwd) ?? (names ? [...names] : null));
 		}
 		return cache.get(cwd)!;
 	};
