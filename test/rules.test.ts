@@ -171,10 +171,14 @@ test("a new GitHub post needs the footer and no em dashes; edits and unreadable 
 	expect(bash(`gh pr create --title "a ${DASH} b" --body-file - <<'EOF'\nBody\n\n${FOOTER}\nEOF`)).toEqual([
 		RULES.emDash,
 	]);
-	expect(bash(`cat > .tmp/body.md <<'EOF'\nBody\nEOF\ngh issue create --title t --body-file .tmp/body.md`)).toEqual([
-		RULES.footer,
-	]);
 	writeFileSync(join(cwd, "body.md"), `Body\n\n${FOOTER}\n`);
+	writeFileSync(join(cwd, "stale.md"), "Body\n");
+	// A body file the same line writes holds what the shell puts there, not what is on disk, so it passes.
+	expect(bash(`cat > stale.md <<EOF\n$body\nEOF\ngh issue create --title t --body-file stale.md`)).toEqual([]);
+	expect(bash(`cat > ./stale.md <<'EOF'\nBody\nEOF\ngh issue create --title t --body-file stale.md`)).toEqual([]);
+	expect(bash("echo x | tee stale.md && gh pr comment 5 --body-file - < stale.md")).toEqual([]);
+	expect(bash("cp other.md stale.md; gh pr comment 5 --body-file stale.md")).toEqual([]);
+	expect(bash("gh pr comment 5 --body-file stale.md; cat > stale.md <<'EOF'\nx\nEOF")).toEqual([RULES.footer]);
 	expect(bash("gh pr create --title t --body-file body.md")).toEqual([]);
 	expect(bash("gh pr create --title t --body-file - < body.md")).toEqual([]);
 	expect(bash("gh api repos/o/r/issues/5/comments -f body=Done")).toEqual([RULES.footer]);

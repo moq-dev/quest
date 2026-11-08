@@ -152,7 +152,10 @@ test("setup installs the worktree hooks on request, keeps them on rerun, and rep
 	const settings = read(path);
 	expect(settings.hooks.WorktreeCreate).toEqual([{ hooks: [worktree] }]);
 	expect(settings.hooks.SessionEnd).toEqual([{ hooks: [{ ...worktree, timeout: 60 }] }]);
-	expect(settings.hooks.SessionStart).toEqual([{ matcher: CLAUDE_HOOKS[0]!.matcher, hooks: [ours] }, { hooks: [worktree] }]);
+	expect(settings.hooks.SessionStart).toEqual([
+		{ matcher: CLAUDE_HOOKS[0]!.matcher, hooks: [ours] },
+		{ hooks: [worktree] },
+	]);
 	expect(Object.keys(settings.hooks).sort()).toEqual(
 		[...new Set([...CLAUDE_HOOKS, ...WORKTREE_HOOKS].map((h) => h.event))].sort(),
 	);

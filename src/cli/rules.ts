@@ -4,7 +4,7 @@
 // call itself shows, and lets through what it cannot tell apart.
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { parse } from "./shell";
 
@@ -121,7 +121,7 @@ function checkoutRoot(cwd: string): string {
 
 function read(cwd: string, path: string): string | undefined {
 	try {
-		return readFileSync(isAbsolute(path) ? path : join(cwd, path), "utf8");
+		return readFileSync(resolve(cwd, path), "utf8");
 	} catch {
 		return undefined;
 	}
@@ -173,18 +173,21 @@ function dropOptions(args: string[]): string[] {
 
 /**
  * Check each simple command in a shell command line, following `sh -c` into
- * its script, which inherits the assignments in `inherited`.
+ * its script, which inherits the assignments in `inherited`. A file an earlier
+ * command on the line writes holds what the shell will put there, not what is
+ * on disk, so it reads as unknown.
  */
 function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set()) {
 	const { found, scratch, cwd } = check;
-	const written = new Map<string, string>();
+	const written = new Set<string>();
+	const write = (path: string) => written.add(resolve(cwd, path));
 	for (const simple of parse(line)) {
 		const env = new Set(inherited);
 		const argv = unwrap(simple.argv, env);
 		for (const { op, target } of simple.redirects) {
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op)) {
 				if (scratch(target)) found.add("tmp");
-				if (simple.stdin !== undefined && !simple.stdinExpanded) written.set(target, simple.stdin);
+				write(target);
 			}
 		}
 		if (argv === null) continue;
@@ -197,21 +200,21 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		const asked = env.has(USER_ASKED);
 		const from = simple.redirects.find((redirect) => redirect.op === "<")?.target;
 		// Text the shell expands is unknown here, so it reads as unreadable.
+		const disk = (file: string) => (written.has(resolve(cwd, file)) ? undefined : read(cwd, file));
 		const stdin = simple.stdinExpanded
 			? undefined
-			: (simple.stdin ?? (from === undefined ? undefined : (written.get(from) ?? read(cwd, from))));
-		const input = (file: string) => (file === "-" ? stdin : (written.get(file) ?? read(cwd, file)));
+			: (simple.stdin ?? (from === undefined ? undefined : disk(from)));
+		const input = (file: string) => (file === "-" ? stdin : disk(file));
 		const literal = (value: string) => (simple.expanded?.some((word) => word.endsWith(value)) ? undefined : value);
 		if (name === "tee") {
 			if (args.some((arg) => !arg.startsWith("-") && scratch(arg))) found.add("tmp");
-			for (const arg of args)
-				if (!arg.startsWith("-") && simple.stdin !== undefined && !simple.stdinExpanded)
-					written.set(arg, simple.stdin);
+			for (const arg of args) if (!arg.startsWith("-")) write(arg);
 		} else if (name === "mkdir" || name === "touch") {
 			if (args.some(scratch)) found.add("tmp");
 		} else if (["cp", "mv", "ln", "rsync"].includes(name!)) {
 			const last = args.filter((arg) => !arg.startsWith("-")).at(-1);
 			if (last !== undefined && scratch(last)) found.add("tmp");
+			if (last !== undefined) write(last);
 		} else if (name === "mktemp") mktemp(args, check);
 		else if (name === "git") git(args, asked, input, check);
 		else if (name === "gh") gh(args, input, literal, check);
