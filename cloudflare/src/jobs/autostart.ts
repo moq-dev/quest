@@ -206,5 +206,14 @@ export async function sweep(env: Env) {
 	const { results } = await env.DB.prepare(
 		"SELECT DISTINCT a.user FROM autostart a JOIN github_projects p ON p.id=a.repository WHERE p.state='enabled'",
 	).all<{ user: string }>();
-	await Promise.all(results.map(({ user }) => env.RUNNERS.get(env.RUNNERS.idFromName(user)).dispatch(user)));
+	// One failing hub must not stop the others, or the scheduled retention after the sweep.
+	const settled = await Promise.allSettled(
+		results.map(({ user }) => env.RUNNERS.get(env.RUNNERS.idFromName(user)).dispatch(user)),
+	);
+	for (const outcome of settled)
+		if (outcome.status === "rejected")
+			console.error({
+				event: "autostart_sweep_failed",
+				name: outcome.reason instanceof Error ? outcome.reason.name : "unknown",
+			});
 }

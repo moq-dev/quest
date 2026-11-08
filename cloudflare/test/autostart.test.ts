@@ -265,6 +265,14 @@ describe("starting ready quests on free slots", () => {
 			);
 		expect((await ready("e".repeat(40))).status).toBe(403);
 		expect(pr.draft).toBe(true);
+		// Only a draft handed back as GitHub has it now, such as after a stale form, and held by no session.
+		pr.body = "Still on it.";
+		expect((await ready(head)).status).toBe(403);
+		pr.body = "Handed back.\n\n## Waiting\n\n- Maintainer: accept it as is\n";
+		pr.labels = ["quest:active"];
+		expect((await ready(head)).status).toBe(403);
+		expect(pr.draft).toBe(true);
+		pr.labels = [];
 		// A start job that published this draft keeps its quest as its target, yet may still push to it.
 		const { id } = await store.createJob(db, startOf("quest/first.md"), 0);
 		await store.delivered(db, id, 2);

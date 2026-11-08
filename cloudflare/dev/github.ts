@@ -714,6 +714,7 @@ export function fakeGitHub(world: World) {
 		mergeable_state: pull.mergeableState ?? (pull.merge === "DIRTY" ? "dirty" : "clean"),
 		title: pull.title,
 		body: pull.body ?? "",
+		labels: (pull.labels ?? []).map((name) => ({ name })),
 		draft: !!pull.draft,
 		user: { login: pull.author },
 		created_at: new Date(pull.createdAt ?? Date.parse(updatedAt)).toISOString(),
