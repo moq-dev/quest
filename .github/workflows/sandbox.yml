@@ -1,8 +1,9 @@
 name: Sandbox
 
-# The runner sandbox's boundary tests (`just runner-sandbox`) run nightly on a
-# GitHub-hosted runner, and on pull requests that change the agents they check:
-# the flake's pins, the runner's sources, or the tests themselves. They stay
+# The runner sandbox's boundary tests (`just runner-sandbox`), with its pool's
+# limit checks, run nightly on a GitHub-hosted runner, and on pull requests that
+# change the agents they check: the flake's pins, the runner's sources, the
+# limit messages they match, or the tests themselves. They stay
 # off the merge queue's required checks, so landing never waits on them;
 # /quest-merge names a failing optional check before it queues. The job runs PR
 # code, so it stays read-only and uses no secrets. GitHub reports a failed scheduled run only to the account
@@ -21,6 +22,8 @@ on:
       - package.json
       - bun.lock
       - src/runner/**
+      - src/cli/limit.ts
+      - src/cli/review.ts
       - test/live/runner-sandbox*.ts
       - .github/workflows/sandbox.yml
 

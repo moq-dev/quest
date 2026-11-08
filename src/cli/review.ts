@@ -793,7 +793,7 @@ export async function reviewerEnvironment(
  * a brief throttle, but a gateway such as CLIProxyAPI has already retried every
  * credential it pools, so there it is the pool's usage limit.
  */
-const RETRIED_429 = /exceeded retry limit, last status: 429\b/;
+export const RETRIED_429 = /exceeded retry limit, last status: 429\b/;
 
 /** Run one reviewer turn on `model`, failing on any error it reports, and as logged out on an authentication error. */
 async function turn(cli: Cli, call: Turn, cwd: string, model: string): Promise<Reply> {
