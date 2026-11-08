@@ -215,14 +215,17 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 			const last = args.filter((arg) => !arg.startsWith("-")).at(-1);
 			if (last !== undefined && scratch(last)) found.add("tmp");
 			if (last !== undefined) write(last);
-		} else if (name === "mktemp") mktemp(args, check);
+		} else if (name === "mktemp") mktemp(args, env, check);
 		else if (name === "git") git(args, asked, input, check);
 		else if (name === "gh") gh(args, input, literal, check);
 	}
 }
 
-/** `mktemp` creates under `/tmp` unless given a directory or a template outside it. */
-function mktemp(args: string[], check: Check) {
+/**
+ * `mktemp` creates under `$TMPDIR`, which is `/tmp` unless an assignment in
+ * `env` sets it, unless given a directory or a template outside it.
+ */
+function mktemp(args: string[], env: ReadonlySet<string>, check: Check) {
 	let dir: string | undefined;
 	let tmpdir = false;
 	let template: string | undefined;
@@ -233,10 +236,12 @@ function mktemp(args: string[], check: Check) {
 		else if (arg === "--tmpdir" || /^-[a-z]*t[a-z]*$/.test(arg)) tmpdir = true;
 		else if (!arg.startsWith("-")) template = arg;
 	}
-	if (dir !== undefined) {
-		if (check.scratch(dir)) check.found.add("tmp");
-	} else if (template === undefined || tmpdir) check.found.add("tmp");
-	else if (check.scratch(template)) check.found.add("tmp");
+	const assigned = [...env]
+		.filter((assignment) => assignment.startsWith("TMPDIR="))
+		.at(-1)
+		?.slice("TMPDIR=".length);
+	if (dir === undefined && (template === undefined || tmpdir)) dir = assigned || "/tmp";
+	if (check.scratch(dir ?? template!)) check.found.add("tmp");
 }
 
 /** Options of `git` itself that take the next word. */
@@ -324,8 +329,10 @@ function push(args: string[], asked: boolean, check: Check) {
 		flags.some((flag) => /^(--force|--force-with-lease(=.*)?|--mirror|-[a-zA-Z]*f[a-zA-Z]*)$/.test(flag));
 	if (forced && !asked) check.found.add("rewrite");
 	const deleting = flags.some((flag) => flag === "--delete" || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(flag));
-	const whole = flags.some((flag) => ["--tags", "--all", "--branches", "--mirror"].includes(flag));
-	if (whole || deleting) return;
+	const whole = flags.some((flag) => ["--all", "--branches", "--mirror"].includes(flag));
+	// `--tags` pushes every tag beside any refspecs given, which still need a `:`.
+	const tagsOnly = flags.includes("--tags") && refspecs.length === 0;
+	if (whole || deleting || tagsOnly) return;
 	if (refspecs.length === 0 || refspecs.some((spec) => !spec.includes(":"))) check.found.add("refspec");
 }
 

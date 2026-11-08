@@ -52,6 +52,7 @@ test.each([
 	"git -C repo push origin refs/heads/a:refs/heads/a feature",
 	"direnv exec . git push origin main",
 	"bash -c 'git push origin main'",
+	"git push --tags origin feature",
 ])("a push without an explicit refspec is blocked: %s", (command) => {
 	expect(bash(command)).toEqual([RULES.refspec]);
 });
@@ -62,6 +63,7 @@ test.each([
 	"git push -o ci.skip origin refs/heads/a:refs/heads/a",
 	"git push origin --delete feature",
 	"git push --tags origin",
+	"git push --tags origin HEAD:refs/heads/a",
 	"git log --grep 'git push origin main'",
 	"echo git push",
 ])("a push with explicit refspecs, or no push, passes: %s", (command) => {
@@ -103,6 +105,7 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"git clone --separate-git-dir /tmp/repo.git /tmp/source .tmp/clone",
 		"mktemp -d",
 		"mktemp -t body.XXXX",
+		"TMPDIR=/tmp/x mktemp -d",
 		'cat > "$TMPDIR/body.md" <<EOF\nx\nEOF',
 	])
 		expect(bash(command), command).toEqual([RULES.tmp]);
@@ -112,6 +115,8 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"echo x > .tmp/log 2>/dev/null",
 		"mktemp -p .tmp",
 		"mktemp .tmp/body.XXXX",
+		'TMPDIR="$PWD/.tmp" mktemp -d',
+		"env TMPDIR=.tmp mktemp -t body.XXXX",
 		"cp /tmp/a .tmp/a",
 		"git clone /tmp/source .tmp/clone",
 		"git clone --depth 1 /tmp/source",
