@@ -485,7 +485,8 @@ describe("bumpPass", () => {
 		expect(target.pulls).toEqual([]);
 	});
 
-	test("refuses an escaping symlink whose name holds a tab", async () => {
+	// Git for Windows refuses a path with a control character.
+	test.skipIf(process.platform === "win32")("refuses an escaping symlink whose name holds a tab", async () => {
 		const target = world();
 		const work = tempDir();
 		git(work, "clone", "--quiet", bare(target), ".");
