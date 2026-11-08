@@ -26,6 +26,7 @@ import { activeHighlights, cards, highlights } from "./inbox/activity";
 import * as inbox from "./inbox/model";
 import { AgentCards, InboxPage } from "./inbox/page";
 import { purge, retain } from "./jobs/output";
+import * as autostart from "./jobs/autostart";
 import { INBOX_HEADER } from "./jobs/hub";
 import * as landing from "./jobs/landing";
 import { BootstrapRequired, fromForm, hub, inboxURL, jobs, nextURL, resume, stop } from "./jobs/routes";
@@ -774,6 +775,7 @@ export default {
 	fetch: app.fetch,
 	async scheduled(controller, env) {
 		await landing.sweep(env);
+		await autostart.sweep(env);
 		if (controller.cron !== landing.SWEEP_CRON) await retain(env, Date.now());
 	},
 } satisfies ExportedHandler<Env>;

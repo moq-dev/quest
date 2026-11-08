@@ -58,7 +58,3 @@ Agent's choices, for the implementer to revisit:
   `--json`. `--since`, `--quest`, and `--pr` narrow it.
 - One host only: each host reports its own sessions. Combining hosts
   belongs with the kix page.
-
-## Required
-
-- [Route quests to models by size](/quest/m0/model-routing/README.md) - the PR records of size, implementer, reviewer, and score it reads

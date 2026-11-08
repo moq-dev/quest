@@ -263,6 +263,33 @@ awaits a decision, and any other whose issue, pull request, or quest is still
 observed, so finished work stays set aside. Retrying a failed planning
 interview keeps its `plans/<id>` target.
 
+A pull request someone holds is in progress with no actions, and names its
+holder: the author of a draft without a `## Waiting` (or older `## Decisions
+needed`) section, or the `quest:*` label a session holds it with. Such a draft
+quiet for a week becomes a "quiet draft" decision offering to take it over
+with an iterate job, or to skip it until it changes; a labeled hold is never
+offered, since its session or job releases it. Every other open pull request
+offers merge, iterate, and skip, and a draft handed back with `## Waiting`
+also offers "Mark ready for review" (`POST
+/projects/github/<owner>/<repo>/pulls/<n>/ready` with the `head` on screen),
+which the App does once no job of that pull request is active.
+
+Each project's "Start ready quests on your runners" box opts the viewer in to
+starting its ready quests without a click, optionally only in some milestones
+(`POST /projects/github/<owner>/<repo>/autostart`, stored in `autostart`;
+`src/jobs/autostart.ts`). Whenever a dispatch pass leaves one of the
+opted-in maintainer's runners with a free slot and a usable account, their
+hub starts the next unclaimed ready quest in `quest unblocked` order,
+round-robin across their opted-in projects, as an ordinary start job they
+requested, after the same current GitHub checks as their own start. A quest
+that already had a job, or that they skipped in the inbox at its current
+text, waits for them, so a skipped, stopped, or failed start never reruns on
+its own. The scheduled sweep wakes every opted-in hub, so quests that became
+ready since the last runner event start too. Losing the maintainer role ends
+the opt-in. A start job's agent first checks the quest is still worth
+starting, and asks one decision when in doubt: start, skip, deprioritize to a
+later milestone, or delete.
+
 Beside the decisions (below them on a phone), an Agents card shows each job
 on the maintainer's projects (`src/inbox/activity.ts`): every target's latest
 job while it is queued, running, or waiting, and an ended one while the pull

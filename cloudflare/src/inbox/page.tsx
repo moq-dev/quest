@@ -37,6 +37,8 @@ const recorded: Record<Done, string> = {
 	stop: "Stop requested.",
 	skip: "Skipped until it changes.",
 	merge: "Pull request merged.",
+	autostart: "Ready quest setting saved.",
+	ready: "Marked ready for review.",
 };
 
 const kinds = { pull: "Pull request", issue: "Issue", quest: "Ready quest", plan: "Plan", devshell: "Bootstrap" };
@@ -54,7 +56,8 @@ function needLabel(item: Item) {
 		if (item.skipped && item.job) return `${kinds[item.kind]} · job ${item.job.state}`;
 		return item.followups ? "Follow-ups to plan" : kinds[item.kind];
 	}
-	if (!item.job) return "Claimed draft";
+	if (item.need === "takeover") return "Quiet draft";
+	if (!item.job) return item.holder ? `Held by ${item.holder}` : "Claimed draft";
 	if (item.job.state === "waiting") return "Awaiting approval";
 	return item.job.state === "queued" ? "Queued" : "Working";
 }
@@ -62,8 +65,13 @@ function needLabel(item: Item) {
 /** Plainly what the item's job is doing, with the next useful action where there is one. */
 function progress(item: Item, runners: Runners, user: string) {
 	const job = item.job;
+	const pull = item.kind === "pull" ? (item.activity?.data as Pull | null | undefined) : null;
+	if (item.need === "takeover")
+		return `This draft, started by ${item.holder}, has been quiet since ${pull?.updatedAt.slice(0, 10)}. Take it over to iterate on it with your runners, or skip it until it changes.`;
 	if (!job && item.need === null)
-		return "Its starter holds this draft. It waits on you once they mark it ready or hand back decisions.";
+		return pull?.hold
+			? `A session holds this pull request with its ${pull.hold} label and releases it when done.`
+			: `This draft is held by ${item.holder ?? "its starter"}. It waits on you once they mark it ready or hand back decisions.`;
 	if (!job || item.need === "start") return null;
 	const whose = job.actor === user ? "your" : "the requester's";
 	if (item.need === "trust")
@@ -406,7 +414,7 @@ function work(item: Item, view: ProjectView) {
 			workflow: "iterate",
 			target: item.target,
 			revision: (item.activity!.data as Pull).headRefOid,
-			label: "Iterate on this PR",
+			label: item.need === "takeover" ? "Take over and iterate" : "Iterate on this PR",
 		};
 	if (item.kind === "issue")
 		return { workflow: "plan", target: item.target, revision: commit, label: "Plan this issue" };
@@ -434,6 +442,15 @@ function landing(item: Item) {
 	return { pull, clean: ["CLEAN", "HAS_HOOKS"].includes(pull.mergeStateStatus ?? "") };
 }
 
+/**
+ * The observed draft its starter handed back with a `## Waiting` section and
+ * no session holds, which the maintainer may mark ready.
+ */
+function handedBack(item: Item) {
+	const pull = item.kind === "pull" ? (item.activity?.data as Pull | null | undefined) : null;
+	return pull?.state === "OPEN" && pull.isDraft && pull.handedBack && !pull.hold ? pull : null;
+}
+
 function Refresh(props: { project: Item["project"] }) {
 	return (
 		<form method="post" action={`${projectURL(props.project.owner, props.project.name)}/refresh`}>
@@ -446,12 +463,14 @@ function Refresh(props: { project: Item["project"] }) {
 function Actions(props: { item: Item; view: ProjectView | undefined; runners: Runners }) {
 	const { item, view } = props;
 	const base = projectURL(item.project.owner, item.project.name);
-	const starts = item.need === "start" || item.need === "retry";
+	const starts = item.need === "start" || item.need === "retry" || item.need === "takeover";
 	const reason = starts ? blocked(item, view) : null;
 	// Only an unblocked item has the observations its work is bound to.
 	const job = starts && !reason ? work(item, view!) : null;
 	// Only an idle item offers merge: no queued, running, or waiting job can still push to its head.
 	const merge = starts && !reason ? landing(item) : null;
+	// A draft handed back with its waits can be accepted as it is; a draft its starter holds is theirs to mark.
+	const draft = item.need === "start" && !reason ? handedBack(item) : null;
 	const active = item.job && ["queued", "running", "waiting"].includes(item.job.state) && !item.job.cancel;
 	return (
 		<div class="decision-actions">
@@ -471,6 +490,12 @@ function Actions(props: { item: Item; view: ProjectView | undefined; runners: Ru
 					<input type="hidden" name="revision" value={merge.pull.headRefOid} />
 					<Pin runners={props.runners} id={`merge-${item.project.id}-pin`} />
 					<button class="button primary">Merge this PR</button>
+				</form>
+			)}
+			{draft && (
+				<form method="post" action={`${base}/pulls/${draft.number}/ready`}>
+					<input type="hidden" name="head" value={draft.headRefOid} />
+					<button class="button quiet">Mark ready for review</button>
 				</form>
 			)}
 			{reason ? (
@@ -496,7 +521,7 @@ function Actions(props: { item: Item; view: ProjectView | undefined; runners: Ru
 					Review on GitHub
 				</a>
 			)}
-			{(item.need === "start" || item.need === "retry") && !item.skipped && (
+			{starts && !item.skipped && (
 				<form method="post" action={`${base}/skip`}>
 					<input type="hidden" name="item" value={item.target} />
 					<input type="hidden" name="version" value={item.version} />
@@ -683,6 +708,46 @@ function NewPlan(props: { project: ProjectView["project"]; commit: string; runne
 	);
 }
 
+/**
+ * The viewer's opt-in to start the project's ready quests on their own
+ * runners whenever a slot frees, in `quest unblocked` order, optionally
+ * within some milestones.
+ */
+function Autostart(props: { view: ProjectView }) {
+	const { project, autostart } = props.view;
+	const action = `${projectURL(project.owner, project.name)}/autostart`;
+	const id = `autostart-${project.id}`;
+	const scope = autostart?.milestones?.join(", ") ?? "";
+	return (
+		<details class="entry-meta new-plan">
+			<summary>
+				{autostart
+					? `Starting ready quests on your runners${scope ? ` in ${scope}` : ""}`
+					: "Start ready quests on your runners"}
+			</summary>
+			<form method="post" action={action} class="decision-form">
+				<p class="note-small muted">
+					Whenever one of your runners has a free slot, kix starts the next unclaimed ready quest, highest
+					impact first. Each agent first checks the quest is worth starting and asks you when in doubt. A
+					quest that already had a job, or that you skipped, waits for you.
+				</p>
+				<label class="free" for={`${id}-milestones`}>
+					Only these milestones, such as m0, m1 (empty for all)
+				</label>
+				<input id={`${id}-milestones`} name="milestones" value={scope} />
+				<button class="button primary" name="enabled" value="1">
+					{autostart ? "Save" : "Start ready quests"}
+				</button>
+				{autostart && (
+					<button class="button quiet" name="enabled" value="0">
+						Stop starting quests
+					</button>
+				)}
+			</form>
+		</details>
+	);
+}
+
 function Project(props: { view: ProjectView; runners: Runners }) {
 	const { project, state, error } = props.view;
 	const base = projectURL(project.owner, project.name);
@@ -714,6 +779,7 @@ function Project(props: { view: ProjectView; runners: Runners }) {
 			{!error && project.state === "enabled" && state?.project.available && (
 				<NewPlan project={project} commit={state.project.commit} runners={props.runners} />
 			)}
+			{!error && <Autostart view={props.view} />}
 		</li>
 	);
 }

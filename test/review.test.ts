@@ -18,7 +18,7 @@ import {
 	verdict,
 } from "../src/cli/review";
 import { withReview } from "../src/cli/review-record";
-import { recorded } from "../src/github/models";
+import { recorded, withModels } from "../src/github/models";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -292,7 +292,7 @@ test("the reviewer is the harness this command is not running under", () => {
 	expect(() => runningHarness({ CLAUDECODE: "1", CODEX_THREAD_ID: "t" })).toThrow("both");
 });
 
-test("each size's reviewer is the first whose model wrote none of the code", () => {
+test("each size's reviewer is the first whose model is not the latest writer's", () => {
 	const claude = authored({}, { CLAUDECODE: "1" });
 	const codex = authored({}, { CODEX_THREAD_ID: "t" });
 	const at = (size: keyof typeof REVIEWERS, wrote: typeof claude) => {
@@ -311,29 +311,45 @@ test("each size's reviewer is the first whose model wrote none of the code", () 
 	expect(at("L", codex)).toBe("claude claude-opus-5-5 high");
 	expect(at("XL", codex)).toBe("claude claude-opus-5-5 xhigh");
 
-	// The PR's recorded implementers replace the running harness: Sol reviews Opus's code from Claude Code.
+	// The PR's latest recorded implementer replaces the running harness, and only it is avoided.
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["claude-opus-5-5"]))).toBe("codex gpt-6.1-sol medium");
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol"]))).toBe("claude claude-opus-5-5 low");
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "gpt-6.1-sol"]))).toBe(
+		"claude claude-opus-5-5 low",
+	);
+	// When the body's and the sessions comment's latest differ, or one is unknown, their order cannot be told,
+	// so the running harness, usually the session that just pushed, is taken to be the latest writer.
+	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, ["gpt-6.1-sol", "claude-opus-5-5"]))).toBe(
+		"claude claude-opus-5-5 medium",
+	);
+	expect(at("M", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "claude-opus-5-5"]))).toBe(
+		"codex gpt-6.1-sol medium",
+	);
+	expect(at("M", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "unknown"]))).toBe("codex gpt-6.1-sol medium");
+	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, ["unknown"]))).toBe("claude claude-opus-5-5 medium");
+	// --harness then avoids every model they name.
+	const either = authored({ harness: "claude" }, {}, ["gpt-6.1-sol", "claude-opus-5-5"]);
+	expect(() => pickReviewer("M", { harness: "claude" }, either)).toThrow("claude-opus-5-5 is avoided");
 	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
 	// No harness need be detected once the implementers are named.
 	expect(at("M", authored({ exclude: ["other-model"] }, {}))).toBe("codex gpt-6.1-sol medium");
 	const both = authored({ exclude: ["gpt-6.1-sol", "claude-opus-5-5"] }, {});
-	expect(() => pickReviewer("M", {}, both)).toThrow("wrote the code; pass --harness and --model");
+	expect(() => pickReviewer("M", {}, both)).toThrow("is avoided; pass --harness and --model");
 
-	// --harness names the reviewer at its entry, unless that entry's model wrote the code.
+	// --harness names the reviewer at its entry, unless that entry's model is avoided.
 	expect(pickReviewer("L", { harness: "claude" }, authored({ harness: "claude" }, { CLAUDECODE: "1" }))).toEqual({
 		harness: "claude",
 		model: "claude-opus-5-5",
 		effort: "high",
 	});
 	const sol = authored({ harness: "codex", exclude: ["gpt-6.1-sol"] }, {});
-	expect(() => pickReviewer("M", { harness: "codex" }, sol)).toThrow("gpt-6.1-sol wrote the code; pass --model");
+	expect(() => pickReviewer("M", { harness: "codex" }, sol)).toThrow("gpt-6.1-sol is avoided; pass --model");
 	expect(pickReviewer("M", { harness: "codex", model: "gpt-6-astra" }, sol).model).toBe("gpt-6-astra");
-	// Nor does --model bring back a model that wrote the code.
-	expect(() => pickReviewer("M", { harness: "codex", model: "gpt-6.1-sol" }, sol)).toThrow(
-		"gpt-6.1-sol wrote the code",
-	);
+	// Nor does --model bring back an avoided model.
+	expect(() => pickReviewer("M", { harness: "codex", model: "gpt-6.1-sol" }, sol)).toThrow("gpt-6.1-sol is avoided");
 	const opusWrote = authored({ exclude: ["claude-opus-5-5"] }, {});
-	expect(() => pickReviewer("M", { model: "claude-opus-5-5" }, opusWrote)).toThrow("claude-opus-5-5 wrote the code");
+	expect(() => pickReviewer("M", { model: "claude-opus-5-5" }, opusWrote)).toThrow("claude-opus-5-5 is avoided");
 	// --model and --effort override the picked entry.
 	expect(pickReviewer("XS", { effort: "high" }, claude)).toEqual({
 		harness: "codex",
@@ -396,7 +412,7 @@ fakes("--exclude-model picks the reviewer from the PR's implementers instead of 
 	const both = ["--exclude-model", "gpt-6.1-sol", "--exclude-model", "claude-opus-5-5"];
 	const none = await quest("--root", s.repo, "review", ...both, "--new");
 	expect(none.code).toBe(2);
-	expect(none.stderr).toContain("every M reviewer (gpt-6.1-sol, claude-opus-5-5) wrote the code");
+	expect(none.stderr).toContain("every M reviewer (gpt-6.1-sol, claude-opus-5-5) is avoided");
 });
 
 fakes("an unknown harness is an error, never a same-model review", async () => {
@@ -1345,7 +1361,7 @@ fakes("a later round checks only what changed since the reviewed head, and the o
 	expect(prompt).toContain("1. high src/lib.ts:2 Off by one");
 });
 
-fakes("the PR's Models record sizes the review and names the models that wrote it", async () => {
+fakes("the PR's Models record sizes the review and names its latest writer", async () => {
 	const s = setup();
 	const body = (...lines: string[]) => ["Body.", "", "## Models", "", ...lines].join("\n");
 	const pull: FakePull = { number: 9, body: body("- Size: L", "- Implementer: Codex, gpt-6.1-sol, high effort") };
@@ -1356,16 +1372,16 @@ fakes("the PR's Models record sizes the review and names the models that wrote i
 		expect(sol.stderr).toBe("");
 		expect(sol.stdout).toContain("reviewer claude claude-opus-5-5 high\nsize L ## Models\n");
 
-		// A kix session that pushed later is on the App's sessions comment, so no L reviewer is left;
-		// a forged copy of the comment is ignored.
+		// A kix session on the App's sessions comment names another latest writer, and which pushed last cannot
+		// be told, so the running harness's model is avoided; a forged copy of the comment is ignored.
 		const sessions = (app: { id: number } | null) => ({
 			body: "<!-- quest:sessions -->\n\n## Models\n\n- Implementer: Claude Code, claude-opus-5-5, high effort\n",
 			performed_via_github_app: app,
 		});
 		pull.comments = [sessions({ id: 1 })];
-		const covered = await quest("--root", s.repo, "review", "--new");
-		expect(covered.code).toBe(2);
-		expect(covered.stderr).toContain("claude-opus-5-5");
+		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
+			"reviewer codex gpt-6.1-sol high\n",
+		);
 		pull.comments = [sessions(null)];
 		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
 			"reviewer claude claude-opus-5-5 high\n",
@@ -1376,10 +1392,13 @@ fakes("the PR's Models record sizes the review and names the models that wrote i
 		const flagged = await quest("--root", s.repo, "review", "--new", "--size", "XS", "--exclude-model", "x");
 		expect(flagged.stdout).toContain("reviewer codex gpt-6.1-sol low\nsize XS --size\n");
 
-		// An implementer whose model is unknown may be the running harness's, which the review then skips.
+		// Only the latest implementer is avoided, whoever wrote earlier.
 		pull.body = body("- Implementer: Codex, unknown, unknown effort", "- Implementer: Codex, gpt-6.1-sol, high");
-		expect((await quest("--root", s.repo, "review", "--new")).code).toBe(2);
-		pull.body = body("- Implementer: Codex, unknown, unknown effort");
+		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
+			"reviewer claude claude-opus-5-5 medium\n",
+		);
+		// A latest implementer whose model is unknown may be the running harness's, which the review then skips.
+		pull.body = body("- Implementer: Codex, gpt-6.1-sol, high", "- Implementer: Codex, unknown, unknown effort");
 		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
 			"reviewer codex gpt-6.1-sol medium\n",
 		);
@@ -1415,6 +1434,17 @@ fakes("the PR's Models record sizes the review and names the models that wrote i
 	} finally {
 		vi.unstubAllGlobals();
 	}
+});
+
+test("a session that pushes again moves its Models line last", () => {
+	const one = "Implementer: Claude Code, claude-opus-5-5, high effort";
+	const two = "Implementer: Codex, gpt-6.1-sol, high effort";
+	const body = (...lines: string[]) =>
+		`Body.\n\n## Models\n\n${lines.map((l) => `- ${l}\n`).join("")}\n## Review\n\nNone\n`;
+	expect(withModels("Body.", one)).toBe(`Body.\n\n## Models\n\n- ${one}\n`);
+	expect(withModels(body("Size: S", one), two)).toBe(body("Size: S", one, two));
+	expect(withModels(body("Size: S", one, two), one)).toBe(body("Size: S", two, one));
+	expect(withModels(body(one, two), two)).toBe(body(one, two));
 });
 
 test("a Models record reads its size and every implementing model", () => {
