@@ -53,6 +53,7 @@ test.each([
 	"direnv exec . git push origin main",
 	"bash -c 'git push origin main'",
 	"git push --tags origin feature",
+	"git push --repo origin main refs/heads/a:refs/heads/a",
 ])("a push without an explicit refspec is blocked: %s", (command) => {
 	expect(bash(command)).toEqual([RULES.refspec]);
 });
@@ -64,6 +65,8 @@ test.each([
 	"git push origin --delete feature",
 	"git push --tags origin",
 	"git push --tags origin HEAD:refs/heads/a",
+	"git push --repo origin refs/heads/a:refs/heads/a",
+	"git push --help",
 	"git log --grep 'git push origin main'",
 	"echo git push",
 ])("a push with explicit refspecs, or no push, passes: %s", (command) => {
@@ -88,6 +91,7 @@ test("a rebase is blocked unless the user asked, or it ends one", () => {
 	expect(bash(`${USER_ASKED} bash -c 'git rebase origin/main'`)).toEqual([]);
 	expect(bash("bash -c 'git rebase origin/main'")).toEqual([DENIED_REWRITE]);
 	expect(bash("git rebase --abort")).toEqual([]);
+	expect(bash("git rebase --help")).toEqual([]);
 	expect(bash("git pull --no-rebase origin main")).toEqual([]);
 	expect(bash("gh pr merge 5 --rebase")).toEqual([]);
 });
@@ -106,7 +110,8 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"mktemp -d",
 		"mktemp -t body.XXXX",
 		"TMPDIR=/tmp/x mktemp -d",
-		'cat > "$TMPDIR/body.md" <<EOF\nx\nEOF',
+		"touch -m /tmp/x",
+		"cp -t /tmp/out a.txt",
 	])
 		expect(bash(command), command).toEqual([RULES.tmp]);
 	for (const command of [
@@ -121,6 +126,13 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"git clone /tmp/source .tmp/clone",
 		"git clone --depth 1 /tmp/source",
 		"git worktree add -b x .worktrees/x /tmp/ignored",
+		// `$TMPDIR` may name the checkout, as a kix runner job sets it.
+		'cat > "$TMPDIR/body.md" <<EOF\nx\nEOF',
+		"cp -t .tmp /tmp/out",
+		"touch -r /tmp/reference .tmp/out",
+		"mkdir -m 700 .tmp/x",
+		"mktemp --help",
+		"mktemp -u",
 	])
 		expect(bash(command), command).toEqual([]);
 	expect(broken({ tool: "Write", input: { file_path: "/tmp/x.md", content: "x" }, cwd })).toEqual([RULES.tmp]);

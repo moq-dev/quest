@@ -97,7 +97,10 @@ type Rule = keyof typeof RULES;
 /** One call's check: the rules found broken so far. */
 interface Check {
 	found: Set<Rule>;
-	/** Whether `path` is scratch under `/tmp`, written as is or through `$TMPDIR`, outside the checkout holding `cwd`. */
+	/**
+	 * Whether `path` is scratch under `/tmp` outside the checkout holding `cwd`.
+	 * A `$TMPDIR` path is unknown, since `TMPDIR` may name the checkout itself.
+	 */
 	scratch: (path: string) => boolean;
 }
 
@@ -105,7 +108,7 @@ function check(cwd: string): Check {
 	const root = checkoutRoot(cwd);
 	return {
 		found: new Set(),
-		scratch: (path) => /^(\/tmp|\$TMPDIR|\$\{TMPDIR[^}]*\})(\/|$)/.test(path) && !`${path}/`.startsWith(`${root}/`),
+		scratch: (path) => /^\/tmp(\/|$)/.test(path) && !`${path}/`.startsWith(`${root}/`),
 	};
 }
 
@@ -197,9 +200,12 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		if (name === "tee") {
 			if (args.some((arg) => !arg.startsWith("-") && scratch(arg))) found.add("tmp");
 		} else if (name === "mkdir" || name === "touch") {
-			if (args.some(scratch)) found.add("tmp");
+			// `touch -r <file>` reads its reference file, and `-d`/`-t` take a date, as `mkdir -m` takes a mode.
+			const valued = name === "mkdir" ? ["-m"] : ["-r", "-d", "-t"];
+			if (positionals(args, new Set(valued)).some(scratch)) found.add("tmp");
 		} else if (["cp", "mv", "ln", "rsync"].includes(name!)) {
-			const last = args.filter((arg) => !arg.startsWith("-")).at(-1);
+			const target = values(args, ["-t", "--target-directory"]).at(-1);
+			const last = target ?? args.filter((arg) => !arg.startsWith("-")).at(-1);
 			if (last !== undefined && scratch(last)) found.add("tmp");
 		} else if (name === "mktemp") mktemp(args, env, check);
 		else if (name === "git") git(args, asked, input, check);
@@ -217,6 +223,8 @@ function mktemp(args: string[], env: ReadonlySet<string>, check: Check) {
 	let template: string | undefined;
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i]!;
+		// These create nothing.
+		if (["--help", "--version", "--dry-run"].includes(arg) || /^-[a-z]*u[a-z]*$/.test(arg)) return;
 		if (arg === "-p") dir = args[++i];
 		else if (arg.startsWith("--tmpdir=")) dir = arg.slice("--tmpdir=".length);
 		else if (arg === "--tmpdir" || /^-[a-z]*t[a-z]*$/.test(arg)) tmpdir = true;
@@ -237,6 +245,7 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 	let i = 0;
 	while (i < argv.length && argv[i]!.startsWith("-")) i += GIT_VALUE_OPTIONS.has(argv[i]!) ? 2 : 1;
 	const [sub, ...args] = argv.slice(i);
+	if (args.includes("--help") || args.includes("-h")) return;
 	if (sub === "push") push(args, asked, check);
 	else if (sub === "rebase") {
 		if (!asked && !args.some((arg) => ["--abort", "--quit", "--show-current-patch"].includes(arg)))
@@ -301,15 +310,18 @@ const PUSH_VALUE_OPTIONS = new Set(["-o", "--push-option", "--repo", "--receive-
 function push(args: string[], asked: boolean, check: Check) {
 	const positionals: string[] = [];
 	const flags: string[] = [];
+	let repo = false;
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i]!;
 		if (arg === "--") positionals.push(...args.slice(i + 1));
 		if (arg === "--") break;
+		if (arg === "--repo" || arg.startsWith("--repo=")) repo = true;
 		if (PUSH_VALUE_OPTIONS.has(arg)) i++;
 		else if (arg.startsWith("-")) flags.push(arg);
 		else positionals.push(arg);
 	}
-	const refspecs = positionals.slice(1);
+	// `--repo` names the remote, so every positional is a refspec.
+	const refspecs = repo ? positionals : positionals.slice(1);
 	const forced =
 		refspecs.some((spec) => spec.startsWith("+")) ||
 		flags.some((flag) => /^(--force|--force-with-lease(=.*)?|--mirror|-[a-zA-Z]*f[a-zA-Z]*)$/.test(flag));
