@@ -286,7 +286,7 @@ quest rm -r quest/m1/drain
 under a moved epic. `rm` drops each `Required`, `Related`, or `Closes` entry
 that links to what it deleted, and the heading if that was the last entry.
 It also drops every `Required` link to a finished milestone, including one it
-just finished, but keeps the root's listing of the milestone.
+just finished, and every epic's `Required` link to a quest in its own folder.
 Both stage the change, print one line per file (`R from -> to`, `D path`, or
 `M path`), and report on stderr any other mention of the path, such as prose
 or files outside `quest/`, without editing it. They run `quest check` on the
@@ -333,12 +333,15 @@ A clean merge can still leave this branch's list links to quests the base
 finished, which `quest check` then flags. `quest check --fix` drops every
 `Required`, `Related`, or `Closes` entry linking to a quest deleted in the
 history of `HEAD`, and of `MERGE_HEAD` during a merge, that the working tree
-lacks, and prints `M path` for each edited document. It then promotes a section
-heading written below `##` to `##` where nothing but its own content follows it
-before the next `##` heading, and no `##` section of that name exists. It leaves
-the edits unstaged and refuses while a quest file has unresolved conflicts. A
-quest moved rather than deleted, a link that never named a quest, a link in
-prose, and any other misleveled heading stay for `quest check` to report.
+lacks, and every epic's `Required` entry naming a quest in its own folder,
+which the epic already waits for, and prints `M path` for each edited
+document. That part also migrates a tree from before epics stopped listing
+their children. It then promotes a section heading written below `##` to `##`
+where nothing but its own content follows it before the next `##` heading, and
+no `##` section of that name exists. It leaves the edits unstaged and refuses
+while a quest file has unresolved conflicts. A quest moved rather than deleted,
+a link that never named a quest, a link in prose, and any other misleveled
+heading stay for `quest check` to report.
 
 ## Wait for pull request activity
 

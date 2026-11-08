@@ -321,27 +321,19 @@ describe("epics", () => {
 			.rejects("quest/m0/loose/deeper/README.md: sits in quest/m0/loose, which has no README.md");
 	});
 
-	// Trees from before directory membership still list each epic's children.
-	// Such a link is membership, so it counts once.
+	// An epic already waits for everything in its directory, so a link to any of
+	// it is the child list this format retired; `quest check --fix` drops it.
 	test.each([
 		["quest/README.md", "/quest/m0/README.md"],
 		["quest/m0/README.md", "/quest/m0/epic/README.md"],
+		["quest/m0/README.md", "/quest/m0/epic/one.md"],
 		["quest/m0/epic/README.md", "/quest/m0/epic/one.md"],
-	])("%s requiring its child %s", (readme, target) => {
-		const listed = tree().append(readme, `\n## Required\n\n- [Held](${target})\n`);
-		listed.accepts();
-		expect(listed.ready()).toEqual(tree().ready());
-		expect(listed.blockers(readme)).toEqual(tree().blockers(readme));
-	});
-
-	// Only a child stands in for a link: a deeper quest, or a link to no quest,
-	// stays a blocker, as on a tree that listed children.
-	test.each([
-		["/quest/m0/epic/one.md", "quest/m0/epic/one.md"],
-		["/quest/m0/gone.md", "Gone"],
-	])("quest/m0/README.md requiring %s, which is not its child", (target, rendered) => {
-		const t = tree().append("quest/m0/README.md", `\n## Required\n\n- [Gone](${target})\n`);
-		expect(t.blockers("quest/m0/README.md")[0]).toBe(rendered);
+	])("%s requiring %s, which it holds", (readme, target) => {
+		const t = tree().append(readme, `\n## Required\n\n- [Held](${target})\n`);
+		expect(t.findings()).toHaveLength(1);
+		t.rejects(
+			`requires ${target}, which this epic holds; an epic waits for everything in its directory, so remove the entry (quest check --fix does)`,
+		);
 	});
 
 	test("a quest required twice", () => {
@@ -422,12 +414,14 @@ describe("finished milestones", () => {
 			.accepts();
 	});
 
-	// The root's listing of its milestones is membership, not a blocker.
-	test("the root's link to a finished milestone is allowed", () => {
-		tree()
+	// The root holds every milestone, so its link to one is that finding alone.
+	test("the root's link to a finished milestone is one finding", () => {
+		const t = tree()
 			.append("quest/README.md", "\n## Required\n\n- [M0](/quest/m0/README.md)\n")
-			.remove("quest/m0/epic")
-			.accepts();
+			.remove("quest/m0/epic");
+		expect(t.findings()).toEqual([
+			"quest/README.md:9: requires /quest/m0/README.md, which this epic holds; an epic waits for everything in its directory, so remove the entry (quest check --fix does)",
+		]);
 	});
 
 	test("removing the link readies the quest", () => {

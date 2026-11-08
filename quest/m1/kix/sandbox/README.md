@@ -92,8 +92,3 @@ Shipped in [moq-dev/quest#212](https://github.com/moq-dev/quest/pull/212)
 - Sources:
   [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing)
   and [sandbox-runtime](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime).
-
-## Required
-
-- [macOS sandbox](/quest/m1/kix/sandbox/macos.md) - the boundary verified under Seatbelt, then the answer-approval gate removed
-- [Untrusted devShells](/quest/m1/kix/sandbox/vm.md) - untrusted PR heads build their devShell in a per-job VM

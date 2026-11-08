@@ -136,10 +136,3 @@ fixes what it finds:
   [moq-dev/quest#209](https://github.com/moq-dev/quest/pull/209) assumes
   is the comparison GitHub makes. Try it with a real PR that edits a
   workflow (decided 2026-10-24, user).
-
-## Required
-
-- [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/moq and moq-dev/quest
-- [Private repositories](/quest/m0/kix/private.md) - moq-dev/moq.pro enrolls, visible only to signed-in users who can read it
-- [Runner account pool](/quest/m0/kix/cliproxy.md) - the runner routes every Claude and Codex job and review through its own CLIProxyAPI pool
-- [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs

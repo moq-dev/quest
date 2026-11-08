@@ -37,13 +37,8 @@ export function ranking(docs: Doc[]): Ranking {
 		reverse.set(target, dependents);
 	};
 	for (const doc of docs) {
-		const kids = children(docs, doc);
-		for (const entry of entries(doc, "Required")) {
-			const target = rooted(entry.target!)!;
-			// An old child list's entry is membership, which the children below record.
-			if (!kids.includes(target)) depend(target, doc.path, false);
-		}
-		for (const child of kids) depend(child, doc.path, true);
+		for (const entry of entries(doc, "Required")) depend(rooted(entry.target!)!, doc.path, false);
+		for (const child of children(docs, doc)) depend(child, doc.path, true);
 	}
 
 	// Assign the root's subtrees their priority before scoring. In particular,
