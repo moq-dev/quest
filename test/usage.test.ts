@@ -13,6 +13,7 @@ import { tempDir } from "./fixture";
 
 const THREAD = "01a1b8e8-8fca-7793-99d1-062f41f8a7b0";
 const CLAUDE = "0d8d9084-40a0-48e2-921b-8ba0d67baa2f";
+const OTHER = "961c731d-399c-46c5-81ef-069105f87cc4";
 
 const lines = (...records: unknown[]) => `${records.map((r) => JSON.stringify(r)).join("\n")}\n`;
 
@@ -108,8 +109,14 @@ describe("session logs", () => {
 		const log = readClaudeLog(path);
 		expect(log.started).toBe(Date.parse("2026-11-06T10:00:00Z"));
 		expect([...log.branches]).toEqual([
-			["t3/scratch", { first: Date.parse("2026-11-06T10:00:00Z"), last: Date.parse("2026-11-06T10:00:00Z") }],
-			["quest/m0/a", { first: Date.parse("2026-11-06T10:05:00Z"), last: Date.parse("2026-11-06T10:09:00Z") }],
+			[
+				"t3/scratch",
+				{ first: Date.parse("2026-11-06T10:00:00Z"), last: Date.parse("2026-11-06T10:00:00Z"), cwd: null },
+			],
+			[
+				"quest/m0/a",
+				{ first: Date.parse("2026-11-06T10:05:00Z"), last: Date.parse("2026-11-06T10:09:00Z"), cwd: null },
+			],
 		]);
 		expect(log.effort).toBe("high");
 		expect(log.repository).toBeNull();
@@ -243,13 +250,22 @@ describe("usage", () => {
 		mkdirSync(join(claudeHome, "projects", "-work"), { recursive: true });
 		writeFileSync(
 			join(claudeHome, "projects", "-work", `${CLAUDE}.jsonl`),
-			lines(claude("2026-11-06T09:00:00Z", "t3/scratch"), claude("2026-11-06T10:05:00Z", "quest/m0/a"), {
-				type: "assistant",
-				timestamp: "2026-11-06T10:06:00Z",
-				gitBranch: "quest/m0/a",
-				effort: "high",
-			}),
+			lines(
+				claude("2026-11-06T09:00:00Z", "t3/scratch"),
+				claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: root }),
+				{ type: "assistant", timestamp: "2026-11-06T10:06:00Z", gitBranch: "quest/m0/a", effort: "high" },
+			),
 		);
+		// A session in a checkout of another repository, on a branch of the same name.
+		const other = join(dir, "other");
+		mkdirSync(other);
+		execFileSync("git", ["init", "-q"], { cwd: other });
+		execFileSync("git", ["remote", "add", "origin", "git@github.com:other/repo.git"], { cwd: other });
+		writeFileSync(
+			join(claudeHome, "projects", "-work", `${OTHER}.jsonl`),
+			lines(claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: join(other, "sub") })),
+		);
+		mkdirSync(join(other, "sub"));
 		const codexHome = join(dir, "codex");
 		const day = join(codexHome, "sessions", "2026", "11", "06");
 		mkdirSync(day, { recursive: true });
@@ -271,6 +287,7 @@ describe("usage", () => {
 			"",
 			"- Size: L",
 			"- Implementer: Claude Code, claude-opus-5-5, high effort",
+			"- Implementer: Claude Code, claude-opus-5-5, high effort (iterate, L)",
 			"",
 			"## Review",
 			"",
@@ -320,6 +337,7 @@ describe("usage", () => {
 		};
 		const priced: Priced[] = [
 			{ harness: "claude", id: CLAUDE, models: [spent("claude-opus-5-5", 5)] },
+			{ harness: "claude", id: OTHER, models: [spent("claude-opus-5-5", 6)] },
 			{ harness: "codex", id: `2026/11/06/rollout-a-${THREAD}`, models: [spent("gpt-6.1-sol", 1)] },
 			{
 				harness: "codex",
@@ -362,16 +380,17 @@ describe("usage", () => {
 		expect(ten.fixedBy).toEqual([11]);
 		expect(ten.implementers).toEqual([
 			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null },
+			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: "L" },
 			{ harness: "Codex", model: "gpt-6.1-sol", effort: "medium", size: "S" },
 		]);
 		expect(report.pulls.find((p) => p.number === 9)!.sessions).toEqual([]);
 		expect(report.unattributed).toEqual({
-			sessions: 2,
-			input: 20,
-			cacheWrite: 40,
-			cacheRead: 60,
-			output: 80,
-			cost: 7,
+			sessions: 3,
+			input: 30,
+			cacheWrite: 60,
+			cacheRead: 90,
+			output: 120,
+			cost: 13,
 		});
 		expect(report.spend.map((s) => [s.size, s.role, s.harness, s.cost])).toEqual([
 			["L", "implementing", "claude", 5],
@@ -395,6 +414,9 @@ describe("usage", () => {
 		expect(one.pulls.map((p) => p.number)).toEqual([10]);
 		expect(one.pulls[0]!.fixedBy).toEqual([11]);
 		expect(one.unattributed).toBeNull();
+		// #9 shares #10's branch but closed before any session reached it, so narrowing to it hands it none.
+		const nine = await usage(root, { since: "2026-11-05", pr: 9 }, deps(priced));
+		expect(nine.pulls.map((p) => [p.number, p.sessions.length])).toEqual([[9, 0]]);
 		const quest = await usage(root, { since: "2026-11-05", quest: "quest/m0/a.md" }, deps(null));
 		expect(quest.priced).toBe(false);
 		expect(quest.pulls.map((p) => [p.number, p.sessions.length])).toEqual([

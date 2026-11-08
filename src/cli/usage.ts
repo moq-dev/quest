@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { type Size, SIZES, handedBack, questBranch } from "../core";
 import { type Comment, implementer, recorded, sessionsComment } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
-import { git } from "./git";
+import { discoveryEnv, git } from "./git";
 import { fixes } from "./land-fixer";
 import { MERGER } from "./land-watch-fix";
 import { type GitHub, type ObjectValue, type Repository, githubRepository, link, requireRemote } from "./github";
@@ -34,8 +34,8 @@ export interface Priced {
 export interface SessionLog {
 	/** Epoch milliseconds of its first record. */
 	started: number;
-	/** Each branch its log names, with the first and last time it does. */
-	branches: Map<string, { first: number; last: number }>;
+	/** Each branch its log names, with the first and last time it does, and the directory it last ran in there. */
+	branches: Map<string, { first: number; last: number; cwd: string | null }>;
 	/** The repository its checkout fetched from, when the log names it; Claude Code's does not. */
 	repository: Repository | null;
 	effort: string | null;
@@ -252,8 +252,11 @@ export function readClaudeLog(path: string): SessionLog {
 		const branch = record.gitBranch;
 		if (typeof branch === "string" && branch !== "" && branch !== "HEAD") {
 			const seen = log.branches.get(branch);
-			if (seen) seen.last = Math.max(seen.last, at);
-			else log.branches.set(branch, { first: at, last: at });
+			const cwd = typeof record.cwd === "string" ? record.cwd : null;
+			if (seen) {
+				seen.last = Math.max(seen.last, at);
+				seen.cwd = cwd ?? seen.cwd;
+			} else log.branches.set(branch, { first: at, last: at, cwd });
 		}
 		if (record.type === "assistant" && typeof record.effort === "string") log.effort = record.effort;
 	});
@@ -273,9 +276,10 @@ export function readCodexLog(path: string): SessionLog {
 			const repo = payload?.git as Record<string, unknown> | undefined;
 			const branch = typeof repo?.branch === "string" && repo.branch !== "" ? repo.branch : null;
 			const url = typeof repo?.repository_url === "string" ? repo.repository_url : null;
+			const cwd = typeof payload?.cwd === "string" ? payload.cwd : null;
 			log = {
 				started: at,
-				branches: new Map(branch ? [[branch, { first: at, last: at }]] : []),
+				branches: new Map(branch ? [[branch, { first: at, last: at, cwd }]] : []),
 				repository: url === null ? null : githubRepository(url),
 				effort: null,
 				review: (payload?.source as Record<string, unknown> | undefined)?.subagent === "review",
@@ -448,8 +452,30 @@ function sessionId(session: Priced): string {
 	return /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(session.id)?.[1] ?? session.id;
 }
 
+const checkouts = new Map<string, string[] | null>();
+
+/** The GitHub repositories the checkout at `cwd` has remotes for, or null once it is no checkout to ask. */
+function checkoutRepositories(cwd: string): string[] | null {
+	if (!checkouts.has(cwd)) {
+		const remotes = existsSync(cwd)
+			? spawnSync("git", ["-C", cwd, "remote", "-v"], { encoding: "utf8", env: discoveryEnv() })
+			: null;
+		checkouts.set(
+			cwd,
+			remotes?.status === 0
+				? remotes.stdout.split("\n").flatMap((line) => {
+						const named = githubRepository(line.split(/\s+/)[1] ?? "");
+						return named ? [key(named)] : [];
+					})
+				: null,
+		);
+	}
+	return checkouts.get(cwd)!;
+}
+
 /**
- * Attribute each priced session to the PR whose head branch its log last named, and give it a role: reviewing when
+ * Attribute each priced session to the PR whose head branch its log last named, among those still open when the
+ * session reached the branch and not of another repository, and give it a role: reviewing when
  * a PR's review record names it or Codex marks it a review, implementing when it began before its PR opened, and
  * iterating otherwise. Returns the sessions on no PR here.
  */
@@ -469,11 +495,16 @@ function attribute(
 		const branches = log ? [...log.branches].sort((a, b) => b[1].last - a[1].last) : [];
 		let found: Pull | undefined;
 		for (const [branch, seen] of branches) {
-			const candidates = (byBranch.get(branch) ?? []).filter(
-				(each) => log!.repository === null || each.repositories.includes(key(log!.repository)),
-			);
+			// Another repository may use the same branch name: its log or its checkout's remotes tell, while either can.
+			const known = log!.repository ? [key(log!.repository)] : seen.cwd ? checkoutRepositories(seen.cwd) : null;
 			// A branch can head a new PR after an earlier one closed: take the one open when the session reached it.
-			found = candidates.find((each) => each.closed === null || each.closed >= seen.first) ?? candidates.at(-1);
+			found = byBranch
+				.get(branch)
+				?.find(
+					(each) =>
+						(each.closed === null || each.closed >= seen.first) &&
+						(known === null || each.repositories.some((name) => known.includes(name))),
+				);
 			if (found) break;
 		}
 		const row = found && rows.get(found.number);
@@ -532,10 +563,15 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	const rows = new Map<string, AccuracyRow>();
 	for (const each of pulls) {
-		// A session that pushed twice is one implementer of the PR.
-		const distinct = new Map(each.implementers.map((i) => [JSON.stringify(i), i]));
+		// A session that pushed twice is one implementer of the PR, whether or not each line names its size.
+		const distinct = new Map(
+			each.implementers.map((i) => {
+				const at = { ...i, size: i.size ?? each.size };
+				return [JSON.stringify(at), at];
+			}),
+		);
 		for (const implementer of distinct.values()) {
-			const size = implementer.size ?? each.size;
+			const size = implementer.size;
 			const id = JSON.stringify([size, implementer.harness, implementer.model, implementer.effort]);
 			let row = rows.get(id);
 			if (!row) {
@@ -620,7 +656,8 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	let unattributed: Usage["unattributed"] = null;
 	if (priced !== null) {
 		const reviewers = new Set(rows.flatMap((row) => (row.review ? [row.review.session] : [])));
-		const left = attribute(priced, sessionLogs(priced, deps), pulls, byNumber, reviewers);
+		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
+		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };
 			for (const session of left) for (const spent of session.models) add(unattributed, spent);
