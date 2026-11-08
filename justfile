@@ -46,8 +46,10 @@ review-sandbox *args:
     QUEST_LIVE=1 bun run vitest run test/live/review-sandbox {{args}}
 
 # Check that a runner job's commands cannot escape its sandbox, with the pinned
-# Claude Code, opencode, and sandbox-runtime and a scripted model, on Linux. Needs
-# no login; CI runs it nightly (.github/workflows/sandbox.yml). Run it after bumping any.
+# Claude Code, opencode, and sandbox-runtime and a scripted model, and that the
+# pinned CLIProxyAPI, Claude Code, and Codex report a spent pool as its limit, on
+# Linux. Needs no login; CI runs it nightly (.github/workflows/sandbox.yml). Run
+# it after bumping any.
 runner-sandbox *args:
     QUEST_LIVE=1 bun run vitest run test/live/runner-sandbox {{args}}
 

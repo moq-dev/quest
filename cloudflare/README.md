@@ -159,7 +159,9 @@ The hub's alarm moves them once it passes, so a returning runner is fenced out.
 A status that omits an acknowledged job gives it up at once.
 
 An account limit pauses the job with an account decision; kix never switches
-accounts on its own. An answer requeues the job and resumes its session on the
+accounts on its own. A runner reports its Claude subscriptions as one pooled
+account, which its own CLIProxyAPI rotates between, so the pool's limit means
+every subscription in it is out. An answer requeues the job and resumes its session on the
 runner that holds it. Until the job sandbox ships, that holds only for the
 requester's own answers: the agent acts on an answer with the requester's
 machine and credentials, so another maintainer's answer waits, with an
