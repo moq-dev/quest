@@ -110,10 +110,6 @@ Decided while planning on 2026-10-05, amended 2026-10-14 where noted:
   uses these terms. A blocked waypoint's tooltip lists what it needs under
   "Required:".
 
-## Required
-
-- [Landing page](/quest/m1/theme/landing.md) - the home page's calls to action lead to sign-in, onboarding, and the setup paste
-
 ## Related
 
 - [Launch material](/quest/m1/launch.md) - posts, quickstart, demo, and comparison written in the same voice

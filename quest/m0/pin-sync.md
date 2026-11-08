@@ -43,5 +43,4 @@ hand once; from then on the hosts upgrade themselves.
 
 ## Related
 
-- [Pin routing-capable quest](/quest/m0/model-routing/pins.md) - the one-time bump this automates
 - [Land through the merge queue](/quest/m0/queue-watcher/README.md) - the host daemon this builds on

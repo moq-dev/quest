@@ -386,18 +386,28 @@ async function settle(target: Repository, record: Bump, connection: BumpConnecti
 		return { ...record, status: "failed" as const };
 	};
 	if (!gated) {
-		const found = await contexts(github, target, head);
-		const state = found.length === 0 ? "PENDING" : checksState(found);
-		if (state === "FAILURE") return fail(`a check failed on its head ${head}`);
 		// A workflow's later jobs report only once they start, and a queued workflow may have no check run yet,
 		// so Actions is judged by its workflow runs. Another app's suite that never ran a check stays queued
 		// forever, and counts for nothing.
 		const runs = object(await (await github.request(`${path}/actions/runs?head_sha=${head}&per_page=100`)).json());
-		const workflows = array(runs.workflow_runs);
+		const all = array(runs.workflow_runs);
 		const suites = object(await (await github.request(`${path}/commits/${head}/check-suites?per_page=100`)).json());
 		const listed = array(suites.check_suites);
-		if (Number(runs.total_count) > workflows.length || Number(suites.total_count) > listed.length)
+		if (Number(runs.total_count) > all.length || Number(suites.total_count) > listed.length)
 			throw new Error(`${head} has more workflow runs or check suites than one page, more than a bump reads`);
+		const workflows = latestRuns(all);
+		// The check runs of a replaced workflow run, such as one a newer run cancelled, are replaced with it.
+		const replaced = new Set(
+			all
+				.filter((run) => !workflows.includes(run) && run.check_suite_id != null)
+				.map((run) => Number(run.check_suite_id)),
+		);
+		const found = (await contexts(github, target, head)).filter((context) => {
+			const suite = object(context.checkSuite ?? {}).databaseId;
+			return suite == null || !replaced.has(Number(suite));
+		});
+		const state = found.length === 0 ? "PENDING" : checksState(found);
+		if (state === "FAILURE") return fail(`a check failed on its head ${head}`);
 		if (workflows.some((run) => run.status === "completed" && !PASSING.includes(String(run.conclusion))))
 			return fail(`a workflow failed on its head ${head}`);
 		const running =
@@ -419,6 +429,21 @@ async function settle(target: Repository, record: Bump, connection: BumpConnecti
 	}
 	output.push(`bump landing ${name(target)} ${pr}`);
 	return { ...record, status: "done" };
+}
+
+/**
+ * The workflow runs on a head that still count: each workflow's latest run per event. A cancelled run
+ * also yields to a newer run of its workflow from another event, as when push and pull_request share a
+ * `cancel-in-progress` concurrency group, so a run a newer one replaced counts as replaced, not failed.
+ */
+export function latestRuns(runs: ObjectValue[]): ObjectValue[] {
+	return runs.filter((run) => {
+		const newer = runs.filter(
+			(other) => other.workflow_id === run.workflow_id && Number(other.id) > Number(run.id),
+		);
+		if (newer.some((other) => other.event === run.event)) return false;
+		return !(run.conclusion === "cancelled" && newer.length > 0);
+	});
 }
 
 /** The tools on the host: Nix locks the input and builds the source's quest; its commands get no credentials. */

@@ -104,6 +104,20 @@ test("skill lists every skill", () => {
 	expect(out.stdout).toMatch(/^start - /m);
 });
 
+test("skill prints what the skill builds on", () => {
+	const out = run("skill", "plan");
+	expect(out.code).toBe(0);
+	expect(out.stdout).toContain("\n# /quest-grill\n");
+	expect(out.stdout).toContain("\n# Quest guide\n\n## Model\n");
+});
+
+test("guide prints the named sections in the guide's order", () => {
+	const out = run("guide", "prompting", "FORMAT");
+	expect(out.code).toBe(0);
+	expect(out.stdout).toMatch(/^## Format\n[\s\S]*\n## Prompting\n/);
+	expect(out.stdout).not.toContain("## Model");
+});
+
 test("skill rejects an unknown name", () => {
 	const out = run("skill", "nope");
 	expect(out.code).toBe(1);
@@ -112,7 +126,7 @@ test("skill rejects an unknown name", () => {
 
 test("usage errors exit 2", () => {
 	expect(run("bogus").code).toBe(2);
-	expect(run("skill", "--stub").code).toBe(2);
+	expect(run("guide", "nope").code).toBe(2);
 	expect(run("unblocked", "a", "b").code).toBe(2);
 	expect(run().code).toBe(2);
 });
@@ -138,14 +152,51 @@ test("a document that is not UTF-8 is an error", () => {
 test("unblocked prints ranked counts and paths, with deterministic JSON and a limit", () => {
 	const tree = Tree.baseline();
 	expect(tree.run("unblocked")).toEqual({ code: 0, stdout: "1\tquest/m0/epic/one.md\n", stderr: "" });
+	const opusLow = '{"harness":"claude","model":"claude-opus-5-5","effort":"low"}';
+	const solMedium = '{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}';
 	expect(tree.run("unblocked", "--json", "--limit", "1")).toEqual({
 		code: 0,
-		stdout: '[{"path":"quest/m0/epic/one.md","dependents":1}]\n',
+		stdout: `[{"path":"quest/m0/epic/one.md","dependents":1,"models":[${opusLow},${solMedium}]}]\n`,
 		stderr: "",
 	});
 	tree.write("quest/m0/epic/two.md", "# [S] Two\n\n## Goal\n\nWork.\n");
 	expect(JSON.parse(tree.run("unblocked", "--json", "--limit", "1").stdout)).toHaveLength(1);
 	expect(JSON.parse(tree.run("unblocked", "--json").stdout)).toHaveLength(2);
+});
+
+test("unblocked routes a quest with a decision open one size up, and XL stays XL", () => {
+	const models = (tree: Tree) =>
+		JSON.parse(tree.run("unblocked", "--json").stdout).map((quest: { models: { effort: string }[] }) =>
+			quest.models.map((entry) => entry.effort).join(" "),
+		);
+	const tree = Tree.baseline().append("quest/m0/epic/one.md", "\n## Waiting\n\n- moq-dev/moq: a release.\n");
+	expect(models(tree)).toEqual(["low medium"]);
+	tree.append("quest/m0/epic/one.md", "- Maintainer: pick a name.\n");
+	expect(models(tree)).toEqual(["medium high"]);
+	tree.write("quest/m0/epic/one.md", "# [XL] One\n\n## Goal\n\nWork.\n\n## Waiting\n\n- Maintainer: pick.\n");
+	expect(models(tree)).toEqual(["xhigh"]);
+});
+
+test("models ranks a size's writers, or the one entry that runs a PR's writer", () => {
+	const tree = Tree.baseline();
+	expect(tree.run("models", "XS")).toEqual({
+		code: 0,
+		stdout: "claude\tclaude-haiku-5-5\thigh\ncodex\tgpt-6.1-sol\tlow\n",
+		stderr: "",
+	});
+	expect(JSON.parse(tree.run("models", "XL", "--json").stdout)).toEqual([
+		{ harness: "claude", model: "claude-opus-5-5", effort: "xhigh" },
+	]);
+	const writer = (size: string, model: string) => tree.run("models", size, "--writer", model).stdout;
+	expect(writer("M", "gpt-6.1-sol")).toBe("codex\tgpt-6.1-sol\thigh\n");
+	// A writer its size does not list runs at the nearest size that lists it.
+	expect(writer("XS", "claude-opus-5-5")).toBe("claude\tclaude-opus-5-5\tlow\n");
+	expect(writer("L", "claude-haiku-5-5")).toBe("claude\tclaude-haiku-5-5\thigh\n");
+	expect(writer("XL", "gpt-6.1-sol")).toBe("codex\tgpt-6.1-sol\txhigh\n");
+	const unknown = tree.run("models", "S", "--writer", "unknown");
+	expect(unknown.code).toBe(2);
+	expect(unknown.stderr).toContain("no write list names unknown");
+	expect(tree.run("models", "XXL").code).toBe(2);
 });
 
 test("unblocked explains the count on a terminal, including NO_COLOR", () => {

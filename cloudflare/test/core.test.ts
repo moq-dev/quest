@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 describe("quest/core", () => {
 	it("checks a tree and finds ready work", () => {
 		const docs = [
-			parse("quest/README.md", "# Quests\n\n## Goal\n\nShip it.\n\n## Required\n\n- [One](/quest/one.md)\n"),
+			parse("quest/README.md", "# Quests\n\n## Goal\n\nShip it.\n"),
 			parse("quest/one.md", "# [S] One\n\n## Goal\n\nThe first quest.\n"),
 		];
 		const paths = new Set(docs.map((doc) => doc.path));
@@ -16,10 +16,7 @@ describe("quest/core", () => {
 
 	it("reports a quest and an epic that share a path", () => {
 		const docs = [
-			parse(
-				"quest/README.md",
-				"# Quests\n\n## Goal\n\nShip it.\n\n## Required\n\n- [Quest](/quest/one.md)\n- [Epic](/quest/one/README.md)\n",
-			),
+			parse("quest/README.md", "# Quests\n\n## Goal\n\nShip it.\n"),
 			parse("quest/one.md", "# [S] One\n\n## Goal\n\nA quest.\n"),
 			parse("quest/one/README.md", "# [S] Epic\n\n## Goal\n\nAn epic's remaining work.\n"),
 		];

@@ -1,4 +1,4 @@
-// `quest review`: a model that wrote none of the code reviews the committed branch, read-only,
+// `quest review`: a model other than the latest writer reviews the committed branch, read-only,
 // picked by the PR's size from the lists in `models.ts`.
 //
 // A branch's first round runs the reviewer CLI's own review, given the scope, the
@@ -29,9 +29,13 @@ export class ReviewInputError extends Error {}
 /** `--responses` is missing after a round with findings, or given with no round to answer. */
 export class ResponsesError extends ReviewInputError {}
 
-/** The reviewer's account hit its usage limit, which resets at `until` (epoch milliseconds) if the CLI named it. */
+/** The reviewer's account hit its usage limit on `model`, which resets at `until` (epoch milliseconds) if the CLI named it. */
 export class ReviewLimitError extends Error {
-	constructor(harness: HarnessName, until: number | null) {
+	constructor(
+		readonly harness: HarnessName,
+		readonly until: number | null,
+		readonly model: string,
+	) {
 		const resets = until === null ? "unknown" : new Date(until).toISOString().replace(/\.\d{3}Z$/, "Z");
 		super(`${harness} hit its usage limit; resets ${resets}`);
 	}
@@ -165,7 +169,7 @@ export function runningHarness(env: NodeJS.ProcessEnv): HarnessName {
 	if (claude) return "claude";
 	if (codex) return "codex";
 	throw new ReviewInputError(
-		"not running under Claude Code or Codex; pass --harness to name the reviewer, or --exclude-model for each model that wrote the code",
+		"not running under Claude Code or Codex; pass --harness to name the reviewer, or --exclude-model for the model that changed it last",
 	);
 }
 
@@ -174,39 +178,43 @@ export interface Choice {
 	harness?: HarnessName;
 	model?: string;
 	effort?: string;
-	/** The models that wrote the code; without any, the running harness's are excluded. */
+	/** The models never to pick; without any, the latest writer's is avoided. */
 	exclude?: string[];
 }
 
 /**
- * Whether an entry's model wrote the code: one of `exclude`, or else one the
- * PR's `## Models` record names (`recorded`), and, unless `--harness` names the
- * reviewer or the record names every implementing model, any model of the
- * harness running this command, since its own model is not known.
+ * Whether an entry's model is the one to avoid: one of `exclude`, or else the
+ * latest writer. That is the model of the last Implementer line the PR's
+ * `## Models` records name (`latest`, one per record: the body's and kix's
+ * sessions comment's). When they name none, an `unknown` model, or two
+ * different models, whose order cannot be told, it is the harness running this
+ * command, which is usually the session that just pushed, unless `--harness`
+ * names the reviewer, which then avoids every model they name.
  */
-export function authored(choice: Choice, env: NodeJS.ProcessEnv, recorded: string[] = []): (entry: Model) => boolean {
+export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest: string[] = []): (entry: Model) => boolean {
 	const exclude = choice.exclude ?? [];
 	if (exclude.length > 0) return (entry) => exclude.includes(entry.model);
-	const known = recorded.filter((model) => model !== "unknown");
-	const wrote = (entry: Model) => known.includes(entry.model);
-	if (choice.harness !== undefined || (known.length > 0 && known.length === recorded.length)) return wrote;
+	const named = [...new Set(latest)];
+	const known = named.filter((model) => model !== "unknown");
+	if (named.length === 1 && known.length === 1) return (entry) => entry.model === known[0];
+	if (choice.harness !== undefined) return (entry) => known.includes(entry.model);
 	const running = runningHarness(env);
-	return (entry) => wrote(entry) || entry.harness === running;
+	return (entry) => entry.harness === running;
 }
 
 /**
  * The reviewer for a PR of `size`: the first entry of its list whose model
- * wrote none of the code, or `--harness`'s entry, with `--model` and
- * `--effort` overriding its model and effort. An override never brings back
- * a model that wrote the code.
+ * is not avoided, or `--harness`'s entry, with `--model` and `--effort`
+ * overriding its model and effort. An override never brings back an avoided
+ * model.
  */
-export function pickReviewer(size: Size, choice: Choice, wrote: (entry: Model) => boolean): Model {
+export function pickReviewer(size: Size, choice: Choice, avoided: (entry: Model) => boolean): Model {
 	const list = REVIEWERS[size];
 	const entry =
-		choice.harness === undefined ? list.find((e) => !wrote(e)) : list.find((e) => e.harness === choice.harness);
+		choice.harness === undefined ? list.find((e) => !avoided(e)) : list.find((e) => e.harness === choice.harness);
 	if (entry === undefined && choice.harness === undefined) {
 		const models = [...new Set(list.map((e) => e.model))].join(", ");
-		throw new ReviewInputError(`every ${size} reviewer (${models}) wrote the code; pass --harness and --model`);
+		throw new ReviewInputError(`every ${size} reviewer (${models}) is avoided; pass --harness and --model`);
 	}
 	const harness = choice.harness ?? entry!.harness;
 	const model = choice.model ?? entry?.model;
@@ -215,8 +223,8 @@ export function pickReviewer(size: Size, choice: Choice, wrote: (entry: Model) =
 		throw new ReviewInputError(`no ${harness} reviewer for size ${size}; pass --model and --effort`);
 	}
 	const picked = { harness, model, effort };
-	if (wrote(picked))
-		throw new ReviewInputError(`${model} wrote the code; pass --model to name another ${harness} model`);
+	if (avoided(picked))
+		throw new ReviewInputError(`${model} is avoided; pass --model to name another ${harness} model`);
 	return picked;
 }
 
@@ -253,11 +261,11 @@ type BaseOptions = { base?: string; fetched?: false } | { base: string; fetched:
 export type ReviewOptions = BaseOptions & {
 	/** The checkout to review. */
 	root: string;
-	/** The reviewer; defaults to the first of the size's list whose model wrote none of the code. */
+	/** The reviewer; defaults to the first of the size's list whose model is not the latest writer's. */
 	harness?: HarnessName;
 	model?: string;
 	effort?: string;
-	/** The models that wrote the code; without any, the running harness's are excluded. */
+	/** The models never to pick; without any, the latest writer's is avoided. */
 	exclude?: string[];
 	/** The PR's size, instead of its quest's or the default. */
 	size?: Size;
@@ -272,7 +280,7 @@ export type ReviewOptions = BaseOptions & {
 	fresh?: boolean;
 	/**
 	 * The branch whose session the round continues, instead of the checked-out
-	 * one; required on a detached `HEAD`.
+	 * one or its upstream; required on a detached `HEAD`.
 	 */
 	branch?: string;
 	/** Stops the reviewer CLI, failing the round; the session keeps its earlier rounds. */
@@ -285,7 +293,7 @@ export interface ReviewDependencies {
 	 * The `## Models` record of the open PR from `branch` into `base`, or null when it has none; without
 	 * it, as in the runner, only the options and the running harness pick the reviewer.
 	 */
-	models?: (root: string, base: string, branch: string) => Promise<ReturnType<typeof recorded> | null>;
+	models?: (root: string, base: string, branch: string) => Promise<PullModels | null>;
 }
 
 export const processDependencies = (): ReviewDependencies => ({ env: process.env });
@@ -321,6 +329,8 @@ export interface Context {
 	/** The reply's schema, and where `--output-schema` reads it from. */
 	schema: ReturnType<typeof schema>;
 	schemaFile: string;
+	/** The gateway Codex sends its requests to, from OPENAI_BASE_URL, which Codex itself no longer reads. */
+	openaiBaseUrl?: string;
 }
 
 interface Turn {
@@ -547,7 +557,9 @@ const codex: Reviewer = {
 	// CODEX_ACCESS_TOKEN is an agent identity token, which both read.
 	credentials: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
 	routeCredentials: [],
-	// A gateway that intercepts TLS needs its CA. OPENAI_BASE_URL is never stripped.
+	// A gateway that intercepts TLS needs its CA. OPENAI_BASE_URL is never stripped, and reaches Codex as
+	// `openai_base_url`. It is no route: `codex login status` ignores CODEX_API_KEY, so a gateway's key
+	// passes as any key does, while Codex has no stored login.
 	connection: ["CODEX_CA_CERTIFICATE"],
 	routes: () => [],
 	unauthorized: LOGINS.codex.unauthorized,
@@ -625,6 +637,7 @@ function codexFlags(context: Context): string[] {
 		context.model,
 		"-c",
 		`model_reasoning_effort=${JSON.stringify(context.effort)}`,
+		...(context.openaiBaseUrl ? ["-c", `openai_base_url=${JSON.stringify(context.openaiBaseUrl)}`] : []),
 	];
 }
 
@@ -779,8 +792,15 @@ export async function reviewerEnvironment(
 	return (await prepare(harness, cwd, env)).env;
 }
 
-/** Run one reviewer turn, failing on any error it reports, and as logged out on an authentication error. */
-async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
+/**
+ * Codex's failure once it gave up retrying a 429. From the provider that may be
+ * a brief throttle, but a gateway such as CLIProxyAPI has already retried every
+ * credential it pools, so there it is the pool's usage limit.
+ */
+export const RETRIED_429 = /exceeded retry limit, last status: 429\b/;
+
+/** Run one reviewer turn on `model`, failing on any error it reports, and as logged out on an authentication error. */
+async function turn(cli: Cli, call: Turn, cwd: string, model: string): Promise<Reply> {
 	const reader = cli.reviewer.reader();
 	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader, cli.signal);
 	const reply = reader.reply(code, stderr);
@@ -790,7 +810,9 @@ async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 		if (reply.status === 401 || cli.reviewer.unauthorized.test(`${reply.error ?? ""}\n${stderr}`)) {
 			throw new ReviewInputError(cli.unauthorized);
 		}
-		if (reply.limited) throw new ReviewLimitError(cli.harness, reply.limited.until);
+		if (reply.limited) throw new ReviewLimitError(cli.harness, reply.limited.until, model);
+		if (cli.harness === "codex" && cli.env.OPENAI_BASE_URL && RETRIED_429.test(`${reply.error ?? ""}\n${stderr}`))
+			throw new ReviewLimitError(cli.harness, null, model);
 		const detail = reply.error ?? stderr.trim().split("\n").slice(-5).join("\n");
 		throw new Error(`${call.argv[0]} failed${detail ? `: ${detail}` : ` with exit status ${code}`}`);
 	}
@@ -1132,9 +1154,9 @@ export function sessionFile(common: string, branch: string): string {
 	return join(common, "quest", "review", `${digest(branch)}.json`);
 }
 
-function load(path: string): State | undefined {
+function load(path: string): unknown {
 	try {
-		return JSON.parse(readFileSync(path, "utf8")) as State;
+		return JSON.parse(readFileSync(path, "utf8"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
@@ -1142,11 +1164,41 @@ function load(path: string): State | undefined {
 }
 
 /**
- * The branch whose session a round continues: `name`, checked as a branch
- * name, or else the checked-out branch. A detached `HEAD`, such as a checkout
- * of a branch another worktree holds, has none of its own.
+ * A saved session, read before its reviewer runs. A session saved before
+ * moq-dev/quest#508 kept only each round's finding count, which no round can
+ * settle: one with findings is refused, naming `--new`, rather than failing
+ * after the reviewer spent its round. One saved before moq-dev/quest#514 has
+ * no `last` round, so it never resumes and its next round reviews anew.
  */
-function sessionBranch(root: string, name: string | undefined): string {
+export function parseState(value: unknown): State {
+	const state = value as Partial<State> | null;
+	const refuse = (why: string) =>
+		new ReviewInputError(`the saved review session ${why}; pass --new to start a new session`);
+	if (typeof state !== "object" || state === null || !Array.isArray(state.rounds)) {
+		throw refuse("is not one quest review reads");
+	}
+	const rounds = state.rounds.map((round) => {
+		const findings: unknown = round?.findings;
+		if (Array.isArray(findings)) return round;
+		if (findings === 0) return { ...round, findings: [] };
+		throw refuse(
+			typeof findings === "number"
+				? `was saved by an older quest and keeps only its last round's finding count (${findings}), not the findings to settle`
+				: "has a round with no findings list",
+		);
+	});
+	return { ...state, rounds } as State;
+}
+
+/**
+ * The branch whose session a round continues: `name`, checked as a branch
+ * name, or else the checked-out branch's upstream branch, without its remote,
+ * so a temporary branch tracking the PR's head continues the head's session.
+ * An upstream that is the base `baseBranch` names no PR, so such a branch keys
+ * by its own name. A detached `HEAD`, such as a checkout of a branch another
+ * worktree holds, has none of its own.
+ */
+function sessionBranch(root: string, name: string | undefined, baseBranch: string): string {
 	if (name !== undefined) {
 		try {
 			return git(root, ["check-ref-format", "--branch", name]);
@@ -1154,16 +1206,52 @@ function sessionBranch(root: string, name: string | undefined): string {
 			throw new ReviewInputError(`--branch is not a valid branch name: ${name}`);
 		}
 	}
+	let local: string;
 	try {
-		return git(root, ["symbolic-ref", "--short", "HEAD"]);
+		local = git(root, ["symbolic-ref", "--short", "HEAD"]);
 	} catch {
-		throw new ReviewInputError(
-			"HEAD is detached; pass --branch to name the branch whose review session this continues",
-		);
+		throw new ReviewInputError(detachedMessage(root, baseBranch));
 	}
+	let merge = "";
+	try {
+		merge = git(root, ["config", "--get", `branch.${local}.merge`]);
+	} catch {
+		// No upstream.
+	}
+	const upstream = merge.startsWith("refs/heads/") ? merge.slice("refs/heads/".length) : "";
+	return upstream === "" || upstream === baseBranch ? local : upstream;
 }
 
-type ModelsRecord = ReturnType<typeof recorded> | null | undefined;
+/** The detached-`HEAD` refusal, naming the branches whose tip is `HEAD` so the next call can pass one. */
+function detachedMessage(root: string, baseBranch: string): string {
+	const message = "HEAD is detached; pass --branch to name the branch whose review session this continues";
+	const remotes = git(root, ["remote"]).split("\n").filter(Boolean);
+	const names = new Set<string>();
+	const refs = git(root, [
+		"for-each-ref",
+		"--points-at",
+		"HEAD",
+		"--format=%(refname)",
+		"refs/heads",
+		"refs/remotes",
+	]);
+	for (const ref of refs.split("\n").filter(Boolean)) {
+		let branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
+		if (branch === undefined) {
+			const rest = ref.slice("refs/remotes/".length);
+			const remote = remotes.filter((r) => rest.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
+			if (remote !== undefined) branch = rest.slice(remote.length + 1);
+		}
+		if (branch !== undefined && branch !== "HEAD" && branch !== baseBranch) names.add(branch);
+	}
+	if (names.size === 0) return message;
+	return `${message}, such as ${[...names].map((n) => `--branch ${n}`).join(" or ")}`;
+}
+
+/** A PR's `## Models` records: the body's and kix's sessions comment's together, and each one's latest model. */
+export type PullModels = ReturnType<typeof recorded> & { latest: string[] };
+
+type ModelsRecord = PullModels | null | undefined;
 
 /** The size the PR's record names, checked only when no `--size` replaces it. */
 function recordedSize(record: ModelsRecord, options: ReviewOptions): Size | null {
@@ -1178,13 +1266,13 @@ function recordedSize(record: ModelsRecord, options: ReviewOptions): Size | null
 	return size as Size;
 }
 
-/** The implementing models the PR's record names, checked only when no `--exclude-model` replaces them. */
-function recordedModels(record: ModelsRecord, options: ReviewOptions): string[] {
+/** The latest writer each of the PR's records names, checked only when no `--exclude-model` replaces them. */
+function recordedLatest(record: ModelsRecord, options: ReviewOptions): string[] {
 	if (record == null || (options.exclude ?? []).length > 0) return [];
-	return record.implementers.map(({ item, model }) => {
+	for (const { item, model } of record.implementers) {
 		if (model === null) throw new ReviewInputError(`the PR's ## Models record names no model in: ${item}`);
-		return model;
-	});
+	}
+	return record.latest;
 }
 
 /** Review the checkout's committed branch: one round, resuming the branch's session unless `fresh`. */
@@ -1194,7 +1282,6 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		throw new ReviewInputError("quest review does not support native Windows yet; use WSL");
 	const root = git(options.root, ["rev-parse", "--show-toplevel"]);
 
-	const branch = sessionBranch(root, options.branch);
 	if (git(root, ["status", "--porcelain"]) !== "") {
 		throw new ReviewInputError(
 			"the checkout has uncommitted changes; commit them, since only the committed branch is reviewed",
@@ -1204,21 +1291,25 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	// The reviewer's sandbox has no network, so the base is fetched first, and the size is read from it.
 	const baseRef = options.fetched ? options.base : await fetchBase(root, options.base);
 	const { remote, branch: baseBranch } = parseBase(root, baseRef);
+	const branch = sessionBranch(root, options.branch, baseBranch);
 	const tracking = `refs/remotes/${remote}/${baseBranch}`;
 	const baseSha = git(root, ["rev-parse", "--verify", `${tracking}^{commit}`]);
 	// The PR's own record names its size and implementers, so the author passes neither as a flag.
 	const needed = options.size === undefined || (options.exclude ?? []).length === 0;
 	const record = needed ? await deps.models?.(root, baseRef, branch) : undefined;
 	const sized = reviewSize(root, baseSha, options.sizeBranch ?? branch, options.size, recordedSize(record, options));
-	const picked = pickReviewer(sized.size, options, authored(options, deps.env, recordedModels(record, options)));
+	const picked = pickReviewer(sized.size, options, authored(options, deps.env, recordedLatest(record, options)));
 	const harness = picked.harness;
 	const reviewer = CLIS[harness];
 
 	const statePath = sessionFile(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
 	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
-	const stored = load(statePath);
-	const state = options.fresh || stored?.reviewer !== harness ? undefined : stored;
+	const stored = options.fresh ? undefined : load(statePath);
+	const state =
+		stored === undefined || (stored as Partial<State> | null)?.reviewer !== harness
+			? undefined
+			: parseState(stored);
 	const previous = state?.rounds.at(-1);
 	if (previous === undefined && options.responses !== undefined) {
 		throw new ResponsesError("--responses answers a previous round, and this branch has none to resume");
@@ -1277,6 +1368,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		effort: picked.effort,
 		schema: replySchema,
 		schemaFile,
+		...(cli.env.OPENAI_BASE_URL && { openaiBaseUrl: cli.env.OPENAI_BASE_URL }),
 	};
 
 	const usage: Usage[] = [];
@@ -1284,11 +1376,11 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	let reply: Reply;
 	if (!resume) {
 		const prompt = reviewPrompt(change, rules, earlier, options.responses);
-		const first = await turn(cli, reviewer.review(context, randomUUID(), prompt), root);
+		const first = await turn(cli, reviewer.review(context, randomUUID(), prompt), root, context.model);
 		if (first.session === undefined) throw new Error(`${harness} did not report its session`);
 		session = first.session;
 		if (reported(first.usage)) usage.push({ turn: "review", ...first.usage });
-		reply = await turn(cli, reviewer.resume(context, session, reportPrompt(head, earlier)), root);
+		reply = await turn(cli, reviewer.resume(context, session, reportPrompt(head, earlier)), root, context.model);
 	} else {
 		session = state!.session;
 		const prompt = laterPrompt({
@@ -1297,7 +1389,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			earlier,
 			responses: options.responses,
 		});
-		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
+		reply = await turn(cli, reviewer.resume(context, session, prompt), root, context.model);
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
 	const { score, rationale, findings: found, earlier: answers } = verdict(reply, earlier.length);
@@ -1335,6 +1427,21 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	};
 	save(statePath, { branch, reviewer: harness, session, rounds, last: round, given } satisfies State);
 	return round;
+}
+
+/**
+ * The author's next step after `round`, printed last so each step of the
+ * procedure arrives when it applies: handling findings that are all low
+ * severity without another round, the design checkpoint on every third round
+ * that reports others, else answering them, or nothing left to do.
+ */
+export function nextStep(round: Round): string {
+	if (round.findings.length === 0) return "next done: no findings remain on this head";
+	if (round.findings.every((finding) => finding.severity === "low"))
+		return "next finish: fix or refute each finding, commit, rerun the checks, then add a line after the PR body's review record naming the new head's full SHA and each finding's disposition; run no further round";
+	if (round.round % 3 === 0)
+		return "next checkpoint: before fixing these findings, reconsider the approach and let the user decide, as /quest-review describes";
+	return "next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number";
 }
 
 /** The plain report: one record per line, then each finding with its body indented. */

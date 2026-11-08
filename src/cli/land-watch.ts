@@ -21,6 +21,7 @@ import { fixerText, post } from "./land-fixer";
 import {
 	apiDependencies,
 	daemonLoop,
+	defaultBranch,
 	EXCERPT,
 	excerpt,
 	type Failure,
@@ -41,6 +42,7 @@ import {
 } from "./land-watch-fix";
 import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
 import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools } from "./land-bump";
+import { pruneLogs } from "./land-prune";
 import { enabledHead, headBefore } from "./status";
 
 export { readRemoval } from "./land-watch-fix";
@@ -699,14 +701,6 @@ export async function watchPass(
 }
 
 /** The repository's default branch. */
-async function defaultBranch(github: GitHub, repository: Repository): Promise<string> {
-	const data = await github.graphql(
-		"query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name } } }",
-		{ owner: repository.owner, name: repository.repo },
-	);
-	return string(object(object(data.repository).defaultBranchRef).name);
-}
-
 /**
  * Whether `base` lands through the watcher's own queue, since its rules have no `merge_queue` rule.
  * Rules GitHub does not answer with fail the pass, which then does nothing.
@@ -791,16 +785,17 @@ export async function watch(
 	if (options.bump.length > 0) checkTools();
 	if (options.bump.some((target) => same(target, repository)))
 		throw new Error("--bump names the watched repository, which cannot bump its own pin");
-	const unlock = await startDaemon(root, repository, options);
+	const now = { fetch, now: Date.now };
+	const mint = (wanted: Permissions) => installationToken(repository, options, wanted, now);
+	// Each mode's token is minted only once a pass needs it, and the mode is read with neither, so an
+	// installation granted only one mode's permissions still runs it.
+	const probe = apiDependencies(() => mint({ contents: "read" }), { ...now, sleep, warn });
+	const unlock = await startDaemon(root, repository, options, () => defaultBranch(new GitHub(probe), repository));
+	const base = options.base!;
 	try {
-		const now = { fetch, now: Date.now };
 		const fixing = options.fixer !== undefined;
 		const github = watchPermissions(fixing);
 		const own = watchPermissions(fixing, true);
-		const mint = (wanted: Permissions) => installationToken(repository, options, wanted, now);
-		// Each mode's token is minted only once a pass needs it, and the mode is read with neither, so an
-		// installation granted only one mode's permissions still runs it.
-		const probe = apiDependencies(() => mint({ contents: "read" }), { ...now, sleep, warn });
 		const deps = apiDependencies(() => mint(github.api), { ...now, sleep, warn });
 		const ownDeps = apiDependencies(() => mint(own.api), { ...now, sleep, warn });
 		const token = (workflows: boolean) => mint(workflows ? own.pushWorkflows! : own.push!);
@@ -853,8 +848,8 @@ export async function watch(
 						},
 					};
 		await daemonLoop(async () => {
+			pruneLogs(options.state, deps.now(), deps.warn);
 			const api = new GitHub(probe);
-			const base = options.base ?? (await defaultBranch(api, repository));
 			let again = false;
 			if (await ownQueue(api, repository, base)) {
 				const pass = await ownPass(repository, base, queue, ownDeps, fix);

@@ -1,12 +1,11 @@
 ---
 description: Start multiple quests in parallel.
+guide: Creation, Execution, Coordination, Summaries, Questions, Prompting
 ---
-
-Before you begin, run `quest guide` and read its output completely.
 
 Your goal is to execute many quests in parallel.
 The scope consists of all ready quests that are not claimed.
-Run `quest unblocked --unclaimed --json` for unclaimed ready candidates in milestone priority, descending downstream impact, then tree order.
+Run `quest unblocked --unclaimed --json` for unclaimed ready candidates in milestone priority, descending downstream impact, then path order.
 The count is distinct transitive dependents; other prerequisites may still remain.
 Use that order when dispatching.
 As each agent reports, rerun `quest unblocked --unclaimed --json`, which reads the upstream tree afresh, and start the newly ready quests you would recommend, within the harness's agent limit: merges elsewhere and released claims make more work ready while the spawn runs.
@@ -19,7 +18,7 @@ Start every quest you would recommend starting, without asking: well planned, wi
 Print each quest you skip and why, suggesting `/quest-plan` for any with significant design issues.
 
 Ask only when unsure, such as a quest that may not be worth implementing or may not be worth doing now.
-Present those one at a time: a short paragraph explaining the problem, the quest's goal, and your recommendation, then one synchronous question following `quest context`'s Questions section, offering:
+Present those one at a time: a short paragraph explaining the problem, the quest's goal, and your recommendation, then one synchronous question following the guide's Questions section, offering:
 
 - `/quest-start`: If the quest should start now.
 - skip: If the quest should not be started yet.
@@ -63,20 +62,9 @@ Resume that agent by messaging it, or with `quest agent resume` for a headless a
 If it cannot be resumed, start a new agent with the same brief plus its claim PR, its checkout, and the token of any hold it took on the PR, which `quest status <pr>` shows, so the new one continues that work and keeps that hold rather than claiming again.
 While the error persists, such as a rate limit before its reset, resume and start nothing until it clears, and report it once rather than per agent.
 
-## Other harnesses
+## Models
 
-A sub-agent runs only this session's harness.
-To start a quest on another, such as Codex from Claude Code when the user asks for it, run it as a headless agent through `quest agent`, which uses that CLI's own login.
-Stop and report if it says the agent CLI is not installed.
-
-Start each agent as a background command, in its own isolated worktree, so the harness reports its exit as it would a sub-agent's:
-`quest agent start --harness <claude|codex> --model <model> --effort <level> --permission-mode <mode> <worktree> <prompt>`.
-Pass the model and effort the user named; `--permission-mode` is Claude Code's permission mode, or Codex's sandbox mode.
-It prints the session id first, then the outcome and the agent's final reply.
-Tell the agent that it cannot prompt, so it ends with any decisions and its recommendations in its final reply, and that ending its turn ends the process and kills its background commands, so it waits in the foreground.
-Ask the user, then resume that session in the background with the answer, as you would message a sub-agent: `quest agent resume` with the same options, the worktree, the session id, and the answer.
-Stop one agent with `quest agent stop <worktree>`.
-When the spawn ends, run `quest agent stop --all`, which stops any agent still running.
-
-Exit status 3 means the harness's account hit its usage limit, and 4 that its CLI is logged out, printing the login command.
-Start nothing more on that harness, report its outage once, and list each interrupted quest with its worktree and session id so the user can resume it later.
+Start each quest on the first entry of its `models` that can run.
+Fall to the next when `quest agent` reports its CLI missing or logged out, or the agent stops on a usage limit with nothing written beyond the claim commit, continuing in that checkout and claim PR.
+Once a model has written anything, the PR is its: list the quest with its worktree and session id to resume after the reset.
+Skip a quest whose list runs out, and report each harness's outage once.

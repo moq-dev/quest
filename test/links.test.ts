@@ -5,10 +5,7 @@ import { ONE, Tree } from "./fixture";
 
 function linked(name: string, target: string): Tree {
 	return new Tree()
-		.write(
-			"quest/README.md",
-			`# Quests\n\n## Goal\n\nShip it.\n\n## Required\n\n- [One](${target})\n- [Two](/quest/two.md)\n`,
-		)
+		.write("quest/README.md", "# Quests\n\n## Goal\n\nShip it.\n")
 		.write(`quest/${name}`, ONE)
 		.write("quest/two.md", `# [S] Two\n\n## Goal\n\nLater.\n\n## Required\n\n- [One](${target})\n`);
 }

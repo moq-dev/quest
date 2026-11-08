@@ -82,9 +82,19 @@ export function environment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	);
 }
 
-/** opencode's environment in an account's home, as `HOME` too, since opencode loads plugins and skills from it. */
+/** The database holding an account's opencode sessions and credentials, which every job on it shares. */
+export function accountDatabase(home: string): string {
+	return join(accountDirectories(home).XDG_DATA_HOME, "opencode", "opencode.db");
+}
+
+/**
+ * opencode's environment in an account's home, as `HOME` too, since opencode
+ * loads plugins and skills from it. The database is named absolutely, since a
+ * job's data directory is elsewhere, and opencode would otherwise pick one per
+ * release channel.
+ */
 function accountEnvironment(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
-	return { ...environment(env), ...accountDirectories(home), HOME: home };
+	return { ...environment(env), ...accountDirectories(home), HOME: home, OPENCODE_DB: accountDatabase(home) };
 }
 
 /** The account's own opencode config: which providers it may use, and the model it picked. */
@@ -239,6 +249,9 @@ export default {
 		const writes = options.writes.map(real);
 		const reads = [...writes, ...options.reads.map(real)];
 		const config = options.config.map(real);
+		await ctx.tool.transform((editor) => {
+			for (const tool of editor.list()) if (tool.options?.namespace === "opencode") editor.remove(tool.id);
+		});
 		await ctx.tool.hook("execute.before", ({ tool, input }) => {
 			const files = Object.hasOwn(TOOLS, tool);
 			if (!files && !FOREGROUND.includes(tool)) return;
@@ -287,22 +300,24 @@ exec /usr/bin/env -i ${kept.join(" ")} "QUEST_COMMAND=$2" ${quote(srt)} --settin
 }
 
 /**
- * Where opencode saves the full output it truncates: a tool's, and a shell
- * command's, under a directory per project. The read-only file tools may read them.
+ * Where opencode saves the full output it truncates, a tool's and a shell
+ * command's, in the job's own data directory so no other job can read it. The
+ * read-only file tools may read them.
  */
-function savedOutput(home: string): string[] {
-	const data = join(accountDirectories(home).XDG_DATA_HOME, "opencode");
-	return [join(data, "tool-output"), join(data, "shell")];
+function savedOutput(data: string): string[] {
+	return [join(data, "opencode", "tool-output"), join(data, "opencode", "shell")];
 }
 
 /**
  * opencode's config for a job. Every tool is allowed, as Claude Code's
  * permission mode allows its own, except: questions, which go through kix;
  * WebFetch, web search, and the desktop browser, which would run in the
- * unconfined server; Code Mode's `execute`, which carries opencode's own
- * tools, such as moving the session to another directory; and the file tools'
- * paths outside the checkout, the attempt's directory, and opencode's saved
- * output, which the plugin keeps read-only. A tool whose last matching rule denies it
+ * unconfined server; Code Mode's `execute`; and the file tools' paths outside
+ * the checkout, the attempt's directory, and the job's saved output, which the
+ * plugin keeps read-only. The plugin also removes opencode's own tools, which
+ * opencode offers directly once `execute` is denied, such as moving or renaming
+ * any session in the account's shared database, or making or removing a
+ * worktree anywhere; one checks its permission under another tool's name. A tool whose last matching rule denies it
  * everywhere is not offered at all. The kix tools stay direct tools rather than
  * Code Mode's. `instructions` is the file holding the launch's system prompt.
  */
@@ -326,7 +341,7 @@ export function jobConfig(options: {
 			deny("execute"),
 			deny("browser"),
 			deny("external_directory"),
-			...[launch.sandbox.tmp, ...savedOutput(launch.home)].map((dir) => ({
+			...[launch.sandbox.tmp, ...savedOutput(launch.data)].map((dir) => ({
 				action: "external_directory",
 				resource: join(dir, "*"),
 				effect: "allow",
@@ -353,7 +368,7 @@ export function jobConfig(options: {
 				options: {
 					cwd: launch.cwd,
 					writes: [launch.cwd, launch.sandbox.tmp],
-					reads: savedOutput(launch.home),
+					reads: savedOutput(launch.data),
 					config: PROJECT_CONFIG.map((name) => join(launch.cwd, name)),
 				},
 			},
@@ -695,6 +710,7 @@ export class Opencode implements Adapter {
 		const shell = join(dir, "sandboxed-bash");
 		writeFileSync(shell, shellScript(this.srt, settings, launch.sandbox, launch.env), { mode: 0o700 });
 		const config = jobConfig({ launch, shell, plugin, instructions });
+		mkdirSync(launch.data, { recursive: true, mode: 0o700 });
 		// The server runs outside the devShell, whose shellHook the job's revision controls, and with a
 		// HOME commands cannot write, since opencode loads plugins and instructions from it.
 		const server = serve(
@@ -702,6 +718,9 @@ export class Opencode implements Adapter {
 			launch.cwd,
 			{
 				...accountEnvironment(launch.env, launch.home),
+				// The job's saved output stays its own, while its sessions and the credential, whose refreshed
+				// tokens every job must see, stay in the account's database.
+				XDG_DATA_HOME: launch.data,
 				TMPDIR: join(dir, "tmp"),
 				OPENCODE_DISABLE_PROJECT_CONFIG: "1",
 				OPENCODE_SERVER_PASSWORD: password,

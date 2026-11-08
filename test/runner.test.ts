@@ -9,19 +9,30 @@ import {
 	readdirSync,
 	realpathSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 
 import type { AdapterName } from "../src/runner/adapter";
 import { Claude, jobEnvironment, streamReader, TOOL_TIMEOUT_MS } from "../src/runner/claude";
-import { addAccount, devShell, login, RunnerInputError, runnerAdapters } from "../src/runner/cli";
+import {
+	addAccount,
+	devShell,
+	listAccounts,
+	login,
+	removeAccount,
+	RunnerInputError,
+	runnerAdapters,
+} from "../src/runner/cli";
 import { Connection, type Socket, backoff } from "../src/runner/connection";
-import { type Account, RunnerHome } from "../src/runner/home";
+import { type Account, RunnerHome, type Seat } from "../src/runner/home";
 import { serveTools } from "../src/runner/mcp";
+import { clientKey, reset, startProxy, writeProxyConfig } from "../src/runner/proxy";
 import {
 	accountDirectories,
 	accountLimit,
@@ -37,9 +48,9 @@ import {
 import { FLUSH_BYTES, OutputUploader, split } from "../src/runner/output";
 import { formatAnswer, resumePrompt, startPrompt, systemPrompt } from "../src/runner/prompt";
 import type { Job } from "../src/runner/protocol";
-import type { Round } from "../src/cli/review";
+import { type Round, ReviewLimitError } from "../src/cli/review";
 import { type ReviewRequest, reviewerFor, Unreviewable } from "../src/runner/review";
-import { Runner } from "../src/runner/runner";
+import { LIMIT_FALLBACK_MS, Runner } from "../src/runner/runner";
 import {
 	REGISTRIES,
 	type Sandbox,
@@ -663,15 +674,18 @@ describe("sandbox", () => {
 				AWS_SECRET_ACCESS_KEY: "s",
 				SSH_AUTH_SOCK: "a",
 			},
-			"/acct",
+			"/pool",
 			sandbox,
+			{ origin: "http://127.0.0.1:4000" },
 		);
+		// The proxy's client key reaches Claude Code through apiKeyHelper, never the environment commands inherit.
 		expect(env).toEqual({
 			PATH: "/bin",
 			HOME: "/home/me",
 			LANG: "C",
 			HTTPS_PROXY: "p",
-			CLAUDE_CONFIG_DIR: "/acct",
+			CLAUDE_CONFIG_DIR: "/pool",
+			ANTHROPIC_BASE_URL: "http://127.0.0.1:4000",
 			TMPDIR: "/tmp/quest-job-x",
 			CLAUDE_ENV_FILE: "/tmp/quest-job-x/env.sh",
 		});
@@ -717,6 +731,19 @@ describe("Claude Code output", () => {
 
 		const crashed = streamReader();
 		expect(crashed.exit(1, "boom\n")).toEqual({ limited: null, failed: true, reply: "boom" });
+
+		// What Claude Code 2.1.305 shows once every credential in the runner's pool is cooling down.
+		const pooled = streamReader();
+		pooled.line(JSON.stringify({ type: "assistant", error: "rate_limit", api_error_status: 429 }));
+		pooled.line(
+			JSON.stringify({
+				type: "result",
+				is_error: true,
+				api_error_status: 429,
+				result: "API Error: Request rejected (429) · All credentials for model claude-opus-5-5 are cooling down (last error: rate_limit_error: This request would exceed your account's rate limit.)",
+			}),
+		);
+		expect(pooled.exit(1, "").limited).toEqual({ until: null });
 	});
 });
 
@@ -870,15 +897,29 @@ describe("opencode", () => {
 		const { default: plugin } = await import(pathToFileURL(file).href);
 		const config = ["opencode.json", ".opencode"].map((name) => join(checkout, name));
 		let hook: ((event: { tool: string; input: unknown }) => unknown) | undefined;
+		let tools = [
+			{ id: "read", options: { codemode: false } },
+			{ id: "opencode_session_move", options: { namespace: "opencode" } },
+			{ id: "opencode_worktree_remove", options: { namespace: "opencode", permission: "edit" } },
+			{ id: "kix_ask", options: { namespace: "kix" } },
+		];
 		await plugin.setup({
 			options: { cwd: checkout, writes: [checkout, tmp], reads: [output], config },
 			tool: {
+				transform: async (callback: (editor: unknown) => void) => {
+					callback({
+						list: () => tools,
+						remove: (id: string) => (tools = tools.filter((tool) => tool.id !== id)),
+					});
+				},
 				hook: async (name: string, callback: typeof hook) => {
 					expect(name).toBe("execute.before");
 					hook = callback;
 				},
 			},
 		});
+		// opencode's own tools run in the server, one checking its permission under another tool's name.
+		expect(tools.map((tool) => tool.id)).toEqual(["read", "kix_ask"]);
 		const call = async (tool: string, input: unknown) => hook!({ tool, input });
 		const patch = (...headers: string[]) => ({
 			patchText: ["*** Begin Patch", ...headers, "+x", "*** End Patch"].join("\n"),
@@ -1142,6 +1183,19 @@ describe("prompts", () => {
 		expect(merge).toContain("a multiple of three reports findings");
 	});
 
+	test("run a delete job through the delete skill, repurposing its pull request and landing with deliver", () => {
+		const del = startPrompt(
+			job("a".repeat(40), { workflow: "delete", target: "pulls/9", branch: "quest/m0/old" }),
+			null,
+			tempDir(),
+		);
+		expect(del).toContain("Delete the quest `quest/m0/old.md` that pull request #9 of owner/repo claims");
+		expect(del).toContain("kix lands it only while it changes nothing but quest files");
+		expect(del).toContain("call `deliver` with the repurposed pull request's title and body");
+		expect(del).toContain("# The delete workflow");
+		expect(del).toContain("Delete the specified quest with `quest rm`");
+	});
+
 	test("carry earlier summaries and the latest answer", () => {
 		const questions = [
 			{
@@ -1216,7 +1270,7 @@ describe("account add", () => {
 		const home = new RunnerHome(join(dir, "home"));
 		const [account] = home.accounts();
 		expect(account).toMatchObject({
-			adapter: "opencode",
+			cli: "opencode",
 			provider: "opencode-go",
 			kind: "subscription",
 			label: "OpenCode Go (opencode)",
@@ -1246,9 +1300,265 @@ describe("account add", () => {
 		]);
 		expect(new Set(calls.map((c) => c.cwd))).toEqual(new Set([home.accountHome(account!.id)]));
 	});
+
+	/** A runner home with a fake CLIProxyAPI whose sign-in saves `email`'s credential as the real one does. */
+	function pooled(env: NodeJS.ProcessEnv = {}) {
+		const dir = tempDir();
+		const bin = join(dir, "bin");
+		mkdirSync(bin);
+		writeFileSync(join(bin, "cliproxyapi"), `#!${process.execPath}\n${FAKE_CLIPROXY}`);
+		chmodSync(join(bin, "cliproxyapi"), 0o755);
+		const out: string[] = [];
+		const io = {
+			stdout: (text: string) => out.push(text),
+			stderr: () => {},
+			env: {
+				PATH: process.env.PATH,
+				QUEST_RUNNER_HOME: join(dir, "home"),
+				QUEST_RUNNER_CLIPROXY: join(bin, "cliproxyapi"),
+				...env,
+			} as NodeJS.ProcessEnv,
+		};
+		const signIn = (email: string) => writeFileSync(join(dir, "email"), email);
+		const calls = () =>
+			readFileSync(join(dir, "calls.log"), "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as string[]);
+		return { io, out, signIn, calls, home: () => new RunnerHome(join(dir, "home")) };
+	}
+
+	const config = (home: RunnerHome) =>
+		JSON.parse(readFileSync(join(home.proxyDir(), "config.yaml"), "utf8")) as Record<string, any>;
+
+	posix("signs Claude and Codex subscriptions in to the proxy's pool", async () => {
+		const { io, out, signIn, calls, home } = pooled();
+		signIn("a@example.test");
+		expect(await addAccount(io, { cli: "claude", console: false })).toBe(0);
+		signIn("b@example.test");
+		expect(await addAccount(io, { cli: "codex", console: false, label: "Work" })).toBe(0);
+		const [claude, codex] = home().accounts();
+		expect(claude).toMatchObject({
+			cli: "claude",
+			provider: "anthropic",
+			kind: "subscription",
+			label: "a@example.test",
+			credential: "claude-a@example.test.json",
+		});
+		expect(codex).toMatchObject({
+			cli: "codex",
+			provider: "openai",
+			label: "Work",
+			credential: "codex-b@example.test.json",
+		});
+		expect(calls().map((argv) => argv.slice(2))).toEqual([["-claude-login"], ["-codex-login"]]);
+		// The sign-in reads the runner's own config, whose auth directory is in its home.
+		expect(calls()[0]!.slice(0, 2)).toEqual(["-config", join(home().proxyDir(), "config.yaml")]);
+		expect(config(home()).oauth["auth-dir"]).toBe(join(home().proxyDir(), "auth"));
+		// Signing in again refreshes the credential rather than adding the account twice.
+		signIn("a@example.test");
+		expect(await addAccount(io, { cli: "claude", console: false })).toBe(0);
+		expect(home().accounts()).toHaveLength(2);
+		expect(out.at(-1)).toBe(`Signed a@example.test in again as ${claude!.id}.\n`);
+		// Codex's pool only reviews, so kix sees only the Claude pool.
+		expect(home().seats()).toEqual([
+			{
+				id: "claude",
+				adapter: "claude",
+				provider: "anthropic",
+				kind: "subscription",
+				label: "Claude pool: a@example.test",
+			},
+		]);
+		// Removing a pooled account deletes its credential, signing it out of the proxy.
+		removeAccount(io, claude!.id);
+		expect(existsSync(join(home().proxyDir(), "auth", "claude-a@example.test.json"))).toBe(false);
+		expect(home().seats()).toEqual([]);
+	});
+
+	posix("keeps the accounts another command changed during a sign-in", async () => {
+		const { io, signIn, home } = pooled();
+		signIn("a@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		const [a] = home().accounts();
+		const other = { ...a!, id: "other", label: "Other", credential: "claude-other.json" };
+		// While b signs in, another command removes a and adds another account.
+		writeFileSync(join(io.env.QUEST_RUNNER_HOME!, "..", "during.json"), JSON.stringify([other]));
+		signIn("b@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		expect(
+			home()
+				.accounts()
+				.map((account) => account.label),
+		).toEqual(["Other", "b@example.test"]);
+	});
+
+	posix("lets a pool that gained an account serve again", async () => {
+		const { io, signIn, home } = pooled({ ANTHROPIC_API_KEY: "sk-ant-api03-abcd" });
+		const until = Date.now() + 3_600_000;
+		home().limit("claude", until);
+		home().limit("codex", until);
+		signIn("a@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		expect(home().limits()).toEqual({ codex: until });
+		home().limit("claude", until);
+		await addAccount(io, { cli: "claude", console: true });
+		expect(home().limits()).toEqual({ codex: until });
+		// Signing an account in again gives the pool no account its provider has not refused.
+		home().limit("claude", until);
+		signIn("a@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		expect(home().limits()).toEqual({ claude: until, codex: until });
+	});
+
+	posix("uses the remote flows over SSH, and fails a sign-in that saved nothing", async () => {
+		const { io, signIn, calls, home } = pooled({ SSH_CONNECTION: "10.0.0.1 22 10.0.0.2 22" });
+		signIn("a@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		signIn("b@example.test");
+		await addAccount(io, { cli: "codex", console: false });
+		expect(calls().map((argv) => argv.slice(2))).toEqual([
+			["-claude-login", "-no-browser"],
+			["-codex-device-login"],
+		]);
+		// The proxy exits 0 after a failed sign-in, which saves no credential.
+		signIn("");
+		await expect(addAccount(io, { cli: "claude", console: false })).rejects.toThrow(
+			"the account did not finish signing in",
+		);
+		expect(home().accounts()).toHaveLength(2);
+	});
+
+	posix("adds a Console API key to the Claude pool's config", async () => {
+		const { io, out, home } = pooled();
+		await expect(addAccount(io, { cli: "claude", console: true })).rejects.toThrow(
+			/reads the Console API key from ANTHROPIC_API_KEY/,
+		);
+		io.env = { ...io.env, ANTHROPIC_API_KEY: "not-a-key" };
+		await expect(addAccount(io, { cli: "claude", console: true })).rejects.toThrow(RunnerInputError);
+		await expect(addAccount(io, { cli: "codex", console: true })).rejects.toThrow(RunnerInputError);
+		io.env = { ...io.env, ANTHROPIC_API_KEY: "sk-ant-api03-abcd" };
+		expect(await addAccount(io, { cli: "claude", console: true })).toBe(0);
+		await expect(addAccount(io, { cli: "claude", console: true })).rejects.toThrow(/already in the Claude pool/);
+		const [account] = home().accounts();
+		expect(account).toMatchObject({ cli: "claude", kind: "api-key", label: "Console API key ...abcd" });
+		expect(config(home())["api-keys"]).toEqual({
+			claude: [{ name: account!.id, keys: [{ "api-key": "sk-ant-api03-abcd" }] }],
+		});
+		expect(home().seats()[0]).toMatchObject({ id: "claude", kind: "api-key" });
+		out.length = 0;
+		listAccounts(io);
+		expect(out).toEqual([`${account!.id}\tclaude\tapi-key\tConsole API key ...abcd\n`]);
+		// A limited pool's accounts say when it resets.
+		home().limit("claude", 4_000_000_000_000);
+		out.length = 0;
+		listAccounts(io);
+		expect(out[0]).toContain("\tlimited until 2096-");
+		removeAccount(io, account!.id);
+		expect(config(home())["api-keys"]).toBeUndefined();
+		// The last account of a pool takes its limit with it.
+		expect(home().limits()).toEqual({});
+	});
+});
+
+describe("CLIProxyAPI", () => {
+	posix("starts on a free loopback port with the runner's config and client key, and stops", async () => {
+		const dir = tempDir();
+		const binary = join(dir, "cliproxyapi");
+		writeFileSync(
+			binary,
+			`#!${process.execPath}
+const fs = require("node:fs");
+const config = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+fs.writeFileSync(${JSON.stringify(join(dir, "seen.json"))}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), config }));
+console.log("API server started successfully on: 127.0.0.1:" + config.server.port);
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+		);
+		chmodSync(binary, 0o755);
+		const home = new RunnerHome(join(dir, "home"));
+		home.saveAccounts([
+			{ id: "k", cli: "claude", provider: "anthropic", kind: "api-key", label: "key", key: "sk-ant-x" },
+			{
+				id: "s",
+				cli: "claude",
+				provider: "anthropic",
+				kind: "subscription",
+				label: "s",
+				credential: "claude-s.json",
+			},
+		]);
+		const proxy = await startProxy(binary, home, { PATH: process.env.PATH, ANTHROPIC_API_KEY: "ambient" });
+		try {
+			const seen = JSON.parse(readFileSync(join(dir, "seen.json"), "utf8"));
+			expect(seen.argv).toEqual(["-config", join(home.proxyDir(), "config.yaml")]);
+			expect(seen.cwd).toBe(home.proxyDir());
+			expect(proxy.origin).toBe(`http://127.0.0.1:${seen.config.server.port}`);
+			expect(seen.config).toMatchObject({
+				server: { host: "127.0.0.1" },
+				// No management API, which would take another key.
+				management: { "secret-key": "" },
+				access: { "api-keys": [proxy.key] },
+				oauth: { "auth-dir": join(home.proxyDir(), "auth") },
+				routing: { strategy: "round-robin", "session-affinity": true },
+				"api-keys": { claude: [{ name: "k", keys: [{ "api-key": "sk-ant-x" }] }] },
+			});
+			// The key is the runner's, kept user-only, and the same on the next start.
+			expect(readFileSync(proxy.keyFile, "utf8")).toBe(proxy.key);
+			expect(statSync(proxy.keyFile).mode & 0o777).toBe(0o600);
+			expect(clientKey(home).key).toBe(proxy.key);
+			// An account added while it runs rewrites the config on the same port.
+			writeProxyConfig(home);
+			expect(JSON.parse(readFileSync(join(home.proxyDir(), "config.yaml"), "utf8")).server.port).toBe(
+				seen.config.server.port,
+			);
+		} finally {
+			await proxy.stop();
+		}
+		expect(proxy.stopping).toBe(true);
+		expect(await proxy.exited).toMatch(/^CLIProxyAPI exited 0/);
+
+		writeFileSync(binary, `#!/bin/sh\necho "config is invalid" >&2\nexit 1\n`);
+		await expect(startProxy(binary, home, {})).rejects.toThrow("CLIProxyAPI exited 1:\nconfig is invalid");
+	});
+
+	test("asks the proxy when a cooling pool resets, from its Retry-After", async () => {
+		const seen: { url: string; key: string; version?: string; body: Record<string, unknown> }[] = [];
+		let status = 429;
+		const server = createServer((req, res) => {
+			let body = "";
+			req.on("data", (chunk) => (body += chunk));
+			req.on("end", () => {
+				seen.push({
+					url: req.url!,
+					key: req.headers.authorization!,
+					version: req.headers["anthropic-version"] as string | undefined,
+					body: JSON.parse(body),
+				});
+				res.writeHead(status, status === 429 ? { "Retry-After": "120" } : {}).end("{}");
+			});
+		});
+		await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+		const endpoint = { origin: `http://127.0.0.1:${(server.address() as { port: number }).port}`, key: "k" };
+		try {
+			expect(await reset(endpoint, "claude", "claude-opus-5-5", 1000)).toBe(121_000);
+			expect(await reset(endpoint, "codex", "gpt-6.1-sol", 1000)).toBe(121_000);
+			status = 200;
+			expect(await reset(endpoint, "claude", "claude-opus-5-5", 1000)).toBeNull();
+		} finally {
+			server.close();
+		}
+		expect(seen.map(({ url, key, version, body }) => [url, key, version, body.model])).toEqual([
+			["/v1/messages", "Bearer k", "2023-06-01", "claude-opus-5-5"],
+			["/v1/responses", "Bearer k", undefined, "gpt-6.1-sol"],
+			["/v1/messages", "Bearer k", "2023-06-01", "claude-opus-5-5"],
+		]);
+	});
 });
 
 describe("runner adapters", () => {
+	const PROXY = { origin: "http://127.0.0.1:9", keyFile: "/runner/proxy/client-key" };
 	/** What socat says when srt's seccomp filter refuses it a Unix socket. */
 	const REFUSED = "socat[5] E socket(1, 1, 0): Operation not permitted";
 
@@ -1262,7 +1572,7 @@ describe("runner adapters", () => {
 			}
 		};
 		install("claude", "opencode");
-		const adapter = runnerAdapters({ PATH: bin });
+		const adapter = runnerAdapters({ PATH: bin }, PROXY);
 		expect(() => adapter("claude")).toThrow(/bwrap and socat are not installed/);
 		// An account added while the runner runs is checked then.
 		install("bwrap", "socat");
@@ -1290,7 +1600,7 @@ describe("runner adapters", () => {
 			writeFileSync(join(bin, name), "#!/bin/sh\n");
 			chmodSync(join(bin, name), 0o755);
 		}
-		expect(() => runnerAdapters({ PATH: bin })("opencode")).toThrow(/has no seccomp helper \(apply-seccomp/);
+		expect(() => runnerAdapters({ PATH: bin }, PROXY)("opencode")).toThrow(/has no seccomp helper \(apply-seccomp/);
 		// Anything but the filter's own refusal fails closed.
 		expect(unixSocketRefusal(srt("exit 0\n"), { PATH: bin })).toMatch(/^could not check that .* \(exit 0\)$/);
 		expect(unixSocketRefusal(srt(`echo '${REFUSED}' >&2\nexit 1\n`), { PATH: bin })).toBeNull();
@@ -1314,7 +1624,7 @@ describe("runner adapters", () => {
 			chmodSync(join(bin, name), 0o755);
 		}
 		const bwrap = join(realpathSync(bin), "bwrap");
-		expect(() => runnerAdapters({ PATH: bin })("claude")).toThrow(
+		expect(() => runnerAdapters({ PATH: bin }, PROXY)("claude")).toThrow(
 			`${bwrap} cannot make the sandbox's namespaces (bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted)`,
 		);
 		expect(sandboxRefusal(join(bin, "claude"))).toBeNull();
@@ -1375,6 +1685,44 @@ describe("login", () => {
 });
 
 describe("runner home", () => {
+	test("offers kix the Claude pool as one account where its first account was, and no Codex pool", () => {
+		const home = new RunnerHome(tempDir());
+		const add = (id: string, cli: Account["cli"], kind: Account["kind"] = "subscription") => ({
+			id,
+			cli,
+			provider: cli === "claude" ? "anthropic" : "openai",
+			kind,
+			label: `${id}@example.test`,
+		});
+		home.saveAccounts([
+			add("o1", "opencode"),
+			add("c1", "claude", "api-key"),
+			add("x1", "codex"),
+			add("c2", "claude"),
+			add("o2", "opencode"),
+		]);
+		expect(home.seats().map((seat) => [seat.id, seat.adapter, seat.kind, seat.label])).toEqual([
+			["o1", "opencode", "subscription", "o1@example.test"],
+			// A pool with any subscription bills as one.
+			["claude", "claude", "subscription", "Claude pool: c1@example.test, c2@example.test"],
+			["o2", "opencode", "subscription", "o2@example.test"],
+		]);
+		// kix keeps 100 characters of a label.
+		home.saveAccounts(Array.from({ length: 9 }, (_, i) => add(`claude-account-${i}`, "claude")));
+		const [pool] = home.seats();
+		expect(pool!.label).toHaveLength(100);
+		expect(pool!.label.endsWith("…")).toBe(true);
+	});
+
+	test("refuses accounts an earlier runner saved, saying how to add them again", () => {
+		const home = new RunnerHome(tempDir());
+		writeFileSync(
+			join(home.dir, "accounts.json"),
+			JSON.stringify([{ id: "a", adapter: "claude", provider: "anthropic", kind: "subscription", label: "a" }]),
+		);
+		expect(() => home.accounts()).toThrow(/is from an earlier quest runner.*`quest runner account add`/);
+	});
+
 	/** Another process holding `dir` until it is killed. */
 	async function holder(dir: string) {
 		const root = resolve(import.meta.dirname, "..");
@@ -1440,6 +1788,8 @@ log({
 	stdin,
 	cwd: process.cwd(),
 	home: process.env.CLAUDE_CONFIG_DIR,
+	baseUrl: process.env.ANTHROPIC_BASE_URL,
+	credentials: Object.keys(process.env).filter((name) => /^ANTHROPIC_(API_KEY|AUTH_TOKEN)$/.test(name)),
 	gh: process.env.GH_TOKEN ?? null,
 	secret: process.env.AWS_SECRET_ACCESS_KEY ?? null,
 	tmp: process.env.TMPDIR,
@@ -1492,6 +1842,31 @@ async function rpc(method, params) {
 `;
 
 /**
+ * A fake CLIProxyAPI whose sign-in saves the credential of the email in
+ * `email` to the config's auth directory, or nothing for an empty one, and
+ * exits 0 either way, as the real one does.
+ */
+const FAKE_CLIPROXY = `
+const fs = require("node:fs");
+const { join } = require("node:path");
+const argv = process.argv.slice(2);
+fs.appendFileSync(join(__dirname, "..", "calls.log"), JSON.stringify(argv) + "\\n");
+const config = JSON.parse(fs.readFileSync(argv[argv.indexOf("-config") + 1], "utf8"));
+const email = fs.readFileSync(join(__dirname, "..", "email"), "utf8");
+const type = argv.includes("-claude-login") ? "claude" : "codex";
+if (email) {
+	fs.mkdirSync(config.oauth["auth-dir"], { recursive: true });
+	fs.writeFileSync(join(config.oauth["auth-dir"], type + "-" + email + ".json"), JSON.stringify({ type, email, access_token: String(Math.random()) }));
+}
+// Another quest runner account command that changes the accounts while this sign-in waits.
+const during = join(__dirname, "..", "during.json");
+if (fs.existsSync(during)) {
+	fs.copyFileSync(during, join(config.oauth["auth-dir"], "..", "..", "accounts.json"));
+	fs.rmSync(during);
+}
+`;
+
+/**
  * A fake `opencode serve --stdio` that runs the same steps as the fake
  * `claude` on each prompt: it checks the password, loads the runner's plugin,
  * streams events, and ends a waiting turn when the session is interrupted.
@@ -1534,7 +1909,7 @@ const plugin = config && (async () => {
 	const { package: dir, options } = config.plugins[0];
 	const { default: definition } = await import(pathToFileURL(join(dir, "server.js")).href);
 	let hooked = false;
-	await definition.setup({ options, tool: { hook: async () => (hooked = true) } });
+	await definition.setup({ options, tool: { transform: async (edit) => edit({ list: () => [], remove() {} }), hook: async () => (hooked = true) } });
 	return { id: definition.id, source: { type: "local", path: dir }, features: {}, state: hooked ? { status: "active" } : { status: "failed", error: "no hook" } };
 })();
 const body = (request) => new Promise((resolve) => {
@@ -1548,7 +1923,7 @@ async function turn(session, text) {
 	const resume = fs.existsSync(logFile) && fs.readFileSync(logFile, "utf8").includes('"prompted":"' + session + '"');
 	log({
 		argv, cwd: process.cwd(), stdin: text, system: fs.readFileSync(config.instructions[0], "utf8"), session, prompted: session,
-		xdg: process.env.XDG_DATA_HOME, home: process.env.HOME, devShell: process.env.IN_DEVSHELL ?? null,
+		xdg: process.env.XDG_DATA_HOME, db: process.env.OPENCODE_DB ?? null, home: process.env.HOME, devShell: process.env.IN_DEVSHELL ?? null,
 		gh: process.env.GH_TOKEN ?? null, projectConfig: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null, config,
 	});
 	await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake", version: "0" } });
@@ -1655,8 +2030,12 @@ interface Rig {
 	logs: string[];
 	calls(): Sent[];
 	steps(steps: Record<string, unknown[]>): void;
+	/** Assign `job`, on the rig's seat when it names the default account. */
 	assign(job: Job, instructions?: string | null): void;
 	result(): Promise<Sent>;
+	/** The models the runner asked the proxy about, and what it answers. */
+	resets: { pool: string; model: string }[];
+	reset(until: number | null): void;
 }
 
 /** A rig whose `publishReply` may answer a publication itself, or throw as if its reply were lost. */
@@ -1691,14 +2070,26 @@ function rig(
 	const log = join(dir, "calls.log");
 	const stepsFile = join(dir, "steps.json");
 	const home = new RunnerHome(join(dir, "home"));
+	// A Claude account joins the pool, which kix sees as the seat `claude`; an opencode account is its own seat.
 	const account: Account = {
 		id: "acct1",
-		adapter: cli,
+		cli,
 		provider: cli === "claude" ? "anthropic" : "openai",
 		kind: "subscription",
 		label: "me@example.test",
+		...(cli === "claude" && { credential: "claude-me@example.test.json" }),
 	};
-	home.saveAccounts([account]);
+	const seat = cli === "claude" ? "claude" : "acct1";
+	// Codex reviews Claude jobs from its own pool.
+	const reviewer: Account = {
+		id: "acct2",
+		cli: "codex",
+		provider: "openai",
+		kind: "subscription",
+		label: "me@example.test",
+		credential: "codex-me@example.test.json",
+	};
+	home.saveAccounts(cli === "claude" ? [account, reviewer] : [account]);
 	if (cli === "opencode") {
 		// What `quest runner account add opencode --model openai/gpt-5.5` records after a ChatGPT sign-in.
 		const config = join(accountDirectories(home.accountHome("acct1")).XDG_CONFIG_HOME, "opencode");
@@ -1728,14 +2119,24 @@ function rig(
 	};
 	const logs: string[] = [];
 	const source = upstream();
+	const resets: { pool: string; model: string }[] = [];
+	let reset: number | null = null;
+	const proxy = { origin: "http://127.0.0.1:9", key: "proxy-key", keyFile: join(dir, "client-key") };
 	const runner = new Runner({
 		home,
 		login: { url: "http://kix.test", token: "token", id: "r1", name: "laptop" },
 		slots: 2,
 		adapter: () =>
 			cli === "claude"
-				? new Claude(join(bin, "claude"), env)
+				? new Claude(join(bin, "claude"), proxy, env)
 				: new Opencode(join(bin, "opencode"), join(bin, "srt"), env),
+		proxy: {
+			...proxy,
+			reset: async (pool, model) => {
+				resets.push({ pool, model });
+				return reset;
+			},
+		},
 		devShell: (job, repository, signal) => devShell(job, repository, env, signal),
 		remote: () => source.dir,
 		review: (request) => {
@@ -1787,7 +2188,10 @@ function rig(
 						.map((line) => JSON.parse(line))
 				: [],
 		steps: (steps) => writeFileSync(stepsFile, JSON.stringify(steps)),
-		assign: (job, instructions = null) => {
+		resets,
+		reset: (until) => (reset = until),
+		assign: (assigned, instructions = null) => {
+			const job = assigned.account === "acct1" ? { ...assigned, account: seat } : assigned;
 			const send = () => hub.socket.deliver({ type: "assign", job, instructions });
 			if (hub.of("status").length) send();
 			else void hub.next((m) => m.type === "status").then(send);
@@ -1956,7 +2360,14 @@ describe("quest runner", () => {
 		expect(r.hub.of("status").some((s) => s.attempts.length === 1 && s.slots === 1)).toBe(true);
 		expect(r.hub.of("checkpoint")).toMatchObject([{ summary: "Wrote a.txt", session: expect.any(String) }]);
 		const [checkpoint, delivery] = r.publishes;
-		expect(checkpoint).toMatchObject({ job: "job1", attempt: 1, head: null, message: "Wrote a.txt" });
+		expect(checkpoint).toMatchObject({
+			job: "job1",
+			attempt: 1,
+			head: null,
+			message: "Wrote a.txt",
+			// kix records the session from each publication on a pull request whose text it does not write.
+			implementer: "Implementer: claude, claude-test, high effort",
+		});
 		expect(checkpoint!.changes).toEqual([{ path: "a.txt", content: Buffer.from("first\n").toString("base64") }]);
 		expect(delivery).toMatchObject({
 			head: "0".repeat(39) + "1",
@@ -1993,7 +2404,11 @@ describe("quest runner", () => {
 			]),
 		);
 		expect(launch.argv.slice(-2)).toEqual(["--disallowedTools", "AskUserQuestion,WebFetch"]);
-		expect(launch.home).toBe(r.home.accountHome("acct1"));
+		// It runs on the pool's home, which holds no login, through the proxy, whose key only apiKeyHelper reads.
+		expect(launch.home).toBe(r.home.poolHome("claude"));
+		expect(launch.baseUrl).toBe("http://127.0.0.1:9");
+		expect(launch.credentials).toEqual([]);
+		expect(launch.settings.apiKeyHelper).toBe(`cat '${join(dirname(r.home.dir), "client-key")}'`);
 		// The tools' bearer token never appears on the command line.
 		expect(JSON.stringify(launch.argv)).not.toContain("Bearer");
 		expect(launch.gh).toBeNull();
@@ -2135,15 +2550,18 @@ describe("quest runner", () => {
 		const [nix, first, srt, shell] = r.calls();
 		expect(nix.nix.slice(0, 3)).toEqual(["print-dev-env", "--accept-flake-config", "--no-write-lock-file"]);
 		const home = r.home.accountHome("acct1");
+		const checkout = r.home.path("jobs", "job1");
+		const data = `${checkout}.data`;
 		// The server runs outside the devShell, in the account's own homes, and loads nothing from the checkout.
 		expect(first.argv).toEqual(["serve", "--stdio", "--hostname=127.0.0.1", "--port=0"]);
 		expect(first.devShell).toBeNull();
-		expect(first.xdg).toBe(join(home, "data"));
+		// It saves output in the job's own data directory, but keeps sessions and the credential in the account's database.
+		expect(first.xdg).toBe(data);
+		expect(first.db).toBe(join(home, "data", "opencode", "opencode.db"));
 		expect(first.home).toBe(home);
 		expect(first.projectConfig).toBe("1");
 		expect(first.gh).toBeNull();
 		// Its commands run through sandbox-runtime with the policy Claude Code's sandbox gets.
-		const checkout = r.home.path("jobs", "job1");
 		const repository = srt.settings.filesystem.allowRead[1];
 		const [tmp] = srt.settings.filesystem.allowWrite.slice(1);
 		expect(srt.srt[0]).toBe("--settings");
@@ -2181,9 +2599,11 @@ describe("quest runner", () => {
 					resource: "*",
 					effect: "deny",
 				})),
-				...[tmp, join(home, "data", "opencode", "tool-output"), join(home, "data", "opencode", "shell")].map(
-					(dir) => ({ action: "external_directory", resource: `${dir}/*`, effect: "allow" }),
-				),
+				...[tmp, join(data, "opencode", "tool-output"), join(data, "opencode", "shell")].map((dir) => ({
+					action: "external_directory",
+					resource: `${dir}/*`,
+					effect: "allow",
+				})),
 			],
 			lsp: false,
 			formatter: false,
@@ -2200,11 +2620,12 @@ describe("quest runner", () => {
 		expect(first.config.plugins[0].options).toEqual({
 			cwd: checkout,
 			writes: [checkout, tmp],
-			reads: [join(home, "data", "opencode", "tool-output"), join(home, "data", "opencode", "shell")],
+			reads: [join(data, "opencode", "tool-output"), join(data, "opencode", "shell")],
 			config: [".opencode", "opencode.json", "opencode.jsonc"].map((name) => join(checkout, name)),
 		});
-		// The launch's shell, plugin, and settings are gone once it ends.
+		// The launch's shell, plugin, and settings are gone once it ends, but the job's data stays for its next attempt.
 		expect(existsSync(dirname(first.config.shell))).toBe(false);
+		expect(existsSync(data)).toBe(true);
 		// The server's own output and its events stream as raw output.
 		const output = r.hub
 			.of("output")
@@ -2242,6 +2663,9 @@ describe("quest runner", () => {
 		// The kix session maps to the opencode session that asked.
 		expect(resumed[1].session).toBe(first.session);
 		expect(resumed[1].stdin).toContain("Q: Which?\nA: A");
+		// The job's data goes with its checkout.
+		expect(existsSync(checkout)).toBe(false);
+		expect(existsSync(data)).toBe(false);
 		await r.runner.shutdown();
 	});
 
@@ -2270,7 +2694,9 @@ describe("quest runner", () => {
 		const limited = await r.hub.next((m) => m.type === "result" && m.job === "job2");
 		await idle(r.runner);
 		expect(limited).toMatchObject({ outcome: "limited" });
-		expect(r.home.accounts()[0]!.limitedUntil).toBe(resets * 1000);
+		expect(r.home.limits()).toEqual({ acct1: resets * 1000 });
+		// An opencode account's reset comes from its provider, never the proxy.
+		expect(r.resets).toEqual([]);
 		await r.runner.shutdown();
 	});
 
@@ -2331,7 +2757,7 @@ describe("quest runner", () => {
 		expect(r.calls().filter((c) => c.argv)).toHaveLength(0);
 	});
 
-	posix("pauses a limited account until it resets, never switching accounts", async () => {
+	posix("pauses a limited pool until it resets", async () => {
 		const r = rig();
 		const resets = Math.floor(Date.now() / 1000) + 3600;
 		r.steps({
@@ -2345,13 +2771,59 @@ describe("quest runner", () => {
 		const result = await r.result();
 		await idle(r.runner);
 		expect(result).toMatchObject({ outcome: "limited" });
-		expect(result.summary).toContain("me@example.test hit its usage limit until");
-		expect(r.home.accounts()[0]!.limitedUntil).toBe(resets * 1000);
+		expect(result.summary).toContain(
+			`Claude pool: me@example.test hit its usage limit until ${new Date(resets * 1000).toISOString()}`,
+		);
+		expect(r.home.limits()).toEqual({ claude: resets * 1000 });
+		// The reset Claude Code reported needs no question to the proxy.
+		expect(r.resets).toEqual([]);
 		expect(r.hub.of("status").at(-1)!.accounts).toEqual([
-			{ id: "acct1", provider: "anthropic", kind: "subscription", label: "me@example.test", limited: true },
+			{
+				id: "claude",
+				provider: "anthropic",
+				kind: "subscription",
+				label: "Claude pool: me@example.test",
+				limited: true,
+			},
 		]);
 		// The checkout stays for the account decision, which may resume it here.
 		expect(existsSync(r.home.path("jobs", "job1"))).toBe(true);
+		await r.runner.shutdown();
+	});
+
+	posix("asks the proxy when a cooling pool resets, which Claude Code does not show", async () => {
+		const r = rig();
+		const resets = Date.now() + 2 * 3600_000;
+		r.reset(resets);
+		r.steps({
+			start: [
+				{
+					emit: {
+						type: "result",
+						is_error: true,
+						api_error_status: 429,
+						result: "API Error: Request rejected (429) · All credentials for model claude-test are cooling down",
+					},
+				},
+				{ exit: 1 },
+			],
+		});
+		r.assign(job(r.upstream.commit));
+		const result = await r.result();
+		await idle(r.runner);
+		expect(result).toMatchObject({ outcome: "limited" });
+		expect(result.summary).toContain(`hit its usage limit until ${new Date(resets).toISOString()}`);
+		// The model the session ran on, as its init event named it.
+		expect(r.resets).toEqual([{ pool: "claude", model: "claude-test" }]);
+		expect(r.home.limits()).toEqual({ claude: resets });
+
+		// A proxy that names no reset leaves the pool out for the fallback window.
+		r.reset(null);
+		r.assign(job(r.upstream.commit, { id: "job2" }));
+		const fallback = await r.hub.next((m) => m.type === "result" && m.job === "job2");
+		await idle(r.runner);
+		expect(fallback).toMatchObject({ outcome: "limited" });
+		expect(r.home.limits().claude).toBeGreaterThan(Date.now() + LIMIT_FALLBACK_MS - 60_000);
 		await r.runner.shutdown();
 	});
 
@@ -2550,17 +3022,8 @@ describe("quest runner", () => {
 
 	test("stops waiting for an account's reset once another runner replaces it", async () => {
 		const home = new RunnerHome(tempDir());
-		const until = Date.now() + 3_600_000;
-		home.saveAccounts([
-			{
-				id: "a",
-				adapter: "claude",
-				provider: "anthropic",
-				kind: "subscription",
-				label: "a",
-				limitedUntil: until,
-			},
-		]);
+		home.saveAccounts([{ id: "a", cli: "claude", provider: "anthropic", kind: "subscription", label: "a" }]);
+		home.limit("claude", Date.now() + 3_600_000);
 		const hub = new FakeHub();
 		const set = vi.spyOn(globalThis, "setTimeout");
 		const clear = vi.spyOn(globalThis, "clearTimeout");
@@ -2569,7 +3032,8 @@ describe("quest runner", () => {
 				home,
 				login: { url: "http://kix.test", token: "token", id: "r1", name: "laptop" },
 				slots: 1,
-				adapter: () => new Claude("claude", {}),
+				adapter: () => new Claude("claude", { origin: "http://127.0.0.1:9", keyFile: "/key" }, {}),
+				proxy: { origin: "http://127.0.0.1:9", key: "k", reset: async () => null },
 				devShell: async () => null,
 				remote: () => "",
 				dial: hub.dial,
@@ -2593,43 +3057,101 @@ describe("quest runner", () => {
 describe("runner reviews", () => {
 	const account = (extra: Partial<Account>): Account => ({
 		id: "a",
-		adapter: "claude",
+		cli: "claude",
 		provider: "anthropic",
 		kind: "subscription",
 		label: "a",
 		...extra,
 	});
-	const home = (a: Account) => `/runner/accounts/${a.id}`;
+	const pools = (accounts: Account[], limits: Record<string, number> = {}) => ({
+		accounts,
+		limits,
+		home: (pool: string) => `/runner/pools/${pool}`,
+		proxy: { origin: "http://127.0.0.1:4000", key: "proxy-key" },
+	});
+	const seat = (provider: string): Seat => ({
+		id: provider === "anthropic" ? "claude" : "gpt",
+		adapter: provider === "anthropic" ? "claude" : "opencode",
+		provider,
+		kind: "subscription",
+		label: "a",
+	});
 
-	test("pick the other vendor: Codex on the user's own login, or one of the runner's free Claude Code accounts", () => {
+	test("pick the other vendor's pool, through the proxy and never an ambient login", () => {
 		const env = {
 			PATH: "/usr/bin",
 			QUEST_RUNNER_CLAUDE: "/nix/store/claude/bin/claude",
 			QUEST_RUNNER_CODEX: "/nix/store/codex/bin/codex",
+			// The user's own credentials and gateway, which a review never uses.
+			ANTHROPIC_API_KEY: "sk-ant-user",
+			CODEX_API_KEY: "sk-user",
+			CLAUDE_CONFIG_DIR: "/home/me/.claude",
+			OPENAI_BASE_URL: "https://gateway.example.test/v1",
 		};
-		const claude = account({ id: "claude" });
-		expect(reviewerFor(claude, [claude], home, env)).toEqual({
+		const claude = account({ id: "c" });
+		const codex = account({ id: "x", cli: "codex", provider: "openai" });
+		const pinned = {
+			PATH: "/usr/bin",
+			QUEST_RUNNER_CLAUDE: "/nix/store/claude/bin/claude",
+			QUEST_RUNNER_CODEX: "/nix/store/codex/bin/codex",
+		};
+		expect(reviewerFor(seat("anthropic"), pools([claude, codex]), env)).toEqual({
 			harness: "codex",
-			env: { ...env, PATH: "/nix/store/codex/bin:/usr/bin" },
-		});
-		expect(reviewerFor(claude, [claude], home, { PATH: "/usr/bin" })).toEqual({
-			harness: "codex",
-			env: { PATH: "/usr/bin" },
-		});
-		const openai = account({ id: "gpt", adapter: "opencode", provider: "openai" });
-		const limited = account({ id: "busy", limitedUntil: 2000 });
-		expect(reviewerFor(openai, [openai, limited, claude], home, env, 1000)).toEqual({
-			harness: "claude",
 			env: {
-				...env,
-				CLAUDE_CONFIG_DIR: "/runner/accounts/claude",
-				PATH: ["/nix/store/claude/bin", "/usr/bin"].join(delimiter),
+				...pinned,
+				PATH: ["/nix/store/codex/bin", "/usr/bin"].join(delimiter),
+				OPENAI_BASE_URL: "http://127.0.0.1:4000/v1",
+				CODEX_API_KEY: "proxy-key",
+				CODEX_HOME: "/runner/pools/codex",
 			},
 		});
-		expect(() => reviewerFor(openai, [openai, limited], home, env, 1000)).toThrow(Unreviewable);
-		expect(reviewerFor(openai, [openai, limited], home, env, 3000).env.CLAUDE_CONFIG_DIR).toBe(
-			"/runner/accounts/busy",
+		expect(reviewerFor(seat("openai"), pools([claude]), env, 1000)).toEqual({
+			harness: "claude",
+			env: {
+				...pinned,
+				PATH: ["/nix/store/claude/bin", "/usr/bin"].join(delimiter),
+				ANTHROPIC_BASE_URL: "http://127.0.0.1:4000",
+				ANTHROPIC_AUTH_TOKEN: "proxy-key",
+				CLAUDE_CONFIG_DIR: "/runner/pools/claude",
+			},
+		});
+		// No pool to review with, or a limited one, leaves the head to a maintainer.
+		expect(() => reviewerFor(seat("anthropic"), pools([claude]), env)).toThrow(
+			"this runner has no Codex account to review with; add one with `quest runner account add codex`",
 		);
+		expect(() => reviewerFor(seat("openai"), pools([claude], { claude: 2000 }), env, 1000)).toThrow(
+			`the Claude Code pool is limited until ${new Date(2000).toISOString()}`,
+		);
+		expect(reviewerFor(seat("openai"), pools([claude], { claude: 2000 }), env, 3000).harness).toBe("claude");
+	});
+
+	posix("mark the reviewer's pool limited until the proxy's reset", async () => {
+		const resets = Date.now() + 3 * 3600_000;
+		const r = rig(undefined, "claude", async () => {
+			throw new ReviewLimitError("codex", null, "gpt-6.1-sol");
+		});
+		r.reset(resets);
+		try {
+			r.steps({
+				start: [
+					{ write: "new.txt", content: "new\n" },
+					{ tool: "deliver", args: { summary: "Done", ...pull } },
+				],
+			});
+			r.assign(job(r.upstream.commit));
+			expect(await r.result()).toMatchObject({ outcome: "completed" });
+			expect(r.resets).toEqual([{ pool: "codex", model: "gpt-6.1-sol" }]);
+			expect(r.home.limits()).toEqual({ codex: resets });
+			expect(tools(r)[0].reply.content[0].text).toContain(
+				`The runner did not review 0000000: its reviewer's codex pool hit its usage limit until ${new Date(resets).toISOString()}.`,
+			);
+			// The Claude pool still runs jobs; only reviews wait for Codex's.
+			expect(r.hub.of("status").at(-1)!.accounts).toEqual([
+				expect.objectContaining({ id: "claude", limited: false }),
+			]);
+		} finally {
+			await r.runner.shutdown();
+		}
 	});
 
 	posix("check out each published head on the job's review branch, beside the agent's checkout", async () => {

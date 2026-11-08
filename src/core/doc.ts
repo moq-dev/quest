@@ -16,7 +16,7 @@ import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmStrikethrough } from "micromark-extension-gfm-strikethrough";
 import { gfmTable } from "micromark-extension-gfm-table";
 
-import { depth, escapes, fileName, join, normalize, parent } from "./path";
+import { comparePaths, depth, escapes, fileName, join, normalize, parent } from "./path";
 
 /**
  * Where a link sits inside its `## Section`, which is what separates a
@@ -47,7 +47,7 @@ export interface Link {
 	span: [number, number];
 }
 
-/** One top-level list entry: the shape a `Required` child or blocker has. */
+/** One top-level list entry: the shape a `Required` blocker has. */
 export interface Entry {
 	/** 1-based source line, for findings. */
 	line: number;
@@ -68,10 +68,12 @@ export interface Entry {
 	target: string | null;
 }
 
-/** One `# ` or `## ` heading as the rules need to see it. */
+/** One heading as the rules need to see it. */
 export interface Heading {
 	/** 1-based source line, for findings. */
 	line: number;
+	/** The number of `#` marks, 1 through 6. */
+	depth: number;
 	/** The rendered heading text, trimmed. */
 	text: string;
 	/**
@@ -89,6 +91,12 @@ export interface Doc {
 	title: Heading | null;
 	/** `## ` headings only. Deeper levels are free-form prose structure. */
 	headings: Heading[];
+	/**
+	 * Every heading at another level, `# ` included, in source order. Free-form
+	 * prose structure, except that a section name written here is a mistake the
+	 * rules report: readiness and `quest waiting` read only `## ` sections.
+	 */
+	offLevel: Heading[];
 	/** Every link in the document, in source order. */
 	links: Link[];
 	/**
@@ -173,26 +181,43 @@ export function owner(path: string): string {
 }
 
 /**
- * The `Required` entries that sit directly under a README's directory: the
- * epic's children, in priority order. Every other entry is a blocker like any
- * quest's, and a quest that is not a README has no children.
+ * Whether the epic README `readme` holds `path`: it sits anywhere under the
+ * epic's directory, so the epic already waits for it.
  */
-export function children(doc: Doc): string[] {
-	if (!isReadme(doc.path)) return [];
-	const dir = parent(doc.path);
-	return entries(doc, "Required")
-		.map((entry) => (entry.target === null ? null : rooted(entry.target)))
-		.filter((child): child is string => child !== null && owner(child) === dir);
+export function holds(readme: string, path: string): boolean {
+	return isReadme(readme) && path !== readme && path.startsWith(`${parent(readme)}/`);
 }
 
 /**
- * An epic is a `README.md` that still requires a child. Any other README is
- * what an epic becomes when its last child merges: the epic's own remaining
- * work, executed like any other quest. The root and the milestones are the
- * exception.
+ * An epic's children: the quests directly in its directory and the READMEs of
+ * the epics one level down, in path order. A quest that is not a README has
+ * none.
  */
-export function isEpic(doc: Doc): boolean {
-	return isReadme(doc.path) && (children(doc).length > 0 || permanent(doc.path));
+export function children(docs: readonly Doc[], doc: Doc): string[] {
+	if (!isReadme(doc.path)) return [];
+	const dir = parent(doc.path);
+	return docs
+		.map((d) => d.path)
+		.filter((path) => owner(path) === dir)
+		.sort(comparePaths);
+}
+
+/**
+ * An epic is a `README.md` whose directory still holds another quest. Any
+ * other README is what an epic becomes when its last child merges: the epic's
+ * own remaining work, executed like any other quest. The root and the
+ * milestones are the exception.
+ */
+export function isEpic(docs: readonly Doc[], doc: Doc): boolean {
+	return permanent(doc.path) || docs.some((d) => holds(doc.path, d.path));
+}
+
+/** What must finish before `doc`: its `Required` quests, then, for an epic, its children. */
+export function requires(docs: readonly Doc[], doc: Doc): string[] {
+	const required = entries(doc, "Required")
+		.map((entry) => (entry.target === null ? null : rooted(entry.target)))
+		.filter((target): target is string => target !== null);
+	return [...required, ...children(docs, doc)];
 }
 
 /**
@@ -223,7 +248,7 @@ export function resolve(docPath: string, target: string): string | null {
 
 /**
  * A root-absolute target as a repository-relative path, or `null` if it is not
- * root-absolute or cannot resolve safely. The index and cycle walk use the same
+ * root-absolute or cannot resolve safely. The rules and cycle walk use the same
  * decoded, normalized path as link validation.
  */
 export function rooted(target: string): string | null {
@@ -256,6 +281,7 @@ export function parse(path: string, text: string): Doc {
 
 	let title: Heading | null = null;
 	const headings: Heading[] = [];
+	const offLevel: Heading[] = [];
 	const links: Link[] = [];
 	const found: Entry[] = [];
 	let entry: Entry | null = null;
@@ -309,11 +335,8 @@ export function parse(path: string, text: string): Doc {
 	const enter = (node: Nodes) => {
 		switch (node.type) {
 			case "heading":
-				if (node.depth <= 2) {
-					heading = { depth: node.depth, line: lineOf(node), text: "" };
-				} else {
-					other();
-				}
+				heading = { depth: node.depth, line: lineOf(node), text: "" };
+				if (node.depth > 2) other();
 				break;
 			case "blockquote":
 				quoteDepth++;
@@ -389,7 +412,7 @@ export function parse(path: string, text: string): Doc {
 			case "break":
 				break;
 			case "heading":
-				if (node.depth <= 2 && heading) {
+				if (heading) {
 					const done = heading;
 					heading = null;
 					const text = done.text.trim();
@@ -398,18 +421,23 @@ export function parse(path: string, text: string): Doc {
 					// the two can never disagree.
 					const parsed: Heading = {
 						line: done.line,
+						depth: done.depth,
 						text,
 						literal: lines[done.line - 1] === `${"#".repeat(done.depth)} ${text}`,
 					};
-					if (done.depth === 1) {
-						title = parsed;
-					} else {
+					if (done.depth === 1) title = parsed;
+					if (done.depth !== 2) offLevel.push(parsed);
+					if (done.depth === 2) {
 						section = text;
 						headings.push(parsed);
 					}
-					itemDepth = 0;
-					entry = null;
-					fresh = false;
+					if (done.depth <= 2) {
+						itemDepth = 0;
+						entry = null;
+						fresh = false;
+					} else {
+						other();
+					}
 				} else {
 					other();
 				}
@@ -454,7 +482,7 @@ export function parse(path: string, text: string): Doc {
 
 	for (const child of tree.children) walk(child, false);
 
-	return { path, title, headings, links, entries: found };
+	return { path, title, headings, offLevel, links, entries: found };
 }
 
 /**

@@ -16,12 +16,14 @@ export {
 	children,
 	entries,
 	has,
+	holds,
 	isQuest,
 	isEpic,
 	owner,
 	parse,
 	permanent,
 	questBranch,
+	requires,
 	resolve,
 	rooted,
 	SIZES,
@@ -30,7 +32,7 @@ export {
 } from "./doc";
 export { type ClosedPull, handBackWaits, handedBack, landed, withoutHandBack } from "./claim";
 export { reviewSection } from "./review";
-export { type Missed, type Moved, type Source, move, relocate, remove } from "./edit";
+export { type Missed, type Moved, type Source, move, promote, relocate, remove } from "./edit";
 export { comparePaths, normalize } from "./path";
 export { type Blocker, blockers, label, lookup, ready, renderBlocker } from "./ready";
 export { type Finding, ROOT, check, formatFinding } from "./rules";
@@ -54,6 +56,7 @@ export {
 	REFERENCE_LINE,
 	REFERENCE_MARKER,
 	SKILL_DIRS,
+	type SkillDir,
 	type Stub,
 	installedStubs,
 	lines,
@@ -66,6 +69,7 @@ export { type Chunk, type Clean, type Conflict, LABELS, chunks, render, resolveL
 export {
 	HOLD_PREFIX,
 	ACTIVE_LABEL,
+	KIX_LABEL,
 	type HoldEvent,
 	type HoldSnapshot,
 	isHoldLabel,

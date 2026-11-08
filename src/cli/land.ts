@@ -167,7 +167,7 @@ export interface Waiting {
 const CONTEXTS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		__typename
-		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { app { databaseId } } }
+		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { databaseId app { databaseId } } }
 		... on StatusContext { context state createdAt targetUrl }
 	}`;
 

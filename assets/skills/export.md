@@ -1,8 +1,7 @@
 ---
 description: Turn active quests into GitHub issues before leaving Quest. Use when the user invokes /quest-export or asks to export quests before removing Quest.
+guide: Model, Format, Summaries, Questions
 ---
-
-Before you begin, run `quest guide` and read its output completely.
 
 Every **active** quest still under `quest/` should become a GitHub issue before the repository stops using Quest.
 Quests that already finished were deleted when they merged; do not recreate them as closed issues.

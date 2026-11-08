@@ -2,9 +2,8 @@
 
 ## Goal
 
-Once [model routing](/quest/m0/model-routing/README.md) lands, its first
-audit checks how the routed PRs went and retunes `quest`'s built-in size
-tables, as each milestone's [model check](/quest/m1/model-check.md) does
+Model routing's first audit checks how the routed PRs went and retunes
+`quest`'s built-in size tables, as each milestone's [model check](/quest/m1/model-check.md) does
 after it.
 
 ## Plan
@@ -30,7 +29,3 @@ run is in m0 once routing lands, then each milestone.
 - m1's run already exists, listed in [m1](/quest/m1/README.md)'s `Required`
   and requiring m0. The PR that finishes this run creates no new run: it
   carries the tallies and any table changes into m1's Plan as its baseline.
-
-## Required
-
-- [Route quests to models by size](/quest/m0/model-routing/README.md) - the routing, its PR records, and the moq-dev repositories' pins land first

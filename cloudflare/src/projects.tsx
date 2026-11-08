@@ -485,6 +485,8 @@ export function ProjectStatePage(props: {
 					<p>
 						<a href={`${base}/board`}>Quest board</a>
 						{" · "}
+						<a href={`${base}/queue`}>Landing queue</a>
+						{" · "}
 						<a href={`${base}/data`}>Observed data</a>
 					</p>
 					<h2>Claimed quests</h2>

@@ -1,54 +1,47 @@
 // The Claude Code adapter. It runs the unmodified `claude` binary headless
-// (`claude -p` with stream-json output), signed in by Claude Code's own flow
-// in an isolated `CLAUDE_CONFIG_DIR` per account; the runner never reads its
-// tokens. The kix tools attach as an HTTP MCP server, and AskUserQuestion is
-// disabled so every question goes through kix's `ask` tool instead.
+// (`claude -p` with stream-json output) against the runner's CLIProxyAPI,
+// which pools its Claude accounts, from a `CLAUDE_CONFIG_DIR` that keeps the
+// pool's sessions and no login. The kix tools attach as an HTTP MCP server,
+// and AskUserQuestion is disabled so every question goes through kix's `ask`
+// tool instead.
 //
 // Claude Code's own sandbox confines every shell command, and permission
 // rules confine its file tools, which the sandbox does not cover. Only the
 // runner's settings apply: the checkout's own settings could add hooks that
 // run outside the sandbox, so neither they nor its CLAUDE.md are loaded.
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { boundedLines, LINE_LIMIT } from "../cli/agent";
 import { LIMIT } from "../cli/limit";
-import {
-	type Adapter,
-	baseEnvironment,
-	type Exit,
-	type Launch,
-	type Running,
-	type SignedIn,
-	signalGroup,
-	STOP_GRACE_MS,
-} from "./adapter";
-import { keptEnvironment, type Sandbox } from "./sandbox";
+import { type Adapter, type Exit, type Launch, type Running, signalGroup, STOP_GRACE_MS } from "./adapter";
+import type { Endpoint } from "./proxy";
+import { keptEnvironment, quote, type Sandbox } from "./sandbox";
 import { WAIT_LIMIT } from "./wait";
-
-const run = promisify(execFile);
 
 /** How long Claude Code waits on one kix tool call: the longest `wait`, with margin. */
 export const TOOL_TIMEOUT_MS = WAIT_LIMIT + 5 * 60_000;
 
-/** The environment for an account's Claude Code, with the account's own home. */
-export function accountEnvironment(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
-	return { ...baseEnvironment(env), CLAUDE_CONFIG_DIR: home };
-}
-
 /**
- * A job's environment: the account's home, the sandbox's temporary directory
- * and per-command script, and little else. Not CLAUDE_CODE_SUBPROCESS_ENV_SCRUB:
- * it covers files such as `.env` and `package.json` with mount points that stay
+ * A job's environment: the pool's home and the proxy's origin, the sandbox's
+ * temporary directory and per-command script, and little else. Claude Code
+ * passes its environment to commands, so the proxy's client key reaches it
+ * through `apiKeyHelper` instead. Not CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: it
+ * covers files such as `.env` and `package.json` with mount points that stay
  * behind in the checkout as empty files, which kix would then publish.
  */
-export function jobEnvironment(env: NodeJS.ProcessEnv, home: string, sandbox: Sandbox): NodeJS.ProcessEnv {
+export function jobEnvironment(
+	env: NodeJS.ProcessEnv,
+	home: string,
+	sandbox: Sandbox,
+	proxy: Pick<Endpoint, "origin">,
+): NodeJS.ProcessEnv {
 	return {
 		...keptEnvironment(env),
 		CLAUDE_CONFIG_DIR: home,
+		ANTHROPIC_BASE_URL: proxy.origin,
 		TMPDIR: sandbox.tmp,
 		CLAUDE_ENV_FILE: sandbox.env,
 	};
@@ -58,14 +51,17 @@ export function jobEnvironment(env: NodeJS.ProcessEnv, home: string, sandbox: Sa
  * Claude Code settings for a job. In `dontAsk` mode anything not allowed is
  * refused: shell commands run only inside the sandbox, the file tools edit
  * only the checkout and read only the checkout (outside it Claude Code would
- * ask), and WebFetch, which would run outside the sandbox, is off.
+ * ask), and WebFetch, which would run outside the sandbox, is off. The proxy's
+ * client key comes from `keyFile`, in the runner's home, which commands cannot
+ * read.
  */
-export function claudeSettings(sandbox: Sandbox, effort: string): Record<string, unknown> {
+export function claudeSettings(sandbox: Sandbox, effort: string, keyFile: string): Record<string, unknown> {
 	// Claude Code shows its effort only to hooks and commands, as CLAUDE_EFFORT, and only within a turn, so
 	// a hook on the kix tools records it before `deliver` reads it. Hooks run outside the sandbox, so
-	// `effort` is in the account's home, which commands cannot reach.
-	const record = { type: "command", command: `printf %s "$CLAUDE_EFFORT" > '${effort.replaceAll("'", "'\\''")}'` };
+	// `effort` is in the pool's home, which commands cannot reach.
+	const record = { type: "command", command: `printf %s "$CLAUDE_EFFORT" > ${quote(effort)}` };
 	return {
+		apiKeyHelper: `cat ${quote(keyFile)}`,
 		hooks: { PreToolUse: [{ matcher: "mcp__kix__.*", hooks: [record] }] },
 		sandbox: {
 			enabled: true,
@@ -140,42 +136,15 @@ export function streamReader() {
 export class Claude implements Adapter {
 	readonly name = "claude";
 
-	/** `binary` is an absolute path, so a devShell's PATH cannot substitute another `claude`. */
+	/**
+	 * `binary` is an absolute path, so a devShell's PATH cannot substitute
+	 * another `claude`; `proxy` is the runner's CLIProxyAPI.
+	 */
 	constructor(
 		readonly binary: string,
+		readonly proxy: Pick<Endpoint, "origin" | "keyFile">,
 		readonly env: NodeJS.ProcessEnv = process.env,
 	) {}
-
-	async login(home: string, options: { console: boolean }): Promise<void> {
-		const args = ["auth", "login", options.console ? "--console" : "--claudeai"];
-		await new Promise<void>((resolve, reject) => {
-			const child = spawn(this.binary, args, { env: accountEnvironment(this.env, home), stdio: "inherit" });
-			child.once("error", reject);
-			child.once("close", (code) =>
-				code === 0 ? resolve() : reject(new Error(`claude auth login exited ${code}`)),
-			);
-		});
-	}
-
-	async status(home: string): Promise<SignedIn | null> {
-		let stdout: string;
-		try {
-			({ stdout } = await run(this.binary, ["auth", "status", "--json"], {
-				env: accountEnvironment(this.env, home),
-				encoding: "utf8",
-			}));
-		} catch (error) {
-			// Signed out exits non-zero with the same JSON.
-			stdout = (error as { stdout?: string }).stdout ?? "";
-		}
-		const status = json(stdout.trim());
-		if (status?.loggedIn !== true) return null;
-		const kind = status.authMethod === "claude.ai" ? "subscription" : "api-key";
-		const email = typeof status.email === "string" ? status.email : undefined;
-		const plan = typeof status.subscriptionType === "string" ? status.subscriptionType : undefined;
-		const label = [email ?? "Claude Code", plan && `(${plan})`].filter(Boolean).join(" ");
-		return { provider: "anthropic", kind, label };
-	}
 
 	launch(launch: Launch): Running {
 		const mcp = {
@@ -190,12 +159,14 @@ export class Claude implements Adapter {
 				},
 			},
 		};
-		// The bearer token stays out of the command line, which other users can read, in the account's private home.
+		// The bearer token stays out of the command line, which other users can read, in the pool's private home.
 		const config = join(launch.home, `kix-tools-${launch.session}.json`);
 		writeFileSync(config, JSON.stringify(mcp), { mode: 0o600 });
 		const settings = join(launch.home, `kix-settings-${launch.session}.json`);
 		const effortFile = join(launch.home, `kix-effort-${launch.session}`);
-		writeFileSync(settings, JSON.stringify(claudeSettings(launch.sandbox, effortFile)), { mode: 0o600 });
+		writeFileSync(settings, JSON.stringify(claudeSettings(launch.sandbox, effortFile, this.proxy.keyFile)), {
+			mode: 0o600,
+		});
 		const readEffort = () => {
 			try {
 				return readFileSync(effortFile, "utf8").trim() || "unknown";
@@ -230,7 +201,7 @@ export class Claude implements Adapter {
 		];
 		const child = spawn(this.binary, argv, {
 			cwd: launch.cwd,
-			env: jobEnvironment(launch.env, launch.home, launch.sandbox),
+			env: jobEnvironment(launch.env, launch.home, launch.sandbox, this.proxy),
 			stdio: ["pipe", "pipe", "pipe"],
 			// Its own process group, so stopping it also stops every tool it started.
 			detached: true,

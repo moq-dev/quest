@@ -16,6 +16,8 @@ export type Issue = {
 	body?: string;
 	comments?: Comment[];
 	closed?: boolean;
+	/** When GitHub last saw activity on it; a fixed past date when absent. */
+	updatedAt?: string;
 };
 export type Thread = { path: string; line: number | null; resolved?: boolean; outdated?: boolean; comments: Comment[] };
 export type Pull = Issue & {
@@ -61,6 +63,8 @@ export type Pull = Issue & {
 	landing?: boolean;
 	/** It is in its base's merge queue; only a base with `queue` takes it. */
 	queued?: boolean;
+	/** Its merge queue entry's state, `QUEUED` by default, and its merge group's check runs, while `queued`. */
+	group?: { state: string; runs: NonNullable<Pull["runs"]> };
 	/** The enabled auto-merge's time and commit body; `quest land` reads its queue from them. */
 	autoMerge?: { enabledAt: string; commitBody: string };
 	/** A fork's head branch accepts pushes from the upstream's maintainers. */
@@ -208,7 +212,7 @@ function entity(repo: Repo, item: Issue) {
 		number: item.number,
 		title: item.title,
 		state: (item as Pull).merged ? "MERGED" : item.closed ? "CLOSED" : "OPEN",
-		updatedAt,
+		updatedAt: item.updatedAt ?? updatedAt,
 		closedAt: item.closed ? updatedAt : null,
 		author: { login: item.author },
 		comments: { totalCount: item.comments?.length ?? 0 },
@@ -382,6 +386,8 @@ function holdsTarget(repo: Repo, pull: Pull) {
 	return {
 		id: nodeId(repo, pull),
 		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
+		isDraft: !!pull.draft,
+		body: pull.body ?? "",
 		baseRefName: pull.base ?? defaultOf(repo),
 		headRefOid: headOf(repo, pull),
 		mergeStateStatus: mergeState(pull),
@@ -460,6 +466,50 @@ function contextPage(pull: Pick<Pull, "runs">, after: unknown) {
 	return {
 		nodes: all.slice(start, end),
 		pageInfo: { hasNextPage: end < all.length, endCursor: end < all.length ? String(end) : null },
+	};
+}
+
+/** An open pull request as kix's landing queue page reads it: its landing, merge group, and `quest queue` check. */
+function landingTarget(repo: Repo, pull: Pull, queued: Pull[]) {
+	const head = headOf(repo, pull);
+	const run = (repo.checkRuns ?? []).filter((r) => r.name === "quest queue" && r.head_sha === head).at(-1);
+	return {
+		number: pull.number,
+		title: pull.title,
+		url: `https://github.com/${repo.owner}/${repo.name}/pull/${pull.number}`,
+		baseRefName: pull.base ?? defaultOf(repo),
+		isMergeQueueEnabled: repo.queue === true && (pull.base ?? defaultOf(repo)) === defaultOf(repo),
+		autoMergeRequest: pull.landing ? { enabledAt: pull.autoMerge?.enabledAt ?? updatedAt } : null,
+		mergeQueueEntry: pull.queued
+			? {
+					position: queued.indexOf(pull) + 1,
+					state: pull.group?.state ?? "QUEUED",
+					headCommit: pull.group ? { statusCheckRollup: { contexts: contextPage(pull.group, null) } } : null,
+				}
+			: null,
+		commits: {
+			nodes: [
+				{
+					commit: {
+						checkSuites: page(
+							run
+								? [
+										{
+											checkRuns: page([
+												{
+													status: (run.status ?? "completed").toUpperCase(),
+													title: run.output.title ?? null,
+													detailsUrl: run.details_url ?? null,
+												},
+											]),
+										},
+									]
+								: [],
+						),
+					},
+				},
+			],
+		},
 	};
 }
 
@@ -558,6 +608,25 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 				},
 			},
 		};
+	}
+	if (query.includes('checkName: "quest queue"')) {
+		const open = repo.pulls.filter((pull) => !pull.closed);
+		const queued = open.filter((pull) => pull.queued);
+		return { data: { repository: { pullRequests: page(open.map((pull) => landingTarget(repo, pull, queued))) } } };
+	}
+	// The pull requests a landing drop names, by number, which may have closed.
+	const dropped = [...query.matchAll(/(p\d+): pullRequest\(number: (\d+)\)/g)];
+	if (dropped.length) {
+		const found = Object.fromEntries(
+			dropped.map(([, alias, number]) => {
+				const pull = repo.pulls.find((p) => p.number === Number(number));
+				return [alias, pull ? landingTarget(repo, pull, []) : null];
+			}),
+		);
+		const errors = dropped
+			.filter(([, alias]) => !found[alias!])
+			.map(([, alias]) => ({ type: "NOT_FOUND", path: ["repository", alias] }));
+		return { data: { repository: found }, ...(errors.length ? { errors } : {}) };
 	}
 	if (query.includes("defaultBranchRef"))
 		return { data: { repository: { defaultBranchRef: { name: defaultOf(repo) } } } };
@@ -712,6 +781,7 @@ export function fakeGitHub(world: World) {
 		mergeable_state: pull.mergeableState ?? (pull.merge === "DIRTY" ? "dirty" : "clean"),
 		title: pull.title,
 		body: pull.body ?? "",
+		labels: (pull.labels ?? []).map((name) => ({ name })),
 		draft: !!pull.draft,
 		user: { login: pull.author },
 		created_at: new Date(pull.createdAt ?? Date.parse(updatedAt)).toISOString(),
@@ -1238,6 +1308,21 @@ export function fakeGitHub(world: World) {
 			}
 			return json(restPull(repo, pull));
 		}
+		// The files a pull request changes against its base's tip, one page of up to 100.
+		const changed = tail.match(/^\/pulls\/(\d+)\/files$/);
+		if (changed && method === "GET") {
+			const pull = repo.pulls.find((p) => String(p.number) === changed[1]);
+			if (!pull) return notFound();
+			const tree = (sha: string | undefined) => (sha ? filesOf(repo, repo.commits[sha]?.tree ?? "") : {});
+			const before = tree(repo.branches[pull.base ?? defaultOf(repo)]);
+			const after = tree(headOf(repo, pull));
+			const paths = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+				.filter((path) => before[path] !== after[path])
+				.sort();
+			const at = Number(url.searchParams.get("page") ?? 1);
+			const size = Number(url.searchParams.get("per_page") ?? 30);
+			return json(paths.slice((at - 1) * size, at * size).map((filename) => ({ filename })));
+		}
 		const merge = tail.match(/^\/pulls\/(\d+)\/merge$/);
 		if (merge && method === "PUT") {
 			if (!writes("contents")) return forbidden();
@@ -1264,11 +1349,59 @@ export function fakeGitHub(world: World) {
 				message: "Pull Request successfully merged",
 			});
 		}
+		// Every issue and pull request comment, oldest first, updated at or after `since`.
+		if (tail === "/issues/comments" && method === "GET") {
+			if (!scope.permissions.issues && !scope.permissions.pull_requests) return forbidden();
+			const since = Date.parse(url.searchParams.get("since") ?? "1970-01-01T00:00:00Z");
+			const page = Number(url.searchParams.get("page") ?? 1);
+			const size = Number(url.searchParams.get("per_page") ?? 30);
+			const all = [...repo.pulls, ...repo.issues]
+				.flatMap((item) =>
+					(item.comments ?? []).map((c, i) => ({
+						id: item.number * 1000 + i,
+						html_url: `https://github.com/${fullName}/pull/${item.number}#issuecomment-${item.number * 1000 + i}`,
+						issue_url: `https://api.github.com/repos/${fullName}/issues/${item.number}`,
+						body: c.body,
+						created_at: c.at,
+						updated_at: c.at,
+						user: c.author && { login: c.author, type: c.author.endsWith("[bot]") ? "Bot" : "User" },
+						author_association:
+							c.author && ["admin", "maintain", "write"].includes(roleOf(repo, c.author) ?? "")
+								? "COLLABORATOR"
+								: "NONE",
+					})),
+				)
+				.filter((c) => Date.parse(c.created_at) >= since)
+				.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+			return json(all.slice((page - 1) * size, page * size));
+		}
 		const comment = tail.match(/^\/issues\/(\d+)\/comments$/);
 		if (comment && method === "GET") {
 			const item = [...repo.pulls, ...repo.issues].find((i) => String(i.number) === comment[1]);
 			if (!item) return notFound();
-			return json((item.comments ?? []).map((c) => ({ body: c.body, user: { login: c.author } })));
+			const bot = `${world.app.slug}[bot]`;
+			const page = Number(url.searchParams.get("page") ?? 1);
+			const size = Number(url.searchParams.get("per_page") ?? 30);
+			return json(
+				(item.comments ?? [])
+					.map((c, i) => ({
+						id: item.number * 1000 + i,
+						body: c.body,
+						user: { login: c.author },
+						performed_via_github_app: c.author === bot ? { id: world.app.id } : null,
+					}))
+					.slice((page - 1) * size, page * size),
+			);
+		}
+		const edited = tail.match(/^\/issues\/comments\/(\d+)$/);
+		if (edited && method === "PATCH") {
+			if (!writes("issues") && !writes("pull_requests")) return forbidden();
+			const id = Number(edited[1]);
+			const item = [...repo.pulls, ...repo.issues].find((i) => i.number === Math.floor(id / 1000));
+			const found = item?.comments?.[id % 1000];
+			if (!found || found.author !== `${world.app.slug}[bot]`) return notFound();
+			found.body = String(body.body);
+			return json({ id, body: found.body });
 		}
 		if (comment && method === "POST") {
 			if (!writes("issues") && !writes("pull_requests")) return forbidden();

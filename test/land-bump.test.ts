@@ -15,6 +15,7 @@ import {
 	type BumpTools,
 	bumpBody,
 	bumpPass,
+	latestRuns,
 	questInput,
 	unpin,
 } from "../src/cli/land-bump";
@@ -79,7 +80,7 @@ interface World {
 	/** Each check suite on a head. */
 	suites: Record<string, { status: string; latest_check_runs_count: number; app: { slug: string } }[]>;
 	/** Each workflow run on a head. */
-	runs: Record<string, { status: string; conclusion: string | null }[]>;
+	runs: Record<string, { status: string; conclusion: string | null; [field: string]: unknown }[]>;
 	requests: string[];
 	/** The flake.lock GitHub serves on `main`, when it differs from the remote's. */
 	lock?: string;
@@ -387,6 +388,59 @@ describe("bumpPass", () => {
 			expect.anything(),
 			true,
 		);
+	});
+
+	test("on an ungated base, a run a newer run cancelled counts as replaced, not failed", async () => {
+		const target = world({ rules: "free", allowAutoMerge: false });
+		const ctx = context(target);
+		await bumpPass(ctx, NEW);
+		const head = git(bare(target), "rev-parse", BUMP_BRANCH);
+		// Push and pull_request share a cancel-in-progress group: the pull_request run cancelled the push run,
+		// whose later job reported cancelled before the newer run started it.
+		const cancelled = { id: 1, workflow_id: 10, event: "push", check_suite_id: 100 };
+		const newer = { id: 2, workflow_id: 10, event: "pull_request", check_suite_id: 200 };
+		const run = (suite: number, id: number, name: string, status: string, conclusion?: string) => ({
+			__typename: "CheckRun",
+			databaseId: id,
+			name,
+			status,
+			conclusion,
+			checkSuite: { databaseId: suite },
+		});
+		target.runs[head] = [
+			{ ...cancelled, status: "completed", conclusion: "cancelled" },
+			{ ...newer, status: "in_progress", conclusion: null },
+		];
+		target.checks[head] = [
+			run(100, 1, "check", "COMPLETED", "CANCELLED"),
+			run(100, 2, "later", "COMPLETED", "CANCELLED"),
+			run(200, 3, "check", "IN_PROGRESS"),
+		];
+		expect(await bumpPass(ctx, NEW)).toEqual([]);
+		expect(landed).not.toHaveBeenCalled();
+
+		target.runs[head][1] = { ...newer, status: "completed", conclusion: "success" };
+		target.checks[head] = [
+			run(100, 1, "check", "COMPLETED", "CANCELLED"),
+			run(100, 2, "later", "COMPLETED", "CANCELLED"),
+			run(200, 3, "check", "COMPLETED", "SUCCESS"),
+			run(200, 4, "later", "COMPLETED", "SUCCESS"),
+		];
+		expect(await bumpPass(ctx, NEW)).toEqual(["bump landing moq-dev/widget 7"]);
+	});
+
+	test("latestRuns keeps each workflow's latest run per event, and drops a cancelled run a newer one replaced", () => {
+		const runs = [
+			{ id: 1, workflow_id: 10, event: "push", conclusion: "failure" },
+			{ id: 2, workflow_id: 10, event: "push", conclusion: "success" },
+			{ id: 3, workflow_id: 20, event: "push", conclusion: "cancelled" },
+			{ id: 4, workflow_id: 20, event: "pull_request", conclusion: "success" },
+			{ id: 5, workflow_id: 30, event: "push", conclusion: "failure" },
+			{ id: 6, workflow_id: 30, event: "pull_request", conclusion: "success" },
+			{ id: 7, workflow_id: 40, event: "push", conclusion: "cancelled" },
+		];
+		// Another event's failure still counts, as does a cancellation nothing replaced.
+		expect(latestRuns(runs).map((run) => run.id)).toEqual([2, 4, 5, 6, 7]);
 	});
 
 	test("a failed check on an ungated base is left for a maintainer", async () => {

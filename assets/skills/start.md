@@ -1,8 +1,7 @@
 ---
 description: Start work on a quest.
+guide: Model, Format, Creation, Execution, Summaries, Questions
 ---
-
-Before you begin, run `quest guide` and read its output completely.
 
 Your goal is to implement the quest, or as much of it as possible, and open a PR.
 The argument is the quest to work on.

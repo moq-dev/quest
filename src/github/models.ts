@@ -41,13 +41,52 @@ export function recorded(body: string): { sizes: string[]; implementers: { item:
 	};
 }
 
-/** `body` with `line` as an item of its `## Models` section, which it gains when it has none. */
+/**
+ * `body` with `line` as the last item of its `## Models` section, which it gains when it has none, so the record's
+ * last Implementer names the latest session to push. An earlier copy of `line` moves rather than repeats.
+ */
 export function withModels(body: string, line: string): string {
 	const item = `- ${line}`;
-	if (body.split(/\r?\n/).some((each) => each.trim() === item)) return body;
 	const found = section(body);
 	if (!found) return `${body.trimEnd()}\n\n## Models\n\n${item}\n`;
 	const { start, end } = found;
-	const gap = body.slice(start, end).trim() ? "\n" : "\n\n";
-	return `${body.slice(0, end).trimEnd()}${gap}${item}\n${end < body.length ? "\n" : ""}${body.slice(end)}`;
+	const lines = body.slice(start, end).split(/\r?\n/);
+	if (
+		lines
+			.filter((each) => each.trim() !== "")
+			.at(-1)
+			?.trim() === item
+	)
+		return body;
+	const kept = lines.some((each) => each.trim() === item)
+		? lines.filter((each) => each.trim() !== item).join("\n")
+		: body.slice(start, end);
+	const gap = kept.trim() ? "\n" : "\n\n";
+	return `${(body.slice(0, start) + kept).trimEnd()}${gap}${item}\n${end < body.length ? "\n" : ""}${body.slice(end)}`;
+}
+
+/** The hidden marker of the one PR comment where kix records the sessions that published to an existing PR. */
+export const SESSIONS = "<!-- quest:sessions -->";
+
+/** The sessions comment `existing` with `line` last in its `## Models` record, or null when it already ends with it. */
+export function withSession(existing: string | null, line: string): string | null {
+	const body = existing ?? `${SESSIONS}\nThe sessions that published to this pull request after it opened.`;
+	const next = withModels(body, line);
+	return next === existing ? null : next;
+}
+
+/** A PR comment as GitHub's REST API returns it. */
+export type Comment = { body?: string | null; performed_via_github_app?: { id: number } | null };
+
+/**
+ * The sessions comment among `comments`: the first marked one a GitHub App wrote, since anyone can copy the marker.
+ * `app` narrows it to that App's own.
+ */
+export function sessionsComment<T extends Comment>(comments: T[], app?: number): T | undefined {
+	return comments.find(
+		(c) =>
+			c.performed_via_github_app != null &&
+			(app === undefined || c.performed_via_github_app.id === app) &&
+			(c.body ?? "").startsWith(SESSIONS),
+	);
 }

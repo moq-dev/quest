@@ -1,4 +1,5 @@
 // Host orchestration: PR code runs only through the configured sandbox.
+import { pruneLogs } from "./land-prune";
 import { authenticatedRead } from "./land-git";
 import { startFixer, startBaseFixer, collectFixers } from "./land-fixer";
 import { closeFix, fixing, haltNotice, readHalt, resume, saveHalt } from "./land-halt";
@@ -142,12 +143,27 @@ export function keyPath(): string {
 	return path;
 }
 
-/** systemd's StateDirectory, or the XDG state home, outside any checkout a sandbox might mount. */
-export function defaultState(repository: Repository): string {
+/** A base branch as one path component: `/` and `@` escaped, so no two bases share a file name. */
+const baseKey = (base: string) => encodeURIComponent(base);
+
+/**
+ * systemd's StateDirectory, or the XDG state home, outside any checkout a sandbox might mount, one per
+ * repository and base. No repository name contains `@`, so no two pairs share a directory.
+ */
+export function defaultState(repository: Repository, base: string): string {
 	const home =
 		process.env.STATE_DIRECTORY ??
 		join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "quest-land");
-	return join(home, `${repository.owner}-${repository.repo}`);
+	return join(home, `${repository.owner}-${repository.repo}@${baseKey(base)}`);
+}
+
+/** The repository's default branch, which a daemon started without `--base` lands onto. */
+export async function defaultBranch(github: GitHub, repository: Repository): Promise<string> {
+	const data = await github.graphql(
+		"query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name } } }",
+		{ owner: repository.owner, name: repository.repo },
+	);
+	return string(object(object(data.repository).defaultBranchRef).name);
 }
 
 /** Refresh before expiry and retry a revoked token once; callers never retain an expired token. */
@@ -705,29 +721,35 @@ export async function lockCheckout(path: string): Promise<() => void> {
 	return () => child.stdin.end();
 }
 
-/** Every linked worktree resolves to the same lock in the common git directory. */
-export function lockRepository(root: string): Promise<() => void> {
+/** Every linked worktree resolves to the same lock per base in the common git directory. */
+export function lockRepository(root: string, base: string): Promise<() => void> {
 	return lockCheckout(
-		join(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), "quest-land.lock"),
+		join(
+			git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+			`quest-land-${baseKey(base)}.lock`,
+		),
 	);
 }
 
 /**
- * Prepare a daemon for `repository`: resolve and create its state directory in `options`, check the
- * App key, and hold one lock per checkout's repository and one per state directory, whichever two
- * daemons would share, so `quest land serve` and `quest land watch` never run beside each other.
- * Returns the unlock.
+ * Prepare a daemon for `repository`: check the App key, resolve its base in `options` once, from
+ * `--base` or `defaultBase`, for the daemon's life, resolve and create its state directory, and hold
+ * one lock per checkout's repository and base and one per state directory, whichever two daemons
+ * would share, so `quest land serve` and `quest land watch` never run beside each other on one base
+ * while daemons on different bases do. Returns the unlock.
  */
 export async function startDaemon(
 	root: string,
 	repository: Repository,
-	options: { state: string },
+	options: { state: string; base?: string },
+	defaultBase: () => Promise<string>,
 ): Promise<() => void> {
-	options.state = resolve(root, options.state || defaultState(repository));
-	mkdirSync(options.state, { recursive: true, mode: 0o700 });
 	// These are startup configuration failures; transient network failures in the loop are recoverable.
 	createPrivateKey(readFileSync(keyPath()));
-	const unlockRepository = await lockRepository(root);
+	const base = (options.base ||= await defaultBase());
+	options.state = resolve(root, options.state || defaultState(repository, base));
+	mkdirSync(options.state, { recursive: true, mode: 0o700 });
+	const unlockRepository = await lockRepository(root, base);
 	const unlockState = await lockCheckout(join(options.state, "lock")).catch((error: unknown) => {
 		unlockRepository();
 		throw error;
@@ -774,7 +796,17 @@ export async function serve(
 	if (options.fixer) options.fixer = resolve(options.fixer);
 	accessSync(options.sandbox, constants.X_OK);
 	if (options.fixer) accessSync(options.fixer, constants.X_OK);
-	const unlock = await startDaemon(root, repository, options);
+	const unlock = await startDaemon(root, repository, options, () =>
+		defaultBranch(
+			new GitHub(
+				apiDependencies(
+					() => installationToken(repository, options, { contents: "read" }, { fetch, now: Date.now }),
+					{ fetch, now: Date.now, sleep, warn },
+				),
+			),
+			repository,
+		),
+	);
 	try {
 		const trusted = privateRepository(options.state);
 
@@ -820,6 +852,7 @@ export async function serve(
 			},
 		};
 		await daemonLoop(async () => {
+			pruneLogs(options.state, deps.now(), deps.warn);
 			// Without `collect`: this check runs inside a collection, which must not start another.
 			const checkCollected = (base: Plan["base"]) => checkBase(trusted, name, base, options, deps, read);
 			for (const line of await collectFixers(trusted, options.state, deps, mint, undefined, read, checkCollected))

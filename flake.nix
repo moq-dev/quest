@@ -53,8 +53,9 @@
           claudeCode = pkgs.claude-code.override {
             manifest = pkgs.lib.importJSON ./nix/claude-code.json;
           };
-          # `quest runner` with pinned agent CLIs, the sandbox-runtime that runs opencode
-          # jobs' commands, and on Linux the bubblewrap and socat Claude Code's sandbox runs its jobs' commands in.
+          # `quest runner` with pinned agent CLIs, the CLIProxyAPI that pools its Claude and Codex
+          # accounts, the sandbox-runtime that runs opencode jobs' commands, and on Linux the
+          # bubblewrap and socat Claude Code's sandbox runs its jobs' commands in.
           runner = pkgs.symlinkJoin {
             name = "quest-runner-${quest.version}";
             paths = [ quest ];
@@ -64,6 +65,7 @@
                 --set-default QUEST_RUNNER_CLAUDE ${pkgs.lib.getExe claudeCode} \
                 --set-default QUEST_RUNNER_OPENCODE ${pkgs.lib.getExe opencode} \
                 --set-default QUEST_RUNNER_CODEX ${pkgs.lib.getExe pkgs.codex} \
+                --set-default QUEST_RUNNER_CLIPROXY ${pkgs.lib.getExe pkgs.cliproxyapi} \
                 --set-default QUEST_RUNNER_SRT ${pkgs.lib.getExe sandboxRuntime} ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "--prefix PATH : ${
                   pkgs.lib.makeBinPath [
                     pkgs.bubblewrap
@@ -108,10 +110,13 @@
               # `flock` (the land daemon's repository lock) and `script` (the tests' terminal), which
               # self-hosted NixOS runners don't otherwise provide.
               ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux ];
-            # The runner package's opencode and sandbox-runtime, for the sandbox boundary test
-            # (test/live/runner-sandbox.test.ts), which runs where srt does. Named as the runner
-            # finds them rather than put on PATH, where they would shadow the user's own opencode.
+            # The runner package's Claude Code, Codex, opencode, CLIProxyAPI, and sandbox-runtime,
+            # for the sandbox boundary tests (test/live/runner-sandbox*.test.ts), which run on Linux.
+            # Named as the runner finds them rather than put on PATH, where they would shadow the user's own.
             env = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              QUEST_RUNNER_CLAUDE = pkgs.lib.getExe claudeCode;
+              QUEST_RUNNER_CODEX = pkgs.lib.getExe pkgs.codex;
+              QUEST_RUNNER_CLIPROXY = pkgs.lib.getExe pkgs.cliproxyapi;
               QUEST_RUNNER_OPENCODE = pkgs.lib.getExe opencode;
               QUEST_RUNNER_SRT = pkgs.lib.getExe sandboxRuntime;
             };
