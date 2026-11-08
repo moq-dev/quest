@@ -1,4 +1,4 @@
-# [XS] Turn off Codex cloud reviews
+# [S] Turn off Codex cloud reviews
 
 ## Goal
 
@@ -12,12 +12,15 @@ Local review (`quest review` and `/quest-review`) has landed. As of
 2026-11-02, moq, rind and rust2's `CONTRIBUTING.md` no longer name Codex's
 cloud review; moq.pro's still does.
 
-## Waiting
+Decided 2026-11-08 (maintainer, /quest-unblock): ✅ an agent moves moq.pro to
+local review and updates its stragglers (rejected: keep Codex cloud review
+for moq.pro and delete this quest; leave it waiting).
 
-- moq.pro: its review policy stops naming Codex's cloud review, as moq's,
-  rind's and rust2's did. Check its `CONTRIBUTING.md` for
-  `chatgpt-codex-connector`.
-- moq, moq.pro, rind, rust2, quest: no open PR was opened before its
-  repository adopted local review without having merged main since. To
-  check, list each repository's open PRs and compare them with the adoption
-  merge. To advance it, update the stragglers to main.
+- One moq.pro PR rewrites its `CONTRIBUTING.md` review policy to local
+  review, as moq's did, dropping the `chatgpt-codex-connector[bot]`
+  findings rule.
+- Once it lands, merge main into every open moq.pro PR opened before it
+  (on 2026-11-08: 3215, 3211, 3209 and 3091, all the maintainer's drafts).
+  moq, rind, rust2 and quest had no such stragglers that day.
+- Then the maintainer turns off automatic reviews in Codex's settings, and
+  this quest is deleted.

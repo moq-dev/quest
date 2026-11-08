@@ -48,7 +48,9 @@ queue, so it is the repository the own queue exists for.
   `Queue` does.
 - The own queue's token asks moq-bot's App for `actions: write` (to cancel a
   stale build) and `checks: write` (each pick's `quest queue` check run),
-  beyond what the gate uses; grant them on moq.pro's installation first.
+  beyond what the gate uses. Granted 2026-11-08 (maintainer, /quest-unblock):
+  moq-bot's moq-dev installation, which covers every repository, now has
+  both.
 - Drain or carry over the gate's queue before switching: picks already armed
   stay armed, so the watcher reads them in the same order. Switch only once
   the gate has no fixer job running or uncollected: the gate records each in
