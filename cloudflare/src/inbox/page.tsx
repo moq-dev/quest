@@ -702,6 +702,7 @@ function Project(props: { view: ProjectView; runners: Runners }) {
 						{state?.failure && <span role="alert">Background read failed: {state.failure}</span>}
 						<a href={`${base}/board`}>Quest board</a>
 						<a href={`${base}/state`}>Activity</a>
+						<a href={`${base}/queue`}>Landing queue</a>
 					</>
 				)}
 			</span>

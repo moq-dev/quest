@@ -121,8 +121,8 @@ GitHub Team: moq.pro leaves the host gate for an own serial queue in
 third-party queue. The maintainer expects the own queue to become every
 repository's, for visibility. The own queue landed in
 [moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540); the rest is
-recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
-[the queue page](/quest/m0/queue-watcher/queue-page.md).
+recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md), and
+kix.quest shows each base's queue at `/projects/github/<owner>/<name>/queue`.
 
 Shared shape, for the children to follow:
 

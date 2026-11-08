@@ -289,6 +289,22 @@ the item showed (a question, a GitHub change, a quest's text). A newer version
 is unread again, and skipping an item lasts until it changes. A finished or
 stopped job sets its item aside the same way.
 
+### Landing queue
+
+`/projects/github/<owner>/<name>/queue` (`src/queue.tsx`) shows each base's
+landing queue, under the same maintainer check as the project's other pages,
+read from GitHub when the page loads (`src/github/queue.ts`); kix stores none
+of it. A base with GitHub's merge queue lists its entries by position, building
+entries linking their merge group's run, then the PRs whose armed auto-merge
+waits on checks to join. Any other base lists its armed PRs in the order they
+were armed, the watcher's own queue order, each with the `quest queue` check
+the watcher writes, whose in-progress run links its build. Recent drops are
+the watcher's marked removal comments from the last day, in both modes, each
+paired with the watcher's next marked comment on that pick: re-enqueued,
+handed back, not applied, refused, or held. A drop with no later word, such
+as one a hold, a push, or a person's removal ends, shows what its own comment
+said happens next. Only comments from an app or a writer count.
+
 ### Installed app and notifications
 
 kix installs as a progressive web app (`src/manifest.webmanifest`,
