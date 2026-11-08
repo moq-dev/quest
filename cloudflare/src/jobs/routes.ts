@@ -2,7 +2,7 @@ import { type Context, Hono } from "hono";
 import { createAuth } from "../auth";
 import * as push from "../push/notify";
 import { GitHubError, GitHubService, type Stopped } from "../github/service";
-import type { ProjectState, Pull } from "../github/state";
+import { type ProjectState, type Pull, questPull } from "../github/state";
 import * as autostart from "./autostart";
 import { INBOX_HEADER, RUNNER_HEADER } from "./hub";
 import * as landing from "./landing";
@@ -46,7 +46,8 @@ export function inboxURL(repository: number, target: string) {
 	return `/inbox?${new URLSearchParams({ project: String(repository), item: target })}`;
 }
 /** What an inbox form just recorded, which the next decision's page notes. */
-export type Done = "answer" | "approve" | "trust" | "start" | "stop" | "skip" | "merge" | "autostart" | "ready";
+export type Done =
+	"answer" | "approve" | "trust" | "start" | "stop" | "skip" | "merge" | "autostart" | "ready" | "close";
 /**
  * The inbox's next active decision, or its empty state, after a form recorded
  * one. The item acted on stays reachable from its list, with its earlier answers.
@@ -322,13 +323,21 @@ function resolve(
 		const n = issue.number;
 		return { workflow, target: `issues/${n}`, revision: commit, branch: `plan/issue-${n}`, trusted: true };
 	}
-	if (workflow === "iterate" || workflow === "merge") {
+	if (workflow === "iterate" || workflow === "merge" || workflow === "delete") {
 		const pull = open("pull", "pulls");
 		if (!pull)
-			throw new JobError(workflow === "merge" ? "Merge an open pull request" : "Iterate on an open pull request");
+			throw new JobError(
+				`${{ iterate: "Iterate on", merge: "Merge", delete: "Delete" }[workflow]} an open pull request`,
+			);
 		const data = pull.data as Pull;
 		if (workflow === "merge" && data.isDraft)
 			throw new JobError("Mark the draft ready for review before merging it");
+		if (workflow === "delete") {
+			if (!questPull(state, data))
+				throw new JobError("Only a quest's own pull request is deleted with its quest; close any other");
+			if (data.isCrossRepository !== false)
+				throw new JobError("The bot cannot update a quest's pull request from a fork");
+		}
 		// jobSource verifies every commit's provenance before creating this job.
 		return {
 			workflow,
@@ -379,8 +388,8 @@ jobs.post(base, async (c) => {
 		{ ...job, repository: repo.id, actor: user, pinRunner, pinAccount },
 		Date.now(),
 	);
-	// A new merge job holds its pull request before it runs, as a local `quest iterate` would.
-	if (created.created && job.workflow === "merge") {
+	// A new merge or delete job holds its pull request before it runs, as a local `quest iterate` would.
+	if (created.created && store.lands(job.workflow)) {
 		const pull = pullOf(job.target);
 		let token: string;
 		let recorded: boolean;
@@ -498,6 +507,19 @@ jobs.post("/projects/github/:owner/:repository/pulls/:number/ready", async (c) =
 		throw new JobError("Stop this pull request's job before marking it ready");
 	await github.markReady(repo, user, Number(number), body.head);
 	return reply(c, form, "ready", null);
+});
+
+// A maintainer closes a free pull request that claims no quest, at the head they saw.
+jobs.post("/projects/github/:owner/:repository/pulls/:number/close", async (c) => {
+	const { user, repo, github } = await maintained(c);
+	const { body, form } = await input(c);
+	const number = c.req.param("number");
+	if (!/^[1-9]\d{0,14}$/.test(number) || typeof body.head !== "string")
+		throw new JobError("Pull request and head required");
+	if (await store.active(c.env.DB, repo.id, `pulls/${number}`))
+		throw new JobError("Stop this pull request's job before closing it");
+	await github.closePullRequest(repo, user, Number(number), body.head);
+	return reply(c, form, "close", null);
 });
 
 /** The longest reply to a publication decision, in characters as the inbox form counts them. */

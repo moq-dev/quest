@@ -62,8 +62,8 @@ what kix may write.
 
 `src/github/service.ts` provides specific server-only operations for quest
 reads, issue/PR reads, check/status reads, comments, job publication (see
-[Publication](#publication)), and an explicitly authorized merge with an
-expected head SHA.
+[Publication](#publication)), and an explicitly authorized merge or close
+with an expected head SHA.
 Callers pass a user ID obtained from an authenticated local session. The service
 resolves its linked OAuth account, looks up the current GitHub login by numeric
 ID, and verifies current repository admin or maintain authority. A browser's
@@ -232,6 +232,26 @@ on a decision.
 
 Labels need `issues: write` on the upstream; landing needs `contents: write`,
 `pull_requests: write`, and `checks: read` there, as a direct merge does.
+
+### Deleting pull requests
+
+A free pull request, one no hold label holds and not a draft its starter has
+not handed back, also offers delete:
+
+- A quest's own pull request, from an upstream `quest/` branch naming a quest
+  in the tree, starts a `delete` job, which runs `/quest-delete` through the
+  merge job's paths: the same `quest:kix` hold, publication, review, and
+  landing. Its agent repurposes the PR with new commits that leave only the
+  quest's deletion and the mentions `quest rm` reports, and delivers the PR's
+  new title and body, which kix writes while the job holds the PR at the
+  published head. kix lands it only while the PR changes nothing but quest
+  files, marking a handed-back draft ready first. A fork's quest PR offers
+  neither delete nor close, since the bot cannot update its branch.
+- Any other pull request closes as the App (`POST
+/projects/github/<owner>/<repo>/pulls/<n>/close` with the `head` on screen),
+  refused while one of its jobs is active, its head moved, or it is held.
+  Closing leaves a branch in place, so a PR whose upstream `quest/` branch
+  still claims a quest is refused.
 
 ### Landing only reviewed heads
 

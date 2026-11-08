@@ -1,6 +1,7 @@
-import { type Pull, startable } from "../github/state";
+import { type Pull, questPull, startable } from "../github/state";
 import { type Prompt, parsePrompt } from "../jobs/prompt";
 import { type Done, PLAN_LIMITS, PUBLICATION_REPLY, inboxURL } from "../jobs/routes";
+import { lands } from "../jobs/store";
 import { Marker, Notifications } from "../layout";
 import { projectURL } from "../projects";
 import { type Card, PHASES, ago } from "./activity";
@@ -39,6 +40,7 @@ const recorded: Record<Done, string> = {
 	merge: "Pull request merged.",
 	autostart: "Ready quest setting saved.",
 	ready: "Marked ready for review.",
+	close: "Pull request closed.",
 };
 
 const kinds = { pull: "Pull request", issue: "Issue", quest: "Ready quest", plan: "Plan", devshell: "Bootstrap" };
@@ -401,13 +403,13 @@ function blocked(item: Item, view: ProjectView | undefined) {
 /** The workflow a new job runs for the item, bound to the revision on screen. */
 function work(item: Item, view: ProjectView) {
 	const commit = view.state!.project.commit;
-	// Retrying a failed merge job picks merge again.
-	if (item.kind === "pull" && item.need === "retry" && item.job?.workflow === "merge")
+	// Retrying a failed merge or delete job picks it again.
+	if (item.kind === "pull" && item.need === "retry" && item.job && lands(item.job.workflow))
 		return {
-			workflow: "merge",
+			workflow: item.job.workflow,
 			target: item.target,
 			revision: (item.activity!.data as Pull).headRefOid,
-			label: "Merge this PR",
+			label: item.job.workflow === "merge" ? "Merge this PR" : "Delete this quest",
 		};
 	if (item.kind === "pull")
 		return {
@@ -451,6 +453,19 @@ function handedBack(item: Item) {
 	return pull?.state === "OPEN" && pull.isDraft && pull.handedBack && !pull.hold ? pull : null;
 }
 
+/**
+ * How deleting the observed free pull request goes: a quest's own pull
+ * request runs a delete job that abandons the quest, as `/quest-delete` does,
+ * and any other closes. Closing leaves a quest's branch claiming it, so a
+ * quest's pull request from a fork, which the bot cannot update, offers neither.
+ */
+function deletion(item: Item, view: ProjectView) {
+	const pull = item.kind === "pull" ? (item.activity?.data as Pull | null | undefined) : null;
+	if (pull?.state !== "OPEN" || item.holder) return null;
+	if (!questPull(view.state!, pull)) return { pull, quest: false };
+	return pull.isCrossRepository === false ? { pull, quest: true } : null;
+}
+
 function Refresh(props: { project: Item["project"] }) {
 	return (
 		<form method="post" action={`${projectURL(props.project.owner, props.project.name)}/refresh`}>
@@ -471,6 +486,9 @@ function Actions(props: { item: Item; view: ProjectView | undefined; runners: Ru
 	const merge = starts && !reason ? landing(item) : null;
 	// A draft handed back with its waits can be accepted as it is; a draft its starter holds is theirs to mark.
 	const draft = item.need === "start" && !reason ? handedBack(item) : null;
+	// Only a free pull request can be deleted, and never a retried delete job's twice.
+	const remove =
+		starts && !reason && item.need !== "takeover" && job?.workflow !== "delete" ? deletion(item, view!) : null;
 	const active = item.job && ["queued", "running", "waiting"].includes(item.job.state) && !item.job.cancel;
 	return (
 		<div class="decision-actions">
@@ -496,6 +514,21 @@ function Actions(props: { item: Item; view: ProjectView | undefined; runners: Ru
 				<form method="post" action={`${base}/pulls/${draft.number}/ready`}>
 					<input type="hidden" name="head" value={draft.headRefOid} />
 					<button class="button quiet">Mark ready for review</button>
+				</form>
+			)}
+			{remove?.quest && (
+				<form method="post" action={`${base}/jobs`}>
+					<input type="hidden" name="workflow" value="delete" />
+					<input type="hidden" name="target" value={item.target} />
+					<input type="hidden" name="revision" value={remove.pull.headRefOid} />
+					<Pin runners={props.runners} id={`delete-${item.project.id}-pin`} />
+					<button class="button quiet">Delete this quest</button>
+				</form>
+			)}
+			{remove && !remove.quest && (
+				<form method="post" action={`${base}/pulls/${remove.pull.number}/close`}>
+					<input type="hidden" name="head" value={remove.pull.headRefOid} />
+					<button class="button quiet">Close this PR</button>
 				</form>
 			)}
 			{reason ? (
@@ -789,6 +822,7 @@ const workflows = {
 	start: "Implementing",
 	iterate: "Iterating",
 	merge: "Merging",
+	delete: "Deleting",
 	bootstrap: "Adding a devShell",
 };
 

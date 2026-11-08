@@ -113,7 +113,8 @@ jobs wait for a runner that declares them. kix trusts that declaration, so a
 runner declared through `POST /api/runners` with `vm: true` that cannot build
 in a VM is still sent the job; `quest runner` fails it rather than run it. A
 `merge` job runs the merge
-skill's loop on an open, non-draft pull request and lands it; it holds the PR
+skill's loop on an open, non-draft pull request and lands it, and a `delete`
+job runs the delete skill on a quest's own pull request the same way; each holds the PR
 with its own `quest:kix` label, which local sessions respect as they do each
 other's `quest:active` (`src/jobs/landing.ts`), as described in
 [GITHUB.md](GITHUB.md#merge-jobs). A five-minute scheduled sweep retries ended jobs’ hold releases even when a lifecycle callback or GitHub read was missed; a live job, a replacement hold, or an active landing keeps its label. Without a `flake.nix`, the route
@@ -269,10 +270,12 @@ needed`) section, or the `quest:*` label a session holds it with. Such a draft
 quiet for a week becomes a "quiet draft" decision offering to take it over
 with an iterate job, or to skip it until it changes; a labeled hold is never
 offered, since its session or job releases it. Every other open pull request
-offers merge, iterate, and skip, and a draft handed back with `## Waiting`
+offers merge, iterate, delete, and skip, and a draft handed back with `## Waiting`
 also offers "Mark ready for review" (`POST
 /projects/github/<owner>/<repo>/pulls/<n>/ready` with the `head` on screen),
-which the App does once no job of that pull request is active.
+which the App does once no job of that pull request is active. Delete runs a
+`delete` job on a quest's own pull request and closes any other
+([GITHUB.md](GITHUB.md#deleting-pull-requests)).
 
 Each project's "Start ready quests on your runners" box opts the viewer in to
 starting its ready quests without a click, optionally only in some milestones
