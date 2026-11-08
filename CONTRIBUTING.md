@@ -53,7 +53,7 @@ PRs land on `main` through GitHub's merge queue, one PR at a time, as squash com
 Queue the reviewed head with `quest merge <pr> --land <sha>` (`/quest-merge` does this).
 The required `Queue` check skips on pull requests; the merge group runs `just check` and `just test` on the self-hosted runner.
 That build lives in `.github/workflows/queue-build.yml`, which the merge group calls from `main`, so a PR's edit to it runs only after the PR lands.
-The host's `quest land watch` daemon runs the Codex fixer when the queue drops a PR for a failed build or a conflict, and re-enqueues healthy heads at the back of the queue.
+The host runs one `quest land watch` daemon per base, here `main`'s; it runs the Codex fixer when the queue drops a PR for a failed build or a conflict, and re-enqueues healthy heads at the back of the queue.
 The fixer resolves mechanical causes itself and pushes the fix onto the PR's branch: conflicts that keep both sides' intent, formatting and lint, generated files, lockfiles rebuilt from the base's copy, and build or test failures with an obvious fix, built and tested with registry access.
 It hands back, with a diagnosis on the PR, anything that needs a behavior or design decision; a fix that edits protected paths (`flake.nix`, `.github/`, ...) or that GitHub refuses to push comes back as a ready commit for `quest land apply <pr>`.
 The admin bypass of `main`'s ruleset is for emergencies.
