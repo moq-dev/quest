@@ -578,7 +578,7 @@ commit for `quest land apply <pr>`.
 
 ## Land a batch with quest land
 
-`quest land serve` runs on a maintainer's host, with one process per repository.
+`quest land serve` runs on a maintainer's host, with one process per base branch of a repository.
 It replaces the Land workflow; landing needs no GitHub Actions.
 The base requires the unreported `quest land` check, keeping auto-merge waiting.
 Queue an approved head with `quest merge <pr> --land <sha>`.
@@ -744,7 +744,7 @@ and comments with the reason and the failing log, bounded by
 size. When GitHub refuses to merge one PR, only that PR stops: a conflict is
 parked for the fixer, a moved head or refusal is ejected, and the rest of the batch
 stays queued. `quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
-`$STATE_DIRECTORY` or the XDG state home, never inside the checkout. Each daemon pass deletes a log 7 days after its last write once no job, waiting removal, or replayed failure reads it. A check
+`$STATE_DIRECTORY` or the XDG state home, in `<owner>-<repo>@<base>`, never inside the checkout. Each daemon pass deletes a log 7 days after its last write once no job, waiting removal, or replayed failure reads it. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
 Every chain commit the daemon builds, and every base it merges into a PR head, drops
@@ -835,7 +835,7 @@ the unreported required `quest land` check must be verified on the live host.
 
 ## Watch the merge queue with quest land watch
 
-`quest land watch` runs on a maintainer's host, one process per repository,
+`quest land watch` runs on a maintainer's host, one process per base branch of a repository,
 and lands its base through a serial queue: GitHub's merge queue where the
 base's rules have a `merge_queue` rule, and otherwise
 [its own](#the-watchers-own-queue), as on a private repository on GitHub Team,
@@ -846,7 +846,11 @@ pass that cannot read them does nothing. It reads them with a `contents: read`
 token, so an installation granted only one mode's permissions runs it. On GitHub's queue it tells each PR the queue
 drops unmerged why. With `--fixer`, it also runs the land fixer on each PR the
 queue dropped for a failure or a conflict, and puts it back at the back of the
-queue. It polls; the host needs no public endpoint.
+queue. It polls; the host needs no public endpoint. Its base is resolved once at
+startup, from `--base` or the default branch, so a renamed default branch needs a
+restart. Watchers on different bases of one repository, such as `main` and
+`release`, run side by side with their own state, locks, clone and `--method`, and
+never touch each other's PRs; a second daemon on the same base refuses to start.
 
 ```sh
 QUEST_LAND_KEY=/run/credentials/quest-land/key quest land watch --app-id 1039466 --fixer /path/to/fixer-wrapper
@@ -1649,27 +1653,25 @@ stolen. This initial interface refuses unknown or changed checkout ownership.
 
 ### Claude Code checkouts
 
-Quest's hooks for Claude Code are an opt-in each user adds to their own
-settings, `~/.claude/settings.json`, so they apply in every repository that
-user opens and no repository forces them on its contributors. Merge these
-entries into the file's `hooks`:
+Quest's worktree hooks for Claude Code are an opt-in each user installs in their
+own settings, so they apply in every repository that user opens and no
+repository forces them on its contributors:
 
-```json
-{
-  "hooks": {
-    "WorktreeCreate": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
-    "WorktreeRemove": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
-    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook" }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "command -v quest >/dev/null || { echo 'quest is not on the PATH Claude Code runs hooks with: run nix develop --command claude in this repository, or install quest on that PATH' >&2; exit 1; }; quest worktree hook", "timeout": 60 }] }]
-  }
-}
+```sh
+quest setup --worktrees
 ```
+
+It adds `WorktreeCreate`, `WorktreeRemove`, `SubagentStart`, `SubagentStop`,
+`SessionStart`, and `SessionEnd` entries running `quest worktree hook` to
+[`quest setup`](#configure-claude-code)'s other changes, replacing worktree
+entries pasted from an earlier README. Rerun `quest setup` after upgrading to
+pick up new events; `--no-worktrees` or `--remove` takes them out.
 
 Only one hook can manage Claude's worktrees, so remove any other
 `WorktreeCreate` or `WorktreeRemove` hook first. `quest` must be on the `PATH`
-Claude Code runs hooks with. For `claude --bg` and agent view, that is the
+Claude Code runs hooks with: start Claude with `nix develop --command claude`
+in a repository whose dev shell provides it, or install it on that `PATH`.
+For `claude --bg` and agent view, that is the
 environment of the shell that started the session. The hook then creates every worktree Claude makes
 in the repository: for `--worktree`, `EnterWorktree`, isolated subagents and
 workflow agents, background sessions, and `claude remote-control --spawn
@@ -1784,8 +1786,9 @@ when the session compacts. Instead, `quest setup` installs a `SessionStart`
 hook (startup, resume, clear, and compact) and a `SubagentStart` hook, each
 running `quest hook`, which adds `quest context` to the session in a
 repository whose root `AGENTS.md` or `CLAUDE.md` has the `Quests: ` line, and
-nothing elsewhere. `quest` must be on the `PATH` Claude Code starts with, as
-for the worktree hooks.
+nothing elsewhere. `quest` must be on the `PATH` Claude Code starts with.
+`quest setup --worktrees` also installs the
+[worktree hooks](#claude-code-checkouts).
 
 It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`,
 keeps your other settings, refuses a malformed file unchanged, writes once,

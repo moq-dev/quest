@@ -126,8 +126,8 @@ recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md) and
 
 Shared shape, for the children to follow:
 
-- The watcher is a long-running host daemon, one per repository (one per
-  base once [per-base instances](/quest/m0/queue-watcher/per-base.md) land), that reuses
+- The watcher is a long-running host daemon, one per base branch of a
+  repository, each with its own clone, locks and state, that reuses
   the host gate's fixer infrastructure rather than a new one: moq-bot's App
   key through systemd `LoadCredential`, the ephemeral nspawn fixer container
   and its launcher, the detached fixer supervisor and its collection in
@@ -150,6 +150,5 @@ Shared shape, for the children to follow:
 - [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
 - [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
 - [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - moq.pro's `main` leaves the batching gate for the watcher's own queue
-- [The watcher runs one instance per base branch](/quest/m0/queue-watcher/per-base.md) - each base of a repository gets its own watcher, clone, locks, state and `--method`, so moq.pro's `release` can follow `main`
 - [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go
 - [kix.quest shows each repository's landing queue](/quest/m0/queue-watcher/queue-page.md) - one page per repository with its queue order, current build, and recent drops, in both modes

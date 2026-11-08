@@ -11,17 +11,23 @@ import { dirname, join } from "node:path";
 
 import { REFERENCE_MARKER, lines } from "../core";
 import { CONTEXT } from "./skills";
+import { HOOK_EVENTS } from "./worktree-hook";
 
-/** The command every Quest entry runs; `quest setup` recognizes its own entries by it. */
+/** The command the rule hooks run. */
 export const HOOK_COMMAND = "quest hook";
+
+/** The command the worktree hooks run; README-pasted entries ending in it are recognized too. */
+export const WORKTREE_COMMAND = "quest worktree hook";
 
 /** Claude Code truncates longer hook context to a preview and a file path it never asks Claude to read. */
 export const CONTEXT_LIMIT = 10_000;
 
-/** One installed entry: the event, and the matcher narrowing it, if any. */
+/** One installed entry: the event, the matcher narrowing it, the command (`HOOK_COMMAND` by default), and its timeout in seconds. */
 export interface HookEntry {
 	event: string;
 	matcher?: string;
+	command?: string;
+	timeout?: number;
 }
 
 /**
@@ -34,6 +40,17 @@ export const HOOKS: readonly HookEntry[] = [
 	{ event: "SessionStart", matcher: "startup|resume|clear|compact" },
 	{ event: "SubagentStart" },
 ];
+
+/**
+ * The entries `quest setup --worktrees` adds, handing Claude Code's worktrees,
+ * and the subagent and session lifecycles that hold them, to `quest worktree`.
+ * Claude Code gives SessionEnd hooks at most a minute, which its timeout asks for.
+ */
+export const WORKTREE_HOOKS: readonly HookEntry[] = HOOK_EVENTS.map((event) => ({
+	event,
+	command: WORKTREE_COMMAND,
+	...(event === "SessionEnd" ? { timeout: 60 } : {}),
+}));
 
 /**
  * Claude Code's cap on a foreground command's timeout: 55 minutes, just under the
@@ -51,13 +68,18 @@ type Json = Record<string, unknown>;
 
 /**
  * Set Quest's settings in the Claude Code settings file at `path`: the
- * foreground timeout cap and `entries` as Quest's hooks. With `remove`, take
+ * foreground timeout cap and `entries` as Quest's hooks, by default the rule
+ * hooks plus the worktree hooks when `worktrees` is true, or when it is
+ * unset and the file already has them. With `remove`, take
  * Quest's hooks out, and the cap while it still holds Quest's value. Keeps
  * every other setting and hook, and writes once. Returns a line per change. A
  * file that is not a JSON object, or whose `env` or `hooks` is malformed,
  * throws before anything is written.
  */
-export function setup(path: string, options: { remove?: boolean; entries?: readonly HookEntry[] } = {}): string[] {
+export function setup(
+	path: string,
+	options: { remove?: boolean; worktrees?: boolean; entries?: readonly HookEntry[] } = {},
+): string[] {
 	const original = existsSync(path) ? readFileSync(path, "utf8") : null;
 	let settings: unknown = {};
 	if (original !== null) {
@@ -70,7 +92,9 @@ export function setup(path: string, options: { remove?: boolean; entries?: reado
 	if (!isObject(settings)) throw new Error(`${path} does not hold a JSON object`);
 	const env = settings.env ?? {};
 	if (!isObject(env)) throw new Error(`${path}: env is not an object`);
-	const hooked = withHooks(settings, options.remove ? [] : (options.entries ?? HOOKS), path);
+	const worktrees = options.worktrees ?? hasWorktreeHooks(settings);
+	const entries = options.entries ?? (worktrees ? [...HOOKS, ...WORKTREE_HOOKS] : HOOKS);
+	const hooked = withHooks(settings, options.remove ? [] : entries, path);
 
 	const changes: string[] = [];
 	let updated = hooked;
@@ -117,17 +141,21 @@ function withHooks(settings: Json, entries: readonly HookEntry[], path: string):
 			const only =
 				group.hooks.length === 1 && Object.keys(group).every((key) => ["matcher", "hooks"].includes(key));
 			if (only && (group.matcher === undefined || typeof group.matcher === "string"))
-				installed.push({ event, ...(group.matcher === undefined ? {} : { matcher: group.matcher as string }) });
+				installed.push({
+					event,
+					...(group.matcher === undefined ? {} : { matcher: group.matcher as string }),
+					...handlerEntry(group.hooks[0] as Json & { command: string }),
+				});
 			else scattered = true;
 			return handlers.length > 0 ? [{ ...group, hooks: handlers }] : [];
 		});
 		if (left.length > 0 || groups.length === 0) kept[event] = left;
 	}
 	if (!scattered && sameEntries(installed, entries)) return settings;
-	for (const { event, matcher } of entries) {
+	for (const { event, matcher, command = HOOK_COMMAND, timeout } of entries) {
 		const group = {
 			...(matcher === undefined ? {} : { matcher }),
-			hooks: [{ type: "command", command: HOOK_COMMAND }],
+			hooks: [{ type: "command", command, ...(timeout === undefined ? {} : { timeout }) }],
 		};
 		kept[event] = [...((kept[event] as unknown[] | undefined) ?? []), group];
 	}
@@ -137,13 +165,41 @@ function withHooks(settings: Json, entries: readonly HookEntry[], path: string):
 	return rest;
 }
 
-/** Whether a hook handler is one `quest setup` wrote. */
-function isOurs(handler: unknown): boolean {
-	return isObject(handler) && handler.type === "command" && handler.command === HOOK_COMMAND;
+/** Whether a hook handler is Quest's: one `quest setup` wrote, or a worktree entry pasted from an older README. */
+function isOurs(handler: unknown): handler is Json & { command: string } {
+	return (
+		isObject(handler) &&
+		handler.type === "command" &&
+		typeof handler.command === "string" &&
+		(handler.command === HOOK_COMMAND || handler.command.endsWith(WORKTREE_COMMAND))
+	);
+}
+
+/** The command and timeout of Quest's `handler`, with any other field making it differ from every entry. */
+function handlerEntry(handler: Json & { command: string }): Pick<HookEntry, "command" | "timeout"> {
+	const extra = Object.keys(handler).some((key) => !["type", "command", "timeout"].includes(key));
+	const timeout = typeof handler.timeout === "number" ? handler.timeout : undefined;
+	return { command: extra ? `${handler.command}\0` : handler.command, ...(timeout === undefined ? {} : { timeout }) };
+}
+
+/** Whether `settings` holds any of Quest's worktree hooks. */
+function hasWorktreeHooks(settings: Json): boolean {
+	if (!isObject(settings.hooks)) return false;
+	return Object.values(settings.hooks).some(
+		(groups) =>
+			Array.isArray(groups) &&
+			groups.some(
+				(group) =>
+					isObject(group) &&
+					Array.isArray(group.hooks) &&
+					group.hooks.some((handler) => isOurs(handler) && handler.command.endsWith(WORKTREE_COMMAND)),
+			),
+	);
 }
 
 function sameEntries(a: readonly HookEntry[], b: readonly HookEntry[]): boolean {
-	const key = (entry: HookEntry) => `${entry.event}\0${entry.matcher ?? ""}`;
+	const key = (entry: HookEntry) =>
+		[entry.event, entry.matcher ?? "", entry.command ?? HOOK_COMMAND, entry.timeout ?? ""].join("\0");
 	const left = a.map(key).sort();
 	const right = b.map(key).sort();
 	return left.length === right.length && left.every((value, i) => value === right[i]);
