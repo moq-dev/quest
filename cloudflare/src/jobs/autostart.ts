@@ -107,9 +107,9 @@ export async function read(db: D1Database, repository: number, user: string): Pr
 	return row ? { milestones: row.milestones ? JSON.parse(row.milestones) : null } : null;
 }
 
-/** Whether an opt-in still covers `quest`. */
-function covers(scope: Autostart | null, quest: string) {
-	return !!scope && (!scope.milestones || scope.milestones.includes(quest.split("/")[1]!));
+/** Whether an opt-in covers `quest`'s milestone; `createJob` checks the same in SQL. */
+function covers(scope: Autostart, quest: string) {
+	return !scope.milestones || scope.milestones.includes(quest.split("/")[1]!);
 }
 
 /** Opt a project in for `user`'s runners, or out with `null`. */
@@ -169,26 +169,20 @@ export async function autostart(env: Env, owner: string, free: number) {
 				refused.add(project.id);
 				continue;
 			}
+			// The insert rechecks the opt-in, which may have ended or narrowed while this pass read GitHub.
 			const created = await store.createJob(
 				env.DB,
-				{ ...job, repository: project.id, actor: owner, pinRunner: null, pinAccount: null },
+				{ ...job, repository: project.id, actor: owner, pinRunner: null, pinAccount: null, automatic: true },
 				Date.now(),
 			);
-			if (!created.created) continue;
-			// The maintainer may have opted out or narrowed the milestones while this pass read GitHub.
-			// Any change after this read came after the job, so this check closes that window.
-			if (!covers(await read(env.DB, project.id, owner), target)) {
-				await store.cancel(env.DB, created.id, owner, Date.now());
-				refused.add(project.id);
-				continue;
-			}
-			started++;
+			if (created.created) started++;
 		} catch (error) {
 			if (error instanceof NotMaintainer) {
 				// Lost authority ends the opt-in: it lent runners to a project its owner no longer maintains.
 				await save(env.DB, project.id, owner, null, Date.now());
 				refused.add(project.id);
-			} else if (error instanceof JobError) continue;
+			} else if (error instanceof store.NotOptedIn) refused.add(project.id);
+			else if (error instanceof JobError) continue;
 			else if (error instanceof GitHubError) refused.add(project.id);
 			else throw error;
 		}

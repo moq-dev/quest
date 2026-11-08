@@ -740,7 +740,16 @@ export type NewJob = Pick<Job, "repository" | "workflow" | "target" | "revision"
 	pinAccount?: string | null;
 	idea?: string | null;
 	context?: string | null;
+	/** Started by the actor's autostart opt-in, so created only while it covers the target's milestone. */
+	automatic?: boolean;
 };
+
+/** An automatic start whose opt-in ended or no longer covers its quest. */
+export class NotOptedIn extends JobError {
+	constructor() {
+		super("Autostart no longer covers this quest");
+	}
+}
 
 /** Create a job, or return the active job already doing the same work. */
 export async function createJob(db: D1Database, input: NewJob, now: number) {
@@ -752,6 +761,10 @@ export async function createJob(db: D1Database, input: NewJob, now: number) {
 	const account = input.pinAccount ?? null;
 	const trusted = input.trusted ? 1 : 0;
 	const pin = [runner, runner, input.actor, trusted, account, account];
+	// Checked in the insert itself, so an opt-out that commits first leaves no job for a dispatch to find.
+	const opted =
+		"(?=0 OR EXISTS(SELECT 1 FROM autostart a WHERE a.repository=? AND a.user=? AND (a.milestones IS NULL OR EXISTS(SELECT 1 FROM json_each(a.milestones) WHERE value=?))))";
+	const opt = [input.automatic ? 1 : 0, input.repository, input.actor, input.target.split("/")[1] ?? ""];
 	const id = crypto.randomUUID();
 	// The insert checks the project and pins again, since a pause or a
 	// runner's status can commit after the request read them. Iterating on or
@@ -759,13 +772,13 @@ export async function createJob(db: D1Database, input: NewJob, now: number) {
 	// whose latest job failed continues that job's branch and pull request
 	// where it left them, as a reassigned attempt would, and records which
 	// job it continues.
-	const [insert, active, enabled, pinned] = await db.batch([
+	const [insert, active, enabled, pinned, covered] = await db.batch([
 		db
 			.prepare(
 				`INSERT OR IGNORE INTO jobs(id,repository,workflow,target,revision,branch,head,pending,pendingAt,pull,continues,idea,context,actor,trusted,pinRunner,pinAccount,state,createdAt,updatedAt)
  SELECT ?,p.id,?,?,?,?,COALESCE(?,f.head),f.pending,f.pendingAt,f.pull,f.id,COALESCE(?,f.idea),COALESCE(?,f.context),?,?,?,?,'queued',?,? FROM github_projects p
  LEFT JOIN jobs f ON ?=0 AND f.state='failed' AND f.branch=? AND f.id=(SELECT id FROM jobs WHERE repository=p.id AND target=? ORDER BY createdAt DESC,id LIMIT 1)
- WHERE p.id=? AND p.state='enabled' AND ${pinnable}`,
+ WHERE p.id=? AND p.state='enabled' AND ${pinnable} AND ${opted}`,
 			)
 			.bind(
 				id,
@@ -787,15 +800,18 @@ export async function createJob(db: D1Database, input: NewJob, now: number) {
 				input.target,
 				input.repository,
 				...pin,
+				...opt,
 			),
 		db
 			.prepare("SELECT id FROM jobs WHERE repository=? AND target=? AND state IN ('queued','running','waiting')")
 			.bind(input.repository, input.target),
 		db.prepare("SELECT 1 FROM github_projects WHERE id=? AND state='enabled'").bind(input.repository),
 		db.prepare(`SELECT ${pinnable} AS ok`).bind(...pin),
+		db.prepare(`SELECT ${opted} AS ok`).bind(...opt),
 	]);
 	if (insert!.meta.changes === 1) return { id, created: true };
 	if (!enabled!.results.length) throw new JobError("Contributions are paused");
+	if (!(covered!.results[0] as { ok: number }).ok) throw new NotOptedIn();
 	if (!(pinned!.results[0] as { ok: number }).ok) throw new JobError("Pinned runner or account unavailable");
 	const found = active!.results[0] as { id: string } | undefined;
 	if (!found) throw new JobError("Job changed; try again");

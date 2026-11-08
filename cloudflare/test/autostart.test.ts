@@ -148,7 +148,7 @@ describe("starting ready quests on free slots", () => {
 		expect((await opt([["enabled", "maybe"]])).status).toBe(409);
 	});
 
-	it("cancels a start the maintainer opted out of while it read GitHub", async () => {
+	it("creates no start the maintainer opted out of while it read GitHub", async () => {
 		await save(db, 10, user, { milestones: null }, 0);
 		const github = vi.mocked(globalThis.fetch).getMockImplementation()!;
 		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
@@ -157,7 +157,22 @@ describe("starting ready quests on free slots", () => {
 			return github(input, init);
 		});
 		expect(await autostart(testEnv, user, 1)).toBe(0);
-		expect((await db.prepare("SELECT state FROM jobs").all()).results).toEqual([{ state: "cancelled" }]);
+		expect(await jobs()).toEqual([]);
+		// Narrowing the milestones works the same way, checked in the same insert.
+		await save(db, 10, user, { milestones: ["m3"] }, 0);
+		const start = {
+			repository: 10,
+			actor: user,
+			workflow: "start",
+			target: "quest/m0/x.md",
+			revision: head,
+			branch: "quest/m0/x",
+			trusted: true,
+			automatic: true,
+		} as const;
+		await expect(store.createJob(db, start, 0)).rejects.toThrow(store.NotOptedIn);
+		await save(db, 10, user, { milestones: ["m0"] }, 0);
+		expect((await store.createJob(db, start, 0)).created).toBe(true);
 	});
 
 	it("takes turns across projects, the least recently started first", async () => {
