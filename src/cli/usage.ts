@@ -6,7 +6,7 @@ import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type Size, SIZES, handedBack, questBranch } from "../core";
-import { type Comment, implementer, recorded, sessionsComment } from "../github/models";
+import { implementer, recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { discoveryEnv, git } from "./git";
 import { fixes } from "./land-fixer";
@@ -368,23 +368,6 @@ async function updatedPulls(client: GitHub, repository: Repository, since: numbe
 	return pulls;
 }
 
-/** The sessions comment of each PR, read a few at a time. */
-async function sessionComments(client: GitHub, repository: Repository, pulls: Pull[]): Promise<Map<number, string>> {
-	const found = new Map<number, string>();
-	const queue = [...pulls];
-	const worker = async () => {
-		for (let each = queue.shift(); each; each = queue.shift()) {
-			const comments = (await client.all(
-				`${repositoryPath(repository)}/issues/${each.number}/comments?per_page=100`,
-			)) as Comment[];
-			const body = sessionsComment(comments)?.body;
-			if (body) found.set(each.number, body);
-		}
-	};
-	await Promise.all(Array.from({ length: 8 }, worker));
-	return found;
-}
-
 /** The PR numbers of `repository` that `body`'s `## Caused by` section links. */
 function causes(body: string, repository: Repository): number[] {
 	const heading = /^## Caused by[ \t]*\r?$/m.exec(body);
@@ -403,14 +386,13 @@ const sized = (value: string | null | undefined): Size | null =>
 	(SIZES as readonly string[]).includes(value ?? "") ? (value as Size) : null;
 
 /** Each PR's record, without its sessions yet. */
-function pullRows(pulls: Pull[], comments: Map<number, string>, repository: Repository): PullRow[] {
+function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 	const fixedBy = new Map<number, number[]>();
 	for (const each of pulls)
 		for (const cause of causes(each.body, repository))
 			if (cause !== each.number) fixedBy.set(cause, [...(fixedBy.get(cause) ?? []), each.number]);
 	return pulls.map((each) => {
 		const own = recorded(each.body);
-		const later = recorded(comments.get(each.number) ?? "");
 		return {
 			number: each.number,
 			url: each.url,
@@ -420,7 +402,7 @@ function pullRows(pulls: Pull[], comments: Map<number, string>, repository: Repo
 			draft: each.draft,
 			handedBack: each.draft && handedBack(each.body),
 			size: own.sizes.map(sized).find((s) => s !== null) ?? null,
-			implementers: [...own.implementers, ...later.implementers].flatMap(({ item }) => {
+			implementers: own.implementers.flatMap(({ item }) => {
 				const fields = implementer(item);
 				return fields ? [{ ...fields, size: sized(fields.size) }] : [];
 			}),
@@ -663,8 +645,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 			(branch === undefined || each.branch === branch),
 	);
 	const narrowed = options.pr !== undefined || branch !== undefined;
-	const comments = await sessionComments(client, repository, pulls);
-	const rows = pullRows(all, comments, repository).filter((row) => pulls.some((each) => each.number === row.number));
+	const rows = pullRows(all, repository).filter((row) => pulls.some((each) => each.number === row.number));
 	const byNumber = new Map(rows.map((row) => [row.number, row]));
 	const priced = deps.ccusage(options.since);
 	let unattributed: Usage["unattributed"] = null;

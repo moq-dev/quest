@@ -116,7 +116,7 @@ Settings → Actions → General → Workflow permissions to read; move reposito
 secrets, and organization secrets shared with the repository, into
 environments whose deployment branches are limited to protected branches; and
 keep write `permissions:` out of jobs that pull requests and pushes to other
-branches run. kix checks the same settings when a repository enrolls.
+branches run.
 Change settings and workflows only if the user agrees.
 
 Run `quest check`, then suggest next steps: restart the agent session so it

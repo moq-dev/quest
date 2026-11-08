@@ -1,8 +1,7 @@
 // The quest log theme on a terminal: markers, size colours, and the quest-log
 // voice. `design/theme.md` is the source of truth for the codes; this is the CLI's
-// own copy of its small tables, kept out of the core so the Worker never carries
-// presentation it does not use. Statuses use the format's own terms (ready,
-// blocked, `Required`), with no display aliases.
+// own copy of its small tables, kept out of the core. Statuses use the format's
+// own terms (ready, blocked, `Required`), with no display aliases.
 //
 // Only a terminal sees any of this. Piped output is the plain contract agents
 // and scripts read, and `main.ts` prints it unchanged.

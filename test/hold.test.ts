@@ -47,10 +47,6 @@ class FakePull {
 	events: Event[] = [];
 	/** Mutations and label writes, in order. */
 	readonly writes: string[] = [];
-	/** Runs before each label is added, as when another session adds one at the same moment. */
-	beforeAdd?: () => void;
-	/** Runs after each label is added, as when another session adds one a moment later. */
-	afterAdd?: () => void;
 	beforeAutoMerge?: () => string | undefined;
 	/** The error GitHub answers `enqueuePullRequest` with, if any. */
 	beforeEnqueue?: () => { message: string; type?: string } | undefined;
@@ -92,9 +88,7 @@ class FakePull {
 		if (url.pathname === "/graphql")
 			return json(200, this.graphql(String(body.query), body.variables as ObjectValue));
 		if (url.pathname === "/repos/example/project/issues/7/labels" && method === "POST") {
-			this.beforeAdd?.();
 			for (const name of body.labels as string[]) this.label(name);
-			this.afterAdd?.();
 			this.writes.push(`add ${(body.labels as string[]).join(",")}`);
 			return json(
 				200,
@@ -236,43 +230,11 @@ describe("taking a PR", () => {
 		expect(pull.labels).toEqual(["quest:active"]);
 	});
 
-	test("refuses while kix holds it, and its token releases it", async () => {
-		const pull = new FakePull();
-		const token = pull.label("quest:kix");
-		expect(await refused(take(PR, undefined, pull.deps()))).toContain("held by quest:kix");
-		expect(pull.labels).toEqual(["quest:kix"]);
-		// Its token releases it.
-		expect(await release(PR, token!, pull.deps())).toBe("quest:kix");
-		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
-	});
-
 	test("ignores the quest:merge label older quest versions left on queued PRs", async () => {
 		const pull = new FakePull();
 		pull.label("quest:merge");
 		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
 		expect(pull.labels).toEqual(["quest:merge", "quest:active"]);
-	});
-
-	test("backs off when another session's label lands between its check and its add", async () => {
-		const pull = new FakePull();
-		pull.beforeAdd = () => {
-			pull.beforeAdd = undefined;
-			pull.label("quest:kix");
-		};
-		expect(await refused(take(PR, undefined, pull.deps()))).toContain("held by quest:kix");
-		expect(pull.labels).toEqual(["quest:kix"]);
-		expect(pull.writes).toEqual(["add quest:active", "remove quest:active"]);
-	});
-
-	test("keeps the PR when another session's label lands after its own", async () => {
-		const pull = new FakePull();
-		pull.afterAdd = () => {
-			pull.afterAdd = undefined;
-			pull.label("quest:kix");
-		};
-		expect(await take(PR, undefined, pull.deps())).toEqual({ label: "quest:active", token: "LabeledEvent_1" });
-		// The later session sees the earlier label and backs off.
-		expect(pull.labels).toEqual(["quest:active", "quest:kix"]);
 	});
 
 	test("keeps the hold its token names", async () => {
@@ -286,14 +248,6 @@ describe("taking a PR", () => {
 		const pull = new FakePull();
 		const token = pull.label("quest:ready")!;
 		expect(await refused(take(PR, token, pull.deps()))).toContain("quest:ready is off");
-		expect(pull.writes).toEqual([]);
-	});
-
-	test("refuses a token naming kix's hold rather than taking it over", async () => {
-		const pull = new FakePull();
-		const token = pull.label("quest:kix")!;
-		expect(await refused(take(PR, token, pull.deps()))).toContain("names the quest:kix hold");
-		expect(pull.labels).toEqual(["quest:kix"]);
 		expect(pull.writes).toEqual([]);
 	});
 
@@ -349,9 +303,9 @@ describe("merge --land", () => {
 		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
 			`held by quest:active, added just now as token ${token}`,
 		);
-		pull.label("quest:kix");
 		await release(PR, token, pull.deps());
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:kix");
+		pull.label("quest:active");
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:active");
 		pull.labels = ["quest:merge"];
 		await land(PR, HEAD, "merge", pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);

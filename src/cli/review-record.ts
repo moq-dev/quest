@@ -1,7 +1,7 @@
 // `quest review` rewrites the `## Review` section of its branch's open PR after each round, so the head
 // it reviewed counts without an agent copying the round into the body by hand.
 import { reviewSection } from "../core";
-import { type Comment, recorded, sessionsComment } from "../github/models";
+import { recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { git } from "./git";
 import { requireRemote, string } from "./github";
@@ -156,15 +156,7 @@ export async function pullModels(
 ): Promise<PullModels | null> {
 	const pull = await openPull(root, baseRef, branch, deps);
 	if ("skipped" in pull) return null;
-	// Sessions that published to the PR after it opened are on kix's sessions comment rather than in the body.
-	const comments = (await pull.client.all(
-		`${repositoryPath(pull.repository)}/issues/${pull.number}/comments?per_page=100`,
-	)) as Comment[];
-	const own = recorded(pull.body);
-	const later = recorded(sessionsComment(comments)?.body ?? "");
-	// Each records its sessions in the order they last pushed, but which record a later push went to cannot be told.
-	const latest = [own, later].flatMap((record) => record.implementers.at(-1)?.model ?? []);
-	return { sizes: own.sizes, implementers: [...own.implementers, ...later.implementers], latest };
+	return recorded(pull.body);
 }
 
 /** Record `round` in the `## Review` section of its branch's open PR. The edit is the token's user's, which the land gate counts only when that user wrote the PR. */

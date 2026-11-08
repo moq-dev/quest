@@ -62,9 +62,7 @@ README has no `Required` left) removes the links to that milestone too;
 `quest check` flags any it misses. The
 finished plan stays in Git history, beside the code that completed it.
 
-Work is taken through a live runner lock or an open change on the forge.
-kix.quest records each active job in its database and reassigns a job whose
-runner goes offline. On GitHub, a draft PR
+Work is taken through an open change on the forge. On GitHub, a draft PR
 opened from the quest's branch, including from a fork, claims the work;
 `quest start` opens one. These states stay out of the plan file.
 
@@ -161,7 +159,7 @@ same way. A fork whose parent keeps no quests is its own upstream. A failed
 lookup, such as an expired token or a network error, fails the command rather
 than picking a different upstream. `--remote` picks a remote other than `origin`.
 Off GitHub, only branches are checked.
-Neither form inspects kix.quest runner locks or outside conditions.
+Neither form inspects outside conditions.
 
 ## Find what waits on you
 
@@ -522,13 +520,13 @@ quest merge 128 --land <sha> # auto-merge bound to that head; takes no label
 A taken PR carries the `quest:active` label while an agent works on it.
 Sessions often share a GitHub account, so taking it prints a hold token: the
 ID of the timeline event that added the label. Every command refuses while a
-`quest:active` or `quest:kix` label it holds no token for is on the PR,
-including another session's `quest:active`; a draft its starter still holds, one without a
+`quest:active` label it holds no token for is on the PR; a draft its starter still holds, one without a
 `## Waiting` (or older `## Decisions needed`) section; and a merged or closed PR, since a push after
 the merge brings the branch back. The refusal names the holder's label, age,
 and token, so you can decide whether to release a stale hold. When two
-sessions add labels at once, the first label added keeps the PR and the other
-backs off.
+sessions add the label at once, the first added keeps the PR; GitHub records no
+event for adding a label already on the PR, so two takes in the same moment
+are not told apart.
 
 `quest merge` takes no label: the head-pinned auto-merge or merge-queue entry
 it creates is the queue signal, so a queued PR shows no hold. It refuses while
@@ -1202,8 +1200,7 @@ ownership instead: a scope of the gate's own would take the command out of
 the enclosing one's reach. Internal compiler or test worker parallelism remains
 the command's responsibility.
 
-This repository's `just check`, `just test`, `just worker-check`, and
-`just worker-test` run through the gate.
+This repository's `just check` and `just test` run through the gate.
 
 Arguments, working directory, environment, terminal streams, and the exit
 status pass through, and waiting happens before the command starts. Each
@@ -1285,9 +1282,8 @@ neither gets M's reviewers. `--size` overrides both. The first reviewer whose
 model is not the latest writer's reviews: the record's last `Implementer:` line
 names it, since each session moves its line last whenever it pushes, or
 `--exclude-model` names each model to avoid instead. Earlier writers may review.
-Without a record, or when its last line names an `unknown` model, or when the
-body's and kix's sessions comment's last lines name different models, whose
-order cannot be told, the harness running the command, usually the session that
+Without a record, or when its last line names an `unknown` model, the harness
+running the command, usually the session that
 just pushed, is taken to be the latest writer, so Codex reviews from Claude Code
 and Claude Code from Codex. `--harness` names the reviewer instead, at its entry's model and
 effort, and `--model` and `--effort` override those, as a repository whose
@@ -1444,8 +1440,7 @@ session must also be this repository's, as its Codex log, its checkout's
 remotes, or, once the checkout is deleted, a Codex log for that exact directory
 names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
 it or Codex marks it a review, implementing when it began before the PR opened,
-and iterating otherwise. Each PR shows its `## Models` size and implementers,
-with those on kix's sessions comment; its latest `quest review` round's
+and iterating otherwise. Each PR shows its `## Models` size and implementers; its latest `quest review` round's
 reviewer, round, score, open findings, and the last round's findings fixed or
 refuted; the land fixer's fixes; and the later PRs that list it under
 `## Caused by`.
@@ -1511,175 +1506,6 @@ npm's `claude.cmd` runs through System32's `cmd.exe` with its arguments
 escaped, `NoDefaultCurrentDirectoryInExePath` stops Windows' implicit search of
 the working directory, and `stop` ends the agent's whole process tree at once,
 since Windows has no `SIGTERM`.
-
-## Run kix jobs on your machines
-
-`quest runner` turns a Linux or macOS machine with Nix into a runner for kix at
-[quest.moq.dev](https://quest.moq.dev), driving Claude Code or opencode with
-that machine's own logins:
-
-```sh
-quest runner login --name laptop  # prints a link to approve while signed in to kix
-quest runner account add          # a Claude subscription, into the runner's pool
-quest runner account add codex    # a ChatGPT plan, into the pool Codex reviews with
-ANTHROPIC_API_KEY=sk-ant-... quest runner account add --console --label work
-quest runner account add opencode # opencode's sign-in: OpenCode Go, ChatGPT, or an API key
-quest runner account add opencode --model openai/gpt-5.5
-quest runner account list
-quest runner --slots 2            # runs jobs in the foreground until interrupted
-```
-
-`login` makes a token that never leaves the machine; the link carries only its
-hash, and kix connects the runner once you approve it. Claude and Codex
-subscriptions pool behind the runner's own
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI): `account add`
-signs each one in through the proxy's OAuth flow (`-claude-login` or
-`-codex-login`; over SSH, Claude's prints its link and takes the callback URL
-you paste back, and Codex's takes a device code), and `--console` adds an
-Anthropic Console API key from `ANTHROPIC_API_KEY` to the Claude pool. Signing a
-pooled account in again refreshes its credential. `quest runner` starts the
-proxy on a free loopback port with a client key of its own and stops it on
-exit, and every Claude Code job and review and every Codex review goes through
-it, so work spreads round-robin across the pool, keeping each session on one
-account for its prompt cache, and moves to another account when one is
-refused. The agent sees only the proxy's client key, through Claude Code's
-`apiKeyHelper` rather than its environment, never a subscription's token. kix
-sees the Claude pool as one account, labeled with its members; Codex's pool
-only reviews, since no adapter runs Codex jobs. opencode accounts sign in with
-`opencode auth login`, each in its own set of XDG directories, and use only
-the providers they signed in to, with `--model` or opencode's default. kix
-stores only an opaque account id, its kind, and a label. kix's `/runners` page
-shows each runner's presence and sets the order jobs use your accounts in.
-
-Runner state from before the pool, with Claude Code accounts in their own
-homes, is refused with a message: delete `accounts.json` and `accounts/` from
-the runner's home and add each account again.
-
-Every job runs in its own checkout with the project's devShell, which the runner
-builds with `nix print-dev-env` from the job's revision, honoring the flake's
-`nixConfig`; a project without a flake gets a bootstrap job instead. An OS
-sandbox (bubblewrap on Linux, Seatbelt on macOS) confines every command the
-agent runs, the devShell's shellHook included: Claude Code's own sandbox on
-the Claude pool, and on opencode accounts the same policy through
-[sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime),
-which the runner sets as opencode's shell. Commands
-write only to the checkout and a private temporary directory that is
-also their `HOME`, cannot read account homes, the runner's state (the proxy's
-credentials and client key included), or shared temporary directories, and
-have no Nix daemon. A trusted revision's commands reach only the npm,
-crates.io, and PyPI package registries, so its checks can install
-dependencies; an untrusted one's reach no network host, the proxy on loopback
-included. npm's registry
-also accepts publishes, so a prompt-injected agent holding someone's npm token
-could publish the checkout there. The agent's file tools stay in the checkout
-(opencode's may also use the private temporary directory, and its read tool
-the output it saved), WebFetch and opencode's web search are off, and nothing
-the checkout configures is loaded: not its `.claude` settings, hooks, and MCP
-servers, nor its `opencode.json` and `.opencode` plugins, tools, and MCP
-servers, and opencode's language servers and formatters are off. An opencode
-job refuses to run if opencode loaded any config besides the runner's and the
-account's, such as a machine's managed `/etc/opencode`, which would outrank
-the runner's. The CLI itself, Claude Code or
-`opencode serve`, runs outside the sandbox and outside the devShell, and its
-commands start from a minimal environment, so its login or the proxy's client
-key, the opencode server's password, and the kix tools' token stay out of their
-reach. This is an OS
-sandbox, not a VM, and it narrows rather than removes the risk of running
-agent commands on your machine. On Linux, `just runner-sandbox` in this
-repository runs a scripted model through the pinned Claude Code, and through
-the pinned opencode and sandbox-runtime, in a checkout that tries to read
-credentials, write outside its sandbox, plant its own agent config and hooks,
-reach the network, and connect to the Nix daemon's or another Unix socket, and
-fails if any attempt gets through. CI runs it nightly and on pull requests that change the pins or the runner,
-outside the merge queue.
-
-On Linux the sandbox needs `bwrap` and `socat` (the flake's `runner` package
-pins both) and unprivileged user namespaces, including the nested one the
-seccomp helpers of Claude Code and sandbox-runtime make inside the sandbox.
-Before taking jobs, `quest runner` runs a trivial command in nested sandbox
-namespaces and refuses to start if bubblewrap cannot make them. On Ubuntu 23.10 and later, AppArmor allows them
-only to programs whose profile grants `userns`, so for the runner package's
-bubblewrap the refusal prints this profile, filled in with its Nix store path,
-and the commands that install it as `/etc/apparmor.d/quest-bwrap`:
-
-```
-abi <abi/4.0>,
-include <tunables/global>
-
-profile quest-bwrap /nix/store/HASH-bubblewrap-VERSION/bin/bwrap flags=(unconfined) {
-  userns,
-}
-```
-
-It is the form Ubuntu gives other programs that sandbox themselves. Ubuntu's
-own `bwrap-userns-restrict` profile for `/usr/bin/bwrap` takes capabilities from
-the commands bubblewrap runs, which breaks the seccomp helpers, so a
-system bwrap there is refused, and a second profile for it would disable both;
-use the runner package instead. The job's commands still get no user namespace
-of their own: the seccomp helper refuses them one. The profile names one exact store path, since anyone
-who can build with Nix can add a store path matching a glob, so a runner update
-that changes bubblewrap refuses to start until you install the profile it prints.
-
-For opencode accounts, `quest runner` also checks that sandbox-runtime keeps
-commands from making Unix sockets, which it does only with its seccomp helper,
-and refuses to start without it. nixpkgs' sandbox-runtime leaves the helper
-out, so the runner package builds it from sandbox-runtime's source. sandbox-runtime
-keeps its own `/tmp/claude` open to commands whenever it exists; they cannot
-write it, but can read it.
-
-Merge jobs retain existing PR submodule pointers when merging the base. Their
-`wait` tool wakes on GitHub webhook hints or reconnects and rereads the PR;
-a hint never approves work. If someone moves the head, the maintainer can
-continue from that exact head through the existing approval flow. The same
-runner checkpoints and merges its unpublished source locally; conflicts pause
-for a decision. Stale local changes are preserved in the runner's bare clone
-under `refs/kix/checkpoints/<job>/`, and are not reapplied after another runner
-publishes. Existing failover still restarts from the latest published branch
-checkpoint. Initialized submodules leave their checkout intact until their
-local commits and changes can be preserved explicitly; this path never deletes
-them to force continuation.
-
-The agent reports through kix tools: `checkpoint` summaries publish
-work in progress to the job's branch, `ask` pauses the job on a decision for you,
-and `deliver` publishes the result and its pull request, listing any suggested
-follow-ups, which the inbox offers you to plan for 30 days after the job
-completes. Expired offers cannot start a plan, and the job's history remains.
-A job on an issue or
-pull request reads it through `context`, since the runner holds no GitHub
-token; a new plan reads your idea and pasted context there. kix publishes as its GitHub App, so the runner never pushes. Once
-every account in a pool is cooling down, Claude Code shows the proxy's "All
-credentials for model ... are cooling down" without its reset, so the runner
-asks the proxy, which names it in `Retry-After` without asking any provider,
-and marks the pool limited until then (an hour when neither says); adding an
-account to the pool lifts that. A job that
-hits its account's or pool's limit pauses for you to pick another account; kix
-never switches on its own. A review whose pool is limited leaves the head
-unreviewed, saying when the pool resets, and landing it needs a maintainer's
-approval on GitHub.
-On SIGINT or SIGTERM, running work is published and its jobs move to another
-runner. `quest runner` takes only trusted revisions until it can build
-untrusted heads' devShells in a VM: it registers without declaring VM builds,
-so kix routes it no other job, and it fails one if sent. A pull request's head is trusted only when every
-commit beyond the default branch has a valid signature from a current
-maintainer, so sign your commits (for example with
-[SSH signing](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification#ssh-commit-signature-verification))
-for its iterate and merge jobs to run. Any other head, such as one kix
-pushed to, waits in the inbox for a maintainer to review its commits and
-approve that exact head; the approval lapses when the head moves, and counts
-only while its approver is still a maintainer. A job resumes with another maintainer's answer
-only once you approve it in the inbox. opencode runs as `opencode serve` on
-localhost behind a password made for each turn.
-
-The flake's `runner` package pins Claude Code 2.1.305 from its official release
-manifest; opencode, Codex, CLIProxyAPI, sandbox-runtime (and on Linux, bubblewrap and socat) follow
-this repository's lock (`nix run github:moq-dev/quest#runner -- runner`);
-otherwise `claude`, `opencode`, `codex`, `cliproxyapi`, and `srt` come from `QUEST_RUNNER_CLAUDE`,
-`QUEST_RUNNER_OPENCODE`, `QUEST_RUNNER_CODEX`, `QUEST_RUNNER_CLIPROXY`, and `QUEST_RUNNER_SRT`, or `PATH`.
-Codex reviews the heads that jobs on Anthropic's models publish with the
-Codex pool, and Claude Code the rest with the Claude pool, so add a Codex
-account for Claude jobs to be reviewed. State lives in `$QUEST_RUNNER_HOME`, by default
-`$XDG_DATA_HOME/quest/runner`; one `quest runner` runs in a home at a time. To keep a runner up, run `quest runner` as a user
-service, such as a systemd user unit with `Restart=on-failure`.
 
 ## Prunable local checkouts
 
@@ -1938,14 +1764,6 @@ losing your plans. The binary carries the skills, your tool manager (mise or nix
 pins its version, and your repository's instructions stay yours. Quest supports
 macOS, Linux, and [native Windows](docs/windows.md).
 
-The hosted service, kix, runs at [quest.moq.dev](https://quest.moq.dev) for
-moq-dev until it opens to everyone at kix.quest: maintainers
-plan issues, start ready quests, and act on GitHub PRs through a decision UI.
-Hosted work will use explicitly selected maintainer or donor API funding.
-Automatic project history passes read updates since their prior issue/PR
-boundaries, including timestamp ties. Explicit Refresh starts or resumes a full
-history pass; successive refreshes repair cached issues deleted without a
-webhook. Open draft bodies are read only to classify `## Waiting`.
 [The first milestone](quest/m0/) holds the quests that remain.
 
 ## Contributing

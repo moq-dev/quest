@@ -1,10 +1,8 @@
-// A fake of the GitHub (and SPDX) endpoints the Worker calls, answering from
-// an in-memory world. It backs the seeded local server and the Worker tests
-// that drive GitHub, so it never holds or forwards real credentials, and it
-// refuses anything it does not model. Like GitHub, it scopes each installation
-// token to the repositories and permissions it was minted for.
+// A fake of the GitHub endpoints the land tests call, answering from an
+// in-memory world. It never holds or forwards real credentials, and it refuses
+// anything it does not model. Like GitHub, it scopes each installation token
+// to the repositories and permissions it was minted for.
 import { createHash } from "node:crypto";
-import { REVIEW_CHECK } from "../src/github/review";
 
 export type User = { id: number; login: string; name: string; email: string };
 /** A comment or review thread reply; a null author is a deleted account. */
@@ -173,9 +171,7 @@ export type World = {
 };
 
 const sha1 = (text: string) => createHash("sha1").update(text).digest("hex");
-/** The signed-in user's GitHub App token. */
-const USER_TOKEN = "fake-user-token";
-/** The Git object ID of a file's content, which the Worker verifies. */
+/** The Git object ID of a file's content. */
 export const blob = (content: string | Uint8Array) => {
 	const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : content;
 	return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
@@ -206,204 +202,9 @@ const nodeId = (repo: Repo, pull: Pull) => `PR_${databaseId(repo, pull.number)}`
 // The open pull requests whose branch is on the upstream itself.
 const upstreamPulls = (repo: Repo) => repo.pulls.filter((pull) => !pull.closed && !pull.contributor);
 
-function entity(repo: Repo, item: Issue) {
-	return {
-		databaseId: databaseId(repo, item.number),
-		number: item.number,
-		title: item.title,
-		state: (item as Pull).merged ? "MERGED" : item.closed ? "CLOSED" : "OPEN",
-		updatedAt: item.updatedAt ?? updatedAt,
-		closedAt: item.closed ? updatedAt : null,
-		author: { login: item.author },
-		comments: { totalCount: item.comments?.length ?? 0 },
-	};
-}
-
 const mergeState = (pull: Pull) => pull.merge ?? (pull.draft ? "DRAFT" : "BLOCKED");
 
-/** How GitHub relates a login to the repository: only an association that can come with write access names one. */
-const association = (repo: Repo, login: string) =>
-	login === repo.owner
-		? "OWNER"
-		: [...repo.maintainers, ...(repo.writers ?? [])].includes(login)
-			? "COLLABORATOR"
-			: "CONTRIBUTOR";
-
-/** A pull request as the project read pages it, with what the inbox's body batch adds for `app`'s review check. */
-function pullNode(repo: Repo, pull: Pull, app?: unknown) {
-	const oid = headOf(repo, pull);
-	const reviews = pull.reviews ?? [];
-	const checks = (pull.runs ?? []).filter(
-		(run) => !run.context && run.name === REVIEW_CHECK && run.app === app && (run.commit ?? oid) === oid,
-	);
-	return {
-		...entity(repo, pull),
-		...reviewTarget(repo, pull),
-		authorAssociation: association(repo, pull.author),
-		tip: {
-			nodes: [
-				{
-					commit: {
-						oid,
-						parents: { totalCount: repo.commits[oid]?.parents.length ?? 1 },
-						checkSuites: {
-							nodes: checks.length
-								? [
-										{
-											checkRuns: {
-												nodes: [{ status: "COMPLETED", conclusion: checks.at(-1)!.conclusion }],
-											},
-										},
-									]
-								: [],
-						},
-					},
-				},
-			],
-		},
-		headRefName: pull.branch,
-		headRefOid: oid,
-		isCrossRepository: !!pull.contributor,
-		isDraft: !!pull.draft,
-		reviewDecision: pull.review,
-		mergeStateStatus: mergeState(pull),
-		labels: { nodes: (pull.labels ?? []).map((name) => ({ name })) },
-		reviews: { totalCount: reviews.length },
-		latestReviews: {
-			nodes: reviews.map((r) => ({ state: r.state, author: { login: r.author }, commit: { oid } })),
-			pageInfo: { hasNextPage: false },
-		},
-		commits: { nodes: [{ commit: { oid, statusCheckRollup: pull.checks ? { state: pull.checks } : null } }] },
-	};
-}
-
-/** One connection page, using opaque positions just as the service uses GitHub's cursors. */
-function connection<T>(nodes: T[], size: number, after: unknown = null) {
-	const start = typeof after === "string" ? Number(after) : 0;
-	const end = start + size;
-	return {
-		nodes: nodes.slice(start, end),
-		pageInfo: { hasNextPage: end < nodes.length, endCursor: end < nodes.length ? String(end) : null },
-	};
-}
-
-const comments = (list: Comment[] = [], size = 100, after: unknown = null) =>
-	connection(
-		list.map((c) => ({ author: c.author === null ? null : { login: c.author }, body: c.body, createdAt: c.at })),
-		size,
-		after,
-	);
-
-/** An issue with its discussion, as a job's agent reads it. */
-const issueTarget = (item: Issue, after: unknown = null) => ({
-	number: item.number,
-	title: item.title,
-	state: item.closed ? "CLOSED" : "OPEN",
-	body: item.body ?? "",
-	author: { login: item.author },
-	comments: comments(item.comments, 100, after),
-});
-
-const threadId = (repo: Repo, pull: Pull, index: number) => `PRT_${databaseId(repo, pull.number)}_${index}`;
-
-/** A pull request with its discussion, reviews, threads, and checks, as a job's agent reads it. */
-function pullTarget(repo: Repo, pull: Pull, after: unknown) {
-	const oid = headOf(repo, pull);
-	return {
-		...issueTarget(pull, after),
-		isDraft: !!pull.draft,
-		baseRefName: pull.base ?? defaultOf(repo),
-		headRefName: pull.branch,
-		headRefOid: oid,
-		reviews: connection(
-			(pull.reviews ?? []).map((r) => ({
-				author: { login: r.author },
-				state: r.state,
-				body: r.body ?? "",
-				submittedAt: updatedAt,
-			})),
-			50,
-			after,
-		),
-		reviewThreads: connection(
-			(pull.threads ?? []).map((t, index) => ({
-				id: threadId(repo, pull, index),
-				isResolved: !!t.resolved,
-				isOutdated: !!t.outdated,
-				path: t.path,
-				line: t.line,
-				comments: comments(t.comments, 50),
-			})),
-			100,
-			after,
-		),
-		commits: {
-			nodes: [
-				{
-					commit: {
-						oid,
-						statusCheckRollup: pull.checks && {
-							state: pull.checks,
-							contexts: contextPage(pull, null),
-						},
-					},
-				},
-			],
-		},
-	};
-}
-
 const actor = (login: string) => ({ __typename: login.endsWith("[bot]") ? "Bot" : "User", login });
-
-/** A pull request's author and each writer's latest approval or change request, as the review gate reads them. */
-function reviewTarget(repo: Repo, pull: Pull) {
-	const latest = new Map<string, NonNullable<Pull["reviews"]>[number]>();
-	for (const review of pull.reviews ?? [])
-		if (
-			["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(review.state) &&
-			["admin", "maintain", "write"].includes(roleOf(repo, review.author) ?? "")
-		)
-			latest.set(review.author, review);
-	return {
-		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
-		headRefOid: headOf(repo, pull),
-		baseRefName: pull.base ?? defaultOf(repo),
-		body: pull.body ?? "",
-		author: actor(pull.author),
-		userContentEdits: { nodes: pull.editor ? [{ editor: actor(pull.editor) }] : [] },
-		latestOpinionatedReviews: {
-			nodes: [...latest.values()].map((r) => ({
-				state: r.state,
-				author: actor(r.author),
-				commit: { oid: r.commit ?? headOf(repo, pull) },
-			})),
-		},
-	};
-}
-
-/** A pull request's labels, the timeline that added them, and its landing, as a merge hold reads them. */
-function holdsTarget(repo: Repo, pull: Pull) {
-	return {
-		id: nodeId(repo, pull),
-		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
-		isDraft: !!pull.draft,
-		body: pull.body ?? "",
-		baseRefName: pull.base ?? defaultOf(repo),
-		headRefOid: headOf(repo, pull),
-		mergeStateStatus: mergeState(pull),
-		isMergeQueueEnabled: repo.queue === true,
-		autoMergeRequest: pull.landing ? { enabledAt: updatedAt } : null,
-		mergeQueueEntry: pull.queued ? { state: "QUEUED" } : null,
-		labels: { nodes: (pull.labels ?? []).map((name) => ({ name })) },
-		timelineItems: {
-			nodes: (pull.timeline ?? []).map((event) =>
-				event.label === null
-					? { __typename: "AutoMergeEnabledEvent", id: event.id }
-					: { __typename: "LabeledEvent", id: event.id, label: { name: event.label } },
-			),
-		},
-	};
-}
 
 const page = <T>(nodes: T[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
 
@@ -439,9 +240,6 @@ function queueTarget(repo: Repo, pull: Pull) {
 	};
 }
 
-/** Source-available licenses SPDX lists without OSI approval; the fake's SPDX approves every other. */
-const UNAPPROVED = new Set(["BUSL-1.1", "SSPL-1.0", "Elastic-2.0"]);
-
 /** The fake's GitHub Actions app, which reports a run unless it names another. */
 export const ACTIONS_APP = 15368;
 
@@ -469,125 +267,7 @@ function contextPage(pull: Pick<Pull, "runs">, after: unknown) {
 	};
 }
 
-/** An open pull request as kix's landing queue page reads it: its landing, merge group, and `quest queue` check. */
-function landingTarget(repo: Repo, pull: Pull, queued: Pull[]) {
-	const head = headOf(repo, pull);
-	const run = (repo.checkRuns ?? []).filter((r) => r.name === "quest queue" && r.head_sha === head).at(-1);
-	return {
-		number: pull.number,
-		title: pull.title,
-		url: `https://github.com/${repo.owner}/${repo.name}/pull/${pull.number}`,
-		baseRefName: pull.base ?? defaultOf(repo),
-		isMergeQueueEnabled: repo.queue === true && (pull.base ?? defaultOf(repo)) === defaultOf(repo),
-		autoMergeRequest: pull.landing ? { enabledAt: pull.autoMerge?.enabledAt ?? updatedAt } : null,
-		mergeQueueEntry: pull.queued
-			? {
-					position: queued.indexOf(pull) + 1,
-					state: pull.group?.state ?? "QUEUED",
-					headCommit: pull.group ? { statusCheckRollup: { contexts: contextPage(pull.group, null) } } : null,
-				}
-			: null,
-		commits: {
-			nodes: [
-				{
-					commit: {
-						checkSuites: page(
-							run
-								? [
-										{
-											checkRuns: page([
-												{
-													status: (run.status ?? "completed").toUpperCase(),
-													title: run.output.title ?? null,
-													detailsUrl: run.details_url ?? null,
-												},
-											]),
-										},
-									]
-								: [],
-						),
-					},
-				},
-			],
-		},
-	};
-}
-
 function graphql(repo: Repo, query: string, variables: Record<string, unknown>) {
-	const blobs = [...query.matchAll(/(q\d+): object\(oid: "([0-9a-f]{40})"\)/g)];
-	if (blobs.length) {
-		const files = new Map(repo.files.map((file) => [blob(file.content), file.content]));
-		const objects = Object.fromEntries(
-			blobs.map(([, alias, oid]) => {
-				const text = files.get(oid!);
-				return [alias, text === undefined ? null : { oid, text, isBinary: false, isTruncated: false }];
-			}),
-		);
-		return { data: { repository: objects } };
-	}
-	if (query.includes("signature {")) {
-		const pull = repo.pulls.find((p) => p.number === variables.number);
-		if (!pull) return { data: { repository: { pullRequest: null } } };
-		const branch = defaultOf(repo);
-		const anchor = tipOf(repo);
-		const comparison = query.includes("compare(headRef:");
-		const base = comparison ? anchor : (repo.branches[pull.base ?? branch] ?? anchor);
-		const head = comparison ? String(variables.revision) : headOf(repo, pull);
-		const ancestors = (tip: string, seen = new Set<string>()): Set<string> => {
-			if (seen.has(tip)) return seen;
-			seen.add(tip);
-			for (const parent of repo.commits[tip]?.parents ?? []) ancestors(parent, seen);
-			return seen;
-		};
-		const inherited = ancestors(base);
-		const commits = [...ancestors(head)].filter((oid) => !inherited.has(oid));
-		const start = variables.after ? Number(variables.after) : 0;
-		const end = Math.min(start + 100, commits.length);
-		const nodes = commits
-			.slice(start, end)
-			.map((oid) => ({ oid, signature: repo.commits[oid]?.signature ?? null }));
-		const connection = {
-			totalCount: commits.length,
-			nodes,
-			pageInfo: { hasNextPage: end < commits.length, endCursor: String(end) },
-		};
-		const live = { state: pull.closed ? "CLOSED" : "OPEN", headRefOid: headOf(repo, pull) };
-		return {
-			data: {
-				repository: comparison
-					? {
-							pullRequest: live,
-							defaultBranchRef: {
-								name: branch,
-								target: { oid: anchor },
-								compare: repo.commits[head]
-									? {
-											baseTarget: { oid: base },
-											headTarget: { oid: head },
-											commits: connection,
-										}
-									: null,
-							},
-						}
-					: {
-							pullRequest: {
-								...live,
-								baseRefOid: base,
-								commits: { ...connection, nodes: nodes.map((commit) => ({ commit })) },
-							},
-						},
-			},
-		};
-	}
-
-	if (query.includes("headRefOid baseRefName body")) {
-		const pull = repo.pulls.find((p) => p.number === variables.number);
-		return { data: { repository: { pullRequest: pull ? reviewTarget(repo, pull) : null } } };
-	}
-	if (query.includes("timelineItems(")) {
-		const pull = repo.pulls.find((p) => p.number === variables.number);
-		return { data: { repository: { pullRequest: pull ? holdsTarget(repo, pull) : null } } };
-	}
 	if (query.includes("object(oid: $oid)")) {
 		const runs = repo.commitRuns?.[variables.oid as string];
 		if (runs)
@@ -609,27 +289,6 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 			},
 		};
 	}
-	if (query.includes('checkName: "quest queue"')) {
-		const open = repo.pulls.filter((pull) => !pull.closed);
-		const queued = open.filter((pull) => pull.queued);
-		return { data: { repository: { pullRequests: page(open.map((pull) => landingTarget(repo, pull, queued))) } } };
-	}
-	// The pull requests a landing drop names, by number, which may have closed.
-	const dropped = [...query.matchAll(/(p\d+): pullRequest\(number: (\d+)\)/g)];
-	if (dropped.length) {
-		const found = Object.fromEntries(
-			dropped.map(([, alias, number]) => {
-				const pull = repo.pulls.find((p) => p.number === Number(number));
-				return [alias, pull ? landingTarget(repo, pull, []) : null];
-			}),
-		);
-		const errors = dropped
-			.filter(([, alias]) => !found[alias!])
-			.map(([, alias]) => ({ type: "NOT_FOUND", path: ["repository", alias] }));
-		return { data: { repository: found }, ...(errors.length ? { errors } : {}) };
-	}
-	if (query.includes("defaultBranchRef"))
-		return { data: { repository: { defaultBranchRef: { name: defaultOf(repo) } } } };
 	if (query.includes("queue:pullRequests(")) {
 		const queued = repo.pulls.filter((pull) => !pull.closed && variables.base === defaultOf(repo));
 		return {
@@ -644,59 +303,8 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 			},
 		};
 	}
-	const open = repo.pulls.filter((pull) => !pull.closed);
-	const result: Record<string, unknown> = {};
-	const errors: unknown[] = [];
-	if (query.includes("issues(")) result.issues = page(repo.issues.map((issue) => entity(repo, issue)));
-	if (/(?<!:)pullRequests\(/.test(query)) result.pullRequests = page(repo.pulls.map((pull) => pullNode(repo, pull)));
-	if (query.includes("open:pullRequests(")) result.open = page(open.map((pull) => pullNode(repo, pull)));
-	if (query.includes("refs(")) {
-		// Quest branches at their tips, with the pull requests from them that merged, newest first.
-		const tips = new Map<string, string>();
-		for (const pull of upstreamPulls(repo)) tips.set(pull.branch, headOf(repo, pull));
-		for (const [branch, oid] of Object.entries(repo.branches)) tips.set(branch, oid);
-		const merged = (branch: string) =>
-			repo.pulls.filter((pull) => pull.merged && !pull.contributor && pull.branch === branch).reverse();
-		result.refs = page(
-			[...tips].flatMap(([branch, oid]) =>
-				branch.startsWith("quest/")
-					? [
-							{
-								name: branch.slice("quest/".length),
-								prefix: "refs/heads/quest/",
-								target: { oid },
-								associatedPullRequests: page(
-									merged(branch).map((pull) => ({ headRefOid: headOf(repo, pull) })),
-								),
-							},
-						]
-					: [],
-			),
-		);
-	}
-	// A job's issue or pull request, read with its discussion.
-	for (const field of ["issue", "pullRequest"] as const)
-		if (query.includes(`${field}(number: $number)`)) {
-			const pull = repo.pulls.find((p) => p.number === variables.number);
-			const issue = repo.issues.find((i) => i.number === variables.number);
-			const found =
-				field === "pullRequest"
-					? pull && pullTarget(repo, pull, variables.after)
-					: issue && issueTarget(issue, variables.after);
-			result[field] = found ?? null;
-			if (!found) errors.push({ type: "NOT_FOUND", path: ["repository", field] });
-		}
-	// Entities a webhook named, read by number as GitHub does: an issue number
-	// that is a pull request, or a missing one, is NOT_FOUND at its alias.
-	for (const [, alias, field, number] of query.matchAll(/([sb]\d+):(issue|pullRequest)\(number:(\d+)\)/g)) {
-		const pull = repo.pulls.find((p) => p.number === Number(number));
-		const issue = repo.issues.find((i) => i.number === Number(number));
-		const found =
-			field === "pullRequest" ? pull && pullNode(repo, pull, variables.app) : issue && entity(repo, issue);
-		result[alias!] = found ?? null;
-		if (!found) errors.push({ type: "NOT_FOUND", path: ["repository", alias] });
-	}
-	return { data: { repository: result }, ...(errors.length ? { errors } : {}) };
+	// Anything else reads as a repository with none of the fields asked for.
+	return { data: { repository: {} } };
 }
 
 function tree(repo: Repo) {
@@ -805,54 +413,6 @@ export function fakeGitHub(world: World) {
 		allow_auto_merge: true,
 	});
 
-	/**
-	 * What the signed-in user's own token reads: the installation on the
-	 * repositories' owner, its repositories with the user's role, and each
-	 * default branch's `quest` directory, as the project picker asks.
-	 */
-	function userRead(path: string, body: Record<string, any>, me: User): Response | null {
-		if (path === "/user/installations")
-			return json({
-				total_count: 1,
-				installations: [{ id: world.installation, app_id: world.app.id, suspended_at: null, permissions: {} }],
-			});
-		const listed = path.match(/^\/user\/installations\/(\d+)\/repositories$/);
-		if (listed) {
-			const repos = Number(listed[1]) === world.installation ? world.repos : [];
-			return json({
-				total_count: repos.length,
-				repositories: repos.map((repo) => ({
-					...restRepo(repo),
-					permissions: {
-						admin: roleOf(repo, me.login) === "admin",
-						maintain: ["admin", "maintain"].includes(roleOf(repo, me.login) ?? ""),
-						push: true,
-						pull: true,
-					},
-				})),
-			});
-		}
-		if (path !== "/graphql") return null;
-		const { query, variables } = body as { query: string; variables: Record<string, string> };
-		const data: Record<string, unknown> = {};
-		for (const [, alias, index] of query.matchAll(/(r(\d+)): repository\(/g)) {
-			const repo = world.repos.find(
-				(r) => r.owner === variables[`o${index}`] && r.name === variables[`n${index}`],
-			);
-			if (!repo) continue;
-			const entries = new Map<string, string>();
-			for (const file of repo.files) {
-				const [top, name, ...rest] = file.path.split("/");
-				if (top === "quest" && name) entries.set(name, rest.length ? "tree" : "blob");
-			}
-			data[alias!] = {
-				databaseId: repo.id,
-				object: entries.size ? { entries: [...entries].map(([name, type]) => ({ name, type })) } : null,
-			};
-		}
-		return json({ data });
-	}
-
 	/** The repositories an installation token may name, by `owner/name`. */
 	function grant(installation: number, input: { repository_ids?: number[]; repositories?: string[] }) {
 		if (installation !== world.installation) return null;
@@ -878,25 +438,14 @@ export function fakeGitHub(world: World) {
 		const url = new URL(request.url);
 		const method = request.method;
 		const path = url.pathname;
-		const me = world.users[0]!;
-		const license = url.origin === "https://spdx.org" && path.match(/^\/licenses\/([^/]+)\.json$/)?.[1];
-		if (license) {
-			const licenseId = decodeURIComponent(license);
-			return json({ licenseId, isOsiApproved: !UNAPPROVED.has(licenseId) });
-		}
-		if (url.origin === "https://github.com" && path === "/login/oauth/access_token")
-			return json({ access_token: USER_TOKEN, token_type: "bearer", scope: "" });
 		if (url.origin !== "https://api.github.com") return missing(method, request.url);
 		const text = await request.text();
 		const body = text ? (JSON.parse(text) as Record<string, any>) : {};
-		if (path === "/user") return json({ id: me.id, login: me.login, name: me.name, email: me.email });
-		if (path === "/user/emails") return json([{ email: me.email, primary: true, verified: true }]);
 
 		const token = request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? "";
 		// The App authenticates as itself with a JWT, and as an installation with a token minted from it.
 		const app = token.split(".").length === 3;
 		const unauthorized = () => json({ message: "Bad credentials" }, 401);
-		if (token === USER_TOKEN) return userRead(path, body, me) ?? unauthorized();
 		if (path === "/app") return app ? json({ id: world.app.id, slug: world.app.slug }) : unauthorized();
 		const mint = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/);
 		if (mint && method === "POST") {
@@ -952,20 +501,6 @@ export function fakeGitHub(world: World) {
 							return json({ data: { markPullRequestReadyForReview: { clientMutationId: null } } });
 						}
 				return json({ errors: [{ type: "NOT_FOUND" }] });
-			}
-			// Later pages of one review thread's comments, addressed by its node ID.
-			if (query.includes("... on PullRequestReviewThread")) {
-				for (const repo of world.repos)
-					for (const pull of repo.pulls)
-						for (const [index, thread] of (pull.threads ?? []).entries())
-							if (threadId(repo, pull, index) === variables.id) {
-								if (!scope.repositories.has(`${repo.owner}/${repo.name}`))
-									return json({ errors: [{ type: "NOT_FOUND" }] });
-								return json({
-									data: { node: { comments: comments(thread.comments, 50, variables.after) } },
-								});
-							}
-				return json({ data: { node: null } });
 			}
 			// A pull request by node ID, or turning its auto-merge off.
 			if (query.includes("node(id:") || query.includes("disablePullRequestAutoMerge(")) {
@@ -1594,36 +1129,4 @@ export function fakeGitHub(world: World) {
 		}
 		return null;
 	}
-}
-
-/**
- * Wrap a fetch so the first request matching `when` is answered by `change`,
- * which may pass it on with `next`. Tests inject a failure this way, or act
- * while the request is in flight.
- */
-export function intercept(
-	fetch: typeof globalThis.fetch,
-	when: (url: URL, method: string) => boolean,
-	change: (next: () => Promise<Response>) => Promise<Response>,
-): typeof globalThis.fetch {
-	let done = false;
-	return async function (this: unknown, input, init) {
-		const request = new Request(input, init);
-		if (done || !when(new URL(request.url), request.method)) return fetch.call(this, input, init);
-		done = true;
-		return change(() => fetch.call(this, input, init));
-	};
-}
-
-/** Sign a webhook body the way GitHub does. */
-export async function webhookSignature(secret: string, body: string) {
-	const key = await crypto.subtle.importKey(
-		"raw",
-		new TextEncoder().encode(secret),
-		{ name: "HMAC", hash: "SHA-256" },
-		false,
-		["sign"],
-	);
-	const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
-	return "sha256=" + Buffer.from(digest).toString("hex");
 }

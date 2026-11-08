@@ -32,16 +32,6 @@ import {
 	stopAgent,
 	stopAll,
 } from "./agent";
-import {
-	DEFAULT_URL,
-	RunnerInputError,
-	addAccount,
-	listAccounts,
-	login,
-	removeAccount,
-	runRunner,
-} from "../runner/cli";
-import type { Cli } from "../runner/home";
 import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { gate, QUICK_MS } from "./gate";
 import {
@@ -559,8 +549,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	const OWNERSHIP =
 		"Before a session pushes to an existing PR, it takes the PR with iterate, and hands it back with " +
 		"release. A taken PR carries the quest:active label; iterate prints a hold token, the ID of the timeline " +
-		"event that added it, since sessions often share an account. A command refuses while a quest:active or " +
-		"quest:kix label it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
+		"event that added it, since sessions often share an account. A command refuses while a quest:active " +
+		"label it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
 		"holds (one whose body has no Waiting heading). A refusal names the holder's label, age, and " +
 		"token; releasing a stale hold with that token is the user's choice. Given a token, a command refuses " +
 		"unless the token is still the latest add of its label. When two sessions add the label at once, the " +
@@ -1079,8 +1069,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
 				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
 				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
-				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers " +
-				"(with those on kix's sessions comment), its latest ## Review round's reviewer, round, score, and findings, " +
+				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
+				"its latest ## Review round's reviewer, round, score, and findings, " +
 				"and the later PRs that list it under ## Caused by. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, and accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
@@ -1115,11 +1105,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
 				"first whose model is not avoided reviews. --exclude-model names each model to avoid; without it, the " +
-				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR " +
-				"and of kix's sessions comment on it. When they name none, an `unknown` model, or two different models, " +
+				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR. " +
+				"When it names none or an `unknown` model, " +
 				"it is any model of the harness running this command, usually the session that just pushed, detected from the " +
-				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; --harness instead avoids " +
-				"every model they name. " +
+				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; with --harness it is " +
+				"none. " +
 				"--harness names the reviewer instead, at its entry's model and effort, and --model and --effort " +
 				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
@@ -1265,82 +1255,6 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				);
 			},
 		);
-
-	const runnerIO = () => ({ stdout: out.stdout, stderr: out.stderr, env: process.env });
-	const runnerFailure = (error: unknown) => {
-		if (error instanceof RunnerInputError) {
-			out.stderr(`error: ${error.message}\n`);
-			return 2;
-		}
-		warn(error instanceof Error ? error.message : String(error));
-		return 1;
-	};
-	const runnerAction = (task: () => number | Promise<number>) => {
-		try {
-			pending = Promise.resolve(task()).catch(runnerFailure);
-		} catch (error) {
-			pending = Promise.resolve(runnerFailure(error));
-		}
-	};
-	const runner = program
-		.command("runner")
-		.summary("Run kix jobs on this machine with its own agent accounts")
-		.description(
-			"Turn this Linux or macOS machine into a kix runner. `quest runner login` connects it to your kix " +
-				"account, `quest runner account add` signs agent accounts in, and `quest runner` runs routed jobs in " +
-				"the foreground until interrupted.\n\n" +
-				"Claude and Codex subscriptions sign in to the pool of the runner's own CLIProxyAPI, which `quest " +
-				"runner` starts on loopback and which rotates between them; every Claude Code job and review and every " +
-				"Codex review goes through it, and kix sees the Claude pool as one account. opencode accounts sign in " +
-				"through opencode's own flow, each in an isolated home. kix stores only an opaque account id, its " +
-				"kind, and its label, and never sees a token. Every job runs inside its project's `nix develop` " +
-				"shell. State lives in $QUEST_RUNNER_HOME, by default $XDG_DATA_HOME/quest/runner.",
-		);
-	runner
-		.command("run", { isDefault: true })
-		.description(
-			"Start the runner's CLIProxyAPI, connect to kix, and run assigned jobs until interrupted. On SIGINT or " +
-				"SIGTERM, or if the proxy exits, running agents stop, their work is published to their job branches, " +
-				"and their jobs move to another runner.",
-		)
-		.option("--slots <count>", "Jobs to run at once", positiveInteger("slots"), 1)
-		.action((options: { slots: number }) => runnerAction(() => runRunner(runnerIO(), options)));
-	runner
-		.command("login")
-		.description(
-			"Connect this machine to your kix account: print a link to approve it while signed in, then wait. " +
-				"The machine keeps its token; the link carries only its hash.",
-		)
-		.option("--url <origin>", "The kix origin", DEFAULT_URL)
-		.option("--name <name>", "The name kix shows for this machine (default: its hostname)")
-		.action((options: { url: string; name?: string }) => runnerAction(() => login(runnerIO(), options)));
-	const account = runner.command("account").description("Add, list, and remove this runner's agent accounts");
-	account
-		.command("add")
-		.description(
-			"Sign an account in. `claude` signs a Claude subscription in to the runner's pool through CLIProxyAPI's " +
-				"own OAuth flow, and `codex` a ChatGPT plan, which only reviews; over SSH, Claude's flow prints its " +
-				"link and takes the pasted callback URL, and Codex's takes a device code. `opencode` runs `opencode " +
-				"auth login` in a new isolated home for an OpenCode Go plan, a ChatGPT plan, or any provider's API key. " +
-				"Signing a pooled subscription in again refreshes its credential.",
-		)
-		.addArgument(new Argument("[cli]", "The agent CLI").choices(["claude", "codex", "opencode"]).default("claude"))
-		.option("--console", "claude: add the Anthropic Console API key in ANTHROPIC_API_KEY to the pool instead")
-		.option("--model <provider/model>", "opencode: the model this account's jobs use (default: opencode's)")
-		.option("--label <label>", "The name the account shows (default: its email or providers)")
-		.action((cli: Cli, options: { console?: boolean; model?: string; label?: string }) =>
-			runnerAction(() =>
-				addAccount(runnerIO(), { cli, console: !!options.console, model: options.model, label: options.label }),
-			),
-		);
-	account
-		.command("list")
-		.description("Print each account's id, CLI, kind, and label, and when a limited account resets")
-		.action(() => runnerAction(() => listAccounts(runnerIO())));
-	account
-		.command("remove <id>")
-		.description("Remove an account and delete its home or pooled credential, signing it out of this machine")
-		.action((id: string) => runnerAction(() => removeAccount(runnerIO(), id)));
 
 	/** Changes on stdout; mentions and check findings on stderr, which fail the command. */
 	const report = (result: Report): number => {

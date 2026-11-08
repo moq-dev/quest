@@ -22,8 +22,8 @@ dependencies. `packageManager` in `package.json` names the same Bun for CI
 runners without Nix, and `nix flake check` fails when the two disagree. Without
 Nix, install the tools listed in `flake.nix` and run the same just recipes.
 
-`just test` runs vitest, the shell hook suites, the built CLI's lifecycle check,
-and the Worker tests. `just check` includes TypeScript, formatting, workflow,
+`just test` runs vitest, the shell hook suites, and the built CLI's lifecycle
+check. `just check` includes TypeScript, formatting, workflow,
 shell, and Nix checks in addition to quest validation.
 
 `nix build` builds the package; `nix run -- --help` runs it. `nix flake check`

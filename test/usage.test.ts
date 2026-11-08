@@ -315,6 +315,7 @@ describe("usage", () => {
 			"- Size: L",
 			"- Implementer: Claude Code, claude-opus-5-5, high effort",
 			"- Implementer: Claude Code, claude-opus-5-5, high effort (iterate, L)",
+			"- Implementer: Codex, gpt-6.1-sol, medium effort (iterate, S)",
 			"",
 			"## Review",
 			"",
@@ -361,14 +362,6 @@ describe("usage", () => {
 					fork: false,
 				});
 			if (url.pathname === "/repos/acme/proj/pulls") return json(pulls);
-			if (url.pathname === "/repos/acme/proj/issues/10/comments")
-				return json([
-					{
-						body: "<!-- quest:sessions -->\nLater.\n\n## Models\n\n- Implementer: Codex, gpt-6.1-sol, medium effort (iterate, S)\n",
-						performed_via_github_app: { id: 1 },
-					},
-				]);
-			if (/^\/repos\/acme\/proj\/issues\/\d+\/comments$/.test(url.pathname)) return json([]);
 			return new Response("not found", { status: 404 });
 		};
 		const priced: Priced[] = [
