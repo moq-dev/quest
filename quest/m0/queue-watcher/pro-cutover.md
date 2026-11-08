@@ -30,8 +30,8 @@ Decided 2026-11-06 (maintainer, /quest-plan): moq.pro moves `main` first and
 one branch. moq.pro is private on GitHub Team, where GitHub offers no merge
 queue, so it is the repository the own queue exists for.
 
-- Follow the
-  [public repositories' cutover](/quest/m0/queue-watcher/follow.md): a
+- Follow the public repositories' cutover (2026-11-03, described in
+  moq-dev/quest's `queue.yml` header and the README): a
   moq.pro PR adds the queue workflow and its queue-branch trigger, a
   kixelated/nixos PR switches the daemon, and the first queue builds may show
   gaps in the runner's environment, which are fixed in that PR or in moq.pro.

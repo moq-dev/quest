@@ -35,5 +35,4 @@ the own queue relies on so GitHub never merges a pick itself.
 
 ## Required
 
-- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - the public repositories' queues are proven
 - [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - the last repository leaves the gate

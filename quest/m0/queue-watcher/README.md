@@ -48,7 +48,7 @@ Decision prompts, selected options marked ✅:
   - ✅ moq first, since it lands the most PRs and so proves the design
     fastest. moq-dev/quest, moq.pro, rust2 and rind stay on the host
     `quest land` gate until moq proves it, then
-    [follow](/quest/m0/queue-watcher/follow.md).
+    follow (done 2026-11-03; proven from a fork on the PR that deleted it).
   - All five at once
   - moq and quest
 - Runners:
