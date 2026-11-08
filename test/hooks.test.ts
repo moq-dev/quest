@@ -6,7 +6,16 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { REFERENCE_LINE } from "../src/core";
-import { BASH_MAX_TIMEOUT_MS, HOOKS, HOOK_COMMAND, hook, settingsPath, setup } from "../src/cli/hooks";
+import {
+	BASH_MAX_TIMEOUT_MS,
+	HOOKS,
+	HOOK_COMMAND,
+	WORKTREE_COMMAND,
+	WORKTREE_HOOKS,
+	hook,
+	settingsPath,
+	setup,
+} from "../src/cli/hooks";
 import { CONTEXT } from "../src/cli/skills";
 import { tempDir } from "./fixture";
 
@@ -90,6 +99,35 @@ test("removing Quest's only settings drops the hooks and env keys", () => {
 	setup(path, { remove: true });
 	expect(read(path)).toEqual({ theme: "dark" });
 	expect(setup(path, { remove: true })).toEqual([]);
+});
+
+test("setup installs the worktree hooks on request, keeps them on rerun, and replaces pasted ones", () => {
+	const path = join(tempDir(), "settings.json");
+	const pasted = { type: "command", command: `command -v quest >/dev/null || exit 1; ${WORKTREE_COMMAND}` };
+	const worktree = { type: "command", command: WORKTREE_COMMAND };
+	writeFileSync(
+		path,
+		JSON.stringify({
+			hooks: { WorktreeCreate: [{ hooks: [pasted] }], SessionEnd: [{ hooks: [{ ...pasted, timeout: 60 }] }] },
+		}),
+	);
+	setup(path);
+	const settings = read(path);
+	expect(settings.hooks.WorktreeCreate).toEqual([{ hooks: [worktree] }]);
+	expect(settings.hooks.SessionEnd).toEqual([{ hooks: [{ ...worktree, timeout: 60 }] }]);
+	expect(settings.hooks.SessionStart).toEqual([{ matcher: HOOKS[0]!.matcher, hooks: [ours] }, { hooks: [worktree] }]);
+	expect(Object.keys(settings.hooks).sort()).toEqual(
+		[...new Set([...HOOKS, ...WORKTREE_HOOKS].map((h) => h.event))].sort(),
+	);
+	expect(setup(path)).toEqual([]);
+	expect(setup(path, { worktrees: true })).toEqual([]);
+
+	expect(setup(path, { worktrees: false })).toEqual([`${path}: installed Quest's hooks`]);
+	expect(Object.keys(read(path).hooks)).toEqual(HOOKS.map((h) => h.event));
+	expect(setup(path)).toEqual([]);
+	expect(setup(path, { worktrees: true })).toEqual([`${path}: installed Quest's hooks`]);
+	setup(path, { remove: true });
+	expect(read(path)).toEqual({});
 });
 
 test.each([

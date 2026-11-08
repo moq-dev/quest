@@ -80,10 +80,10 @@ across the user's repositories, through hooks in the user's own Claude Code
 settings rather than the repository's, since repository settings apply to
 every contributor. Offer them, explaining that they then apply in every
 repository the user opens in Claude Code and need `quest` on the `PATH`
-Claude Code runs hooks with. With consent, merge the entries in
-[Claude Code checkouts](README.md#claude-code-checkouts) into
-`~/.claude/settings.json`, keeping its other settings. If it already has a
-`WorktreeCreate` or `WorktreeRemove` hook, ask the user which to keep.
+Claude Code runs hooks with. If `~/.claude/settings.json` already has a
+`WorktreeCreate` or `WorktreeRemove` hook, ask the user which to keep. With
+consent, run `quest setup --worktrees`, which keeps the file's other settings;
+see [Claude Code checkouts](README.md#claude-code-checkouts).
 
 ## Adapt the instructions
 
@@ -133,10 +133,8 @@ work or `/quest-import` to bring in open GitHub issues.
    shell package. For an unpinned install, delete the `quest` binary the
    installer placed (`~/.local/bin/quest` by default, or `quest.exe` in the
    chosen Windows install directory). Remove any PATH entry you added. If the
-   user opted into Quest's worktree hooks and Claude Code no longer finds
-   `quest`, remove those entries from `~/.claude/settings.json`, since without
-   it they stop Claude Code making worktrees. Before removing the binary, run
-   `quest setup --remove` if the user ran `quest setup` and uses Quest in no
-   other repository.
+   user uses Quest in no other repository, run `quest setup --remove` before
+   removing the binary, since Quest's worktree hooks stop Claude Code making
+   worktrees once it cannot find `quest`.
 4. Ask the user whether to delete `quest/`. Git history keeps the plans either
    way.

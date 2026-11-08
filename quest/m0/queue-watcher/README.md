@@ -144,10 +144,3 @@ Shared shape, for the children to follow:
   class (`QUEST_GATE_PRIORITY=1`, which waits for memory but never for load)
   lets them admit ahead of agent load, set from moq's workflow or the
   runner's environment.
-
-## Required
-
-- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - quest, rind and rust2 are cut over and landing; waits for a fork PR to land through one of their queues
-- [Harden the queue runners](/quest/m0/queue-watcher/runners.md) - each queue runner runs only its repository's queue workflow, and every outside fork PR needs approval
-- [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - moq.pro's `main` leaves the batching gate for the watcher's own queue
-- [Retire the batching gate](/quest/m0/queue-watcher/retire.md) - once no repository lands through `quest land serve`, its batching code and host units go

@@ -64,7 +64,7 @@ import {
 	roundLines,
 } from "./review";
 import { type Recorded, pullModels, recordRound } from "./review-record";
-import { BASH_MAX_TIMEOUT_MS, HOOKS, hook, settingsPath, setup } from "./hooks";
+import { BASH_MAX_TIMEOUT_MS, HOOKS, WORKTREE_HOOKS, hook, settingsPath, setup } from "./hooks";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -170,7 +170,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"first: a stale base can predate the quest and skip it.\n\n" +
 				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
 				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
-				"does, such as the quests a merged base finished, with any heading left empty. It then promotes a " +
+				"does, such as the quests a merged base finished, and every epic's Required entry naming a quest in " +
+				"its own directory, which the epic already waits for, with any heading left empty. It then promotes a " +
 				"section heading written below ## to ## where nothing but its own content follows it before the next " +
 				"## heading, and no ## section of that name exists. It prints M for each edited document and leaves " +
 				"the edits unstaged. A quest moved rather than deleted, a link that never " +
@@ -179,13 +180,18 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
-		.option("--fix", "First drop list links to quests the history deleted, and promote misleveled section headings")
+		.option(
+			"--fix",
+			"First drop list links to quests the history deleted and epics' links to their own quests, and promote misleveled section headings",
+		)
 		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
 			}
 			if (options.fix) {
-				const edited = new Set([...fixLinks(root()), ...fixHeadings(root())]);
+				// fixLinks checks the repair preconditions before anything is written; it runs again
+				// after promotion, since a promoted `Required` can hold links it then drops.
+				const edited = new Set([...fixLinks(root()), ...fixHeadings(root()), ...fixLinks(root())]);
 				for (const line of [...edited].sort()) print(line);
 			}
 			const tree = checkout(root(), warn);
@@ -897,7 +903,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Handle the Claude Code hook event whose JSON input arrives on stdin, for " +
 				HOOK_EVENTS.join(", ") +
-				". Add it to your own Claude Code settings for those events to opt in, as the README describes.\n\n" +
+				". `quest setup --worktrees` installs it for those events.\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
 				"initializes its submodules recursively, and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
@@ -1315,7 +1321,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Delete a quest, or an epic and the quests under it, with git rm, and drop every Required, Related, " +
 				"or Closes entry that links to it, with any heading left empty. It also drops every Required link to a " +
 				"finished milestone, one whose directory holds no other quest and whose README has no Required left, " +
-				"except the root's own listing. The change is staged.\n\n" +
+				"and every epic's Required entry naming a quest in its own directory. The change is staged.\n\n" +
 				"Refuses outside a git work tree. An epic is its directory or README; removing one that holds other " +
 				"quests requires -r. The root epic and milestones are permanent.\n\n" +
 				"Prints D for each deleted quest and M for each edited document. Mentions that are not list entries, " +
@@ -1419,12 +1425,19 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"which add `quest context` to each session and subagent in a repository that uses Quest, and again " +
 				"after compaction, so agents never run it themselves. Each runs `quest hook`, so `quest` must be on " +
 				"the PATH Claude Code starts with.\n\n" +
+				"With --worktrees, also installs " +
+				WORKTREE_HOOKS.map((h) => h.event).join(", ") +
+				" hooks running `quest worktree hook`, which hand Claude Code's worktrees to `quest worktree`; " +
+				"--no-worktrees takes them out, and without either a rerun keeps them as they are. Only one hook " +
+				"can manage Claude's worktrees, so remove any other WorktreeCreate or WorktreeRemove hook first.\n\n" +
 				"Validates the whole file, then writes it once and prints each change; settings that are not a JSON " +
 				"object, or whose env or hooks are malformed, are an error and stay unchanged. Rerun it after " +
 				"upgrading Quest; it replaces Quest's earlier hooks and changes nothing when all is set.",
 		)
+		.option("--worktrees", "Also install the worktree hooks")
+		.option("--no-worktrees", "Remove the worktree hooks")
 		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
-		.action((options: { remove?: boolean }) => {
+		.action((options: { remove?: boolean; worktrees?: boolean }) => {
 			for (const line of setup(settingsPath(), options)) print(line);
 		});
 
