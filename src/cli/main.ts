@@ -1056,7 +1056,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Report which models worked on each PR, at what token cost, and how its reviews went")
 		.description(
 			"Report origin's PRs updated since --since and this host's agent sessions active since then. Each " +
-				"Claude Code or Codex session belongs to the PR whose head branch its log last names, read from " +
+				"Claude Code or Codex session belongs to the PR whose head branch its log last names, when its Codex log, its " +
+				"checkout's remotes, or a Codex log for its directory names this repository, read from " +
 				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
 				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
 				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +

@@ -1383,9 +1383,12 @@ moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) esti
 prices the sessions, at each model's API list price, which subscriptions do
 not bill, so the cost is an estimate. `quest usage` ties each Claude Code or
 Codex session to the PR whose head branch its log last names, reading only the
-branch, remote, start time, and effort from `$CLAUDE_CONFIG_DIR` (or
+branch, directory, remote, start time, and effort from `$CLAUDE_CONFIG_DIR` (or
 `~/.config/claude` and `~/.claude`) and `$CODEX_HOME` (or `~/.codex`), never a
-prompt or reply. A session is reviewing when the PR's `## Review` record names
+prompt or reply. Since another repository may use the same branch name, the
+session must also be this repository's, as its Codex log, its checkout's
+remotes, or, once the checkout is deleted, a Codex log for that directory or
+one above it names; otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
 it or Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. Each PR shows its `## Models` size and implementers,
 with those on kix's sessions comment; its latest `quest review` round's

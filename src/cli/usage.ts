@@ -4,7 +4,7 @@
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type Size, SIZES, handedBack, questBranch } from "../core";
 import { type Comment, implementer, recorded, sessionsComment } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
@@ -452,30 +452,46 @@ function sessionId(session: Priced): string {
 	return /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(session.id)?.[1] ?? session.id;
 }
 
-const checkouts = new Map<string, string[] | null>();
-
 /** The GitHub repositories the checkout at `cwd` has remotes for, or null once it is no checkout to ask. */
 function checkoutRepositories(cwd: string): string[] | null {
-	if (!checkouts.has(cwd)) {
-		const remotes = existsSync(cwd)
-			? spawnSync("git", ["-C", cwd, "remote", "-v"], { encoding: "utf8", env: discoveryEnv() })
-			: null;
-		checkouts.set(
-			cwd,
-			remotes?.status === 0
-				? remotes.stdout.split("\n").flatMap((line) => {
-						const named = githubRepository(line.split(/\s+/)[1] ?? "");
-						return named ? [key(named)] : [];
-					})
-				: null,
-		);
-	}
-	return checkouts.get(cwd)!;
+	if (!existsSync(cwd)) return null;
+	const remotes = spawnSync("git", ["-C", cwd, "remote", "-v"], { encoding: "utf8", env: discoveryEnv() });
+	if (remotes.status !== 0) return null;
+	return remotes.stdout.split("\n").flatMap((line) => {
+		const named = githubRepository(line.split(/\s+/)[1] ?? "");
+		return named ? [key(named)] : [];
+	});
+}
+
+/**
+ * Which repositories the directory `cwd` belongs to: its checkout's remotes while it exists, else the remote a
+ * Codex log names for it or a directory above it, as a reviewer run in the same checkout records; null when
+ * nothing tells, since a branch name alone may be another repository's.
+ */
+function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
+	const logged = new Map<string, Set<string>>();
+	for (const log of logs)
+		if (log?.repository)
+			for (const seen of log.branches.values())
+				if (seen.cwd) logged.set(seen.cwd, (logged.get(seen.cwd) ?? new Set()).add(key(log.repository)));
+	const cache = new Map<string, string[] | null>();
+	return (cwd) => {
+		if (!cache.has(cwd)) {
+			let found = checkoutRepositories(cwd);
+			for (let dir = cwd; found === null; dir = dirname(dir)) {
+				const names = logged.get(dir);
+				if (names) found = [...names];
+				if (dirname(dir) === dir) break;
+			}
+			cache.set(cwd, found);
+		}
+		return cache.get(cwd)!;
+	};
 }
 
 /**
  * Attribute each priced session to the PR whose head branch its log last named, among those still open when the
- * session reached the branch and not of another repository, and give it a role: reviewing when
+ * session reached the branch and of the repository its log, checkout, or directory names, and give it a role: reviewing when
  * a PR's review record names it or Codex marks it a review, implementing when it began before its PR opened, and
  * iterating otherwise. Returns the sessions on no PR here.
  */
@@ -490,20 +506,22 @@ function attribute(
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
 		byBranch.set(each.branch, [...(byBranch.get(each.branch) ?? []), each]);
 	const unattributed: Priced[] = [];
+	const owned = owners(logs);
 	sessions.forEach((session, index) => {
 		const log = logs[index];
 		const branches = log ? [...log.branches].sort((a, b) => b[1].last - a[1].last) : [];
 		let found: Pull | undefined;
 		for (const [branch, seen] of branches) {
-			// Another repository may use the same branch name: its log or its checkout's remotes tell, while either can.
-			const known = log!.repository ? [key(log!.repository)] : seen.cwd ? checkoutRepositories(seen.cwd) : null;
+			// Another repository may use the same branch name, so a session counts only where its repository is known.
+			const known = log!.repository ? [key(log!.repository)] : seen.cwd ? owned(seen.cwd) : null;
+			if (known === null) continue;
 			// A branch can head a new PR after an earlier one closed: take the one open when the session reached it.
 			found = byBranch
 				.get(branch)
 				?.find(
 					(each) =>
 						(each.closed === null || each.closed >= seen.first) &&
-						(known === null || each.repositories.some((name) => known.includes(name))),
+						each.repositories.some((name) => known.includes(name)),
 				);
 			if (found) break;
 		}

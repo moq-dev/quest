@@ -14,6 +14,8 @@ import { tempDir } from "./fixture";
 const THREAD = "01a1b8e8-8fca-7793-99d1-062f41f8a7b0";
 const CLAUDE = "0d8d9084-40a0-48e2-921b-8ba0d67baa2f";
 const OTHER = "961c731d-399c-46c5-81ef-069105f87cc4";
+const OWNED = "f1913a12-44c4-438c-a9d9-06e5b1192c04";
+const GONE = "83a08f0e-6ef1-4b41-ad0c-58b37fc993f8";
 
 const lines = (...records: unknown[]) => `${records.map((r) => JSON.stringify(r)).join("\n")}\n`;
 
@@ -26,7 +28,11 @@ const claude = (timestamp: string, gitBranch: string, extra: object = {}) => ({
 	...extra,
 });
 
-const codexLog = (timestamp: string, branch: string | null, extra: { source?: unknown; url?: string } = {}) =>
+const codexLog = (
+	timestamp: string,
+	branch: string | null,
+	extra: { source?: unknown; url?: string; cwd?: string } = {},
+) =>
 	lines(
 		{
 			type: "session_meta",
@@ -34,7 +40,7 @@ const codexLog = (timestamp: string, branch: string | null, extra: { source?: un
 			payload: {
 				id: THREAD,
 				timestamp,
-				cwd: "/work",
+				cwd: extra.cwd ?? "/work",
 				source: extra.source ?? "exec",
 				git: branch ? { branch, repository_url: extra.url ?? "https://github.com/acme/proj.git" } : undefined,
 			},
@@ -266,6 +272,15 @@ describe("usage", () => {
 			lines(claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: join(other, "sub") })),
 		);
 		mkdirSync(join(other, "sub"));
+		// Two sessions in checkouts since deleted: one below the directory a Codex log names, one nothing names.
+		writeFileSync(
+			join(claudeHome, "projects", "-work", `${OWNED}.jsonl`),
+			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/work/.tmp" })),
+		);
+		writeFileSync(
+			join(claudeHome, "projects", "-work", `${GONE}.jsonl`),
+			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/nowhere" })),
+		);
 		const codexHome = join(dir, "codex");
 		const day = join(codexHome, "sessions", "2026", "11", "06");
 		mkdirSync(day, { recursive: true });
@@ -277,7 +292,7 @@ describe("usage", () => {
 		);
 		writeFileSync(
 			join(day, "rollout-c-22222222-2222-2222-2222-222222222222.jsonl"),
-			codexLog("2026-11-06T13:00:00Z", "quest/m0/a", { url: "https://github.com/other/repo.git" }),
+			codexLog("2026-11-06T13:00:00Z", "quest/m0/a", { url: "https://github.com/other/repo.git", cwd: "/other" }),
 		);
 
 		const body10 = [
@@ -350,6 +365,8 @@ describe("usage", () => {
 				models: [spent("gpt-6.1-sol", 3)],
 			},
 			{ harness: "opencode", id: "ses_1", models: [spent("deepseek", 4)] },
+			{ harness: "claude", id: OWNED, models: [spent("claude-opus-5-5", 7)] },
+			{ harness: "claude", id: GONE, models: [spent("claude-opus-5-5", 8)] },
 		];
 		const deps = (ccusage: Priced[] | null) => ({
 			github: () => ({
@@ -376,6 +393,7 @@ describe("usage", () => {
 			["claude", CLAUDE, "implementing", "high"],
 			["codex", THREAD, "reviewing", "high"],
 			["codex", "11111111-1111-1111-1111-111111111111", "iterating", "high"],
+			["claude", OWNED, "iterating", null],
 		]);
 		expect(ten.fixedBy).toEqual([11]);
 		expect(ten.implementers).toEqual([
@@ -385,15 +403,16 @@ describe("usage", () => {
 		]);
 		expect(report.pulls.find((p) => p.number === 9)!.sessions).toEqual([]);
 		expect(report.unattributed).toEqual({
-			sessions: 3,
-			input: 30,
-			cacheWrite: 60,
-			cacheRead: 90,
-			output: 120,
-			cost: 13,
+			sessions: 4,
+			input: 40,
+			cacheWrite: 80,
+			cacheRead: 120,
+			output: 160,
+			cost: 21,
 		});
 		expect(report.spend.map((s) => [s.size, s.role, s.harness, s.cost])).toEqual([
 			["L", "implementing", "claude", 5],
+			["L", "iterating", "claude", 7],
 			["L", "iterating", "codex", 2],
 			["L", "reviewing", "codex", 1],
 		]);
