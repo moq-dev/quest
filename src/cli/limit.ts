@@ -10,7 +10,11 @@ export const EXHAUSTED = /credit balance is too low|insufficient_quota|exceeded 
 /**
  * Messages for a spent usage limit or key balance, such as Claude Code's
  * "You've hit your weekly limit" or "5-hour limit reached", Codex's "You've hit
- * your usage limit", and opencode's providers' errors.
+ * your usage limit", and opencode's providers' errors. A CLIProxyAPI pool whose
+ * every credential is cooling down answers "All credentials for model ... are
+ * cooling down", which Claude Code shows, with the `model_cooldown` code in the
+ * OpenAI-style formats; the proxy has already retried every credential, so it
+ * is no brief throttle.
  */
 export const LIMIT = new RegExp(
 	[
@@ -20,6 +24,8 @@ export const LIMIT = new RegExp(
 		"(?:hour|weekly|opus|sonnet|fable) limit reached",
 		"out of (?:extra usage|usage credits|credits)",
 		"free usage exceeded",
+		"credentials for model \\S+ are cooling down",
+		"model_cooldown",
 		EXHAUSTED.source,
 	].join("|"),
 	"i",

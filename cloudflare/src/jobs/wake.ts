@@ -1,6 +1,7 @@
-// Webhooks are hints: only a running merge attempt is notified, then it rereads GitHub through kix.
+// Webhooks are hints: only a running merge or delete attempt is notified, then it rereads GitHub through kix.
 import { positiveId } from "../github/webhook";
 import { hub } from "./routes";
+import { LANDS } from "./store";
 
 export async function wake(env: Env, repository: number, installation: number, event: string, payload: any) {
 	if (
@@ -31,7 +32,7 @@ export async function wake(env: Env, repository: number, installation: number, e
 	if (!pulls.length && !heads.length) return;
 	const { results } = await env.DB.prepare(
 		`SELECT j.id AS job,j.attempt,j.runner,j.actor FROM jobs j JOIN github_projects p ON p.id=j.repository
-WHERE j.repository=? AND p.installation=? AND j.workflow='merge' AND j.state='running' AND j.runner IS NOT NULL
+WHERE j.repository=? AND p.installation=? AND ${LANDS("j.")} AND j.state='running' AND j.runner IS NOT NULL
 AND (j.target IN (SELECT value FROM json_each(?)) OR COALESCE(j.head,j.revision) IN (SELECT value FROM json_each(?)))`,
 	)
 		.bind(repository, installation, JSON.stringify(pulls), JSON.stringify(heads))

@@ -1249,7 +1249,8 @@ as an expired or revoked token. The reviewer reaches its model as the user's own
 Claude Code keeps `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, and its
 cloud providers' `CLAUDE_CODE_USE_*` switches and settings, so a gateway such
 as CLIProxyAPI, Bedrock, Vertex, or Foundry works, and Codex keeps
-`CODEX_CA_CERTIFICATE`. It uses the CLI's own stored login; the credential the
+`CODEX_CA_CERTIFICATE` and sends its requests to `OPENAI_BASE_URL`, if set, as
+its `openai_base_url` setting. It uses the CLI's own stored login; the credential the
 CLI reads from the environment (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or
 `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code, `CODEX_API_KEY` or
 `CODEX_ACCESS_TOKEN` for Codex) passes only when the CLI has no stored login or
@@ -1357,6 +1358,10 @@ cannot be reviewed, including a login the API rejects, 3 when the reviewer's
 account hit its usage limit, and 1 for other failures. A usage limit prints one
 line, `error: <harness> hit its usage limit; resets <time>`, where `<time>` is
 the reset as an ISO 8601 UTC timestamp, or `unknown` when the CLI named none.
+Through a gateway that pools accounts, such as CLIProxyAPI, the limit is the
+pool's: Claude Code shows its "All credentials for model ... are cooling down",
+and Codex, sent to `OPENAI_BASE_URL`, gives up on the gateway's 429 after its
+own retries, which also counts as the limit there.
 `/quest-review` runs the rounds and marks the PR ready.
 
 ## Audit cost and accuracy
@@ -1466,8 +1471,9 @@ that machine's own logins:
 
 ```sh
 quest runner login --name laptop  # prints a link to approve while signed in to kix
-quest runner account add          # Claude Code's own sign-in, in an isolated home
-quest runner account add --console --label work
+quest runner account add          # a Claude subscription, into the runner's pool
+quest runner account add codex    # a ChatGPT plan, into the pool Codex reviews with
+ANTHROPIC_API_KEY=sk-ant-... quest runner account add --console --label work
 quest runner account add opencode # opencode's sign-in: OpenCode Go, ChatGPT, or an API key
 quest runner account add opencode --model openai/gpt-5.5
 quest runner account list
@@ -1475,28 +1481,46 @@ quest runner --slots 2            # runs jobs in the foreground until interrupte
 ```
 
 `login` makes a token that never leaves the machine; the link carries only its
-hash, and kix connects the runner once you approve it. Each account signs in
-through its CLI's own flow in its own home: `claude auth login` in a
-`CLAUDE_CONFIG_DIR`, or `opencode auth login` in a set of XDG directories, so
-kix stores only an opaque account id, its kind, and a label. An opencode
-account uses only the providers it signed in to, with `--model` or opencode's
-default. Use Claude Code for Claude subscriptions, since opencode cannot sign
-in to them. kix's `/runners` page shows each runner's presence and sets the
-order jobs use your accounts in.
+hash, and kix connects the runner once you approve it. Claude and Codex
+subscriptions pool behind the runner's own
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI): `account add`
+signs each one in through the proxy's OAuth flow (`-claude-login` or
+`-codex-login`; over SSH, Claude's prints its link and takes the callback URL
+you paste back, and Codex's takes a device code), and `--console` adds an
+Anthropic Console API key from `ANTHROPIC_API_KEY` to the Claude pool. Signing a
+pooled account in again refreshes its credential. `quest runner` starts the
+proxy on a free loopback port with a client key of its own and stops it on
+exit, and every Claude Code job and review and every Codex review goes through
+it, so work spreads round-robin across the pool, keeping each session on one
+account for its prompt cache, and moves to another account when one is
+refused. The agent sees only the proxy's client key, through Claude Code's
+`apiKeyHelper` rather than its environment, never a subscription's token. kix
+sees the Claude pool as one account, labeled with its members; Codex's pool
+only reviews, since no adapter runs Codex jobs. opencode accounts sign in with
+`opencode auth login`, each in its own set of XDG directories, and use only
+the providers they signed in to, with `--model` or opencode's default. kix
+stores only an opaque account id, its kind, and a label. kix's `/runners` page
+shows each runner's presence and sets the order jobs use your accounts in.
+
+Runner state from before the pool, with Claude Code accounts in their own
+homes, is refused with a message: delete `accounts.json` and `accounts/` from
+the runner's home and add each account again.
 
 Every job runs in its own checkout with the project's devShell, which the runner
 builds with `nix print-dev-env` from the job's revision, honoring the flake's
 `nixConfig`; a project without a flake gets a bootstrap job instead. An OS
 sandbox (bubblewrap on Linux, Seatbelt on macOS) confines every command the
 agent runs, the devShell's shellHook included: Claude Code's own sandbox on
-Claude Code accounts, and on opencode accounts the same policy through
+the Claude pool, and on opencode accounts the same policy through
 [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime),
 which the runner sets as opencode's shell. Commands
 write only to the checkout and a private temporary directory that is
-also their `HOME`, cannot read account homes, the runner's state, or shared
-temporary directories, and have no Nix daemon. A trusted revision's commands
-reach only the npm, crates.io, and PyPI package registries, so its checks can
-install dependencies; an untrusted one's reach no network host. npm's registry
+also their `HOME`, cannot read account homes, the runner's state (the proxy's
+credentials and client key included), or shared temporary directories, and
+have no Nix daemon. A trusted revision's commands reach only the npm,
+crates.io, and PyPI package registries, so its checks can install
+dependencies; an untrusted one's reach no network host, the proxy on loopback
+included. npm's registry
 also accepts publishes, so a prompt-injected agent holding someone's npm token
 could publish the checkout there. The agent's file tools stay in the checkout
 (opencode's may also use the private temporary directory, and its read tool
@@ -1508,8 +1532,9 @@ job refuses to run if opencode loaded any config besides the runner's and the
 account's, such as a machine's managed `/etc/opencode`, which would outrank
 the runner's. The CLI itself, Claude Code or
 `opencode serve`, runs outside the sandbox and outside the devShell, and its
-commands start from a minimal environment, so its login, the opencode server's
-password, and the kix tools' token stay out of their reach. This is an OS
+commands start from a minimal environment, so its login or the proxy's client
+key, the opencode server's password, and the kix tools' token stay out of their
+reach. This is an OS
 sandbox, not a VM, and it narrows rather than removes the risk of running
 agent commands on your machine. On Linux, `just runner-sandbox` in this
 repository runs a scripted model through the pinned Claude Code, and through
@@ -1572,8 +1597,16 @@ follow-ups, which the inbox offers you to plan for 30 days after the job
 completes. Expired offers cannot start a plan, and the job's history remains.
 A job on an issue or
 pull request reads it through `context`, since the runner holds no GitHub
-token; a new plan reads your idea and pasted context there. kix publishes as its GitHub App, so the runner never pushes. A job that hits an account's limit
-pauses for you to pick another account; the runner never switches on its own.
+token; a new plan reads your idea and pasted context there. kix publishes as its GitHub App, so the runner never pushes. Once
+every account in a pool is cooling down, Claude Code shows the proxy's "All
+credentials for model ... are cooling down" without its reset, so the runner
+asks the proxy, which names it in `Retry-After` without asking any provider,
+and marks the pool limited until then (an hour when neither says); adding an
+account to the pool lifts that. A job that
+hits its account's or pool's limit pauses for you to pick another account; kix
+never switches on its own. A review whose pool is limited leaves the head
+unreviewed, saying when the pool resets, and landing it needs a maintainer's
+approval on GitHub.
 On SIGINT or SIGTERM, running work is published and its jobs move to another
 runner. `quest runner` takes only trusted revisions until it can build
 untrusted heads' devShells in a VM: it registers without declaring VM builds,
@@ -1589,12 +1622,13 @@ only once you approve it in the inbox. opencode runs as `opencode serve` on
 localhost behind a password made for each turn.
 
 The flake's `runner` package pins Claude Code 2.1.305 from its official release
-manifest; opencode, Codex, sandbox-runtime (and on Linux, bubblewrap and socat) follow
+manifest; opencode, Codex, CLIProxyAPI, sandbox-runtime (and on Linux, bubblewrap and socat) follow
 this repository's lock (`nix run github:moq-dev/quest#runner -- runner`);
-otherwise `claude`, `opencode`, `codex`, and `srt` come from `QUEST_RUNNER_CLAUDE`,
-`QUEST_RUNNER_OPENCODE`, `QUEST_RUNNER_CODEX`, and `QUEST_RUNNER_SRT`, or `PATH`.
-Codex reviews the heads that jobs on Anthropic's models publish, with the
-login of the user running the runner, so run `codex login` as that user. State lives in `$QUEST_RUNNER_HOME`, by default
+otherwise `claude`, `opencode`, `codex`, `cliproxyapi`, and `srt` come from `QUEST_RUNNER_CLAUDE`,
+`QUEST_RUNNER_OPENCODE`, `QUEST_RUNNER_CODEX`, `QUEST_RUNNER_CLIPROXY`, and `QUEST_RUNNER_SRT`, or `PATH`.
+Codex reviews the heads that jobs on Anthropic's models publish with the
+Codex pool, and Claude Code the rest with the Claude pool, so add a Codex
+account for Claude jobs to be reviewed. State lives in `$QUEST_RUNNER_HOME`, by default
 `$XDG_DATA_HOME/quest/runner`; one `quest runner` runs in a home at a time. To keep a runner up, run `quest runner` as a user
 service, such as a systemd user unit with `Restart=on-failure`.
 

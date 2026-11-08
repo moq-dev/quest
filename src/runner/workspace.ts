@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 
 import { fetchBase, sessionFile } from "../cli/review";
 import { save } from "../cli/worktree";
-import type { Job } from "./protocol";
+import { type Job, lands } from "./protocol";
 
 const run = promisify(execFile);
 const identity = () => ({
@@ -127,7 +127,7 @@ export class Workspace {
 			}
 			const saved = previous ? await previous.#checkpoint(job.id, source!) : null;
 			const continuing =
-				job.workflow === "merge" &&
+				lands(job.workflow) &&
 				job.head !== null &&
 				record &&
 				job.questions.some((question) => {

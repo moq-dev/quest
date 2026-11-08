@@ -16,6 +16,8 @@ export type Issue = {
 	body?: string;
 	comments?: Comment[];
 	closed?: boolean;
+	/** When GitHub last saw activity on it; a fixed past date when absent. */
+	updatedAt?: string;
 };
 export type Thread = { path: string; line: number | null; resolved?: boolean; outdated?: boolean; comments: Comment[] };
 export type Pull = Issue & {
@@ -210,7 +212,7 @@ function entity(repo: Repo, item: Issue) {
 		number: item.number,
 		title: item.title,
 		state: (item as Pull).merged ? "MERGED" : item.closed ? "CLOSED" : "OPEN",
-		updatedAt,
+		updatedAt: item.updatedAt ?? updatedAt,
 		closedAt: item.closed ? updatedAt : null,
 		author: { login: item.author },
 		comments: { totalCount: item.comments?.length ?? 0 },
@@ -384,6 +386,8 @@ function holdsTarget(repo: Repo, pull: Pull) {
 	return {
 		id: nodeId(repo, pull),
 		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
+		isDraft: !!pull.draft,
+		body: pull.body ?? "",
 		baseRefName: pull.base ?? defaultOf(repo),
 		headRefOid: headOf(repo, pull),
 		mergeStateStatus: mergeState(pull),
@@ -777,6 +781,7 @@ export function fakeGitHub(world: World) {
 		mergeable_state: pull.mergeableState ?? (pull.merge === "DIRTY" ? "dirty" : "clean"),
 		title: pull.title,
 		body: pull.body ?? "",
+		labels: (pull.labels ?? []).map((name) => ({ name })),
 		draft: !!pull.draft,
 		user: { login: pull.author },
 		created_at: new Date(pull.createdAt ?? Date.parse(updatedAt)).toISOString(),
@@ -1302,6 +1307,21 @@ export function fakeGitHub(world: World) {
 				}
 			}
 			return json(restPull(repo, pull));
+		}
+		// The files a pull request changes against its base's tip, one page of up to 100.
+		const changed = tail.match(/^\/pulls\/(\d+)\/files$/);
+		if (changed && method === "GET") {
+			const pull = repo.pulls.find((p) => String(p.number) === changed[1]);
+			if (!pull) return notFound();
+			const tree = (sha: string | undefined) => (sha ? filesOf(repo, repo.commits[sha]?.tree ?? "") : {});
+			const before = tree(repo.branches[pull.base ?? defaultOf(repo)]);
+			const after = tree(headOf(repo, pull));
+			const paths = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+				.filter((path) => before[path] !== after[path])
+				.sort();
+			const at = Number(url.searchParams.get("page") ?? 1);
+			const size = Number(url.searchParams.get("per_page") ?? 30);
+			return json(paths.slice((at - 1) * size, at * size).map((filename) => ({ filename })));
 		}
 		const merge = tail.match(/^\/pulls\/(\d+)\/merge$/);
 		if (merge && method === "PUT") {

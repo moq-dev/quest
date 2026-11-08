@@ -2042,7 +2042,69 @@ describe("merge jobs", () => {
 			trusted: false,
 		});
 		const refused = await publish({ job: iterate, attempt: 1, head: prHead, land: {} });
-		expect(await refused.json()).toEqual({ error: "Only a merge job lands its pull request" });
+		expect(await refused.json()).toEqual({ error: "Only a merge or delete job lands its pull request" });
+	});
+});
+
+describe("delete jobs", () => {
+	const pull = () => project.pulls.find((p) => p.number === 2)!;
+	/** Give pull request #2's head a tree that adds `path` to the base's files. */
+	function changes(path: string) {
+		const tree = "c".repeat(40);
+		project.trees[tree] = { base: "e".repeat(40), entries: [{ path, content: "x", mode: "100644", type: "blob" }] };
+		project.commits[prHead]!.tree = tree;
+	}
+	/** A running delete job on quest pull request #2 that holds it, its head reviewed. */
+	async function deleting() {
+		pull().branch = "quest/first";
+		project.branches = { main: revision, "quest/first": prHead };
+		pull().reviews = [{ state: "APPROVED", author: "maintainer", commit: prHead }];
+		const id = await running({
+			workflow: "delete",
+			target: "pulls/2",
+			revision: prHead,
+			branch: "quest/first",
+			trusted: false,
+		});
+		await store.held(db, id, await new GitHubService(testEnv).holdPullRequest(upstream, user, 2));
+		await store.dispatch(db, user, new Map([[machine.id, 1]]), 0);
+		return id;
+	}
+
+	it("rewrites its pull request's text, then marks a handed-back draft ready and lands only quest changes", async () => {
+		pull().draft = true;
+		pull().body = "## Waiting\n\n- Maintainer: decide";
+		changes("quest/first.md");
+		const id = await deleting();
+		const pullText = { title: "quest: delete first", body: "Abandoned: superseded.", draft: true };
+		expect((await publish({ job: id, attempt: 1, head: prHead, pull: pullText, land: {} })).status).toBe(409);
+		const described = await publish({ job: id, attempt: 1, head: prHead, pull: pullText });
+		expect(await described.json()).toEqual({ head: prHead });
+		expect(pull()).toMatchObject({ title: "quest: delete first", body: "Abandoned: superseded.", draft: true });
+		const landed = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+		expect(await landed.json()).toEqual({ head: prHead, landed: expect.any(Object) });
+		expect(pull().draft).toBe(false);
+	});
+
+	it("refuses to land a pull request that still changes more than quest files", async () => {
+		changes("src/a.ts");
+		const id = await deleting();
+		const response = await publish({ job: id, attempt: 1, head: prHead, land: {} });
+		expect(response.status).toBe(202);
+		expect((await job(id)).questions.at(-1)!.prompt).toEqual({
+			type: "publication",
+			blocked: "A delete lands only quest file changes, but the pull request also changes src/a.ts.",
+		});
+		expect(pull().closed).toBeFalsy();
+	});
+
+	it("rewrites no pull request it no longer holds", async () => {
+		changes("quest/first.md");
+		const id = await deleting();
+		pull().labels = [];
+		const response = await publish({ job: id, attempt: 1, head: prHead, pull: { title: "t", body: "b" } });
+		expect(response.status).toBe(202);
+		expect(pull().title).toBe("Fix");
 	});
 });
 

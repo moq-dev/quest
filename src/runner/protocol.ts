@@ -2,7 +2,12 @@
 // `cloudflare/src/jobs/protocol.ts` is the authority; these are the fields the
 // runner reads and writes. Everything the hub sends is checked before use.
 
-export type Workflow = "plan" | "start" | "iterate" | "merge" | "bootstrap";
+export type Workflow = "plan" | "start" | "iterate" | "merge" | "delete" | "bootstrap";
+
+/** Whether a workflow lands its pull request: a merge, or a delete that repurposes a quest's pull request first. */
+export function lands(workflow: Workflow) {
+	return workflow === "merge" || workflow === "delete";
+}
 export type Outcome = "completed" | "failed" | "cancelled" | "limited";
 
 export interface Attempt {
@@ -110,7 +115,7 @@ export function parsePush(value: unknown): Push | null {
 	}
 	if (body?.type !== "assign") return null;
 	const job = record(body.job);
-	const workflows = ["plan", "start", "iterate", "merge", "bootstrap"];
+	const workflows = ["plan", "start", "iterate", "merge", "delete", "bootstrap"];
 	if (
 		!job ||
 		typeof job.id !== "string" ||

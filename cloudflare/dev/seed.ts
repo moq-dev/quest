@@ -107,6 +107,7 @@ export function world(): World {
 				review: "CHANGES_REQUESTED",
 				reviews: [{ state: "CHANGES_REQUESTED", author: "reviewer" }],
 			},
+			// A draft its starter left quiet for weeks: offered for takeover.
 			{
 				number: 15,
 				title: "Try a shared build cache",
@@ -124,7 +125,7 @@ export function world(): World {
 				checks: null,
 				review: "REVIEW_REQUIRED",
 			},
-			// A claim its starter still holds: work in progress, not a decision.
+			// A claim its starter still holds and touched just now: work in progress, not a decision.
 			{
 				number: 17,
 				title: "Draft the theme picker",
@@ -134,6 +135,7 @@ export function world(): World {
 				review: null,
 				draft: true,
 				body: "Started on the picker.",
+				updatedAt: new Date().toISOString(),
 			},
 			// A draft handed back with decisions: it waits on the maintainer.
 			{

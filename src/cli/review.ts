@@ -29,9 +29,13 @@ export class ReviewInputError extends Error {}
 /** `--responses` is missing after a round with findings, or given with no round to answer. */
 export class ResponsesError extends ReviewInputError {}
 
-/** The reviewer's account hit its usage limit, which resets at `until` (epoch milliseconds) if the CLI named it. */
+/** The reviewer's account hit its usage limit on `model`, which resets at `until` (epoch milliseconds) if the CLI named it. */
 export class ReviewLimitError extends Error {
-	constructor(harness: HarnessName, until: number | null) {
+	constructor(
+		readonly harness: HarnessName,
+		readonly until: number | null,
+		readonly model: string,
+	) {
 		const resets = until === null ? "unknown" : new Date(until).toISOString().replace(/\.\d{3}Z$/, "Z");
 		super(`${harness} hit its usage limit; resets ${resets}`);
 	}
@@ -325,6 +329,8 @@ export interface Context {
 	/** The reply's schema, and where `--output-schema` reads it from. */
 	schema: ReturnType<typeof schema>;
 	schemaFile: string;
+	/** The gateway Codex sends its requests to, from OPENAI_BASE_URL, which Codex itself no longer reads. */
+	openaiBaseUrl?: string;
 }
 
 interface Turn {
@@ -551,7 +557,9 @@ const codex: Reviewer = {
 	// CODEX_ACCESS_TOKEN is an agent identity token, which both read.
 	credentials: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
 	routeCredentials: [],
-	// A gateway that intercepts TLS needs its CA. OPENAI_BASE_URL is never stripped.
+	// A gateway that intercepts TLS needs its CA. OPENAI_BASE_URL is never stripped, and reaches Codex as
+	// `openai_base_url`. It is no route: `codex login status` ignores CODEX_API_KEY, so a gateway's key
+	// passes as any key does, while Codex has no stored login.
 	connection: ["CODEX_CA_CERTIFICATE"],
 	routes: () => [],
 	unauthorized: LOGINS.codex.unauthorized,
@@ -629,6 +637,7 @@ function codexFlags(context: Context): string[] {
 		context.model,
 		"-c",
 		`model_reasoning_effort=${JSON.stringify(context.effort)}`,
+		...(context.openaiBaseUrl ? ["-c", `openai_base_url=${JSON.stringify(context.openaiBaseUrl)}`] : []),
 	];
 }
 
@@ -783,8 +792,15 @@ export async function reviewerEnvironment(
 	return (await prepare(harness, cwd, env)).env;
 }
 
-/** Run one reviewer turn, failing on any error it reports, and as logged out on an authentication error. */
-async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
+/**
+ * Codex's failure once it gave up retrying a 429. From the provider that may be
+ * a brief throttle, but a gateway such as CLIProxyAPI has already retried every
+ * credential it pools, so there it is the pool's usage limit.
+ */
+export const RETRIED_429 = /exceeded retry limit, last status: 429\b/;
+
+/** Run one reviewer turn on `model`, failing on any error it reports, and as logged out on an authentication error. */
+async function turn(cli: Cli, call: Turn, cwd: string, model: string): Promise<Reply> {
 	const reader = cli.reviewer.reader();
 	const { code, stderr } = await run(call.argv, cwd, { ...cli.env, ...call.env }, call.stdin, reader, cli.signal);
 	const reply = reader.reply(code, stderr);
@@ -794,7 +810,9 @@ async function turn(cli: Cli, call: Turn, cwd: string): Promise<Reply> {
 		if (reply.status === 401 || cli.reviewer.unauthorized.test(`${reply.error ?? ""}\n${stderr}`)) {
 			throw new ReviewInputError(cli.unauthorized);
 		}
-		if (reply.limited) throw new ReviewLimitError(cli.harness, reply.limited.until);
+		if (reply.limited) throw new ReviewLimitError(cli.harness, reply.limited.until, model);
+		if (cli.harness === "codex" && cli.env.OPENAI_BASE_URL && RETRIED_429.test(`${reply.error ?? ""}\n${stderr}`))
+			throw new ReviewLimitError(cli.harness, null, model);
 		const detail = reply.error ?? stderr.trim().split("\n").slice(-5).join("\n");
 		throw new Error(`${call.argv[0]} failed${detail ? `: ${detail}` : ` with exit status ${code}`}`);
 	}
@@ -1350,6 +1368,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		effort: picked.effort,
 		schema: replySchema,
 		schemaFile,
+		...(cli.env.OPENAI_BASE_URL && { openaiBaseUrl: cli.env.OPENAI_BASE_URL }),
 	};
 
 	const usage: Usage[] = [];
@@ -1357,11 +1376,11 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	let reply: Reply;
 	if (!resume) {
 		const prompt = reviewPrompt(change, rules, earlier, options.responses);
-		const first = await turn(cli, reviewer.review(context, randomUUID(), prompt), root);
+		const first = await turn(cli, reviewer.review(context, randomUUID(), prompt), root, context.model);
 		if (first.session === undefined) throw new Error(`${harness} did not report its session`);
 		session = first.session;
 		if (reported(first.usage)) usage.push({ turn: "review", ...first.usage });
-		reply = await turn(cli, reviewer.resume(context, session, reportPrompt(head, earlier)), root);
+		reply = await turn(cli, reviewer.resume(context, session, reportPrompt(head, earlier)), root, context.model);
 	} else {
 		session = state!.session;
 		const prompt = laterPrompt({
@@ -1370,7 +1389,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			earlier,
 			responses: options.responses,
 		});
-		reply = await turn(cli, reviewer.resume(context, session, prompt), root);
+		reply = await turn(cli, reviewer.resume(context, session, prompt), root, context.model);
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
 	const { score, rationale, findings: found, earlier: answers } = verdict(reply, earlier.length);

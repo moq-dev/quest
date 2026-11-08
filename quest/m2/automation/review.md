@@ -16,7 +16,3 @@ attributed GitHub review findings. Maintainers decide how to act on them.
   Present actionable findings through the decision inbox.
 - Test head changes, duplicate publication, revoked funding, and unavailable
   repository tooling.
-
-## Required
-
-- [Web execution](/quest/m0/kix/execution.md) - the initial contribution flow
