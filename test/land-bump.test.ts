@@ -1,8 +1,8 @@
 // The pin bump pass against a fake GitHub and a local target repository, with the host's Nix and quest faked.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -15,6 +15,7 @@ import {
 	type BumpTools,
 	bumpBody,
 	bumpPass,
+	hostTools,
 	latestRuns,
 	questInput,
 	unpin,
@@ -543,6 +544,30 @@ describe("bumpPass", () => {
 		target.pulls[0].base = "old";
 		await bumpPass(ctx, NEW);
 		expect(target.pulls[0].base).toBe("main");
+	});
+
+	test.skipIf(process.platform === "win32")("rebuilds a cached quest that Nix's garbage collection removed", () => {
+		const dir = tempDir();
+		const out = join(dir, "out");
+		const calls = join(dir, "calls");
+		writeFileSync(
+			join(dir, "nix"),
+			`#!/bin/sh\necho build >> "${calls}"\nmkdir -p "${out}/bin"\ntouch "${out}/bin/quest"\necho "${out}"\n`,
+			{ mode: 0o755 },
+		);
+		const path = process.env.PATH;
+		process.env.PATH = `${dir}${delimiter}${path}`;
+		try {
+			const host = hostTools(SOURCE, dir);
+			const quest = host.quest(NEW, "token");
+			expect(host.quest(NEW, "token")).toBe(quest);
+			rmSync(out, { recursive: true });
+			expect(host.quest(NEW, "token")).toBe(quest);
+			expect(existsSync(quest)).toBe(true);
+			expect(readFileSync(calls, "utf8")).toBe("build\nbuild\n");
+		} finally {
+			process.env.PATH = path;
+		}
 	});
 
 	test("a target that fails does not hold up the others, and the pass reports it", async () => {

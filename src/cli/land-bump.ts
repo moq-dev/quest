@@ -496,7 +496,8 @@ export function hostTools(source: Repository, state: string): BumpTools {
 		},
 		quest: (sha, token) => {
 			let path = built.get(sha);
-			if (path === undefined) {
+			// `--no-link` roots nothing, so Nix's garbage collection may remove a cached build before a retry.
+			if (path === undefined || !existsSync(path)) {
 				path = join(
 					nix(state, ["build", "--no-link", "--print-out-paths", `github:${name(source)}/${sha}`], token),
 					"bin",
