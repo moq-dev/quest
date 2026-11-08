@@ -1844,9 +1844,11 @@ hook on shell commands and file edits denies, with the rule as the reason:
   line;
 - a scratch file written under `/tmp`, outside the checkout.
 
-A body it cannot read passes, such as one piped into `gh`, or a body file the
-same command line writes first; pass the body on stdin with `--body-file -` and
-a here-document to have it checked. `quest context` still prints these rules,
+It checks only a body on the command line itself: `--body`, a `body=` field,
+`git commit -m`, or `--body-file -` with a here-document. A body file, or one
+piped into `gh`, passes unread, since the file may hold something else by the
+time the command runs; `quest context` keeps the footer and em-dash rules in
+prose for that case. `quest context` still prints these rules,
 under a last `Checked` section that the hook leaves out, for agents without
 it.
 

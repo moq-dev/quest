@@ -1,6 +1,6 @@
 // The rules `quest hook` checks on a tool call, and the shell parsing they rest on.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, expect, test } from "vitest";
@@ -169,40 +169,26 @@ test("commit messages may not add em dashes", () => {
 	expect(bash('git commit -m "fix: a, b"')).toEqual([]);
 });
 
-test("a new GitHub post needs the footer and no em dashes; edits and unreadable bodies pass", () => {
+test("a new GitHub post needs the footer and no em dashes; edits and bodies off the line pass", () => {
 	expect(bash(`gh pr comment 5 --body "Done.\n\n${FOOTER}"`)).toEqual([]);
 	expect(bash('gh pr comment 5 --body "Done."')).toEqual([RULES.footer]);
 	expect(bash(`gh pr comment 5 --body "Done ${DASH} mostly.\n\n${FOOTER}"`)).toEqual([RULES.emDash]);
 	expect(bash(`gh pr create --title "a ${DASH} b" --body-file - <<'EOF'\nBody\n\n${FOOTER}\nEOF`)).toEqual([
 		RULES.emDash,
 	]);
-	writeFileSync(join(cwd, "body.md"), `Body\n\n${FOOTER}\n`);
-	writeFileSync(join(cwd, "stale.md"), "Body\n");
-	// A body file the same line writes holds what the shell puts there, not what is on disk, so it passes.
-	expect(bash(`cat > stale.md <<EOF\n$body\nEOF\ngh issue create --title t --body-file stale.md`)).toEqual([]);
-	expect(bash(`cat > ./stale.md <<'EOF'\nBody\nEOF\ngh issue create --title t --body-file stale.md`)).toEqual([]);
-	expect(bash("echo x | tee stale.md && gh pr comment 5 --body-file - < stale.md")).toEqual([]);
-	expect(bash("cp other.md stale.md; gh pr comment 5 --body-file stale.md")).toEqual([]);
-	expect(bash("gh pr comment 5 --body-file stale.md; cat > stale.md <<'EOF'\nx\nEOF")).toEqual([RULES.footer]);
-	// After a `cd`, a relative body file may be another one of the same name, so it passes.
-	mkdirSync(join(cwd, "sub"), { recursive: true });
-	writeFileSync(join(cwd, "sub", "stale.md"), `Body\n\n${FOOTER}\n`);
-	expect(bash("cd sub && gh pr comment 5 --body-file stale.md")).toEqual([]);
-	expect(bash("cd sub && gh pr comment 5 --body-file - < stale.md")).toEqual([]);
-	expect(bash(`cd sub && gh pr comment 5 --body-file ${join(cwd, "stale.md")}`)).toEqual([RULES.footer]);
-	expect(bash("gh pr create --title t --body-file body.md")).toEqual([]);
-	expect(bash("gh pr create --title t --body-file - < body.md")).toEqual([]);
+	// A body file is never read: it may hold something else by the time the line posts it.
+	writeFileSync(join(cwd, "stale.md"), `Body ${DASH}\n`);
+	expect(bash("gh pr comment 5 --body-file stale.md")).toEqual([]);
+	expect(bash("gh pr comment 5 --body-file - < stale.md")).toEqual([]);
+	expect(bash("git commit -F stale.md")).toEqual([]);
+	expect(bash("gh api repos/o/r/issues/5/comments -F body=@stale.md")).toEqual([]);
 	expect(bash("gh api repos/o/r/issues/5/comments -f body=Done")).toEqual([RULES.footer]);
-	expect(bash("gh api repos/o/r/issues/5/comments -F body=@body.md")).toEqual([]);
 	expect(bash("gh pr edit 5 --body Done")).toEqual([]);
 	expect(bash("gh api -X PATCH repos/o/r/pulls/5 -f body=Done")).toEqual([]);
 	expect(bash("gh pr review 5 --approve")).toEqual([]);
 	expect(bash("cat .tmp/body.md | gh pr comment 5 --body-file -")).toEqual([]);
-	expect(bash("gh pr comment 5 --body-file missing.md")).toEqual([]);
 	expect(bash('gh pr comment 5 --body "$body"')).toEqual([]);
 	expect(bash("gh pr comment 5 --body-file - <<EOF\n$(cat .tmp/body.md)\nEOF")).toEqual([]);
-	writeFileSync(join(cwd, "code.md"), "Run `$HOME/bin/x` and `$(y)`.\n");
-	expect(bash("gh pr comment 5 --body-file code.md")).toEqual([RULES.footer]);
 	expect(bash("gh pr comment 5 --body-file - <<'EOF'\nRun `$(y)`.\nEOF")).toEqual([RULES.footer]);
 	expect(bash("gh pr comment 5 --body 'Run `$(y)`.'")).toEqual([RULES.footer]);
 });
