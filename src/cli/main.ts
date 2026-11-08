@@ -71,6 +71,7 @@ import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, 
 import { type Terminal, Theme } from "./theme";
 import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
 import { pullRequestStatus, statusLines } from "./status";
+import { CCUSAGE_MISSING, daysBefore, usage, usageDependencies, usageLines } from "./usage";
 import { waitForActivity, WaitTimeout } from "./wait";
 import { Worktrees } from "./worktree";
 import { HOOK_EVENTS, claudeHook } from "./worktree-hook";
@@ -1050,6 +1051,41 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			else for (const e of entries) print(`${e.harness}\t${e.model}\t${e.effort}`);
 		});
 
+	program
+		.command("usage")
+		.summary("Report which models worked on each PR, at what token cost, and how its reviews went")
+		.description(
+			"Report origin's PRs updated since --since and this host's agent sessions active since then. Each " +
+				"Claude Code or Codex session belongs to the PR whose head branch its log last names, read from " +
+				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
+				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
+				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
+				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers " +
+				"(with those on kix's sessions comment), its latest ## Review round's reviewer, round, score, and findings, " +
+				"and the later PRs that list it under ## Caused by. Rollups follow: spend by size, role, harness, model, and " +
+				"effort, and accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +
+				"over the PR's. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
+				"--json prints the same report as one object.\n\n" +
+				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
+				"other failures.",
+		)
+		.option("--since <date>", "First local date to report, as YYYY-MM-DD (default: 7 days ago)", date)
+		.option("--quest <path>", "Report only the PRs of this quest's branch")
+		.option("--pr <number>", "Report only this PR", positiveInteger("--pr"))
+		.option("--json", "Print one JSON object")
+		.action((options: { since?: string; quest?: string; pr?: number; json?: boolean }) => {
+			const github = { github: () => gitHubDependencies(warn), warn };
+			const since = options.since ?? daysBefore(new Date(), 7);
+			settle(
+				usage(root(), { since, quest: options.quest, pr: options.pr }, usageDependencies(github)),
+				(report) => {
+					if (!report.priced) warn(CCUSAGE_MISSING);
+					if (options.json) print(JSON.stringify(report));
+					else for (const line of usageLines(report)) print(line);
+				},
+			);
+		});
+
 	const reviewers = SIZES.map(
 		(size) => `${size} ${REVIEWERS[size].map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}`,
 	).join("; ");
@@ -1513,6 +1549,14 @@ function withinRoot(root: string, path: string): string | null {
 	} catch {
 		return null;
 	}
+}
+
+/** A local calendar date, as YYYY-MM-DD. */
+function date(value: string): string {
+	const day = new Date(`${value}T00:00:00`);
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(day.getTime()) || daysBefore(day, 0) !== value)
+		throw new InvalidArgumentError("a date must be YYYY-MM-DD");
+	return value;
 }
 
 /** A deadline must be finite, positive, and safe for the platform's timer. */

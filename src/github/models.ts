@@ -42,6 +42,17 @@ export function recorded(body: string): { sizes: string[]; implementers: { item:
 }
 
 /**
+ * The fields of an `Implementer: <harness>, <model>, <effort> effort` item, with the size its own line ends with,
+ * as `(iterate, XS)`, or null when it names none or does not parse.
+ */
+export function implementer(
+	item: string,
+): { harness: string; model: string; effort: string; size: string | null } | null {
+	const match = /^Implementer: (.+?), ([^,\s]+), (\S+) effort(?: \((?:[^,)]+, )?(\w+)\))?$/.exec(item.trim());
+	return match ? { harness: match[1]!, model: match[2]!, effort: match[3]!, size: match[4] ?? null } : null;
+}
+
+/**
  * `body` with `line` as the last item of its `## Models` section, which it gains when it has none, so the record's
  * last Implementer names the latest session to push. An earlier copy of `line` moves rather than repeats.
  */

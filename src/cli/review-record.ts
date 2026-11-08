@@ -28,7 +28,7 @@ const capitalized = (word: string) => word[0]!.toUpperCase() + word.slice(1);
 /** The `## Review` section's text for `round`, without its heading. */
 export function reviewRecord(round: Round): string {
 	const lines = [
-		"Rewritten by `quest review` after each round.",
+		MARK,
 		"",
 		`- Reviewer: ${HARNESSES[round.reviewer]}, ${round.model}, ${round.effort} effort`,
 		`- Session: ${code(round.session)}, round ${round.round}`,
@@ -48,6 +48,58 @@ export function reviewRecord(round: Round): string {
 			`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
 		);
 	return lines.join("\n");
+}
+
+/** What a PR body's `## Review` record says of its latest round, as `reviewRecord` writes it. */
+export interface ReviewSummary {
+	/** The reviewer's harness as the record names it, such as `Codex`. */
+	harness: string;
+	model: string;
+	effort: string;
+	session: string;
+	round: number;
+	/** Null on a record written before rounds were scored. */
+	score: number | null;
+	/** The latest round's findings, open until the next round settles them. */
+	findings: number;
+	/** The round before's findings this round found fixed, and those whose refutation held. */
+	fixed: number;
+	refuted: number;
+}
+
+const MARK = "Rewritten by `quest review` after each round.";
+
+/**
+ * The latest round `body`'s `## Review` section records, or null when `quest review` wrote none there, as when the
+ * section records a skipped review or only the land fixer's fixes.
+ */
+export function parseReview(body: string): ReviewSummary | null {
+	const section = reviewSection(body);
+	if (!section) return null;
+	const all = body.slice(section.start, section.end);
+	const at = all.indexOf(MARK);
+	if (at < 0) return null;
+	const text = all.slice(at);
+	const match = (pattern: RegExp) => {
+		const found = pattern.exec(text);
+		if (!found) throw new Error(`the ## Review record has no line matching ${pattern.source}`);
+		return found;
+	};
+	const reviewer = match(/^- Reviewer: (.+?), (\S+), (\S+) effort\r?$/m);
+	const session = match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
+	const score = /^- Score: (\d+)\/10,/m.exec(text);
+	const items = (prefix: RegExp) => text.split(/\r?\n/).filter((line) => prefix.test(line)).length;
+	return {
+		harness: reviewer[1]!,
+		model: reviewer[2]!,
+		effort: reviewer[3]!,
+		session: session[2]!,
+		round: Number(session[3]),
+		score: score ? Number(score[1]) : null,
+		findings: items(/^ {2}- (High|Medium|Low), /),
+		fixed: items(/^ {2}- Fixed: /),
+		refuted: items(/^ {2}- Refuted: /),
+	};
 }
 
 /** `body` with `record` as its `## Review` section, which it gains when it has none; the rest stays as written. */
