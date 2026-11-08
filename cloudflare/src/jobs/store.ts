@@ -9,14 +9,24 @@
 /** A disconnected runner's running jobs move to another runner after this long. */
 export const GRACE = 2 * 60_000;
 
-export type Workflow = "plan" | "start" | "iterate" | "merge" | "bootstrap";
+export type Workflow = "plan" | "start" | "iterate" | "merge" | "delete" | "bootstrap";
 
 /** Whether a workflow works on an open pull request's own head branch, rather than opening one. */
 export function onPull(workflow: Workflow) {
-	return workflow === "iterate" || workflow === "merge";
+	return workflow === "iterate" || lands(workflow);
 }
 /** `onPull` as a SQL condition on a jobs row. */
-const ON_PULL = "workflow IN ('iterate','merge')";
+const ON_PULL = "workflow IN ('iterate','merge','delete')";
+/**
+ * Whether a workflow lands its pull request: a merge, or a delete that first
+ * repurposes a quest's pull request to delete the quest. Either holds the pull
+ * request with `quest:kix` while it runs.
+ */
+export function lands(workflow: Workflow) {
+	return workflow === "merge" || workflow === "delete";
+}
+/** `lands` as a SQL condition on a jobs row, which may be aliased as `j`. */
+export const LANDS = (row = "") => `${row}workflow IN ('merge','delete')`;
 export type JobState = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 export type Outcome = "completed" | "failed" | "cancelled" | "limited";
 export type Platform = "linux" | "darwin";
@@ -68,7 +78,7 @@ export type Job = {
 	pull: number | null;
 	/** The failed job this retry continues. */
 	continues: string | null;
-	/** A merge job's `quest:kix` label: the timeline event that added it, until kix releases it. */
+	/** A landing job's `quest:kix` label: the timeline event that added it, until kix releases it. */
 	hold: string | null;
 	/** A new plan's request: the maintainer's idea, and pasted context the agent reads as untrusted. */
 	idea: string | null;
@@ -215,10 +225,10 @@ export async function listRunners(db: D1Database, owner: string, online: Set<str
 /** What a statement that may end jobs returns, for `ended`. */
 const ending = "id,workflow,state,hold";
 
-/** The merge jobs a statement `RETURNING ${ending}` ended while they still held their pull request. */
+/** The landing jobs a statement `RETURNING ${ending}` ended while they still held their pull request. */
 function ended(result: D1Result): string[] {
 	return (result.results as Pick<Job, "id" | "workflow" | "state" | "hold">[])
-		.filter((job) => job.workflow === "merge" && job.hold !== null && job.state === "cancelled")
+		.filter((job) => lands(job.workflow) && job.hold !== null && job.state === "cancelled")
 		.map((job) => job.id);
 }
 
@@ -230,7 +240,7 @@ const fence = "EXISTS(SELECT 1 FROM jobs WHERE id=? AND attempt=? AND runner=? A
  * reported attempts to continue, cancel, or stop because they are no longer
  * this runner's. An acknowledged attempt the status omits was lost, so it
  * moves now; an unacknowledged one may still be on its way. Also returns
- * the merge jobs this cancelled that still hold their pull request.
+ * the landing jobs this cancelled that still hold their pull request.
  */
 export async function report(
 	db: D1Database,
@@ -338,7 +348,7 @@ export type Claimed = NonNullable<Awaited<ReturnType<typeof readJob>>> & { owner
  * Reconcile an owner's jobs with their connected runners and free slots.
  * A running job has a lease exactly while its runner is disconnected; an
  * expired lease moves the job. Then queued work is assigned. Returns what to
- * send each runner, the merge jobs it cancelled that still hold their pull
+ * send each runner, the landing jobs it cancelled that still hold their pull
  * request, when to run again, and how many usable slots stay free. Every assignment its runner has
  * not acknowledged is sent again, since a delivery can be lost after the
  * claim commits. Until acknowledged, an assignment holds one of the runner's
@@ -378,11 +388,11 @@ export async function dispatch(
 		db
 			.prepare(`SELECT * FROM jobs WHERE actor=? AND state='queued' AND cancel=0 AND recheck=1 AND ${ON_PULL}`)
 			.bind(owner),
-		// A paused project starts and continues nothing new, and a merge job starts once it holds its pull request.
+		// A paused project starts and continues nothing new, and a landing job starts once it holds its pull request.
 		db
 			.prepare(
 				`SELECT j.* FROM jobs j JOIN github_projects p ON p.id=j.repository
- WHERE j.actor=? AND p.state='enabled' AND j.cancel=0 AND j.state='queued' AND (j.workflow<>'merge' OR j.hold IS NOT NULL)
+ WHERE j.actor=? AND p.state='enabled' AND j.cancel=0 AND j.state='queued' AND (NOT ${LANDS("j.")} OR j.hold IS NOT NULL)
  ORDER BY j.createdAt,j.id`,
 			)
 			.bind(owner),
@@ -1288,23 +1298,23 @@ export async function hold(db: D1Database, job: string, input: { summary: string
  */
 export async function held(db: D1Database, job: string, token: string) {
 	const row = await db
-		.prepare("UPDATE jobs SET hold=? WHERE id=? AND workflow='merge' AND (hold IS NULL OR hold=?) RETURNING state")
+		.prepare(`UPDATE jobs SET hold=? WHERE id=? AND ${LANDS()} AND (hold IS NULL OR hold=?) RETURNING state`)
 		.bind(token, job, token)
 		.first<{ state: JobState }>();
 	// Retain a stopped job's token too, so a failed immediate release remains recoverable.
 	return row?.state === "queued";
 }
 
-/** A merge job's hold on its pull request is over. */
+/** A landing job's hold on its pull request is over. */
 export async function released(db: D1Database, job: string, token: string) {
 	await db.prepare("UPDATE jobs SET hold=NULL WHERE id=? AND hold=?").bind(job, token).run();
 }
 
-/** The ended merge jobs on `target` that still hold its pull request, such as one whose landing is queued. */
+/** The ended landing jobs on `target` that still hold its pull request, such as one whose landing is queued. */
 export async function holding(db: D1Database, repository: number, target: string) {
 	const { results } = await db
 		.prepare(
-			"SELECT id,hold FROM jobs WHERE repository=? AND target=? AND workflow='merge' AND hold IS NOT NULL AND state NOT IN ('queued','running','waiting')",
+			`SELECT id,hold FROM jobs WHERE repository=? AND target=? AND ${LANDS()} AND hold IS NOT NULL AND state NOT IN ('queued','running','waiting')`,
 		)
 		.bind(repository, target)
 		.all<{ id: string; hold: string }>();

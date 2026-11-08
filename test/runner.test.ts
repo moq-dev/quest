@@ -1156,6 +1156,19 @@ describe("prompts", () => {
 		expect(merge).toContain("a multiple of three reports findings");
 	});
 
+	test("run a delete job through the delete skill, repurposing its pull request and landing with deliver", () => {
+		const del = startPrompt(
+			job("a".repeat(40), { workflow: "delete", target: "pulls/9", branch: "quest/m0/old" }),
+			null,
+			tempDir(),
+		);
+		expect(del).toContain("Delete the quest `quest/m0/old.md` that pull request #9 of owner/repo claims");
+		expect(del).toContain("kix lands it only while it changes nothing but quest files");
+		expect(del).toContain("call `deliver` with the repurposed pull request's title and body");
+		expect(del).toContain("# The delete workflow");
+		expect(del).toContain("Delete the specified quest with `quest rm`");
+	});
+
 	test("carry earlier summaries and the latest answer", () => {
 		const questions = [
 			{

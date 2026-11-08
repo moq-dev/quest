@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import {
 	InitRefused,
 	KIX_LABEL,
+	branchQuest,
 	isHoldLabel,
 	latestHold,
 	heldToken,
@@ -143,7 +144,7 @@ export class NoQuestFiles extends GitHubError {
 export type Change = { path: string; content: Uint8Array | null; mode: "100644" | "100755" | "120000" };
 /** What a job may publish: its workflow, its target, and its one branch. */
 export type Contribution = {
-	workflow: "plan" | "start" | "iterate" | "merge" | "bootstrap";
+	workflow: "plan" | "start" | "iterate" | "merge" | "delete" | "bootstrap";
 	target: string;
 	branch: string;
 	pull: number | null;
@@ -1170,6 +1171,54 @@ export class GitHubService {
 	}
 
 	/**
+	 * Close a free pull request as the App, at the head `userId` saw. A
+	 * session's hold label or a draft its starter has not handed back keeps
+	 * it open, and so does a quest's branch: closing leaves the branch, which
+	 * still claims its quest, so a quest's pull request is deleted with
+	 * `/quest-delete` instead.
+	 */
+	closePullRequest(repo: GitHubRepository, userId: string, pull: number, head: string) {
+		const permissions = { contents: "read", pull_requests: "write" } as const;
+		return this.#authorized(repo, userId, permissions, async (token, current) => {
+			this.#public(current);
+			const path = repositoryPath(repo);
+			const live = await this.#api<{
+				state: string;
+				draft: boolean;
+				body: string | null;
+				labels: { name: string }[];
+				head: { sha: string; ref: string; repo: { id: number } | null };
+			}>(token, `${path}/pulls/${number(pull)}`);
+			if (live.state !== "open" || live.head.sha !== sha(head))
+				throw new GitHubError("The pull request's head moved since you looked; review it again", 409);
+			const hold = live.labels.find((label) => isHoldLabel(label.name));
+			if (hold) throw new GitHubError(heldBy(hold.name), 409);
+			if (live.draft && !handedBack(live.body ?? ""))
+				throw new GitHubError("Its starter holds this draft until they hand it back with ## Waiting", 409);
+			if (live.head.ref.startsWith("quest/")) {
+				const quest = branchQuest(live.head.ref).split("/").map(encodeURIComponent).join("/");
+				let claims = true;
+				try {
+					await this.#api(
+						token,
+						`${path}/contents/${quest}?ref=${encodeURIComponent(current.default_branch)}`,
+					);
+				} catch (error) {
+					if (!(error instanceof GitHubError) || error.status !== 404) throw error;
+					claims = false;
+				}
+				if (claims)
+					throw new GitHubError(
+						"This pull request claims a quest; delete the quest instead of closing it",
+						409,
+					);
+			}
+			await this.#api(token, `${path}/pulls/${number(pull)}`, "PATCH", { state: "closed" });
+			await this.#invalidate(repo);
+		});
+	}
+
+	/**
 	 * Approve one exact open pull request head for host runners, as the
 	 * maintainer `userId` saw it. The approval lapses when the head moves, and
 	 * counts only while its approver keeps a maintain or admin role.
@@ -2037,7 +2086,7 @@ export class GitHubService {
 		job: Contribution,
 		action: (branch: Branch) => Promise<T>,
 	) {
-		const pulled = job.workflow === "iterate" || job.workflow === "merge";
+		const pulled = job.workflow === "iterate" || job.workflow === "merge" || job.workflow === "delete";
 		return this.#authorized(
 			upstream,
 			userId,
@@ -2295,7 +2344,7 @@ export class GitHubService {
 		job: Contribution,
 		input: { title: string; body: string; draft: boolean },
 	) {
-		if (job.workflow === "iterate" || job.workflow === "merge")
+		if (job.workflow === "iterate" || job.workflow === "merge" || job.workflow === "delete")
 			throw new GitHubError("Work on a pull request updates its head and opens no pull request");
 		return this.#authorized(upstream, userId, { pull_requests: "write" }, async (token, current, installation) => {
 			this.#public(current);
@@ -2449,6 +2498,29 @@ export class GitHubService {
 		});
 	}
 
+	/**
+	 * The first file an open pull request changes, against its merge base,
+	 * that is not a quest file, or null when it changes only quest files.
+	 * GitHub lists at most 3000 files, so a longer list is refused rather than
+	 * judged from part of it.
+	 */
+	async #nonQuest(token: string, repo: GitHubRepository, pull: number): Promise<string | null> {
+		const quest = (path: string) => path.startsWith("quest/") && isQuest(path);
+		for (let page = 1; page <= 30; page++) {
+			const files = await this.#api<{ filename: string; previous_filename?: string }[]>(
+				token,
+				`${repositoryPath(repo)}/pulls/${number(pull)}/files?per_page=100&page=${page}`,
+			);
+			const other = files.find(
+				(file) =>
+					!quest(file.filename) || (file.previous_filename !== undefined && !quest(file.previous_filename)),
+			);
+			if (other) return other.filename;
+			if (files.length < 100) return null;
+		}
+		throw new PublicationBlocked("The pull request changes more files than GitHub lists.");
+	}
+
 	/** As a webhook would, mark observations stale so the inbox stops offering a pull request that merged or is landing. */
 	async #invalidate(repo: GitHubRepository) {
 		await this.#env.DB.prepare(
@@ -2472,6 +2544,8 @@ export class GitHubService {
 		return {
 			id: row.id,
 			state: row.state,
+			draft: row.isDraft,
+			handedBack: handedBack(row.body ?? ""),
 			base: row.baseRefName,
 			head: row.headRefOid,
 			mergeState: row.mergeStateStatus,
@@ -2500,9 +2574,10 @@ export class GitHubService {
 	}
 
 	/**
-	 * Hold an open pull request for a merge job with the `quest:kix` label,
+	 * Hold an open pull request for a merge or delete job with the `quest:kix` label,
 	 * under the contract `quest iterate --help` states for local sessions.
-	 * Refused while another session holds a hold label. When two sessions
+	 * Refused while another session holds a hold label, or while its starter
+	 * holds a draft they have not handed back. When two sessions
 	 * label it at once, the first label added keeps it. Returns the hold's
 	 * token: the timeline event that added the label.
 	 */
@@ -2512,6 +2587,9 @@ export class GitHubService {
 			if (holds.state !== "OPEN") throw new GitHubError("The pull request is no longer open");
 			const other = holds.labels[0];
 			if (other) throw new GitHubError(heldBy(other));
+			// Read live, since a stale form may follow a starter resuming the draft.
+			if (holds.draft && !holds.handedBack)
+				throw new GitHubError("Its starter holds this draft until they hand it back with ## Waiting", 409);
 			await this.#api(token, `${repositoryPath(repo)}/issues/${number(pull)}/labels`, "POST", {
 				labels: [KIX_LABEL],
 			});
@@ -2573,7 +2651,34 @@ export class GitHubService {
 	}
 
 	/**
-	 * Land a merge job's pull request at exactly `head`, while the job still
+	 * Rewrite the title and body of the pull request a delete job repurposes,
+	 * while the job holds it at exactly `head`.
+	 */
+	describePullRequest(
+		repo: GitHubRepository,
+		userId: string,
+		pull: number,
+		input: { head: string; hold: string | null; title: string; body: string },
+	) {
+		return this.#authorized(repo, userId, { issues: "write", pull_requests: "write" }, async (token) => {
+			const holds = await this.#holds(token, repo, pull);
+			if (holds.state !== "OPEN") throw new PublicationBlocked("The pull request is no longer open.");
+			if (!input.hold || heldToken(holds, KIX_LABEL) !== input.hold)
+				throw new PublicationBlocked(
+					`This job's ${KIX_LABEL} label was removed or replaced, so it no longer holds the pull request.`,
+				);
+			if (holds.head !== sha(input.head))
+				throw new PublicationBlocked("The pull request's head moved outside this job.");
+			await this.#api(token, `${repositoryPath(repo)}/pulls/${number(pull)}`, "PATCH", {
+				title: input.title,
+				body: input.body,
+			});
+			await this.#invalidate(repo);
+		});
+	}
+
+	/**
+	 * Land a merge or delete job's pull request at exactly `head`, while the job still
 	 * holds it: enable auto-merge bound to that head, or merge at once when
 	 * GitHub would refuse auto-merge because nothing is left to wait for.
 	 * A base with a merge queue gets the head enqueued instead, or auto-merge
@@ -2582,12 +2687,15 @@ export class GitHubService {
 	 * the first the repository allows. A base that requires the `quest land` check queues it for that gate
 	 * instead, as `quest merge` does: squash auto-merge whose commit body
 	 * pins the head. Either way, only once a review counts on the head.
+	 * A delete job's pull request lands only while it changes nothing but
+	 * quest files, and a draft its starter handed back is marked ready first,
+	 * as `/quest-delete` would.
 	 */
 	landPullRequest(
 		repo: GitHubRepository,
 		userId: string,
 		pull: number,
-		input: { head: string; hold: string | null; method: MergeMethod | null },
+		input: { head: string; hold: string | null; method: MergeMethod | null; deletes: boolean },
 	) {
 		return this.#authorized(
 			repo,
@@ -2611,6 +2719,21 @@ export class GitHubService {
 				// The maintainer's pick of merge never stands in for a review of what the job published since.
 				const waiting = await this.#unreviewed(token, repo, current, pull, input.head);
 				if (waiting) throw new PublicationBlocked(waiting);
+				if (input.deletes) {
+					const other = await this.#nonQuest(token, repo, pull);
+					if (other)
+						throw new PublicationBlocked(
+							`A delete lands only quest file changes, but the pull request also changes ${other}.`,
+						);
+					if (holds.draft) {
+						const result = await this.#api<{ errors?: unknown[] }>(token, "/graphql", "POST", {
+							query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { clientMutationId } }",
+							variables: { id: holds.id },
+						});
+						if (result.errors?.length)
+							throw new PublicationBlocked("GitHub refused to mark the pull request ready for review.");
+					}
+				}
 				const gated = await this.#gated(token, repo, holds.base);
 				/** Send one landing mutation, turning GitHub's refusal into the job's. */
 				const mutate = async (query: string, variables: Record<string, string | null>) => {
@@ -2697,13 +2820,15 @@ function mergeMethod(current: Repository): MergeMethod {
 const LAND_CHECK = "quest land";
 const LAND_PIN = "Quest-Land-Head";
 const HOLDS = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) {
- id state baseRefName headRefOid mergeStateStatus isMergeQueueEnabled autoMergeRequest { enabledAt } mergeQueueEntry { state }
+ id state isDraft body baseRefName headRefOid mergeStateStatus isMergeQueueEnabled autoMergeRequest { enabledAt } mergeQueueEntry { state }
  labels(first: 100) { nodes { name } }
  timelineItems(last: 100, itemTypes: [LABELED_EVENT, AUTO_MERGE_ENABLED_EVENT, ADDED_TO_MERGE_QUEUE_EVENT]) { nodes { __typename
   ... on LabeledEvent { id label { name } } ... on AutoMergeEnabledEvent { id } ... on AddedToMergeQueueEvent { id } } } } } }`;
 type HoldRow = {
 	id: string;
 	state: string;
+	isDraft: boolean;
+	body: string | null;
 	baseRefName: string;
 	headRefOid: string;
 	mergeStateStatus: string;
@@ -2716,6 +2841,9 @@ type HoldRow = {
 type Holds = {
 	id: string;
 	state: string;
+	draft: boolean;
+	/** A draft handed back with `## Waiting`, which its starter no longer holds. */
+	handedBack: boolean;
 	base: string;
 	head: string;
 	mergeState: string;

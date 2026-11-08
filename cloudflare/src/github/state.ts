@@ -107,6 +107,17 @@ export type ProjectState = {
 };
 
 /**
+ * The quest in the tree an observed pull request's `quest/` branch names, or
+ * null. Deleting that pull request abandons the quest, as `/quest-delete`
+ * does, rather than closing it.
+ */
+export function questPull(state: ProjectState, pull: Pull) {
+	if (!pull.headRefName.startsWith("quest/")) return null;
+	const path = branchQuest(pull.headRefName);
+	return state.project.documents.some((doc) => doc.path === path) ? path : null;
+}
+
+/**
  * How long a closed issue or PR stays in the activity log. Only the log shows
  * closed entities, so after this its row is pruned when history next reads it.
  * 30 days keeps a month of closed history while bounding storage: about 2.5k
