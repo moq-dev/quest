@@ -16,6 +16,7 @@ const CLAUDE = "0d8d9084-40a0-48e2-921b-8ba0d67baa2f";
 const OTHER = "961c731d-399c-46c5-81ef-069105f87cc4";
 const OWNED = "f1913a12-44c4-438c-a9d9-06e5b1192c04";
 const GONE = "83a08f0e-6ef1-4b41-ad0c-58b37fc993f8";
+const BOTH = "5d2c7f3e-8a41-4b6e-9f0d-2c6a1e7b4d93";
 
 const lines = (...records: unknown[]) => `${records.map((r) => JSON.stringify(r)).join("\n")}\n`;
 
@@ -272,6 +273,16 @@ describe("usage", () => {
 			lines(claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: join(other, "sub") })),
 		);
 		mkdirSync(join(other, "sub"));
+		// A session in a checkout with remotes for both the fork and its upstream, on a branch each has a PR from.
+		const both = join(dir, "both");
+		mkdirSync(both);
+		execFileSync("git", ["init", "-q"], { cwd: both });
+		execFileSync("git", ["remote", "add", "origin", "https://github.com/fork/proj.git"], { cwd: both });
+		execFileSync("git", ["remote", "add", "upstream", "https://github.com/acme/proj.git"], { cwd: both });
+		writeFileSync(
+			join(claudeHome, "projects", "-work", `${BOTH}.jsonl`),
+			lines(claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: both })),
+		);
 		// Two sessions in checkouts since deleted: one in the directory a Codex log names, and one in a clone nested
 		// below it, which may be another repository's and so is not charged to this one.
 		writeFileSync(
@@ -325,7 +336,8 @@ describe("usage", () => {
 				closed_at: "2026-11-02T00:00:00Z",
 				updated_at: "2026-11-06T00:00:00Z",
 			}),
-			// A fork's PR whose head shares #10's branch name, opened earlier and still open: no session here is its.
+			// A fork's PR whose head shares #10's branch name, opened earlier and still open: no session here is
+			// shown to be its.
 			pr(7, "quest/m0/a", "", "2026-11-03T00:00:00Z", {
 				state: "open",
 				merged_at: null,
@@ -376,6 +388,7 @@ describe("usage", () => {
 			{ harness: "opencode", id: "ses_1", models: [spent("deepseek", 4)] },
 			{ harness: "claude", id: OWNED, models: [spent("claude-opus-5-5", 7)] },
 			{ harness: "claude", id: GONE, models: [spent("claude-opus-5-5", 8)] },
+			{ harness: "claude", id: BOTH, models: [spent("claude-opus-5-5", 9)] },
 		];
 		const deps = (ccusage: Priced[] | null) => ({
 			github: () => ({
@@ -413,12 +426,12 @@ describe("usage", () => {
 		expect(report.pulls.find((p) => p.number === 9)!.sessions).toEqual([]);
 		expect(report.pulls.find((p) => p.number === 7)!.sessions).toEqual([]);
 		expect(report.unattributed).toEqual({
-			sessions: 4,
-			input: 40,
-			cacheWrite: 80,
-			cacheRead: 120,
-			output: 160,
-			cost: 21,
+			sessions: 5,
+			input: 50,
+			cacheWrite: 100,
+			cacheRead: 150,
+			output: 200,
+			cost: 30,
 		});
 		expect(report.spend.map((s) => [s.size, s.role, s.harness, s.cost])).toEqual([
 			["L", "implementing", "claude", 5],

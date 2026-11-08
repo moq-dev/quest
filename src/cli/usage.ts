@@ -510,14 +510,15 @@ function attribute(
 			const known = log!.repository ? [key(log!.repository)] : seen.cwd ? owned(seen.cwd) : null;
 			if (known === null) continue;
 			// A branch can head a new PR after an earlier one closed: take the one open when the session reached it.
-			found = byBranch
-				.get(branch)
-				?.find(
-					(each) =>
-						(each.closed === null || each.closed >= seen.first) &&
-						each.repository !== null &&
-						known.includes(each.repository),
-				);
+			const open = (byBranch.get(branch) ?? []).filter(
+				(each) =>
+					(each.closed === null || each.closed >= seen.first) &&
+					each.repository !== null &&
+					known.includes(each.repository),
+			);
+			// A checkout with remotes for both a fork and its upstream cannot tell which one's branch it was on.
+			if (new Set(open.map((each) => each.repository)).size > 1) continue;
+			found = open[0];
 			if (found) break;
 		}
 		const row = found && rows.get(found.number);
