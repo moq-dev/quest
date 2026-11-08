@@ -1036,6 +1036,55 @@ cancel runs, `checks: write` for its check runs, `statuses: read`, and
 does. Its pushes ask for `contents: write`, and `workflows: write` for one that
 carries a workflow change.
 
+### Pin bumps
+
+With `--bump <owner/repo>`, repeatable, the watcher keeps each named
+repository's flake input on the watched repository at the watched base, so
+every push to the base reaches those repositories with no one touching them.
+It needs `nix` on `PATH`. Once a pass sees the base at a commit a target does
+not pin yet, it opens or updates that target's one `quest-bump` PR as the App:
+
+1. It reads the target's `flake.lock` on its default branch for the one root
+   input that locks the watched repository on GitHub; a target already at the
+   commit gets nothing, and an open bump PR there is closed.
+2. In a fresh shallow checkout, which it refuses when a tracked symlink leaves
+   the checkout or dangles, since the tools write through symlinks, it drops a
+   revision from that input's URL in
+   `flake.nix`, so `flake.lock` alone pins it from then on, and locks the input
+   at the commit with `nix flake lock --override-input`.
+3. It builds the watched repository's `quest` at that commit with `nix build`,
+   and runs its `quest init` and `quest check --fix` on the checkout with
+   `--root`, from a directory of its own, so the target's `bunfig.toml` never
+   loads.
+4. It commits the result as moq-bot and lease-pushes it to `quest-bump`. An open
+   bump PR's head becomes the new commit's first parent, beside the target's
+   base, so the branch never rewinds; any other `quest-bump` branch, left by a
+   merged or closed PR, is replaced. Auto-merge on the open PR is disarmed
+   before the push. The PR body links the comparison and records the review as
+   skipped, since a pin bump changes no repository code and the target's CI is
+   the gate.
+5. Findings `quest check --fix` cannot resolve leave the PR a draft with a
+   `## Waiting` item quoting them. Otherwise it lands like any PR there, through
+   `quest merge`'s path: into GitHub's merge queue, the target's own queue, or
+   auto-merge. A base that requires no check would merge at once, so there the
+   bump first waits for every check and workflow run on its head to pass, and
+   for every other app's check suite that ran a check to complete, then merges
+   directly
+   when the repository has no auto-merge, as on a private repository on GitHub
+   Free, whose rules GitHub does not serve. A failed check, or a landing
+   `quest merge` refuses, is commented on and left for a maintainer.
+
+From there the target's own gate and fixer take the PR, as any other; a newer
+commit on the base replaces it with a fresh bump. `bump.json` in the state
+directory records each target's last bump, so a restart repeats nothing and a
+closed bump is not reopened for the same commit. A target's failure is logged
+and retried on the next pass without holding up the others. Each target gets
+its own tokens: `contents: write`, `pull_requests: write`, `merge_queues:
+write`, and reads of `actions`, `administration`, `checks`, and `statuses` for its API
+calls, and `workflows: write` for a push whose diff from the branch's old head
+carries a workflow change. Nix reads GitHub with the watched repository's
+`contents: read` token.
+
 ## Gate expensive commands
 
 `quest gate <command> [args...]` holds an expensive command until the host has

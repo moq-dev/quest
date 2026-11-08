@@ -44,7 +44,15 @@ import {
 import type { Cli } from "../runner/home";
 import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { gate, QUICK_MS } from "./gate";
-import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, readRemote, remoteRepository } from "./github";
+import {
+	gitHubDependencies,
+	GitHubInputError,
+	mergedHead,
+	pullRequest,
+	readRemote,
+	remoteRepository,
+	type Repository,
+} from "./github";
 import { type Hold, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
 import { apply, pushCommand } from "./land-apply";
@@ -756,6 +764,16 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			)
 				.choices(EFFORTS)
 				.default("medium"),
+		)
+		.option(
+			"--bump <owner/repo>",
+			"Keep this repository's flake input in another repository at this repository's base (repeatable): each pass opens or updates that repository's quest-bump PR as the App and lands it",
+			(value: string, previous: Repository[]) => {
+				const match = /^([\w.-]+)\/([\w.-]+)$/.exec(value);
+				if (!match) throw new InvalidArgumentError("expected owner/repo");
+				return [...previous, { owner: match[1], repo: match[2] }];
+			},
+			[] as Repository[],
 		)
 		.action((options: WatchOptions) => {
 			const origin = readRemote(root(), "origin");

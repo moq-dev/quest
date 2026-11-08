@@ -41,6 +41,7 @@ import {
 	requeuedHeads,
 } from "./land-watch-fix";
 import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
+import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools } from "./land-bump";
 import { pruneLogs } from "./land-prune";
 import { enabledHead, headBefore } from "./status";
 
@@ -61,6 +62,8 @@ export interface WatchOptions {
 	fixerJobs: number;
 	/** The fixer's `model_reasoning_effort`. */
 	fixerEffort: string;
+	/** Repositories whose flake input on this repository each pass bumps to this repository's base. */
+	bump: Repository[];
 }
 
 /**
@@ -709,6 +712,9 @@ export async function ownQueue(github: GitHub, repository: Repository, base: str
 
 type Permissions = Record<string, "read" | "write">;
 
+const same = (a: Repository, b: Repository) =>
+	a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
+
 /**
  * The installation token permissions the watcher asks for. On GitHub's merge queue, `api` reads the
  * queue's events, comments, and the `merge_group` logs (`actions: read`), and enqueues the armed picks
@@ -776,6 +782,9 @@ export async function watch(
 		options.fixer = resolve(options.fixer);
 		accessSync(options.fixer, constants.X_OK);
 	}
+	if (options.bump.length > 0) checkTools();
+	if (options.bump.some((target) => same(target, repository)))
+		throw new Error("--bump names the watched repository, which cannot bump its own pin");
 	const now = { fetch, now: Date.now };
 	const mint = (wanted: Permissions) => installationToken(repository, options, wanted, now);
 	// Each mode's token is minted only once a pass needs it, and the mode is read with neither, so an
@@ -811,17 +820,51 @@ export async function watch(
 			token,
 			read,
 		};
+		const connections = new Map<string, BumpConnection>();
+		const bump: BumpContext | undefined =
+			options.bump.length === 0
+				? undefined
+				: {
+						source: repository,
+						targets: options.bump,
+						state: options.state,
+						reader: () => mint({ contents: "read" }),
+						tools: hostTools(repository, options.state),
+						connect: (target) => {
+							const key = `${target.owner}/${target.repo}`;
+							let connection = connections.get(key);
+							if (connection === undefined) {
+								const scoped = (wanted: Permissions) => installationToken(target, options, wanted, now);
+								const push: Permissions = { contents: "write", pull_requests: "write" };
+								connection = {
+									remote: `https://github.com/${key}.git`,
+									deps: apiDependencies(() => scoped(BUMP_PERMISSIONS), { ...now, sleep, warn }),
+									token: (workflows) => scoped(workflows ? { ...push, workflows: "write" } : push),
+									read: authenticatedRead(() => scoped({ contents: "read" })),
+								};
+								connections.set(key, connection);
+							}
+							return connection;
+						},
+					};
 		await daemonLoop(async () => {
 			pruneLogs(options.state, deps.now(), deps.warn);
 			const api = new GitHub(probe);
+			let again = false;
 			if (await ownQueue(api, repository, base)) {
 				const pass = await ownPass(repository, base, queue, ownDeps, fix);
 				for (const line of pass.lines) warn(line);
-				return pass.again;
+				again = pass.again;
+			} else {
+				for (const line of await leaveOwnQueue(repository, base, queue, ownDeps, fixing)) warn(line);
+				for (const line of await watchPass(repository, { ...options, base }, deps, fix)) warn(line);
 			}
-			for (const line of await leaveOwnQueue(repository, base, queue, ownDeps, fixing)) warn(line);
-			for (const line of await watchPass(repository, { ...options, base }, deps, fix)) warn(line);
-			return false;
+			if (bump) {
+				const ref = `/repos/${repository.owner}/${repository.repo}/git/ref/heads/${encodeURIComponent(base)}`;
+				const sha = string(object(object(await (await api.request(ref)).json()).object).sha);
+				for (const line of await bumpPass(bump, sha)) warn(line);
+			}
+			return again;
 		}, deps);
 	} finally {
 		unlock();
