@@ -70,7 +70,3 @@ The user-level hooks live in [kixelated/dotfiles](https://github.com/kixelated/d
 installed into each Claude profile's `settings.json` and Codex's user
 config, and generalize this repository's `.claude/hooks/direnv.sh` and
 moq-dev/moq's `.codex/hooks/direnv.sh`.
-
-## Required
-
-- [moq.pro drops its Codex dev-shell config](/quest/m0/user-dev-shell/repo-config.md) - once a fresh Codex session there loads the dev shell without the repo hooks

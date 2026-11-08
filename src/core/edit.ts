@@ -5,7 +5,7 @@
 // dependency graph. Anything else that mentions a path is prose, which the
 // caller reports rather than rewriting.
 
-import { type Doc, type Entry, type Heading, has, parse, rooted, withoutFragment } from "./doc";
+import { type Doc, type Entry, type Heading, has, holds, parse, rooted, withoutFragment } from "./doc";
 import { HEADINGS, LIST_SECTIONS, finishedMilestone } from "./rules";
 
 /** One quest document as loaded: its repository-relative path and source text. */
@@ -106,24 +106,35 @@ function following(doc: Doc, heading: Heading): Heading[] {
  * Drop every list entry, in a list section, that opens with a link to a
  * deleted document, and a section heading left with no entries. Then drop
  * every `Required` link to a finished milestone, whether this removal emptied
- * it or the link was already stale, repeating until nothing changes so the
- * result passes `quest check`. Returns the new text of every surviving
+ * it or the link was already stale, and every epic's `Required` link to a
+ * quest it holds, which it already waits for, repeating until nothing changes
+ * so the result passes `quest check`. Returns the new text of every surviving
  * document that changed.
  */
 export function remove(sources: Source[], deleted: (path: string) => boolean): Map<string, string> {
 	const texts = new Map(sources.filter((s) => !deleted(s.path)).map((s) => [s.path, s.text]));
 	const changed = new Set<string>();
+	const target = (entry: Entry) => (entry.target === null ? null : rooted(entry.target));
 	const linksDeleted = (entry: Entry) => {
-		if (entry.section === null || !LIST_SECTIONS.includes(entry.section) || entry.target === null) return false;
-		const target = rooted(entry.target);
-		return target !== null && deleted(target);
+		if (entry.section === null || !LIST_SECTIONS.includes(entry.section)) return false;
+		const path = target(entry);
+		return path !== null && deleted(path);
+	};
+	// Only a quest that exists is held: a mistyped link stays for `quest check` to report.
+	const held = (doc: Doc, entry: Entry) => {
+		const path = target(entry);
+		return entry.section === "Required" && path !== null && texts.has(path) && holds(doc.path, path);
 	};
 	for (let progress = true; progress;) {
 		progress = false;
 		const docs = [...texts].map(([path, text]) => parse(path, text));
 		const finished = finishedMilestone(docs);
 		for (const doc of docs) {
-			const text = drop(texts.get(doc.path)!, doc, (entry) => linksDeleted(entry) || finished(doc, entry));
+			const text = drop(
+				texts.get(doc.path)!,
+				doc,
+				(entry) => linksDeleted(entry) || finished(doc, entry) || held(doc, entry),
+			);
 			if (text === null) continue;
 			texts.set(doc.path, text);
 			changed.add(doc.path);
