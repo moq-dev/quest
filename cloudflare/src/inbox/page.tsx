@@ -442,10 +442,13 @@ function landing(item: Item) {
 	return { pull, clean: ["CLEAN", "HAS_HOOKS"].includes(pull.mergeStateStatus ?? "") };
 }
 
-/** The observed draft its starter handed back with a `## Waiting` section, which the maintainer may mark ready. */
+/**
+ * The observed draft its starter handed back with a `## Waiting` section and
+ * no session holds, which the maintainer may mark ready.
+ */
 function handedBack(item: Item) {
 	const pull = item.kind === "pull" ? (item.activity?.data as Pull | null | undefined) : null;
-	return pull?.state === "OPEN" && pull.isDraft && pull.handedBack ? pull : null;
+	return pull?.state === "OPEN" && pull.isDraft && pull.handedBack && !pull.hold ? pull : null;
 }
 
 function Refresh(props: { project: Item["project"] }) {
@@ -764,6 +767,7 @@ function Project(props: { view: ProjectView; runners: Runners }) {
 						{state?.failure && <span role="alert">Background read failed: {state.failure}</span>}
 						<a href={`${base}/board`}>Quest board</a>
 						<a href={`${base}/state`}>Activity</a>
+						<a href={`${base}/queue`}>Landing queue</a>
 					</>
 				)}
 			</span>

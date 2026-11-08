@@ -7,6 +7,7 @@ import {
 	heldToken,
 	check,
 	isQuest,
+	handedBack,
 	parse,
 	planInit,
 	ready,
@@ -23,6 +24,16 @@ import {
 import { BODY_LIMIT } from "../jobs/trail";
 import { osiApproved } from "../licenses";
 import { CI_PERMISSIONS, type CIPermission, ciProblems } from "./ci";
+import {
+	type Comment as QueueComment,
+	DROP_WINDOW,
+	DROPPED_FIELDS,
+	type DroppedPull,
+	droppedNumbers,
+	landingQueues,
+	OPEN_PULLS,
+	type OpenPull,
+} from "./queue";
 import { OBSERVED, type Observed, observedGap, REVIEW_CHECK, unreviewed } from "./review";
 import { GOAL_LIMIT, SETUP_BRANCH, STUBS, planCheck, planned, setupGoal, setupPull, treeCheckout } from "./setup";
 import { positiveId } from "./webhook";
@@ -1123,19 +1134,31 @@ export class GitHubService {
 	/**
 	 * Mark a draft ready for review at the exact head the maintainer saw, as
 	 * the App, accepting it as handed back. GitHub's own rules still decide
-	 * whether and how it merges.
+	 * whether and how it merges. A draft its starter still holds, or that a
+	 * session holds with a `quest:*` label, is theirs to mark, as the inbox
+	 * offers it.
 	 */
 	markReady(repo: GitHubRepository, userId: string, pull: number, head: string) {
 		const permissions = { pull_requests: "write" } as const;
 		return this.#authorized(repo, userId, permissions, async (token, current) => {
 			this.#public(current);
-			const live = await this.#api<{ state: string; draft: boolean; node_id: string; head: { sha: string } }>(
-				token,
-				`${repositoryPath(repo)}/pulls/${number(pull)}`,
-			);
+			const live = await this.#api<{
+				state: string;
+				draft: boolean;
+				node_id: string;
+				body: string | null;
+				labels: { name: string }[];
+				head: { sha: string };
+			}>(token, `${repositoryPath(repo)}/pulls/${number(pull)}`);
 			if (live.state !== "open" || live.head.sha !== sha(head))
 				throw new GitHubError("The pull request's head moved since you looked; review it again", 409);
 			if (live.draft) {
+				// Read live, since a stale form may follow a starter resuming the draft.
+				if (!handedBack(live.body ?? "") || live.labels.some((label) => isHoldLabel(label.name)))
+					throw new GitHubError(
+						"Only a draft handed back with ## Waiting and no hold can be marked ready",
+						409,
+					);
 				const result = await this.#api<{ errors?: unknown[] }>(token, "/graphql", "POST", {
 					query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { clientMutationId } }",
 					variables: { id: live.node_id },
@@ -1711,6 +1734,58 @@ export class GitHubService {
 		}));
 	}
 	/**
+	 * Each base's landing queue (`./queue.ts`): its open pull requests in landing order with their
+	 * builds, and the watcher's drops in the last day with their outcomes.
+	 */
+	readQueues(repo: GitHubRepository, userId: string, now: number) {
+		const permissions: Permissions = { pull_requests: "read", issues: "read", checks: "read", statuses: "read" };
+		return this.#authorized(repo, userId, permissions, async (token) => {
+			const graphql = async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
+				const result = await this.#api<{ data?: { repository: T | null }; errors?: unknown[] }>(
+					token,
+					"/graphql",
+					"POST",
+					{ query, variables },
+				);
+				if (result.errors?.length || !result.data?.repository)
+					throw new GitHubError("The repository's pull requests are unavailable");
+				return result.data.repository;
+			};
+			const variables = { owner: repo.owner, name: repo.name };
+			const open: OpenPull[] = [];
+			for (let after: string | null = null; ;) {
+				type Page = {
+					pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: OpenPull[] };
+				};
+				const { pullRequests }: Page = await graphql<Page>(OPEN_PULLS, { ...variables, after });
+				open.push(...pullRequests.nodes);
+				if (!pullRequests.pageInfo.hasNextPage) break;
+				after = pullRequests.pageInfo.endCursor;
+			}
+			const since = now - DROP_WINDOW;
+			const comments: QueueComment[] = [];
+			const path = `${repositoryPath(repo)}/issues/comments?since=${new Date(since).toISOString()}&sort=created&direction=asc&per_page=100`;
+			for (let page = 1; ; page++) {
+				const items = await this.#api<QueueComment[]>(token, `${path}&page=${page}`);
+				comments.push(...items);
+				if (items.length < 100) break;
+			}
+			const known = new Set(open.map((pull) => pull.number));
+			const missing = droppedNumbers(comments).filter((n) => !known.has(n));
+			const dropped = missing.length
+				? Object.values(
+						await graphql<Record<string, DroppedPull>>(
+							`query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${missing
+								.map((n) => `p${number(n)}: pullRequest(number: ${n}) { ${DROPPED_FIELDS} }`)
+								.join(" ")} } }`,
+							variables,
+						),
+					)
+				: [];
+			return landingQueues(open, dropped, comments, since);
+		});
+	}
+	/**
 	 * What a job's agent reads about its issue or pull request, which its
 	 * checkout does not hold: an issue's text and comments, or a pull request's
 	 * text, comments, reviews, unresolved review threads, and checks at its head.
@@ -2265,8 +2340,9 @@ export class GitHubService {
 					if (pull?.state !== "open") throw error;
 				}
 			}
-			// A later session's body keeps the sessions that delivered before it in its `## Models` record.
-			const body = implementers(pull.body ?? "").reduce(withModels, input.body);
+			// A later session's body keeps the sessions that delivered before it in its `## Models` record,
+			// with its own last, since the last names the latest writer.
+			const body = [...implementers(pull.body ?? ""), ...implementers(input.body)].reduce(withModels, input.body);
 			if (body.length > BODY_LIMIT) throw new GitHubError("The pull request body is too long");
 			if (pull.title !== input.title || pull.body !== body)
 				pull = await this.#api<PullHead>(token, `${pulls}/${number(pull.number)}`, "PATCH", {

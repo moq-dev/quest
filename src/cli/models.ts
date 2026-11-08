@@ -33,8 +33,8 @@ export const WRITERS: Record<Size, readonly Model[]> = {
 };
 
 /**
- * Each PR size's reviewers, ranked: the first whose model wrote none of the
- * code reviews it, so Opus reviews what Sol wrote, at its own write efforts.
+ * Each PR size's reviewers, ranked: the first whose model is not the latest
+ * writer's reviews it, so Opus reviews what Sol changed last, at its own write efforts.
  */
 export const REVIEWERS: Record<Size, readonly Model[]> = {
 	XS: [sol("low"), opus("low")],

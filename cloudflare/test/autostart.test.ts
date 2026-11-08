@@ -7,7 +7,8 @@ import { autostart, candidates, digest, milestones, optIns, save } from "../src/
 import * as store from "../src/jobs/store";
 import { privateKey } from "./github-key";
 import { origin } from "./login-fixtures";
-import { head, maintainerOf, project } from "./project-fixtures";
+import { skip } from "../src/inbox/model";
+import { documents, head, maintainerOf, project } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
 const db = env.DB;
@@ -168,12 +169,50 @@ describe("starting ready quests on free slots", () => {
 			revision: head,
 			branch: "quest/m0/x",
 			trusted: true,
-			automatic: true,
+			automatic: { version: "v1" },
 		} as const;
 		await expect(store.createJob(db, start, 0)).rejects.toThrow(store.NotOptedIn);
 		await save(db, 10, user, { milestones: ["m0"] }, 0);
 		expect((await store.createJob(db, start, 0)).created).toBe(true);
 	});
+
+	it("creates no start the maintainer skipped, or another pass started, while it read GitHub", async () => {
+		await save(db, 10, user, { milestones: null }, 0);
+		const quest = documents.find((d) => d.path === "quest/first.md")!;
+		const github = vi.mocked(globalThis.fetch).getMockImplementation()!;
+		let during = async () => {};
+		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+			if (String(input).includes("/contents/flake.nix")) await during();
+			return github(input, init);
+		});
+		// A skip at the quest's current text commits while the pass reads GitHub.
+		during = async () => void (await skip(db, user, 10, quest.path, digest(quest.content)));
+		expect(await autostart(testEnv, user, 1)).toBe(0);
+		expect(await jobs()).toEqual([]);
+		// A skip at an older text no longer applies.
+		await skip(db, user, 10, quest.path, "stale");
+		// Another pass's start commits and is cancelled while this one reads GitHub.
+		during = async () => {
+			during = async () => {};
+			const start = { ...startOf(quest.path), automatic: { version: digest(quest.content) } };
+			const { id } = await store.createJob(db, start, 0);
+			await store.cancel(db, id, user, 0);
+		};
+		expect(await autostart(testEnv, user, 1)).toBe(0);
+		expect(await jobs()).toHaveLength(1);
+	});
+
+	function startOf(target: string) {
+		return {
+			repository: 10,
+			actor: user,
+			workflow: "start",
+			target,
+			revision: head,
+			branch: target.replace(/\.md$/, ""),
+			trusted: true,
+		} as const;
+	}
 
 	it("takes turns across projects, the least recently started first", async () => {
 		await project(11, user);
@@ -226,6 +265,28 @@ describe("starting ready quests on free slots", () => {
 			);
 		expect((await ready("e".repeat(40))).status).toBe(403);
 		expect(pr.draft).toBe(true);
+		// Only a draft handed back as GitHub has it now, such as after a stale form, and held by no session.
+		pr.body = "Still on it.";
+		expect((await ready(head)).status).toBe(403);
+		pr.body = "Handed back.\n\n## Waiting\n\n- Maintainer: accept it as is\n";
+		pr.labels = ["quest:active"];
+		expect((await ready(head)).status).toBe(403);
+		expect(pr.draft).toBe(true);
+		pr.labels = [];
+		// A start job that published this draft keeps its quest as its target, yet may still push to it.
+		const { id } = await store.createJob(db, startOf("quest/first.md"), 0);
+		await store.delivered(db, id, 2);
+		expect((await ready(head)).status).toBe(409);
+		expect(pr.draft).toBe(true);
+		await store.cancel(db, id, user, 0);
+		// So may a job on the pull request itself.
+		const iterate = await store.createJob(
+			db,
+			{ ...startOf("quest/first.md"), workflow: "iterate", target: "pulls/2", branch: pr.branch },
+			0,
+		);
+		expect((await ready(head)).status).toBe(409);
+		await store.cancel(db, iterate.id, user, 0);
 		expect((await ready(head)).status).toBe(303);
 		expect(pr.draft).toBe(false);
 	});

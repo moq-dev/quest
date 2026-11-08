@@ -162,17 +162,28 @@ export async function autostart(env: Env, owner: string, free: number) {
 		if (started >= free) break;
 		if (refused.has(project.id)) continue;
 		try {
-			const { job, enabled, flake } = await github.jobSource(project, owner, (state) =>
-				startJob(state, target, null),
-			);
+			// The skip check at insertion compares the quest's text as GitHub has it now.
+			let version = "";
+			const { job, enabled, flake } = await github.jobSource(project, owner, (state) => {
+				version = digest(state.project.documents.find((d) => d.path === target)?.content ?? "");
+				return startJob(state, target, null);
+			});
 			if (!enabled || !flake) {
 				refused.add(project.id);
 				continue;
 			}
-			// The insert rechecks the opt-in, which may have ended or narrowed while this pass read GitHub.
+			// The insert rechecks the opt-in, which may have ended or narrowed while this pass read GitHub,
+			// and the quest's own exclusions, since a skip or another pass's job may have committed meanwhile.
 			const created = await store.createJob(
 				env.DB,
-				{ ...job, repository: project.id, actor: owner, pinRunner: null, pinAccount: null, automatic: true },
+				{
+					...job,
+					repository: project.id,
+					actor: owner,
+					pinRunner: null,
+					pinAccount: null,
+					automatic: { version },
+				},
 				Date.now(),
 			);
 			if (created.created) started++;
@@ -195,5 +206,14 @@ export async function sweep(env: Env) {
 	const { results } = await env.DB.prepare(
 		"SELECT DISTINCT a.user FROM autostart a JOIN github_projects p ON p.id=a.repository WHERE p.state='enabled'",
 	).all<{ user: string }>();
-	await Promise.all(results.map(({ user }) => env.RUNNERS.get(env.RUNNERS.idFromName(user)).dispatch(user)));
+	// One failing hub must not stop the others, or the scheduled retention after the sweep.
+	const settled = await Promise.allSettled(
+		results.map(({ user }) => env.RUNNERS.get(env.RUNNERS.idFromName(user)).dispatch(user)),
+	);
+	for (const outcome of settled)
+		if (outcome.status === "rejected")
+			console.error({
+				event: "autostart_sweep_failed",
+				name: outcome.reason instanceof Error ? outcome.reason.name : "unknown",
+			});
 }

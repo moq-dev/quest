@@ -229,6 +229,13 @@ describe("decision inbox", () => {
 		expect(thread(handed)).toContain("Iterate on this PR");
 		expect(thread(handed)).toContain(`action="/projects/github/upstream/project/pulls/2/ready"`);
 		expect(handed).not.toContain("<h2>In progress</h2>");
+		// A session holding the handed-back draft marks it itself.
+		await db
+			.prepare(
+				"UPDATE github_project_activity SET data=json_set(data,'$.hold','quest:active'),changedAt=changedAt+1 WHERE id='21'",
+			)
+			.run();
+		expect(thread(await inbox({ project: "10", item: "pulls/2" }))).not.toContain("Mark ready for review");
 	});
 
 	it("drops a pull request the latest occupancy pass no longer found open", async () => {

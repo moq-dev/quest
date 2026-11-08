@@ -15,7 +15,7 @@ review harness check. The m0 run was
 [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426). Extended on
 2026-11-04 (user, /quest-plan follow-up of
 [moq-dev/quest#487](https://github.com/moq-dev/quest/pull/487)) to audit
-the size tables of [model routing](/quest/m0/model-routing/README.md):
+the size tables of model routing (`src/cli/models.ts`):
 
 - Should the routing audit be its own recurring quest?
   - ✅ Merge it into this check, so one quest owns the tables
