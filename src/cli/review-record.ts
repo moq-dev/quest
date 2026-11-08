@@ -5,7 +5,7 @@ import { type Comment, recorded, sessionsComment } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { git } from "./git";
 import { requireRemote, string } from "./github";
-import { type Round, located, parseBase } from "./review";
+import { type PullModels, type Round, located, parseBase } from "./review";
 
 const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex" };
 
@@ -101,7 +101,7 @@ export async function pullModels(
 	baseRef: string,
 	branch: string,
 	deps: ClaimDependencies,
-): Promise<ReturnType<typeof recorded> | null> {
+): Promise<PullModels | null> {
 	const pull = await openPull(root, baseRef, branch, deps);
 	if ("skipped" in pull) return null;
 	// Sessions that published to the PR after it opened are on kix's sessions comment rather than in the body.
@@ -110,7 +110,9 @@ export async function pullModels(
 	)) as Comment[];
 	const own = recorded(pull.body);
 	const later = recorded(sessionsComment(comments)?.body ?? "");
-	return { sizes: own.sizes, implementers: [...own.implementers, ...later.implementers] };
+	// Each records its sessions in the order they last pushed, but which record a later push went to cannot be told.
+	const latest = [own, later].flatMap((record) => record.implementers.at(-1)?.model ?? []);
+	return { sizes: own.sizes, implementers: [...own.implementers, ...later.implementers], latest };
 }
 
 /** Record `round` in the `## Review` section of its branch's open PR. The edit is the token's user's, which the land gate counts only when that user wrote the PR. */
