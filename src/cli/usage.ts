@@ -323,8 +323,8 @@ interface Pull {
 	url: string;
 	title: string;
 	branch: string;
-	/** The head and base repositories, lowercased as `owner/repo`. */
-	repositories: string[];
+	/** The head repository, lowercased as `owner/repo`, or null once a fork's is deleted. */
+	repository: string | null;
 	state: PullRow["state"];
 	draft: boolean;
 	created: number;
@@ -336,16 +336,14 @@ const key = (repository: Repository) => `${repository.owner}/${repository.repo}`
 
 function pull(row: ObjectValue): Pull {
 	const head = row.head as ObjectValue;
-	const repositories = [head?.repo, (row.base as ObjectValue)?.repo]
-		.map((repo) => (repo as ObjectValue | null)?.full_name)
-		.filter((name): name is string => typeof name === "string")
-		.map((name) => name.toLowerCase());
+	// Only the head names the branch: a fork's PR may share a branch name with its base, as `main` often does.
+	const name = (head?.repo as ObjectValue | null)?.full_name;
 	return {
 		number: Number(row.number),
 		url: String(row.html_url),
 		title: String(row.title),
 		branch: String(head?.ref),
-		repositories,
+		repository: typeof name === "string" ? name.toLowerCase() : null,
 		state: row.merged_at ? "merged" : row.state === "open" ? "open" : "closed",
 		draft: row.draft === true,
 		created: Date.parse(String(row.created_at)),
@@ -487,7 +485,7 @@ function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
 
 /**
  * Attribute each priced session to the PR whose head branch its log last named, among those still open when the
- * session reached the branch and of the repository its log, checkout, or directory names, and give it a role: reviewing when
+ * session reached the branch and headed from the repository its log, checkout, or directory names, and give it a role: reviewing when
  * a PR's review record names it or Codex marks it a review, implementing when it began before its PR opened, and
  * iterating otherwise. Returns the sessions on no PR here.
  */
@@ -517,7 +515,8 @@ function attribute(
 				?.find(
 					(each) =>
 						(each.closed === null || each.closed >= seen.first) &&
-						each.repositories.some((name) => known.includes(name)),
+						each.repository !== null &&
+						known.includes(each.repository),
 				);
 			if (found) break;
 		}

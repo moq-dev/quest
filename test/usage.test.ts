@@ -325,6 +325,14 @@ describe("usage", () => {
 				closed_at: "2026-11-02T00:00:00Z",
 				updated_at: "2026-11-06T00:00:00Z",
 			}),
+			// A fork's PR whose head shares #10's branch name, opened earlier and still open: no session here is its.
+			pr(7, "quest/m0/a", "", "2026-11-03T00:00:00Z", {
+				state: "open",
+				merged_at: null,
+				closed_at: null,
+				updated_at: "2026-11-06T00:00:00Z",
+				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
+			}),
 			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 		];
 		const requests: string[] = [];
@@ -388,7 +396,7 @@ describe("usage", () => {
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {
 		const { root, deps, priced } = setup();
 		const report = await usage(root, { since: "2026-11-05" }, deps(priced));
-		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9]);
+		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7]);
 		const ten = report.pulls.find((p) => p.number === 10)!;
 		expect(ten.sessions.map((s) => [s.harness, s.session, s.role, s.effort])).toEqual([
 			["claude", CLAUDE, "implementing", "high"],
@@ -403,6 +411,7 @@ describe("usage", () => {
 			{ harness: "Codex", model: "gpt-6.1-sol", effort: "medium", size: "S" },
 		]);
 		expect(report.pulls.find((p) => p.number === 9)!.sessions).toEqual([]);
+		expect(report.pulls.find((p) => p.number === 7)!.sessions).toEqual([]);
 		expect(report.unattributed).toEqual({
 			sessions: 4,
 			input: 40,
@@ -442,6 +451,7 @@ describe("usage", () => {
 		expect(quest.pulls.map((p) => [p.number, p.sessions.length])).toEqual([
 			[10, 0],
 			[9, 0],
+			[7, 0],
 		]);
 		expect(quest.pulls[0]!.review?.score).toBe(9);
 	});
