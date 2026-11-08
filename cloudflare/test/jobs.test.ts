@@ -12,6 +12,7 @@ import { parse } from "../src/jobs/protocol";
 import { refName } from "../src/github/service";
 import { formAnswer, parseAnswer, parsePrompt } from "../src/jobs/prompt";
 import { resume } from "../src/jobs/routes";
+import { instructions } from "../src/jobs/trail";
 import { privateKey } from "./github-key";
 import { origin } from "./login-fixtures";
 import { commit, delivery, failing, graphql, head, maintainerOf, project, rewrite, world } from "./project-fixtures";
@@ -625,7 +626,11 @@ describe("runner connections", () => {
 		// Resuming sends no runner event, so the resume itself dispatches.
 		await project(10, "owner");
 		await resume(env, 10);
-		expect(await live.next()).toMatchObject({ type: "assign", job: { id, attempt: 1 }, instructions: null });
+		expect(await live.next()).toMatchObject({
+			type: "assign",
+			job: { id, attempt: 1 },
+			instructions: instructions("start"),
+		});
 	});
 
 	it("tells a planning job's agent that kix writes its decision record", async () => {

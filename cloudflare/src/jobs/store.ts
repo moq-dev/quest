@@ -339,7 +339,7 @@ export type Claimed = NonNullable<Awaited<ReturnType<typeof readJob>>> & { owner
  * A running job has a lease exactly while its runner is disconnected; an
  * expired lease moves the job. Then queued work is assigned. Returns what to
  * send each runner, the merge jobs it cancelled that still hold their pull
- * request, and when to run again. Every assignment its runner has
+ * request, when to run again, and how many usable slots stay free. Every assignment its runner has
  * not acknowledged is sent again, since a delivery can be lost after the
  * claim commits. Until acknowledged, an assignment holds one of the runner's
  * reported free slots, which it could not count yet.
@@ -484,6 +484,10 @@ export async function dispatch(
 		}
 		assign.push({ runner, job: { ...job, ...project } });
 	}
+	// Free slots left on runners with a usable account, which ready work may fill.
+	let idle = 0;
+	for (const [runner, n] of free)
+		if (n > 0 && accounts.some((offer) => offer.runner === runner && !offer.limited)) idle += n;
 	const wake = await db
 		.prepare("SELECT MIN(lease) AS at FROM jobs WHERE actor=? AND state='running' AND lease IS NOT NULL")
 		.bind(owner)
@@ -493,6 +497,7 @@ export async function dispatch(
 		cancel: [...(cancels!.results as (Attempt & { runner: string })[]), ...revoked],
 		ended: ended(cancelled!),
 		wake: revoked.length ? now : (wake?.at ?? null),
+		idle,
 	};
 }
 

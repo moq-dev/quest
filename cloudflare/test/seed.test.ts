@@ -107,8 +107,12 @@ it("seeds a representative inbox through the Worker's own routes", async () => {
 		expect(html).not.toContain(text);
 	// A draft its starter holds is in progress; one handed back with decisions waits on the maintainer.
 	const section = (heading: string) => html.match(new RegExp(`<h2>${heading}</h2>[\\s\\S]*?</ol>`))?.[0] ?? "";
-	expect(section("In progress")).toMatch(/Draft the theme picker<\/a><span class="entry-meta"><span>Claimed draft/);
+	expect(section("In progress")).toMatch(
+		/Draft the theme picker<\/a><span class="entry-meta"><span>Held by contributor/,
+	);
 	expect(section("Up next")).toContain("Search quest titles");
+	// One left quiet past a week is offered for takeover.
+	expect(section("Up next")).toMatch(/Try a shared build cache<\/a><span class="entry-meta">.*?<span>Quiet draft/);
 
 	// The board agrees: a held draft claims its quest, a handed-back one is turned in.
 	const board = await (
@@ -125,7 +129,7 @@ it("seeds a representative inbox through the Worker's own routes", async () => {
 		expect(response.status).toBe(200);
 		return response.text();
 	};
-	expect(await open("pulls/17")).toContain("Its starter holds this draft");
+	expect(await open("pulls/17")).toContain("This draft is held by contributor");
 	// GitHub's UNKNOWN on a recorded pull request keeps the clean state it last reported.
 	expect(await open("pulls/19")).toContain("/pulls/19/merge");
 

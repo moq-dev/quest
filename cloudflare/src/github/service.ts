@@ -1121,6 +1121,32 @@ export class GitHubService {
 	}
 
 	/**
+	 * Mark a draft ready for review at the exact head the maintainer saw, as
+	 * the App, accepting it as handed back. GitHub's own rules still decide
+	 * whether and how it merges.
+	 */
+	markReady(repo: GitHubRepository, userId: string, pull: number, head: string) {
+		const permissions = { pull_requests: "write" } as const;
+		return this.#authorized(repo, userId, permissions, async (token, current) => {
+			this.#public(current);
+			const live = await this.#api<{ state: string; draft: boolean; node_id: string; head: { sha: string } }>(
+				token,
+				`${repositoryPath(repo)}/pulls/${number(pull)}`,
+			);
+			if (live.state !== "open" || live.head.sha !== sha(head))
+				throw new GitHubError("The pull request's head moved since you looked; review it again", 409);
+			if (live.draft) {
+				const result = await this.#api<{ errors?: unknown[] }>(token, "/graphql", "POST", {
+					query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { clientMutationId } }",
+					variables: { id: live.node_id },
+				});
+				if (result.errors?.length) throw new GitHubError("Could not mark the pull request ready for review");
+			}
+			await this.#invalidate(repo);
+		});
+	}
+
+	/**
 	 * Approve one exact open pull request head for host runners, as the
 	 * maintainer `userId` saw it. The approval lapses when the head moves, and
 	 * counts only while its approver keeps a maintain or admin role.
