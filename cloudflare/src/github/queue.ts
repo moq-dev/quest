@@ -88,6 +88,11 @@ export type Drop = {
 	/** GitHub's removal reason, such as `merge_conflict`, or null when the comment names none. */
 	reason: string | null;
 	text: string;
+	/**
+	 * What the watcher said it does next, in the removal comment itself: the fixer taking it, or
+	 * why the pick ends there, as for a hold, a push, or a person's removal, which get no later word.
+	 */
+	next: string | null;
 	url: string;
 	at: string;
 	outcome: Outcome | null;
@@ -104,12 +109,20 @@ const OUTCOMES = new Set<Outcome["kind"]>(["requeued", "handback", "ended", "ref
 
 /** The comment's first paragraph as one bounded line, without the watcher's prefix. */
 function excerpt(body: string) {
-	const first = body.split(/\n\s*\n/, 1)[0] ?? "";
-	return first
+	return line(body.split(/\n\s*\n/, 1)[0] ?? "");
+}
+function line(text: string) {
+	return text
 		.replace(/^quest land watch: /, "")
 		.replace(/[\x00-\x1f\x7f]+/g, " ")
 		.trim()
 		.slice(0, 300);
+}
+
+/** A removal comment's second paragraph when it is prose, rather than its failing jobs' logs or its marker. */
+function next(body: string) {
+	const second = body.split(/\n\s*\n/)[1];
+	return second && /^[A-Z]/.test(second) ? line(second) : null;
 }
 
 /** A watcher comment on a pull request: a drop or an outcome. Only an app or a writer speaks for the watcher. */
@@ -235,6 +248,7 @@ export function landingQueues(
 			pull: ref(pull),
 			reason: /\(`([a-z_]+)`\)/.exec(word.body)?.[1] ?? null,
 			text: excerpt(word.body),
+			next: next(word.body),
 			url: word.url,
 			at: word.at,
 			outcome,

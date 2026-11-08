@@ -172,6 +172,8 @@ describe("landing queues", () => {
 		expect(main.drops[1]!.text).toBe(
 			"the queue removed this pull request because it conflicts (`merge_conflict`).",
 		);
+		// A drop with no later word shows what its own comment said happens next.
+		expect(main.drops[0]!.next).toBe("More.");
 		expect(queues.find((q) => q.base === "release")).toMatchObject({
 			mode: "own",
 			entries: [],
@@ -211,6 +213,11 @@ describe("landing queue page", () => {
 				body: "quest land watch: re-enqueued this pull request at the back of the merge queue.\n\n<!-- quest land fixer: 2026-11-07T00:00:00Z requeued watch-job-1.json -->",
 				at: at(20),
 			},
+			{
+				author: "quest-test[bot]",
+				body: "quest land watch: the merge queue removed this pull request because its `merge_group` build failed (`failed_checks`).\n\nAnother session holds this pull request, so the watcher stops acting on it.\n\n<!-- quest land fixer: 2026-11-07T00:00:00Z removed RFMQE_2 -->",
+				at: at(10),
+			},
 		];
 		const response = await queuePage(cookie);
 		expect(response.status).toBe(200);
@@ -219,6 +226,7 @@ describe("landing queue page", () => {
 		expect(html).toContain('href="https://github.com/upstream/project/actions/runs/42"');
 		expect(html).toContain("Dropped for merge_conflict");
 		expect(html).toContain("Re-enqueued");
+		expect(html).toContain("Another session holds this pull request, so the watcher stops acting on it.");
 
 		const reader = await other("read");
 		expect((await queuePage(reader.session)).status).toBe(403);

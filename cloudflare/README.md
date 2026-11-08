@@ -301,8 +301,9 @@ were armed, the watcher's own queue order, each with the `quest queue` check
 the watcher writes, whose in-progress run links its build. Recent drops are
 the watcher's marked removal comments from the last day, in both modes, each
 paired with the watcher's next marked comment on that pick: re-enqueued,
-handed back, not applied, refused, or held. Only comments from an app or a
-writer count.
+handed back, not applied, refused, or held. A drop with no later word, such
+as one a hold, a push, or a person's removal ends, shows what its own comment
+said happens next. Only comments from an app or a writer count.
 
 ### Installed app and notifications
 

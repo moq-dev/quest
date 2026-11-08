@@ -101,7 +101,7 @@ export function QueuePage(props: { owner: string; repository: string; queues: La
 												<When at={drop.outcome.at} now={props.now} />: {drop.outcome.text}
 											</p>
 										) : (
-											<p class="muted">No outcome yet.</p>
+											<p class="muted">{drop.next ?? "No outcome yet."}</p>
 										)}
 									</li>
 								))}
