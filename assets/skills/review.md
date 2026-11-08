@@ -1,5 +1,5 @@
 ---
-description: Review a PR's branch locally with a model that wrote none of it, then mark it ready for review.
+description: Review a PR's branch locally with a model other than its latest writer, then mark it ready for review.
 guide: Execution, Summaries, Questions
 skills: merge
 ---
@@ -21,8 +21,8 @@ Never alter the repository's harness to get a pass, such as by disabling a tool,
 If a `## Review` record that `/quest-merge` counts names the committed head, or its review exemptions cover the changes since the head it names, and it leaves no finding unrefuted, run no new round and go on to pushing and marking it ready below.
 If you judge the change too trivial to review, skip the review instead and record the skip and its reason in `## Review`.
 
-Otherwise, review the committed branch with `quest review --base <remote>/<base>`, which picks a reviewer that wrote none of the code, and its effort, by the PR's size; `quest review --help` explains the round.
-It reads the implementing models, and on a branch that is not a quest's the size, from the PR body's `## Models` record and kix's sessions comment, so write that record before the first round; a quest branch's size is read from its quest.
+Otherwise, review the committed branch with `quest review --base <remote>/<base>`, which picks a reviewer other than the model that changed it last, and its effort, by the PR's size; `quest review --help` explains the round.
+It reads the latest implementing model, and on a branch that is not a quest's the size, from the PR body's `## Models` record and kix's sessions comment, so write that record before the first round; a quest branch's size is read from its quest.
 Pass `--exclude-model` or `--size` only for a PR whose body cannot hold the record.
 Where the repository's root instructions name other reviewers, pass them with `--harness`, `--model`, and `--effort`.
 Run it in the foreground; a round takes minutes.

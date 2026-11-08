@@ -481,8 +481,9 @@ it("publishes jobs' work end to end, through the upstream branch to the pull req
 		head: first.head,
 		pull: models("- Size: S\n- Implementer: opencode, second, high effort"),
 	});
+	// The delivering session's own line stays last, since the last names the latest writer.
 	expect(rocket.pulls.at(-1)!.body).toBe(
-		models("- Size: S\n- Implementer: opencode, second, high effort\n- Implementer: claude, first, high effort")
+		models("- Size: S\n- Implementer: claude, first, high effort\n- Implementer: opencode, second, high effort")
 			.body,
 	);
 

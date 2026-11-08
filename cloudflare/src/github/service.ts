@@ -2239,8 +2239,9 @@ export class GitHubService {
 					if (pull?.state !== "open") throw error;
 				}
 			}
-			// A later session's body keeps the sessions that delivered before it in its `## Models` record.
-			const body = implementers(pull.body ?? "").reduce(withModels, input.body);
+			// A later session's body keeps the sessions that delivered before it in its `## Models` record,
+			// with its own last, since the last names the latest writer.
+			const body = [...implementers(pull.body ?? ""), ...implementers(input.body)].reduce(withModels, input.body);
 			if (body.length > BODY_LIMIT) throw new GitHubError("The pull request body is too long");
 			if (pull.title !== input.title || pull.body !== body)
 				pull = await this.#api<PullHead>(token, `${pulls}/${number(pull.number)}`, "PATCH", {

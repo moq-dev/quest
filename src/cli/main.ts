@@ -1043,15 +1043,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	).join("; ");
 	program
 		.command("review")
-		.summary("Have a model that wrote none of the code review the committed branch, read-only")
+		.summary("Have a model other than the latest writer review the committed branch, read-only")
 		.description(
-			"Review the checkout's committed branch against its base with a reviewer its size picks, never a model " +
-				`that wrote the code. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The first ` +
-				"whose model wrote none of the code reviews. The models that wrote it are --exclude-model's; without " +
-				"it, they are those the Implementer lines of the `## Models` record in the body of the branch's open PR, and of kix's sessions comment on it, " +
-				"name and, unless those name every one with no `unknown` model or --harness names the reviewer, any " +
-				"model of the harness running this command, detected from the variables each sets, so Codex reviews " +
-				"from Claude Code and Claude Code from Codex. " +
+			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
+				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
+				"first whose model is not avoided reviews. --exclude-model names each model to avoid; without it, the " +
+				"latest writer is avoided: the model of the last Implementer line of the `## Models` record in the body of the branch's open PR, " +
+				"then of kix's sessions comment on it, or, when that line names an `unknown` model or there is none and " +
+				"--harness does not name the reviewer, any model of the harness running this command, detected from the " +
+				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex. " +
 				"--harness names the reviewer instead, at its entry's model and effort, and --model and --effort " +
 				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
@@ -1116,7 +1116,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option(
 			"--exclude-model <model>",
-			"A model that wrote the code, never picked to review it, instead of the PR's record; repeat for each",
+			"A model never picked to review it, instead of the PR's latest writer; repeat for each",
 			(value: string, previous: string[] = []) => [...previous, value],
 		)
 		.addOption(

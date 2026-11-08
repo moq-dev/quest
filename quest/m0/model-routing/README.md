@@ -68,8 +68,12 @@ are mostly judgment.
   models: Opus writes the code, since it does a much better job. XS: Grok
   high, then Sol medium. S: Opus medium, then Sol high. M: Opus high, then
   Sol xhigh. L and XL: Opus xhigh, no fallback. Reviews: Sol low, medium,
-  high, xhigh, xhigh for XS to XL, never the model that wrote the code;
+  high, xhigh, xhigh for XS to XL, never the model that changed it last;
   Pullfrog and CodeRabbit add free reviews on top.
+- Revised 2026-11-07 (user): a review avoids only the latest writer, the
+  record's last Implementer, which each session moves last whenever it pushes.
+  Avoiding every writer left no reviewer once Sol and Opus had both written a
+  PR, and agents then picked an unlisted model themselves.
 - Every PR records its models and efforts, and every fix links the PR that
   caused it, so the rankings can be audited (user). The PR record alone,
   without commit trailers (user, 2026-11-04 design checkpoint of
