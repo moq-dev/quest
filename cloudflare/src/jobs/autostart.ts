@@ -162,17 +162,28 @@ export async function autostart(env: Env, owner: string, free: number) {
 		if (started >= free) break;
 		if (refused.has(project.id)) continue;
 		try {
-			const { job, enabled, flake } = await github.jobSource(project, owner, (state) =>
-				startJob(state, target, null),
-			);
+			// The skip check at insertion compares the quest's text as GitHub has it now.
+			let version = "";
+			const { job, enabled, flake } = await github.jobSource(project, owner, (state) => {
+				version = digest(state.project.documents.find((d) => d.path === target)?.content ?? "");
+				return startJob(state, target, null);
+			});
 			if (!enabled || !flake) {
 				refused.add(project.id);
 				continue;
 			}
-			// The insert rechecks the opt-in, which may have ended or narrowed while this pass read GitHub.
+			// The insert rechecks the opt-in, which may have ended or narrowed while this pass read GitHub,
+			// and the quest's own exclusions, since a skip or another pass's job may have committed meanwhile.
 			const created = await store.createJob(
 				env.DB,
-				{ ...job, repository: project.id, actor: owner, pinRunner: null, pinAccount: null, automatic: true },
+				{
+					...job,
+					repository: project.id,
+					actor: owner,
+					pinRunner: null,
+					pinAccount: null,
+					automatic: { version },
+				},
 				Date.now(),
 			);
 			if (created.created) started++;
