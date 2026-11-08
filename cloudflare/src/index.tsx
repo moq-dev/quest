@@ -26,11 +26,13 @@ import { activeHighlights, cards, highlights } from "./inbox/activity";
 import * as inbox from "./inbox/model";
 import { AgentCards, InboxPage } from "./inbox/page";
 import { purge, retain } from "./jobs/output";
+import * as autostart from "./jobs/autostart";
 import { INBOX_HEADER } from "./jobs/hub";
 import * as landing from "./jobs/landing";
 import { BootstrapRequired, fromForm, hub, inboxURL, jobs, nextURL, resume, stop } from "./jobs/routes";
 import { JobError, active, listActivityJobs, listRunners, moveAccount, registerRunner } from "./jobs/store";
 import { Layout, type Page, type User } from "./layout";
+import { QueuePage } from "./queue";
 import { RunnersPage, connectRequest } from "./runners";
 import * as push from "./push/notify";
 
@@ -305,6 +307,24 @@ app.get("/projects/github/:owner/:repository/state", async (c) => {
 			state={state}
 			log={log}
 		/>,
+	);
+});
+// Each base's landing queue, read live from GitHub under the same authority as the project's other pages.
+app.get("/projects/github/:owner/:repository/queue", async (c) => {
+	const session = await createAuth(c.env).api.getSession({ headers: c.req.raw.headers });
+	if (!session) return c.redirect(`/sign-in?next=${encodeURIComponent(here(c))}`, 303);
+	const github = new GitHubService(c.env);
+	const repo = await github.enrolledProject(c.req.param("owner"), c.req.param("repository"), session.user.id);
+	if (!repo) throw new GitHubError("Project is not enrolled");
+	const now = Date.now();
+	const queues = await github.readQueues(repo, session.user.id, now);
+	return page(
+		c,
+		{
+			title: `${repo.owner}/${repo.name} landing`,
+			description: "Each base's landing queue, builds, and recent drops.",
+		},
+		<QueuePage owner={c.req.param("owner")} repository={c.req.param("repository")} queues={queues} now={now} />,
 	);
 });
 app.get("/projects/github/:owner/:repository/data", async (c) => {
@@ -755,6 +775,7 @@ export default {
 	fetch: app.fetch,
 	async scheduled(controller, env) {
 		await landing.sweep(env);
+		await autostart.sweep(env);
 		if (controller.cron !== landing.SWEEP_CRON) await retain(env, Date.now());
 	},
 } satisfies ExportedHandler<Env>;

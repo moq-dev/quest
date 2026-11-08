@@ -1,9 +1,9 @@
 import { type Context, Hono } from "hono";
-import { questBranch } from "quest/core";
 import { createAuth } from "../auth";
 import * as push from "../push/notify";
-import { GitHubError, GitHubService, refName, type Stopped } from "../github/service";
-import { type ProjectState, type Pull, startable } from "../github/state";
+import { GitHubError, GitHubService, type Stopped } from "../github/service";
+import { type ProjectState, type Pull, questPull } from "../github/state";
+import * as autostart from "./autostart";
 import { INBOX_HEADER, RUNNER_HEADER } from "./hub";
 import * as landing from "./landing";
 import * as output from "./output";
@@ -46,7 +46,8 @@ export function inboxURL(repository: number, target: string) {
 	return `/inbox?${new URLSearchParams({ project: String(repository), item: target })}`;
 }
 /** What an inbox form just recorded, which the next decision's page notes. */
-export type Done = "answer" | "approve" | "trust" | "start" | "stop" | "skip" | "merge";
+export type Done =
+	"answer" | "approve" | "trust" | "start" | "stop" | "skip" | "merge" | "autostart" | "ready" | "close";
 /**
  * The inbox's next active decision, or its empty state, after a form recorded
  * one. The item acted on stays reachable from its list, with its earlier answers.
@@ -300,13 +301,7 @@ function resolve(
 				!item.missing &&
 				item.data?.state === "OPEN",
 		);
-	if (workflow === "start") {
-		if (typeof target !== "string" || !startable(state, target, failed))
-			throw new JobError("Only ready, unclaimed quests on the default branch can start");
-		const branch = questBranch(target);
-		if (!refName(branch)) throw new JobError("Rename the quest so its path can be a branch name");
-		return { workflow, target, revision: commit, branch, trusted: true };
-	}
+	if (workflow === "start") return autostart.startJob(state, target, failed);
 	if (workflow === "plan") {
 		// A new interview gets its own target. Retrying a failed one keeps it and
 		// its request; planning a finished job's follow-ups targets that job's ID.
@@ -328,13 +323,21 @@ function resolve(
 		const n = issue.number;
 		return { workflow, target: `issues/${n}`, revision: commit, branch: `plan/issue-${n}`, trusted: true };
 	}
-	if (workflow === "iterate" || workflow === "merge") {
+	if (workflow === "iterate" || workflow === "merge" || workflow === "delete") {
 		const pull = open("pull", "pulls");
 		if (!pull)
-			throw new JobError(workflow === "merge" ? "Merge an open pull request" : "Iterate on an open pull request");
+			throw new JobError(
+				`${{ iterate: "Iterate on", merge: "Merge", delete: "Delete" }[workflow]} an open pull request`,
+			);
 		const data = pull.data as Pull;
 		if (workflow === "merge" && data.isDraft)
 			throw new JobError("Mark the draft ready for review before merging it");
+		if (workflow === "delete") {
+			if (!questPull(state, data))
+				throw new JobError("Only a quest's own pull request is deleted with its quest; close any other");
+			if (data.isCrossRepository !== false)
+				throw new JobError("The bot cannot update a quest's pull request from a fork");
+		}
 		// jobSource verifies every commit's provenance before creating this job.
 		return {
 			workflow,
@@ -385,8 +388,8 @@ jobs.post(base, async (c) => {
 		{ ...job, repository: repo.id, actor: user, pinRunner, pinAccount },
 		Date.now(),
 	);
-	// A new merge job holds its pull request before it runs, as a local `quest iterate` would.
-	if (created.created && job.workflow === "merge") {
+	// A new merge or delete job holds its pull request before it runs, as a local `quest iterate` would.
+	if (created.created && store.lands(job.workflow)) {
 		const pull = pullOf(job.target);
 		let token: string;
 		let recorded: boolean;
@@ -404,6 +407,19 @@ jobs.post(base, async (c) => {
 	}
 	await hub(c.env, user).dispatch(user);
 	return reply(c, form, "start", created, created.created ? 201 : 200);
+});
+
+// A maintainer lends their own runners to a project's ready quests, or stops.
+jobs.post("/projects/github/:owner/:repository/autostart", async (c) => {
+	const { user, repo } = await maintained(c);
+	const { body, form } = await input(c);
+	// A form sends `1` or `0`; the JSON API, a boolean.
+	const on = form ? { "1": true, "0": false }[String(body.enabled)] : body.enabled;
+	if (typeof on !== "boolean") throw new JobError("Choose whether to start ready quests");
+	const scope = on ? { milestones: autostart.milestones(body.milestones) } : null;
+	await autostart.save(c.env.DB, repo.id, user, scope, Date.now());
+	if (on) await hub(c.env, user).dispatch(user);
+	return reply(c, form, "autostart", null);
 });
 
 jobs.post(`${base}/:job/answer`, async (c) => {
@@ -477,6 +493,33 @@ jobs.post("/projects/github/:owner/:repository/pulls/:number/approve", async (c)
 	const queued = await store.queuedOn(c.env.DB, repo.id, `pulls/${number}`);
 	if (queued && store.onPull(queued.workflow)) await hub(c.env, queued.actor).recheck(queued.actor, queued.id);
 	return reply(c, form, "trust", null);
+});
+
+// A maintainer accepts a handed-back draft as it is, at the head they saw.
+jobs.post("/projects/github/:owner/:repository/pulls/:number/ready", async (c) => {
+	const { user, repo, github } = await maintained(c);
+	const { body, form } = await input(c);
+	const number = c.req.param("number");
+	if (!/^[1-9]\d{0,14}$/.test(number) || typeof body.head !== "string")
+		throw new JobError("Pull request and head required");
+	// A job may still push to the pull request, so it stays as the job leaves it.
+	if (await store.active(c.env.DB, repo.id, `pulls/${number}`))
+		throw new JobError("Stop this pull request's job before marking it ready");
+	await github.markReady(repo, user, Number(number), body.head);
+	return reply(c, form, "ready", null);
+});
+
+// A maintainer closes a free pull request that claims no quest, at the head they saw.
+jobs.post("/projects/github/:owner/:repository/pulls/:number/close", async (c) => {
+	const { user, repo, github } = await maintained(c);
+	const { body, form } = await input(c);
+	const number = c.req.param("number");
+	if (!/^[1-9]\d{0,14}$/.test(number) || typeof body.head !== "string")
+		throw new JobError("Pull request and head required");
+	if (await store.active(c.env.DB, repo.id, `pulls/${number}`))
+		throw new JobError("Stop this pull request's job before closing it");
+	await github.closePullRequest(repo, user, Number(number), body.head);
+	return reply(c, form, "close", null);
 });
 
 /** The longest reply to a publication decision, in characters as the inbox form counts them. */

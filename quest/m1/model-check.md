@@ -15,7 +15,7 @@ review harness check. The m0 run was
 [moq-dev/quest#426](https://github.com/moq-dev/quest/pull/426). Extended on
 2026-11-04 (user, /quest-plan follow-up of
 [moq-dev/quest#487](https://github.com/moq-dev/quest/pull/487)) to audit
-the size tables of [model routing](/quest/m0/model-routing/README.md):
+the size tables of model routing (`src/cli/models.ts`):
 
 - Should the routing audit be its own recurring quest?
   - ✅ Merge it into this check, so one quest owns the tables
@@ -27,7 +27,7 @@ the size tables of [model routing](/quest/m0/model-routing/README.md):
 
 Audit the routing from the records of the PRs merged since the last run,
 with [`quest usage`](/quest/m0/token-waste/usage.md) once it lands: each body's
-`## Models` size and implementers and its `## Review` reviewer. Tally each implementer by the size
+`## Models` size and implementers, plus those on kix's sessions comment, and its `## Review` reviewer. Tally each implementer by the size
 on its own `Implementer:` line where it carries one, such as `(iterate, XS)`,
 not the PR's `## Models` size, so a small iterate on a large PR counts as the
 work it was routed for:

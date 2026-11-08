@@ -16,6 +16,8 @@ export type Issue = {
 	body?: string;
 	comments?: Comment[];
 	closed?: boolean;
+	/** When GitHub last saw activity on it; a fixed past date when absent. */
+	updatedAt?: string;
 };
 export type Thread = { path: string; line: number | null; resolved?: boolean; outdated?: boolean; comments: Comment[] };
 export type Pull = Issue & {
@@ -61,6 +63,8 @@ export type Pull = Issue & {
 	landing?: boolean;
 	/** It is in its base's merge queue; only a base with `queue` takes it. */
 	queued?: boolean;
+	/** Its merge queue entry's state, `QUEUED` by default, and its merge group's check runs, while `queued`. */
+	group?: { state: string; runs: NonNullable<Pull["runs"]> };
 	/** The enabled auto-merge's time and commit body; `quest land` reads its queue from them. */
 	autoMerge?: { enabledAt: string; commitBody: string };
 	/** A fork's head branch accepts pushes from the upstream's maintainers. */
@@ -124,8 +128,37 @@ export type Repo = {
 	rules?: Record<string, unknown>[];
 	/** The default branch's classic protection, as `GET /branches/<default>/protection` returns it; none when absent. */
 	protection?: Record<string, any>;
-	/** Check runs the App wrote through `POST /check-runs`, oldest first. */
-	checkRuns?: { name: string; head_sha: string; conclusion: string; app: number; output: Record<string, unknown> }[];
+	/** Check runs the App wrote through `POST /check-runs`, oldest first; `status` is set while one is unfinished. */
+	checkRuns?: {
+		name: string;
+		head_sha: string;
+		conclusion?: string;
+		status?: string;
+		details_url?: string;
+		app: number;
+		output: Record<string, unknown>;
+	}[];
+	/** The check runs reported on commits that are no pull request's head, such as a queue build's. */
+	commitRuns?: Record<string, NonNullable<Pull["runs"]>>;
+	/** GitHub Actions workflow runs, as `GET /actions/runs` lists them, with their jobs and each job's log. */
+	actionRuns?: {
+		id: number;
+		name: string;
+		head_branch: string;
+		head_sha: string;
+		status: string;
+		conclusion: string | null;
+		html_url: string;
+		jobs: {
+			id: number;
+			name: string;
+			status: string;
+			conclusion: string | null;
+			html_url: string;
+			steps?: { name: string; conclusion: string | null }[];
+			log?: string;
+		}[];
+	}[];
 	/** Rulesets by ID, as `GET /rulesets/<id>` shows them to the App. */
 	rulesets?: Record<number, { current_user_can_bypass: "always" | "pull_requests_only" | "never" }>;
 };
@@ -179,7 +212,7 @@ function entity(repo: Repo, item: Issue) {
 		number: item.number,
 		title: item.title,
 		state: (item as Pull).merged ? "MERGED" : item.closed ? "CLOSED" : "OPEN",
-		updatedAt,
+		updatedAt: item.updatedAt ?? updatedAt,
 		closedAt: item.closed ? updatedAt : null,
 		author: { login: item.author },
 		comments: { totalCount: item.comments?.length ?? 0 },
@@ -353,6 +386,8 @@ function holdsTarget(repo: Repo, pull: Pull) {
 	return {
 		id: nodeId(repo, pull),
 		state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
+		isDraft: !!pull.draft,
+		body: pull.body ?? "",
 		baseRefName: pull.base ?? defaultOf(repo),
 		headRefOid: headOf(repo, pull),
 		mergeStateStatus: mergeState(pull),
@@ -411,7 +446,7 @@ const UNAPPROVED = new Set(["BUSL-1.1", "SSPL-1.0", "Elastic-2.0"]);
 export const ACTIONS_APP = 15368;
 
 /** One page of a head's check runs and commit statuses, as `statusCheckRollup.contexts` pages them. */
-function contextPage(pull: Pull, after: unknown) {
+function contextPage(pull: Pick<Pull, "runs">, after: unknown) {
 	const start = typeof after === "string" ? Number(after) : 0;
 	const all = (pull.runs ?? []).map((run, index) =>
 		run.context
@@ -431,6 +466,50 @@ function contextPage(pull: Pull, after: unknown) {
 	return {
 		nodes: all.slice(start, end),
 		pageInfo: { hasNextPage: end < all.length, endCursor: end < all.length ? String(end) : null },
+	};
+}
+
+/** An open pull request as kix's landing queue page reads it: its landing, merge group, and `quest queue` check. */
+function landingTarget(repo: Repo, pull: Pull, queued: Pull[]) {
+	const head = headOf(repo, pull);
+	const run = (repo.checkRuns ?? []).filter((r) => r.name === "quest queue" && r.head_sha === head).at(-1);
+	return {
+		number: pull.number,
+		title: pull.title,
+		url: `https://github.com/${repo.owner}/${repo.name}/pull/${pull.number}`,
+		baseRefName: pull.base ?? defaultOf(repo),
+		isMergeQueueEnabled: repo.queue === true && (pull.base ?? defaultOf(repo)) === defaultOf(repo),
+		autoMergeRequest: pull.landing ? { enabledAt: pull.autoMerge?.enabledAt ?? updatedAt } : null,
+		mergeQueueEntry: pull.queued
+			? {
+					position: queued.indexOf(pull) + 1,
+					state: pull.group?.state ?? "QUEUED",
+					headCommit: pull.group ? { statusCheckRollup: { contexts: contextPage(pull.group, null) } } : null,
+				}
+			: null,
+		commits: {
+			nodes: [
+				{
+					commit: {
+						checkSuites: page(
+							run
+								? [
+										{
+											checkRuns: page([
+												{
+													status: (run.status ?? "completed").toUpperCase(),
+													title: run.output.title ?? null,
+													detailsUrl: run.details_url ?? null,
+												},
+											]),
+										},
+									]
+								: [],
+						),
+					},
+				},
+			],
+		},
 	};
 }
 
@@ -510,6 +589,13 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 		return { data: { repository: { pullRequest: pull ? holdsTarget(repo, pull) : null } } };
 	}
 	if (query.includes("object(oid: $oid)")) {
+		const runs = repo.commitRuns?.[variables.oid as string];
+		if (runs)
+			return {
+				data: {
+					repository: { object: { statusCheckRollup: { contexts: contextPage({ runs }, variables.after) } } },
+				},
+			};
 		const pull = repo.pulls.find(
 			(p) => headOf(repo, p) === variables.oid || p.autoMerge?.commitBody === `Quest-Land-Head: ${variables.oid}`,
 		);
@@ -522,6 +608,25 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 				},
 			},
 		};
+	}
+	if (query.includes('checkName: "quest queue"')) {
+		const open = repo.pulls.filter((pull) => !pull.closed);
+		const queued = open.filter((pull) => pull.queued);
+		return { data: { repository: { pullRequests: page(open.map((pull) => landingTarget(repo, pull, queued))) } } };
+	}
+	// The pull requests a landing drop names, by number, which may have closed.
+	const dropped = [...query.matchAll(/(p\d+): pullRequest\(number: (\d+)\)/g)];
+	if (dropped.length) {
+		const found = Object.fromEntries(
+			dropped.map(([, alias, number]) => {
+				const pull = repo.pulls.find((p) => p.number === Number(number));
+				return [alias, pull ? landingTarget(repo, pull, []) : null];
+			}),
+		);
+		const errors = dropped
+			.filter(([, alias]) => !found[alias!])
+			.map(([, alias]) => ({ type: "NOT_FOUND", path: ["repository", alias] }));
+		return { data: { repository: found }, ...(errors.length ? { errors } : {}) };
 	}
 	if (query.includes("defaultBranchRef"))
 		return { data: { repository: { defaultBranchRef: { name: defaultOf(repo) } } } };
@@ -676,6 +781,7 @@ export function fakeGitHub(world: World) {
 		mergeable_state: pull.mergeableState ?? (pull.merge === "DIRTY" ? "dirty" : "clean"),
 		title: pull.title,
 		body: pull.body ?? "",
+		labels: (pull.labels ?? []).map((name) => ({ name })),
 		draft: !!pull.draft,
 		user: { login: pull.author },
 		created_at: new Date(pull.createdAt ?? Date.parse(updatedAt)).toISOString(),
@@ -873,7 +979,11 @@ export function fakeGitHub(world: World) {
 									data: {
 										node: {
 											state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
+											baseRefName: pull.base ?? defaultOf(repo),
 											headRefOid: headOf(repo, pull),
+											mergeStateStatus: mergeState(pull),
+											mergeQueueEntry: pull.queued ? { enqueuedAt: updatedAt } : null,
+											labels: { nodes: (pull.labels ?? []).map((name) => ({ name })) },
 											autoMergeRequest: pull.landing
 												? { enabledAt: pull.autoMerge?.enabledAt ?? updatedAt }
 												: null,
@@ -1010,18 +1120,73 @@ export function fakeGitHub(world: World) {
 			const found = repo.rulesets?.[Number(ruleset[1])];
 			return found ? json({ id: Number(ruleset[1]), ...found }) : notFound();
 		}
+		const statuses = ["queued", "in_progress", "completed"];
 		if (tail === "/check-runs" && method === "POST") {
 			if (!writes("checks")) return forbidden();
-			if (body.status !== "completed" || typeof body.head_sha !== "string" || !repo.commits[body.head_sha])
+			const known =
+				typeof body.head_sha === "string" &&
+				(repo.commits[body.head_sha] || repo.pulls.some((pull) => headOf(repo, pull) === body.head_sha));
+			if (!statuses.includes(body.status) || (body.status === "completed") !== !!body.conclusion || !known)
 				return json({ message: "Validation Failed" }, 422);
 			(repo.checkRuns ??= []).push({
 				name: body.name,
 				head_sha: body.head_sha,
 				conclusion: body.conclusion,
+				status: body.status === "completed" ? undefined : body.status,
+				details_url: body.details_url,
 				app: world.app.id,
 				output: body.output,
 			});
 			return json({ id: repo.checkRuns.length, name: body.name, head_sha: body.head_sha }, 201);
+		}
+		const checkRun = tail.match(/^\/check-runs\/(\d+)$/);
+		if (checkRun && method === "PATCH") {
+			if (!writes("checks")) return forbidden();
+			const run = repo.checkRuns?.[Number(checkRun[1]) - 1];
+			if (!run) return notFound();
+			if (!statuses.includes(body.status) || (body.status === "completed") !== !!body.conclusion)
+				return json({ message: "Validation Failed" }, 422);
+			Object.assign(run, {
+				conclusion: body.conclusion,
+				status: body.status === "completed" ? undefined : body.status,
+				details_url: body.details_url ?? run.details_url,
+				output: body.output,
+			});
+			return json({ id: Number(checkRun[1]), name: run.name, head_sha: run.head_sha });
+		}
+		if (tail === "/actions/runs" && method === "GET") {
+			if (!scope.permissions.actions) return forbidden();
+			const sha = url.searchParams.get("head_sha");
+			const branch = url.searchParams.get("branch");
+			const workflow_runs = (repo.actionRuns ?? [])
+				.filter((run) => (!sha || run.head_sha === sha) && (!branch || run.head_branch === branch))
+				.map(({ jobs: _, ...run }) => run);
+			return json({ total_count: workflow_runs.length, workflow_runs });
+		}
+		const actionRun = tail.match(/^\/actions\/runs\/(\d+)\/(jobs|cancel)$/);
+		if (actionRun) {
+			const run = repo.actionRuns?.find((item) => item.id === Number(actionRun[1]));
+			if (!run) return notFound();
+			if (actionRun[2] === "jobs" && method === "GET")
+				return scope.permissions.actions
+					? json({ total_count: run.jobs.length, jobs: run.jobs.map(({ log: _, ...job }) => job) })
+					: forbidden();
+			if (actionRun[2] === "cancel" && method === "POST") {
+				if (!writes("actions")) return forbidden();
+				if (run.status === "completed")
+					return json({ message: "Cannot cancel a workflow run that is completed." }, 409);
+				run.status = "completed";
+				run.conclusion = "cancelled";
+				return json({}, 202);
+			}
+		}
+		const jobLog = tail.match(/^\/actions\/jobs\/(\d+)\/logs$/);
+		if (jobLog && method === "GET") {
+			if (!scope.permissions.actions) return forbidden();
+			const job = (repo.actionRuns ?? [])
+				.flatMap((run) => run.jobs)
+				.find((item) => item.id === Number(jobLog[1]));
+			return job?.log === undefined ? notFound() : new Response(job.log);
 		}
 		const runs = tail.match(/^\/commits\/([0-9a-f]{40})\/check-runs$/);
 		if (runs && method === "GET") {
@@ -1044,7 +1209,7 @@ export function fakeGitHub(world: World) {
 				.filter((run) => run.head_sha === runs[1])
 				.reverse()
 				.filter((run, i, all) => all.findIndex((other) => other.name === run.name) === i)
-				.map((run) => ({ ...run, status: "completed", app: { id: run.app } }));
+				.map((run) => ({ ...run, status: run.status ?? "completed", app: { id: run.app } }));
 			const check_runs = [...written, ...found].filter(
 				(run) => (!name || run.name === name) && (!app || String(run.app.id) === app),
 			);
@@ -1143,6 +1308,21 @@ export function fakeGitHub(world: World) {
 			}
 			return json(restPull(repo, pull));
 		}
+		// The files a pull request changes against its base's tip, one page of up to 100.
+		const changed = tail.match(/^\/pulls\/(\d+)\/files$/);
+		if (changed && method === "GET") {
+			const pull = repo.pulls.find((p) => String(p.number) === changed[1]);
+			if (!pull) return notFound();
+			const tree = (sha: string | undefined) => (sha ? filesOf(repo, repo.commits[sha]?.tree ?? "") : {});
+			const before = tree(repo.branches[pull.base ?? defaultOf(repo)]);
+			const after = tree(headOf(repo, pull));
+			const paths = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+				.filter((path) => before[path] !== after[path])
+				.sort();
+			const at = Number(url.searchParams.get("page") ?? 1);
+			const size = Number(url.searchParams.get("per_page") ?? 30);
+			return json(paths.slice((at - 1) * size, at * size).map((filename) => ({ filename })));
+		}
 		const merge = tail.match(/^\/pulls\/(\d+)\/merge$/);
 		if (merge && method === "PUT") {
 			if (!writes("contents")) return forbidden();
@@ -1169,11 +1349,59 @@ export function fakeGitHub(world: World) {
 				message: "Pull Request successfully merged",
 			});
 		}
+		// Every issue and pull request comment, oldest first, updated at or after `since`.
+		if (tail === "/issues/comments" && method === "GET") {
+			if (!scope.permissions.issues && !scope.permissions.pull_requests) return forbidden();
+			const since = Date.parse(url.searchParams.get("since") ?? "1970-01-01T00:00:00Z");
+			const page = Number(url.searchParams.get("page") ?? 1);
+			const size = Number(url.searchParams.get("per_page") ?? 30);
+			const all = [...repo.pulls, ...repo.issues]
+				.flatMap((item) =>
+					(item.comments ?? []).map((c, i) => ({
+						id: item.number * 1000 + i,
+						html_url: `https://github.com/${fullName}/pull/${item.number}#issuecomment-${item.number * 1000 + i}`,
+						issue_url: `https://api.github.com/repos/${fullName}/issues/${item.number}`,
+						body: c.body,
+						created_at: c.at,
+						updated_at: c.at,
+						user: c.author && { login: c.author, type: c.author.endsWith("[bot]") ? "Bot" : "User" },
+						author_association:
+							c.author && ["admin", "maintain", "write"].includes(roleOf(repo, c.author) ?? "")
+								? "COLLABORATOR"
+								: "NONE",
+					})),
+				)
+				.filter((c) => Date.parse(c.created_at) >= since)
+				.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+			return json(all.slice((page - 1) * size, page * size));
+		}
 		const comment = tail.match(/^\/issues\/(\d+)\/comments$/);
 		if (comment && method === "GET") {
 			const item = [...repo.pulls, ...repo.issues].find((i) => String(i.number) === comment[1]);
 			if (!item) return notFound();
-			return json((item.comments ?? []).map((c) => ({ body: c.body, user: { login: c.author } })));
+			const bot = `${world.app.slug}[bot]`;
+			const page = Number(url.searchParams.get("page") ?? 1);
+			const size = Number(url.searchParams.get("per_page") ?? 30);
+			return json(
+				(item.comments ?? [])
+					.map((c, i) => ({
+						id: item.number * 1000 + i,
+						body: c.body,
+						user: { login: c.author },
+						performed_via_github_app: c.author === bot ? { id: world.app.id } : null,
+					}))
+					.slice((page - 1) * size, page * size),
+			);
+		}
+		const edited = tail.match(/^\/issues\/comments\/(\d+)$/);
+		if (edited && method === "PATCH") {
+			if (!writes("issues") && !writes("pull_requests")) return forbidden();
+			const id = Number(edited[1]);
+			const item = [...repo.pulls, ...repo.issues].find((i) => i.number === Math.floor(id / 1000));
+			const found = item?.comments?.[id % 1000];
+			if (!found || found.author !== `${world.app.slug}[bot]`) return notFound();
+			found.body = String(body.body);
+			return json({ id, body: found.body });
 		}
 		if (comment && method === "POST") {
 			if (!writes("issues") && !writes("pull_requests")) return forbidden();

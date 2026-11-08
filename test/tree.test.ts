@@ -214,6 +214,34 @@ describe("headings", () => {
 	test("an empty Closes section", () => {
 		tree().append("quest/m0/epic/one.md", "\n## Closes\n").rejects("'## Closes' is empty");
 	});
+
+	// Readiness and `quest waiting` read only `## ` sections, so a section name
+	// one level down would drop its items out silently.
+	test("a Waiting section one level too deep", () => {
+		tree()
+			.append("quest/m0/epic/one.md", "\n### Waiting\n\n- Maintainer: pick the name\n")
+			.rejects("'### Waiting' must be '## Waiting'");
+	});
+
+	test("a Waiting heading above the title", () => {
+		tree()
+			.write("quest/m0/epic/one.md", "# Waiting\n\n" + ONE)
+			.rejects("'# Waiting' must be '## Waiting'");
+	});
+
+	test("a Required section one level too deep", () => {
+		tree()
+			.append("quest/m0/epic/one.md", "\n### Required\n\n- [Two](/quest/m0/epic/two.md) - must finish first\n")
+			.rejects("'### Required' must be '## Required'");
+	});
+
+	test("a Goal one level too deep does not satisfy the Goal rule", () => {
+		tree().write("quest/m0/epic/one.md", ONE.replace("## Goal", "### Goal")).rejects("missing '## Goal'");
+	});
+
+	test("a free-form heading below ## is prose", () => {
+		tree().append("quest/m0/epic/one.md", "\n### Notes\n\nAny structure here.\n").accepts();
+	});
 });
 
 describe("epics", () => {
@@ -293,27 +321,19 @@ describe("epics", () => {
 			.rejects("quest/m0/loose/deeper/README.md: sits in quest/m0/loose, which has no README.md");
 	});
 
-	// Trees from before directory membership still list each epic's children.
-	// Such a link is membership, so it counts once.
+	// An epic already waits for everything in its directory, so a link to any of
+	// it is the child list this format retired; `quest check --fix` drops it.
 	test.each([
 		["quest/README.md", "/quest/m0/README.md"],
 		["quest/m0/README.md", "/quest/m0/epic/README.md"],
+		["quest/m0/README.md", "/quest/m0/epic/one.md"],
 		["quest/m0/epic/README.md", "/quest/m0/epic/one.md"],
-	])("%s requiring its child %s", (readme, target) => {
-		const listed = tree().append(readme, `\n## Required\n\n- [Held](${target})\n`);
-		listed.accepts();
-		expect(listed.ready()).toEqual(tree().ready());
-		expect(listed.blockers(readme)).toEqual(tree().blockers(readme));
-	});
-
-	// Only a child stands in for a link: a deeper quest, or a link to no quest,
-	// stays a blocker, as on a tree that listed children.
-	test.each([
-		["/quest/m0/epic/one.md", "quest/m0/epic/one.md"],
-		["/quest/m0/gone.md", "Gone"],
-	])("quest/m0/README.md requiring %s, which is not its child", (target, rendered) => {
-		const t = tree().append("quest/m0/README.md", `\n## Required\n\n- [Gone](${target})\n`);
-		expect(t.blockers("quest/m0/README.md")[0]).toBe(rendered);
+	])("%s requiring %s, which it holds", (readme, target) => {
+		const t = tree().append(readme, `\n## Required\n\n- [Held](${target})\n`);
+		expect(t.findings()).toHaveLength(1);
+		t.rejects(
+			`requires ${target}, which this epic holds; an epic waits for everything in its directory, so remove the entry (quest check --fix does)`,
+		);
 	});
 
 	test("a quest required twice", () => {
@@ -394,12 +414,14 @@ describe("finished milestones", () => {
 			.accepts();
 	});
 
-	// The root's listing of its milestones is membership, not a blocker.
-	test("the root's link to a finished milestone is allowed", () => {
-		tree()
+	// The root holds every milestone, so its link to one is that finding alone.
+	test("the root's link to a finished milestone is one finding", () => {
+		const t = tree()
 			.append("quest/README.md", "\n## Required\n\n- [M0](/quest/m0/README.md)\n")
-			.remove("quest/m0/epic")
-			.accepts();
+			.remove("quest/m0/epic");
+		expect(t.findings()).toEqual([
+			"quest/README.md:9: requires /quest/m0/README.md, which this epic holds; an epic waits for everything in its directory, so remove the entry (quest check --fix does)",
+		]);
 	});
 
 	test("removing the link readies the quest", () => {

@@ -13,6 +13,8 @@ import {
 	CONTEXT_LIMIT,
 	HOOK_COMMAND,
 	type Target,
+	WORKTREE_COMMAND,
+	WORKTREE_HOOKS,
 	hook,
 	settingsPath,
 	setup,
@@ -23,7 +25,7 @@ import { tempDir } from "./fixture";
 
 const ours = { type: "command", command: HOOK_COMMAND };
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
-const claude = (path: string): Target => ({ name: "Claude Code", path, hooks: CLAUDE_HOOKS, timeout: true });
+const claude = (path: string): Target => ({ name: "Claude Code", path, hooks: CLAUDE_HOOKS, claude: true });
 
 test("settings live in CLAUDE_CONFIG_DIR when set, else ~/.claude", () => {
 	expect(settingsPath({ CLAUDE_CONFIG_DIR: "/profiles/work" })).toBe(join("/profiles/work", "settings.json"));
@@ -51,14 +53,14 @@ test("setup replaces a different timeout, and removal leaves the user's own", ()
 	writeFileSync(path, JSON.stringify({ env: { FOO: "1", BASH_MAX_TIMEOUT_MS: "600000" } }));
 	expect(setup(claude(path))).toContain(`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS} (was "600000")`);
 	expect(read(path).env).toEqual({ FOO: "1", BASH_MAX_TIMEOUT_MS });
-	expect(setup(claude(path), true)).toEqual([
+	expect(setup(claude(path), { remove: true })).toEqual([
 		`${path}: removed Quest's hooks`,
 		`${path}: removed env.BASH_MAX_TIMEOUT_MS`,
 	]);
 	expect(read(path)).toEqual({ env: { FOO: "1" } });
 
 	writeFileSync(path, JSON.stringify({ env: { BASH_MAX_TIMEOUT_MS: "600000" } }));
-	expect(setup(claude(path), true)).toEqual([]);
+	expect(setup(claude(path), { remove: true })).toEqual([]);
 	expect(read(path)).toEqual({ env: { BASH_MAX_TIMEOUT_MS: "600000" } });
 });
 
@@ -71,7 +73,7 @@ test("setup keeps other settings and hooks in place", () => {
 	expect(Object.keys(settings)).toEqual(["theme", "hooks", "env"]);
 	expect(settings.hooks.SessionStart[0]).toEqual(theirs);
 	expect(settings.hooks.SessionStart).toHaveLength(2);
-	expect(setup(claude(path), true)).toHaveLength(2);
+	expect(setup(claude(path), { remove: true })).toHaveLength(2);
 	expect(read(path)).toEqual({ theme: "dark", hooks: { SessionStart: [theirs] }, env: { A: "1" } });
 });
 
@@ -100,7 +102,7 @@ test("setup replaces an earlier version's entries, including one sharing a group
 
 test("Codex's hooks file gets its hooks and their settings, but no timeout", () => {
 	const path = join(tempDir(), "hooks.json");
-	const codex: Target = { name: "Codex", path, hooks: CODEX_HOOKS, timeout: false };
+	const codex: Target = { name: "Codex", path, hooks: CODEX_HOOKS, claude: false };
 	expect(setup(codex)).toEqual([`${path}: installed Quest's hooks`]);
 	const settings = read(path);
 	expect(settings.env).toBeUndefined();
@@ -112,7 +114,7 @@ test("Codex's hooks file gets its hooks and their settings, but no timeout", () 
 	expect(setup({ ...codex, hooks: [{ event: "SessionStart", settings: { additionalContextLimit: 1 } }] })).toEqual([
 		`${path}: installed Quest's hooks`,
 	]);
-	expect(setup(codex, true)).toEqual([`${path}: removed Quest's hooks`]);
+	expect(setup(codex, { remove: true })).toEqual([`${path}: removed Quest's hooks`]);
 	expect(read(path)).toEqual({});
 });
 
@@ -131,9 +133,42 @@ test("removing Quest's only settings drops the hooks and env keys", () => {
 	const path = join(tempDir(), "settings.json");
 	writeFileSync(path, JSON.stringify({ theme: "dark" }));
 	setup(claude(path));
-	setup(claude(path), true);
+	setup(claude(path), { remove: true });
 	expect(read(path)).toEqual({ theme: "dark" });
-	expect(setup(claude(path), true)).toEqual([]);
+	expect(setup(claude(path), { remove: true })).toEqual([]);
+});
+
+test("setup installs the worktree hooks on request, keeps them on rerun, and replaces pasted ones", () => {
+	const path = join(tempDir(), "settings.json");
+	const pasted = { type: "command", command: `command -v quest >/dev/null || exit 1; ${WORKTREE_COMMAND}` };
+	const worktree = { type: "command", command: WORKTREE_COMMAND };
+	writeFileSync(
+		path,
+		JSON.stringify({
+			hooks: { WorktreeCreate: [{ hooks: [pasted] }], SessionEnd: [{ hooks: [{ ...pasted, timeout: 60 }] }] },
+		}),
+	);
+	setup(claude(path));
+	const settings = read(path);
+	expect(settings.hooks.WorktreeCreate).toEqual([{ hooks: [worktree] }]);
+	expect(settings.hooks.SessionEnd).toEqual([{ hooks: [{ ...worktree, timeout: 60 }] }]);
+	expect(settings.hooks.SessionStart).toEqual([{ matcher: CLAUDE_HOOKS[0]!.matcher, hooks: [ours] }, { hooks: [worktree] }]);
+	expect(Object.keys(settings.hooks).sort()).toEqual(
+		[...new Set([...CLAUDE_HOOKS, ...WORKTREE_HOOKS].map((h) => h.event))].sort(),
+	);
+	expect(setup(claude(path))).toEqual([]);
+	expect(setup(claude(path), { worktrees: true })).toEqual([]);
+
+	expect(setup(claude(path), { worktrees: false })).toEqual([`${path}: installed Quest's hooks`]);
+	expect(Object.keys(read(path).hooks)).toEqual(CLAUDE_HOOKS.map((h) => h.event));
+	expect(setup(claude(path))).toEqual([]);
+	expect(setup(claude(path), { worktrees: true })).toEqual([`${path}: installed Quest's hooks`]);
+	setup(claude(path), { remove: true });
+	expect(read(path)).toEqual({});
+
+	const codex = join(tempDir(), "hooks.json");
+	setup({ name: "Codex", path: codex, hooks: CODEX_HOOKS, claude: false }, { worktrees: true });
+	expect(Object.keys(read(codex).hooks)).toEqual(CODEX_HOOKS.map((h) => h.event));
 });
 
 test.each([
@@ -149,7 +184,7 @@ test.each([
 	const path = join(tempDir(), "settings.json");
 	writeFileSync(path, content);
 	expect(() => setup(claude(path))).toThrow(path);
-	expect(() => setup(claude(path), true)).toThrow(path);
+	expect(() => setup(claude(path), { remove: true })).toThrow(path);
 	expect(readFileSync(path, "utf8")).toBe(content);
 });
 

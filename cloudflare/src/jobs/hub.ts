@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import * as push from "../push/notify";
+import { autostart } from "./autostart";
 import * as landing from "./landing";
 import * as output from "./output";
 import { MessageError, type RunnerMessage, parse } from "./protocol";
@@ -27,6 +28,8 @@ export class RunnerHub extends DurableObject<Env> {
 	// Handlers interleave at each D1 await. Runner messages and dispatch passes
 	// run one at a time, so a pass cannot assign from a status it has outlived.
 	#serial: Promise<unknown> = Promise.resolve();
+	// One autostart pass at a time, so two passes cannot fill the same free slot.
+	#starting = false;
 
 	async fetch(request: Request) {
 		const viewer = request.headers.get(INBOX_HEADER);
@@ -197,7 +200,7 @@ export class RunnerHub extends DurableObject<Env> {
 			const reported = (ws.deserializeAttachment() as RunnerAttachment).slots;
 			if (reported !== null) slots.set(runner, reported);
 		}
-		const { assign, cancel, ended, wake } = await store.dispatch(
+		const { assign, cancel, ended, wake, idle } = await store.dispatch(
 			this.env.DB,
 			owner,
 			slots,
@@ -215,6 +218,23 @@ export class RunnerHub extends DurableObject<Env> {
 		if (assign.length || cancel.length || ended.length) await this.#notify(owner);
 		if (wake === null) await this.ctx.storage.deleteAlarm();
 		else await this.ctx.storage.setAlarm(wake);
+		// GitHub reads stay outside the serialized pass, so runner messages never wait on them.
+		if (idle > 0) this.ctx.waitUntil(this.#autostart(owner, idle));
+	}
+
+	/** Fill free slots with the owner's opted-in ready quests, then route what it created. */
+	async #autostart(owner: string, free: number) {
+		if (this.#starting) return;
+		this.#starting = true;
+		let started = 0;
+		try {
+			started = await autostart(this.env, owner, free);
+		} catch (error) {
+			console.error({ event: "autostart_failed", name: error instanceof Error ? error.name : "unknown" });
+		} finally {
+			this.#starting = false;
+		}
+		if (started) await this.dispatch(owner);
 	}
 
 	async #handle(ws: WebSocket, attachment: RunnerAttachment, message: RunnerMessage) {

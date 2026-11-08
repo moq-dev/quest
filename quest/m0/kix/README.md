@@ -60,9 +60,8 @@ operator-paid-hosting decisions:
   limit pauses with a decision to switch accounts; kix never rotates
   automatically to dodge provider limits. Superseded for Claude and Codex
   on 2026-11-04 (user): their accounts pool behind the runner's own
-  CLIProxyAPI, which rotates between them
-  ([Runner account pool](/quest/m0/kix/cliproxy.md)); opencode accounts
-  keep this.
+  CLIProxyAPI, which rotates between them, and kix sees a runner's Claude
+  pool as one account; opencode accounts keep this.
 - **Nix only.** Runners run every job inside the project's `nix develop`
   shell, with no other way to install dependencies, for cache efficiency and
   reproducibility. The runner pins the agent CLIs through Nix as well.
@@ -118,12 +117,16 @@ check locally (it shipped in
 [moq-dev/quest#188](https://github.com/moq-dev/quest/pull/188)), and
 fixes what it finds:
 
-- On macOS, two accounts in separate `CLAUDE_CONFIG_DIR` homes keep separate
-  Keychain credentials, and `claude auth status --json` reports each one's own
-  `authMethod` and email.
-- A rejected `rate_limit_event` and its `resetsAt` arrive when a plan runs
-  out, so the account sits out until its reset instead of the one-hour
-  fallback.
+- Two Claude subscriptions and a ChatGPT plan sign in to the runner's
+  CLIProxyAPI pool (`quest runner account add`, `add codex`), the Claude
+  one also from a remote runner by pasting its callback URL, and jobs and
+  reviews spread across them. On macOS, Claude Code's sandbox keeps a job's
+  commands from the proxy on loopback, as the Linux boundary test checks
+  for bubblewrap.
+- When a pool runs out, Claude Code shows the proxy's "All credentials for
+  model ... are cooling down" and Codex gives up on the proxy's 429, and the
+  runner reads the reset from the proxy's `Retry-After`, so the pool sits out
+  until its reset instead of the one-hour fallback.
 - opencode accounts (shipped with stubbed servers and a free model) sign in
   to an OpenCode Go plan and a ChatGPT plan, the latter through its headless
   method on a remote runner, and run a job on opencode's default model or
@@ -136,11 +139,3 @@ fixes what it finds:
   [moq-dev/quest#209](https://github.com/moq-dev/quest/pull/209) assumes
   is the comparison GitHub makes. Try it with a real PR that edits a
   workflow (decided 2026-10-24, user).
-
-## Required
-
-- [Operator setup](/quest/m0/kix/operator-setup.md) - pilot installations and a verified test PR on moq-dev/moq and moq-dev/quest
-- [Private repositories](/quest/m0/kix/private.md) - moq-dev/moq.pro enrolls, visible only to signed-in users who can read it
-- [Job sandbox](/quest/m0/kix/sandbox/README.md) - head approval for kix-pushed heads, and opencode sandboxed
-- [Runner account pool](/quest/m0/kix/cliproxy.md) - the runner routes every Claude and Codex job and review through its own CLIProxyAPI pool
-- [Web execution](/quest/m0/kix/execution.md) - spawn and iterate through the UI, ending in contribution PRs

@@ -9,6 +9,7 @@ Parse the arguments to determine the PR number. Any other text is the user's fee
 Take it with `quest iterate <pr>` before acting, passing a token you already hold for it to keep that hold, and keep the hold token it prints; `quest iterate --help` explains holds.
 If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
 If you cannot push to the PR's branch, stop and report.
+Your `Implementer:` line ends with the size your brief gives the work, as `Implementer: Claude Code, claude-opus-5-5, low effort (iterate, XS)`.
 
 Read the PR, its linked issues and quest, the reviews and comments posted on it, and the surrounding code.
 `quest status <pr>` reports its checks, reviews by head, and unresolved threads in one call.
@@ -25,7 +26,7 @@ One round only; never request a review, including by toggling a ready PR to draf
 
 If `quest status <pr>` shows auto-merge enabled, disable it with `gh pr merge <pr> --disable-auto` before any push: GitHub keeps it across a writer's push and would land the new head unreviewed.
 Once nothing is unfinished and no decisions need the user, run `/quest-review` with your token, which reviews the branch, pushes, and marks the PR ready.
-Otherwise, before pushing to a PR that is ready for review, review the new head locally with `quest review --base <remote>/<base>`, following each round's `next` line; then push and update the PR's summary.
+Otherwise, before pushing to a PR that is ready for review, review the new head locally with `quest review --base <remote>/<base>`, following each round's `next` line; when another worktree holds the PR branch, work in a detached checkout of its head and pass `--branch <head-branch>`; then push and update the PR's summary.
 Summarize the changes made.
 Hand it back with `quest release <pr> <token>`, using the latest token printed, whenever you stop, including to ask.
 Never merge; that is `/quest-merge`, once the PR is picked.

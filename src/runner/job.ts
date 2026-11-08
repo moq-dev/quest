@@ -5,18 +5,18 @@
 // attempt reports nothing, since the job is no longer this attempt's.
 import { randomUUID } from "node:crypto";
 
-import { type Round, ResponsesError } from "../cli/review";
+import { type Round, ResponsesError, ReviewLimitError } from "../cli/review";
 import { withModels } from "../github/models";
 
 import type { Adapter, Exit, Running } from "./adapter";
 import { Refused } from "./connection";
-import type { Account } from "./home";
+import type { Seat } from "./home";
 import type { Tool } from "./mcp";
 import { serveTools } from "./mcp";
 import { OutputUploader } from "./output";
 import { resumePrompt, startPrompt, systemPrompt } from "./prompt";
-import { type Job, type Message, type Outcome, clip } from "./protocol";
-import { formatFindings, type ReviewRequest, reviewerFor, Unreviewable } from "./review";
+import { type Job, type Message, type Outcome, clip, lands } from "./protocol";
+import { formatFindings, type Pools, type ReviewRequest, reviewerFor, Unreviewable } from "./review";
 import { type Sandbox, closeSandbox, openSandbox } from "./sandbox";
 import { Changes, fingerprint, WAIT_LIMIT, waitForChange } from "./wait";
 import { Workspace } from "./workspace";
@@ -25,10 +25,13 @@ import { Workspace } from "./workspace";
 export interface Context {
 	/** The runner's home, where checkouts live. */
 	root: string;
-	accounts(): Account[];
-	/** The account's isolated CLI home. */
-	home(account: Account): string;
-	adapter(account: Account): Adapter;
+	/** What jobs run on: the opencode accounts and the Claude pool. */
+	seats(): Seat[];
+	/** The seat's private CLI home. */
+	home(seat: Seat): string;
+	adapter(seat: Seat): Adapter;
+	/** The runner's pools, which review the heads jobs publish. */
+	pools(): Pools;
 	/**
 	 * The job's devShell as a script for its sandboxed commands to source,
 	 * evaluated from the job's revision in the bare clone `repository`, or
@@ -47,8 +50,12 @@ export interface Context {
 	reviewed(body: unknown): Promise<{ status: number; body: Record<string, unknown> }>;
 	/** `GET /api/runner/context`: the job's issue or pull request as kix reads it from GitHub. */
 	context(job: string, attempt: number): Promise<unknown>;
-	/** Record that the provider refused `account` until `until`, or for an unknown time. */
-	limited(account: Account, until: number | null): void;
+	/**
+	 * Record that the provider refused a seat or pool until `until`, or for an
+	 * unknown time, and return the reset it recorded. A pool's unknown reset is
+	 * the proxy's, for `model`, the model it refused.
+	 */
+	limited(id: string, until: number | null, model?: string): Promise<number>;
 	log(line: string): void;
 }
 
@@ -57,7 +64,7 @@ interface Delivery {
 	summary: string;
 	head: string | null;
 	pull?: { number: number; url: string; draft: boolean };
-	/** A merge job's landing: merged at once, or queued or auto-merging. */
+	/** A landing job's landing: merged at once, or queued or auto-merging. */
 	landed?: { merged: boolean };
 	/** Follow-up work the agent suggested, which kix offers the maintainer to plan. */
 	followups?: string[];
@@ -109,7 +116,7 @@ export class Attempt {
 
 	#session: string;
 	#workspace: Workspace | undefined;
-	#account: Account | undefined;
+	#seat: Seat | undefined;
 	/** Heads this attempt's reviews passed, which a delivery of the same head does not review again. */
 	#passed = new Set<string>();
 	/** A delivered head whose review found something the agent has not answered yet. */
@@ -210,13 +217,12 @@ export class Attempt {
 					"failed",
 					"kix sent an answer that this runner's owner has not approved; the runner acts only on answers its owner gave or approved.",
 				);
-			const account = ctx.accounts().find((a) => a.id === job.account);
-			if (!account)
-				return await this.#finish("failed", `The account ${job.account} is no longer on this runner.`);
+			const seat = ctx.seats().find((a) => a.id === job.account);
+			if (!seat) return await this.#finish("failed", `The account ${job.account} is no longer on this runner.`);
 			// Before any checkout: an account added while the runner runs may lack its CLI or sandbox.
-			const adapter = ctx.adapter(account);
+			const adapter = ctx.adapter(seat);
 			this.#harness = adapter.name;
-			this.#account = account;
+			this.#seat = seat;
 			this.#workspace = await Workspace.prepare(ctx.root, job, ctx.remote(job));
 			if (this.#workspace.preserved)
 				ctx.log(
@@ -252,14 +258,14 @@ export class Attempt {
 				this.wake();
 				return;
 			}
-			if (this.#ended()) return await this.#conclude(null, account);
+			if (this.#ended()) return await this.#conclude(null, seat);
 			const devShell = await ctx
 				.devShell(job, this.#workspace.repository, this.#preparing.signal)
 				.catch((error: unknown) => {
 					if (this.#ended()) return null;
 					throw error;
 				});
-			if (this.#ended()) return await this.#conclude(null, account);
+			if (this.#ended()) return await this.#conclude(null, seat);
 			const resume = job.session !== null;
 			const output = new OutputUploader(
 				(seq, text) => ctx.request({ type: "output", job: job.id, attempt: job.attempt, seq, text }),
@@ -278,7 +284,8 @@ export class Attempt {
 				});
 				this.#agent = adapter.launch({
 					cwd: this.#workspace.dir,
-					home: ctx.home(account),
+					home: ctx.home(seat),
+					data: this.#workspace.data,
 					session: this.#session,
 					resume,
 					prompt: resume ? resumePrompt(job) : startPrompt(job, this.instructions, this.#workspace.dir),
@@ -298,7 +305,7 @@ export class Attempt {
 				await output.close();
 				if (sandbox) closeSandbox(sandbox);
 			}
-			await this.#conclude(exit, account);
+			await this.#conclude(exit, seat);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			ctx.log(`${job.id}: ${message}`);
@@ -312,8 +319,12 @@ export class Attempt {
 		return this.#cancelled || this.#stopped || this.#abandoned || this.#paused;
 	}
 
-	async #conclude(exit: Exit | null, account: Account): Promise<void> {
-		if (exit?.limited) this.ctx.limited(account, exit.limited.until);
+	async #conclude(exit: Exit | null, seat: Seat): Promise<void> {
+		let until: number | undefined;
+		if (exit?.limited) {
+			const model = (await this.#agent?.ran())?.model;
+			until = await this.ctx.limited(seat.id, exit.limited.until, model === "unknown" ? undefined : model);
+		}
 		// A review the agent left running when it exited ends before its checkout can go.
 		this.#reviewing.abort();
 		await this.#reviewRun;
@@ -330,13 +341,11 @@ export class Attempt {
 			const { summary, ...result } = this.#delivered;
 			return this.#finish("completed", `${summary}${unsaved}`, result);
 		}
-		if (exit?.limited) {
-			const until = exit.limited.until;
+		if (until !== undefined)
 			return this.#finish(
 				"limited",
-				`${account.label} hit its usage limit${until ? ` until ${new Date(until).toISOString()}` : ""}.${unsaved}`,
+				`${seat.label} hit its usage limit until ${new Date(until).toISOString()}.${unsaved}`,
 			);
-		}
 		const reply = exit?.reply?.trim();
 		if (this.#outstanding)
 			return this.#finish(
@@ -374,6 +383,12 @@ export class Attempt {
 		if (outcome !== "limited") await this.#workspace?.remove();
 	}
 
+	/** This session's `## Models` line, from what the CLI reports. */
+	async #implementer() {
+		const ran = (await this.#agent?.ran()) ?? { model: "unknown", effort: "unknown" };
+		return `Implementer: ${field(this.#harness)}, ${field(ran.model)}, ${field(ran.effort)} effort`;
+	}
+
 	/**
 	 * Publish what the worktree changed, with the pull request on delivery.
 	 * Returns null when kix paused the job on a decision instead.
@@ -386,6 +401,8 @@ export class Attempt {
 		const next = this.#publishing.then(async () => {
 			const workspace = this.#workspace!;
 			let snapshot = await workspace.snapshot();
+			// kix records the session on a pull request it commits to without writing its text.
+			const implementer = await this.#implementer();
 
 			const idle = () => !snapshot.changes.length && !snapshot.merge && !pull && !land;
 			if (idle()) return { head: workspace.head };
@@ -402,6 +419,7 @@ export class Attempt {
 					...(snapshot.merge && snapshot.submodules.length && { submodules: snapshot.submodules }),
 					...(pull && { pull }),
 					...(land && { land }),
+					...((snapshot.changes.length || snapshot.merge) && { implementer }),
 				});
 			let { status, body } = await send();
 			// An earlier publication landed but its reply was lost: continue from the head kix reports.
@@ -460,7 +478,7 @@ export class Attempt {
 		};
 		let round: Round;
 		try {
-			const reviewer = reviewerFor(this.#account!, ctx.accounts(), (a) => ctx.home(a), ctx.env);
+			const reviewer = reviewerFor(this.#seat!, ctx.pools(), ctx.env);
 			const running = ctx.review({
 				workspace: this.#workspace!,
 				head,
@@ -478,6 +496,12 @@ export class Attempt {
 						? "The last review round reported findings: deliver again with `responses`, saying how you fixed or refuted each one."
 						: "There is no earlier review round to answer: deliver again without `responses`.",
 				);
+			if (error instanceof ReviewLimitError) {
+				const until = await ctx.limited(error.harness, error.until, error.model);
+				return unreviewed(
+					`its reviewer's ${error.harness} pool hit its usage limit until ${new Date(until).toISOString()}`,
+				);
+			}
 			return unreviewed(
 				error instanceof Unreviewable ? error.message : `its review failed: ${(error as Error).message}`,
 			);
@@ -545,7 +569,7 @@ export class Attempt {
 		const summary = { type: "string", description: "What happened, for the maintainer, in a few sentences" };
 		const message = { type: "string", description: "Commit message for the published changes" };
 		// The checkout holds no issue, pull request, or plan request, and the agent has no GitHub access of its own.
-		const pulled = job.workflow === "iterate" || job.workflow === "merge";
+		const pulled = job.workflow === "iterate" || lands(job.workflow);
 		const context: Tool[] = /^(issues|pulls|plans)\//.test(job.target)
 			? [
 					{
@@ -566,42 +590,40 @@ export class Attempt {
 					},
 				]
 			: [];
-		// A merge job waits for checks and reviews between its fixes, as `quest wait` would.
-		const wait: Tool[] =
-			job.workflow === "merge"
-				? [
-						{
-							name: "wait",
-							description:
-								"Wait until the pull request changes since you last read it: its checks finish, a review, comment, or thread arrives, or its head or state changes. Returns its context then, or says nothing changed by the deadline. Call it again to keep waiting.",
-							inputSchema: {
-								type: "object",
-								properties: {
-									minutes: {
-										type: "number",
-										description: `How long to wait at most, up to ${WAIT_LIMIT / 60_000} minutes; 30 by default`,
-									},
+		// A landing job waits for checks and reviews between its fixes, as `quest wait` would.
+		const wait: Tool[] = lands(job.workflow)
+			? [
+					{
+						name: "wait",
+						description:
+							"Wait until the pull request changes since you last read it: its checks finish, a review, comment, or thread arrives, or its head or state changes. Returns its context then, or says nothing changed by the deadline. Call it again to keep waiting.",
+						inputSchema: {
+							type: "object",
+							properties: {
+								minutes: {
+									type: "number",
+									description: `How long to wait at most, up to ${WAIT_LIMIT / 60_000} minutes; 30 by default`,
 								},
 							},
-							call: async (args) => {
-								const minutes =
-									typeof args.minutes === "number" && args.minutes > 0 ? args.minutes : 30;
-								const waited = await waitForChange(() => this.ctx.context(job.id, job.attempt), {
-									since: this.#seen,
-									changes: this.#changes,
-									until: Date.now() + Math.min(minutes * 60_000, WAIT_LIMIT),
-									stopped: () => this.#closed(),
-								});
-								if ("stopped" in waited) return waited.stopped;
-								this.#seen = fingerprint(waited.context);
-								const text = JSON.stringify(waited.context, null, 1);
-								return waited.changed
-									? `The pull request changed:\n${text}`
-									: `Nothing changed while waiting. The pull request now:\n${text}`;
-							},
 						},
-					]
-				: [];
+						call: async (args) => {
+							const minutes = typeof args.minutes === "number" && args.minutes > 0 ? args.minutes : 30;
+							const waited = await waitForChange(() => this.ctx.context(job.id, job.attempt), {
+								since: this.#seen,
+								changes: this.#changes,
+								until: Date.now() + Math.min(minutes * 60_000, WAIT_LIMIT),
+								stopped: () => this.#closed(),
+							});
+							if ("stopped" in waited) return waited.stopped;
+							this.#seen = fingerprint(waited.context);
+							const text = JSON.stringify(waited.context, null, 1);
+							return waited.changed
+								? `The pull request changed:\n${text}`
+								: `Nothing changed while waiting. The pull request now:\n${text}`;
+						},
+					},
+				]
+			: [];
 		return [
 			...context,
 			...wait,
@@ -703,18 +725,17 @@ export class Attempt {
 			},
 			{
 				name: "deliver",
-				description:
-					job.workflow === "merge"
-						? `Land the pull request once its decisions are settled: kix publishes the working tree to its head, then ${REVIEWS}, and kix lands exactly that head through GitHub unless the review found something, enabling auto-merge bound to it or merging at once. End your turn after, unless the review found something.`
-						: job.workflow === "iterate"
-							? `Deliver the finished work: kix publishes the working tree to the pull request's head, then ${REVIEWS}. End your turn after, unless the review found something.`
-							: `Deliver the finished work: kix publishes the working tree and opens or updates the job's pull request, then, unless it stays a draft, ${REVIEWS}. End your turn after, unless the review found something.`,
+				description: lands(job.workflow)
+					? `Land the pull request once its decisions are settled: kix publishes the working tree to its head, then ${REVIEWS}, and kix lands exactly that head through GitHub unless the review found something, enabling auto-merge bound to it or merging at once. End your turn after, unless the review found something.`
+					: job.workflow === "iterate"
+						? `Deliver the finished work: kix publishes the working tree to the pull request's head, then ${REVIEWS}. End your turn after, unless the review found something.`
+						: `Deliver the finished work: kix publishes the working tree and opens or updates the job's pull request, then, unless it stays a draft, ${REVIEWS}. End your turn after, unless the review found something.`,
 				inputSchema: {
 					type: "object",
 					properties: {
 						summary,
 						message,
-						...(job.workflow === "merge" && {
+						...(lands(job.workflow) && {
 							method: {
 								type: "string",
 								enum: ["merge", "squash", "rebase"],
@@ -722,9 +743,12 @@ export class Attempt {
 									"The merge method the repository's root instructions name for the base branch; omit to use the first the repository allows",
 							},
 						}),
-						...(!pulled && {
+						// A delete repurposes its pull request, so it rewrites the pull request's text too.
+						...((!pulled || job.workflow === "delete") && {
 							title: { type: "string", description: "The pull request's title" },
 							body: { type: "string", description: "The pull request's description, in Markdown" },
+						}),
+						...(!pulled && {
 							draft: {
 								type: "boolean",
 								description: "Keep the pull request a draft while decisions or unfinished work remain",
@@ -743,26 +767,27 @@ export class Attempt {
 								"Suggested follow-up work, one self-contained line each, which kix offers the maintainer to plan",
 						},
 					},
-					required: pulled ? ["summary"] : ["summary", "title", "body"],
+					required: pulled && job.workflow !== "delete" ? ["summary"] : ["summary", "title", "body"],
 				},
 				call: async (args) => {
 					const closed = this.#closed();
 					if (closed) return closed;
 					const text = string(args.summary, "summary", 4000);
 					// kix names this session in the body's `## Models` record, from what the CLI reports.
-					const ran = (await this.#agent?.ran()) ?? { model: "unknown", effort: "unknown" };
-					const implementer = `Implementer: ${field(this.#harness)}, ${field(ran.model)}, ${field(ran.effort)} effort`;
-					const pull = pulled
-						? undefined
-						: {
-								title: string(args.title, "title", 256),
-								body: withModels(string(args.body, "body", 59_000), implementer),
-								draft: args.draft !== false,
-							};
+					const implementer = await this.#implementer();
+					const pull =
+						pulled && job.workflow !== "delete"
+							? undefined
+							: {
+									title: string(args.title, "title", 256),
+									body: withModels(string(args.body, "body", 59_000), implementer),
+									// A delete's pull request lands, so kix marks it ready then.
+									draft: !pulled && args.draft !== false,
+								};
 					const method = args.method as Land["method"];
 					if (method !== undefined && !["merge", "squash", "rebase"].includes(method))
 						throw new Error("method is one of merge, squash, or rebase");
-					const land: Land | undefined = job.workflow === "merge" ? (method ? { method } : {}) : undefined;
+					const land: Land | undefined = lands(job.workflow) ? (method ? { method } : {}) : undefined;
 					const followups = followupsOf(args.followups);
 					const responses =
 						args.responses === undefined ? undefined : string(args.responses, "responses", 60_000);

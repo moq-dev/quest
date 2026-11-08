@@ -67,12 +67,6 @@ Decision prompts, chosen options marked ✅:
   semver-breaking features) is moq-dev/moq's own plan: ✅ re-plan moq
   separately (rejected: make it quest's convention; not now).
 
-## Required
-
-- [Epics list no children](/quest/m0/token-waste/child-lists.md) - an epic's children are its directory, so finishing a quest edits no README
-- [quest usage](/quest/m0/token-waste/usage.md) - per quest and PR: which models and efforts worked on it, their tokens and API-equal cost, and how the work went; the epic's re-measure runs it
-- [Point to token-max](/quest/m0/token-waste/token-max.md) - `SETUP.md` recommends the standalone settings doctor, and the re-measure runs it
-
 ## Related
 
 - [Model check](/quest/m0/model-check.md) - audits the size tables the review quest changes

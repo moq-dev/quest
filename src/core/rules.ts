@@ -35,7 +35,7 @@ import { MAINTAINER, WAITING, parseWait } from "./waiting";
  * literally, so a typo turns a blocked quest ready and fails nowhere else: the
  * closed vocabulary is what catches it.
  */
-const HEADINGS = ["Goal", "Plan", "Waiting", "Required", "Closes", "Related"];
+export const HEADINGS = ["Goal", "Plan", "Waiting", "Required", "Closes", "Related"];
 
 /**
  * Sections whose whole content is a list. A heading left standing after its
@@ -144,6 +144,18 @@ function headings(found: Finding[], docs: Doc[], doc: Doc) {
 		}
 	}
 
+	// A section name at any other level is invisible to readiness and to `quest
+	// waiting`, so a `### Waiting` would drop its items out of the list silently.
+	for (const heading of doc.offLevel) {
+		if (HEADINGS.includes(heading.text)) {
+			found.push({
+				path: doc.path,
+				line: heading.line,
+				message: `'${"#".repeat(heading.depth)} ${heading.text}' must be '## ${heading.text}': readiness and quest waiting read only '## ' sections`,
+			});
+		}
+	}
+
 	for (const heading of doc.headings) {
 		if (LIST_SECTIONS.includes(heading.text) && entries(doc, heading.text).length === 0) {
 			const why =
@@ -210,8 +222,8 @@ function links(found: Finding[], exists: (path: string) => boolean, known: Set<s
 /**
  * Every document sits in an epic: its directory has a README, and so does
  * each directory above it up to the root, so the tree reaches it. Every
- * `Required` entry is a quest, required once. An epic may still list its
- * children, as trees from before directory membership do; each counts once.
+ * `Required` entry is a quest, required once, and an epic requires nothing it
+ * holds, since it already waits for everything in its directory.
  *
  * A condition outside the repository (a release, a customer, a person) is a
  * quest of its own rather than a plain-text bullet: a blocked quest drops out
@@ -245,6 +257,13 @@ function membership(found: Finding[], known: Set<string>, docs: Doc[]) {
 				found.push({ path: doc.path, line: entry.line, message: `requires ${entry.target} twice` });
 			}
 			seen.add(target);
+			if (holds(doc.path, target)) {
+				found.push({
+					path: doc.path,
+					line: entry.line,
+					message: `requires ${entry.target}, which this epic holds; an epic waits for everything in its directory, so remove the entry (quest check --fix does)`,
+				});
+			}
 		}
 	}
 }
@@ -256,8 +275,8 @@ function membership(found: Finding[], known: Set<string>, docs: Doc[]) {
  * other quest and its README has no `## Required`.
  *
  * Readiness stays a grep for the heading; this rule is what keeps that answer
- * true once the milestone empties. The root's own listing of its milestones is
- * membership, not a blocker, so it is exempt.
+ * true once the milestone empties. A root entry naming a milestone is the
+ * membership rule's finding, not this one's.
  */
 function milestones(found: Finding[], docs: Doc[]) {
 	const finished = finishedMilestone(docs);

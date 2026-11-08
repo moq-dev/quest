@@ -43,7 +43,7 @@ import { apply, parseResolution, pushCommand, resolutionSection } from "../src/c
 import fixerPrompt from "../assets/land-fix.md";
 import { COMMENT_LIMIT, FLAKY_INPUT, fix, parseBaseFix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
-import type { GitHubDependencies } from "../src/cli/github";
+import { GitHub, type GitHubDependencies } from "../src/cli/github";
 import {
 	type Plan,
 	type Target,
@@ -54,8 +54,12 @@ import {
 	build,
 	mergeBase,
 	pin,
+	readRemote,
 	resolveQueue,
 } from "../src/cli/land";
+import { type OwnQueue, ownPass, QUEUE_CHECK, queueBranch } from "../src/cli/land-queue";
+import { ownQueue, readRemoval, watchPermissions } from "../src/cli/land-watch";
+import type { FixContext } from "../src/cli/land-watch-fix";
 import { batchable, parked } from "../src/cli/land-park";
 import {
 	apiDependencies,
@@ -68,6 +72,7 @@ import {
 	keyPath,
 	lockCheckout,
 	lockRepository,
+	startDaemon,
 	readPolicy,
 	resumeFailure,
 	serveBatch,
@@ -2043,7 +2048,7 @@ mv '${result}.new' '${result}'
 		expect(forge.merges.map(({ number }) => number)).toEqual([1, 2]);
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toContain("CRITICAL");
-		expect(warnings[0]).toContain("tested chain");
+		expect(warnings[0]).toContain("but the tested one is");
 		expect(forge.repo.pulls.slice(0, 2).every((pull) => pull.merged)).toBe(true);
 		// PR 3 passed the check in the batch, and PR 4 was not in it: both stay queued, without a comment.
 		expect(forge.repo.pulls.slice(2).every((pull) => pull.landing)).toBe(true);
@@ -2405,11 +2410,43 @@ mv '${result}.new' '${result}'
 		const root = forge.clone();
 		const linked = join(tempDir(), "linked");
 		git(root, "worktree", "add", "--detach", linked, "HEAD");
-		const release = await lockRepository(root);
+		const release = await lockRepository(root, "main");
 		try {
-			await expect(lockRepository(linked)).rejects.toThrow("another quest land daemon");
+			await expect(lockRepository(linked, "main")).rejects.toThrow("another quest land daemon");
 		} finally {
 			release();
+		}
+	});
+
+	test("starts one daemon per base from one checkout and refuses a second on the same base", async () => {
+		const forge = new Forge();
+		const root = forge.clone();
+		const key = join(tempDir(), "key.pem");
+		writeFileSync(
+			key,
+			generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }),
+		);
+		vi.stubEnv("QUEST_LAND_KEY", key);
+		vi.stubEnv("STATE_DIRECTORY", tempDir());
+		const main = { state: "" };
+		const release = { state: "", base: "release/v1" };
+		const unlockMain = await startDaemon(root, REPOSITORY, main, async () => "main");
+		const unlockRelease = await startDaemon(root, REPOSITORY, release, async () => "unused");
+		try {
+			expect(main).toMatchObject({ base: "main", state: defaultState(REPOSITORY, "main") });
+			expect(release.state).toBe(defaultState(REPOSITORY, "release/v1"));
+			expect(release.state).not.toBe(main.state);
+			// `serve` and `watch` share startDaemon, so either refuses the other on one base.
+			await expect(startDaemon(root, REPOSITORY, { state: "" }, async () => "main")).rejects.toThrow(
+				"another quest land daemon",
+			);
+			// A separate state directory on the same base still meets the checkout's lock.
+			await expect(
+				startDaemon(root, REPOSITORY, { state: tempDir(), base: "release/v1" }, async () => "unused"),
+			).rejects.toThrow("another quest land daemon");
+		} finally {
+			unlockRelease();
+			unlockMain();
 		}
 	});
 
@@ -2418,7 +2455,9 @@ mv '${result}.new' '${result}'
 		vi.stubEnv("CREDENTIALS_DIRECTORY", "/run/credentials/quest-land.service");
 		expect(keyPath()).toBe("/run/credentials/quest-land.service/github-app-key");
 		vi.stubEnv("STATE_DIRECTORY", "/var/lib/quest-land");
-		expect(defaultState(REPOSITORY)).toBe(join("/var/lib/quest-land", `${REPOSITORY.owner}-${REPOSITORY.repo}`));
+		expect(defaultState(REPOSITORY, "release/v1")).toBe(
+			join("/var/lib/quest-land", `${REPOSITORY.owner}-${REPOSITORY.repo}@release%2Fv1`),
+		);
 	});
 
 	test("fails a batch whose check outlives the timeout", async () => {
@@ -3330,7 +3369,11 @@ ${requeueScript}
 
 		// The daemon's known flaky tests, in the checkout's .git, follow the PRs as data.
 		const known = [
-			{ failure: "cargo test: render_timeout", jobs: ["https://github.com/o/r/actions/runs/1/job/2"] },
+			{
+				failure: "cargo test: render_timeout",
+				quest: "quest/m0/flaky/render-timeout.md",
+				jobs: ["https://github.com/o/r/actions/runs/1/job/2"],
+			},
 		];
 		writeFileSync(join(dir, ".git", FLAKY_INPUT), JSON.stringify(known));
 		await fix(dir, log, [1], agent, ["-"]);
@@ -4264,4 +4307,310 @@ describe("land fixer stop rules", () => {
 		expect(stopReason("requeued", round("environment"))).toContain("the runner's environment fails it");
 		expect(stopReason("requeued", round("flaky"))).toContain("last judged flaky");
 	});
+});
+
+/** The test commit the own queue pushed for PR `number`, if its branch exists. */
+function queued(forge: Forge, number: number): string | null {
+	const found = spawnSync("git", ["-C", forge.origin, "rev-parse", `refs/heads/${queueBranch("main", number)}`], {
+		encoding: "utf8",
+	});
+	return found.status === 0 ? found.stdout.trim() : null;
+}
+
+/** The queue workflow's run on PR `number`'s queue branch, reporting the required `test` check there. */
+function report(forge: Forge, number: number, conclusion: "SUCCESS" | "FAILURE" | null, log = "") {
+	const sha = queued(forge, number)!;
+	if (conclusion)
+		forge.repo.commitRuns = {
+			...forge.repo.commitRuns,
+			[sha]: [{ name: "test", conclusion, url: "https://ci.test/queue" }],
+		};
+	const id = (forge.repo.actionRuns ?? []).length + 1;
+	(forge.repo.actionRuns ??= []).push({
+		id,
+		name: "Queue",
+		head_branch: queueBranch("main", number),
+		head_sha: sha,
+		status: conclusion ? "completed" : "in_progress",
+		conclusion: conclusion?.toLowerCase() ?? null,
+		html_url: `https://github.com/upstream/project/actions/runs/${id}`,
+		jobs: [
+			{
+				id: id * 10,
+				name: "Build",
+				status: conclusion ? "completed" : "in_progress",
+				conclusion: conclusion?.toLowerCase() ?? null,
+				html_url: `https://github.com/upstream/project/actions/runs/${id}/job/${id * 10}`,
+				steps: [{ name: "Test", conclusion: conclusion?.toLowerCase() ?? null }],
+				log,
+			},
+		],
+	});
+}
+
+/** The latest queue check each PR's current head shows, as `status title`. */
+function shown(forge: Forge): Record<number, string> {
+	const found: Record<number, string> = {};
+	for (const pull of forge.repo.pulls) {
+		const run = (forge.repo.checkRuns ?? [])
+			.filter((item) => item.name === QUEUE_CHECK && item.head_sha === pull.head)
+			.at(-1);
+		if (run) found[pull.number] = `${run.status ?? run.conclusion} ${String(run.output.title)}`;
+	}
+	return found;
+}
+
+describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
+	function setup(options: Partial<OwnQueue> = {}) {
+		const forge = new Forge();
+		const queue: OwnQueue = {
+			root: forge.clone(),
+			state: tempDir(),
+			method: "squash",
+			timeout: 60,
+			token: async () => "",
+			read: readRemote,
+			...options,
+		};
+		const now = Date.parse("2026-11-07T12:00:00Z");
+		/** Requests GitHub refuses, each once. */
+		const refuse: ((url: string, init?: RequestInit) => boolean)[] = [];
+		/** One pass at `minutes` after the first, as the daemon runs it, and GitHub's view after it. */
+		const pass = async (minutes = 0, fix?: FixContext) => {
+			const forged = await forge.deps({ checks: "write", actions: "write" });
+			const deps: GitHubDependencies = {
+				...forged,
+				now: () => now + minutes * 60_000,
+				fetch: (async (input, init) => {
+					const index = refuse.findIndex((matches) => matches(String(input), init));
+					if (index < 0) return forged.fetch(input, init);
+					refuse.splice(index, 1);
+					return Response.json({ message: "Validation Failed" }, { status: 422 });
+				}) as typeof fetch,
+			};
+			queue.token = async () => deps.token;
+			if (fix) fix.token = queue.token;
+			const result = await ownPass(REPOSITORY, "main", queue, deps, fix);
+			forge.settle();
+			// GitHub knows each pushed queue commit, with no checks until the workflow reports them.
+			for (const pull of forge.repo.pulls) {
+				const sha = queued(forge, pull.number);
+				if (sha) (forge.repo.commitRuns ??= {})[sha] ??= [];
+			}
+			return result.lines.map((line) => line.split(" ").slice(0, 2).join(" "));
+		};
+		return { forge, queue, pass, refuse };
+	}
+
+	test("tests one pick at a time on the base, shows each its place, and lands exactly the tested tree", async () => {
+		const { forge, pass } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		const two = forge.pull("Two", { "two.txt": "2\n" });
+		const base = forge.main();
+		expect(await pass()).toEqual(["building 1"]);
+		const tested = queued(forge, 1)!;
+		// The base merged into the pick, with the base as its second parent, which the workflow builds on.
+		expect(git(forge.origin, "rev-parse", `${tested}^1`, `${tested}^2`).split("\n")).toEqual([one.head, base]);
+		expect(shown(forge)).toEqual({ 1: "in_progress Building on main", 2: "queued Position 2 of 2" });
+		// Pending checks wait, writing nothing new.
+		const writes = forge.repo.checkRuns!.length;
+		expect(await pass()).toEqual([]);
+		expect(forge.repo.checkRuns!.length).toBe(writes);
+		report(forge, 1, null);
+		await pass();
+		expect(forge.repo.checkRuns!.filter((run) => run.head_sha === one.head).at(-1)!.details_url).toBe(
+			"https://github.com/upstream/project/actions/runs/1",
+		);
+
+		report(forge, 1, "SUCCESS");
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(one.merged).toBe(true);
+		expect(git(forge.origin, "rev-parse", "main^{tree}")).toBe(git(forge.origin, "rev-parse", `${tested}^{tree}`));
+		expect(queued(forge, 1)).toBeNull();
+		expect(shown(forge)[1]).toBe("success Landed");
+		// The next pick builds on the base the landing moved.
+		expect(await pass()).toEqual(["building 2"]);
+		expect(git(forge.origin, "rev-parse", `${queued(forge, 2)!}^2`)).toBe(forge.main());
+		report(forge, 2, "SUCCESS");
+		expect(await pass()).toEqual(["landed 2"]);
+		expect(two.merged).toBe(true);
+		expect(git(forge.origin, "show", "main:one.txt", "main:two.txt")).toBe("1\n2");
+	});
+
+	test("lands merge commits with --method merge", async () => {
+		const { forge, pass } = setup({ method: "merge" });
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		const base = forge.main();
+		await pass();
+		report(forge, 1, "SUCCESS");
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(git(forge.origin, "rev-parse", "main^1")).toBe(base);
+		expect(git(forge.origin, "merge-base", "--is-ancestor", one.head!, "main")).toBe("");
+	});
+
+	test("a fork that refuses maintainer pushes lands by fast-forwarding the base to the tested tree", async () => {
+		const { forge, pass } = setup();
+		const fork = forge.pull("Fork", { "fork.txt": "f\n" }, { contributor: "outside", edits: false });
+		forge.advance({ "other.txt": "moved\n" });
+		const base = forge.main();
+		await pass();
+		const tested = queued(forge, 1)!;
+		report(forge, 1, "SUCCESS");
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(git(forge.origin, "rev-parse", "main^1")).toBe(base);
+		expect(git(forge.origin, "rev-parse", "main^{tree}")).toBe(git(forge.origin, "rev-parse", `${tested}^{tree}`));
+		expect(fork.closed).toBe(true);
+		expect(forge.comment(1)).toContain("by quest land");
+		expect(shown(forge)[1]).toBe("success Landed");
+	});
+
+	test("a failed build is dropped as GitHub's queue removes a PR, and recorded for the land fixer", async () => {
+		const { forge, queue, pass } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		forge.pull("Two", { "two.txt": "2\n" });
+		const base = forge.main();
+		await pass();
+		report(forge, 1, "FAILURE", "error: one.test failed\n");
+		expect(await pass()).toEqual(["removed 1", "building 2"]);
+		expect(one.landing).toBe(false);
+		expect(forge.comment(1)).toContain("the queue removed this pull request at");
+		expect(forge.comment(1)).toContain("because its queue build failed (`failed_checks`)");
+		expect(forge.comment(1)).toContain("error: one.test failed");
+		const removal = readRemoval(queue.state, 1)!;
+		expect(removal.verdict).toBe("fix");
+		expect(removal.jobs.map((job) => [job.name, job.step])).toEqual([["Build", "Test"]]);
+		expect(removal.failure!.plan.base).toEqual({ ref: "main", sha: base });
+		expect(removal.failure!.plan.queue[0].head).toBe(one.head);
+		expect(shown(forge)).toEqual({ 1: "failure Removed from the queue", 2: "in_progress Building on main" });
+		expect(queued(forge, 1)).toBeNull();
+	});
+
+	test("a build past its timeout is dropped, and its runs cancelled", async () => {
+		const { forge, queue, pass } = setup({ timeout: 30 });
+		forge.pull("One", { "one.txt": "1\n" });
+		await pass();
+		report(forge, 1, null);
+		expect(await pass(29)).toEqual([]);
+		expect(await pass(30)).toEqual(["removed 1"]);
+		expect(readRemoval(queue.state, 1)!.reason).toBe("checks_timed_out");
+		expect(forge.repo.actionRuns![0].conclusion).toBe("cancelled");
+	});
+
+	test("a moved base rebuilds the pick with no drop, and a pick that ends stops its build", async () => {
+		const { forge, queue, pass } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		forge.pull("Two", { "two.txt": "2\n" });
+		await pass();
+		const first = queued(forge, 1);
+		report(forge, 1, null);
+		forge.advance({ "other.txt": "admin bypass\n" });
+		expect(await pass()).toEqual(["rebuilding 1", "building 1"]);
+		expect(queued(forge, 1)).not.toBe(first);
+		expect(git(forge.origin, "rev-parse", `${queued(forge, 1)}^2`)).toBe(forge.main());
+		expect(forge.repo.actionRuns![0].conclusion).toBe("cancelled");
+		expect(readRemoval(queue.state, 1)).toBeUndefined();
+		// A person disarms it: the build stops, and the next pick starts.
+		one.landing = false;
+		delete one.autoMerge;
+		expect(await pass()).toEqual(["left 1", "building 2"]);
+		expect(queued(forge, 1)).toBeNull();
+		expect(shown(forge)[1]).toBe("neutral Left the queue");
+	});
+
+	test("a conflict the quest merge driver cannot merge is dropped before any build", async () => {
+		const { forge, queue, pass } = setup();
+		forge.pull("Clash", { "code.txt": "one\nII\nthree\n" });
+		forge.advance({ "code.txt": "one\n2\nthree\n" });
+		expect(await pass()).toEqual(["removed 1"]);
+		expect(readRemoval(queue.state, 1)!.reason).toBe("merge_conflict");
+		expect(forge.comment(1)).toContain(`because it conflicts with`);
+		expect(queued(forge, 1)).toBeNull();
+	});
+
+	test("a held pick keeps its place unbuilt, and stale queue branches and their runs are cleared on the first pass", async () => {
+		const { forge, pass } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		forge.pull("Two", { "two.txt": "2\n" });
+		one.labels = ["quest:active"];
+		// A build a crashed daemon pushed but never recorded, still running.
+		git(forge.origin, "update-ref", `refs/heads/${queueBranch("main", 9)}`, forge.main());
+		(forge.repo.actionRuns ??= []).push({
+			id: 99,
+			name: "Queue",
+			head_branch: queueBranch("main", 9),
+			head_sha: forge.main(),
+			status: "in_progress",
+			conclusion: null,
+			html_url: "https://github.com/upstream/project/actions/runs/99",
+			jobs: [],
+		});
+		expect(await pass()).toEqual(["building 2"]);
+		expect(forge.repo.actionRuns![0].conclusion).toBe("cancelled");
+		expect(
+			spawnSync("git", ["-C", forge.origin, "rev-parse", `refs/heads/${queueBranch("main", 9)}`]).status,
+		).not.toBe(0);
+		expect(shown(forge)).toEqual({ 1: "queued Held", 2: "in_progress Building on main" });
+	});
+
+	test("a drop interrupted before its comment is finished on the next pass, once", async () => {
+		const { forge, pass, refuse } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		await pass();
+		report(forge, 1, "FAILURE", "boom\n");
+		// GitHub refuses the comment once, after the drop disarmed the PR.
+		refuse.push(
+			(url, init) => url.endsWith("/issues/1/comments") && init?.method !== "GET" && init?.body !== undefined,
+		);
+		await expect(pass()).rejects.toThrow();
+		expect(one.landing).toBe(false);
+		expect(await pass()).toEqual(["removed 1"]);
+		expect(await pass()).toEqual([]);
+		expect(one.comments!.filter(({ body }) => body.includes("the queue removed this pull request"))).toHaveLength(
+			1,
+		);
+	});
+
+	test("the land fixer's requeue arms auto-merge pinned to the head, at the back of the queue", async () => {
+		const { forge, queue, pass } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		const two = forge.pull("Two", { "two.txt": "2\n" });
+		const tools = tempDir();
+		const wrapper = join(tools, "wrapper");
+		writeFileSync(
+			wrapper,
+			`#!/bin/sh\nset -eu\nprintf '[{"number":%s,"action":"requeue","reason":"healthy","failure":"just test: render","cause":"flaky"}]' "$2" > quest-land-result.json\n`,
+			{ mode: 0o755 },
+		);
+		const fix: FixContext = {
+			root: queue.root,
+			fixer: wrapper,
+			jobs: 1,
+			effort: "medium",
+			timeout: 60,
+			token: queue.token,
+			read: readRemote,
+		};
+		await pass(0, fix);
+		report(forge, 1, "FAILURE", "flaked\n");
+		const finished = eventFile(queue.state, (name) => name.endsWith(".exit"));
+		expect(await pass(0, fix)).toEqual(["removed 1", "building 2", "fixing 1"]);
+		await finished;
+		expect(await pass(0, fix)).toEqual(["requeued 1"]);
+		expect(one.landing).toBe(true);
+		expect(one.autoMerge!.commitBody).toBe(pin(one.head!));
+		expect(one.autoMerge!.enabledAt > two.autoMerge!.enabledAt).toBe(true);
+		report(forge, 2, "SUCCESS");
+		expect(await pass(0, fix)).toEqual(["landed 2"]);
+		expect(await pass(0, fix)).toEqual(["building 1"]);
+	});
+});
+
+test("the watcher picks its queue from the base's rules each pass", async () => {
+	const forge = new Forge();
+	const deps = await forge.deps();
+	expect(await ownQueue(new GitHub(deps), REPOSITORY, "main")).toBe(true);
+	forge.repo.rules = [{ type: "merge_queue", parameters: {} }];
+	expect(await ownQueue(new GitHub(deps), REPOSITORY, "main")).toBe(false);
+	expect(watchPermissions(false, true).api).toMatchObject({ checks: "write", actions: "write" });
+	expect(watchPermissions(true).api).not.toHaveProperty("checks", "write");
 });

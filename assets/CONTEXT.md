@@ -90,10 +90,10 @@ A PR that another session pushed to in the last hour is theirs: report its event
 Before each push to a PR's branch, confirm the PR is still open, since a push after it merges restores the deleted branch.
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
 
-Before a PR is marked ready for review, and before each push to one that is, a model that wrote none of its code reviews the committed branch locally, as `/quest-review` describes.
+Before a PR is marked ready for review, and before each push to one that is, a model other than the one that changed it last reviews the committed branch locally, as `/quest-review` describes.
 
-The PR body's `## Models` section records its size as `Size: M` (its quest's, or for a skill's own PR, as a quest is sized) and one `Implementer: Codex, gpt-6.1-sol, high effort` line per implementing session, added when it first pushes.
-Read your model and effort rather than guess, writing `unknown` for any you cannot find: Claude Code knows its model and exports `CLAUDE_EFFORT`; Codex records `model` and `effort` in the last `turn_context` of `~/.codex/sessions/*/*/*/rollout-*-$CODEX_THREAD_ID.jsonl`; Grok records `model_id` and `reasoning_effort` in `~/.grok/sessions/*/$GROK_SESSION_ID/chat_history.jsonl`.
+The PR body's `## Models` section records its size as `Size: M` (its quest's, or for a skill's own PR, as a quest is sized) and one `Implementer: Codex, gpt-6.1-sol, high effort` line per implementing session, moved last whenever it pushes; kix records one that pushes to an open PR in its own comment.
+Read your model and effort rather than guess, writing `unknown` for any you cannot find: Claude Code knows its model and exports `CLAUDE_EFFORT`, and Codex records `model` and `effort` in the last `turn_context` of `~/.codex/sessions/*/*/*/rollout-*-$CODEX_THREAD_ID.jsonl`.
 
 GitHub gives secrets to workflows on branches pushed to the repository, as quest branches usually are, so keep pull request CI, which runs unreviewed code, read-only: a read-only `GITHUB_TOKEN`, and write credentials only in environments limited to protected branches.
 Flag any workflow that breaks this to the user, and never add one.

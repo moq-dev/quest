@@ -15,6 +15,9 @@ export const BODY_LIMIT = 65_536;
 
 /** What a job's agent is told beyond the workflow's own skill, or null. */
 export function instructions(workflow: Workflow): string | null {
+	// kix may start ready quests on its own, so the job first checks the quest still deserves the slot.
+	if (workflow === "start")
+		return "Before implementing, check that this quest is still worth starting now: its problem may no longer be real, a later change may have made its plan wrong, or more urgent work may depend on its slot. If it is clearly worth starting, start without asking. If you doubt it, ask the maintainer one decision before changing anything, with these options and your recommendation: Start (implement it as planned), Skip (end without publishing anything), Deprioritize (move it to a later milestone with `quest mv` and deliver only that change), or Delete (abandon it with `quest rm`, edit the mentions it reports, and deliver only that change). Name what made you doubt it.";
 	if (workflow !== "plan") return null;
 	return "kix adds this pull request's decision record from the maintainer's recorded answers. Do not write the interview's questions, options, or answers into the pull request body; summarize the proposed quests instead. Still record each settled decision and its reason in the quest's Plan.";
 }

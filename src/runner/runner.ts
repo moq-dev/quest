@@ -1,15 +1,17 @@
-// `quest runner`: one machine's live presence on kix. It reports its accounts,
-// running attempts, and free slots in a `status` whenever they change, takes
-// `assign` and `cancel` pushes, and runs each attempt until it reports.
+// `quest runner`: one machine's live presence on kix. It reports its seats (its
+// opencode accounts and its Claude pool) as accounts, its running attempts, and
+// its free slots in a `status` whenever they change, takes `assign` and
+// `cancel` pushes, and runs each attempt until it reports.
 import type { Round } from "../cli/review";
 import type { Adapter } from "./adapter";
 import { Connection, type Dial, dialWebSocket } from "./connection";
-import type { Account, Login, RunnerHome } from "./home";
+import type { Login, Pool, RunnerHome, Seat } from "./home";
 import { Attempt, type Context } from "./job";
 import type { Action, Job, Message, Push } from "./protocol";
+import type { RunningProxy } from "./proxy";
 import { type ReviewRequest, reviewHead } from "./review";
 
-/** When the provider does not say when a limit resets, the account sits out this long. */
+/** When neither the provider nor the proxy says when a limit resets, the seat or pool sits out this long. */
 export const LIMIT_FALLBACK_MS = 60 * 60_000;
 
 export interface RunnerOptions {
@@ -17,7 +19,9 @@ export interface RunnerOptions {
 	login: Login;
 	/** How many jobs run at once. */
 	slots: number;
-	adapter(account: Account): Adapter;
+	adapter(seat: Seat): Adapter;
+	/** The runner's CLIProxyAPI, which pools its Claude and Codex accounts. */
+	proxy: Pick<RunningProxy, "origin" | "key" | "reset">;
 	devShell(job: Job, repository: string, signal: AbortSignal): Promise<string | null>;
 	remote(job: Job): string;
 	/** Review a published head; `quest review` on its own checkout by default. */
@@ -113,12 +117,13 @@ export class Runner {
 
 	#accounts() {
 		const now = this.#now();
-		return this.options.home.accounts().map((account) => ({
-			id: account.id,
-			provider: account.provider,
-			kind: account.kind,
-			label: account.label,
-			limited: (account.limitedUntil ?? 0) > now,
+		const limits = this.options.home.limits();
+		return this.options.home.seats().map((seat) => ({
+			id: seat.id,
+			provider: seat.provider,
+			kind: seat.kind,
+			label: seat.label,
+			limited: (limits[seat.id] ?? 0) > now,
 		}));
 	}
 
@@ -193,9 +198,15 @@ export class Runner {
 		const { options } = this;
 		return {
 			root: options.home.dir,
-			accounts: () => options.home.accounts(),
-			home: (account) => options.home.accountHome(account.id),
+			seats: () => options.home.seats(),
+			home: (seat) => options.home.seatHome(seat),
 			adapter: options.adapter,
+			pools: () => ({
+				accounts: options.home.accounts(),
+				limits: options.home.limits(),
+				home: (pool) => options.home.poolHome(pool),
+				proxy: options.proxy,
+			}),
 			devShell: options.devShell,
 			remote: options.remote,
 			env: options.env ?? process.env,
@@ -204,7 +215,7 @@ export class Runner {
 			review: options.review ?? reviewHead,
 			reviewed: (body) => this.#post("review", body),
 			context: (job, attempt) => this.#target(job, attempt),
-			limited: (account, until) => this.#limited(account, until),
+			limited: (id, until, model) => this.#limited(id, until, model),
 			log: options.log,
 		};
 	}
@@ -236,17 +247,26 @@ export class Runner {
 		return body;
 	}
 
-	/** Keep a refused account out of routing until it resets, and report the change. */
-	#limited(account: Account, until: number | null): void {
-		const { home } = this.options;
-		const accounts = home.accounts();
-		const found = accounts.find((a) => a.id === account.id);
-		if (!found) return;
-		found.limitedUntil = until && until > this.#now() ? until : this.#now() + LIMIT_FALLBACK_MS;
-		home.saveAccounts(accounts);
-		this.options.log(`${found.label} is limited until ${new Date(found.limitedUntil).toISOString()}`);
+	/**
+	 * Keep a refused seat or pool out of routing and reviews until it resets,
+	 * and report the change. The CLIs show a pool's cooldown without its reset,
+	 * so the proxy is asked for it.
+	 */
+	async #limited(id: string, until: number | null, model?: string): Promise<number> {
+		const { home, proxy, log } = this.options;
+		if (until === null && model !== undefined && (id === "claude" || id === "codex"))
+			until = await proxy.reset(id as Pool, model).catch((error: unknown) => {
+				log(`could not ask CLIProxyAPI when the ${id} pool resets: ${(error as Error).message}`);
+				return null;
+			});
+		const now = this.#now();
+		const resets = until !== null && until > now ? until : now + LIMIT_FALLBACK_MS;
+		home.limit(id, resets);
+		const name = home.seats().find((seat) => seat.id === id)?.label ?? `The ${id} pool`;
+		log(`${name} is limited until ${new Date(resets).toISOString()}`);
 		this.#schedule();
 		this.status();
+		return resets;
 	}
 
 	/** Report again when the next limited account resets. */
@@ -255,12 +275,7 @@ export class Runner {
 		// A closing runner reports nothing more, and its timer must not keep the process alive.
 		if (this.#closing) return;
 		const now = this.#now();
-		const next = Math.min(
-			...this.options.home
-				.accounts()
-				.map((a) => a.limitedUntil ?? 0)
-				.filter((until) => until > now),
-		);
+		const next = Math.min(...Object.values(this.options.home.limits()).filter((until) => until > now));
 		if (!Number.isFinite(next)) return;
 		this.#wake = setTimeout(
 			() => {

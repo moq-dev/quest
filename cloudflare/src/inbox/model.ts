@@ -7,6 +7,8 @@ import { parse, questBranch } from "quest/core";
 import { encodePath } from "../board/model";
 import { GitHubError, type Enrollment, GitHubService, NotMaintainer } from "../github/service";
 import { type Activity, type ProjectState, type Pull, owned, readState } from "../github/state";
+import { type Autostart, digest } from "../jobs/autostart";
+import * as autostart from "../jobs/autostart";
 import { type Prompt, parsePrompt } from "../jobs/prompt";
 import { hub } from "../jobs/routes";
 import * as store from "../jobs/store";
@@ -20,11 +22,11 @@ export type Read = { repository: number; item: string; seen: string | null; skip
 /**
  * What the item asks of the maintainer: answer an agent, pick an account for
  * a limited job, approve another maintainer's answer to their own job, trust
- * a pull request head no runner may run yet, retry a failure, or start work
- * on an issue, PR, or ready quest. `null` is work in progress, which only
- * informs.
+ * a pull request head no runner may run yet, retry a failure, start work
+ * on an issue, PR, or ready quest, or take over a draft its starter left
+ * quiet for `STALE`. `null` is work in progress, which only informs.
  */
-export type Need = "answer" | "account" | "approve" | "trust" | "retry" | "start";
+export type Need = "answer" | "account" | "approve" | "trust" | "retry" | "start" | "takeover";
 export type Kind = "issue" | "pull" | "quest" | "plan" | "devshell";
 
 export type Item = {
@@ -42,6 +44,8 @@ export type Item = {
 	/** The job's open question, or its answer awaiting approval, and its prompt when an agent asked it. */
 	question: QuestionView | null;
 	prompt: Prompt | null;
+	/** Who holds a PR nobody may act on: its draft's author, or the hold label a session holds it with. */
+	holder: string | null;
 	/** A "trust" decision's exact head, and GitHub's view of its commits beyond the default branch. */
 	head: { sha: string; compare: string } | null;
 	need: Need | null;
@@ -54,14 +58,13 @@ export type Item = {
 };
 
 /** One project's place in the inbox, or why it is unavailable. */
-export type ProjectView = { project: Enrollment; state: ProjectState | null; error: string | null };
-
-// FNV-1a: a short, stable version for a quest's text.
-function digest(text: string) {
-	let hash = 0x811c9dc5;
-	for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
-	return (hash >>> 0).toString(16);
-}
+export type ProjectView = {
+	project: Enrollment;
+	state: ProjectState | null;
+	error: string | null;
+	/** The viewer's opt-in to start this project's ready quests on their runners. */
+	autostart?: Autostart | null;
+};
 
 function kindOf(target: string): Kind {
 	if (target.startsWith("issues/")) return "issue";
@@ -145,13 +148,31 @@ export function entities(project: Enrollment, state: ProjectState | null) {
 }
 
 /**
- * A PR whose observed draft its starter still holds, or that a session holds
- * with a hold label, such as a merge job whose landing is queued, so nothing
- * waits on the maintainer.
+ * How long a draft its starter holds can stay quiet before the maintainer is
+ * offered to take it over. A week outlasts a weekend away from a local
+ * session while still surfacing abandoned claims.
  */
-function held(entity: Pick<Item, "kind" | "activity">) {
+export const STALE = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Who holds a PR, so nothing waits on the maintainer: the hold label a
+ * session holds it with, such as a merge job whose landing is queued, or the
+ * author of an observed draft they have not handed back. Null when free.
+ */
+function holder(entity: Pick<Item, "kind" | "activity">) {
 	const pull = entity.kind === "pull" ? (entity.activity?.data as Pull | null | undefined) : null;
-	return !!pull && (owned(pull) || !!pull.hold);
+	if (pull?.hold) return pull.hold;
+	if (pull && owned(pull)) return pull.author?.login ?? "its starter";
+	return null;
+}
+
+/**
+ * Whether a held draft has been quiet past `STALE`. Only a starter's draft is
+ * offered: a hold label names a live session or job, which releases its own.
+ */
+function abandoned(entity: Pick<Item, "kind" | "activity">, now: number) {
+	const pull = entity.kind === "pull" ? (entity.activity?.data as Pull | null | undefined) : null;
+	return !!pull && !pull.hold && owned(pull) && Date.parse(pull.updatedAt) < now - STALE;
 }
 
 /** What an item is called and links to when nothing observed names its target. */
@@ -180,6 +201,7 @@ export function decisions(
 	jobs: JobView[],
 	reads: Read[],
 	user: string,
+	now = Date.now(),
 ): Item[] {
 	const { project } = view;
 	const latest = new Map<string, JobView>();
@@ -196,6 +218,7 @@ export function decisions(
 		let question: QuestionView | null = null;
 		let head: Item["head"] = null;
 		let ended = false;
+		const holds = entity ? holder(entity) : null;
 		if (job?.state === "queued" && store.onPull(job.workflow) && !job.trusted) {
 			// Its head has commits no current maintainer signed, so no runner takes it until one approves the head.
 			const sha = job.head ?? job.revision;
@@ -217,9 +240,12 @@ export function decisions(
 		} else if (entity) {
 			// Starting new work on a paused project would be refused, so it is not offered.
 			if (project.state !== "enabled") continue;
-			// A draft its starter still holds is their work in progress until they hand it back.
-			if (!held(entity)) {
+			// A draft its starter still holds is their work in progress until they hand it back or leave it.
+			if (!holds) {
 				need = "start";
+				ended = !!job && !changed;
+			} else if (abandoned(entity, now)) {
+				need = "takeover";
 				ended = !!job && !changed;
 			}
 		} else continue;
@@ -239,6 +265,7 @@ export function decisions(
 			question,
 			prompt,
 			head,
+			holder: holds,
 			need,
 			version,
 			unread: need !== null && read?.seen !== version,
@@ -323,7 +350,11 @@ export async function load(env: Env, user: string) {
 	const views = await Promise.all(
 		(await github.projects(user)).map(async (project): Promise<ProjectView | null> => {
 			try {
-				return { project, state: await github.projectState(project, user), error: null };
+				const [state, scope] = await Promise.all([
+					github.projectState(project, user),
+					autostart.read(env.DB, project.id, user),
+				]);
+				return { project, state, error: null, autostart: scope };
 			} catch (error) {
 				if (error instanceof NotMaintainer) return null;
 				if (!(error instanceof GitHubError)) throw error;

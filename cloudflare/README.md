@@ -113,7 +113,8 @@ jobs wait for a runner that declares them. kix trusts that declaration, so a
 runner declared through `POST /api/runners` with `vm: true` that cannot build
 in a VM is still sent the job; `quest runner` fails it rather than run it. A
 `merge` job runs the merge
-skill's loop on an open, non-draft pull request and lands it; it holds the PR
+skill's loop on an open, non-draft pull request and lands it, and a `delete`
+job runs the delete skill on a quest's own pull request the same way; each holds the PR
 with its own `quest:kix` label, which local sessions respect as they do each
 other's `quest:active` (`src/jobs/landing.ts`), as described in
 [GITHUB.md](GITHUB.md#merge-jobs). A five-minute scheduled sweep retries ended jobs’ hold releases even when a lifecycle callback or GitHub read was missed; a live job, a replacement hold, or an active landing keeps its label. Without a `flake.nix`, the route
@@ -158,7 +159,9 @@ The hub's alarm moves them once it passes, so a returning runner is fenced out.
 A status that omits an acknowledged job gives it up at once.
 
 An account limit pauses the job with an account decision; kix never switches
-accounts on its own. An answer requeues the job and resumes its session on the
+accounts on its own. A runner reports its Claude subscriptions as one pooled
+account, which its own CLIProxyAPI rotates between, so the pool's limit means
+every subscription in it is out. An answer requeues the job and resumes its session on the
 runner that holds it. Until the job sandbox ships, that holds only for the
 requester's own answers: the agent acts on an answer with the requester's
 machine and credentials, so another maintainer's answer waits, with an
@@ -261,6 +264,35 @@ awaits a decision, and any other whose issue, pull request, or quest is still
 observed, so finished work stays set aside. Retrying a failed planning
 interview keeps its `plans/<id>` target.
 
+A pull request someone holds is in progress with no actions, and names its
+holder: the author of a draft without a `## Waiting` (or older `## Decisions
+needed`) section, or the `quest:*` label a session holds it with. Such a draft
+quiet for a week becomes a "quiet draft" decision offering to take it over
+with an iterate job, or to skip it until it changes; a labeled hold is never
+offered, since its session or job releases it. Every other open pull request
+offers merge, iterate, delete, and skip, and a draft handed back with `## Waiting`
+also offers "Mark ready for review" (`POST
+/projects/github/<owner>/<repo>/pulls/<n>/ready` with the `head` on screen),
+which the App does once no job of that pull request is active. Delete runs a
+`delete` job on a quest's own pull request and closes any other
+([GITHUB.md](GITHUB.md#deleting-pull-requests)).
+
+Each project's "Start ready quests on your runners" box opts the viewer in to
+starting its ready quests without a click, optionally only in some milestones
+(`POST /projects/github/<owner>/<repo>/autostart`, stored in `autostart`;
+`src/jobs/autostart.ts`). Whenever a dispatch pass leaves one of the
+opted-in maintainer's runners with a free slot and a usable account, their
+hub starts the next unclaimed ready quest in `quest unblocked` order,
+round-robin across their opted-in projects, as an ordinary start job they
+requested, after the same current GitHub checks as their own start. A quest
+that already had a job, or that they skipped in the inbox at its current
+text, waits for them, so a skipped, stopped, or failed start never reruns on
+its own. The scheduled sweep wakes every opted-in hub, so quests that became
+ready since the last runner event start too. Losing the maintainer role ends
+the opt-in. A start job's agent first checks the quest is still worth
+starting, and asks one decision when in doubt: start, skip, deprioritize to a
+later milestone, or delete.
+
 Beside the decisions (below them on a phone), an Agents card shows each job
 on the maintainer's projects (`src/inbox/activity.ts`): every target's latest
 job while it is queued, running, or waiting, and an ended one while the pull
@@ -288,6 +320,22 @@ Each maintainer's read state lives in `inbox_items`, keyed by a version of what
 the item showed (a question, a GitHub change, a quest's text). A newer version
 is unread again, and skipping an item lasts until it changes. A finished or
 stopped job sets its item aside the same way.
+
+### Landing queue
+
+`/projects/github/<owner>/<name>/queue` (`src/queue.tsx`) shows each base's
+landing queue, under the same maintainer check as the project's other pages,
+read from GitHub when the page loads (`src/github/queue.ts`); kix stores none
+of it. A base with GitHub's merge queue lists its entries by position, building
+entries linking their merge group's run, then the PRs whose armed auto-merge
+waits on checks to join. Any other base lists its armed PRs in the order they
+were armed, the watcher's own queue order, each with the `quest queue` check
+the watcher writes, whose in-progress run links its build. Recent drops are
+the watcher's marked removal comments from the last day, in both modes, each
+paired with the watcher's next marked comment on that pick: re-enqueued,
+handed back, not applied, refused, or held. A drop with no later word, such
+as one a hold, a push, or a person's removal ends, shows what its own comment
+said happens next. Only comments from an app or a writer count.
 
 ### Installed app and notifications
 
