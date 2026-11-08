@@ -1363,6 +1363,41 @@ describe("account add", () => {
 		expect(home().seats()).toEqual([]);
 	});
 
+	posix("keeps the accounts another command changed during a sign-in", async () => {
+		const { io, signIn, home } = pooled();
+		signIn("a@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		const [a] = home().accounts();
+		const other = { ...a!, id: "other", label: "Other", credential: "claude-other.json" };
+		// While b signs in, another command removes a and adds another account.
+		writeFileSync(join(io.env.QUEST_RUNNER_HOME!, "..", "during.json"), JSON.stringify([other]));
+		signIn("b@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		expect(
+			home()
+				.accounts()
+				.map((account) => account.label),
+		).toEqual(["Other", "b@example.test"]);
+	});
+
+	posix("lets a pool that gained an account serve again", async () => {
+		const { io, signIn, home } = pooled({ ANTHROPIC_API_KEY: "sk-ant-api03-abcd" });
+		const until = Date.now() + 3_600_000;
+		home().limit("claude", until);
+		home().limit("codex", until);
+		signIn("a@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		expect(home().limits()).toEqual({ codex: until });
+		home().limit("claude", until);
+		await addAccount(io, { cli: "claude", console: true });
+		expect(home().limits()).toEqual({ codex: until });
+		// Signing an account in again gives the pool no account its provider has not refused.
+		home().limit("claude", until);
+		signIn("a@example.test");
+		await addAccount(io, { cli: "claude", console: false });
+		expect(home().limits()).toEqual({ claude: until, codex: until });
+	});
+
 	posix("uses the remote flows over SSH, and fails a sign-in that saved nothing", async () => {
 		const { io, signIn, calls, home } = pooled({ SSH_CONNECTION: "10.0.0.1 22 10.0.0.2 22" });
 		signIn("a@example.test");
@@ -1809,6 +1844,12 @@ const type = argv.includes("-claude-login") ? "claude" : "codex";
 if (email) {
 	fs.mkdirSync(config.oauth["auth-dir"], { recursive: true });
 	fs.writeFileSync(join(config.oauth["auth-dir"], type + "-" + email + ".json"), JSON.stringify({ type, email, access_token: String(Math.random()) }));
+}
+// Another quest runner account command that changes the accounts while this sign-in waits.
+const during = join(__dirname, "..", "during.json");
+if (fs.existsSync(during)) {
+	fs.copyFileSync(during, join(config.oauth["auth-dir"], "..", "..", "accounts.json"));
+	fs.rmSync(during);
 }
 `;
 

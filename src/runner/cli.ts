@@ -186,10 +186,17 @@ export async function addAccount(
 	if (model !== undefined && !/^[^/\s]+\/\S+$/.test(model))
 		throw new RunnerInputError("--model must be provider/model, such as openai/gpt-5.5");
 	const state = home(io);
-	const accounts = state.accounts();
+	// Refused here, before any sign-in, when the home is from an earlier runner.
+	state.accounts();
 	const id = state.newId();
+	// The accounts are read again after the sign-in, which another `account add` or `remove` may have overlapped.
 	const added = (account: Account) => {
-		state.saveAccounts([...accounts, account]);
+		state.saveAccounts([...state.accounts(), account]);
+		// The pool has an account its provider has not refused, so it no longer sits out.
+		if (account.cli !== "opencode") {
+			writeProxyConfig(state);
+			state.limit(account.cli, null);
+		}
 		io.stdout(`Added ${account.label} (${account.kind}) as ${id}.\n`);
 		return 0;
 	};
@@ -213,9 +220,9 @@ export async function addAccount(
 		if (!key) throw new RunnerInputError("--console reads the Console API key from ANTHROPIC_API_KEY");
 		if (!/^sk-ant-[\w-]+$/.test(key))
 			throw new RunnerInputError("ANTHROPIC_API_KEY is not an Anthropic API key (sk-ant-...)");
-		if (accounts.some((account) => account.key === key))
+		if (state.accounts().some((account) => account.key === key))
 			throw new RunnerInputError("this Console API key is already in the Claude pool");
-		added({
+		return added({
 			id,
 			cli: "claude",
 			provider: POOL_PROVIDER.claude,
@@ -223,8 +230,6 @@ export async function addAccount(
 			label: label ?? `Console API key ...${key.slice(-4)}`,
 			key,
 		});
-		writeProxyConfig(state);
-		return 0;
 	}
 	const pool = options.cli;
 	// Over SSH the browser is elsewhere: Claude's link is pasted back, and Codex takes a device code.
@@ -235,6 +240,7 @@ export async function addAccount(
 	const signedIn = readCredential(state, credential);
 	if (signedIn.pool !== pool || !signedIn.email)
 		throw new Error(`the sign-in saved ${credential}, which is not a ${pool} login`);
+	const accounts = state.accounts();
 	const existing = accounts.find((account) => account.credential === credential);
 	if (existing) {
 		if (label) existing.label = label;
@@ -335,14 +341,23 @@ export async function runRunner(io: RunnerIO, options: { slots: number }): Promi
 	const held = state.hold();
 	let proxy: Awaited<ReturnType<typeof startProxy>> | undefined;
 	const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-	let stop = () => {};
+	// Handled from before the proxy starts, since it is detached and would outlive a runner the signal killed.
+	let runner: Runner | undefined;
+	let stopped = false;
+	const stop = () => {
+		stopped = true;
+		log("stopping: publishing running work so it moves to another runner");
+		void runner?.shutdown();
+	};
+	for (const signal of signals) process.on(signal, stop);
 	try {
 		proxy = await startProxy(cliproxy, state, io.env);
+		if (stopped) return 0;
 		log(`CLIProxyAPI pools this runner's Claude and Codex accounts at ${proxy.origin}`);
 		// Only the CLIs some seat uses, resolved before any job enters a devShell.
 		const adapter = runnerAdapters(io.env, proxy);
 		for (const seat of seats) adapter(seat.adapter);
-		const runner = new Runner({
+		runner = new Runner({
 			home: state,
 			login: current,
 			slots: options.slots,
@@ -355,11 +370,6 @@ export async function runRunner(io: RunnerIO, options: { slots: number }): Promi
 			fetch: fetcher,
 			log,
 		});
-		stop = () => {
-			log("stopping: publishing running work so it moves to another runner");
-			void runner.shutdown();
-		};
-		for (const signal of signals) process.on(signal, stop);
 		// Without its proxy no Claude job or review can run, so the runner hands its jobs on and exits.
 		let lost: string | undefined;
 		void proxy.exited.then((reason) => {

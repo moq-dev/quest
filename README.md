@@ -1555,7 +1555,8 @@ token; a new plan reads your idea and pasted context there. kix publishes as its
 every account in a pool is cooling down, Claude Code shows the proxy's "All
 credentials for model ... are cooling down" without its reset, so the runner
 asks the proxy, which names it in `Retry-After` without asking any provider,
-and marks the pool limited until then (an hour when neither says). A job that
+and marks the pool limited until then (an hour when neither says); adding an
+account to the pool lifts that. A job that
 hits its account's or pool's limit pauses for you to pick another account; kix
 never switches on its own. A review whose pool is limited leaves the head
 unreviewed, saying when the pool resets, and landing it needs a maintainer's
