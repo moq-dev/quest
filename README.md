@@ -581,7 +581,7 @@ commit for `quest land apply <pr>`.
 
 ## Land a batch with quest land
 
-`quest land serve` runs on a maintainer's host, with one process per repository.
+`quest land serve` runs on a maintainer's host, with one process per base branch of a repository.
 It replaces the Land workflow; landing needs no GitHub Actions.
 The base requires the unreported `quest land` check, keeping auto-merge waiting.
 Queue an approved head with `quest merge <pr> --land <sha>`.
@@ -747,7 +747,7 @@ and comments with the reason and the failing log, bounded by
 size. When GitHub refuses to merge one PR, only that PR stops: a conflict is
 parked for the fixer, a moved head or refusal is ejected, and the rest of the batch
 stays queued. `quest status` reads the hidden reason marker. Full logs stay in the state directory: `--state`, or by default systemd's
-`$STATE_DIRECTORY` or the XDG state home, never inside the checkout. Each daemon pass deletes a log 7 days after its last write once no job, waiting removal, or replayed failure reads it. A check
+`$STATE_DIRECTORY` or the XDG state home, in `<owner>-<repo>@<base>`, never inside the checkout. Each daemon pass deletes a log 7 days after its last write once no job, waiting removal, or replayed failure reads it. A check
 that runs past `--timeout` minutes (60 by default) is killed and fails its batch.
 
 Every chain commit the daemon builds, and every base it merges into a PR head, drops
@@ -838,7 +838,7 @@ the unreported required `quest land` check must be verified on the live host.
 
 ## Watch the merge queue with quest land watch
 
-`quest land watch` runs on a maintainer's host, one process per repository,
+`quest land watch` runs on a maintainer's host, one process per base branch of a repository,
 and lands its base through a serial queue: GitHub's merge queue where the
 base's rules have a `merge_queue` rule, and otherwise
 [its own](#the-watchers-own-queue), as on a private repository on GitHub Team,
@@ -849,7 +849,11 @@ pass that cannot read them does nothing. It reads them with a `contents: read`
 token, so an installation granted only one mode's permissions runs it. On GitHub's queue it tells each PR the queue
 drops unmerged why. With `--fixer`, it also runs the land fixer on each PR the
 queue dropped for a failure or a conflict, and puts it back at the back of the
-queue. It polls; the host needs no public endpoint.
+queue. It polls; the host needs no public endpoint. Its base is resolved once at
+startup, from `--base` or the default branch, so a renamed default branch needs a
+restart. Watchers on different bases of one repository, such as `main` and
+`release`, run side by side with their own state, locks, clone and `--method`, and
+never touch each other's PRs; a second daemon on the same base refuses to start.
 
 ```sh
 QUEST_LAND_KEY=/run/credentials/quest-land/key quest land watch --app-id 1039466 --fixer /path/to/fixer-wrapper
