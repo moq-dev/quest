@@ -13,23 +13,23 @@ still runs the pinned tools, through the maintainer's user-level hooks.
 
 Decided 2026-11-07 (maintainer): moq.pro drops all of its dev-shell config.
 Its Claude direnv hook is already gone. Its Codex config stays until the
-condition below holds.
+Goal's check passes.
 
 - Keep `.claude/hooks/submodule.sh`, `worktree.sh`, `tofu-secrets.py`, and
   `.codex/environments/environment.toml`'s submodule setup.
 - Check: in a fresh moq.pro clone with `.codex/` removed and a clean
   environment, `codex exec` resolves `which just`.
 
-## Waiting
+Decided 2026-11-08 (maintainer, /quest-unblock): a fresh headless Codex
+session in moq.pro couldn't load the dev shell without the repo hooks, since
+the flake takes `path:./moq` and nothing initialized that submodule for
+`codex exec`. ✅ (a) the user-level `dev-shell-hook` runs
+`git submodule update --init` when `.gitmodules` lists an uninitialized path
+the flake needs (rejected: (b) keep moq.pro's Codex config for good; (c)
+accept a manual submodule init in fresh clones). It also fixes a cold first
+Claude session, where the user-level hook ran before moq.pro's
+`submodule.sh` and printed no `just`.
 
-- Maintainer: a fresh headless Codex session in moq.pro can't load the dev
-  shell without the repo hooks. The flake takes `path:./moq`, nothing
-  initializes that submodule for `codex exec`, and the user-level
-  `dev-shell-hook` (in the maintainer's dotfiles, outside this tree) doesn't
-  initialize submodules. With the submodule initialized, the same check passed.
-  Options: (a) `dev-shell-hook` runs `git submodule update --init` when
-  `.gitmodules` lists an uninitialized path the flake needs; (b) keep moq.pro's
-  Codex config for good, and close this quest; (c) accept that fresh clones
-  need a manual submodule init. Recommendation: (a). It also fixes a cold first Claude
-  session, where the user-level hook ran before moq.pro's `submodule.sh` and
-  printed no `just`. Check: the Goal's check passes.
+- The hook lives in kixelated/dotfiles (`bin/dev-shell-hook`, documented in
+  `docs/dev-shell.md`), so this quest's work opens a PR there first, then
+  the moq.pro PR that drops the Codex config once the Goal's check passes.
