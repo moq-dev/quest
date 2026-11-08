@@ -64,7 +64,7 @@ import {
 	roundLines,
 } from "./review";
 import { type Recorded, pullModels, recordRound } from "./review-record";
-import { BASH_MAX_TIMEOUT_MS, HOOKS, hook, settingsPath, setup } from "./hooks";
+import { BASH_MAX_TIMEOUT_MS, HOOKS, WORKTREE_HOOKS, hook, settingsPath, setup } from "./hooks";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -891,7 +891,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Handle the Claude Code hook event whose JSON input arrives on stdin, for " +
 				HOOK_EVENTS.join(", ") +
-				". Add it to your own Claude Code settings for those events to opt in, as the README describes.\n\n" +
+				". `quest setup --worktrees` installs it for those events.\n\n" +
 				"WorktreeCreate checks out the remote's default branch as last fetched (origin/HEAD), as Claude does by " +
 				"default, or the session's commit without one, as a quest worktree under the main checkout's .worktrees/, " +
 				"initializes its submodules recursively, and prints its path. A name pr-<number>, which Claude gives the worktree for --worktree '#<number>' or a " +
@@ -1413,12 +1413,19 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"which add `quest context` to each session and subagent in a repository that uses Quest, and again " +
 				"after compaction, so agents never run it themselves. Each runs `quest hook`, so `quest` must be on " +
 				"the PATH Claude Code starts with.\n\n" +
+				"With --worktrees, also installs " +
+				WORKTREE_HOOKS.map((h) => h.event).join(", ") +
+				" hooks running `quest worktree hook`, which hand Claude Code's worktrees to `quest worktree`; " +
+				"--no-worktrees takes them out, and without either a rerun keeps them as they are. Only one hook " +
+				"can manage Claude's worktrees, so remove any other WorktreeCreate or WorktreeRemove hook first.\n\n" +
 				"Validates the whole file, then writes it once and prints each change; settings that are not a JSON " +
 				"object, or whose env or hooks are malformed, are an error and stay unchanged. Rerun it after " +
 				"upgrading Quest; it replaces Quest's earlier hooks and changes nothing when all is set.",
 		)
+		.option("--worktrees", "Also install the worktree hooks")
+		.option("--no-worktrees", "Remove the worktree hooks")
 		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
-		.action((options: { remove?: boolean }) => {
+		.action((options: { remove?: boolean; worktrees?: boolean }) => {
 			for (const line of setup(settingsPath(), options)) print(line);
 		});
 
