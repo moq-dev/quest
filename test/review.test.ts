@@ -13,6 +13,7 @@ import {
 	pickReviewer,
 	review,
 	runningHarness,
+	parseState,
 	sessionFile,
 	verdict,
 } from "../src/cli/review";
@@ -1551,4 +1552,32 @@ test("the next step stops for the design checkpoint on every third round that re
 	expect(nextStep(round(3, 0))).toMatch(/^next done: /);
 	expect(nextStep(round(3, 2, "low"))).toMatch(/^next finish: /);
 	expect(nextStep(round(4, 1, "low"))).toMatch(/^next finish: /);
+});
+
+test("a saved session reads in each format an older quest wrote, or is refused naming --new", () => {
+	const finding = { severity: "low", file: "a.ts", line: 1, title: "t", body: "b" };
+	// Before moq-dev/quest#508: each round kept only its finding count.
+	expect(parseState({ rounds: [{ head: "a", findings: 0 }] }).rounds[0].findings).toEqual([]);
+	expect(() => parseState({ rounds: [{ head: "a", findings: 2 }] })).toThrow(/finding count \(2\).*--new/);
+	// Before moq-dev/quest#514: findings but no merge base or last round.
+	expect(parseState({ rounds: [{ head: "a", findings: [finding] }] }).rounds[0].findings).toEqual([finding]);
+	// The current format.
+	const current = { rounds: [{ head: "a", mergeBase: "m", findings: [finding] }], last: {} };
+	expect(parseState(current)).toEqual(current);
+	expect(() => parseState(null)).toThrow(/--new/);
+	expect(() => parseState({ rounds: [{ head: "a" }] })).toThrow(/no findings list.*--new/);
+});
+
+fakes("a session saved by an older quest is refused before the reviewer runs", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	const path = sessionFile(join(s.repo, ".git"), "feature");
+	const saved = JSON.parse(readFileSync(path, "utf8"));
+	writeFileSync(path, JSON.stringify({ ...saved, rounds: [{ head: saved.rounds[0].head, findings: 1 }] }));
+	const calls = s.calls().length;
+	const refused = await quest("--root", s.repo, "review", "--responses", path);
+	expect(refused.code).not.toBe(0);
+	expect(refused.stderr).toMatch(/--new/);
+	expect(s.calls().length).toBe(calls);
+	expect((await quest("--root", s.repo, "review", "--new")).code).toBe(0);
 });
