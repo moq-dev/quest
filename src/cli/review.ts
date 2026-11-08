@@ -15,7 +15,6 @@ import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
 
 import { SIZES, type Size, branchQuest, parse, size as questSize } from "../core";
-import { streamReader } from "../runner/claude";
 import { type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
@@ -184,20 +183,16 @@ export interface Choice {
 
 /**
  * Whether an entry's model is the one to avoid: one of `exclude`, or else the
- * latest writer. That is the model of the last Implementer line the PR's
- * `## Models` records name (`latest`, one per record: the body's and kix's
- * sessions comment's). When they name none, an `unknown` model, or two
- * different models, whose order cannot be told, it is the harness running this
- * command, which is usually the session that just pushed, unless `--harness`
- * names the reviewer, which then avoids every model they name.
+ * latest writer. That is the model of the last Implementer line in the PR's
+ * `## Models` record (`latest`). When it names none or an `unknown` model, it is
+ * the harness running this command, which is usually the session that just
+ * pushed, unless `--harness` names the reviewer, which then avoids nothing.
  */
-export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest: string[] = []): (entry: Model) => boolean {
+export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest?: string): (entry: Model) => boolean {
 	const exclude = choice.exclude ?? [];
 	if (exclude.length > 0) return (entry) => exclude.includes(entry.model);
-	const named = [...new Set(latest)];
-	const known = named.filter((model) => model !== "unknown");
-	if (named.length === 1 && known.length === 1) return (entry) => entry.model === known[0];
-	if (choice.harness !== undefined) return (entry) => known.includes(entry.model);
+	if (latest !== undefined && latest !== "unknown") return (entry) => entry.model === latest;
+	if (choice.harness !== undefined) return () => false;
 	const running = runningHarness(env);
 	return (entry) => entry.harness === running;
 }
@@ -467,18 +462,30 @@ const claude: Reviewer = {
 		stdin: prompt,
 		env: claudeEnv(),
 	}),
-	// The runner's reader of the same stream-json output finds a usage limit and its reset.
+	// A spent limit shows up as a rejected rate_limit_event carrying its reset, or a
+	// billing_error, or otherwise only in the failed turn's message.
 	reader() {
 		let result: Record<string, unknown> | undefined;
-		const stream = streamReader();
+		let limited: { until: number | null } | undefined;
 		return {
 			line(line) {
-				stream.line(line);
 				const value = json(line);
 				if (value?.type === "result") result = value;
+				if (value?.type === "rate_limit_event") {
+					const info = record(value.rate_limit_info);
+					if (info?.status === "rejected")
+						limited = { until: typeof info.resetsAt === "number" ? info.resetsAt * 1000 : null };
+				}
+				if (value?.type === "assistant" && value.error === "billing_error") limited ??= { until: null };
 			},
 			reply(code, stderr) {
-				const limited = stream.exit(code, stderr).limited ?? undefined;
+				const reply = text(result?.result);
+				const failed = code !== 0 || result === undefined || result.is_error === true;
+				if (failed && !limited && LIMIT.test(`${reply ?? ""}\n${stderr}`)) {
+					// Older releases end the message with `|<epoch seconds>` of the reset.
+					const epoch = /\|(\d{10})\b/.exec(reply ?? "")?.[1];
+					limited = { until: epoch ? Number(epoch) * 1000 : null };
+				}
 				if (result === undefined) return { error: "claude printed no result", limited };
 				const usage = record(result.usage) ?? {};
 				let input = count(usage.input_tokens) + count(usage.cache_read_input_tokens);
@@ -1248,8 +1255,8 @@ function detachedMessage(root: string, baseBranch: string): string {
 	return `${message}, such as ${[...names].map((n) => `--branch ${n}`).join(" or ")}`;
 }
 
-/** A PR's `## Models` records: the body's and kix's sessions comment's together, and each one's latest model. */
-export type PullModels = ReturnType<typeof recorded> & { latest: string[] };
+/** A PR's `## Models` record. */
+export type PullModels = ReturnType<typeof recorded>;
 
 type ModelsRecord = PullModels | null | undefined;
 
@@ -1266,13 +1273,13 @@ function recordedSize(record: ModelsRecord, options: ReviewOptions): Size | null
 	return size as Size;
 }
 
-/** The latest writer each of the PR's records names, checked only when no `--exclude-model` replaces them. */
-function recordedLatest(record: ModelsRecord, options: ReviewOptions): string[] {
-	if (record == null || (options.exclude ?? []).length > 0) return [];
+/** The latest writer the PR's record names, checked only when no `--exclude-model` replaces it. */
+function recordedLatest(record: ModelsRecord, options: ReviewOptions): string | undefined {
+	if (record == null || (options.exclude ?? []).length > 0) return undefined;
 	for (const { item, model } of record.implementers) {
 		if (model === null) throw new ReviewInputError(`the PR's ## Models record names no model in: ${item}`);
 	}
-	return record.latest;
+	return record.implementers.at(-1)?.model ?? undefined;
 }
 
 /** Review the checkout's committed branch: one round, resuming the branch's session unless `fresh`. */

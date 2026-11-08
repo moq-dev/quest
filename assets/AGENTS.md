@@ -115,10 +115,8 @@ Stop and report a PR that makes the same change; one that only touches the same 
 `quest unblocked` ranks the ready quests, and `quest unblocked <path>` prints what blocks one.
 With `--unclaimed`, it skips quests someone holds and lists them on stderr.
 
-Work is taken when it has a live runner lock or an open change on the forge.
-kix.quest records each active job in its database and reassigns a job whose
-runner goes offline. Check those locks and open changes before
-starting. These states stay out of the quest file.
+Work is taken when it has an open change on the forge. Check open changes
+before starting. These states stay out of the quest file.
 
 On GitHub, a quest is claimed by an open PR whose head branch is the quest's
 branch, from the upstream repository or a fork, or by that branch upstream

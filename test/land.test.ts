@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/dev/github";
+import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "./github";
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import {
 	ADMITTED,

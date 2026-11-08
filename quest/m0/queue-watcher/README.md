@@ -11,7 +11,7 @@ fixer in the background and re-enqueues the PR at the back of the queue. Only
 a decision the fixer can't make reaches a person. moq-dev/moq moves first;
 moq-dev/quest, rust2 and rind follow once moq proves it, then moq.pro through
 the own queue, and the batching host gate (`quest land serve`) is then
-retired. kix.quest shows every repository's queue.
+retired.
 
 The epic finishes with an end-to-end run on moq-dev/moq: a PR the queue drops
 for a failing build is fixed and re-enqueued, a PR dropped for a conflict is
@@ -121,8 +121,7 @@ GitHub Team: moq.pro leaves the host gate for an own serial queue in
 third-party queue. The maintainer expects the own queue to become every
 repository's, for visibility. The own queue landed in
 [moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540); the rest is
-recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md), and
-kix.quest shows each base's queue at `/projects/github/<owner>/<name>/queue`.
+recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md).
 
 Shared shape, for the children to follow:
 

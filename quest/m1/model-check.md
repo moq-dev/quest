@@ -27,7 +27,7 @@ the size tables of model routing (`src/cli/models.ts`):
 
 Audit the routing from the records of the PRs merged since the last run,
 with `quest usage --since <the last run's date>`, whose accuracy rollup reads each body's
-`## Models` size and implementers, plus those on kix's sessions comment, and its `## Review` reviewer. It tallies each implementer by the size
+`## Models` size and implementers and its `## Review` reviewer. It tallies each implementer by the size
 on its own `Implementer:` line where it carries one, such as `(iterate, XS)`,
 not the PR's `## Models` size, so a small iterate on a large PR counts as the
 work it was routed for. It counts fixed and refuted findings only from the

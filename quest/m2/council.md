@@ -66,7 +66,3 @@ Agent's choices, for the implementer to revisit:
 ## Required
 
 - [opencode reviewers](/quest/m2/review-harnesses.md) - the council's DeepSeek member
-
-## Related
-
-- [Donated reviews](/quest/m2/automation/review.md) - independent agent reviews donated to other projects

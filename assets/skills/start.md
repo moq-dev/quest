@@ -9,7 +9,7 @@ The argument is the quest to work on.
 If you are unsure on the best course of action, ask the user for direction.
 
 Confirm you can write in your worktree; if you cannot, stop and report without claiming.
-Update your checkout and check the forge for a live runner lock and for an open PR already doing the quest's work, then claim the quest with `quest start <quest>`.
+Update your checkout and check the forge for an open PR already doing the quest's work, then claim the quest with `quest start <quest>`.
 If it refuses, the quest is blocked or someone else holds it: report what it printed and stop.
 If it warns that the quest's local branch already exists, the claim succeeded: resume that earlier attempt as the guide describes.
 If you cannot pursue a claim before pushing work, release it with `quest start --release <quest>` and remove your isolated worktree; once work is pushed, hand it back as the guide describes.
