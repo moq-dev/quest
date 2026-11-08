@@ -180,17 +180,20 @@ export interface Choice {
 
 /**
  * Whether an entry's model is the one to avoid: one of `exclude`, or else the
- * latest writer, which is the model of the last Implementer line the PR's
- * `## Models` record names (`recorded`). Without a known one, and unless
- * `--harness` names the reviewer, it is the harness running this command,
- * since its own model is not known.
+ * latest writer. That is the model of the last Implementer line the PR's
+ * `## Models` records name (`latest`, one per record: the body's and kix's
+ * sessions comment's). When they name none, an `unknown` model, or two
+ * different models, whose order cannot be told, it is the harness running this
+ * command, which is usually the session that just pushed, unless `--harness`
+ * names the reviewer, which then avoids every model they name.
  */
-export function authored(choice: Choice, env: NodeJS.ProcessEnv, recorded: string[] = []): (entry: Model) => boolean {
+export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest: string[] = []): (entry: Model) => boolean {
 	const exclude = choice.exclude ?? [];
 	if (exclude.length > 0) return (entry) => exclude.includes(entry.model);
-	const latest = recorded.at(-1);
-	if (latest !== undefined && latest !== "unknown") return (entry) => entry.model === latest;
-	if (choice.harness !== undefined) return () => false;
+	const named = [...new Set(latest)];
+	const known = named.filter((model) => model !== "unknown");
+	if (named.length === 1 && known.length === 1) return (entry) => entry.model === known[0];
+	if (choice.harness !== undefined) return (entry) => known.includes(entry.model);
 	const running = runningHarness(env);
 	return (entry) => entry.harness === running;
 }
@@ -286,7 +289,7 @@ export interface ReviewDependencies {
 	 * The `## Models` record of the open PR from `branch` into `base`, or null when it has none; without
 	 * it, as in the runner, only the options and the running harness pick the reviewer.
 	 */
-	models?: (root: string, base: string, branch: string) => Promise<ReturnType<typeof recorded> | null>;
+	models?: (root: string, base: string, branch: string) => Promise<PullModels | null>;
 }
 
 export const processDependencies = (): ReviewDependencies => ({ env: process.env });
@@ -1227,7 +1230,10 @@ function detachedMessage(root: string, baseBranch: string): string {
 	return `${message}, such as ${[...names].map((n) => `--branch ${n}`).join(" or ")}`;
 }
 
-type ModelsRecord = ReturnType<typeof recorded> | null | undefined;
+/** A PR's `## Models` records: the body's and kix's sessions comment's together, and each one's latest model. */
+export type PullModels = ReturnType<typeof recorded> & { latest: string[] };
+
+type ModelsRecord = PullModels | null | undefined;
 
 /** The size the PR's record names, checked only when no `--size` replaces it. */
 function recordedSize(record: ModelsRecord, options: ReviewOptions): Size | null {
@@ -1242,13 +1248,13 @@ function recordedSize(record: ModelsRecord, options: ReviewOptions): Size | null
 	return size as Size;
 }
 
-/** The implementing models the PR's record names, checked only when no `--exclude-model` replaces them. */
-function recordedModels(record: ModelsRecord, options: ReviewOptions): string[] {
+/** The latest writer each of the PR's records names, checked only when no `--exclude-model` replaces them. */
+function recordedLatest(record: ModelsRecord, options: ReviewOptions): string[] {
 	if (record == null || (options.exclude ?? []).length > 0) return [];
-	return record.implementers.map(({ item, model }) => {
+	for (const { item, model } of record.implementers) {
 		if (model === null) throw new ReviewInputError(`the PR's ## Models record names no model in: ${item}`);
-		return model;
-	});
+	}
+	return record.latest;
 }
 
 /** Review the checkout's committed branch: one round, resuming the branch's session unless `fresh`. */
@@ -1274,7 +1280,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const needed = options.size === undefined || (options.exclude ?? []).length === 0;
 	const record = needed ? await deps.models?.(root, baseRef, branch) : undefined;
 	const sized = reviewSize(root, baseSha, options.sizeBranch ?? branch, options.size, recordedSize(record, options));
-	const picked = pickReviewer(sized.size, options, authored(options, deps.env, recordedModels(record, options)));
+	const picked = pickReviewer(sized.size, options, authored(options, deps.env, recordedLatest(record, options)));
 	const harness = picked.harness;
 	const reviewer = CLIS[harness];
 

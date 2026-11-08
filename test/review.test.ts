@@ -311,14 +311,23 @@ test("each size's reviewer is the first whose model is not the latest writer's",
 
 	// The PR's latest recorded implementer replaces the running harness, and only it is avoided.
 	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["claude-opus-5-5"]))).toBe("codex gpt-6.1-sol medium");
-	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["claude-opus-5-5", "gpt-6.1-sol"]))).toBe(
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol"]))).toBe("claude claude-opus-5-5 low");
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "gpt-6.1-sol"]))).toBe(
 		"claude claude-opus-5-5 low",
 	);
+	// When the body's and the sessions comment's latest differ, or one is unknown, their order cannot be told,
+	// so the running harness, usually the session that just pushed, is taken to be the latest writer.
 	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, ["gpt-6.1-sol", "claude-opus-5-5"]))).toBe(
+		"claude claude-opus-5-5 medium",
+	);
+	expect(at("M", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "claude-opus-5-5"]))).toBe(
 		"codex gpt-6.1-sol medium",
 	);
-	// An unknown latest model may be the running harness's, which is then avoided.
 	expect(at("M", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "unknown"]))).toBe("codex gpt-6.1-sol medium");
+	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, ["unknown"]))).toBe("claude claude-opus-5-5 medium");
+	// --harness then avoids every model they name.
+	const either = authored({ harness: "claude" }, {}, ["gpt-6.1-sol", "claude-opus-5-5"]);
+	expect(() => pickReviewer("M", { harness: "claude" }, either)).toThrow("claude-opus-5-5 is avoided");
 	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
 	// No harness need be detected once the implementers are named.
@@ -1338,8 +1347,8 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 		expect(sol.stderr).toBe("");
 		expect(sol.stdout).toContain("reviewer claude claude-opus-5-5 high\nsize L ## Models\n");
 
-		// A kix session that pushed later is on the App's sessions comment, so it is the latest writer and
-		// Sol reviews again; a forged copy of the comment is ignored.
+		// A kix session on the App's sessions comment names another latest writer, and which pushed last cannot
+		// be told, so the running harness's model is avoided; a forged copy of the comment is ignored.
 		const sessions = (app: { id: number } | null) => ({
 			body: "<!-- quest:sessions -->\n\n## Models\n\n- Implementer: Claude Code, claude-opus-5-5, high effort\n",
 			performed_via_github_app: app,

@@ -1229,9 +1229,11 @@ neither gets M's reviewers. `--size` overrides both. The first reviewer whose
 model is not the latest writer's reviews: the record's last `Implementer:` line
 names it, since each session moves its line last whenever it pushes, or
 `--exclude-model` names each model to avoid instead. Earlier writers may review.
-Without a record, or when its last line names an `unknown` model, the harness
-running the command is taken to be the latest writer, so Codex reviews from
-Claude Code and Claude Code from Codex. `--harness` names the reviewer instead, at its entry's model and
+Without a record, or when its last line names an `unknown` model, or when the
+body's and kix's sessions comment's last lines name different models, whose
+order cannot be told, the harness running the command, usually the session that
+just pushed, is taken to be the latest writer, so Codex reviews from Claude Code
+and Claude Code from Codex. `--harness` names the reviewer instead, at its entry's model and
 effort, and `--model` and `--effort` override those, as a repository whose
 `AGENTS.md` names other reviewers needs. An unknown harness, a size whose
 every reviewer is avoided, or a missing or logged-out CLI, is an error
