@@ -201,10 +201,11 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 			if (args.some((arg) => !arg.startsWith("-") && scratch(arg))) found.add("tmp");
 		} else if (name === "mkdir" || name === "touch") {
 			// `touch -r <file>` reads its reference file, and `-d`/`-t` take a date, as `mkdir -m` takes a mode.
-			const valued = name === "mkdir" ? ["-m"] : ["-r", "-d", "-t"];
+			const valued = name === "mkdir" ? ["-m", "--mode"] : ["-r", "--reference", "-d", "--date", "-t"];
 			if (positionals(args, new Set(valued)).some(scratch)) found.add("tmp");
 		} else if (["cp", "mv", "ln", "rsync"].includes(name!)) {
-			const target = values(args, ["-t", "--target-directory"]).at(-1);
+			// rsync's `-t` keeps times instead.
+			const target = name === "rsync" ? undefined : values(args, ["-t", "--target-directory"]).at(-1);
 			const last = target ?? args.filter((arg) => !arg.startsWith("-")).at(-1);
 			if (last !== undefined && scratch(last)) found.add("tmp");
 		} else if (name === "mktemp") mktemp(args, env, check);
@@ -245,7 +246,7 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 	let i = 0;
 	while (i < argv.length && argv[i]!.startsWith("-")) i += GIT_VALUE_OPTIONS.has(argv[i]!) ? 2 : 1;
 	const [sub, ...args] = argv.slice(i);
-	if (args.includes("--help") || args.includes("-h")) return;
+	if (args[0] === "--help" || args[0] === "-h") return;
 	if (sub === "push") push(args, asked, check);
 	else if (sub === "rebase") {
 		if (!asked && !args.some((arg) => ["--abort", "--quit", "--show-current-patch"].includes(arg)))
@@ -403,5 +404,5 @@ function gh(
 	const text = body.join("\n");
 	if (authored && adds("", [...titles.filter((title) => title !== undefined), text].join("\n")))
 		check.found.add("emDash");
-	if (authored && !/^\(written by .+\)\s*$/im.test(text)) check.found.add("footer");
+	if (authored && !/(^|\n)\(written by [^\n]+\)\s*$/i.test(text)) check.found.add("footer");
 }

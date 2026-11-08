@@ -54,6 +54,7 @@ test.each([
 	"bash -c 'git push origin main'",
 	"git push --tags origin feature",
 	"git push --repo origin main refs/heads/a:refs/heads/a",
+	"git push -o --help origin main",
 ])("a push without an explicit refspec is blocked: %s", (command) => {
 	expect(bash(command)).toEqual([RULES.refspec]);
 });
@@ -112,6 +113,7 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"TMPDIR=/tmp/x mktemp -d",
 		"touch -m /tmp/x",
 		"cp -t /tmp/out a.txt",
+		"rsync -t .tmp/source /tmp/destination",
 	])
 		expect(bash(command), command).toEqual([RULES.tmp]);
 	for (const command of [
@@ -130,6 +132,8 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		'cat > "$TMPDIR/body.md" <<EOF\nx\nEOF',
 		"cp -t .tmp /tmp/out",
 		"touch -r /tmp/reference .tmp/out",
+		"touch --reference /tmp/reference .tmp/out",
+		"rsync -t /tmp/source .tmp/destination",
 		"mkdir -m 700 .tmp/x",
 		"mktemp --help",
 		"mktemp -u",
@@ -184,6 +188,7 @@ test("commit messages may not add em dashes", () => {
 test("a new GitHub post needs the footer and no em dashes; edits and bodies off the line pass", () => {
 	expect(bash(`gh pr comment 5 --body "Done.\n\n${FOOTER}"`)).toEqual([]);
 	expect(bash('gh pr comment 5 --body "Done."')).toEqual([RULES.footer]);
+	expect(bash(`gh pr comment 5 --body "${FOOTER}\nMore."`)).toEqual([RULES.footer]);
 	expect(bash(`gh pr comment 5 --body "Done ${DASH} mostly.\n\n${FOOTER}"`)).toEqual([RULES.emDash]);
 	expect(bash(`gh pr create --title "a ${DASH} b" --body-file - <<'EOF'\nBody\n\n${FOOTER}\nEOF`)).toEqual([
 		RULES.emDash,
