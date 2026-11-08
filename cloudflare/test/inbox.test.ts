@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Pull, Repo } from "../dev/github";
 import { app } from "../src/index";
 import { QUIET, cards } from "../src/inbox/activity";
-import { questHref } from "../src/inbox/model";
+import { STALE, questHref } from "../src/inbox/model";
 import * as output from "../src/jobs/output";
 import * as store from "../src/jobs/store";
 import { INBOX_HEADER } from "../src/jobs/hub";
@@ -198,28 +198,44 @@ describe("decision inbox", () => {
 	});
 
 	it("shows a draft its starter holds as work in progress until it hands back decisions", async () => {
-		const draft = (handedBack: boolean) =>
+		const draft = (handedBack: boolean, updatedAt = new Date().toISOString()) =>
 			db
 				.prepare(
-					"UPDATE github_project_activity SET data=json_set(data,'$.isDraft',json('true'),'$.handedBack',json(?)),changedAt=changedAt+1 WHERE id='21'",
+					"UPDATE github_project_activity SET data=json_set(data,'$.isDraft',json('true'),'$.handedBack',json(?),'$.updatedAt',?),changedAt=changedAt+1 WHERE id='21'",
 				)
-				.bind(String(handedBack))
+				.bind(String(handedBack), updatedAt)
 				.run();
 		await draft(false);
 		const html = await inbox();
 		expect(thread(html)).not.toContain(">Fix<");
 		expect(html.match(/<h2>In progress<\/h2>[\s\S]*?<\/ol>/)![0]).toMatch(
-			/Fix<\/a><span class="entry-meta"><span>Claimed draft/,
+			/Fix<\/a><span class="entry-meta"><span>Held by its starter/,
 		);
 		const held = thread(await inbox({ project: "10", item: "pulls/2" }));
-		expect(held).toContain("Its starter holds this draft");
+		expect(held).toContain("This draft is held by its starter");
 		expect(held).not.toContain("Iterate on this PR");
 		expect(held).not.toContain("Skip until it changes");
+		expect(held).not.toContain("Mark ready for review");
+		// Quiet past a week, it is offered for takeover, but never marked ready on its starter's behalf.
+		await draft(false, new Date(Date.now() - STALE - 60_000).toISOString());
+		const quiet = thread(await inbox({ project: "10", item: "pulls/2" }));
+		expect(quiet).toContain("Quiet draft");
+		expect(quiet).toContain("Take over and iterate");
+		expect(quiet).toContain("Skip until it changes");
+		expect(quiet).not.toContain("Mark ready for review");
 		await draft(true);
 		const handed = await inbox();
 		expect(thread(handed)).toContain("Fix");
 		expect(thread(handed)).toContain("Iterate on this PR");
+		expect(thread(handed)).toContain(`action="/projects/github/upstream/project/pulls/2/ready"`);
 		expect(handed).not.toContain("<h2>In progress</h2>");
+		// A session holding the handed-back draft marks it itself.
+		await db
+			.prepare(
+				"UPDATE github_project_activity SET data=json_set(data,'$.hold','quest:active'),changedAt=changedAt+1 WHERE id='21'",
+			)
+			.run();
+		expect(thread(await inbox({ project: "10", item: "pulls/2" }))).not.toContain("Mark ready for review");
 	});
 
 	it("drops a pull request the latest occupancy pass no longer found open", async () => {

@@ -339,7 +339,7 @@ export type Claimed = NonNullable<Awaited<ReturnType<typeof readJob>>> & { owner
  * A running job has a lease exactly while its runner is disconnected; an
  * expired lease moves the job. Then queued work is assigned. Returns what to
  * send each runner, the merge jobs it cancelled that still hold their pull
- * request, and when to run again. Every assignment its runner has
+ * request, when to run again, and how many usable slots stay free. Every assignment its runner has
  * not acknowledged is sent again, since a delivery can be lost after the
  * claim commits. Until acknowledged, an assignment holds one of the runner's
  * reported free slots, which it could not count yet.
@@ -484,6 +484,10 @@ export async function dispatch(
 		}
 		assign.push({ runner, job: { ...job, ...project } });
 	}
+	// Free slots left on runners with a usable account, which ready work may fill.
+	let idle = 0;
+	for (const [runner, n] of free)
+		if (n > 0 && accounts.some((offer) => offer.runner === runner && !offer.limited)) idle += n;
 	const wake = await db
 		.prepare("SELECT MIN(lease) AS at FROM jobs WHERE actor=? AND state='running' AND lease IS NOT NULL")
 		.bind(owner)
@@ -493,6 +497,7 @@ export async function dispatch(
 		cancel: [...(cancels!.results as (Attempt & { runner: string })[]), ...revoked],
 		ended: ended(cancelled!),
 		wake: revoked.length ? now : (wake?.at ?? null),
+		idle,
 	};
 }
 
@@ -735,7 +740,27 @@ export type NewJob = Pick<Job, "repository" | "workflow" | "target" | "revision"
 	pinAccount?: string | null;
 	idea?: string | null;
 	context?: string | null;
+	/**
+	 * Started by the actor's autostart opt-in at this digest of the quest's
+	 * text, so created only while the opt-in covers the target's milestone,
+	 * the target never had a job, and the actor has not skipped it at this text.
+	 */
+	automatic?: { version: string } | null;
 };
+
+/** An automatic start whose opt-in ended or no longer covers its quest. */
+export class NotOptedIn extends JobError {
+	constructor() {
+		super("Autostart no longer covers this quest");
+	}
+}
+
+/** An automatic start of a quest that already had a job, or that its actor skipped at its current text. */
+export class Excluded extends JobError {
+	constructor() {
+		super("Autostart leaves a quest that already had a job or that you skipped");
+	}
+}
 
 /** Create a job, or return the active job already doing the same work. */
 export async function createJob(db: D1Database, input: NewJob, now: number) {
@@ -747,6 +772,23 @@ export async function createJob(db: D1Database, input: NewJob, now: number) {
 	const account = input.pinAccount ?? null;
 	const trusted = input.trusted ? 1 : 0;
 	const pin = [runner, runner, input.actor, trusted, account, account];
+	// Checked in the insert itself, so an opt-out that commits first leaves no job for a dispatch to find.
+	const opted =
+		"(?=0 OR EXISTS(SELECT 1 FROM autostart a WHERE a.repository=? AND a.user=? AND (a.milestones IS NULL OR EXISTS(SELECT 1 FROM json_each(a.milestones) WHERE value=?))))";
+	const automatic = input.automatic ? 1 : 0;
+	const opt = [automatic, input.repository, input.actor, input.target.split("/")[1] ?? ""];
+	// Also checked in the insert, so a skip, or another pass's job, that commits first keeps an automatic start out.
+	const fresh =
+		"(?=0 OR (NOT EXISTS(SELECT 1 FROM jobs WHERE repository=? AND target=?) AND NOT EXISTS(SELECT 1 FROM inbox_items WHERE user=? AND repository=? AND item=? AND skipped=?)))";
+	const unseen = [
+		automatic,
+		input.repository,
+		input.target,
+		input.actor,
+		input.repository,
+		input.target,
+		input.automatic?.version ?? "",
+	];
 	const id = crypto.randomUUID();
 	// The insert checks the project and pins again, since a pause or a
 	// runner's status can commit after the request read them. Iterating on or
@@ -754,13 +796,13 @@ export async function createJob(db: D1Database, input: NewJob, now: number) {
 	// whose latest job failed continues that job's branch and pull request
 	// where it left them, as a reassigned attempt would, and records which
 	// job it continues.
-	const [insert, active, enabled, pinned] = await db.batch([
+	const [insert, active, enabled, pinned, covered, unexcluded] = await db.batch([
 		db
 			.prepare(
 				`INSERT OR IGNORE INTO jobs(id,repository,workflow,target,revision,branch,head,pending,pendingAt,pull,continues,idea,context,actor,trusted,pinRunner,pinAccount,state,createdAt,updatedAt)
  SELECT ?,p.id,?,?,?,?,COALESCE(?,f.head),f.pending,f.pendingAt,f.pull,f.id,COALESCE(?,f.idea),COALESCE(?,f.context),?,?,?,?,'queued',?,? FROM github_projects p
  LEFT JOIN jobs f ON ?=0 AND f.state='failed' AND f.branch=? AND f.id=(SELECT id FROM jobs WHERE repository=p.id AND target=? ORDER BY createdAt DESC,id LIMIT 1)
- WHERE p.id=? AND p.state='enabled' AND ${pinnable}`,
+ WHERE p.id=? AND p.state='enabled' AND ${pinnable} AND ${opted} AND ${fresh}`,
 			)
 			.bind(
 				id,
@@ -782,15 +824,21 @@ export async function createJob(db: D1Database, input: NewJob, now: number) {
 				input.target,
 				input.repository,
 				...pin,
+				...opt,
+				...unseen,
 			),
 		db
 			.prepare("SELECT id FROM jobs WHERE repository=? AND target=? AND state IN ('queued','running','waiting')")
 			.bind(input.repository, input.target),
 		db.prepare("SELECT 1 FROM github_projects WHERE id=? AND state='enabled'").bind(input.repository),
 		db.prepare(`SELECT ${pinnable} AS ok`).bind(...pin),
+		db.prepare(`SELECT ${opted} AS ok`).bind(...opt),
+		db.prepare(`SELECT ${fresh} AS ok`).bind(...unseen),
 	]);
 	if (insert!.meta.changes === 1) return { id, created: true };
 	if (!enabled!.results.length) throw new JobError("Contributions are paused");
+	if (!(covered!.results[0] as { ok: number }).ok) throw new NotOptedIn();
+	if (!(unexcluded!.results[0] as { ok: number }).ok) throw new Excluded();
 	if (!(pinned!.results[0] as { ok: number }).ok) throw new JobError("Pinned runner or account unavailable");
 	const found = active!.results[0] as { id: string } | undefined;
 	if (!found) throw new JobError("Job changed; try again");
@@ -875,13 +923,18 @@ export async function failed(db: D1Database, repository: number, target: string)
 	return latest?.state === "failed" ? latest : null;
 }
 
-/** Whether a job on `target` is queued, running, or waiting, and so may still push to it. */
+/**
+ * Whether a job on `target` is queued, running, or waiting, and so may still
+ * push to it. On a pull request, that includes the job that published it,
+ * such as a start job, which keeps its quest as its target.
+ */
 export async function active(db: D1Database, repository: number, target: string) {
+	const pull = target.match(/^pulls\/(\d+)$/)?.[1];
 	return !!(await db
 		.prepare(
-			"SELECT 1 FROM jobs WHERE repository=? AND target=? AND state IN ('queued','running','waiting') LIMIT 1",
+			"SELECT 1 FROM jobs WHERE repository=? AND (target=? OR pull=?) AND state IN ('queued','running','waiting') LIMIT 1",
 		)
-		.bind(repository, target)
+		.bind(repository, target, pull ? Number(pull) : null)
 		.first());
 }
 

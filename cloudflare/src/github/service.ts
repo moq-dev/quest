@@ -7,6 +7,7 @@ import {
 	heldToken,
 	check,
 	isQuest,
+	handedBack,
 	parse,
 	planInit,
 	ready,
@@ -1128,6 +1129,44 @@ export class GitHubService {
 	 */
 	async #pullTrust(token: string, repo: GitHubRepository, pull: number, revision: string) {
 		return (await this.#signed(token, repo, pull, revision)) || (await this.#approved(token, repo, pull, revision));
+	}
+
+	/**
+	 * Mark a draft ready for review at the exact head the maintainer saw, as
+	 * the App, accepting it as handed back. GitHub's own rules still decide
+	 * whether and how it merges. A draft its starter still holds, or that a
+	 * session holds with a `quest:*` label, is theirs to mark, as the inbox
+	 * offers it.
+	 */
+	markReady(repo: GitHubRepository, userId: string, pull: number, head: string) {
+		const permissions = { pull_requests: "write" } as const;
+		return this.#authorized(repo, userId, permissions, async (token, current) => {
+			this.#public(current);
+			const live = await this.#api<{
+				state: string;
+				draft: boolean;
+				node_id: string;
+				body: string | null;
+				labels: { name: string }[];
+				head: { sha: string };
+			}>(token, `${repositoryPath(repo)}/pulls/${number(pull)}`);
+			if (live.state !== "open" || live.head.sha !== sha(head))
+				throw new GitHubError("The pull request's head moved since you looked; review it again", 409);
+			if (live.draft) {
+				// Read live, since a stale form may follow a starter resuming the draft.
+				if (!handedBack(live.body ?? "") || live.labels.some((label) => isHoldLabel(label.name)))
+					throw new GitHubError(
+						"Only a draft handed back with ## Waiting and no hold can be marked ready",
+						409,
+					);
+				const result = await this.#api<{ errors?: unknown[] }>(token, "/graphql", "POST", {
+					query: "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { clientMutationId } }",
+					variables: { id: live.node_id },
+				});
+				if (result.errors?.length) throw new GitHubError("Could not mark the pull request ready for review");
+			}
+			await this.#invalidate(repo);
+		});
 	}
 
 	/**

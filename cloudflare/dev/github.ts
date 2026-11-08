@@ -16,6 +16,8 @@ export type Issue = {
 	body?: string;
 	comments?: Comment[];
 	closed?: boolean;
+	/** When GitHub last saw activity on it; a fixed past date when absent. */
+	updatedAt?: string;
 };
 export type Thread = { path: string; line: number | null; resolved?: boolean; outdated?: boolean; comments: Comment[] };
 export type Pull = Issue & {
@@ -210,7 +212,7 @@ function entity(repo: Repo, item: Issue) {
 		number: item.number,
 		title: item.title,
 		state: (item as Pull).merged ? "MERGED" : item.closed ? "CLOSED" : "OPEN",
-		updatedAt,
+		updatedAt: item.updatedAt ?? updatedAt,
 		closedAt: item.closed ? updatedAt : null,
 		author: { login: item.author },
 		comments: { totalCount: item.comments?.length ?? 0 },
@@ -777,6 +779,7 @@ export function fakeGitHub(world: World) {
 		mergeable_state: pull.mergeableState ?? (pull.merge === "DIRTY" ? "dirty" : "clean"),
 		title: pull.title,
 		body: pull.body ?? "",
+		labels: (pull.labels ?? []).map((name) => ({ name })),
 		draft: !!pull.draft,
 		user: { login: pull.author },
 		created_at: new Date(pull.createdAt ?? Date.parse(updatedAt)).toISOString(),
