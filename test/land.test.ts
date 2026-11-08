@@ -72,6 +72,7 @@ import {
 	keyPath,
 	lockCheckout,
 	lockRepository,
+	startDaemon,
 	readPolicy,
 	resumeFailure,
 	serveBatch,
@@ -2409,11 +2410,43 @@ mv '${result}.new' '${result}'
 		const root = forge.clone();
 		const linked = join(tempDir(), "linked");
 		git(root, "worktree", "add", "--detach", linked, "HEAD");
-		const release = await lockRepository(root);
+		const release = await lockRepository(root, "main");
 		try {
-			await expect(lockRepository(linked)).rejects.toThrow("another quest land daemon");
+			await expect(lockRepository(linked, "main")).rejects.toThrow("another quest land daemon");
 		} finally {
 			release();
+		}
+	});
+
+	test("starts one daemon per base from one checkout and refuses a second on the same base", async () => {
+		const forge = new Forge();
+		const root = forge.clone();
+		const key = join(tempDir(), "key.pem");
+		writeFileSync(
+			key,
+			generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }),
+		);
+		vi.stubEnv("QUEST_LAND_KEY", key);
+		vi.stubEnv("STATE_DIRECTORY", tempDir());
+		const main = { state: "" };
+		const release = { state: "", base: "release/v1" };
+		const unlockMain = await startDaemon(root, REPOSITORY, main, async () => "main");
+		const unlockRelease = await startDaemon(root, REPOSITORY, release, async () => "unused");
+		try {
+			expect(main).toMatchObject({ base: "main", state: defaultState(REPOSITORY, "main") });
+			expect(release.state).toBe(defaultState(REPOSITORY, "release/v1"));
+			expect(release.state).not.toBe(main.state);
+			// `serve` and `watch` share startDaemon, so either refuses the other on one base.
+			await expect(startDaemon(root, REPOSITORY, { state: "" }, async () => "main")).rejects.toThrow(
+				"another quest land daemon",
+			);
+			// A separate state directory on the same base still meets the checkout's lock.
+			await expect(
+				startDaemon(root, REPOSITORY, { state: tempDir(), base: "release/v1" }, async () => "unused"),
+			).rejects.toThrow("another quest land daemon");
+		} finally {
+			unlockRelease();
+			unlockMain();
 		}
 	});
 
@@ -2422,7 +2455,9 @@ mv '${result}.new' '${result}'
 		vi.stubEnv("CREDENTIALS_DIRECTORY", "/run/credentials/quest-land.service");
 		expect(keyPath()).toBe("/run/credentials/quest-land.service/github-app-key");
 		vi.stubEnv("STATE_DIRECTORY", "/var/lib/quest-land");
-		expect(defaultState(REPOSITORY)).toBe(join("/var/lib/quest-land", `${REPOSITORY.owner}-${REPOSITORY.repo}`));
+		expect(defaultState(REPOSITORY, "release/v1")).toBe(
+			join("/var/lib/quest-land", `${REPOSITORY.owner}-${REPOSITORY.repo}@release%2Fv1`),
+		);
 	});
 
 	test("fails a batch whose check outlives the timeout", async () => {
