@@ -1,5 +1,4 @@
 // `quest init` and `quest uninstall`: install skill stubs and reverse it.
-// `quest setup`: configure the user's own agent settings.
 //
 // Init applies the core's file plan (`planInit`) to the checkout, then
 // registers the clone's merge driver. Uninstall never deletes the quest tree.
@@ -17,7 +16,6 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import {
@@ -213,41 +211,4 @@ function removeLine(root: string, path: string, marker: string): boolean {
 		writeFileSync(join(root, path), `${kept}${eol}`);
 	}
 	return true;
-}
-
-/**
- * Claude Code's cap on a foreground command's timeout: 55 minutes, just under the
- * 1h prompt-cache TTL, so a blocking wait returns while the session's cache is warm.
- */
-export const BASH_MAX_TIMEOUT_MS = "3300000";
-
-/** The Claude Code user settings file: under `CLAUDE_CONFIG_DIR`, or `~/.claude`. */
-export function claudeSettings(env: NodeJS.ProcessEnv = process.env): string {
-	return join(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json");
-}
-
-/**
- * Set Quest's entries in the Claude Code user settings at `path`, keeping every
- * other setting. Returns a line per setting it changed. Malformed settings throw
- * before anything is written.
- */
-export function setup(path: string): string[] {
-	let settings: Record<string, unknown> = {};
-	if (existsSync(path)) {
-		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-		if (!isObject(parsed)) throw new Error(`${path} is not a JSON object`);
-		settings = parsed;
-	}
-	const env = settings.env ?? {};
-	if (!isObject(env)) throw new Error(`${path}: env is not a JSON object`);
-	if (env.BASH_MAX_TIMEOUT_MS === BASH_MAX_TIMEOUT_MS) return [];
-	const was = env.BASH_MAX_TIMEOUT_MS === undefined ? "" : ` (was ${JSON.stringify(env.BASH_MAX_TIMEOUT_MS)})`;
-	settings.env = { ...env, BASH_MAX_TIMEOUT_MS };
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
-	return [`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS}${was}`];
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

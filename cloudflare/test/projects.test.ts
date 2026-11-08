@@ -35,11 +35,7 @@ function blobOid(content: string) {
 	return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 }
 const documents = [
-	{
-		path: "quest/README.md",
-		content:
-			"# Project\n\n## Goal\n\nBuild it.\n\n## Required\n\n- [First](/quest/first.md)\n- [Second](/quest/second.md)\n",
-	},
+	{ path: "quest/README.md", content: "# Project\n\n## Goal\n\nBuild it.\n" },
 	{ path: "quest/first.md", content: "# [S] First\n\n## Goal\n\nBuild first.\n" },
 	{
 		path: "quest/second.md",
@@ -569,13 +565,7 @@ describe("project enrollment", () => {
 			path: `quest/quest-${i}.md`,
 			content: `# [S] Quest ${i}\n\n## Goal\n\nBuild it.\n`,
 		}));
-		const snapshot = [
-			{
-				path: "quest/README.md",
-				content: `# Project\n\n## Goal\n\nBuild it.\n\n## Required\n\n${quests.map((q, i) => `- [Quest ${i}](/${q.path})`).join("\n")}\n`,
-			},
-			...quests,
-		];
+		const snapshot = [{ path: "quest/README.md", content: "# Project\n\n## Goal\n\nBuild it.\n" }, ...quests];
 		const { service, calls } = github({ documents: snapshot, subrequestLimit: 50 });
 		// Enrollment routes resolve the submitted repository before enabling it.
 		await service.resolveRepository(repo.owner, repo.name);

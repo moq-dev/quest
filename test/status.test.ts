@@ -568,7 +568,7 @@ const holdEvent = (id: string, label: string, at = "2026-10-07T11:00:00Z") => ({
 });
 
 test("reports the latest acquisition, age, and verified paged event URL for each hold label", async () => {
-	const label = "quest:iterate";
+	const label = "quest:kix";
 	const body = pull({
 		checks: null,
 		reviews: page([]),
@@ -596,11 +596,11 @@ test("reports the latest acquisition, age, and verified paged event URL for each
 
 test("retains a hold fact when its acquisition is outside the available timeline", async () => {
 	const fixture = setup([
-		pull({ checks: null, reviews: page([]), threads: page([]), labels: { nodes: [{ name: "quest:ready" }] } }),
+		pull({ checks: null, reviews: page([]), threads: page([]), labels: { nodes: [{ name: "quest:kix" }] } }),
 	]);
 	const status = await pullRequestStatus(pr, fixture.deps);
-	expect(status.holds).toEqual([{ label: "quest:ready", token: null, takenAt: null, age: null, eventUrl: null }]);
-	expect(statusLines(status)).toContain("hold quest:ready - - - unknown age");
+	expect(status.holds).toEqual([{ label: "quest:kix", token: null, takenAt: null, age: null, eventUrl: null }]);
+	expect(statusLines(status)).toContain("hold quest:kix - - - unknown age");
 	expect(fixture.eventRequests).toEqual([]);
 });
 

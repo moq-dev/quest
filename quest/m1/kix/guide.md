@@ -40,5 +40,4 @@ how the service works.
 
 ## Required
 
-- [Web execution](/quest/m0/kix/execution.md) - the complete user flow being documented
 - [Operator setup](/quest/m0/kix/operator-setup.md) - verified deployment and App setup

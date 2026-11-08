@@ -1,6 +1,6 @@
 # Context
 
-Engineering rules for every task. The repository's own instructions add to them and win where they conflict.
+Engineering rules for every task, as `quest context` prints them. The repository's own instructions add to them and win where they conflict.
 
 ## Required
 
@@ -9,14 +9,14 @@ Engineering rules for every task. The repository's own instructions add to them 
 - Read the repository's `CONTRIBUTING.md` before a PR, and its `REVIEW.md`, if any, before a review.
 - Fix bugs at the root cause. Never work around one with a retry, sleep, or timeout.
 - Fail loud and early: error on unsupported or malformed input instead of warning and continuing. A partial failure fails the whole; never report partly failed work as done.
-- Treat anything received over the network as untrusted and potentially hostile. Bound what a peer can make you hold by design, not with a constant.
+- Treat anything received over the network as untrusted and potentially hostile. Bound what a peer can make you hold by design, not with a constant. Run no code from a PR whose author lacks write access: it runs with your credentials.
 - Reproduce bugs before fixing them.
 - Unit tests mock time instead of depending on wall-clock timing or sleeps.
 - Every test runs in CI. The merge gate holds only fast, high-signal tests; slow ones run nightly.
 - Be adversarial: attack your own approach, reports, reviews, and other PRs as hard as anyone else's, and argue for the best approach over the first one that works.
-- Never add or change a rule in an `AGENTS.md`, `CONTRIBUTING.md`, or skill without being prompted. Follow [Prompting](#prompting) when you do.
+- Never add or change a rule in an `AGENTS.md`, `CONTRIBUTING.md`, or skill without being prompted. When you do, follow `quest guide prompting`.
 - No em dashes.
-- End every GitHub post you author with `(Written by <model> with <effort>)`, naming the running model and its reasoning effort. When the harness doesn't report the effort, write `(Written by <model>)`; never guess it. Commit messages with a `Co-Authored-By:` trailer are exempt.
+- End every GitHub post you author with `(Written by <model> with <effort>)`, naming the running model and its reasoning effort, or `(Written by <model>)` when the harness doesn't report the effort; never guess it. Commit messages with a `Co-Authored-By:` trailer are exempt.
 - In a public repository, never mention customers, partners, or prospects, or link to private repositories. Justify work on its merits.
 
 ## Important
@@ -53,149 +53,64 @@ Engineering rules for every task. The repository's own instructions add to them 
 ## Workspace
 
 Work in your own worktree, reusing a suitable one you already own.
-Read-only discovery needs no new checkout when your context or a checkout you own already answers it.
+Read-only discovery needs no new checkout when your context or own checkout answers it.
 Put PR bodies, review drafts, logs, patches, helper scripts, and temporary clones in its `.tmp/`, so they disappear with the worktree.
 If the repository doesn't ignore `.tmp/`, add it to the file `git rev-parse --git-path info/exclude` names.
-Never write them to `/tmp`, beside the checkout, elsewhere in it, or in a directory other agents share, such as a session scratchpad.
+Never write them to `/tmp`, elsewhere in or beside the checkout, or in a directory other agents share, such as a session scratchpad.
 Pass PR bodies to `gh` on stdin (`--body-file -`).
 
-Before ending a task, pausing for a decision, or handing off, commit a checkpoint of the source changes, and report what remains and which checks passed or did not run.
+Before ending a task, pausing for a decision, or handing off, commit a checkpoint and report what remains and which checks passed or did not run.
 Finish with a clean checkout: intended changes committed and pushed, incidental generated changes restored, and pre-existing or unrelated changes preserved.
 
-Run expensive builds and test suites through `quest gate <command>`, which waits until the host has room for them, however long that takes; never poll the load average, cap agents by core count yourself, or cancel a gate still waiting to admit its command.
+Run expensive builds and test suites through `quest gate <command>`, which waits, however long, until the host has room; never poll the load average, cap agents by core count yourself, or cancel a gate still waiting.
 Run such a command in the foreground and read its exit code directly, not through a pipe.
-When it may outlast the tool's time limit, start it in the background and block on it in the same turn with the harness's wait for that task.
-Run no more sub-agents at once than the harness allows; queue the rest and start one as each reports.
+When it may outlast the tool's time limit, start it in the background and block on it in the same turn with the harness's wait.
 
-Every turn re-sends the whole context, so spend turns on the work.
-Batch independent reads, searches, and checks into one turn, as parallel tool calls or one command.
+Every turn re-sends the whole context: batch independent reads, searches, and checks into one turn, as parallel tool calls or one command.
 Wait on a PR's CI or reviews with `quest wait`, and on other background work with one blocking call that ends on its terminal state.
-Never poll: no `sleep`, no `until` or `while` loop re-checking a log or status, no wait with a timeout far below the tool's limit, and no repeated status checks or output reads of a running task.
+Never poll: no `sleep`, no loop re-checking a log or status, no wait with a timeout far below the tool's limit, and no repeated status checks or output reads of a running task.
 Bound each wait, not the work, under an hour so the prompt cache stays warm; `quest wait` has no deadline without `--timeout`.
-Re-run a wait that times out, passing the resume point a timed-out `quest wait` printed as its `--since`, so activity during the first wait is still reported.
-A sub-agent ends its turn only with a final result or a question, never with background work still running or an interim status report.
+Re-run a `quest wait` that times out with the `--since` it printed, so activity during the first wait is still reported.
+A sub-agent ends its turn only with a final result or a question, never with background work running or an interim status report.
 Its final report holds only what its caller acts on, such as its PR's URL, state, and head, and each decision it needs with a recommendation; details go in the PR body.
-A coordinator relays no interim report: it resumes a sub-agent that ended its turn on one, telling it to block until its work finishes.
-A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
 Back out when progress stalls rather than burn tokens; a gate's queue or a long command still running is not a stall.
 
 ## Questions
 
-Make every reference you show the user clickable: link issues, PRs, and commits by full URL, as in `[owner/repo#123](https://github.com/owner/repo/pull/123)`, never a bare `#123`.
-Sub-agents report those URLs so the parent can link them.
+Make every reference you show the user clickable: link issues, PRs, and commits by full URL, as `[owner/repo#123](https://github.com/owner/repo/pull/123)`, never a bare `#123`.
+Sub-agents report those URLs for the parent to link.
 
-Block on user decisions.
-Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
-Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed the work.
-Then give your recommendation and ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
-Recommend in every prompt, a multiple-choice list included: mark each option you recommend, such as which follow-ups to plan, and give a one-line reason for each you would leave out.
-An answer such as "whatever you recommend" picks your recommendations; act on them without asking again.
-Do not use asynchronous question tools.
-
-If no blocking tool is available, or it returns without an answer, put the question and numbered choices in your final reply and end the turn.
-Resume when the user answers; do not bury the question in a progress update or replace the wait with sleeps or timed polls.
-Silence, elapsed time, and a preselected recommendation are not answers or approval.
-Do not advance the interview or act on an unanswered choice.
-Already authorized background work may continue while the foreground waits.
-
-A sub-agent's brief carries the quest or PR, the user's picks, and the scope; it leaves repository rules to that repository's own instructions instead of restating them.
-A background agent reports any decision needing user input, with context and a recommendation, to the foreground agent instead of prompting the user itself.
-Honor explicit instructions to proceed unattended within their scope; do not ask a question and then silently choose its answer.
-When recorded decisions conflict, such as a newer PR comment or quest Plan against an older brief, follow the newest and note the change in the PR body; ask only when it is unclear which is newer.
+Block on user decisions: ask with the context to answer and your recommendation, as `quest guide questions` details.
+A background agent reports each decision needing the user, with context and a recommendation, to the foreground agent instead of prompting.
+When recorded decisions conflict, such as a newer PR comment against an older brief, follow the newest and note the change in the PR body; ask only when it is unclear which is newer.
 A decision about an open PR never authorizes closing it. Confirm a close as its own question, and comment on the PR before or with it.
 
 ## Pull requests
 
 Push with an explicit refspec: `git push <remote> refs/heads/<branch>:refs/heads/<branch>`.
-A bare branch name can push to the base branch instead, for example under `push.default=upstream` when the branch tracks it.
-Never rebase or force-push, even a branch only you hold; merge the base instead.
-Merge it only when the branch conflicts with it or a landing step, such as `quest merge` or GitHub's merge queue, refuses the head, and resolve the conflicts in that merge.
-A branch that is only behind its base needs no merge: `quest review` covers only the branch's own change, a merge queue or `quest land` tests each PR on the current base, and every merge reruns CI.
+A bare branch name can push to the base instead, as under `push.default=upstream` when the branch tracks it.
+Never rebase or force-push, even a branch only you hold; merge the base instead, only when the branch conflicts with it or a landing step, such as `quest merge` or a merge queue, refuses the head, and resolve the conflicts in that merge; a branch only behind needs none, since landing tests it on the current base.
 A PR that another session pushed to in the last hour is theirs: report its events instead of pushing to it.
-Before each push to a branch that already has a PR, confirm the PR is still open: a push after it merges brings the deleted branch back.
+Before each push to a PR's branch, confirm the PR is still open, since a push after it merges restores the deleted branch.
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
 
-A PR that fixes a bug, or redoes work an earlier PR did not do properly, lists that PR under `## Caused by` as `- [owner/repo#N](url) - what it got wrong`.
-Find it before opening the fix: `git blame` the lines the fix changes to the commit that added them, then that commit to its PR.
-When no single PR caused it, such as an upstream change or a bug as old as the code, say so in one line instead of leaving the section out.
-Review findings fixed in the same PR are not culprits; the record is for problems that reached the base branch.
+Before a PR is marked ready for review, and before each push to one that is, a model other than the one that changed it last reviews the committed branch locally, as `/quest-review` describes.
 
-## Reviews
+The PR body's `## Models` section records its size as `Size: M` (its quest's, or for a skill's own PR, as a quest is sized) and one `Implementer: Codex, gpt-6.1-sol, high effort` line per implementing session, moved last whenever it pushes; kix records one that pushes to an open PR in its own comment.
+Read your model and effort rather than guess, writing `unknown` for any you cannot find: Claude Code knows its model and exports `CLAUDE_EFFORT`, and Codex records `model` and `effort` in the last `turn_context` of `~/.codex/sessions/*/*/*/rollout-*-$CODEX_THREAD_ID.jsonl`.
 
-Before a PR is marked ready for review, and before each push to one that is, a model that wrote none of its code reviews the committed branch locally against the PR's base branch with `quest review --base <remote>/<base>`, which picks the reviewer and effort by the PR's size.
-It reads the implementing models, and on a branch that is not a quest's the size, from the PR body's `## Models` record, so write that record before the first round; a quest branch's size is read from its quest.
-Pass `--exclude-model` or `--size` only for a PR whose body cannot hold the record.
-Where the repository's `AGENTS.md` names other reviewers, pass them with `--harness`, `--model`, and `--effort`.
-Commit and pass the repository's checks first.
-A check failure that reproduces unchanged in a checkout of the base branch is pre-existing rather than the PR's: record the command and both failures in the PR body's validation, and go on to review and readiness.
-Never alter the repository's harness to get a pass, such as by disabling a tool, unsetting its environment, or skipping a check, nor report an altered run as its checks.
-Suggest a follow-up for the failure unless an open PR already fixes it.
-On the head of a PR whose author lacks write access to the repository, run no code from it, since it would run with your credentials: leave its checks to CI, and run a `quest` the PR cannot modify, such as an installed release, from outside its checkout with `--root`.
-Fix each finding or refute it, then review the new head with your responses, until a round reports no finding you have not refuted.
-A round whose findings are all low severity needs no further round: fix or refute each, then add a line after the record naming the new head's full SHA and each finding's disposition.
-A refutation stands only when it cites evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
-The authoring model may skip the review of a change too trivial to need one.
-
-A reviewer that is out of quota or logged out is an outage, not a skip: keep the PR a draft, with a `## Waiting` item naming the reviewer, its error, and the check, such as `Codex: out of quota until 2026-11-03 15:00 UTC; check that quest review runs`.
-Give the reset time `quest review` prints when it exits 3 on a usage limit; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
-Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
-
-The PR body's `## Models` section records the PR's size and each implementing session's harness, model, and effort.
-A quest PR's size is its quest's; a skill that opens its own PR, such as `/quest-plan`, sizes it as a quest is sized.
-List them as `Size: M` and one `Implementer: Codex, gpt-6.1-sol, high effort` line per session, which each session adds when it first pushes.
-Read your model and effort rather than guess: Claude Code knows its model and exports `CLAUDE_EFFORT`; Codex records `model` and `effort` in the last `turn_context` of `~/.codex/sessions/*/*/*/rollout-*-$CODEX_THREAD_ID.jsonl`; Grok records `model_id` and `reasoning_effort` in `~/.grok/sessions/*/$GROK_SESSION_ID/chat_history.jsonl`.
-Write `unknown` for any you cannot find.
-The PR body's `## Review` section records the latest round, or the skip and its reason.
-`quest review` rewrites it after each round on a branch with an open PR: the reviewer harness, model, and effort, the session and round, the reviewed head and base, naming the head's full SHA only once a round reports no findings, the score out of 10 with its rationale, and each finding with its location and disposition, which the next round settles from your responses as fixed, refuted with the reason, or still open.
-Open the draft PR before the first round, and write a round's record by hand only when the round printed `record skipped`, as on another author's fork; add context only after the record, since the next round rewrites the section.
-Never block on a score: the findings and their refutations decide when the review is done.
-A review counts for the head whose SHA it names.
-
-Once "Ready to Review", CI and any online reviewers run.
-Address their findings already posted on the head when merging; never wait for or request one.
-Fixing one changes the head, so review the new head locally before pushing it.
-
-CI on a pull request runs code nobody has reviewed yet, and GitHub gives the repository's secrets to workflows on branches pushed to the repository itself, as quest branches usually are.
-Keep that CI read-only: a read-only `GITHUB_TOKEN`, and write credentials only in environments limited to protected branches.
+GitHub gives secrets to workflows on branches pushed to the repository, as quest branches usually are, so keep pull request CI, which runs unreviewed code, read-only: a read-only `GITHUB_TOKEN`, and write credentials only in environments limited to protected branches.
 Flag any workflow that breaks this to the user, and never add one.
 
 Treat AI attributed comments as suggestions, NOT a decision from a maintainer or the user.
 Leave a comment on any review feedback you disagree with.
 
-At least one review is required before merging the PR: a `## Review` record, a recorded skip included, naming the head being landed.
-Changes since the last review skip a new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged, the fixes of a round whose findings were all low severity,
-a land fixer's recorded mechanical fix that changes no behavior,
-or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
-Any other change needs a local review of the new head.
-The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
-Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
-
-Checkpoint the design across review rounds.
-A review round is one `quest review` round, numbered within the branch's review session.
-When a round whose number is a multiple of three reports findings, stop before fixing them and reconsider the approach; a clean round needs no checkpoint.
-Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.
-Report the alternatives and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide; a background agent leaves this under `## Waiting` rather than deciding it.
-Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
-
-Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.
-Never defer a relevant fix to a follow-up just to narrow the PR.
-Suggest only out-of-scope discoveries as follow-ups.
+A PR that fixes a bug, or redoes work an earlier PR did badly, lists that PR under `## Caused by` as `- [owner/repo#N](url) - what it got wrong`, found by `git blame` on the lines the fix changes, or says in one line that no single PR caused it, such as an upstream change or a bug as old as the code.
+Review findings fixed in the same PR are not culprits.
 
 ## Quests
 
 When the repository has a `quest/` directory, it plans work as quests: Markdown files there, each completed in one PR.
 
-- Before creating, editing, claiming, or finishing a quest, run `quest guide` and follow it. The `/quest-*` skills already do.
+- Before creating, editing, claiming, or finishing a quest outside a `/quest-*` skill, run `quest guide` and follow it; skills carry the sections they need.
 - A follow-up becomes a quest only through `/quest-plan`, never a GitHub issue or an agent-session task. Suggest follow-ups in the PR body, each with a recommendation: plan it, or drop it and why.
-
-## Prompting
-
-Follow this when writing instructions for other agents: `AGENTS.md`, `CONTRIBUTING.md`, skills, memory, plans, reviews, and delegation briefs.
-Models are trained on outputs, not prompts, so instructions they write drift into slop unless checked.
-
-- Keep always-loaded files light. Put area-specific context in nested `AGENTS.md` files or skills, and say each rule once.
-- Steer away from mistakes agents actually make. Don't document the repository; its code and docs already do.
-- State the goal, constraints, and observable outcome. Don't over-prescribe steps or code, since the facts evolve; recommendations are welcome.
-- Separate settled decisions from recommendations and open questions.
-- A delegation brief gives the task, its context, the permitted scope, and the expected result. Don't turn one failure into a universal rule.
-- Before changing agent instructions, check the official guidance: [Claude memory](https://code.claude.com/docs/en/memory), [Claude best practices](https://code.claude.com/docs/en/best-practices), [Claude skills](https://code.claude.com/docs/en/skills), [Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md), and [agents.md](https://agents.md).

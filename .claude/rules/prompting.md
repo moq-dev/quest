@@ -6,4 +6,4 @@ paths:
   - ".claude/skills/**"
 ---
 
-Before editing these instructions, follow Prompting in `quest context`.
+Before editing these instructions, run `quest guide prompting` and follow it.

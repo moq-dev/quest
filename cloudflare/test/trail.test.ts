@@ -204,6 +204,7 @@ describe("decision paper trail", () => {
 
 	it("tells planning agents not to write the trail themselves", () => {
 		expect(instructions("plan")).toMatch(/Do not write the interview's questions, options, or answers/);
-		for (const workflow of ["start", "iterate", "bootstrap"] as const) expect(instructions(workflow)).toBeNull();
+		expect(instructions("start")).toMatch(/Start .*Skip .*Deprioritize .*Delete /);
+		for (const workflow of ["iterate", "merge", "bootstrap"] as const) expect(instructions(workflow)).toBeNull();
 	});
 });

@@ -12,6 +12,7 @@ import { parse } from "../src/jobs/protocol";
 import { refName } from "../src/github/service";
 import { formAnswer, parseAnswer, parsePrompt } from "../src/jobs/prompt";
 import { resume } from "../src/jobs/routes";
+import { instructions } from "../src/jobs/trail";
 import { privateKey } from "./github-key";
 import { origin } from "./login-fixtures";
 import { commit, delivery, failing, graphql, head, maintainerOf, project, rewrite, world } from "./project-fixtures";
@@ -625,7 +626,11 @@ describe("runner connections", () => {
 		// Resuming sends no runner event, so the resume itself dispatches.
 		await project(10, "owner");
 		await resume(env, 10);
-		expect(await live.next()).toMatchObject({ type: "assign", job: { id, attempt: 1 }, instructions: null });
+		expect(await live.next()).toMatchObject({
+			type: "assign",
+			job: { id, attempt: 1 },
+			instructions: instructions("start"),
+		});
 	});
 
 	it("tells a planning job's agent that kix writes its decision record", async () => {
@@ -1113,18 +1118,11 @@ describe("job routes", () => {
 	});
 
 	it("starts an epic on its README branch while a child's branch is claimed", async () => {
-		// The epic's last listed child merged, leaving its own work; another quest under it is claimed.
+		// The epic's last child merged, leaving its own work, and that child's branch still holds a claim.
 		const documents = [
-			{
-				path: "quest/README.md",
-				content: "# Project\n\n## Goal\n\nBuild it.\n\n## Required\n\n- [M0](/quest/m0/README.md)\n",
-			},
-			{
-				path: "quest/m0/README.md",
-				content: "# First\n\n## Goal\n\nShip.\n\n## Required\n\n- [Epic](/quest/m0/epic/README.md)\n",
-			},
+			{ path: "quest/README.md", content: "# Project\n\n## Goal\n\nBuild it.\n" },
+			{ path: "quest/m0/README.md", content: "# First\n\n## Goal\n\nShip.\n" },
 			{ path: "quest/m0/epic/README.md", content: "# [S] Epic\n\n## Goal\n\nThe epic's own work.\n" },
-			{ path: "quest/m0/epic/child.md", content: "# [S] Child\n\n## Goal\n\nClaimed.\n" },
 		];
 		await db
 			.prepare(
@@ -1132,7 +1130,6 @@ describe("job routes", () => {
 			)
 			.bind(JSON.stringify(documents), JSON.stringify(["quest/m0/epic/child"]))
 			.run();
-		expect((await post("", { workflow: "start", target: "quest/m0/epic/child.md" })).status).toBe(409);
 		expect((await post("", { workflow: "start", target: "quest/m0/epic/README.md" })).status).toBe(201);
 		const [job] = await store.listJobs(db, 10);
 		expect(job).toMatchObject({
@@ -1438,6 +1435,80 @@ describe("job routes", () => {
 		expect((await post(`/${omitted}/cancel`, {})).status).toBe(204);
 		expect((await store.report(db, machine, [account("main")], [], now)).ended).toEqual([omitted]);
 		await landing.ended(testEnv, omitted);
+		expect(pr.labels).toEqual([]);
+	});
+
+	it("closes a free pull request that claims no quest, at the head on screen", async () => {
+		const close = (sha: string) =>
+			app.request(
+				`${origin}/projects/github/upstream/project/pulls/2/close`,
+				{
+					method: "POST",
+					headers: { Cookie: cookie, Origin: origin },
+					body: new URLSearchParams([["head", sha]]),
+				},
+				testEnv,
+			);
+		expect((await close("e".repeat(40))).status).toBe(403);
+		// A session's hold, or a draft its starter has not handed back, keeps it open.
+		pr.labels = ["quest:active"];
+		expect((await close(head)).status).toBe(403);
+		pr.labels = [];
+		pr.draft = true;
+		expect((await close(head)).status).toBe(403);
+		pr.body = "## Waiting\n\n- Maintainer: decide\n";
+		// So does any active job on it, which could still push.
+		const { id } = (await (await post("", { workflow: "iterate", target: "pulls/2" })).json()) as { id: string };
+		expect((await close(head)).status).toBe(409);
+		expect(pr.closed).toBeFalsy();
+		await post(`/${id}/cancel`, {});
+		// A delete job abandons only a quest's own pull request.
+		const refused = await post("", { workflow: "delete", target: "pulls/2" });
+		expect(refused.status).toBe(409);
+		expect(await refused.json()).toEqual({
+			error: "Only a quest's own pull request is deleted with its quest; close any other",
+		});
+		expect((await close(head)).status).toBe(303);
+		expect(pr.closed).toBe(true);
+	});
+
+	it("deletes a quest's pull request through a delete job that holds it, never by closing it", async () => {
+		const quest = (fork: boolean) =>
+			db
+				.prepare(
+					"UPDATE github_project_activity SET data=json_set(data,'$.headRefName','quest/first','$.isCrossRepository',json(?)) WHERE id='21'",
+				)
+				.bind(String(fork))
+				.run();
+		pr.branch = "quest/first";
+		repo.branches["quest/first"] = head;
+		await quest(true);
+		const fork = await post("", { workflow: "delete", target: "pulls/2" });
+		expect(await fork.json()).toEqual({ error: "The bot cannot update a quest's pull request from a fork" });
+		await quest(false);
+		// Closing would leave the branch claiming the quest.
+		const closed = await app.request(
+			`${origin}/projects/github/upstream/project/pulls/2/close`,
+			{
+				method: "POST",
+				headers: { Cookie: cookie, Origin: origin },
+				body: new URLSearchParams([["head", head]]),
+			},
+			testEnv,
+		);
+		expect(closed.status).toBe(403);
+		expect(pr.closed).toBeFalsy();
+		// A draft its starter holds is theirs, even when the form is stale.
+		pr.draft = true;
+		expect((await post("", { workflow: "delete", target: "pulls/2" })).status).toBe(403);
+		expect(pr.labels).toEqual([]);
+		pr.draft = false;
+		const created = await post("", { workflow: "delete", target: "pulls/2" });
+		expect(created.status).toBe(201);
+		const { id } = (await created.json()) as { id: string };
+		expect(pr.labels).toEqual(["quest:kix"]);
+		expect(await state(id)).toMatchObject({ workflow: "delete", branch: "quest/first", revision: head });
+		expect((await post(`/${id}/cancel`, {})).status).toBe(204);
 		expect(pr.labels).toEqual([]);
 	});
 

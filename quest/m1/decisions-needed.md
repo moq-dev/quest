@@ -16,11 +16,6 @@ m1.
   and `handBackWaits`, which makes every `Decisions needed` item the
   maintainer's) and every doc and skill that names both.
 
-## Waiting
-
-- moq, moq.pro, rind, rust2, quest: no open draft carries
-  `## Decisions needed` (on 2026-11-04, 4 in moq, 5 in moq.pro, 2 in rind,
-  3 in rust2, none in quest). Check with
-  `gh pr list -R moq-dev/<repo> --state open --draft --json number,body` and
-  search the bodies for the heading. To advance it, rewrite each to
-  `## Waiting`.
+Cleared 2026-11-08 (/quest-unblock): no open draft in moq, moq.pro, rind,
+rust2 or quest carries `## Decisions needed` any more; the last one,
+moq-dev/rust2#426, was rewritten to `## Waiting`.

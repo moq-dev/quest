@@ -12,25 +12,15 @@ import {
 	withoutHandBack,
 } from "../src/core";
 
-const ROOT = "# Quests\n\n## Goal\n\nAll.\n\n## Required\n\n- [m0](/quest/m0/README.md)\n- [m1](/quest/m1/README.md)\n";
-
-/** A tree of two milestones, each listing its quests. */
+/** A tree of two milestones and their quests. */
 function tree(m0: Record<string, string>, m1: Record<string, string> = {}): Doc[] {
 	const milestone = (name: string, quests: Record<string, string>) => [
-		parse(
-			`quest/${name}/README.md`,
-			`# ${name}\n\n## Goal\n\nWork.\n` +
-				(Object.keys(quests).length
-					? `\n## Required\n\n${Object.keys(quests)
-							.map((q) => `- [${q}](/quest/${name}/${q})`)
-							.join("\n")}\n`
-					: ""),
-		),
+		parse(`quest/${name}/README.md`, `# ${name}\n\n## Goal\n\nWork.\n`),
 		...Object.entries(quests).map(([q, body]) =>
 			parse(`quest/${name}/${q}`, `# [S] ${q}\n\n## Goal\n\nWork.\n${body}`),
 		),
 	];
-	return [parse("quest/README.md", ROOT), ...milestone("m0", m0), ...milestone("m1", m1)];
+	return [parse("quest/README.md", "# Quests\n\n## Goal\n\nAll.\n"), ...milestone("m0", m0), ...milestone("m1", m1)];
 }
 
 test("a wait opens with its party", () => {
@@ -83,14 +73,13 @@ test("lists the maintainer's waits first, then by milestone and impact", () => {
 	]);
 });
 
-test("ties keep the tree's priority order, as unblocked does", () => {
-	// The CLI loads documents by path, so a.md comes first.
+test("ties keep path order, as unblocked does", () => {
 	const docs = tree({
 		"z.md": "\n## Waiting\n\n- Maintainer: pick one.\n",
 		"a.md": "\n## Waiting\n\n- Maintainer: pick another.\n",
-	}).sort((x, y) => x.path.localeCompare(y.path));
-	expect(unblocked(docs).map((quest) => quest.path)).toEqual(["quest/m0/z.md", "quest/m0/a.md"]);
-	expect(waiting(docs).map((quest) => quest.path)).toEqual(["quest/m0/z.md", "quest/m0/a.md"]);
+	});
+	expect(unblocked(docs).map((quest) => quest.path)).toEqual(["quest/m0/a.md", "quest/m0/z.md"]);
+	expect(waiting(docs).map((quest) => quest.path)).toEqual(["quest/m0/a.md", "quest/m0/z.md"]);
 });
 
 test("a draft hands back with Waiting, or the Decisions needed heading it replaced", () => {

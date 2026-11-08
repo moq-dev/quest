@@ -6,16 +6,19 @@ import { afterEach, expect, test, vi } from "vitest";
 import { type Output, main } from "../src/cli/main";
 import { REVIEWERS } from "../src/cli/models";
 import {
+	type Round,
 	authored,
 	baseInstructions,
+	nextStep,
 	pickReviewer,
 	review,
 	runningHarness,
+	parseState,
 	sessionFile,
 	verdict,
 } from "../src/cli/review";
 import { withReview } from "../src/cli/review-record";
-import { recorded } from "../src/github/models";
+import { recorded, withModels } from "../src/github/models";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -145,7 +148,9 @@ if (rejected) {
 	process.exit(1);
 }
 if (process.env.FAKE_LIMITED) {
-	const message = process.env.FAKE_LIMITED === "unknown"
+	const message = process.env.FAKE_LIMITED === "retried"
+		? "exceeded retry limit, last status: 429 Too Many Requests"
+		: process.env.FAKE_LIMITED === "unknown"
 		? "You've hit your usage limit."
 		: "You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 5th, 2026 3:15 PM.";
 	event({ type: "thread.started", thread_id: "thread-1" });
@@ -287,7 +292,7 @@ test("the reviewer is the harness this command is not running under", () => {
 	expect(() => runningHarness({ CLAUDECODE: "1", CODEX_THREAD_ID: "t" })).toThrow("both");
 });
 
-test("each size's reviewer is the first whose model wrote none of the code", () => {
+test("each size's reviewer is the first whose model is not the latest writer's", () => {
 	const claude = authored({}, { CLAUDECODE: "1" });
 	const codex = authored({}, { CODEX_THREAD_ID: "t" });
 	const at = (size: keyof typeof REVIEWERS, wrote: typeof claude) => {
@@ -304,31 +309,47 @@ test("each size's reviewer is the first whose model wrote none of the code", () 
 	expect(at("S", codex)).toBe("claude claude-opus-5-5 low");
 	expect(at("M", codex)).toBe("claude claude-opus-5-5 medium");
 	expect(at("L", codex)).toBe("claude claude-opus-5-5 high");
-	expect(at("XL", codex)).toBe("claude claude-opus-5-5 high");
+	expect(at("XL", codex)).toBe("claude claude-opus-5-5 xhigh");
 
-	// The PR's recorded implementers replace the running harness: Sol reviews Opus's code from Claude Code.
+	// The PR's latest recorded implementer replaces the running harness, and only it is avoided.
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["claude-opus-5-5"]))).toBe("codex gpt-6.1-sol medium");
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol"]))).toBe("claude claude-opus-5-5 low");
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "gpt-6.1-sol"]))).toBe(
+		"claude claude-opus-5-5 low",
+	);
+	// When the body's and the sessions comment's latest differ, or one is unknown, their order cannot be told,
+	// so the running harness, usually the session that just pushed, is taken to be the latest writer.
+	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, ["gpt-6.1-sol", "claude-opus-5-5"]))).toBe(
+		"claude claude-opus-5-5 medium",
+	);
+	expect(at("M", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "claude-opus-5-5"]))).toBe(
+		"codex gpt-6.1-sol medium",
+	);
+	expect(at("M", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "unknown"]))).toBe("codex gpt-6.1-sol medium");
+	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, ["unknown"]))).toBe("claude claude-opus-5-5 medium");
+	// --harness then avoids every model they name.
+	const either = authored({ harness: "claude" }, {}, ["gpt-6.1-sol", "claude-opus-5-5"]);
+	expect(() => pickReviewer("M", { harness: "claude" }, either)).toThrow("claude-opus-5-5 is avoided");
 	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
 	// No harness need be detected once the implementers are named.
-	expect(at("M", authored({ exclude: ["grok-4.7"] }, {}))).toBe("codex gpt-6.1-sol medium");
+	expect(at("M", authored({ exclude: ["other-model"] }, {}))).toBe("codex gpt-6.1-sol medium");
 	const both = authored({ exclude: ["gpt-6.1-sol", "claude-opus-5-5"] }, {});
-	expect(() => pickReviewer("M", {}, both)).toThrow("wrote the code; pass --harness and --model");
+	expect(() => pickReviewer("M", {}, both)).toThrow("is avoided; pass --harness and --model");
 
-	// --harness names the reviewer at its entry, unless that entry's model wrote the code.
+	// --harness names the reviewer at its entry, unless that entry's model is avoided.
 	expect(pickReviewer("L", { harness: "claude" }, authored({ harness: "claude" }, { CLAUDECODE: "1" }))).toEqual({
 		harness: "claude",
 		model: "claude-opus-5-5",
 		effort: "high",
 	});
 	const sol = authored({ harness: "codex", exclude: ["gpt-6.1-sol"] }, {});
-	expect(() => pickReviewer("M", { harness: "codex" }, sol)).toThrow("gpt-6.1-sol wrote the code; pass --model");
+	expect(() => pickReviewer("M", { harness: "codex" }, sol)).toThrow("gpt-6.1-sol is avoided; pass --model");
 	expect(pickReviewer("M", { harness: "codex", model: "gpt-6-astra" }, sol).model).toBe("gpt-6-astra");
-	// Nor does --model bring back a model that wrote the code.
-	expect(() => pickReviewer("M", { harness: "codex", model: "gpt-6.1-sol" }, sol)).toThrow(
-		"gpt-6.1-sol wrote the code",
-	);
+	// Nor does --model bring back an avoided model.
+	expect(() => pickReviewer("M", { harness: "codex", model: "gpt-6.1-sol" }, sol)).toThrow("gpt-6.1-sol is avoided");
 	const opusWrote = authored({ exclude: ["claude-opus-5-5"] }, {});
-	expect(() => pickReviewer("M", { model: "claude-opus-5-5" }, opusWrote)).toThrow("claude-opus-5-5 wrote the code");
+	expect(() => pickReviewer("M", { model: "claude-opus-5-5" }, opusWrote)).toThrow("claude-opus-5-5 is avoided");
 	// --model and --effort override the picked entry.
 	expect(pickReviewer("XS", { effort: "high" }, claude)).toEqual({
 		harness: "codex",
@@ -391,7 +412,7 @@ fakes("--exclude-model picks the reviewer from the PR's implementers instead of 
 	const both = ["--exclude-model", "gpt-6.1-sol", "--exclude-model", "claude-opus-5-5"];
 	const none = await quest("--root", s.repo, "review", ...both, "--new");
 	expect(none.code).toBe(2);
-	expect(none.stderr).toContain("every M reviewer (gpt-6.1-sol, claude-opus-5-5) wrote the code");
+	expect(none.stderr).toContain("every M reviewer (gpt-6.1-sol, claude-opus-5-5) is avoided");
 });
 
 fakes("an unknown harness is an error, never a same-model review", async () => {
@@ -461,26 +482,51 @@ fakes.each([
 	},
 );
 
-// flaky: /quest/m0/flaky/a-reviewers-usage-limit-exits-3-with-its-reset-and-records-no-round.md
-test.skip("a reviewer's usage limit exits 3 with its reset, and records no round", async () => {
-	// Codex prints its reset in the local time zone, which this process shares.
-	const codex = new Date(2026, 10, 5, 15, 15).toISOString().replace(".000Z", "Z");
-	for (const [host, variant, message] of [
-		["CLAUDECODE", "reset", `codex hit its usage limit; resets ${codex}`],
-		["CLAUDECODE", "unknown", "codex hit its usage limit; resets unknown"],
-		["CODEX_THREAD_ID", "reset", "claude hit its usage limit; resets 2030-03-17T17:46:40Z"],
-		["CODEX_THREAD_ID", "unknown", "claude hit its usage limit; resets unknown"],
-	] as const) {
+// Codex prints its reset in the local time zone, which this process shares.
+const codexReset = new Date(2026, 10, 5, 15, 15).toISOString().replace(".000Z", "Z");
+
+// One test per case: each runs two full reviews, and all four in one test outran its timeout on loaded runners.
+fakes.for([
+	["CLAUDECODE", "reset", `codex hit its usage limit; resets ${codexReset}`],
+	["CLAUDECODE", "unknown", "codex hit its usage limit; resets unknown"],
+	["CODEX_THREAD_ID", "reset", "claude hit its usage limit; resets 2030-03-17T17:46:40Z"],
+	["CODEX_THREAD_ID", "unknown", "claude hit its usage limit; resets unknown"],
+] as const)(
+	"a reviewer's usage limit exits 3 with its reset, and records no round (%s, %s)",
+	async ([host, variant, message]) => {
 		const s = setup(host);
 		vi.stubEnv("FAKE_LIMITED", variant);
 		const result = await quest("--root", s.repo, "review");
-		expect(result.stderr, `${host} ${variant}`).toBe(`error: ${message}\n`);
-		expect(result.code, `${host} ${variant}`).toBe(3);
+		expect(result.stderr).toBe(`error: ${message}\n`);
+		expect(result.code).toBe(3);
 		expect(result.stdout).toBe("");
 		vi.stubEnv("FAKE_LIMITED", undefined);
 		// No round was recorded, so the next one needs no responses.
 		expect((await quest("--root", s.repo, "review")).code).toBe(0);
-	}
+	},
+);
+
+fakes("Codex reaches a gateway at OPENAI_BASE_URL, whose persistent 429 is the pool's usage limit", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("CODEX_API_KEY", "proxy-key");
+	vi.stubEnv("FAKE_LIMITED", "retried");
+	// From the provider itself, giving up on a 429 may be a brief throttle, so it is no limit.
+	const direct = await quest("--root", s.repo, "review");
+	expect(direct.code).toBe(1);
+	expect(direct.stderr).toContain("exceeded retry limit, last status: 429");
+	vi.stubEnv("OPENAI_BASE_URL", "http://127.0.0.1:4000/v1");
+	const pooled = await quest("--root", s.repo, "review");
+	expect(pooled.stderr).toBe("error: codex hit its usage limit; resets unknown\n");
+	expect(pooled.code).toBe(3);
+	vi.stubEnv("FAKE_LIMITED", undefined);
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	// Codex reads no OPENAI_BASE_URL itself, so the review sets its openai_base_url.
+	for (const call of s
+		.calls()
+		.filter((c) => c.argv[0] === "exec")
+		.slice(-2))
+		expect(call.argv.join(" ")).toContain('-c openai_base_url="http://127.0.0.1:4000/v1"');
 });
 
 fakes("a reviewer with no stored login reviews with the credential its CLI reads from the environment", async () => {
@@ -786,6 +832,35 @@ fakes("a differently named branch continues the session --branch names, and with
 	expect(own.stderr).toContain("has none to resume");
 });
 
+fakes("a branch tracking the PR's branch continues its session, and one tracking the base has its own", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).stdout).toContain("round 1\n");
+	write(s.repo, ".tmp/responses.md", "Fixed at src/lib.ts:1.\n");
+	const responses = join(s.repo, ".tmp", "responses.md");
+	git(s.repo, "checkout", "-qb", "temp");
+	git(s.repo, "config", "branch.temp.remote", "origin");
+	git(s.repo, "config", "branch.temp.merge", "refs/heads/feature");
+	const tracking = await quest("--root", s.repo, "review", "--responses", responses);
+	expect(tracking.stderr).toBe("");
+	expect(tracking.stdout).toContain("round 2\n");
+	git(s.repo, "checkout", "-qb", "other");
+	git(s.repo, "config", "branch.other.remote", "origin");
+	git(s.repo, "config", "branch.other.merge", "refs/heads/main");
+	const base = await quest("--root", s.repo, "review", "--responses", responses);
+	expect(base.code).toBe(2);
+	expect(base.stderr).toContain("has none to resume");
+});
+
+fakes("a detached checkout names the branches at its head to pass as --branch", async () => {
+	const s = setup();
+	git(s.repo, "checkout", "-q", "--detach");
+	const detached = await quest("--root", s.repo, "review");
+	expect(detached.code).toBe(2);
+	expect(detached.stderr).toContain(
+		"pass --branch to name the branch whose review session this continues, such as --branch feature",
+	);
+});
+
 fakes.each(["CLAUDECODE", "CODEX_THREAD_ID"] as const)(
 	"a branch behind its base is reviewed from its merge base (host %s)",
 	async (host) => {
@@ -837,6 +912,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 			"  average([3]) is 0.",
 			// The fixture's origin is a local path, which can have no PR.
 			"record skipped: origin is not on GitHub",
+			"next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number",
 			"",
 		].join("\n"),
 	);
@@ -964,6 +1040,7 @@ fakes("a later round resumes the session with the new head and the author's resp
 	expect(later.code).toBe(0);
 	expect(later.stdout).toContain("round 2\n");
 	expect(later.stdout).toContain("findings 0\n");
+	expect(later.stdout).toMatch(/\nnext done: no findings remain on this head\n$/);
 	// The round settles the last round's finding, by its number in the prompt.
 	const first = git(s.repo, "rev-parse", "HEAD~1");
 	expect(later.stdout).toContain(
@@ -1073,7 +1150,8 @@ fakes("a change to the applicable instructions starts a new session that weighs 
  * `upstream/widget`, whose root holds the quest tree, and the PRs are upstream's. Returns the PR bodies
  * each PATCH wrote.
  */
-function onGitHub(repo: string, pulls: { number: number; body: string | null }[], fork = false): { body: string }[] {
+type FakePull = { number: number; body: string | null; comments?: unknown[] };
+function onGitHub(repo: string, pulls: FakePull[], fork = false): { body: string }[] {
 	const local = git(repo, "remote", "get-url", "origin");
 	git(repo, "remote", "set-url", "origin", "https://github.com/acme/widget.git");
 	git(repo, "config", `url.${local}.insteadOf`, "https://github.com/acme/widget.git");
@@ -1106,6 +1184,8 @@ function onGitHub(repo: string, pulls: { number: number; body: string | null }[]
 					: [],
 			);
 		}
+		const comments = new RegExp(`^/repos/${owner}/widget/issues/(\\d+)/comments$`).exec(url.pathname);
+		if (comments) return json(pulls.find((p) => p.number === Number(comments[1]))!.comments ?? []);
 		const patched = new RegExp(`^/repos/${owner}/widget/pulls/(\\d+)$`).exec(url.pathname);
 		if (patched && init?.method === "PATCH") {
 			const { body } = JSON.parse(String(init.body)) as { body: string };
@@ -1281,10 +1361,10 @@ fakes("a later round checks only what changed since the reviewed head, and the o
 	expect(prompt).toContain("1. high src/lib.ts:2 Off by one");
 });
 
-fakes("the PR's Models record sizes the review and names the models that wrote it", async () => {
+fakes("the PR's Models record sizes the review and names its latest writer", async () => {
 	const s = setup();
 	const body = (...lines: string[]) => ["Body.", "", "## Models", "", ...lines].join("\n");
-	const pull = { number: 9, body: body("- Size: L", "- Implementer: Codex, gpt-6.1-sol, high effort") };
+	const pull: FakePull = { number: 9, body: body("- Size: L", "- Implementer: Codex, gpt-6.1-sol, high effort") };
 	onGitHub(s.repo, [pull]);
 	try {
 		// Sol wrote it, so Opus reviews it at L's effort, though Claude Code runs the command.
@@ -1292,14 +1372,33 @@ fakes("the PR's Models record sizes the review and names the models that wrote i
 		expect(sol.stderr).toBe("");
 		expect(sol.stdout).toContain("reviewer claude claude-opus-5-5 high\nsize L ## Models\n");
 
+		// A kix session on the App's sessions comment names another latest writer, and which pushed last cannot
+		// be told, so the running harness's model is avoided; a forged copy of the comment is ignored.
+		const sessions = (app: { id: number } | null) => ({
+			body: "<!-- quest:sessions -->\n\n## Models\n\n- Implementer: Claude Code, claude-opus-5-5, high effort\n",
+			performed_via_github_app: app,
+		});
+		pull.comments = [sessions({ id: 1 })];
+		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
+			"reviewer codex gpt-6.1-sol high\n",
+		);
+		pull.comments = [sessions(null)];
+		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
+			"reviewer claude claude-opus-5-5 high\n",
+		);
+		pull.comments = [];
+
 		// Flags override the record.
 		const flagged = await quest("--root", s.repo, "review", "--new", "--size", "XS", "--exclude-model", "x");
 		expect(flagged.stdout).toContain("reviewer codex gpt-6.1-sol low\nsize XS --size\n");
 
-		// An implementer whose model is unknown may be the running harness's, which the review then skips.
+		// Only the latest implementer is avoided, whoever wrote earlier.
 		pull.body = body("- Implementer: Codex, unknown, unknown effort", "- Implementer: Codex, gpt-6.1-sol, high");
-		expect((await quest("--root", s.repo, "review", "--new")).code).toBe(2);
-		pull.body = body("- Implementer: Codex, unknown, unknown effort");
+		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
+			"reviewer claude claude-opus-5-5 medium\n",
+		);
+		// A latest implementer whose model is unknown may be the running harness's, which the review then skips.
+		pull.body = body("- Implementer: Codex, gpt-6.1-sol, high", "- Implementer: Codex, unknown, unknown effort");
 		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
 			"reviewer codex gpt-6.1-sol medium\n",
 		);
@@ -1335,6 +1434,17 @@ fakes("the PR's Models record sizes the review and names the models that wrote i
 	} finally {
 		vi.unstubAllGlobals();
 	}
+});
+
+test("a session that pushes again moves its Models line last", () => {
+	const one = "Implementer: Claude Code, claude-opus-5-5, high effort";
+	const two = "Implementer: Codex, gpt-6.1-sol, high effort";
+	const body = (...lines: string[]) =>
+		`Body.\n\n## Models\n\n${lines.map((l) => `- ${l}\n`).join("")}\n## Review\n\nNone\n`;
+	expect(withModels("Body.", one)).toBe(`Body.\n\n## Models\n\n- ${one}\n`);
+	expect(withModels(body("Size: S", one), two)).toBe(body("Size: S", one, two));
+	expect(withModels(body("Size: S", one, two), one)).toBe(body("Size: S", two, one));
+	expect(withModels(body(one, two), two)).toBe(body(one, two));
 });
 
 test("a Models record reads its size and every implementing model", () => {
@@ -1486,4 +1596,43 @@ test("each changed directory keeps its own instructions, and a directory's symli
 		{ path: "b/AGENTS.md", text: "same" },
 		{ path: "c/AGENTS.md", text: "c rules" },
 	]);
+});
+
+test("the next step stops for the design checkpoint on every third round that reports findings", () => {
+	const round = (number: number, findings: number, severity = "medium") =>
+		({ round: number, findings: Array.from({ length: findings }, () => ({ severity })) }) as unknown as Round;
+	expect(nextStep(round(3, 1))).toMatch(/^next checkpoint: /);
+	expect(nextStep(round(6, 2))).toMatch(/^next checkpoint: /);
+	expect(nextStep(round(4, 1))).toMatch(/^next respond: /);
+	expect(nextStep(round(3, 0))).toMatch(/^next done: /);
+	expect(nextStep(round(3, 2, "low"))).toMatch(/^next finish: /);
+	expect(nextStep(round(4, 1, "low"))).toMatch(/^next finish: /);
+});
+
+test("a saved session reads in each format an older quest wrote, or is refused naming --new", () => {
+	const finding = { severity: "low", file: "a.ts", line: 1, title: "t", body: "b" };
+	// Before moq-dev/quest#508: each round kept only its finding count.
+	expect(parseState({ rounds: [{ head: "a", findings: 0 }] }).rounds[0].findings).toEqual([]);
+	expect(() => parseState({ rounds: [{ head: "a", findings: 2 }] })).toThrow(/finding count \(2\).*--new/);
+	// Before moq-dev/quest#514: findings but no merge base or last round.
+	expect(parseState({ rounds: [{ head: "a", findings: [finding] }] }).rounds[0].findings).toEqual([finding]);
+	// The current format.
+	const current = { rounds: [{ head: "a", mergeBase: "m", findings: [finding] }], last: {} };
+	expect(parseState(current)).toEqual(current);
+	expect(() => parseState(null)).toThrow(/--new/);
+	expect(() => parseState({ rounds: [{ head: "a" }] })).toThrow(/no findings list.*--new/);
+});
+
+fakes("a session saved by an older quest is refused before the reviewer runs", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	const path = sessionFile(join(s.repo, ".git"), "feature");
+	const saved = JSON.parse(readFileSync(path, "utf8"));
+	writeFileSync(path, JSON.stringify({ ...saved, rounds: [{ head: saved.rounds[0].head, findings: 1 }] }));
+	const calls = s.calls().length;
+	const refused = await quest("--root", s.repo, "review", "--responses", path);
+	expect(refused.code).not.toBe(0);
+	expect(refused.stderr).toMatch(/--new/);
+	expect(s.calls().length).toBe(calls);
+	expect((await quest("--root", s.repo, "review", "--new")).code).toBe(0);
 });

@@ -26,10 +26,10 @@ Recommendations for the implementer:
 
 - Deliver Claude Code `PreToolUse` hooks (Bash for `git push`, `git rebase`,
   `--force`, `/tmp` writes, and `gh` post bodies; Write and Edit for em
-  dashes) at user level through `quest setup`, as
-  [Rules load once](/quest/m0/token-waste/rule-loading.md) installs its
-  `SessionStart` hook, since repositories write no hooks. Give Codex the
-  equivalent `hooks.json` entries where its hooks can match.
+  dashes) at user level through `quest setup`, as a row each in `HOOKS` and a
+  case each in `quest hook` (`src/cli/hooks.ts`), beside its `SessionStart`
+  and `SubagentStart` entries, since repositories write no hooks. Give Codex
+  the equivalent `hooks.json` entries where its hooks can match.
 - Codex parity for the always-on rules too (coordinator, 2026-11-05,
   follow-up of [moq-dev/quest#517](https://github.com/moq-dev/quest/pull/517),
   which gave Claude Code the `SessionStart` rules hook and Codex none):

@@ -20,7 +20,9 @@ nix flake, run `quest init`, and fit Quest into your root `AGENTS.md` or
 `CLAUDE.md`. Init writes a stub per skill under both `.claude/skills/` and
 `.agents/skills/` without requiring symbolic links, and one line
 starting with `Quests: ` in your root instructions; reword the rest of that
-line freely, since init and uninstall recognize it by the prefix.
+line freely, since init and uninstall recognize it by the prefix. In Claude
+Code, `quest setup` then loads the rules that line points at into every
+session from your own settings, so agents never spend a turn on them.
 
 For native Windows installation and removal, see [the Windows guide](windows.md).
 
@@ -57,9 +59,12 @@ a fork, already exists. `quest unblocked --unclaimed` lists the ready quests
 nobody holds. kix.quest records each active job in its database and reassigns a
 job whose runner goes offline; check it for a live runner lock before starting.
 
-You review each change: `/quest-review` has a model that wrote none of it review a
+You review each change: `/quest-review` has a model other than its latest writer review a
 draft locally and marks it ready, and `/quest-merge` (`$quest-merge` in Codex)
 queues it to land once a review covers its head and checks pass.
+`/quest-complete` queues a writer's PR that changes no user-facing behavior,
+such as one editing only quests or tests, without asking, unless your
+`CONTRIBUTING.md` opts out.
 The quest is complete, its plan leaves the tree, and the quests that required it
 can become ready.
 

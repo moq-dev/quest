@@ -51,10 +51,6 @@ cloud runners; donor allocations follow working cloud runners separately.
   [SDK cost tracking](https://code.claude.com/docs/en/agent-sdk/cost-tracking),
   and [Console usage APIs](https://platform.claude.com/docs/en/manage-claude/usage-cost-api).
 
-## Required
-
-- [Job sandbox](/quest/m0/kix/sandbox/README.md) - the boundary keeping provider credentials outside job commands
-
 ## Related
 
 - [Donor allocations](/quest/m2/cloud/donors.md) - add shared budgets after cloud runners work

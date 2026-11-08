@@ -14,7 +14,7 @@ import {
 } from "../github/service";
 import { id, text } from "./protocol";
 import * as store from "./store";
-import { JobError, onPull, type Runner, type Workflow } from "./store";
+import { JobError, lands, onPull, type Runner, type Workflow } from "./store";
 import { withDecisions } from "./trail";
 
 /** Bounds one request's GitHub writes: inline text costs no extra request, other files one each. */
@@ -37,8 +37,10 @@ export type Publication = {
 	/** Existing head pointers carried into a tree built relative to the merged-in commit. */
 	submodules: { path: string; sha: string }[];
 	pull: { title: string; body: string; draft: boolean } | null;
-	/** A merge job lands its pull request at the published head, with the merge method its instructions name. */
+	/** A merge or delete job lands its pull request at the published head, with the merge method its instructions name. */
 	land: { method: MergeMethod | null } | null;
+	/** The publishing session's `Implementer:` line, which a commit to an existing pull request records. */
+	implementer: string | null;
 };
 
 /** Whether `path` names a file inside a work tree, never Git's own directory. */
@@ -149,6 +151,12 @@ export function parsePublication(body: Record<string, unknown>): Publication {
 		pull = { title, body: description, draft: input!.draft !== false };
 	}
 	if (!changes.length && !merge && !pull && !land) throw new JobError("Nothing to publish");
+	let implementer: Publication["implementer"] = null;
+	if (body.implementer !== undefined) {
+		implementer = text(body.implementer, 256);
+		if (!implementer || !/^Implementer: [^\r\n]+$/.test(implementer))
+			throw new JobError("An Implementer: line required");
+	}
 	return {
 		job,
 		attempt,
@@ -160,6 +168,7 @@ export function parsePublication(body: Record<string, unknown>): Publication {
 		submodules: submodules as Publication["submodules"],
 		pull,
 		land,
+		implementer,
 	};
 }
 
@@ -178,7 +187,7 @@ type Decision = { decision: string; cancel: boolean; asked: boolean };
 type Published = {
 	head: string | null;
 	pull?: { number: number; url: string; draft: boolean };
-	/** A merge job's landing: merged at once, or queued or auto-merging. */
+	/** A landing job's landing: merged at once, or queued or auto-merging. */
 	landed?: { merged: boolean };
 };
 
@@ -258,9 +267,11 @@ async function commit(
 export async function publish(env: Env, runner: Runner, input: Publication): Promise<Published | Decision> {
 	const db = env.DB;
 	const job = await store.publishing(db, runner, input.job, input.attempt);
-	if (input.pull && onPull(job.workflow))
+	// A delete repurposes its pull request, so it rewrites that pull request's text, before it lands.
+	if (input.pull && onPull(job.workflow) && job.workflow !== "delete")
 		throw new JobError("Work on a pull request updates its head and opens no pull request");
-	if (input.land && job.workflow !== "merge") throw new JobError("Only a merge job lands its pull request");
+	if (input.pull && input.land) throw new JobError("Rewrite the pull request before landing it");
+	if (input.land && !lands(job.workflow)) throw new JobError("Only a merge or delete job lands its pull request");
 	const refused = [
 		...input.changes.flatMap((change) => {
 			const reason = refusal(job.workflow, change.path, !!input.merge);
@@ -270,6 +281,10 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 	if (refused.length) return decide(db, runner, input, { type: "publication", refused });
 	const github = new GitHubService(env);
 	const upstream: GitHubRepository = { owner: job.owner, name: job.name, id: job.repository };
+	// Work on an existing pull request writes none of its text, so its sessions comment records who changes it,
+	// before the commit, so a commit whose reply is lost never leaves its session unrecorded.
+	if ((input.changes.length || input.merge) && input.implementer && onPull(job.workflow))
+		await github.recordSession(upstream, job.actor, pullOf(job.target), input.implementer);
 	let head: string | null;
 	try {
 		// A pull request opens from the branch, so a delivery alone still checks where it is.
@@ -282,7 +297,7 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 		// Only a job's own upstream branch is kix's to reset; a pull request's own head is not.
 		const restart = error instanceof BranchChanged && !onPull(job.workflow);
 		const moved =
-			error instanceof BranchChanged && job.workflow === "merge" && job.head !== null && job.pending === null
+			error instanceof BranchChanged && lands(job.workflow) && job.head !== null && job.pending === null
 				? await github.contribute(upstream, job.actor, job, (branch) => branch.head())
 				: null;
 		const continuation =
@@ -303,6 +318,7 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 				head: head!,
 				hold: current.hold,
 				method: input.land.method,
+				deletes: current.workflow === "delete",
 			});
 			return { head, landed };
 		} catch (error) {
@@ -314,6 +330,21 @@ export async function publish(env: Env, runner: Runner, input: Publication): Pro
 	if (!head) throw new JobError("Publish the job's changes before opening its pull request");
 	// The attempt may have ended, or been asked to stop, while the branch was written.
 	const current = await store.publishing(db, runner, input.job, input.attempt);
+	if (current.workflow === "delete") {
+		const { title, body } = input.pull;
+		try {
+			await github.describePullRequest(upstream, current.actor, pullOf(current.target), {
+				head,
+				hold: current.hold,
+				title,
+				body,
+			});
+		} catch (error) {
+			if (!(error instanceof PublicationBlocked)) throw error;
+			return decide(db, runner, input, { type: "publication", blocked: error.message });
+		}
+		return { head };
+	}
 	// Planning PRs always await maintainer review; so does work that was asked to stop.
 	const draft = input.pull.draft || current.workflow === "plan" || current.cancel === 1;
 	// A planning pull request's decision record comes from the answers kix recorded, not the agent.
@@ -388,7 +419,7 @@ export async function validateContinuation(
 ) {
 	store.continuationOf(question.prompt, { continue: continuation.head });
 	if (
-		job.workflow !== "merge" ||
+		!lands(job.workflow) ||
 		job.state !== "waiting" ||
 		question.kind !== "publication" ||
 		question.attempt !== job.attempt ||
