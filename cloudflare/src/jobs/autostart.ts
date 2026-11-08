@@ -64,7 +64,7 @@ export function candidates(state: ProjectState, scope: Autostart, taken: Set<str
 	return ranked.filter(
 		(path) =>
 			available.includes(path) &&
-			(!scope.milestones || scope.milestones.includes(path.split("/")[1]!)) &&
+			covers(scope, path) &&
 			!taken.has(path) &&
 			!skipped.has(`${path}\n${digest(text.get(path) ?? "")}`),
 	);
@@ -78,13 +78,17 @@ function interleave<T>(queues: T[][]): T[] {
 	return out;
 }
 
-/** The owner's opt-ins on enabled projects they still belong to. */
-async function optIns(db: D1Database, owner: string) {
+/**
+ * The owner's opt-ins on enabled projects, the one they started work on least
+ * recently first, so projects take turns across passes even when each pass
+ * fills a single slot. A membership's end deletes its opt-in.
+ */
+export async function optIns(db: D1Database, owner: string) {
 	const { results } = await db
 		.prepare(
 			`SELECT p.id,p.owner,p.name,p.state,a.milestones FROM autostart a JOIN github_projects p ON p.id=a.repository
- JOIN github_project_members m ON m.repository=a.repository AND m.user=a.user
- WHERE a.user=? AND p.state='enabled' ORDER BY a.createdAt,p.id`,
+ WHERE a.user=? AND p.state='enabled'
+ ORDER BY COALESCE((SELECT MAX(createdAt) FROM jobs WHERE repository=p.id AND actor=a.user AND workflow='start'),0),a.createdAt,p.id`,
 		)
 		.bind(owner)
 		.all<Enrollment & { milestones: string | null }>();
@@ -101,6 +105,11 @@ export async function read(db: D1Database, repository: number, user: string): Pr
 		.bind(repository, user)
 		.first<{ milestones: string | null }>();
 	return row ? { milestones: row.milestones ? JSON.parse(row.milestones) : null } : null;
+}
+
+/** Whether an opt-in still covers `quest`. */
+function covers(scope: Autostart | null, quest: string) {
+	return !!scope && (!scope.milestones || scope.milestones.includes(quest.split("/")[1]!));
 }
 
 /** Opt a project in for `user`'s runners, or out with `null`. */
@@ -165,7 +174,15 @@ export async function autostart(env: Env, owner: string, free: number) {
 				{ ...job, repository: project.id, actor: owner, pinRunner: null, pinAccount: null },
 				Date.now(),
 			);
-			if (created.created) started++;
+			if (!created.created) continue;
+			// The maintainer may have opted out or narrowed the milestones while this pass read GitHub.
+			// Any change after this read came after the job, so this check closes that window.
+			if (!covers(await read(env.DB, project.id, owner), target)) {
+				await store.cancel(env.DB, created.id, owner, Date.now());
+				refused.add(project.id);
+				continue;
+			}
+			started++;
 		} catch (error) {
 			if (error instanceof NotMaintainer) {
 				// Lost authority ends the opt-in: it lent runners to a project its owner no longer maintains.

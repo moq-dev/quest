@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Repo } from "../dev/github";
 import type { ProjectState } from "../src/github/state";
 import { app } from "../src/index";
-import { autostart, candidates, digest, milestones } from "../src/jobs/autostart";
+import { autostart, candidates, digest, milestones, optIns, save } from "../src/jobs/autostart";
 import * as store from "../src/jobs/store";
 import { privateKey } from "./github-key";
 import { origin } from "./login-fixtures";
-import { head, maintainerOf } from "./project-fixtures";
+import { head, maintainerOf, project } from "./project-fixtures";
 
 const testEnv = { ...env, GITHUB_APP_PRIVATE_KEY: privateKey };
 const db = env.DB;
@@ -146,6 +146,45 @@ describe("starting ready quests on free slots", () => {
 		expect((await opt([["enabled", "0"]])).status).toBe(303);
 		expect(await db.prepare("SELECT 1 FROM autostart").first()).toBeNull();
 		expect((await opt([["enabled", "maybe"]])).status).toBe(409);
+	});
+
+	it("cancels a start the maintainer opted out of while it read GitHub", async () => {
+		await save(db, 10, user, { milestones: null }, 0);
+		const github = vi.mocked(globalThis.fetch).getMockImplementation()!;
+		vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+			// The flake read is the last GitHub request before the job is created.
+			if (String(input).includes("/contents/flake.nix")) await save(db, 10, user, null, 0);
+			return github(input, init);
+		});
+		expect(await autostart(testEnv, user, 1)).toBe(0);
+		expect((await db.prepare("SELECT state FROM jobs").all()).results).toEqual([{ state: "cancelled" }]);
+	});
+
+	it("takes turns across projects, the least recently started first", async () => {
+		await project(11, user);
+		await save(db, 10, user, { milestones: null }, 0);
+		await save(db, 11, user, { milestones: null }, 1);
+		expect((await optIns(db, user)).map((o) => o.project.id)).toEqual([10, 11]);
+		await store.createJob(
+			db,
+			{
+				repository: 10,
+				actor: user,
+				workflow: "start",
+				target: "quest/x.md",
+				revision: head,
+				branch: "quest/x",
+				trusted: true,
+			},
+			5,
+		);
+		expect((await optIns(db, user)).map((o) => o.project.id)).toEqual([11, 10]);
+	});
+
+	it("ends an opt-in with its membership, so regaining access never resumes it", async () => {
+		await save(db, 10, user, { milestones: null }, 0);
+		await db.prepare("DELETE FROM github_project_members WHERE repository=10 AND user=?").bind(user).run();
+		expect(await db.prepare("SELECT 1 FROM autostart").first()).toBeNull();
 	});
 
 	it("ends the opt-in of a maintainer who lost their role", async () => {
