@@ -131,8 +131,7 @@ export async function take(pr: PullRequest, token: string | undefined, deps: Git
 
 /**
  * While `token` holds `pr`, hand it to reviewers: drop its `## Waiting` section
- * (or the older `## Decisions needed`) and mark a draft ready for review. The
- * hold stays.
+ * and mark a draft ready for review. The hold stays.
  */
 export async function finish(pr: PullRequest, token: string, deps: GitHubDependencies): Promise<Hold> {
 	const labels = new Labels(pr, deps);

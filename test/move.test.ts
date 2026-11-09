@@ -551,7 +551,7 @@ test("open pull requests come from every page, by head branch", async () => {
 				html_url: `https://github.com/example/project/pull/${n}`,
 			});
 			return page === null
-				? new Response(JSON.stringify([pull("quest/m0/a", 1, "Notes.\n\n## Decisions needed\n")]), {
+				? new Response(JSON.stringify([pull("quest/m0/a", 1, "Notes.\n\n## Waiting\n")]), {
 						headers: {
 							link: '<https://api.github.com/repos/example/project/pulls?state=open&page=2>; rel="next"',
 						},
@@ -569,7 +569,7 @@ test("open pull requests come from every page, by head branch", async () => {
 			draft: true,
 			...times,
 			handedBack: true,
-			body: "Notes.\n\n## Decisions needed\n",
+			body: "Notes.\n\n## Waiting\n",
 		},
 		{
 			number: 2,

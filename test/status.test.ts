@@ -631,7 +631,7 @@ test("reports draft starter ownership as last activity, and does not invent its 
 	const status = await pullRequestStatus(pr, setup([draft], { now: Date.parse("2026-10-07T12:00:00Z") }).deps);
 	expect(status.starterHold).toEqual({ lastActive: "2026-10-07T11:00:00Z", age: "1 hour ago", url: URL_ });
 	expect(statusLines(status)).toContain(`starter-hold 2026-10-07T11:00:00Z ${URL_} last active 1 hour ago`);
-	for (const change of [{ body: "## Decisions needed\n\nChoose one." }, { state: "CLOSED" }, { state: "MERGED" }]) {
+	for (const change of [{ body: "## Waiting\n\nChoose one." }, { state: "CLOSED" }, { state: "MERGED" }]) {
 		const copy = structuredClone(draft);
 		Object.assign(copy.data.repository.pullRequest, change);
 		expect((await pullRequestStatus(pr, setup([copy]).deps)).starterHold).toBeNull();
