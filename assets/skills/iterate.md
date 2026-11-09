@@ -1,6 +1,6 @@
 ---
 description: Iterate on an open PR to settle its open decisions, fix CI and review findings, and push.
-guide: Format, Execution, Summaries
+guide: Format, Creation, Execution, Summaries
 skills: grill
 ---
 
@@ -19,6 +19,7 @@ Judge the approach before touching anything: would you take a different one?
 Settle every decision this PR needs with the grill skill's interview, starting from the user's feedback: those its `## Waiting` section lists, those your judgment of the approach or the review findings raise, and any you find along the way.
 Record the settled decisions in this PR description's `## Decisions` section as the paper trail, then implement them.
 A sub-agent that cannot prompt leaves each in `## Waiting` with a recommendation.
+Leave the open decisions of its follow-ups to the round that picks it to merge, and record answers your brief or the user gives as the guide's Creation section describes.
 
 Fix merge conflicts and failing CI checks.
 Address the automated review findings already posted, without waiting on optional reviewers: fix those you agree with and comment on any you decline.

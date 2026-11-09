@@ -113,4 +113,4 @@ Review findings fixed in the same PR are not culprits.
 When the repository has a `quest/` directory, it plans work as quests: Markdown files there, each completed in one PR.
 
 - Before creating, editing, claiming, or finishing a quest outside a `/quest-*` skill, run `quest guide` and follow it; skills carry the sections they need.
-- A follow-up becomes a quest only through `/quest-plan`, never a GitHub issue or an agent-session task. Suggest follow-ups in the PR body, each with a recommendation: plan it, or drop it and why.
+- Add a follow-up worth a quest to your own PR as a quest, as `quest guide` describes, never as a GitHub issue or an agent-session task.
