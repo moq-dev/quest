@@ -156,12 +156,17 @@ test("unblocked prints ranked counts and paths, with deterministic JSON and a li
 	const solMedium = '{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}';
 	expect(tree.run("unblocked", "--json", "--limit", "1")).toEqual({
 		code: 0,
-		stdout: `[{"path":"quest/m0/epic/one.md","dependents":1,"models":[${opusLow},${solMedium}]}]\n`,
+		stdout: `[{"path":"quest/m0/epic/one.md","dependents":1,"hosts":[],"models":[${opusLow},${solMedium}]}]\n`,
 		stderr: "",
 	});
 	tree.write("quest/m0/epic/two.md", "# [S] Two\n\n## Goal\n\nWork.\n");
 	expect(JSON.parse(tree.run("unblocked", "--json", "--limit", "1").stdout)).toHaveLength(1);
 	expect(JSON.parse(tree.run("unblocked", "--json").stdout)).toHaveLength(2);
+});
+
+test("unblocked reports the hosts a quest names", () => {
+	const tree = Tree.baseline().append("quest/m0/epic/one.md", "\n## Hosts\n\n- windows\n- macos - the camera.\n");
+	expect(JSON.parse(tree.run("unblocked", "--json").stdout)[0].hosts).toEqual(["macos", "windows"]);
 });
 
 test("unblocked routes a quest with a decision open one size up, and XL stays XL", () => {

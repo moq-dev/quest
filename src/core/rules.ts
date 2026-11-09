@@ -18,6 +18,9 @@ import {
 	entries,
 	has,
 	holds,
+	HOST,
+	HOSTS,
+	hostOf,
 	isEpic,
 	owner,
 	permanent,
@@ -36,14 +39,14 @@ import { MAINTAINER, WAITING, parseWait } from "./waiting";
  * literally, so a typo turns a blocked quest ready and fails nowhere else: the
  * closed vocabulary is what catches it.
  */
-export const HEADINGS = ["Goal", "Plan", "Waiting", "Required", "Closes", "Related"];
+export const HEADINGS = ["Goal", "Plan", "Hosts", "Waiting", "Required", "Closes", "Related"];
 
 /**
  * Sections whose whole content is a list. A heading left standing after its
  * last entry was removed is a bug: an empty `Required` blocks its quest
  * forever.
  */
-export const LIST_SECTIONS = ["Waiting", "Required", "Closes", "Related"];
+export const LIST_SECTIONS = ["Hosts", "Waiting", "Required", "Closes", "Related"];
 
 /** The permanent root epic; the one document nothing has to list. */
 export const ROOT = "quest/README.md";
@@ -164,6 +167,17 @@ function headings(found: Finding[], docs: Doc[], doc: Doc) {
 					? "; an empty one blocks the quest forever, so remove the heading with its last entry"
 					: "; remove the heading with its last entry";
 			found.push({ path: doc.path, line: heading.line, message: `'## ${heading.text}' is empty${why}` });
+		}
+	}
+
+	// A dispatcher routes on these values, so a typo would strand the quest on no host.
+	for (const entry of entries(doc, HOSTS)) {
+		if (hostOf(entry) === null) {
+			found.push({
+				path: doc.path,
+				line: entry.line,
+				message: `'## ${HOSTS}' item must open with one of ${HOST.join(", ")}, optionally followed by ' - why'`,
+			});
 		}
 	}
 

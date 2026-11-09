@@ -52,6 +52,7 @@ import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
+import { hosts } from "../core/doc";
 import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
 import {
 	ReviewInputError,
@@ -62,7 +63,17 @@ import {
 	roundLines,
 } from "./review";
 import { type Recorded, pullModels, recordRound } from "./review-record";
-import { BASH_MAX_TIMEOUT_MS, HOOKS, WORKTREE_HOOKS, hook, settingsPath, setup } from "./hooks";
+import {
+	BASH_MAX_TIMEOUT_MS,
+	CLAUDE_HOOKS,
+	CODEX_HOOKS,
+	type HookEntry,
+	WORKTREE_HOOKS,
+	hook,
+	setup,
+	targets,
+} from "./hooks";
+import { CHECKED_CONTEXT, USER_ASKED } from "./rules";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -268,7 +279,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"section. Counts exclude structural epic membership but include the quests an epic's ## Required holds " +
 				"back. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
-				"ordered array of {path, dependents, models} objects, where models ranks the {harness, model, effort} " +
+				"ordered array of {path, dependents, hosts, models} objects, where hosts lists the operating systems " +
+				"(linux, macos, windows) under the quest's ## Hosts, empty when it runs anywhere, and models ranks the {harness, model, effort} " +
 				"entries that write the quest: its size's list, or the next size's while a Maintainer: item under its " +
 				"## Waiting leaves a decision open (quest models lists them).\n\n" +
 				"--unclaimed ranks the fetched upstream default branch's tree instead of the checkout, then drops " +
@@ -309,7 +321,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						const byPath = new Map(docs.map((doc) => [doc.path, doc]));
 						print(
 							JSON.stringify(
-								shown.map((quest) => ({ ...quest, models: questWriters(byPath.get(quest.path)!) })),
+								shown.map((quest) => {
+									const doc = byPath.get(quest.path)!;
+									return { ...quest, hosts: hosts(doc), models: questWriters(doc) };
+								}),
 							),
 						);
 						return;
@@ -1365,11 +1380,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("context")
 		.summary("Print the engineering rules agents follow in every task, before the repository's own")
 		.description(
-			"Print the engineering rules agents follow in every task, before the repository's own. The hook " +
-				"`quest setup` installs adds them to each Claude Code session in a repository that uses Quest, so " +
-				"its agents need not run this.",
+			"Print the engineering rules agents follow in every task, before the repository's own. The hooks " +
+				"`quest setup` installs add them to each Claude Code and Codex session in a repository that uses " +
+				"Quest, so its agents need not run this, and check the rules under its last section, Checked, on " +
+				"each tool call, so the context they add leaves that section out.",
 		)
-		.action(() => out.stdout(CONTEXT));
+		.action(() => out.stdout(`${CONTEXT}\n${CHECKED_CONTEXT}`));
 
 	program
 		.command("skill")
@@ -1392,24 +1408,30 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			out.stdout(found.instructions);
 		});
 
+	const listed = (hooks: readonly HookEntry[]) =>
+		hooks.map((h) => (h.matcher ? `${h.event} (${h.matcher})` : h.event)).join(", ");
 	program
 		.command("setup")
-		.summary("Configure your own Claude Code settings for quest work")
+		.summary("Configure your own Claude Code and Codex settings for quest work")
 		.description(
 			"Configure your own Claude Code settings for quest work, in $CLAUDE_CONFIG_DIR/settings.json or else " +
-				"~/.claude/settings.json, keeping every other setting and hook. Touches no repository.\n\n" +
-				`Sets env.BASH_MAX_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a foreground command, such as a blocking ` +
+				"~/.claude/settings.json, and Codex's in $CODEX_HOME/hooks.json or else ~/.codex/hooks.json when " +
+				"that directory exists, keeping every other setting and hook. Touches no repository.\n\n" +
+				`Sets Claude Code's env.BASH_MAX_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a foreground command, such as a blocking ` +
 				"wait, may run 55 minutes: just under the 1h prompt-cache TTL. " +
-				`Installs ${HOOKS.map((h) => (h.matcher ? `${h.event} (${h.matcher})` : h.event)).join(" and ")} hooks, ` +
-				"which add `quest context` to each session and subagent in a repository that uses Quest, and again " +
-				"after compaction, so agents never run it themselves. Each runs `quest hook`, so `quest` must be on " +
-				"the PATH Claude Code starts with.\n\n" +
-				"With --worktrees, also installs " +
+				`Installs Claude Code's ${listed(CLAUDE_HOOKS)} hooks and Codex's ${listed(CODEX_HOOKS)} hooks. ` +
+				"The start hooks add `quest context` to each session and Claude Code subagent in a repository that " +
+				"uses Quest, and again after compaction, so agents never run it themselves. PreToolUse blocks tool " +
+				"calls there that break a rule a program can check: em dashes an agent writes, a push without an " +
+				"explicit refspec, a force-push or rebase, a GitHub post without its `(Written by ...)` footer, and " +
+				"scratch files in /tmp. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
+				"with, and Codex asks to trust its hooks once through /hooks.\n\n" +
+				"With --worktrees, also installs Claude Code's " +
 				WORKTREE_HOOKS.map((h) => h.event).join(", ") +
 				" hooks running `quest worktree hook`, which hand Claude Code's worktrees to `quest worktree`; " +
 				"--no-worktrees takes them out, and without either a rerun keeps them as they are. Only one hook " +
 				"can manage Claude's worktrees, so remove any other WorktreeCreate or WorktreeRemove hook first.\n\n" +
-				"Validates the whole file, then writes it once and prints each change; settings that are not a JSON " +
+				"Validates each whole file, then writes it once and prints each change; settings that are not a JSON " +
 				"object, or whose env or hooks are malformed, are an error and stay unchanged. Rerun it after " +
 				"upgrading Quest; it replaces Quest's earlier hooks and changes nothing when all is set.",
 		)
@@ -1417,18 +1439,28 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--no-worktrees", "Remove the worktree hooks")
 		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
 		.action((options: { remove?: boolean; worktrees?: boolean }) => {
-			for (const line of setup(settingsPath(), options)) print(line);
+			for (const target of targets()) {
+				const changes = setup(target, options);
+				for (const line of changes) print(line);
+				if (target.name === "Codex" && changes.length > 0 && !options.remove)
+					print(`${target.path}: review and trust Quest's hooks with /hooks in Codex`);
+			}
 		});
 
 	program
 		.command("hook")
-		.summary("Handle a Claude Code hook event `quest setup` installed, read on stdin")
+		.summary("Handle a Claude Code or Codex hook event `quest setup` installed, read on stdin")
 		.description(
-			"Handle the Claude Code hook event whose JSON input arrives on stdin, for the entries `quest setup` " +
-				"installs. SessionStart and SubagentStart print `quest context` as the session's or subagent's " +
-				"additional context, when the root AGENTS.md or CLAUDE.md of the checkout holding the input's cwd " +
-				"has a line starting with `Quests: `, as `quest init` writes, and nothing otherwise. Exits 1 on " +
-				"malformed input or an event it does not handle.",
+			"Handle the Claude Code or Codex hook event whose JSON input arrives on stdin, for the entries " +
+				"`quest setup` installs, in a repository whose root AGENTS.md or CLAUDE.md, in the checkout holding " +
+				"the input's cwd, has a line starting with `Quests: `, as `quest init` writes; elsewhere it prints " +
+				"nothing. SessionStart and SubagentStart print `quest context` as the session's or subagent's " +
+				"additional context. PreToolUse denies a call that breaks a checked rule, naming the rule: an edit " +
+				"or a commit message or new GitHub post that adds an em dash outside a `>` quote line, a `git push` " +
+				"whose refspecs lack a `:`, a force-push, a `git rebase` or `git pull --rebase`, a new GitHub post " +
+				"whose body lacks a `(Written by ...)` line, or a file written under /tmp. A force-push or rebase the " +
+				`user asked for passes with the \`${USER_ASKED}\` prefix. Exits 1 on malformed input or an event it ` +
+				"does not handle.",
 		)
 		.action(() => {
 			out.stdout(hook(JSON.parse(readFileSync(0, "utf8"))));

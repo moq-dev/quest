@@ -35,6 +35,14 @@ test("a wait opens with its party", () => {
 	expect(prose).toBeNull();
 });
 
+test("check rejects an unknown host and an empty hosts section", () => {
+	const docs = tree({ "a.md": "\n## Hosts\n\n- linux\n- macos - the camera.\n- freebsd\n", "b.md": "\n## Hosts\n" });
+	expect(check(docs, () => true).map((f) => `${f.path}:${f.line}: ${f.message}`)).toEqual([
+		"quest/m0/a.md:11: '## Hosts' item must open with one of linux, macos, windows, optionally followed by ' - why'",
+		"quest/m0/b.md:7: '## Hosts' is empty; remove the heading with its last entry",
+	]);
+});
+
 test("check rejects a wait without a party and an empty section", () => {
 	const docs = tree({ "a.md": "\n## Waiting\n\n- pick a name\n", "b.md": "\n## Waiting\n" });
 	expect(check(docs, () => true).map((f) => `${f.path}:${f.line}: ${f.message}`)).toEqual([

@@ -158,6 +158,26 @@ export function entries(doc: Doc, section: string): Entry[] {
 	return doc.entries.filter((e) => e.section === section);
 }
 
+/** The section naming the operating systems a quest must run on. */
+export const HOSTS = "Hosts";
+
+/** The operating systems a `## Hosts` item may name. */
+export const HOST = ["linux", "macos", "windows"] as const;
+export type Host = (typeof HOST)[number];
+
+/** The host a `## Hosts` item names, as `macos` or `macos - why`, or `null` if it names none. */
+export function hostOf(entry: Entry): Host | null {
+	const match = /^(\S+)(?: - .+)?$/.exec(entry.text);
+	const host = match?.[1];
+	return HOST.find((h) => h === host) ?? null;
+}
+
+/** The hosts a quest must run on, sorted and deduplicated; empty means any. */
+export function hosts(doc: Doc): Host[] {
+	const named = new Set(entries(doc, HOSTS).map(hostOf));
+	return HOST.filter((h) => named.has(h));
+}
+
 function isReadme(path: string): boolean {
 	return fileName(path) === "README.md";
 }

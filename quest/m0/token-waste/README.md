@@ -41,7 +41,8 @@ Decision prompts, chosen options marked ✅:
   (Theo's tstack, jdx's jouet, Matt Pocock's skills, HumanLayer, Mitchell
   Hashimoto), chosen ✅ and rejected listed:
   - ✅ Mechanical rules become hooks or lint, so their prose leaves the
-    always-loaded rules ([rule checks](/quest/m0/token-waste/rule-checks.md)).
+    always-loaded rules, done in
+    [moq-dev/quest#553](https://github.com/moq-dev/quest/pull/553).
   - ✅ A review round budget by severity, after Theo's `sol-loop`
     ([moq-dev/quest#514](https://github.com/moq-dev/quest/pull/514)).
   - ✅ `quest usage` moves from m1 into this epic, so its closing
