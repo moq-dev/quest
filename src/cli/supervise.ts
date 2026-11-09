@@ -30,7 +30,10 @@ export interface Owner {
 	start?: string;
 }
 
-/** Field 22 of /proc/<pid>/stat; the command name in parentheses may hold spaces. */
+/**
+ * Field 22 of /proc/<pid>/stat; the command name in parentheses may hold spaces. Throws once the
+ * process is gone: ENOENT, or ESRCH when it exits mid-read.
+ */
 export function startTime(pid: number): string | undefined {
 	if (process.platform !== "linux") return undefined;
 	const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -48,7 +51,7 @@ export function alive(owner: Owner): boolean {
 		try {
 			return startTime(owner.pid) === owner.start;
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+			if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
 			throw error;
 		}
 	}

@@ -13,7 +13,7 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { constants } from "node:os";
+import { constants, hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -42,8 +42,26 @@ import {
 } from "../src/cli/gate";
 import { forwards, foregroundStat, statProcess } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
-import { questScope } from "../src/cli/supervise";
+import { alive as ownerAlive, questScope } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
+
+// Linux reports a /proc read that races a process's exit as ESRCH rather than ENOENT, so fail
+// one process's stat read with either code, without timing.
+const racing = vi.hoisted(() => ({ read: undefined as { path: string; code: string } | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	return {
+		...fs,
+		readFileSync: (...args: Parameters<typeof fs.readFileSync>) => {
+			if (racing.read && args[0] === racing.read.path) {
+				throw Object.assign(new Error(`${racing.read.code}: no such process, read`), {
+					code: racing.read.code,
+				});
+			}
+			return fs.readFileSync(...args);
+		},
+	};
+});
 
 const GiB = 2 ** 30;
 
@@ -1145,6 +1163,24 @@ function detached(dir: string, rest: string) {
 		pid: () => Number(readFileSync(pid, "utf8")),
 	};
 }
+
+describe.runIf(process.platform === "linux")("a process that exits while its stat is read", () => {
+	const pid = 4242;
+	const identity = { host: hostname(), pid, start: "1" };
+	afterEach(() => (racing.read = undefined));
+
+	test.each(["ENOENT", "ESRCH"])("reads as gone when the stat read fails with %s", (code) => {
+		racing.read = { path: `/proc/${pid}/stat`, code };
+		expect(processStart(pid)).toBeUndefined();
+		expect(ownerAlive(identity)).toBe(false);
+	});
+
+	test("surfaces any other read error", () => {
+		racing.read = { path: `/proc/${pid}/stat`, code: "EACCES" };
+		expect(() => processStart(pid)).toThrow("EACCES");
+		expect(() => ownerAlive(identity)).toThrow("EACCES");
+	});
+});
 
 describe("the Windows job stub", () => {
 	test("passes the exact exit status and restores the caller's environment", async () => {
