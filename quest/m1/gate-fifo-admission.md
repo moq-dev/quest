@@ -30,7 +30,14 @@ an atomic versioned publish; the queue can live in the same ledger, recording
 each waiter when it starts waiting. A waiter whose gate process died leaves
 the queue the way a dead admission leaves the ledger today. `quick` callers
 still start after `QUICK_MS` whatever their place, and a `host` reservation
-still holds everyone back.
+still holds everyone back. A `priority` caller, which today ignores load so it
+goes first while the host is loaded, keeps going ahead of the queue rather than
+taking a place in it.
+
+`admit` drops a ledger entry once it is older than `RECENT_MS` and its process
+no longer runs; a queued waiter's entry must stay while its gate lives, however
+long it waits, and must not count as an admission against anyone's headroom.
+`admit`'s doc comment, which today promises no fairness, states the new order.
 
 ## Related
 
