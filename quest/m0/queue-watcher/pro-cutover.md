@@ -69,3 +69,7 @@ installation already has `actions: write` and `checks: write`.
   for a failing build is fixed and re-enqueued, then delete this quest. Check
   with `gh pr list -R moq-dev/moq.pro --state merged` and the PRs'
   `quest queue` check runs.
+
+## Required
+
+- [The watcher refuses fork picks for a private runner](/quest/m0/queue-watcher/fork-refusal.md) - keeps a fork's code off `moq-pro-gate`, which the queue build alone cannot
