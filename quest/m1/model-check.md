@@ -22,8 +22,8 @@ the size tables of model routing (`src/cli/models.ts`):
   - A separate audit owning the tables
   - A separate audit of efforts only
 - When does it run? ✅ First in m0 once routing lands
-  ([m0's run](/quest/m0/model-check.md)), then each milestone (rejected:
-  each milestone only)
+  ([moq-dev/quest#584](https://github.com/moq-dev/quest/pull/584)), then
+  each milestone (rejected: each milestone only)
 
 Audit the routing from the records of the PRs merged since the last run,
 with `quest usage --since <the last run's date>`, whose accuracy rollup reads each body's
@@ -49,6 +49,25 @@ checkpoints and outages to count by hand:
   it unasked. Replacing a stale model id with the same vendor's newer one,
   below, needs no decision, as this check always did.
 
+- Baseline from m0's routing audit
+  ([moq-dev/quest#584](https://github.com/moq-dev/quest/pull/584)),
+  `quest usage --since 2026-11-07`, after routing landed in
+  [moq-dev/quest#558](https://github.com/moq-dev/quest/pull/558); writers
+  on their table entry:
+  - XS Haiku high: 4 PRs, 0 handed back, score 9.7, 1.0 rounds, 0 fixed.
+  - S Opus low: 4 PRs, 0 handed back, score 10.0, 1.3 rounds, 1 fixed.
+  - M Opus medium: 5 PRs, 1 handed back, score 9.2, 2.2 rounds, 5 fixed,
+    3 open; the hand-back,
+    [moq-dev/quest#553](https://github.com/moq-dev/quest/pull/553), was
+    iterated at low.
+  - L Opus high: 7 PRs, 0 handed back, score 10.0, 2.6 rounds, 10 fixed.
+  - Sol reviews, latest round's fixes: low 4 PRs, 0 fixed; medium 25 PRs,
+    4 with fixes, 4 fixed; high 9 PRs, 6 with fixes, 13 fixed; xhigh 2 PRs,
+    1 fixed. No PR names a routed PR under `## Caused by`, so no review
+    miss showed, and no outage skipped a quest.
+  - Too thin (4-7 PRs per cell) to move a size; no table changed. Watch M
+    at medium, iterates below the size's effort, and `Implementer:` lines
+    without an effort (about 9 said `unknown`).
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   general model. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model

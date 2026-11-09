@@ -65,7 +65,3 @@ Decision prompts, chosen options marked ✅:
 - The milestone re-cut the maintainer raised (m1 additive improvements, m2
   semver-breaking features) is moq-dev/moq's own plan: ✅ re-plan moq
   separately (rejected: make it quest's convention; not now).
-
-## Related
-
-- [Model check](/quest/m0/model-check.md) - audits the size tables the review quest changes
