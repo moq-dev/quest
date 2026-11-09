@@ -312,24 +312,13 @@ test("each size's reviewer is the first whose model is not the latest writer's",
 	expect(at("XL", codex)).toBe("claude claude-opus-5-5 xhigh");
 
 	// The PR's latest recorded implementer replaces the running harness, and only it is avoided.
-	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["claude-opus-5-5"]))).toBe("codex gpt-6.1-sol medium");
-	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol"]))).toBe("claude claude-opus-5-5 low");
-	expect(at("S", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "gpt-6.1-sol"]))).toBe(
-		"claude claude-opus-5-5 low",
-	);
-	// When the body's and the sessions comment's latest differ, or one is unknown, their order cannot be told,
-	// so the running harness, usually the session that just pushed, is taken to be the latest writer.
-	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, ["gpt-6.1-sol", "claude-opus-5-5"]))).toBe(
-		"claude claude-opus-5-5 medium",
-	);
-	expect(at("M", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "claude-opus-5-5"]))).toBe(
-		"codex gpt-6.1-sol medium",
-	);
-	expect(at("M", authored({}, { CLAUDECODE: "1" }, ["gpt-6.1-sol", "unknown"]))).toBe("codex gpt-6.1-sol medium");
-	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, ["unknown"]))).toBe("claude claude-opus-5-5 medium");
-	// --harness then avoids every model they name.
-	const either = authored({ harness: "claude" }, {}, ["gpt-6.1-sol", "claude-opus-5-5"]);
-	expect(() => pickReviewer("M", { harness: "claude" }, either)).toThrow("claude-opus-5-5 is avoided");
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, "claude-opus-5-5"))).toBe("codex gpt-6.1-sol medium");
+	expect(at("S", authored({}, { CLAUDECODE: "1" }, "gpt-6.1-sol"))).toBe("claude claude-opus-5-5 low");
+	// An unknown latest writer is taken to be the running harness, usually the session that just pushed.
+	expect(at("M", authored({}, { CODEX_THREAD_ID: "t" }, "unknown"))).toBe("claude claude-opus-5-5 medium");
+	// --harness then avoids the named latest writer.
+	const opus = authored({ harness: "claude" }, {}, "claude-opus-5-5");
+	expect(() => pickReviewer("M", { harness: "claude" }, opus)).toThrow("claude-opus-5-5 is avoided");
 	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
 	// No harness need be detected once the implementers are named.
@@ -1150,7 +1139,7 @@ fakes("a change to the applicable instructions starts a new session that weighs 
  * `upstream/widget`, whose root holds the quest tree, and the PRs are upstream's. Returns the PR bodies
  * each PATCH wrote.
  */
-type FakePull = { number: number; body: string | null; comments?: unknown[] };
+type FakePull = { number: number; body: string | null };
 function onGitHub(repo: string, pulls: FakePull[], fork = false): { body: string }[] {
 	const local = git(repo, "remote", "get-url", "origin");
 	git(repo, "remote", "set-url", "origin", "https://github.com/acme/widget.git");
@@ -1184,8 +1173,6 @@ function onGitHub(repo: string, pulls: FakePull[], fork = false): { body: string
 					: [],
 			);
 		}
-		const comments = new RegExp(`^/repos/${owner}/widget/issues/(\\d+)/comments$`).exec(url.pathname);
-		if (comments) return json(pulls.find((p) => p.number === Number(comments[1]))!.comments ?? []);
 		const patched = new RegExp(`^/repos/${owner}/widget/pulls/(\\d+)$`).exec(url.pathname);
 		if (patched && init?.method === "PATCH") {
 			const { body } = JSON.parse(String(init.body)) as { body: string };
@@ -1371,22 +1358,6 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 		const sol = await quest("--root", s.repo, "review");
 		expect(sol.stderr).toBe("");
 		expect(sol.stdout).toContain("reviewer claude claude-opus-5-5 high\nsize L ## Models\n");
-
-		// A kix session on the App's sessions comment names another latest writer, and which pushed last cannot
-		// be told, so the running harness's model is avoided; a forged copy of the comment is ignored.
-		const sessions = (app: { id: number } | null) => ({
-			body: "<!-- quest:sessions -->\n\n## Models\n\n- Implementer: Claude Code, claude-opus-5-5, high effort\n",
-			performed_via_github_app: app,
-		});
-		pull.comments = [sessions({ id: 1 })];
-		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
-			"reviewer codex gpt-6.1-sol high\n",
-		);
-		pull.comments = [sessions(null)];
-		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
-			"reviewer claude claude-opus-5-5 high\n",
-		);
-		pull.comments = [];
 
 		// Flags override the record.
 		const flagged = await quest("--root", s.repo, "review", "--new", "--size", "XS", "--exclude-model", "x");

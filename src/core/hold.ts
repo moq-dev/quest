@@ -4,14 +4,6 @@ export const HOLD_PREFIX = "quest:";
 /** The label a local session adds while its agent works on a PR. */
 export const ACTIVE_LABEL = `${HOLD_PREFIX}active`;
 
-/**
- * The label a merge job holds its pull request with, from the pick until the
- * job ends without landing or a landing it started ends unmerged. It is kix's
- * own, apart from local sessions' `quest:active`, since it stays on while the
- * job's landing is queued; local sessions respect it.
- */
-export const KIX_LABEL = `${HOLD_PREFIX}kix`;
-
 export interface HoldEvent {
 	id: string;
 	/** The label added, or null for another timeline event, such as a landing starting. */
@@ -24,7 +16,7 @@ export interface HoldSnapshot {
 }
 
 export function isHoldLabel(label: string): boolean {
-	return label === ACTIVE_LABEL || label === KIX_LABEL;
+	return label === ACTIVE_LABEL;
 }
 
 /** Preserve a caller's extra event fields, such as its timestamp. */

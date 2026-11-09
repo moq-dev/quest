@@ -383,7 +383,7 @@ export async function release(pr: PullRequest, token: string, deps: GitHubDepend
  * Take `pr` with `quest:active`, refusing while it is merged or closed, while
  * another session holds a hold label, or while it is a draft its starter still
  * holds. With `token`, the hold it names must be this session's own `quest:active`,
- * which is kept; another hold label, such as kix's, is refused rather than taken over.
+ * which is kept.
  */
 async function acquire(labels: Labels, token: string | undefined): Promise<{ hold: Hold; snapshot: Snapshot }> {
 	const label = ACTIVE_LABEL;
@@ -400,16 +400,6 @@ async function acquire(labels: Labels, token: string | undefined): Promise<{ hol
 	const after = await labels.read();
 	const ours = latestHold(after.events, label);
 	if (!ours) throw new Error(`added ${label} to ${after.url}, but its timeline does not show it`);
-	// Another session took the PR at the same time: the first label added keeps it.
-	const rival = after.labels.find((name) => {
-		if (name === label) return false;
-		const added = latestHold(after.events, name);
-		return !added || after.events.indexOf(added) < after.events.indexOf(ours);
-	});
-	if (rival !== undefined) {
-		await labels.remove(label);
-		throw new Refusal(holder(after, rival, labels.deps.now()));
-	}
 	return { hold: { label, token: ours.id }, snapshot: { ...after, labels: [label] } };
 }
 

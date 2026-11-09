@@ -7,9 +7,6 @@
 	"repository": "github:moq-dev/quest",
 	"private": true,
 	"type": "module",
-	"workspaces": [
-		"cloudflare"
-	],
 	"exports": {
 		"./core": "./src/core/index.ts"
 	},
@@ -26,7 +23,6 @@
 		"fix": "prettier --write ."
 	},
 	"dependencies": {
-		"@opencode/client": "2.2.1",
 		"commander": "15.0.0",
 		"mdast-util-from-markdown": "2.1.0",
 		"mdast-util-gfm-strikethrough": "2.0.1",

@@ -125,7 +125,7 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"git clone /tmp/source .tmp/clone",
 		"git clone --depth 1 /tmp/source",
 		"git worktree add -b x .worktrees/x /tmp/ignored",
-		// `$TMPDIR` may name the checkout, as a kix runner job sets it.
+		// `$TMPDIR` may name the checkout.
 		'cat > "$TMPDIR/body.md" <<EOF\nx\nEOF',
 		"mkdir -m 700 .tmp/x",
 		"mktemp --help",

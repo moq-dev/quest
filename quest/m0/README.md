@@ -2,19 +2,30 @@
 
 ## Goal
 
-moq-dev plans and runs its own work through Quest and kix:
-moq-dev/moq, moq-dev/quest, and moq-dev/moq.pro are enrolled at
-`https://quest.moq.dev`, maintainers answer decisions from a phone-friendly
-web app with push notifications, and their own Linux and macOS runners do
-the work through Claude Code and opencode inside each project's Nix
-devShell. The GitHub App bot publishes ordinary PRs. The standalone CLI
-(v0.1.0 shipped on 2026-10-07) keeps serving the same repositories locally on
-macOS and Linux.
+moq-dev plans and runs its own work through Quest: moq-dev/moq,
+moq-dev/quest, and moq-dev/moq.pro plan in quests, maintainers' own agent
+sessions implement them through the skills, and PRs land through GitHub's
+merge queue, with the host's watcher fixing what it drops. moq-bot is the one
+GitHub App the host's daemons act as. The standalone CLI (v0.1.0 shipped on
+2026-10-07) serves the same repositories locally on macOS and Linux.
 
 Work that only third-party repositories need, native Windows, and the public
 launch belong to [m1](/quest/m1/README.md).
 
 ## Plan
+
+Decided 2026-11-08 (user): Quest serves moq-dev only, so kix goes. Its
+Worker at quest.moq.dev, `quest runner`, the `quest:kix` hold, kix's
+sessions comment, and the quests that built on them are deleted. Deleting
+its GitHub App, kixel-quest, still waits on authenticated browser access.
+moq-bot is the only GitHub App used by the host's daemons.
+
+- Does kix go, or only its App?
+  - ✅ Delete kix entirely (recommended): it had never run on a real
+    repository, since kixel-quest was installed nowhere
+  - Keep kix, run as moq-bot: the Worker would hold a key with moq-bot's
+    workflow and runner access
+  - Keep kix, move it to the host
 
 Decided 2026-11-03 (user, /quest-complete, on
 [moq-dev/quest#455](https://github.com/moq-dev/quest/pull/455)), after the
@@ -32,26 +43,9 @@ Decided 2026-10-30 (user, /quest-plan), replacing "First public release":
   - Fold third-party work into the existing later milestone
 
   No resources go into a public service before it works for moq-dev.
-- Where does the Worker live until the public launch?
-  - ✅ quest.moq.dev
-  - kix.moq.dev
-
-  [Open kix.quest](/quest/m1/open.md) moves it for the launch.
-- Which kix work leaves m0? ✅ Onboarding (pick repositories, setup PR,
-  guide), ✅ the public face (theme, landing page, launch material), ✅
-  contributor sandboxing (untrusted-head VM, stock-Ubuntu AppArmor, macOS
-  verification), and ✅ the enrollment-time read-only CI check. Head approval
-  and opencode sandboxing stay, since moq-dev's own jobs need them.
-- moq-dev/moq comes first, then private repositories so moq.pro can enroll.
-- Where does Kix rank in m0? Decided 2026-11-01 (user, /quest-complete):
-  - ✅ Land work first (the host gate, the land fixer and the land quests),
-    then Kix, then the rest of m0
-  - Kix first
-  - Kix below the review quests
-
-  The land work is what moq-dev's repositories use every day, and the
-  maintainer ranked it first in the 2026-10-30 and 2026-11-01 sessions.
-  Superseded 2026-11-05 (user, /quest-plan, the
+- Where the Worker lived, which kix work left m0, and where kix ranked
+  were decided 2026-10-30 and 2026-11-01; kix's deletion on 2026-11-08
+  supersedes them. Ranking was already superseded 2026-11-05 (user, /quest-plan, the
   [token waste](/quest/m0/token-waste/README.md) audit): an epic's children
   are its directory, so list order no longer ranks work within m0;
   `quest unblocked` ranks by milestone, then downstream impact, then path.

@@ -110,7 +110,8 @@ export type QueueMode = { kind: "github" } | { kind: "own"; method: LandMethod }
 const JOB = /^watch-job-.*\.json$/;
 const REMOVAL = /^removal-\d+\.json$/;
 /** The merge driver's own result, not an agent's: it is recorded in the PR's Review under this name. */
-const MERGER = "quest land watch";
+/** How the watcher signs the base merges it makes itself, with no model. */
+export const MERGER = "quest land watch";
 /** How a requeue comment says the fixer found the failure was not the PR's, by its cause. */
 const JUDGED: Record<Cause, string> = {
 	flaky: "judged the failure flaky",

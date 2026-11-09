@@ -48,10 +48,25 @@ By 2026-11-03 both had landed PRs through their queues
 [moq-dev/rust2#467](https://github.com/moq-dev/rust2/pull/467) and later), so
 only the fork case remains.
 
+Decided 2026-11-08 (maintainer, /quest-unblock): ✅ the maintainer lands a
+PR of their own from a fork, prepared by an agent (rejected: wait for an
+outside contributor; drop the fork check and delete this quest). The prepared
+PR is this quest's deletion, so landing it from the fork both proves the case
+and finishes the quest. It also exercises the runner groups
+[Harden the queue runners](/quest/m0/queue-watcher/runners.md) restricted that
+day.
+
 ## Waiting
 
-- Fork contributor: a PR from a fork lands through any of the three merge
-  queues. Check with
-  `gh pr list -R moq-dev/<repo> --state merged --json number,isCrossRepository`
-  and the `merge_group` runs on its `<repo>-queue` runner. A maintainer can
-  advance it by landing a PR of their own from a fork.
+- Maintainer: push the prepared local branch `fork-check/follow` (commit
+  `aade5b62` in the moq-dev/quest checkout's shared git directory) from a
+  personal fork and pick merge on it. kixelated/quest is an unrelated
+  repository, so the fork takes another name. An agent can't: the PR must
+  come from the maintainer's own fork and account.
+  `gh repo fork moq-dev/quest --fork-name quest-fork --clone=false`, then
+  `git push git@github.com:kixelated/quest-fork.git fork-check/follow`, then
+  `gh pr create -R moq-dev/quest --head kixelated:fork-check/follow --fill`.
+  If main moved, merge it into the branch locally and rerun `quest check --fix`
+  first. Check with
+  `gh pr list -R moq-dev/quest --state merged --json number,isCrossRepository`
+  and its `merge_group` run on `quest-queue`.

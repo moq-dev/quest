@@ -5,7 +5,7 @@
 #       Admission cost: `quest gate true` with the gate bypassed, and admission
 #       alone against a fresh ledger, so no earlier run counts as recent.
 #   scripts/gate-bench.sh gated|ungated <suites> [cpus]
-#       Start <suites> Worker test suites at once, each in its own detached
+#       Start <suites> unit test suites at once, each in its own detached
 #       worktree of HEAD, through the gate or bypassing it. `cpus` is a taskset
 #       list that confines the suites to a few cores, to oversubscribe them
 #       without saturating a shared host; the gate still sees host-wide load.
@@ -94,7 +94,7 @@ contend() {
             status=0
             # shellcheck disable=SC2016 # The admitted command expands it.
             "${pin[@]}" timeout 900 bun run --silent quest gate \
-                bash -c 'echo $((${EPOCHREALTIME/./} / 1000)) >admitted; exec bun run --cwd cloudflare test' \
+                bash -c 'echo $((${EPOCHREALTIME/./} / 1000)) >admitted; exec bun run test' \
                 >log 2>&1 || status=$?
             echo "$begin $(cat admitted 2>/dev/null || echo "$begin") $(now_ms) $status" >result
         ) &

@@ -65,23 +65,21 @@ and [moq-dev/rust2#650](https://github.com/moq-dev/rust2/pull/650).
 What remains: restrict each group, and verify that a fork PR's workflow waits
 for approval (see Waiting).
 
+Done 2026-11-08 (maintainer, /quest-unblock): moq-dev/rind#491 and
+moq-dev/rust2#650 merged, so every `queue.yml` calls `queue-build.yml@main`,
+and the coordinator restricted runner groups 8 (quest-queue), 9 (rind-queue)
+and 10 (rust2-queue) to their repository's
+`.github/workflows/queue-build.yml@refs/heads/main` with the maintainer's
+org-admin login. GitHub kept the fields on the Team plan.
+
 ## Waiting
 
-- moq-dev/rind, moq-dev/rust2: merge moq-dev/rind#491 and moq-dev/rust2#650.
-  Check with `gh pr view <n> --repo moq-dev/<repo> --json state`.
-- Maintainer: once a repository's `queue.yml` calls `queue-build.yml@main` on
-  main, restrict its runner group to that workflow. An agent can't: the
-  runner-group admin API needs org-admin scope the agents' tokens lack. Not before: the group
-  would then admit no merge-group job and stall the queue. For moq-dev/quest
-  (group 8; rind-queue is 9 and rust2-queue is 10, each with its own name and repository):
-  `gh api -X PATCH orgs/moq-dev/actions/runner-groups/8 -f name=quest-queue -F restricted_to_workflows=true -f 'selected_workflows[]=moq-dev/quest/.github/workflows/queue-build.yml@refs/heads/main'`.
-  Check that `gh api orgs/moq-dev/actions/runner-groups/8` shows
-  `restricted_to_workflows: true` with that one workflow, and that the next
-  merge group's `Queue build / Build` job still runs on the runner. GitHub
-  documents workflow restriction for Enterprise Cloud while moq-dev is on the
-  Team plan, though the API accepts the fields; if GitHub rejects or drops
-  them, revert with `-F restricted_to_workflows=false` and fall back to option
-  (2) above.
+- moq-dev/quest, rind, rust2: the next merge group's
+  `Queue build / Build` job still runs on the repository's restricted runner
+  group. Check with `gh run list -R moq-dev/<repo> --event merge_group` for a
+  run created after 2026-11-08T04:40Z that leaves no job queued for a runner.
+  If one stalls, revert that group with `-F restricted_to_workflows=false`
+  and fall back to option (2) above.
 - Maintainer: the next time an outside contributor opens a fork PR on
   moq-dev/quest, moq-dev/rind or moq-dev/rust2, check that its workflow runs
   wait for approval.

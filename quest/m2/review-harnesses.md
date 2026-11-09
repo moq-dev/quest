@@ -15,8 +15,10 @@ per maker. Planned in m0 for ranked single reviews, it moved to m2 with
 the council once single reviews became Sol only (user, the same day).
 
 - Sandboxing is the work. The reviewer must not run code from the head or
-  write anywhere. opencode already runs kix jobs inside srt
-  (`src/runner/opencode.ts`, `src/runner/cli.ts`); reuse that boundary.
+  write anywhere. kix's runner ran opencode jobs inside srt, with a seccomp
+  helper built from source (`src/runner/opencode.ts`, `src/runner/cli.ts` and
+  `nix/sandbox-runtime.nix`, deleted with kix on 2026-11-08); restore that
+  boundary from Git history rather than design a new one.
 - Grok was dropped from this quest on 2026-11-05 (user, /quest-plan): its
   weekly usage is close to zero and its results were weak, so the council
   has no xAI member.

@@ -56,8 +56,7 @@ your session supports them. Use `$quest-start` and `$quest-spawn` in Codex.
 Both claim through `quest start`, which pushes the quest's branch and opens a
 draft PR right away, and refuses a quest whose branch or PR, including one from
 a fork, already exists. `quest unblocked --unclaimed` lists the ready quests
-nobody holds. kix.quest records each active job in its database and reassigns a
-job whose runner goes offline; check it for a live runner lock before starting.
+nobody holds.
 
 You review each change: `/quest-review` has a model other than its latest writer review a
 draft locally and marks it ready, and `/quest-merge` (`$quest-merge` in Codex)

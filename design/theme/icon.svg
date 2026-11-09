@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-	<!-- The app icon: the mark's `!` on a full-bleed amber square. Home screens round
-	     or mask the square themselves; the `!` stays inside the maskable safe zone. -->
-	<rect width="64" height="64" fill="#ffc53d"/>
-	<g fill="#0a0c11">
-		<path d="M25 11 H39 L35.5 39 H28.5 Z"/>
-		<rect x="27" y="44" width="10" height="10" rx="2"/>
-	</g>
-</svg>

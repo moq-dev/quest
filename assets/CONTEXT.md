@@ -92,7 +92,7 @@ Run the repository's checks locally while the PR is a draft; CI may run only on 
 
 Before a PR is marked ready for review, and before each push to one that is, a model other than the one that changed it last reviews the committed branch locally, as `/quest-review` describes.
 
-The PR body's `## Models` section records its size as `Size: M` (its quest's, or for a skill's own PR, as a quest is sized) and one `Implementer: Codex, gpt-6.1-sol, high effort` line per implementing session, moved last whenever it pushes; kix records one that pushes to an open PR in its own comment.
+The PR body's `## Models` section records its size as `Size: M` (its quest's, or for a skill's own PR, as a quest is sized) and one `Implementer: Codex, gpt-6.1-sol, high effort` line per implementing session, moved last whenever it pushes.
 Read your model and effort rather than guess, writing `unknown` for any you cannot find: Claude Code knows its model and exports `CLAUDE_EFFORT`, and Codex records `model` and `effort` in the last `turn_context` of `~/.codex/sessions/*/*/*/rollout-*-$CODEX_THREAD_ID.jsonl`.
 
 GitHub gives secrets to workflows on branches pushed to the repository, as quest branches usually are, so keep pull request CI, which runs unreviewed code, read-only: a read-only `GITHUB_TOKEN`, and write credentials only in environments limited to protected branches.
