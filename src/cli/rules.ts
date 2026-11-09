@@ -373,24 +373,27 @@ function gh(
 	if (group === "api") {
 		const fields = [command ?? "", ...rest];
 		const field = (names: string[]) =>
-			values(fields, names)
+			values(fields, names, { attached: [names[0]!] })
 				.filter((value) => value.startsWith("body="))
 				.map((value) => literal(value)?.slice("body=".length));
 		body = [
 			...field(["-f", "--raw-field"]),
 			...field(["-F", "--field"]).map((value) => (value?.startsWith("@") ? file(value.slice(1)) : value)),
 		];
-		const method = values(fields, ["-X", "--method"]).at(-1)?.toUpperCase();
+		const method = values(fields, ["-X", "--method"], { attached: ["-X"] })
+			.at(-1)
+			?.toUpperCase();
 		authored = method !== "PATCH" && method !== "PUT";
 	} else {
 		const post = POSTS[group ?? ""]?.[command ?? ""];
 		if (post === undefined) return;
-		authored = post;
+		// `--edit-last` edits the last comment, even with `--create-if-none`, which only sometimes creates one.
+		authored = post && !rest.includes("--edit-last");
 		body = [
-			...values(rest, ["-b", "--body"]).map(literal),
-			...values(rest, ["-F", "--body-file"]).map((path) => file(literal(path))),
+			...values(rest, ["-b", "--body"], { attached: ["-b"] }).map(literal),
+			...values(rest, ["-F", "--body-file"], { attached: ["-F"] }).map((path) => file(literal(path))),
 		];
-		titles = values(rest, ["-t", "--title"]).map(literal);
+		titles = values(rest, ["-t", "--title"], { attached: ["-t"] }).map(literal);
 	}
 	if (body.length === 0) return;
 	// A body not on the line, such as a file, one piped in, or one the shell expands, is left to the prose.

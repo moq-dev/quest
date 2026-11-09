@@ -195,6 +195,10 @@ test("a new GitHub post needs the footer and no em dashes; edits and bodies off 
 	expect(bash("gh api repos/o/r/issues/5/comments -f body=Done")).toEqual([RULES.footer]);
 	expect(bash("gh pr edit 5 --body Done")).toEqual([]);
 	expect(bash("gh api -X PATCH repos/o/r/pulls/5 -f body=Done")).toEqual([]);
+	expect(bash("gh pr comment 5 -bDone")).toEqual([RULES.footer]);
+	expect(bash("gh api repos/o/r/issues/5/comments -fbody=Done")).toEqual([RULES.footer]);
+	expect(bash("gh api -XPATCH repos/o/r/pulls/5 -fbody=Done")).toEqual([]);
+	expect(bash("gh pr comment 5 --edit-last --create-if-none --body Done")).toEqual([]);
 	expect(bash("gh pr review 5 --approve")).toEqual([]);
 	expect(bash("cat .tmp/body.md | gh pr comment 5 --body-file -")).toEqual([]);
 	expect(bash('gh pr comment 5 --body "$body"')).toEqual([]);
