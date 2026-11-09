@@ -132,12 +132,13 @@ $ quest --root examples/export unblocked
 1	quest/m0/export.md
 
 $ quest --root examples/export unblocked --json --limit 1
-[{"path":"quest/m0/export.md","dependents":1,"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"low"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
+[{"path":"quest/m0/export.md","dependents":1,"hosts":[],"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"low"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
 ```
 
 Each plain output line contains the count, a tab, and the path. On a terminal,
 a heading explains the count. `--json` prints an ordered array, including `[]`
-when no quests are ready, and gives each quest the ranked `models` that write
+when no quests are ready, and gives each quest the `hosts` its `## Hosts`
+section names (empty when it runs anywhere) and the ranked `models` that write
 it, as [Route work by size](#route-work-by-size) describes; `--limit <count>`
 requires a positive integer.
 Invalid trees fail with diagnostics and no ranking.

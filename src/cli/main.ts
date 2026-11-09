@@ -52,6 +52,7 @@ import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
+import { hosts } from "../core/doc";
 import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
 import {
 	ReviewInputError,
@@ -266,7 +267,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Given a path, print what blocks that quest instead.\n\n" +
 				"Counts exclude structural epic membership. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
-				"ordered array of {path, dependents, models} objects, where models ranks the {harness, model, effort} " +
+				"ordered array of {path, dependents, hosts, models} objects, where hosts lists the operating systems " +
+				"(linux, macos, windows) under the quest's ## Hosts, empty when it runs anywhere, and models ranks the {harness, model, effort} " +
 				"entries that write the quest: its size's list, or the next size's while a Maintainer: item under its " +
 				"## Waiting leaves a decision open (quest models lists them).\n\n" +
 				"--unclaimed ranks the fetched upstream default branch's tree instead of the checkout, then drops " +
@@ -307,7 +309,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						const byPath = new Map(docs.map((doc) => [doc.path, doc]));
 						print(
 							JSON.stringify(
-								shown.map((quest) => ({ ...quest, models: questWriters(byPath.get(quest.path)!) })),
+								shown.map((quest) => {
+									const doc = byPath.get(quest.path)!;
+									return { ...quest, hosts: hosts(doc), models: questWriters(doc) };
+								}),
 							),
 						);
 						return;
