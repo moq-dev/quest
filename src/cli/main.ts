@@ -357,13 +357,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("waiting")
 		.summary("List quests and draft PRs waiting on the maintainer or an outside party")
 		.description(
-			"List every quest with a ## Waiting section and every open draft PR handed back with one (or the " +
-				"older ## Decisions needed): those waiting on the maintainer first, then milestone priority, distinct " +
+			"List every quest with a ## Waiting section and every open draft PR handed back with one: those " +
+				"waiting on the maintainer first, then milestone priority, distinct " +
 				"transitive dependents as quest unblocked counts them, ready before blocked, then path order, with " +
 				"drafts after quests by PR number. A draft ranks as the quest its branch carries, or last when it " +
 				"carries none. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
-				"followed by the condition and how to check or advance it. A draft's item without a party, and every " +
-				"Decisions needed item, is the maintainer's; a draft's section without items is one maintainer item " +
+				"followed by the condition and how to check or advance it. A draft's item without a party is the " +
+				"maintainer's; a draft's section without items is one maintainer item " +
 				"holding its prose.\n\n" +
 				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the quest's " +
 				"path or the draft's URL, and the item. --json prints an ordered array of {path, pr, dependents, " +
@@ -577,7 +577,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("ready")
 		.summary("Hand a PR this session holds to reviewers")
 		.description(
-			"Hand a PR this session holds to reviewers: remove the body's Waiting section (or the older Decisions needed) and mark a " +
+			"Hand a PR this session holds to reviewers: remove the body's Waiting section and mark a " +
 				`draft ready for review. The hold stays; it prints the token again.\n\n${OWNERSHIP}`,
 		)
 		.argument("<pr>", "GitHub PR URL, or a PR number in origin")

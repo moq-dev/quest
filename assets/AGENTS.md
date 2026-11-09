@@ -154,7 +154,6 @@ A PR that leaves work rewrites the quest to what remains, rather than noting it 
 When a quest is complete, review it locally and mark its PR ready for review with `/quest-review`, even if you made choices without asking; list those choices in the PR body for review.
 Only a decision left for the maintainer, an outside condition, or unfinished work keeps it a draft: hand it back with a `## Waiting` section in the body listing them, in the same form as a quest's.
 Tools read only whether that heading is present; a draft without it still belongs to its starter.
-Drafts handed back before `## Waiting` replaced it use `## Decisions needed`, which counts the same.
 A draft suggests `/quest-iterate`; a PR ready for review suggests `/quest-merge`.
 Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` plans them.
 Add a closing keyword for every issue under `Closes`.

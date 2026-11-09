@@ -82,16 +82,16 @@ test("ties keep path order, as unblocked does", () => {
 	expect(waiting(docs).map((quest) => quest.path)).toEqual(["quest/m0/a.md", "quest/m0/z.md"]);
 });
 
-test("a draft hands back with Waiting, or the Decisions needed heading it replaced", () => {
+test("a draft hands back with Waiting, not the retired Decisions needed heading", () => {
 	expect(handedBack("Work.\n\n## Waiting\n\n- Maintainer: pick one.\n")).toBe(true);
-	expect(handedBack("Work.\r\n\r\n## Decisions needed\r\n\r\n1. Pick one.\r\n")).toBe(true);
+	expect(handedBack("Work.\r\n\r\n## Decisions needed\r\n\r\n1. Pick one.\r\n")).toBe(false);
 	expect(handedBack("Work.\n\n### Waiting\n\nNot a hand-back.\n")).toBe(false);
 	expect(handedBack("Waiting on CI.\n")).toBe(false);
 });
 
 test("a hand-back heading inside a fence, list, or quote is an example, not a hand-back", () => {
 	expect(handedBack("Docs.\n\n````markdown\n## Waiting\n\n- Maintainer: pick.\n````\n")).toBe(false);
-	expect(handedBack("Docs.\n\n~~~\n## Decisions needed\n~~~\n")).toBe(false);
+	expect(handedBack("Docs.\n\n~~~\n## Waiting\n~~~\n")).toBe(false);
 	expect(handedBack("- ## Waiting\n\n> ## Waiting\n")).toBe(false);
 });
 
@@ -108,14 +108,14 @@ test("a draft's hand-back items are the maintainer's unless a Waiting item names
 		handBackWaits(
 			"Work.\n\n## Waiting\n\n- Codex: out of quota until 15:00 UTC.\n- pick a name,\n  either one.\n" +
 				"- [ ] Maintainer: approve the account.\n* [x] moq-dev/moq: a release.\n\n" +
-				"## Validation\n\n- Passes.\n\n## Decisions needed\n\n1. Naming: foo or bar?\n",
+				"## Validation\n\n- Passes.\n\n## Waiting\n\n1. Pick foo or bar.\n",
 		),
 	).toEqual([
 		{ line: 5, party: "Codex", text: "out of quota until 15:00 UTC." },
 		{ line: 6, party: "Maintainer", text: "pick a name, either one." },
 		{ line: 8, party: "Maintainer", text: "approve the account." },
 		{ line: 9, party: "moq-dev/moq", text: "a release." },
-		{ line: 17, party: "Maintainer", text: "Naming: foo or bar?" },
+		{ line: 17, party: "Maintainer", text: "Pick foo or bar." },
 	]);
 });
 
@@ -171,7 +171,7 @@ test("drafts rank as the quest they carry, after quests on a tie, and last when 
 		draft("https://example.com/pull/2", "quest/m0/b", "## Waiting\n\n- Maintainer: pick b.\n"),
 		draft("https://example.com/pull/3", "quest/m0/a", "## Waiting\n\n- moq-dev/moq: a release.\n"),
 		draft("https://example.com/pull/4", "quest/m0/a", "Ready soon.\n"),
-		draft("https://example.com/pull/5", "quest/m9/gone", "## Decisions needed\n\n- Keep it?\n"),
+		draft("https://example.com/pull/5", "quest/m9/gone", "## Waiting\n\n- Keep it?\n"),
 	]);
 	expect(found.map((quest) => [quest.pr ?? quest.path, quest.path, quest.dependents, quest.ready])).toEqual([
 		["https://example.com/pull/2", "quest/m0/b.md", 1, true],

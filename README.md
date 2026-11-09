@@ -176,7 +176,7 @@ action only the maintainer can take, or the outside party, such as
 ```
 
 A draft PR hands itself back to the maintainer with the same heading in its
-body, or the older `## Decisions needed`.
+body.
 
 `quest waiting` lists every item from both, the maintainer's first, then by
 milestone and the same downstream impact `quest unblocked` counts; a draft
@@ -184,7 +184,7 @@ ranks as the quest its branch carries. Each line gives the dependents, whether
 the quest is otherwise ready or still blocked, its path or the draft's URL, and
 the item; `--maintainer` keeps only the maintainer's, and `--json` prints
 `{path, pr, dependents, ready, waits}` objects. A draft's item that names no
-party, and every `Decisions needed` item, is the maintainer's. Drafts come from
+party is the maintainer's. Drafts come from
 the upstream's open PRs, found as for `unblocked --unclaimed`; without the
 remote, off GitHub, or when GitHub cannot be read, it lists the tree's items
 and warns that drafts were skipped. `/quest-unblock` walks you through them.
@@ -221,8 +221,7 @@ the branch without a PR.
 `--release` deletes the branch, with a lease on its tip, and closes its PR, but
 only while the tip is still an empty commit. Once work is on the branch, hand
 the draft back instead: a `## Waiting` section in its body marks it as
-waiting on the maintainer. Drafts handed back with the older `## Decisions
-needed` heading count the same.
+waiting on the maintainer.
 
 `quest start` exits 0 when done, 3 when it refuses (blocked, held, a branch in
 the way, or work on the branch), 2 for invalid arguments, and 1 for other
@@ -521,7 +520,7 @@ A taken PR carries the `quest:active` label while an agent works on it.
 Sessions often share a GitHub account, so taking it prints a hold token: the
 ID of the timeline event that added the label. Every command refuses while a
 `quest:active` label it holds no token for is on the PR; a draft its starter still holds, one without a
-`## Waiting` (or older `## Decisions needed`) section; and a merged or closed PR, since a push after
+`## Waiting` section; and a merged or closed PR, since a push after
 the merge brings the branch back. The refusal names the holder's label, age,
 and token, so you can decide whether to release a stale hold. When two
 sessions add the label at once, the first added keeps the PR; GitHub records no
