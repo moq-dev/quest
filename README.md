@@ -1231,6 +1231,10 @@ the same for every repository unless its `AGENTS.md` names others:
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
 | XL | Claude Code `claude-fable-5-2` medium | Claude Code `claude-opus-5-5` xhigh |
 
+Fable [requires data retention](https://code.claude.com/docs/en/zero-data-retention#model-availability-under-zdr),
+so an organization on zero data retention without Fable access names other XL
+writers and reviewers in its `AGENTS.md`.
+
 `quest unblocked --json` lists each ready quest's ranked `models`: its size's
 list, or the next size's while a `Maintainer:` item under its `## Waiting`
 leaves a decision open, since settling it is part of the work; an XL stays
