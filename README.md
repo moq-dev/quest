@@ -1728,33 +1728,62 @@ The [getting started guide](docs/getting-started.md) covers what happens next.
 quest format and workflow they read before working on a quest outside a skill;
 `quest guide prompting` prints one section.
 
-### Configure Claude Code
+### Configure your agent
 
-`quest setup` configures your own Claude Code settings for quest work, in every
-repository:
+`quest setup` configures your own Claude Code and Codex settings for quest
+work, in every repository:
 
 ```sh
 quest setup
 ```
 
-It sets `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground command such as
-`quest wait` can block for 55 minutes, just under the 1h prompt-cache TTL,
-instead of the 10-minute default.
+It sets Claude Code's `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground
+command such as `quest wait` can block for 55 minutes, just under the 1h
+prompt-cache TTL, instead of the 10-minute default.
 
 It also loads the rules once. The repository's `Quests: ` line has agents run
 `quest context` before any work, which costs a turn and is summarized away
 when the session compacts. Instead, `quest setup` installs a `SessionStart`
-hook (startup, resume, clear, and compact) and a `SubagentStart` hook, each
-running `quest hook`, which adds `quest context` to the session in a
-repository whose root `AGENTS.md` or `CLAUDE.md` has the `Quests: ` line, and
-nothing elsewhere. `quest` must be on the `PATH` Claude Code starts with.
-`quest setup --worktrees` also installs the
+hook (startup, resume, clear, and compact), and for Claude Code a
+`SubagentStart` hook, each running `quest hook`, which adds `quest context` to
+the session in a repository whose root `AGENTS.md` or `CLAUDE.md` has the
+`Quests: ` line, and nothing elsewhere. Codex holds the rules in full, rather
+than spilling them to a file, through the hook's `additionalContextLimit`.
+`quest setup --worktrees` also installs Claude Code's
 [worktree hooks](#claude-code-checkouts).
 
-It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`,
-keeps your other settings, refuses a malformed file unchanged, writes once,
-and prints each change. Rerun it after upgrading. `quest setup --remove` takes
-the hooks out, and the timeout while it still holds Quest's value.
+The rules a program can check are enforced instead of read. A `PreToolUse`
+hook on shell commands and file edits denies, with the rule as the reason:
+
+- an edit, commit message, or new GitHub post that adds an em dash outside a
+  `>` quote line;
+- a `git push` whose refspecs lack a `:`;
+- a force-push, `git rebase`, or `git pull --rebase`, unless the command
+  starts with `QUEST_USER_ASKED=1` because the user asked for it;
+- a new GitHub post (`gh pr create`, `comment`, or `review`, `gh issue create`
+  or `comment`, or `gh api` with a `body` field) without a `(Written by ...)`
+  line;
+- a scratch file written under `/tmp`, outside the checkout, by a redirection,
+  `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit.
+
+It checks only a body on the command line itself: `--body`, a `body=` field,
+`git commit -m`, or `--body-file -` with a here-document. A body file, or one
+piped into `gh`, passes unread, since the file may hold something else by the
+time the command runs; `quest context` keeps the footer and em-dash rules in
+prose for that case. `quest context` still prints these rules,
+under a last `Checked` section that the hook leaves out, for agents without
+it.
+
+`quest` must be on the `PATH` the agent starts with, as for the worktree
+hooks. Codex asks you to trust the hooks once, and after each upgrade that
+changes them, through `/hooks`; `quest review` runs Codex without your
+config, so its reviewers run none of them.
+
+It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`, and
+`$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json`, when that directory exists.
+It keeps your other settings, refuses a malformed file unchanged, writes each
+once, and prints each change. Rerun it after upgrading. `quest setup --remove`
+takes the hooks out, and the timeout while it still holds Quest's value.
 
 ## Where this is going
 
