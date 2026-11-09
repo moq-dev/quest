@@ -15,12 +15,15 @@ Decided 2026-11-09 (maintainer, /quest-complete of
   `main` has user-facing changes (rejected: a step in CONTRIBUTING.md's
   Releases section; ad hoc). A quest resurfaces each time ready work is
   triaged; a checklist line doesn't.
+- Where is the two-week gate? ✅ A `## Waiting` item (rejected: a Plan line).
+  Quests can't be held until a date, so a Plan line would let a spawn claim
+  the quest only to find it too early, while coordinators check outside
+  conditions before starting and `quest waiting` lists them. Each run's PR
+  resets the item to the new release's date when it recreates the quest.
 
 Each run:
 
-- Start no earlier than two weeks after the last release's publish date
-  (`gh release list -R moq-dev/quest --limit 1`); before then, leave it
-  unclaimed. If the commits from the last tag to `origin/main` hold no
+- If the commits from the last tag to `origin/main` hold no
   user-facing change (only `quest/`, CI, tests, or chores), skip the cut and
   recreate the next run.
 - Bump `package.json` by semver's 0.x convention: minor when the range has a
@@ -37,7 +40,12 @@ Each run:
 - The PR that finishes those checks deletes this run and creates the next at
   this path, or at the same path in the lowest open milestone once m1
   completes. It carries forward the last tag, its date, and anything to check
-  first.
+  first, and resets the `Waiting` item to two weeks after the new release.
+
+## Waiting
+
+- moq-dev/quest: two weeks pass since the last release (v0.2.0 once it
+  ships); check `gh release list -R moq-dev/quest --limit 1`
 
 ## Required
 
