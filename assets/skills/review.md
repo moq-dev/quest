@@ -1,11 +1,11 @@
 ---
 description: Review a PR's branch locally with a model other than its latest writer, then mark it ready for review.
-guide: Execution, Summaries, Questions
+guide: Creation, Execution, Summaries, Questions
 skills: merge
 ---
 
 Parse the arguments to determine the PR number, otherwise resolve it from the current context/branch.
-If its body lists open decisions or unfinished work, offer `/quest-iterate` first.
+If its body lists open decisions, other than its follow-ups', or unfinished work, offer `/quest-iterate` first.
 
 Take the PR with `quest iterate <pr>`, passing a token you already hold for it to keep that hold, and keep the hold token it prints; `quest iterate --help` explains holds.
 If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
@@ -15,7 +15,7 @@ Work in a checkout of the PR's head branch, checking out the head first when som
 When another worktree holds that branch, work in a detached checkout of its head instead, and pass `--branch <head-branch>` to each `quest review` so its rounds continue the branch's session.
 Commit everything, then run the repository's local checks and fix any failure the branch causes.
 On the head of a PR whose author lacks write access to the repository, run no code from it instead, since it would run with your credentials: leave its checks to CI, and run a `quest` the PR cannot modify, such as an installed release, from outside its checkout with `--root`.
-A check failure that reproduces unchanged in a checkout of the base branch is pre-existing rather than the PR's: record the command and both failures in the PR body's validation, go on to review and readiness, and suggest a follow-up for it unless an open PR already fixes it.
+A check failure that reproduces unchanged in a checkout of the base branch is pre-existing rather than the PR's: record the command and both failures in the PR body's validation, go on to review and readiness, and add a follow-up for it unless an open PR already fixes it.
 Never alter the repository's harness to get a pass, such as by disabling a tool, unsetting its environment, or skipping a check, nor report an altered run as its checks.
 
 If a `## Review` record that `/quest-merge` counts names the committed head, or its review exemptions cover the changes since the head it names, and it leaves no finding unrefuted, run no new round and go on to pushing and marking it ready below.
@@ -30,7 +30,7 @@ Open the draft PR before the first round: each round rewrites the PR body's `## 
 Write a round's record by hand only when it printed `record skipped`, as on another author's fork, and add context only after the record, since the next round rewrites the section.
 
 Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.
-Never defer a relevant fix to a follow-up just to narrow the PR; suggest only out-of-scope discoveries as follow-ups.
+Never defer a relevant fix to a follow-up just to narrow the PR; add only out-of-scope discoveries as follow-ups.
 Refute a finding only with evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding by its number, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted; never block on the score.

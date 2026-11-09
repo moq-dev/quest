@@ -43,7 +43,7 @@ Stop at the PRs, beyond the `/quest-review` each started agent runs itself: neve
 Stop dispatching once no agent is running and no ready quest is left to start, then wrap up as below; never wait on a merge for more work.
 The final summary names each queued PR, armed for auto-merge or in a merge queue as `quest status` reports, whose merge would make a quest ready, with those quests, so the user can rerun `/quest-spawn` once they land, by hand or with `/loop`.
 
-Never plan the follow-ups agents suggest: each stays in its agent's PR body, where `/quest-merge` or `/quest-complete` plans it once the PR is queued.
+Never answer the follow-ups agents add to their PRs: their decisions wait for the round that picks each PR to merge.
 
 Once every sub-agent has finished, remove each agent checkout `quest worktree status` lists with `quest worktree remove`, since Claude never removes a subagent's checkout; it refuses one holding unpreserved work.
 Remove other local worktrees, and branches, whose tip is the head of a merged PR; squash merges leave that tip off the base branch.

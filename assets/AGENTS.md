@@ -79,7 +79,7 @@ Run it after creating or updating quests.
 
 ## Summaries
 
-End every quest skill with a final summary in sections, such as the PRs and their states, the open decisions with recommendations, and suggested follow-ups, so a user returning to the session first sees what needs them.
+End every quest skill with a final summary in sections, such as the PRs and their states, the open decisions with recommendations, and the follow-ups each PR adds, so a user returning to the session first sees what needs them.
 
 ## Creation
 
@@ -87,13 +87,15 @@ Quests are created in PRs and reviewed.
 Search the tree and git history first before making a new quest.
 
 Split independently completable work into separate quests.
-A suggested follow-up becomes a quest only through `/quest-plan`, never as an agent-session task or a GitHub issue.
-Suggest a follow-up only when it is worth a quest; drop one you would call optional or worth doing only if it matters.
-Give each suggested follow-up a recommendation, to plan it or to drop it with the reason, so whoever plans them never has to ask which to take.
-Only `/quest-merge` and `/quest-complete` plan follow-ups, once they queue the PR that suggests them: run `/quest-plan` on each recommended one in turn without offering first, one follow-up per run; its interview lets the user drop it.
-`/quest-complete` plans them while its other agents keep running, but after any pick or decision question still waiting to be asked.
-Every other skill and background agent leaves its follow-ups in its PR body for them.
 Group related quests in an epic; its README holds the work no child owns.
+
+Work found along the way that is worth a quest is a follow-up: add it to the PR that found it, as a new quest placed and sized by the rules here and the repository's, or as an edit to the quest that already owns the work; never as an agent-session task or a GitHub issue.
+Drop one you would call optional or worth doing only if it matters.
+Answer each of its decisions you can with your recommendation in its Plan, and list each you cannot as a `Maintainer:` decision item under its `Waiting`.
+The PR body's `## Follow-ups` section links each one with its open decisions, which neither keep the PR a draft nor stop its pick.
+A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks which follow-ups to keep and each open decision, in the Questions form.
+Before it lands, record each answer in its quest's Plan, removing that `Waiting` item, and remove each dropped follow-up, with `quest rm` for a new quest.
+A follow-up for work another repository's quest tree owns stays in `## Follow-ups` for `/quest-plan` there.
 
 A release or pin bump that unblocks work is its own quest.
 
@@ -156,7 +158,7 @@ Only a decision left for the maintainer, an outside condition, or unfinished wor
 Tools read only whether that heading is present; a draft without it still belongs to its starter.
 Drafts handed back before `## Waiting` replaced it use `## Decisions needed`, which counts the same.
 A draft suggests `/quest-iterate`; a PR ready for review suggests `/quest-merge`.
-Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` plans them.
+Include a summary of the changes made and the `## Follow-ups` section Creation describes.
 Add a closing keyword for every issue under `Closes`.
 
 ## Deletion
@@ -189,7 +191,7 @@ Stop one with `quest agent stop <worktree>`, and each you started that still run
 Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
 Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed the work.
 Then give your recommendation and ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
-Recommend in every prompt, a multiple-choice list included: mark each option you recommend, such as which follow-ups to plan, and give a one-line reason for each you would leave out.
+Recommend in every prompt, a multiple-choice list included: mark each option you recommend, such as which follow-ups to keep, and give a one-line reason for each you would leave out.
 An answer such as "whatever you recommend" picks your recommendations; act on them without asking again.
 Do not use asynchronous question tools.
 
