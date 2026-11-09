@@ -199,15 +199,8 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		const literal = (value: string) => (simple.expanded?.some((word) => word.endsWith(value)) ? undefined : value);
 		if (name === "tee") {
 			if (args.some((arg) => !arg.startsWith("-") && scratch(arg))) found.add("tmp");
-		} else if (name === "mkdir" || name === "touch") {
-			// `touch -r <file>` reads its reference file, and `-d`/`-t` take a date, as `mkdir -m` takes a mode.
-			const valued = name === "mkdir" ? ["-m", "--mode"] : ["-r", "--reference", "-d", "--date", "-t"];
-			if (positionals(args, new Set(valued)).some(scratch)) found.add("tmp");
-		} else if (["cp", "mv", "ln", "rsync"].includes(name!)) {
-			// rsync's `-t` keeps times instead.
-			const target = name === "rsync" ? undefined : values(args, ["-t", "--target-directory"]).at(-1);
-			const last = target ?? args.filter((arg) => !arg.startsWith("-")).at(-1);
-			if (last !== undefined && scratch(last)) found.add("tmp");
+		} else if (name === "mkdir") {
+			if (positionals(args, new Set(["-m", "--mode"])).some(scratch)) found.add("tmp");
 		} else if (name === "mktemp") mktemp(args, env, check);
 		else if (name === "git") git(args, asked, input, check);
 		else if (name === "gh") gh(args, input, literal, check);
@@ -246,7 +239,8 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 	let i = 0;
 	while (i < argv.length && argv[i]!.startsWith("-")) i += GIT_VALUE_OPTIONS.has(argv[i]!) ? 2 : 1;
 	const [sub, ...args] = argv.slice(i);
-	if (args[0] === "--help" || args[0] === "-h") return;
+	// A help flag anywhere passes, even as an option's value: a missed nudge is cheaper than per-subcommand grammars.
+	if (argv.some((arg) => arg === "--help" || arg === "-h")) return;
 	if (sub === "push") push(args, asked, check);
 	else if (sub === "rebase") {
 		if (!asked && !args.some((arg) => ["--abort", "--quit", "--show-current-patch"].includes(arg)))

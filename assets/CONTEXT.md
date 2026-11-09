@@ -54,7 +54,7 @@ Work in your own worktree, reusing a suitable one you already own.
 Read-only discovery needs no new checkout when your context or own checkout answers it.
 Put PR bodies, review drafts, logs, patches, helper scripts, and temporary clones in its `.tmp/`, so they disappear with the worktree.
 If the repository doesn't ignore `.tmp/`, add it to the file `git rev-parse --git-path info/exclude` names.
-Never write them elsewhere in or beside the checkout, or in a directory other agents share.
+Never write them to `/tmp`, elsewhere in or beside the checkout, or in a directory other agents share.
 Pass PR bodies to `gh` on stdin (`--body-file -`) with a here-document, where the hook checks them; one posted from a file goes unchecked, so it must still end with the `(Written by ...)` line and hold no em dashes.
 
 Before ending a task, pausing for a decision, or handing off, commit a checkpoint and report what remains and which checks passed or did not run.

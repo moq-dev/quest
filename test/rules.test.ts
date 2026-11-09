@@ -54,7 +54,6 @@ test.each([
 	"bash -c 'git push origin main'",
 	"git push --tags origin feature",
 	"git push --repo origin main refs/heads/a:refs/heads/a",
-	"git push -o --help origin main",
 ])("a push without an explicit refspec is blocked: %s", (command) => {
 	expect(bash(command)).toEqual([RULES.refspec]);
 });
@@ -68,6 +67,8 @@ test.each([
 	"git push --tags origin HEAD:refs/heads/a",
 	"git push --repo origin refs/heads/a:refs/heads/a",
 	"git push --help",
+	// A help flag anywhere passes, even as a value, accepting the rare missed nudge.
+	"git push -o --help origin main",
 	"git log --grep 'git push origin main'",
 	"echo git push",
 ])("a push with explicit refspecs, or no push, passes: %s", (command) => {
@@ -93,6 +94,7 @@ test("a rebase is blocked unless the user asked, or it ends one", () => {
 	expect(bash("bash -c 'git rebase origin/main'")).toEqual([DENIED_REWRITE]);
 	expect(bash("git rebase --abort")).toEqual([]);
 	expect(bash("git rebase --help")).toEqual([]);
+	expect(bash("git rebase --interactive -h")).toEqual([]);
 	expect(bash("git pull --no-rebase origin main")).toEqual([]);
 	expect(bash("gh pr merge 5 --rebase")).toEqual([]);
 });
@@ -103,7 +105,6 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"just test > /tmp/test.log 2>&1",
 		"cmd | tee /tmp/out",
 		"mkdir -p /tmp/work",
-		"cp a.txt /tmp/",
 		"git clone https://example.com/r /tmp/r",
 		"git clone -b main https://example.com/r /tmp/r",
 		"git worktree add -b x /tmp/x",
@@ -111,9 +112,6 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"mktemp -d",
 		"mktemp -t body.XXXX",
 		"TMPDIR=/tmp/x mktemp -d",
-		"touch -m /tmp/x",
-		"cp -t /tmp/out a.txt",
-		"rsync -t .tmp/source /tmp/destination",
 	])
 		expect(bash(command), command).toEqual([RULES.tmp]);
 	for (const command of [
@@ -124,16 +122,11 @@ test("scratch writes under /tmp are blocked, reads and checkout paths pass", () 
 		"mktemp .tmp/body.XXXX",
 		'TMPDIR="$PWD/.tmp" mktemp -d',
 		"env TMPDIR=.tmp mktemp -t body.XXXX",
-		"cp /tmp/a .tmp/a",
 		"git clone /tmp/source .tmp/clone",
 		"git clone --depth 1 /tmp/source",
 		"git worktree add -b x .worktrees/x /tmp/ignored",
 		// `$TMPDIR` may name the checkout, as a kix runner job sets it.
 		'cat > "$TMPDIR/body.md" <<EOF\nx\nEOF',
-		"cp -t .tmp /tmp/out",
-		"touch -r /tmp/reference .tmp/out",
-		"touch --reference /tmp/reference .tmp/out",
-		"rsync -t /tmp/source .tmp/destination",
 		"mkdir -m 700 .tmp/x",
 		"mktemp --help",
 		"mktemp -u",

@@ -1842,7 +1842,8 @@ hook on shell commands and file edits denies, with the rule as the reason:
 - a new GitHub post (`gh pr create`, `comment`, or `review`, `gh issue create`
   or `comment`, or `gh api` with a `body` field) without a `(Written by ...)`
   line;
-- a scratch file written under `/tmp`, outside the checkout.
+- a scratch file written under `/tmp`, outside the checkout, by a redirection,
+  `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit.
 
 It checks only a body on the command line itself: `--body`, a `body=` field,
 `git commit -m`, or `--body-file -` with a here-document. A body file, or one
