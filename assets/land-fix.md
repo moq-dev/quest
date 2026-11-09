@@ -44,9 +44,12 @@ behavior changes or review must be handed back.
 Build tools may fetch the dependencies the repository's manifests and lockfiles
 name: from their package registries, such as crates.io, npm, PyPI, and the Go
 module proxy, and from `github.com` and `codeload.github.com` for git
-dependencies. Do not build with `--offline` to avoid them. These fetches are the
-only GitHub contact allowed: never call GitHub's API yourself (`gh`,
-`api.github.com`), push, or reach any other host.
+dependencies. Do not build with `--offline` to avoid them. The repository's
+checks may also reach the services their own tests use, such as a payment
+provider's test mode or a media download: run them as they are, and never stop
+them or hand a PR back for it. Dependency fetches are your only GitHub contact:
+never call GitHub's API yourself (`gh`, `api.github.com`), push, or reach any
+other host.
 
 Write `quest-land-result.json` in the repository root: a JSON array with exactly
 one entry per supplied PR, no extra fields. Use one of:
@@ -85,7 +88,9 @@ and `just test`: this prompt asks you to run them, so they are no standing guida
 to ignore, and a PR's diff never names them for you. Where the base names none, run
 each touched language's own type check and linter beside its build and test. A
 `requeue` of an unchanged head runs the same checks on a scratch merge kept off its
-branch, since the base may have moved under it. Name each command you ran in the
+branch, since the base may have moved under it. Run them in the repository's dev
+shell, if it has one, entered from the tree they check rather than from `base`,
+since a merge can change the shell's inputs. Name each command you ran in the
 reason. A PR you cannot get passing mechanically, or whose checks you cannot run,
 goes back as a handback quoting the command and the output line that shows why in
 the diagnosis.
