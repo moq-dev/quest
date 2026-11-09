@@ -4,7 +4,7 @@
 
 A tagged quest release includes `quest worktree hook`, so SETUP.md's release,
 mise, and installer routes give adopters a `quest` whose Claude Code hooks
-work, and later releases have a known cadence.
+work. Later releases follow [Cut a release](/quest/m1/release-cut.md).
 
 ## Plan
 
@@ -17,7 +17,8 @@ follows the tag:
   the Install check (`.github/workflows/install-check.yml`, which Release
   calls) passes all 12 jobs; against v0.1.0 its 4 Windows jobs failed for
   lack of Windows assets
-  ([run 40144909978](https://github.com/moq-dev/quest/actions/runs/40144909978)).
+  ([run 40144909978](https://github.com/moq-dev/quest/actions/runs/40144909978)
+  and [run 41660575051](https://github.com/moq-dev/quest/actions/runs/41660575051)).
 - Then drop SETUP.md's v0.1.0 caveat and the "next release" notes in
   README.md and docs/windows.md.
 
@@ -26,8 +27,3 @@ follows the tag:
 - Maintainer: push the `v0.2.0` tag from `main` once #587 merges, since
   CONTRIBUTING.md reserves release tags for the maintainer; check with
   `gh release view v0.2.0 -R moq-dev/quest`.
-- Maintainer: decide how later releases are cut. Options: (a) a recurring
-  quest via `/quest-recurring` that cuts a release every two weeks when
-  `main` has user-facing changes, (b) a step in CONTRIBUTING.md's Releases
-  section, (c) ad hoc. Recommend (a): the maintainer asked to start tagging
-  releases, and a quest resurfaces in triage where a checklist line does not.
