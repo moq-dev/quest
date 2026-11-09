@@ -304,12 +304,12 @@ test("each size's reviewer is the first whose model is not the latest writer's",
 	expect(at("M", claude)).toBe("codex gpt-6.1-sol medium");
 	expect(at("L", claude)).toBe("codex gpt-6.1-sol high");
 	expect(at("XL", claude)).toBe("codex gpt-6.1-sol xhigh");
-	// Opus reviews what Sol wrote.
+	// Claude reviews what Sol wrote.
 	expect(at("XS", codex)).toBe("claude claude-opus-5-5 low");
 	expect(at("S", codex)).toBe("claude claude-opus-5-5 low");
 	expect(at("M", codex)).toBe("claude claude-opus-5-5 medium");
 	expect(at("L", codex)).toBe("claude claude-opus-5-5 high");
-	expect(at("XL", codex)).toBe("claude claude-opus-5-5 xhigh");
+	expect(at("XL", codex)).toBe("claude claude-fable-5-2 medium");
 
 	// The PR's latest recorded implementer replaces the running harness, and only it is avoided.
 	expect(at("S", authored({}, { CLAUDECODE: "1" }, "claude-opus-5-5"))).toBe("codex gpt-6.1-sol medium");

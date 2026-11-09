@@ -75,8 +75,16 @@ checkpoints and outages to count by hand:
   - Too thin (0-4 PRs per cell) to move a size; no table changed. Watch
     iterates below the size's effort, and `Implementer:` lines without an
     effort (6 of the 20 lines said `unknown`).
+  - Changed after that run on Anthropic's
+    [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/)
+    rather than tallies (maintainer, 2026-11-09): XS writes on Sonnet 5.5
+    medium instead of Haiku high, which suits one-shot checkable work more
+    than a PR's agent loop, and XL writes on Fable 5.2 medium, falling back
+    to Opus xhigh, and reviews what Sol wrote on Fable 5.2 medium, since the
+    next model up at a lower effort beats Opus past high for less. Tally
+    those cells fresh.
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
-  general model. Bump any that are stale, and check that both CLIs
+  model of each tier the tables pin. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
   tier were dropped in
   [moq-dev/quest#361](https://github.com/moq-dev/quest/pull/361).
@@ -85,7 +93,8 @@ checkpoints and outages to count by hand:
     2026-11-04): Sol low, medium, medium, high, and xhigh for XS to XL since
     the [token waste](/quest/m0/token-waste/README.md) audit (user,
     2026-11-05; it had high and xhigh for M and L), and Opus low, low,
-    medium, high, and high when Sol wrote the code (agent's choice). They replaced Codex `xhigh` and Claude `high` (maintainer,
+    medium, and high, then Fable medium for XL, when Sol wrote the code
+    (agent's choice, XL's the maintainer's). They replaced Codex `xhigh` and Claude `high` (maintainer,
     2026-11-03), for which Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
     `/code-review high`, and codex-cli 0.166.0 ran `gpt-6.1-sol` with
     `model_reasoning_effort="xhigh"`, both with `quest review`'s flags.
@@ -94,13 +103,18 @@ checkpoints and outages to count by hand:
     premium Fable tier (`claude-fable-5-1`); `gpt-6.1-sol` is Codex's
     first-listed "latest workhorse" in `~/.codex/models_cache.json`, beside
     the frontier `gpt-6-astra`. Neither pin changed.
+  - Claude Code 2.1.319 did not recognize `claude-fable-5-2` on
+    2026-11-09: it warned `unrecognized_model` and gave it a 200k context
+    window instead of Fable's 1M, though the API served it. Check that the
+    pinned Claude Code lists it.
   - Check that the pinned Claude Code maps the Claude id to each cloud
     provider. `quest review` keeps Bedrock, Vertex and Foundry routing
     ([moq-dev/quest#424](https://github.com/moq-dev/quest/pull/424)) but
     strips `ANTHROPIC_MODEL`, so the pin must resolve on each route.
     Claude Code 2.1.316's model catalog lists `claude-opus-5-5` with
     `provider_ids` (Bedrock `us.anthropic.claude-opus-5-5`; Vertex and
-    Foundry `claude-opus-5-5`). Find the new pin's entry the same way, and
+    Foundry `claude-opus-5-5`). Find the entries of the newer pins,
+    `claude-sonnet-5-5` and `claude-fable-5-2`, the same way, and
     plan a quest if a provider has none (coordinator, /quest-complete
     follow-ups, 2026-11-03).
 - Run the live sandbox test, `just review-sandbox`, with the CLIs installed

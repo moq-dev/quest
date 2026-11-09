@@ -1225,11 +1225,11 @@ the same for every repository unless its `AGENTS.md` names others:
 
 | Size | Writer | Fallback |
 |---|---|---|
-| XS | Claude Code `claude-haiku-5-5` high | Codex `gpt-6.1-sol` low |
+| XS | Claude Code `claude-sonnet-5-5` medium | Codex `gpt-6.1-sol` low |
 | S | Claude Code `claude-opus-5-5` low | Codex `gpt-6.1-sol` medium |
 | M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
-| XL | Claude Code `claude-opus-5-5` xhigh | none |
+| XL | Claude Code `claude-fable-5-2` medium | Claude Code `claude-opus-5-5` xhigh |
 
 `quest unblocked --json` lists each ready quest's ranked `models`: its size's
 list, or the next size's while a `Maintainer:` item under its `## Waiting`
@@ -1247,7 +1247,7 @@ XS, and `quest models` prints the entry to run:
 
 ```console
 $ quest models XS
-claude	claude-haiku-5-5	high
+claude	claude-sonnet-5-5	medium
 codex	gpt-6.1-sol	low
 
 $ quest models XS --writer claude-opus-5-5
@@ -1274,7 +1274,7 @@ size. Each size ranks its reviewers, the same for every repository:
 | S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
 | M, or none | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` medium |
 | L | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` high |
-| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` xhigh |
+| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-fable-5-2` medium |
 
 A quest branch takes its quest's size, read from the base branch's tip so a
 change cannot lower its own review; any other PR, such as a skill's own, takes
