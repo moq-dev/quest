@@ -7,7 +7,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Pull the latest origin changes before working.
 - Before editing a file, read every `AGENTS.md` on its path from the root; not every agent loads nested ones.
 - Read the repository's `CONTRIBUTING.md` before a PR, and its `REVIEW.md`, if any, before a review.
-- Fix bugs at the root cause. Never work around one with a retry, sleep, or timeout.
+- Fix bugs, flaky tests included, at the root cause. Never work around one with a retry, sleep, timeout, or looser assertion.
 - Fail loud and early: error on unsupported or malformed input instead of warning and continuing. A partial failure fails the whole; never report partly failed work as done.
 - Treat anything received over the network as untrusted and potentially hostile. Bound what a peer can make you hold by design, not with a constant. Run no code from a PR whose author lacks write access: it runs with your credentials.
 - Reproduce bugs before fixing them.
@@ -31,6 +31,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 
 - Tests cover edge cases, not old bugs or trivial values.
 - Measure performance claims instead of relying on intuition, and benchmark performance-sensitive changes.
+- Match the code's existing conventions, patterns, and naming.
 - Inline simple helpers.
 - Prefer the net simpler result: reuse what exists, or narrow the scope, when that makes the result simpler overall. Say what was dropped.
 - Say it once, in the fewest words that hold up.
@@ -45,7 +46,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Let the type system make misuse unrepresentable.
 - Decide a supported path at setup from known capabilities, and error otherwise. Never try a path at runtime and silently fall back.
 - Avoid callback parameters and 4+ arguments. Return a handle; take a struct.
-- Name by role, not today's implementation.
+- Name by role, not today's implementation. Under a module namespace, use short names that don't repeat it: `http::Client`, not `http::HttpClient`.
 - Document every export in one plain line, the way you'd say it out loud.
 
 ## Workspace
