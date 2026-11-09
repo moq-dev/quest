@@ -214,6 +214,26 @@ function scopeGroup(unit: string): string | undefined {
 	return join("/sys/fs/cgroup", group);
 }
 
+/**
+ * The gate scopes bound to `unit` (see `RunOptions.within`). systemd stops them once `unit` stops,
+ * but only after its cgroup empties, so whoever confirms `unit` stopped must wait for them too.
+ */
+function boundTo(unit: string): string[] {
+	const show = execFileSync("systemctl", ["--user", "show", "--property=Id,BindsTo", "quest-gate-*.scope"], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	return show
+		.split("\n\n")
+		.filter((entry) => /^BindsTo=(.*)$/m.exec(entry)?.[1].split(" ").includes(unit))
+		.map((entry) => /^Id=(.*)$/m.exec(entry)![1]);
+}
+
+/** Kill every gate scope bound to `unit` and resolve once each is empty. */
+async function stopBound(unit: string): Promise<void> {
+	for (const bound of boundTo(unit)) await systemdScopes.stop(bound);
+}
+
 export const systemdScopes: Scopes = {
 	check() {
 		if (process.platform !== "linux" || !killable()) throw new Error(UNSUPPORTED);
@@ -235,14 +255,16 @@ export const systemdScopes: Scopes = {
 
 	live(unit) {
 		const group = scopeGroup(unit);
-		return group !== undefined && populated(group);
+		return (group !== undefined && populated(group)) || boundTo(unit).some((bound) => systemdScopes.live(bound));
 	},
 
 	async stop(unit) {
 		const group = scopeGroup(unit);
-		if (group === undefined) return;
-		kill(group);
-		await vacated(group);
+		if (group !== undefined) {
+			kill(group);
+			await vacated(group);
+		}
+		await stopBound(unit);
 	},
 
 	run(unit, cwd, command, options = {}) {
@@ -272,6 +294,7 @@ export const systemdScopes: Scopes = {
 				unsupported: UNSUPPORTED,
 				launcher: "systemd-run",
 				signal: (name, done) => signalScope(unit, name, done),
+				emptied: () => stopBound(unit),
 				bound: Boolean(enclosing),
 			},
 			cwd,
@@ -291,6 +314,8 @@ interface Containment {
 	launcher: string;
 	/** Send `name` to every process in the cgroup, then call `done`, with why when it could not. */
 	signal(name: NodeJS.Signals, done: (error?: string) => void): void;
+	/** Stop what the cgroup's end leaves to systemd, once the cgroup is empty. */
+	emptied(): Promise<void>;
 	/**
 	 * Whether an enclosing Quest owner kills this cgroup at its own second signal, so a repeated
 	 * signal this process receives, which may be a copy of that owner's, leaves the kill to it.
@@ -400,6 +425,7 @@ function contain(
 						if (signalled) await vacated(group, drain.signal);
 						kill(group);
 						await vacated(group);
+						await describe.emptied();
 					} catch (error) {
 						throw new Retained(
 							`cannot confirm that ${describe.name} stopped: ${error instanceof Error ? error.message : error}`,

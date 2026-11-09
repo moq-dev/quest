@@ -1054,7 +1054,8 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 		stop.abort("SIGTERM");
 		kill.abort();
 		await result;
-		await until(() => stopped(Number(readFileSync(pid, "utf8"))), "the gated command to stop");
+		// The enclosing run resolves only once the bound scope is empty too.
+		expect(stopped(Number(readFileSync(pid, "utf8")))).toBe(true);
 	});
 
 	/**
