@@ -76,6 +76,7 @@ A decision item gives its options and a recommendation.
 Remove an item once its condition clears, and the heading with its last item.
 
 `Required` lists the quests that must finish before the work starts; an epic's never lists its own quests, which it already waits for.
+An epic's or milestone's `Required` also holds back every quest under it.
 A child that must precede a sibling is in that sibling's `Required`.
 Nothing else orders work within a milestone: `quest unblocked` ranks it by downstream impact, then path.
 When the section is empty, delete it; the quest is now unblocked.

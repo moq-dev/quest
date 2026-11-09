@@ -14,6 +14,7 @@
 import {
 	type Doc,
 	type Entry,
+	children,
 	entries,
 	has,
 	holds,
@@ -24,7 +25,7 @@ import {
 	owner,
 	permanent,
 	questBranch,
-	requires,
+	gates,
 	resolve,
 	rooted,
 	size,
@@ -325,10 +326,12 @@ export function finishedMilestone(docs: Doc[]): (doc: Doc, entry: Entry) => bool
  * `Required` must be acyclic. A cycle is a set of quests none of which can ever
  * start, and walking the links to rule one out is exactly the manual step an
  * author would otherwise take before adding a blocker. An epic waits for its
- * children, so a quest requiring the epic that holds it is a cycle too.
+ * children, so a quest requiring the epic that holds it is a cycle too. An
+ * epic's `Required` gates everything under it, so a blocker that waits on a
+ * quest under the epic requiring it is one as well.
  */
 function cycles(found: Finding[], docs: Doc[]) {
-	const blockers = new Map(docs.map((doc) => [doc.path, requires(docs, doc)]));
+	const blockers = new Map(docs.map((doc) => [doc.path, [...gates(docs, doc), ...children(docs, doc)]]));
 
 	const state = new Map<string, "open" | "done">();
 	const walk = (node: string, stack: string[]) => {
