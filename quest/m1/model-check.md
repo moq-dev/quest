@@ -22,8 +22,8 @@ the size tables of model routing (`src/cli/models.ts`):
   - A separate audit owning the tables
   - A separate audit of efforts only
 - When does it run? ✅ First in m0 once routing lands
-  ([m0's run](/quest/m0/model-check.md)), then each milestone (rejected:
-  each milestone only)
+  ([moq-dev/quest#584](https://github.com/moq-dev/quest/pull/584)), then
+  each milestone (rejected: each milestone only)
 
 Audit the routing from the records of the PRs merged since the last run,
 with `quest usage --since <the last run's date>`, whose accuracy rollup reads each body's
@@ -49,6 +49,32 @@ checkpoints and outages to count by hand:
   it unasked. Replacing a stale model id with the same vendor's newer one,
   below, needs no decision, as this check always did.
 
+- Baseline from m0's routing audit
+  ([moq-dev/quest#584](https://github.com/moq-dev/quest/pull/584)): the 25
+  PRs merged from 2026-11-07T22:30:45Z, when routing landed in
+  [moq-dev/quest#558](https://github.com/moq-dev/quest/pull/558), to
+  2026-11-09T17:00Z, by GitHub's `merged_at`, with their records from
+  `quest usage --since 2026-11-06 --json`. `quest usage` selects by update
+  time with open PRs included, so filter its PRs by merge time. Writers on
+  their table entry:
+  - XS Haiku high: none; both merged XS PRs ran another model.
+  - S Opus low: 4 PRs, 0 handed back, score 10.0, 1.3 rounds, 1 fixed.
+  - M Opus medium: 2 PRs, 0 handed back, score 9.5, 2.0 rounds, 0 fixed.
+  - L Opus high: 3 PRs, 0 handed back, score 10.0, 3.0 rounds, 4 fixed.
+  - Sol reviews, latest round's fixes: low 1 PR, 0 fixed; medium 17 PRs,
+    4 with fixes, 4 fixed; high 3 PRs, 2 with fixes, 4 fixed; xhigh 1 PR,
+    0 fixed. No PR names a routed PR under `## Caused by`, so no review
+    miss showed, and no outage skipped a quest.
+  - Unfinished then, not counted: open
+    [moq-dev/quest#583](https://github.com/moq-dev/quest/pull/583),
+    [moq-dev/quest#586](https://github.com/moq-dev/quest/pull/586), and
+    [moq-dev/quest#588](https://github.com/moq-dev/quest/pull/588), and
+    [moq-dev/quest#553](https://github.com/moq-dev/quest/pull/553) (M,
+    merged 2026-11-09T17:33Z after a hand-back). Count those that merged
+    in m1's run.
+  - Too thin (0-4 PRs per cell) to move a size; no table changed. Watch
+    iterates below the size's effort, and `Implementer:` lines without an
+    effort (6 of the 20 lines said `unknown`).
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   general model. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
