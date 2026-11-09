@@ -62,8 +62,9 @@ installation already has `actions: write` and `checks: write`.
   `gh api repos/moq-dev/moq.pro/rules/branches/main`.
 - Maintainer: once no `fix-job-*.json` remains in
   `/var/lib/quest-land-moq-pro`, merge and deploy
-  [kixelated/nixos#41](https://github.com/kixelated/nixos/pull/41). An agent
-  must not deploy to the host or switch a live daemon. Check with
+  [kixelated/nixos#41](https://github.com/kixelated/nixos/pull/41), only once
+  [the watcher refuses fork picks](/quest/m0/queue-watcher/fork-refusal.md)
+  and moq.pro's instance turns that on. An agent must not deploy to the host or switch a live daemon. Check with
   `systemctl status quest-land-moq-pro` showing `quest land watch`.
 - Maintainer: confirm a moq.pro PR lands through the own queue and one dropped
   for a failing build is fixed and re-enqueued, then delete this quest. Check
