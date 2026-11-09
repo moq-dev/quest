@@ -28,6 +28,8 @@ export const STUB = [
 	"delete process.env.QUEST_GATE_JOB;",
 	"if (original === null) delete process.env.BUN_BE_BUN; else process.env.BUN_BE_BUN = original;",
 	"if (process.platform === 'win32') {",
+	"  const os = require('node:os');",
+	"  os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);",
 	"  try {",
 	"    const { dlopen, FFIType, ptr } = require('bun:ffi');",
 	"    const handle = FFIType.u64;",

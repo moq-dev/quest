@@ -10,7 +10,7 @@ import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
-import { delegated, nest, questScope, startTime, systemdScopes } from "./supervise";
+import { questScope, startTime, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
@@ -546,33 +546,39 @@ export const direct: Owner = plain(false);
 export const inside: Owner = plain(true);
 
 /**
- * Run the command in its own systemd scope, whose cgroup holds every descendant (see supervise.ts).
- * `owner` never picks it inside another Quest scope.
+ * Run the command in its own systemd scope, whose cgroup holds every descendant (see supervise.ts),
+ * in the user manager's `background.slice`, whose low CPU weight keeps the desktop session ahead
+ * of gated work under contention. Inside a Quest scope, the gate's scope is a sibling bound to
+ * `enclosing`, so the enclosing scope keeps its own weight for the session's other work, its
+ * owner's kill stops the gate's scope too, and the gate forwards that owner's signals to it.
  */
-export const scope: Owner = (command, env, cancel) =>
-	systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, { env, cancel, within: null });
-
-/**
- * Inside a delegated Quest scope, run the command in a new child of `parent`, this process's cgroup,
- * which holds every descendant like a scope of its own and stays within the enclosing scope's reach.
- * That scope's owner signals every process in it, so this leaves a received signal and the kill at
- * its second one to that owner, as `inside` does, and lets the child's processes finish their own
- * cleanup before it kills what is left.
- */
-export const nested =
-	(parent: string): Owner =>
+const background =
+	(enclosing: string | null): Owner =>
 	(command, env, cancel) =>
-		nest(parent, `quest-gate-${randomUUID()}`, process.cwd(), command, { env, cancel });
+		systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, {
+			env,
+			cancel,
+			within: enclosing,
+			slice: "background.slice",
+		});
+
+/** Run the command in a background scope of its own, outside any Quest scope (see `background`). */
+export const scope: Owner = background(null);
+
+/** Run the command in a background scope bound to the Quest scope `enclosing` (see `background`). */
+export const bound = (enclosing: string): Owner => background(enclosing);
 
 /**
  * On Windows, run the command under a stub in a kill-on-close Job Object that forbids breakaway
- * (see job.ts), so every descendant stops once the command exits or the gate stops the stub.
+ * (see job.ts), so every descendant stops once the command exits or the gate stops the stub. The
+ * stub lowers itself to below-normal priority first, which everything it starts inherits.
  */
 export const job: Owner = (command, env, cancel) => direct(...stubbed(command, env), cancel);
 
 /**
  * Run the command as the leader of a new session, whose process group holds every descendant that
- * does not move to another group or session. Once the command exits, the rest of its group is
+ * does not move to another group or session. `nice` lowers its priority, which every descendant
+ * inherits, since no cgroup weighs it against the interactive session. Once the command exits, the rest of its group is
  * killed. The session has no controlling terminal: the command keeps its inherited streams, but a
  * terminal's signals reach it only through Quest, which stands in for the terminal: every SIGINT,
  * SIGTERM, and SIGHUP Quest receives goes to the whole group, as a terminal's Ctrl-C would, and
@@ -586,7 +592,7 @@ export const job: Owner = (command, env, cancel) => direct(...stubbed(command, e
  */
 export const group: Owner = (command, env, cancel) =>
 	new Promise((resolve, reject) => {
-		const child = spawn(command[0], command.slice(1), {
+		const child = spawn("nice", ["-n", "10", ...command], {
 			env: { ...env, [GROUP]: "1" },
 			stdio: ["inherit", "inherit", "inherit", "pipe"],
 			detached: true,
@@ -641,9 +647,7 @@ const TOKEN = 3;
 /**
  * The strongest owner this host offers. A nested call runs inside its admitted command, which an
  * enclosing Quest owner also signals when it is Quest's group or a Quest scope (see `inside`). A
- * call inside a Quest scope owns a child cgroup of its own there once the scope is delegated, and
- * otherwise runs inside the scope: a scope of its own would take its command out of reach of the
- * enclosing one. Linux owns descendants through a systemd scope, and settles for a process group,
+ * call inside a Quest scope runs its command in a background scope bound to it. Linux owns descendants through a systemd scope, and settles for a process group,
  * like macOS, without a systemd user manager. Windows owns them through a Job Object.
  */
 export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
@@ -651,7 +655,7 @@ export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
 	const enclosing = process.platform === "linux" ? questScope(cgroup) : undefined;
 	if (env[ADMITTED] === "1") return env[GROUP] === "1" || enclosing ? inside : direct;
 	if (process.platform === "win32") return job;
-	if (enclosing) return delegated(enclosing.unit) ? nested(enclosing.group) : inside;
+	if (enclosing) return bound(enclosing.unit);
 	if (process.platform !== "linux") return group;
 	try {
 		systemdScopes.check();
