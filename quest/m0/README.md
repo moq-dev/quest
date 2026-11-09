@@ -16,8 +16,9 @@ launch belong to [m1](/quest/m1/README.md).
 
 Decided 2026-11-08 (user): Quest serves moq-dev only, so kix goes. Its
 Worker at quest.moq.dev, `quest runner`, the `quest:kix` hold, kix's
-sessions comment, and its GitHub App, kixel-quest, are deleted, along with
-the quests that built on them. moq-bot is the only GitHub App.
+sessions comment, and the quests that built on them are deleted. Deleting
+its GitHub App, kixel-quest, still waits on authenticated browser access.
+moq-bot is the only GitHub App used by the host's daemons.
 
 - Does kix go, or only its App?
   - ✅ Delete kix entirely (recommended): it had never run on a real
