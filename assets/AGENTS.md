@@ -92,7 +92,7 @@ Group related quests in an epic; its README holds the work no child owns.
 Work found along the way that is worth a quest is a follow-up: add it to the PR that found it, as a new quest placed and sized by the rules here and the repository's, or as an edit to the quest that already owns the work; never as an agent-session task or a GitHub issue.
 Drop one you would call optional or worth doing only if it matters.
 Answer each of its decisions you can with your recommendation in its Plan, and list each you cannot as a `Maintainer:` decision item under its `Waiting`.
-The PR body's `## Follow-ups` section links each one with its open decisions, which keep no PR a draft.
+The PR body's `## Follow-ups` section links each one with its open decisions, which neither keep the PR a draft nor stop its pick.
 A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks which follow-ups to keep and each open decision, in the Questions form.
 Before it lands, record each answer in its quest's Plan, removing that `Waiting` item, and remove each dropped follow-up, with `quest rm` for a new quest.
 A follow-up for work another repository's quest tree owns stays in `## Follow-ups` for `/quest-plan` there.
