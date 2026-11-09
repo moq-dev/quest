@@ -1229,11 +1229,7 @@ the same for every repository unless its `AGENTS.md` names others:
 | S | Claude Code `claude-opus-5-5` low | Codex `gpt-6.1-sol` medium |
 | M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
-| XL | Claude Code `claude-fable-5-2` medium | Claude Code `claude-opus-5-5` xhigh |
-
-Fable [requires data retention](https://code.claude.com/docs/en/zero-data-retention#model-availability-under-zdr),
-so an organization on zero data retention without Fable access names other XL
-writers and reviewers in its `AGENTS.md`.
+| XL | Claude Code `claude-opus-5-5` xhigh | none |
 
 `quest unblocked --json` lists each ready quest's ranked `models`: its size's
 list, or the next size's while a `Maintainer:` item under its `## Waiting`
@@ -1278,7 +1274,7 @@ size. Each size ranks its reviewers, the same for every repository:
 | S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
 | M, or none | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` medium |
 | L | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` high |
-| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-fable-5-2` medium |
+| XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` xhigh |
 
 A quest branch takes its quest's size, read from the base branch's tip so a
 change cannot lower its own review; any other PR, such as a skill's own, takes

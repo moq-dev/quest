@@ -309,7 +309,7 @@ test("each size's reviewer is the first whose model is not the latest writer's",
 	expect(at("S", codex)).toBe("claude claude-opus-5-5 low");
 	expect(at("M", codex)).toBe("claude claude-opus-5-5 medium");
 	expect(at("L", codex)).toBe("claude claude-opus-5-5 high");
-	expect(at("XL", codex)).toBe("claude claude-fable-5-2 medium");
+	expect(at("XL", codex)).toBe("claude claude-opus-5-5 xhigh");
 
 	// The PR's latest recorded implementer replaces the running harness, and only it is avoided.
 	expect(at("S", authored({}, { CLAUDECODE: "1" }, "claude-opus-5-5"))).toBe("codex gpt-6.1-sol medium");
