@@ -66,6 +66,8 @@
                 jq
                 git
                 gh
+                # Prices `quest usage`'s sessions, pinned with the lock so its JSON stays what the parser reads.
+                ccusage
                 direnv
                 actionlint
                 shellcheck
