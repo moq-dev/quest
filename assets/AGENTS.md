@@ -68,10 +68,11 @@ An epic carries no size until its last child is deleted; its README is then the 
 A decision item gives its options and a recommendation.
 Remove an item once its condition clears, and the heading with its last item.
 
+An epic's `Required`, a milestone's included, also holds back every quest under it, so a later milestone can wait on the quest that finishes an earlier one.
 `Required` lists the quests that must finish before the work starts; an epic's never lists its own quests, which it already waits for.
 A child that must precede a sibling is in that sibling's `Required`.
 Nothing else orders work within a milestone: `quest unblocked` ranks it by downstream impact, then path.
-When the section is empty, delete it; the quest is now unblocked.
+When the section is empty, delete it; the quest is unblocked once no epic above it has one.
 `Required` must be acyclic.
 
 `quest check` enforces this structure.
@@ -107,12 +108,12 @@ Unlike a blocked quest it stays ready, so it resurfaces every time ready work is
 
 ## Execution
 
-Start only ready quests.
+Start only ready quests: neither the quest nor any epic above it has a `Required` section.
 First question whether the quest is still needed: its problem may no longer be real, or a later change may have made its plan the wrong solution.
 If so, stop and propose rewriting or deleting it.
 Before claiming, also check that no open PR already does its work: search open PRs whose title, body, or changed files name the quest's path or the files its Plan names, or read the matches a coordinator's brief lists.
 Stop and report a PR that makes the same change; one that only touches the same files is no overlap.
-`quest unblocked` ranks the ready quests, and `quest unblocked <path>` prints what blocks one.
+`quest unblocked` ranks the ready quests, and `quest unblocked <path>` prints what blocks one, including each epic above it whose `Required` gates it.
 With `--unclaimed`, it skips quests someone holds and lists them on stderr.
 
 Work is taken when it has an open change on the forge. Check open changes

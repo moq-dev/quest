@@ -48,7 +48,8 @@ quest/
 ```
 
 Folders are **epics**, and the quests in a folder are its children; its
-README lists only what blocks it, never its children. The README is the epic's
+README lists only what blocks it, never its children, and holds back every quest
+under it until that clears. The README is the epic's
 own quest, and it becomes ready once its children have merged. The top folders
 (`m0`, `m1`, ...) are **milestones** that give the work a delivery horizon.
 Finishing a quest deletes its file and edits no README, so PRs that finish

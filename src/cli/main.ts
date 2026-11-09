@@ -264,7 +264,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Rank ready quests by milestone priority, distinct transitive dependents, then path order. " +
 				"Given a path, print what blocks that quest instead.\n\n" +
-				"Counts exclude structural epic membership. Other prerequisites may remain for dependents. " +
+				"A quest is ready only when neither it nor any epic above it, milestones included, has a ## Required " +
+				"section. Counts exclude structural epic membership but include the quests an epic's ## Required holds " +
+				"back. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
 				"ordered array of {path, dependents, models} objects, where models ranks the {harness, model, effort} " +
 				"entries that write the quest: its size's list, or the next size's while a Maintainer: item under its " +

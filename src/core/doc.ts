@@ -212,6 +212,27 @@ export function isEpic(docs: readonly Doc[], doc: Doc): boolean {
 	return permanent(doc.path) || docs.some((d) => holds(doc.path, d.path));
 }
 
+/**
+ * The epic READMEs above `path`, nearest first, milestones and the root
+ * included. Their `Required` sections gate everything under them.
+ */
+export function ancestors(docs: readonly Doc[], path: string): Doc[] {
+	return docs.filter((d) => holds(d.path, path)).sort((a, b) => depth(b.path) - depth(a.path));
+}
+
+/**
+ * The `Required` targets of `doc` and of every epic above it: what gates its
+ * start. An epic's entry for a quest it holds is skipped above that epic, as
+ * `quest check` already reports it and it would otherwise read as a cycle.
+ */
+export function gates(docs: readonly Doc[], doc: Doc): string[] {
+	return [doc, ...ancestors(docs, doc.path)].flatMap((d) =>
+		entries(d, "Required")
+			.map((entry) => (entry.target === null ? null : rooted(entry.target)))
+			.filter((target): target is string => target !== null && (d === doc || !holds(d.path, target))),
+	);
+}
+
 /** What must finish before `doc`: its `Required` quests, then, for an epic, its children. */
 export function requires(docs: readonly Doc[], doc: Doc): string[] {
 	const required = entries(doc, "Required")
