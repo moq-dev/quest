@@ -38,6 +38,10 @@ The observable outcome and important boundaries.
 
 Current decisions, open questions, or implementation guidance.
 
+## Hosts
+
+- macos - the operating systems the work must run on, such as a camera check
+
 ## Waiting
 
 - Maintainer: the decision or action only they can take, and how to check it is done
@@ -63,6 +67,9 @@ Size the title `[XS]` to `[XL]` by the agent's effort to implement, verify, and 
 Much code that is mechanical stays small, such as applying one rename the same way across the tree, sized XS.
 Little code that is mostly judgment is larger, such as a 30-line rewording of a skill, sized M rather than XS.
 An epic carries no size until its last child is deleted; its README is then the epic's remaining work.
+
+`Hosts` lists the operating systems the work must run on: `linux`, `macos`, or `windows`, each optionally followed by ` - why`.
+A quest without it runs anywhere; `quest unblocked --json` reports the list as `hosts` so a dispatcher routes work without reading prose.
 
 `Waiting` lists what the work waits on outside the tree; each item opens with who acts, `Maintainer:` or the outside party, before a colon.
 A decision item gives its options and a recommendation.
