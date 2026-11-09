@@ -50,24 +50,31 @@ checkpoints and outages to count by hand:
   below, needs no decision, as this check always did.
 
 - Baseline from m0's routing audit
-  ([moq-dev/quest#584](https://github.com/moq-dev/quest/pull/584)),
-  `quest usage --since 2026-11-07`, after routing landed in
-  [moq-dev/quest#558](https://github.com/moq-dev/quest/pull/558); writers
-  on their table entry:
-  - XS Haiku high: 4 PRs, 0 handed back, score 9.7, 1.0 rounds, 0 fixed.
+  ([moq-dev/quest#584](https://github.com/moq-dev/quest/pull/584)): the 25
+  PRs merged from 2026-11-07T22:30:45Z, when routing landed in
+  [moq-dev/quest#558](https://github.com/moq-dev/quest/pull/558), to
+  2026-11-09T17:00Z, by GitHub's `merged_at`, with their records from
+  `quest usage --since 2026-11-06 --json`. `quest usage` selects by update
+  time with open PRs included, so filter its PRs by merge time. Writers on
+  their table entry:
+  - XS Haiku high: none; both merged XS PRs ran another model.
   - S Opus low: 4 PRs, 0 handed back, score 10.0, 1.3 rounds, 1 fixed.
-  - M Opus medium: 5 PRs, 1 handed back, score 9.2, 2.2 rounds, 5 fixed,
-    3 open; the hand-back,
-    [moq-dev/quest#553](https://github.com/moq-dev/quest/pull/553), was
-    iterated at low.
-  - L Opus high: 7 PRs, 0 handed back, score 10.0, 2.6 rounds, 10 fixed.
-  - Sol reviews, latest round's fixes: low 4 PRs, 0 fixed; medium 25 PRs,
-    4 with fixes, 4 fixed; high 9 PRs, 6 with fixes, 13 fixed; xhigh 2 PRs,
-    1 fixed. No PR names a routed PR under `## Caused by`, so no review
+  - M Opus medium: 2 PRs, 0 handed back, score 9.5, 2.0 rounds, 0 fixed.
+  - L Opus high: 3 PRs, 0 handed back, score 10.0, 3.0 rounds, 4 fixed.
+  - Sol reviews, latest round's fixes: low 1 PR, 0 fixed; medium 17 PRs,
+    4 with fixes, 4 fixed; high 3 PRs, 2 with fixes, 4 fixed; xhigh 1 PR,
+    0 fixed. No PR names a routed PR under `## Caused by`, so no review
     miss showed, and no outage skipped a quest.
-  - Too thin (4-7 PRs per cell) to move a size; no table changed. Watch M
-    at medium, iterates below the size's effort, and `Implementer:` lines
-    without an effort (about 9 said `unknown`).
+  - Unfinished then, not counted: open
+    [moq-dev/quest#583](https://github.com/moq-dev/quest/pull/583),
+    [moq-dev/quest#586](https://github.com/moq-dev/quest/pull/586), and
+    [moq-dev/quest#588](https://github.com/moq-dev/quest/pull/588), and
+    [moq-dev/quest#553](https://github.com/moq-dev/quest/pull/553) (M,
+    merged 2026-11-09T17:33Z after a hand-back). Count those that merged
+    in m1's run.
+  - Too thin (0-4 PRs per cell) to move a size; no table changed. Watch
+    iterates below the size's effort, and `Implementer:` lines without an
+    effort (6 of the 20 lines said `unknown`).
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   general model. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
