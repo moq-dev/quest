@@ -1,6 +1,6 @@
 ---
 name: quest-afk
-description: Keep quest work moving while the user is away, leaving every decision for their return.
+description: Make as much quest progress as possible while the user is away, taking the recommended course of action, then unblock them on their return.
 ---
 
 Run `quest skill afk` and follow its output.
