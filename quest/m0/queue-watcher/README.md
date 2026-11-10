@@ -52,9 +52,8 @@ Decision prompts, selected options marked ✅:
   - All five at once
   - moq and quest
 - Runners:
-  - ✅ Self-hosted on nixos: `merge_group` builds run on the host's runner
-    (kixelated/nixos `modules/ci-runners.nix`, runner `moq-ci`, label
-    `moq-queue`), for warm caches and no GitHub minutes
+  - ✅ Self-hosted on the maintainer's host: `merge_group` builds run on its
+    runner (label `moq-queue`), for warm caches and no GitHub minutes
   - GitHub-hosted
 - Interim:
   - Keep improving the host gate
