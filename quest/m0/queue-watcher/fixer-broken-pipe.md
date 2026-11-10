@@ -25,4 +25,12 @@ If it is moq-dev/moq's own check script, fix it there instead (its
 [moq-dev/moq#8424](https://github.com/moq-dev/moq/pull/8424)) and delete
 this quest.
 
+Seen again 2026-11-10 on moq-dev/moq.pro, where it dropped about a dozen PRs
+in a day. There the batch check logs under the land state directory never
+contain the Broken-pipe line: they end with the real failure (a test, a
+typecheck, a merge conflict, or a timeout with exit 124), and the line shows
+up only in the fixer's handback. So the crash is in the fixer's own run, not
+in the repository's check, and the handback hides that real failure. A fixed
+fixer should still name it.
+
 Public API: none. Wire: none.
