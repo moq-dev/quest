@@ -51,8 +51,9 @@ quest unblocked
 ```
 
 Review the plan before setting out. `/quest-start` claims one quest and opens a
-pull request; `/quest-spawn` sends several agents out in parallel when
-your session supports them. Use `$quest-start` and `$quest-spawn` in Codex.
+pull request; `/quest-run` sends several agents out in parallel when
+your session supports them, and takes their PRs to merge as you pick them.
+Use `$quest-start` and `$quest-run` in Codex.
 Both claim through `quest start`, which pushes the quest's branch and opens a
 draft PR right away, and refuses a quest whose branch or PR, including one from
 a fork, already exists. `quest unblocked --unclaimed` lists the ready quests
@@ -61,7 +62,7 @@ nobody holds.
 You review each change: `/quest-review` has a model other than its latest writer review a
 draft locally and marks it ready, and `/quest-merge` (`$quest-merge` in Codex)
 queues it to land once a review covers its head and checks pass.
-`/quest-complete` queues a writer's PR that changes no user-facing behavior,
+`/quest-run` queues a writer's PR that changes no user-facing behavior,
 such as one editing only quests or tests, without asking, unless your
 `CONTRIBUTING.md` opts out.
 The quest is complete, its plan leaves the tree, and the quests that required it

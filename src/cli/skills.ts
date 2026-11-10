@@ -23,6 +23,7 @@ import merge from "../../assets/skills/merge.md";
 import plan from "../../assets/skills/plan.md";
 import recurring from "../../assets/skills/recurring.md";
 import review from "../../assets/skills/review.md";
+import run from "../../assets/skills/run.md";
 import spawn from "../../assets/skills/spawn.md";
 import start from "../../assets/skills/start.md";
 import unblock from "../../assets/skills/unblock.md";
@@ -78,12 +79,6 @@ export class Skill {
 	readonly guide: readonly string[];
 	/** The other skills it builds on, by name, in the order they follow it. */
 	readonly skills: readonly string[];
-	/**
-	 * Skills and guide sections, by name or heading, that it drops from what
-	 * those skills build on when it is the skill composed, such as an
-	 * interview for a skill that asks nothing.
-	 */
-	readonly omit: readonly string[];
 	/** Its own instructions, without what it builds on. */
 	readonly body: string;
 
@@ -96,7 +91,7 @@ export class Skill {
 		if (!match) throw new Error(`skill ${name} does not open with frontmatter`);
 		const fields = new Map<string, string>();
 		for (const line of match[1].split("\n")) {
-			const field = /^(description|guide|skills|omit): (.+)$/.exec(line);
+			const field = /^(description|guide|skills): (.+)$/.exec(line);
 			if (!field || fields.has(field[1]))
 				throw new Error(`skill ${name} has an unknown frontmatter line: ${line}`);
 			fields.set(field[1], field[2]);
@@ -109,7 +104,6 @@ export class Skill {
 		this.description = fields.get("description") ?? "";
 		this.guide = list("guide");
 		this.skills = list("skills");
-		this.omit = list("omit");
 		this.body = match[2];
 	}
 
@@ -157,22 +151,19 @@ export const INLINE_LIMIT = 30_000;
 /**
  * The first skill's own instructions, first since compaction keeps only the
  * start of a long skill, then each other skill and every skill they build on,
- * depth first and once, then the guide sections any of them use, leaving out
- * whatever the given skills omit.
+ * depth first and once, then the guide sections any of them use.
  */
 export function compose(skills: readonly Skill[]): string {
-	const omitted = skills.flatMap((s) => s.omit);
 	const order: Skill[] = [];
 	const visit = (s: Skill) => {
-		if (order.includes(s) || omitted.includes(s.name)) return;
+		if (order.includes(s)) return;
 		order.push(s);
 		for (const name of s.skills) visit(skill(name)!);
 	};
 	for (const s of skills) visit(s);
 	const parts = [order[0]!.body.trim()];
 	for (const s of order.slice(1)) parts.push(`# /${s.installed}\n\n${s.body.trim()}`);
-	const dropped = new Set(omitted.filter((name) => !skill(name)).map(sectionHeading));
-	const sections = [...new Set(order.flatMap((s) => s.guide).map(sectionHeading))].filter((h) => !dropped.has(h));
+	const sections = [...new Set(order.flatMap((s) => s.guide).map(sectionHeading))];
 	if (sections.length > 0) parts.push(`# Quest guide\n\n${guideSections(sections)}`);
 	return `${parts.join("\n\n")}\n`;
 }
@@ -191,6 +182,7 @@ export const SKILLS: readonly Skill[] = Object.entries({
 	plan,
 	recurring,
 	review,
+	run,
 	spawn,
 	start,
 	unblock,
@@ -205,5 +197,4 @@ export function skill(name: string): Skill | undefined {
 for (const s of SKILLS) {
 	for (const name of s.guide) sectionHeading(name);
 	for (const name of s.skills) if (!skill(name)) throw new Error(`skill ${s.name} builds on missing skill ${name}`);
-	for (const name of s.omit) if (!skill(name)) sectionHeading(name);
 }

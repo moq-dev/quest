@@ -57,7 +57,7 @@ Name any decisions the review raised without answering them, then interactively 
 - skip: If the PR should not be merged yet.
 - `/quest-delete`: If the quest should be deleted.
 
-While its required checks or automated reviews are still running, report that instead of asking about it; `/quest-complete` asks once they finish.
+While its required checks or automated reviews are still running, report that instead of asking about it; `/quest-run` asks once they finish.
 
 A background agent that cannot prompt lists these in its report instead.
 

@@ -143,7 +143,7 @@ section names (empty when it runs anywhere) and the ranked `models` that write
 it, as [Route work by size](#route-work-by-size) describes; `--limit <count>`
 requires a positive integer.
 Invalid trees fail with diagnostics and no ranking.
-`quest-spawn` uses the ranking unless you explicitly select work in another order.
+`quest-run` uses the ranking unless you explicitly select work in another order.
 
 `--unclaimed` ranks the fetched upstream default branch's tree rather than
 your checkout, so a stale checkout cannot offer a finished or deleted quest.
@@ -1254,7 +1254,7 @@ the same for every repository unless its `AGENTS.md` names others:
 `quest unblocked --json` lists each ready quest's ranked `models`: its size's
 list, or the next size's while a `Maintainer:` item under its `## Waiting`
 leaves a decision open, since settling it is part of the work; an XL stays
-XL. `/quest-spawn` starts a quest on the first entry that can run, and falls
+XL. `/quest-run` starts a quest on the first entry that can run, and falls
 to the next only while nothing is written: when the CLI is missing or logged
 out, or the agent stops at its usage limit with nothing beyond the claim
 commit. Once a model writes, the PR is its own.
@@ -1741,12 +1741,13 @@ arrives with the guide sections and other skills it builds on, in one call:
 | `quest-export` | Turn active quests into GitHub issues before leaving Quest. |
 | `quest-audit` | Find conflicting, stale, or misprioritized quests, then resolve them. |
 | `quest-start` | Claim a ready quest, complete it, and open a PR. |
-| `quest-spawn` | Triage ready quests and send several agents out in parallel. |
+| `quest-spawn` | Run only `quest-run`'s quest starts: triage ready quests and send agents out in parallel, asking nothing. |
 | `quest-iterate` | Iterate on an open PR to settle its open decisions, fix CI and review findings, and push. |
 | `quest-review` | Review a PR's branch locally with a model other than its latest writer, then mark it ready for review. |
 | `quest-merge` | Queue a PR to land, running `quest-iterate` first when it needs work. |
-| `quest-complete` | Decide which open PRs to merge, then queue them. |
-| `quest-afk` | Keep starting agreed work while you are away, leaving every decision for your return. |
+| `quest-complete` | Run only `quest-run`'s PR decisions: decide which open PRs to merge, then queue them. |
+| `quest-run` | Orchestrate a project from one session: start ready quests and take PRs to merge in a loop, until only your decisions remain. |
+| `quest-afk` | Keep a session such as `quest-run` going while you are away: it acts on its recommendations, defers merges, and walks you through the rest when you return. |
 | `quest-unblock` | Settle what quests and draft PRs wait on you, and clear waits that have resolved. |
 | `quest-delete` | Abandon a quest, deleting it in its own PR. |
 
