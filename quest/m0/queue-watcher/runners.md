@@ -18,7 +18,7 @@ reaches them:
 
 Decided 2026-11-02 (user, /quest-plan of the follow-ups from Claude's review
 of the kixelated/nixos runner change in that day's `/quest-complete` session): ✅ all three
-items, m0, ranked right after the [cutover](/quest/m0/queue-watcher/follow.md).
+items, m0, ranked right after the public repositories' cutover.
 
 Decided 2026-11-03 (user, /quest-complete grill round), since GitHub matches a
 runner group's selected workflow by its exact ref, with no wildcard, and a
