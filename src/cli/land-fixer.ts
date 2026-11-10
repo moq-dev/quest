@@ -36,6 +36,7 @@ import {
 	readFixResult,
 	signature,
 	parseBaseFix,
+	knownFlaky,
 	parseFixResult,
 	type BaseFix,
 	type FixResult,
@@ -733,6 +734,13 @@ export function review(body: string, head: string, reason: string, attribution: 
 	return `${body.slice(0, section.start)}\n\n${line}${body.slice(section.start)}`;
 }
 
+/** Who made each mechanical fix that `review` recorded in `body`'s `## Review` section, in its order there. */
+export function fixes(body: string): string[] {
+	const section = reviewSection(body);
+	if (!section) return [];
+	return [...body.slice(section.start, section.end).matchAll(/^mechanical fix by ([^:\n]+): /gm)].map((m) => m[1]!);
+}
+
 /**
  * The ready commit a handback carries for a validated `head` the daemon cannot publish on `entry`'s PR,
  * while the PR stands at its pinned head: `quest land apply` rebuilds only on the head the fixer worked
@@ -973,7 +981,7 @@ async function collectJob(
 			job,
 			deps,
 			timeout,
-			() => (job.results = parseFixResult(readFixResult(job.checkout), job.numbers)),
+			() => (job.results = parseFixResult(readFixResult(job.checkout), job.numbers, knownFlaky(job.checkout))),
 		)
 	)
 		return output;

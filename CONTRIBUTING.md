@@ -22,8 +22,8 @@ dependencies. `packageManager` in `package.json` names the same Bun for CI
 runners without Nix, and `nix flake check` fails when the two disagree. Without
 Nix, install the tools listed in `flake.nix` and run the same just recipes.
 
-`just test` runs vitest, the shell hook suites, the built CLI's lifecycle check,
-and the Worker tests. `just check` includes TypeScript, formatting, workflow,
+`just test` runs vitest, the shell hook suites, and the built CLI's lifecycle
+check. `just check` includes TypeScript, formatting, workflow,
 shell, and Nix checks in addition to quest validation.
 
 `nix build` builds the package; `nix run -- --help` runs it. `nix flake check`
@@ -35,8 +35,8 @@ and mark them ready after checks pass. Merge only within the user's authorized
 scope and after required repository checks and reviews pass. Never block on a
 CodeRabbit review; it is optional.
 Quest execution stops at PR creation; it merges only on a /quest-merge pick.
-`/quest-complete` picks a maintainer's PR that changes no user-facing behavior
-without asking.
+`/quest-run` picks a maintainer's PR that changes no user-facing behavior
+and adds or expands no quests without asking.
 
 On a PR whose author has write access, the PR body's `## Review` record of a
 local `quest review` round satisfies the required review `/quest-merge` describes when it names

@@ -107,7 +107,8 @@ export type Reason =
 	| "head_moved"
 	| "not_pinned"
 	| "tree_mismatch"
-	| "merge_refused";
+	| "merge_refused"
+	| "fork_head";
 
 /** The hidden line an ejection comment carries, which `quest status` reads. */
 export const EJECTED = /^<!-- quest land: ([a-z_]+) -->$/m;
@@ -167,7 +168,7 @@ export interface Waiting {
 const CONTEXTS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		__typename
-		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { app { databaseId } } }
+		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { databaseId app { databaseId } } }
 		... on StatusContext { context state createdAt targetUrl }
 	}`;
 
@@ -449,7 +450,7 @@ export async function resolveQueue(
  * Every check run and commit status on `head`: from `rollup`, the first page already read with it,
  * when there is one, then the rest by the SHA.
  */
-async function contexts(
+export async function contexts(
 	github: GitHub,
 	repository: Repository,
 	head: string,

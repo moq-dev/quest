@@ -9,12 +9,6 @@ updates:
     groups:
       bun:
         patterns: ["*"]
-    ignore:
-      # Bump by hand once @cloudflare/vitest-plugin's peer range includes the new major.
-      - dependency-name: vitest
-        update-types: ["version-update:semver-major"]
-      # The flake's opencode-client check pins the client to nixpkgs' opencode; bump both together.
-      - dependency-name: "@opencode/client"
   - package-ecosystem: github-actions
     directory: /
     schedule:

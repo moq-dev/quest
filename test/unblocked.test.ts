@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { type Doc, owner, parse, ready, unblocked } from "../src/core";
+import { type Doc, blockers, check, owner, parse, ready, renderBlocker, unblocked, waiting } from "../src/core";
 
 /** A valid tree: each spec quest with its blockers, and the READMEs its directories need as epics. */
 function graph(spec: Record<string, string[]>, milestones = ["m0"]): Doc[] {
@@ -62,17 +62,15 @@ test("does not score membership, but reaches real dependents of nested epics", (
 	expect(unblocked(membership).map((quest) => quest.dependents)).toEqual([0, 0]);
 });
 
-test("retains an epic's real prerequisites alongside its children", () => {
+test("an epic's real prerequisites hold back its children", () => {
 	const docs = graph({
 		"m0/a.md": [],
 		"m0/epic/child.md": [],
 		"m0/epic/README.md": ["m0/a.md"],
 		"m0/outside.md": ["m0/epic/README.md"],
 	});
-	expect(unblocked(docs)).toEqual([
-		{ path: "quest/m0/a.md", dependents: 2 },
-		{ path: "quest/m0/epic/child.md", dependents: 1 },
-	]);
+	// The epic gates child.md, so only a.md is ready, and it counts child.md too.
+	expect(unblocked(docs)).toEqual([{ path: "quest/m0/a.md", dependents: 3 }]);
 });
 
 test("milestone order wins over impact, counting later-milestone dependents", () => {
@@ -109,4 +107,44 @@ test("breaks ties in path order and treats a completed epic as work", () => {
 test("rejects invalid graphs rather than emitting a plausible ranking", () => {
 	expect(() => unblocked(graph({ "m0/a.md": ["m0/b.md"], "m0/b.md": ["m0/a.md"] }))).toThrow("Required cycle");
 	expect(() => unblocked(graph({ "m0/a.md": ["m0/missing.md"] }))).toThrow("not a quest document");
+});
+
+test("an epic's Required gates every quest under it, two levels down and under a milestone", () => {
+	const docs = graph(
+		{
+			"m0/cut.md": [],
+			"m1/README.md": ["m0/cut.md"],
+			"m1/a.md": [],
+			"m1/epic/nested/b.md": [],
+			"m2/epic/README.md": ["m0/cut.md"],
+			"m2/epic/deep/c.md": [],
+			"m2/free.md": [],
+		},
+		["m0", "m1", "m2"],
+	);
+	expect(ready(docs)).toEqual(["quest/m0/cut.md", "quest/m2/free.md"]);
+	expect(waiting(docs)).toEqual([]);
+	// m1 holds back a.md, its epic, nested, and b.md; m2's epic holds back deep and c.md.
+	expect(unblocked(docs)).toEqual([
+		{ path: "quest/m0/cut.md", dependents: 7 },
+		{ path: "quest/m2/free.md", dependents: 0 },
+	]);
+	const ungated = docs.map((doc) =>
+		doc.path === "quest/m1/README.md" ? parse(doc.path, "# Epic\n\n## Goal\n\nWork.\n") : doc,
+	);
+	expect(ready(ungated)).toContain("quest/m1/epic/nested/b.md");
+});
+
+test("blockers names the gating ancestor and its chain", () => {
+	const docs = graph({ "m0/cut.md": [], "m0/epic/README.md": ["m0/cut.md"], "m0/epic/inner/a.md": [] });
+	const doc = docs.find((d) => d.path === "quest/m0/epic/inner/a.md")!;
+	expect(blockers(docs, doc).flatMap((b) => renderBlocker(b))).toEqual([
+		"quest/m0/epic/README.md",
+		"  quest/m0/cut.md",
+	]);
+});
+
+test("a blocker waiting on a quest under the epic requiring it is a cycle", () => {
+	const docs = graph({ "m0/x.md": ["m0/epic/a.md"], "m0/epic/README.md": ["m0/x.md"], "m0/epic/a.md": [] });
+	expect(check(docs, () => true).some((f) => f.message.startsWith("Required cycle"))).toBe(true);
 });

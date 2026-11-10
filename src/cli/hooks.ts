@@ -1,15 +1,15 @@
-// Quest's settings in the user's own Claude Code settings: what `quest setup`
-// writes, and `quest hook`, which handles every hook it installs. Repositories
-// write no hooks, since their settings would bind every contributor, so a user
-// opts in once for all their repositories. Every hook runs the same command and
-// the handler dispatches on the event, so a new hook is one more row in `HOOKS`
-// and one more case in `hook`.
+// Quest's settings in the user's own Claude Code and Codex settings: what
+// `quest setup` writes, and `quest hook`, which handles every hook it installs.
+// Repositories write no hooks, since their settings would bind every
+// contributor, so a user opts in once for all their repositories. Every rule
+// hook runs the same command and the handler dispatches on the event, so a new
+// hook is one more row in an agent's hooks and one more case in `hook`.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { REFERENCE_MARKER, lines } from "../core";
+import { type StopInput, broken, runningGates, usesQuest } from "./rules";
 import { CONTEXT } from "./skills";
 import { HOOK_EVENTS } from "./worktree-hook";
 
@@ -22,24 +22,69 @@ export const WORKTREE_COMMAND = "quest worktree hook";
 /** Claude Code truncates longer hook context to a preview and a file path it never asks Claude to read. */
 export const CONTEXT_LIMIT = 10_000;
 
-/** One installed entry: the event, the matcher narrowing it, the command (`HOOK_COMMAND` by default), and its timeout in seconds. */
+/**
+ * One installed entry: the event, the matcher narrowing it, if any, the
+ * command (`HOOK_COMMAND` by default), and the handler's settings beyond its
+ * command, such as its timeout.
+ */
 export interface HookEntry {
 	event: string;
 	matcher?: string;
 	command?: string;
-	timeout?: number;
+	settings?: Record<string, unknown>;
+}
+
+/** When a session starts, resumes, or clears, and after compaction, which summarizes earlier output away; a fork already holds the rules. */
+const SESSION = "startup|resume|clear|compact";
+
+/**
+ * The entries `quest setup` installs for Claude Code. SessionStart prints the
+ * rules; SubagentStart gives each subagent the same rules, since it starts
+ * without the session's. PreToolUse blocks the calls that break a rule a
+ * program can check. Stop and SubagentStop refuse to end a turn while a gate
+ * the agent started still runs in the background.
+ */
+export const CLAUDE_HOOKS: readonly HookEntry[] = [
+	{ event: "SessionStart", matcher: SESSION },
+	{ event: "SubagentStart" },
+	{ event: "PreToolUse", matcher: "Bash|Write|Edit|MultiEdit" },
+	{ event: "Stop" },
+	{ event: "SubagentStop" },
+];
+
+/**
+ * The same for Codex, whose shell commands match as Bash and whose file edits
+ * are `apply_patch`. Codex spills hook context beyond a token limit, about
+ * 2,500 by default, to a file; the rules' character cap bounds their tokens.
+ */
+export const CODEX_HOOKS: readonly HookEntry[] = [
+	{ event: "SessionStart", matcher: SESSION, settings: { additionalContextLimit: CONTEXT_LIMIT } },
+	{ event: "PreToolUse", matcher: "Bash|apply_patch" },
+];
+
+/**
+ * A settings file `quest setup` writes: its path, its hooks, and whether it is
+ * Claude Code's, which also holds the foreground timeouts and takes the
+ * worktree hooks.
+ */
+export interface Target {
+	name: string;
+	path: string;
+	hooks: readonly HookEntry[];
+	claude: boolean;
 }
 
 /**
- * The entries `quest setup` installs. SessionStart prints the rules when a
- * session starts, resumes, or clears, and again after compaction, which
- * summarizes earlier output away; a fork already holds them. SubagentStart
- * gives each subagent the same rules, since it starts without the session's.
+ * The settings `quest setup` configures: Claude Code's always, and Codex's
+ * `hooks.json` when its home directory exists, in `CODEX_HOME` when set, else
+ * `~/.codex`.
  */
-export const HOOKS: readonly HookEntry[] = [
-	{ event: "SessionStart", matcher: "startup|resume|clear|compact" },
-	{ event: "SubagentStart" },
-];
+export function targets(env: NodeJS.ProcessEnv = process.env): Target[] {
+	const claude = { name: "Claude Code", path: settingsPath(env), hooks: CLAUDE_HOOKS, claude: true };
+	const codexHome = env.CODEX_HOME || join(homedir(), ".codex");
+	if (!existsSync(codexHome)) return [claude];
+	return [claude, { name: "Codex", path: join(codexHome, "hooks.json"), hooks: CODEX_HOOKS, claude: false }];
+}
 
 /**
  * The entries `quest setup --worktrees` adds, handing Claude Code's worktrees,
@@ -49,7 +94,7 @@ export const HOOKS: readonly HookEntry[] = [
 export const WORKTREE_HOOKS: readonly HookEntry[] = HOOK_EVENTS.map((event) => ({
 	event,
 	command: WORKTREE_COMMAND,
-	...(event === "SessionEnd" ? { timeout: 60 } : {}),
+	...(event === "SessionEnd" ? { settings: { timeout: 60 } } : {}),
 }));
 
 /**
@@ -57,6 +102,16 @@ export const WORKTREE_HOOKS: readonly HookEntry[] = HOOK_EVENTS.map((event) => (
  * 1h prompt-cache TTL, so a blocking wait returns while the session's cache is warm.
  */
 export const BASH_MAX_TIMEOUT_MS = "3300000";
+
+/**
+ * The environment `quest setup` sets in Claude Code's settings: the cap, and the
+ * same as the default timeout, so a long foreground command runs to the end
+ * without the agent passing a timeout or backgrounding it.
+ */
+export const CLAUDE_ENV: Readonly<Record<string, string>> = {
+	BASH_MAX_TIMEOUT_MS,
+	BASH_DEFAULT_TIMEOUT_MS: BASH_MAX_TIMEOUT_MS,
+};
 
 /** The user settings file Claude Code reads: in `CLAUDE_CONFIG_DIR` when set, else `~/.claude`. */
 export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -67,19 +122,17 @@ export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
 type Json = Record<string, unknown>;
 
 /**
- * Set Quest's settings in the Claude Code settings file at `path`: the
- * foreground timeout cap and `entries` as Quest's hooks, by default the rule
- * hooks plus the worktree hooks when `worktrees` is true, or when it is
- * unset and the file already has them. With `remove`, take
- * Quest's hooks out, and the cap while it still holds Quest's value. Keeps
- * every other setting and hook, and writes once. Returns a line per change. A
- * file that is not a JSON object, or whose `env` or `hooks` is malformed,
- * throws before anything is written.
+ * Set Quest's settings in `target`'s file: its hooks, and in Claude Code's
+ * `CLAUDE_ENV` and the worktree hooks when `worktrees` is true, or when it is
+ * unset and the file already has them. With `remove`, take Quest's hooks out,
+ * and each `CLAUDE_ENV` variable that still holds Quest's value. Keeps every other setting and
+ * hook, and writes once. Returns a line per change. A file that is not a JSON
+ * object, or whose `env` or `hooks` is malformed, throws before anything is
+ * written.
  */
-export function setup(
-	path: string,
-	options: { remove?: boolean; worktrees?: boolean; entries?: readonly HookEntry[] } = {},
-): string[] {
+export function setup(target: Target, options: { remove?: boolean; worktrees?: boolean } = {}): string[] {
+	const { path } = target;
+	const { remove = false } = options;
 	const original = existsSync(path) ? readFileSync(path, "utf8") : null;
 	let settings: unknown = {};
 	if (original !== null) {
@@ -92,25 +145,28 @@ export function setup(
 	if (!isObject(settings)) throw new Error(`${path} does not hold a JSON object`);
 	const env = settings.env ?? {};
 	if (!isObject(env)) throw new Error(`${path}: env is not an object`);
-	const worktrees = options.worktrees ?? hasWorktreeHooks(settings);
-	const entries = options.entries ?? (worktrees ? [...HOOKS, ...WORKTREE_HOOKS] : HOOKS);
-	const hooked = withHooks(settings, options.remove ? [] : entries, path);
+	const worktrees = target.claude && (options.worktrees ?? hasWorktreeHooks(settings));
+	const entries = worktrees ? [...target.hooks, ...WORKTREE_HOOKS] : target.hooks;
+	const hooked = withHooks(settings, remove ? [] : entries, path);
 
 	const changes: string[] = [];
 	let updated = hooked;
-	if (hooked !== settings) changes.push(`${path}: ${options.remove ? "removed" : "installed"} Quest's hooks`);
-	const cap = env.BASH_MAX_TIMEOUT_MS;
-	if (options.remove) {
-		if (cap === BASH_MAX_TIMEOUT_MS) {
-			const { BASH_MAX_TIMEOUT_MS: _, ...rest } = env;
-			updated = { ...updated, env: rest };
-			if (Object.keys(rest).length === 0) delete updated.env;
-			changes.push(`${path}: removed env.BASH_MAX_TIMEOUT_MS`);
-		}
-	} else if (cap !== BASH_MAX_TIMEOUT_MS) {
-		updated = { ...updated, env: { ...env, BASH_MAX_TIMEOUT_MS } };
-		const was = cap === undefined ? "" : ` (was ${JSON.stringify(cap)})`;
-		changes.push(`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS}${was}`);
+	if (hooked !== settings) changes.push(`${path}: ${remove ? "removed" : "installed"} Quest's hooks`);
+	// Only Claude Code's settings hold the timeouts.
+	const next: Json = { ...env };
+	for (const [key, value] of Object.entries(target.claude ? CLAUDE_ENV : {})) {
+		const current = env[key];
+		if (remove) {
+			if (current !== value) continue;
+			delete next[key];
+			changes.push(`${path}: removed env.${key}`);
+		} else if (current !== value) {
+			next[key] = value;
+			const was = current === undefined ? "" : ` (was ${JSON.stringify(current)})`;
+			changes.push(`${path}: env.${key}=${value}${was}`);
+		} else continue;
+		updated = { ...updated, env: next };
+		if (Object.keys(next).length === 0) delete updated.env;
 	}
 	if (changes.length === 0) return [];
 	mkdirSync(dirname(path), { recursive: true });
@@ -140,22 +196,24 @@ function withHooks(settings: Json, entries: readonly HookEntry[], path: string):
 			if (handlers.length === group.hooks.length) return [group];
 			const only =
 				group.hooks.length === 1 && Object.keys(group).every((key) => ["matcher", "hooks"].includes(key));
-			if (only && (group.matcher === undefined || typeof group.matcher === "string"))
+			if (only && (group.matcher === undefined || typeof group.matcher === "string")) {
+				const { type: _, command, ...settings } = group.hooks[0] as Json & { command: string };
 				installed.push({
 					event,
 					...(group.matcher === undefined ? {} : { matcher: group.matcher as string }),
-					...handlerEntry(group.hooks[0] as Json & { command: string }),
+					command,
+					...(Object.keys(settings).length === 0 ? {} : { settings }),
 				});
-			else scattered = true;
+			} else scattered = true;
 			return handlers.length > 0 ? [{ ...group, hooks: handlers }] : [];
 		});
 		if (left.length > 0 || groups.length === 0) kept[event] = left;
 	}
 	if (!scattered && sameEntries(installed, entries)) return settings;
-	for (const { event, matcher, command = HOOK_COMMAND, timeout } of entries) {
+	for (const { event, matcher, command = HOOK_COMMAND, settings: extra } of entries) {
 		const group = {
 			...(matcher === undefined ? {} : { matcher }),
-			hooks: [{ type: "command", command, ...(timeout === undefined ? {} : { timeout }) }],
+			hooks: [{ type: "command", command, ...extra }],
 		};
 		kept[event] = [...((kept[event] as unknown[] | undefined) ?? []), group];
 	}
@@ -175,13 +233,6 @@ function isOurs(handler: unknown): handler is Json & { command: string } {
 	);
 }
 
-/** The command and timeout of Quest's `handler`, with any other field making it differ from every entry. */
-function handlerEntry(handler: Json & { command: string }): Pick<HookEntry, "command" | "timeout"> {
-	const extra = Object.keys(handler).some((key) => !["type", "command", "timeout"].includes(key));
-	const timeout = typeof handler.timeout === "number" ? handler.timeout : undefined;
-	return { command: extra ? `${handler.command}\0` : handler.command, ...(timeout === undefined ? {} : { timeout }) };
-}
-
 /** Whether `settings` holds any of Quest's worktree hooks. */
 function hasWorktreeHooks(settings: Json): boolean {
 	if (!isObject(settings.hooks)) return false;
@@ -199,7 +250,12 @@ function hasWorktreeHooks(settings: Json): boolean {
 
 function sameEntries(a: readonly HookEntry[], b: readonly HookEntry[]): boolean {
 	const key = (entry: HookEntry) =>
-		[entry.event, entry.matcher ?? "", entry.command ?? HOOK_COMMAND, entry.timeout ?? ""].join("\0");
+		[
+			entry.event,
+			entry.matcher ?? "",
+			entry.command ?? HOOK_COMMAND,
+			JSON.stringify(Object.entries(entry.settings ?? {}).sort()),
+		].join("\0");
 	const left = a.map(key).sort();
 	const right = b.map(key).sort();
 	return left.length === right.length && left.every((value, i) => value === right[i]);
@@ -209,17 +265,26 @@ function isObject(value: unknown): value is Json {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** The fields of a Claude Code hook's JSON input that `quest hook` reads. */
+/** The fields of a Claude Code or Codex hook's JSON input that `quest hook` reads. */
 interface HookInput {
 	hook_event_name: string;
 	cwd: string;
+	tool_name?: string;
+	tool_input?: Record<string, unknown>;
 }
 
+/** What a Stop or SubagentStop refusal tells the agent, after the gates it names. */
+const BLOCK_ON_GATES =
+	"Block on each with the harness's wait until it ends, then end your turn. A subagent's background commands stop when it ends, and a session that ends its turn on one leaves its result unread.";
+
 /**
- * What `quest hook` prints for the Claude Code hook event in `input`, or ""
- * when it adds nothing. SessionStart and SubagentStart add `quest context` to
- * the session's context in a repository whose root instructions carry Quest's
- * reference line, so its agents never run the command themselves.
+ * What `quest hook` prints for the Claude Code or Codex hook event in `input`,
+ * or "" when it adds nothing, in a repository whose root instructions carry
+ * Quest's reference line. SessionStart and SubagentStart add `quest context`
+ * to the session's context, so its agents never run the command themselves.
+ * PreToolUse denies a tool call that breaks a rule `broken` checks, giving the
+ * rule as the reason. Stop and SubagentStop refuse to end the turn while a gate
+ * the agent started runs in the background (see `runningGates`).
  */
 export function hook(input: unknown): string {
 	const value = input as Partial<HookInput> | null;
@@ -231,29 +296,38 @@ export function hook(input: unknown): string {
 		case "SubagentStart":
 			if (!usesQuest(value.cwd)) return "";
 			return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: CONTEXT } });
-		default:
-			throw new Error(`quest hook does not handle ${event}; run \`quest setup\` again to update your hooks`);
-	}
-}
-
-/**
- * Whether the checkout holding `cwd` points its agents at `quest context`:
- * its root `AGENTS.md` or `CLAUDE.md` has a line starting with Quest's
- * reference marker. Found without running git, since every session waits on it.
- */
-function usesQuest(cwd: string): boolean {
-	for (let dir = cwd; ; dir = dirname(dir)) {
-		if (existsSync(join(dir, ".git"))) {
-			return ["AGENTS.md", "CLAUDE.md"].some((name) => {
-				try {
-					return lines(readFileSync(join(dir, name), "utf8")).some((line) =>
-						line.startsWith(REFERENCE_MARKER),
-					);
-				} catch {
-					return false;
-				}
+		case "PreToolUse": {
+			if (
+				typeof value.tool_name !== "string" ||
+				typeof value.tool_input !== "object" ||
+				value.tool_input === null
+			)
+				throw new Error("expected a PreToolUse hook's JSON input with tool_name and tool_input");
+			if (!usesQuest(value.cwd)) return "";
+			const rules = broken({ tool: value.tool_name, input: value.tool_input, cwd: value.cwd });
+			if (rules.length === 0) return "";
+			const reason = rules.join("\n");
+			return JSON.stringify({
+				hookSpecificOutput: {
+					hookEventName: event,
+					permissionDecision: "deny",
+					permissionDecisionReason: reason,
+				},
 			});
 		}
-		if (dirname(dir) === dir) return false;
+		case "Stop":
+		case "SubagentStop": {
+			if (!Array.isArray((value as StopInput).background_tasks))
+				throw new Error(`expected a ${event} hook's JSON input with background_tasks; upgrade Claude Code`);
+			const gates = runningGates(value as StopInput);
+			if (gates.length === 0) return "";
+			const named = gates.map((command) => `- ${command}`).join("\n");
+			return JSON.stringify({
+				decision: "block",
+				reason: `\`quest gate\` commands you started still run in the background:\n${named}\n${BLOCK_ON_GATES}`,
+			});
+		}
+		default:
+			throw new Error(`quest hook does not handle ${event}; run \`quest setup\` again to update your hooks`);
 	}
 }

@@ -13,7 +13,9 @@ line in its root instructions.
 
 Pin the latest [release](https://github.com/moq-dev/quest/releases) tag.
 Releases ship binaries for macOS, Linux, and native Windows on arm64 and x64.
-Check that the chosen release includes the Windows archives; older tags do not. If there is no
+Check that the chosen release includes the Windows archives and the
+`quest worktree hook` command that `quest init`'s Claude Code hooks call;
+v0.1.0 has neither, so until a later release exists treat it as no release. If there is no
 release yet and the repository uses a nix flake (not on Intel Macs), pin the
 latest commit on `main`, which the flake builds from source; otherwise tell the
 user Quest has no release to install yet and stop.
@@ -62,16 +64,20 @@ to proceed; never delete or rename their files to get past it.
 
 ## Configure the user's agent
 
-`quest setup` configures the user's own Claude Code settings, not the
-repository's, in `$CLAUDE_CONFIG_DIR/settings.json` (or
-`~/.claude/settings.json`). It sets `env.BASH_MAX_TIMEOUT_MS` to 55 minutes, so
-agents can block on a long wait in one call instead of polling. It also adds
-the rules the `Quests: ` line points at to every session and subagent, and
-again after compaction, which would otherwise summarize them away, through
-hooks that need `quest` on the `PATH` Claude Code runs hooks with. Offer it,
-explaining that it applies in every repository the user opens in Claude Code
-(the hooks only in those with the `Quests: ` line), and run it with consent. It
-keeps the file's other settings and prints what it changed.
+`quest setup` configures the user's own agent settings, not the repository's:
+Claude Code's in `$CLAUDE_CONFIG_DIR/settings.json` (or
+`~/.claude/settings.json`), and Codex's in `$CODEX_HOME/hooks.json` (or
+`~/.codex/hooks.json`) when that directory exists. It sets Claude Code's
+`env.BASH_MAX_TIMEOUT_MS` and `env.BASH_DEFAULT_TIMEOUT_MS` to 55 minutes, so
+agents can block on a long wait or build in one call instead of polling. It also adds the rules the `Quests: ` line points
+at to every session, and again after compaction, which would otherwise
+summarize them away, and blocks tool calls that break the rules a program can
+check, such as a `git push` without an explicit refspec, through hooks that
+need `quest` on the `PATH` the agent runs hooks with. Offer it, explaining that
+it applies in every repository the user opens (the hooks act only in those with
+the `Quests: ` line), and run it with consent. Codex then asks the user to
+trust the hooks once through `/hooks`. It keeps the files' other settings and
+prints what it changed.
 
 ## Opt into worktree hooks
 
@@ -116,7 +122,7 @@ Settings → Actions → General → Workflow permissions to read; move reposito
 secrets, and organization secrets shared with the repository, into
 environments whose deployment branches are limited to protected branches; and
 keep write `permissions:` out of jobs that pull requests and pushes to other
-branches run. kix checks the same settings when a repository enrolls.
+branches run.
 Change settings and workflows only if the user agrees.
 
 Run `quest check`, then suggest next steps: restart the agent session so it

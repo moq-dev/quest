@@ -1,6 +1,7 @@
 // Supervised runs against the host's real systemd user manager. On Linux these need 5.14+, systemd 254+
 // and unified cgroup v2; a host without them fails here rather than skipping.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -173,7 +174,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", { 
 		writeFileSync(justfile, `run:\n    ${recipe.map((word) => JSON.stringify(word)).join(" ")}\n`);
 		const stop = new AbortController();
 		const kill = new AbortController();
-		const result = scope(
+		const result = scope(`quest-gate-${randomUUID()}.scope`)(
 			["just", "--justfile", justfile, "--working-directory", dir, "run"],
 			{ ...process.env, QUEST_WORKTREE_HOME: home, QUEST_GATE_ADMITTED: "1" },
 			{ signal: stop.signal, kill: kill.signal },

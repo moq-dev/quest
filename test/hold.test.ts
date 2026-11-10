@@ -41,16 +41,14 @@ class FakePull {
 	required: string[] = [];
 	/** The base branch's other ruleset rules. */
 	rules: ObjectValue[] = [];
+	/** The head's check runs, as its `statusCheckRollup` lists them. */
+	checks: ObjectValue[] = [];
 	autoMerge: ObjectValue | null = null;
 	queueEntry: ObjectValue | null = null;
 	labels: string[] = [];
 	events: Event[] = [];
 	/** Mutations and label writes, in order. */
 	readonly writes: string[] = [];
-	/** Runs before each label is added, as when another session adds one at the same moment. */
-	beforeAdd?: () => void;
-	/** Runs after each label is added, as when another session adds one a moment later. */
-	afterAdd?: () => void;
 	beforeAutoMerge?: () => string | undefined;
 	/** The error GitHub answers `enqueuePullRequest` with, if any. */
 	beforeEnqueue?: () => { message: string; type?: string } | undefined;
@@ -92,9 +90,7 @@ class FakePull {
 		if (url.pathname === "/graphql")
 			return json(200, this.graphql(String(body.query), body.variables as ObjectValue));
 		if (url.pathname === "/repos/example/project/issues/7/labels" && method === "POST") {
-			this.beforeAdd?.();
 			for (const name of body.labels as string[]) this.label(name);
-			this.afterAdd?.();
 			this.writes.push(`add ${(body.labels as string[]).join(",")}`);
 			return json(
 				200,
@@ -156,6 +152,18 @@ class FakePull {
 			return { data: { [name]: { clientMutationId: null } } };
 		}
 		if (query.includes("node(id: $id)")) return { data: { node: { autoMergeRequest: this.autoMerge } } };
+		if (query.includes("statusCheckRollup"))
+			return {
+				data: {
+					repository: {
+						object: {
+							statusCheckRollup: {
+								contexts: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: this.checks },
+							},
+						},
+					},
+				},
+			};
 		this.reads++;
 		const read = this.read();
 		this.afterRead?.();
@@ -213,7 +221,7 @@ describe("taking a PR", () => {
 		expect(await refused(take(PR, undefined, pull.deps()))).toContain("its starter still holds");
 		expect(pull.writes).toEqual([]);
 
-		pull.body = "Summary.\r\n\r\n## Decisions needed\r\n\r\n1. Pick one.\r\n";
+		pull.body = "Summary.\r\n\r\n## Waiting\r\n\r\n1. Pick one.\r\n";
 		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
 	});
 
@@ -236,43 +244,11 @@ describe("taking a PR", () => {
 		expect(pull.labels).toEqual(["quest:active"]);
 	});
 
-	test("refuses while kix holds it, and its token releases it", async () => {
-		const pull = new FakePull();
-		const token = pull.label("quest:kix");
-		expect(await refused(take(PR, undefined, pull.deps()))).toContain("held by quest:kix");
-		expect(pull.labels).toEqual(["quest:kix"]);
-		// Its token releases it.
-		expect(await release(PR, token!, pull.deps())).toBe("quest:kix");
-		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
-	});
-
 	test("ignores the quest:merge label older quest versions left on queued PRs", async () => {
 		const pull = new FakePull();
 		pull.label("quest:merge");
 		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
 		expect(pull.labels).toEqual(["quest:merge", "quest:active"]);
-	});
-
-	test("backs off when another session's label lands between its check and its add", async () => {
-		const pull = new FakePull();
-		pull.beforeAdd = () => {
-			pull.beforeAdd = undefined;
-			pull.label("quest:kix");
-		};
-		expect(await refused(take(PR, undefined, pull.deps()))).toContain("held by quest:kix");
-		expect(pull.labels).toEqual(["quest:kix"]);
-		expect(pull.writes).toEqual(["add quest:active", "remove quest:active"]);
-	});
-
-	test("keeps the PR when another session's label lands after its own", async () => {
-		const pull = new FakePull();
-		pull.afterAdd = () => {
-			pull.afterAdd = undefined;
-			pull.label("quest:kix");
-		};
-		expect(await take(PR, undefined, pull.deps())).toEqual({ label: "quest:active", token: "LabeledEvent_1" });
-		// The later session sees the earlier label and backs off.
-		expect(pull.labels).toEqual(["quest:active", "quest:kix"]);
 	});
 
 	test("keeps the hold its token names", async () => {
@@ -286,14 +262,6 @@ describe("taking a PR", () => {
 		const pull = new FakePull();
 		const token = pull.label("quest:ready")!;
 		expect(await refused(take(PR, token, pull.deps()))).toContain("quest:ready is off");
-		expect(pull.writes).toEqual([]);
-	});
-
-	test("refuses a token naming kix's hold rather than taking it over", async () => {
-		const pull = new FakePull();
-		const token = pull.label("quest:kix")!;
-		expect(await refused(take(PR, token, pull.deps()))).toContain("names the quest:kix hold");
-		expect(pull.labels).toEqual(["quest:kix"]);
 		expect(pull.writes).toEqual([]);
 	});
 
@@ -312,10 +280,10 @@ describe("taking a PR", () => {
 });
 
 describe("ready", () => {
-	test("drops the Decisions needed section and marks the draft ready, keeping the hold", async () => {
+	test("drops the Waiting section and marks the draft ready, keeping the hold", async () => {
 		const pull = new FakePull();
 		pull.draft = true;
-		pull.body = "Summary.\n\n## Decisions needed\n\n1. Pick one.\n\n## Validation\n\nTests pass.";
+		pull.body = "Summary.\n\n## Waiting\n\n1. Pick one.\n\n## Validation\n\nTests pass.";
 		const hold = await take(PR, undefined, pull.deps());
 		expect(await finish(PR, hold.token, pull.deps())).toEqual(hold);
 		expect(pull.body).toBe("Summary.\n\n## Validation\n\nTests pass.");
@@ -335,6 +303,34 @@ describe("merge --land", () => {
 		expect(pull.state).toBe("OPEN");
 	});
 
+	test.each([false, true])("refuses a head whose latest run of any check failed (queue: %s)", async (queue) => {
+		const pull = new FakePull();
+		pull.queue = queue;
+		const run = (databaseId: number, name: string, status: string, conclusion: string | null) => ({
+			__typename: "CheckRun",
+			databaseId,
+			name,
+			status,
+			conclusion,
+			detailsUrl: `https://ci.example/${databaseId}`,
+			checkSuite: { app: { databaseId: 15368 } },
+		});
+		// The own queue's check reports a dropped pick, not the head, so it never blocks a requeue.
+		pull.checks = [
+			run(1, "Check", "COMPLETED", "FAILURE"),
+			run(2, "Lint", "IN_PROGRESS", null),
+			run(4, "quest queue", "COMPLETED", "FAILURE"),
+		];
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
+			`head ${HEAD} failed a check: Check (https://ci.example/1)`,
+		);
+		expect(pull.writes).toEqual([]);
+		// A rerun that passed supersedes the failure; a pending check does not block.
+		pull.checks.push(run(3, "Check", "COMPLETED", "SUCCESS"));
+		await land(PR, HEAD, "merge", pull.deps());
+		expect(pull.writes).not.toEqual([]);
+	});
+
 	test("refuses when the token cannot see the auto-merge setting", async () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = null;
@@ -349,9 +345,9 @@ describe("merge --land", () => {
 		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
 			`held by quest:active, added just now as token ${token}`,
 		);
-		pull.label("quest:kix");
 		await release(PR, token, pull.deps());
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:kix");
+		pull.label("quest:active");
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:active");
 		pull.labels = ["quest:merge"];
 		await land(PR, HEAD, "merge", pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
@@ -747,11 +743,9 @@ test("drops each Waiting section up to the next heading", () => {
 	);
 });
 
-test("drops each Decisions needed section up to the next heading", () => {
-	expect(withoutHandBack("Summary.\r\n\r\n## Decisions needed\r\n\r\n1. Pick.\r\n### Detail\r\nMore.\r\n")).toBe(
-		"Summary.",
-	);
-	expect(withoutHandBack("# Title\n\n## Decisions needed ##\n- one\n# Next\nkept")).toBe("# Title\n\n# Next\nkept");
+test("drops each Waiting section up to the next heading, whatever its line endings or closing hashes", () => {
+	expect(withoutHandBack("Summary.\r\n\r\n## Waiting\r\n\r\n1. Pick.\r\n### Detail\r\nMore.\r\n")).toBe("Summary.");
+	expect(withoutHandBack("# Title\n\n## Waiting ##\n- one\n# Next\nkept")).toBe("# Title\n\n# Next\nkept");
 });
 
 describe("arguments", () => {

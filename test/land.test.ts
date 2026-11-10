@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "../cloudflare/dev/github";
+import { ACTIONS_APP, type Pull, type World, fakeGitHub } from "./github";
 import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import {
 	ADMITTED,
@@ -3533,6 +3533,9 @@ ${requeueScript}`);
 			"Do not build with `--offline`",
 			"never call GitHub's API yourself",
 			"or reach any other host",
+			"checks may also reach the services their own tests use",
+			"never stop them or hand a PR back for it",
+			"entered from the tree they check rather than from `base`",
 			"Before reporting `fixed` or `requeue`, run the repository's own checks on the head you report merged with `base`",
 			"lint, format, and type checks as well as build and test",
 			"Take the commands from the base's root instructions",
@@ -3730,7 +3733,7 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		const agent = join(dir, "custom-agent");
 		writeFileSync(agent, `#!/bin/sh\ncat >/dev/null\n${requeueScript}\n`, { mode: 0o755 });
 		await fix(dir, log, [1], agent, ["--model", "actual-model", "-"]);
-		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1]);
+		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1], []);
 		expect(result.agent).toBe("custom-agent");
 		expect(result.model).toBe("actual-model");
 	});
@@ -3748,7 +3751,7 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		vi.stubEnv("OPENAI_BASE_URL", "http://proxy.test/v1");
 		vi.stubEnv("OPENAI_API_KEY", "proxy-client");
 		await fix(dir, log, [1], agent, undefined, undefined, "high");
-		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1]);
+		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1], []);
 		expect(result).toMatchObject({ agent: "codex", model: "header-model", effort: "high" });
 		expect(author(result)).toBe("codex, header-model, high effort");
 	});
@@ -3826,15 +3829,16 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 
 	test("accepts one multiline Markdown comment per result and rejects a malformed one", () => {
 		const accepted = { number: 1, action: "requeue", reason: "fine", comment: "Line one\n\n- two\r\n\tthree" };
-		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		expect(parseFixResult(JSON.stringify([accepted]), [1], [])).toEqual([accepted]);
 		for (const comment of [7, "", "  \n", "x".repeat(COMMENT_LIMIT + 1), "bell\u0007", "nul\u0000"])
 			expect(() =>
-				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", comment }]), [1]),
+				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", comment }]), [1], []),
 			).toThrow("invalid fixer comment");
 		expect(() =>
 			parseFixResult(
 				JSON.stringify([{ number: 1, action: "requeue", reason: "fine", comment: "ok", extra: true }]),
 				[1],
+				[],
 			),
 		).toThrow("invalid fixer action or fields");
 	});
@@ -3852,7 +3856,7 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 			[{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", log: [0, 2] }],
 			[{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", log: [1.5, 2] }],
 		])
-			expect(() => parseFixResult(JSON.stringify(value), [1])).toThrow();
+			expect(() => parseFixResult(JSON.stringify(value), [1], [])).toThrow();
 		expect(
 			parseFixResult(
 				JSON.stringify([
@@ -3860,15 +3864,16 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 					{ number: 2, action: "requeue", reason: "collateral", blame: false },
 				]),
 				[1, 2],
+				[],
 			),
 		).toHaveLength(2);
 	});
 	test("accepts a one-line failure signature on any PR result", () => {
 		const accepted = { number: 1, action: "requeue", reason: "fine", failure: "cargo test: interop::render" };
-		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		expect(parseFixResult(JSON.stringify([accepted]), [1], [])).toEqual([accepted]);
 		for (const failure of [7, "", "  ", "x".repeat(201), "a\nb", "tab\t"])
 			expect(() =>
-				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure }]), [1]),
+				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure }]), [1], []),
 			).toThrow("invalid fixer failure");
 		// The base fix has no signature: nothing compares its rounds.
 		expect(() =>
@@ -3879,16 +3884,17 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		const [result] = parseFixResult(
 			JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure: ` cargo  test: "\`render\`'" ` }]),
 			[1],
+			[],
 		);
 		expect(result.failure).toBe("cargo test: render");
 		expect(() =>
-			parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure: "``" }]), [1]),
+			parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure: "``" }]), [1], []),
 		).toThrow("invalid fixer failure");
 	});
 	test("accepts a cause only on a requeue, as one of the known causes", () => {
 		for (const cause of ["flaky", "base", "environment"]) {
-			const accepted = { number: 1, action: "requeue", reason: "fine", cause };
-			expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+			const accepted = { number: 1, action: "requeue", reason: "fine", cause, failure: "render" };
+			expect(parseFixResult(JSON.stringify([accepted]), [1], [])).toEqual([accepted]);
 		}
 		for (const value of [
 			{ number: 1, action: "requeue", reason: "fine", cause: "runner" },
@@ -3896,29 +3902,53 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 			{ number: 1, action: "fixed", head: "a".repeat(40), reason: "fine", cause: "base" },
 			{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", cause: "flaky" },
 		])
-			expect(() => parseFixResult(JSON.stringify([value]), [1])).toThrow("invalid fixer cause");
+			expect(() => parseFixResult(JSON.stringify([value]), [1], [])).toThrow("invalid fixer cause");
 	});
-	test("accepts a disabling commit only on a flaky requeue", () => {
+	test("names a known flaky test by its quest, and requires a flaky requeue to name its test", () => {
+		const quest = "quest/m0/flaky/render.md";
+		const known = [{ failure: "cargo test: render", quest, jobs: [] }];
+		const accepted = { number: 1, action: "requeue", reason: "flaky", cause: "flaky", quest };
+		expect(parseFixResult(JSON.stringify([accepted]), [1], known)).toEqual([accepted]);
+		for (const value of [
+			{ ...accepted, quest: "quest/m0/flaky/other.md" },
+			{ ...accepted, cause: "base" },
+			{ number: 1, action: "requeue", reason: "fine", quest },
+		])
+			expect(() => parseFixResult(JSON.stringify([value]), [1], known)).toThrow("invalid fixer quest");
+		expect(() => parseFixResult(JSON.stringify([accepted]), [1], [])).toThrow("invalid fixer quest");
+		expect(() =>
+			parseFixResult(
+				JSON.stringify([{ number: 1, action: "requeue", reason: "flaky", cause: "flaky" }]),
+				[1],
+				[],
+			),
+		).toThrow("a flaky requeue must name its test");
+	});
+	test("accepts a disabling commit only on a known flaky test's requeue", () => {
 		const disable = "d".repeat(40);
+		const quest = "quest/m0/flaky/render.md";
+		const known = [{ failure: "cargo test: render", quest, jobs: [] }];
 		const accepted = {
 			number: 1,
 			action: "requeue",
 			reason: "flaky",
 			cause: "flaky",
 			failure: "cargo test: render",
+			quest,
 			disable,
 		};
-		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		expect(parseFixResult(JSON.stringify([accepted]), [1], known)).toEqual([accepted]);
 		for (const value of [
-			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", disable: "short" },
-			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", disable: 7 },
+			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", quest, disable: "short" },
+			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", quest, disable: 7 },
+			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", failure: "render", disable },
 			{ number: 1, action: "requeue", reason: "flaky", disable },
 			{ number: 1, action: "requeue", reason: "on the base", cause: "base", disable },
 			{ number: 1, action: "requeue", reason: "runner", cause: "environment", disable },
 			{ number: 1, action: "fixed", head: disable, reason: "fine", disable },
 			{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", disable },
 		])
-			expect(() => parseFixResult(JSON.stringify([value]), [1])).toThrow("invalid fixer disable");
+			expect(() => parseFixResult(JSON.stringify([value]), [1], known)).toThrow("invalid fixer disable");
 		expect(() =>
 			parseBaseFix(JSON.stringify({ action: "fixed", head: disable, reason: "fine", disable })),
 		).toThrow();
@@ -4462,6 +4492,35 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(fork.closed).toBe(true);
 		expect(forge.comment(1)).toContain("by quest land");
 		expect(shown(forge)[1]).toBe("success Landed");
+	});
+
+	test("--refuse-forks ejects a fork's pick before any build reaches the runner", async () => {
+		const { forge, pass } = setup({ refuseForks: true });
+		const fork = forge.pull("Fork", { "fork.txt": "f\n" }, { contributor: "outside", edits: true });
+		const gone = forge.pull("Gone", { "gone.txt": "g\n" }, { contributor: "departed", edits: true });
+		gone.headDeleted = true;
+		forge.pull("Own", { "own.txt": "o\n" });
+		expect(await pass()).toEqual(["ejected 1", "ejected 2", "building 3"]);
+		expect(queued(forge, 1)).toBeNull();
+		expect(queued(forge, 2)).toBeNull();
+		expect(fork.landing).toBe(false);
+		expect(forge.comment(1)).toContain("fork pull requests cannot use the private runner");
+		expect(forge.comment(1)).toContain("<!-- quest land: fork_head -->");
+		expect(shown(forge)).toMatchObject({
+			1: "failure Removed from the queue",
+			2: "failure Removed from the queue",
+		});
+	});
+
+	test("--refuse-forks stops a fork's build already under way", async () => {
+		const { forge, queue, pass } = setup();
+		forge.pull("Fork", { "fork.txt": "f\n" }, { contributor: "outside", edits: true });
+		await pass();
+		expect(queued(forge, 1)).not.toBeNull();
+		queue.refuseForks = true;
+		expect(await pass()).toEqual(["ejected 1"]);
+		expect(queued(forge, 1)).toBeNull();
+		expect(shown(forge)[1]).toBe("failure Removed from the queue");
 	});
 
 	test("a failed build is dropped as GitHub's queue removes a PR, and recorded for the land fixer", async () => {

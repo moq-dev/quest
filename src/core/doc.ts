@@ -158,6 +158,26 @@ export function entries(doc: Doc, section: string): Entry[] {
 	return doc.entries.filter((e) => e.section === section);
 }
 
+/** The section naming the operating systems a quest must run on. */
+export const HOSTS = "Hosts";
+
+/** The operating systems a `## Hosts` item may name. */
+export const HOST = ["linux", "macos", "windows"] as const;
+export type Host = (typeof HOST)[number];
+
+/** The host a `## Hosts` item names, as `macos` or `macos - why`, or `null` if it names none. */
+export function hostOf(entry: Entry): Host | null {
+	const match = /^(\S+)(?: - .+)?$/.exec(entry.text);
+	const host = match?.[1];
+	return HOST.find((h) => h === host) ?? null;
+}
+
+/** The hosts a quest must run on, sorted and deduplicated; empty means any. */
+export function hosts(doc: Doc): Host[] {
+	const named = new Set(entries(doc, HOSTS).map(hostOf));
+	return HOST.filter((h) => named.has(h));
+}
+
 function isReadme(path: string): boolean {
 	return fileName(path) === "README.md";
 }
@@ -210,6 +230,27 @@ export function children(docs: readonly Doc[], doc: Doc): string[] {
  */
 export function isEpic(docs: readonly Doc[], doc: Doc): boolean {
 	return permanent(doc.path) || docs.some((d) => holds(doc.path, d.path));
+}
+
+/**
+ * The epic READMEs above `path`, nearest first, milestones and the root
+ * included. Their `Required` sections gate everything under them.
+ */
+export function ancestors(docs: readonly Doc[], path: string): Doc[] {
+	return docs.filter((d) => holds(d.path, path)).sort((a, b) => depth(b.path) - depth(a.path));
+}
+
+/**
+ * The `Required` targets of `doc` and of every epic above it: what gates its
+ * start. An epic's entry for a quest it holds is skipped above that epic, as
+ * `quest check` already reports it and it would otherwise read as a cycle.
+ */
+export function gates(docs: readonly Doc[], doc: Doc): string[] {
+	return [doc, ...ancestors(docs, doc.path)].flatMap((d) =>
+		entries(d, "Required")
+			.map((entry) => (entry.target === null ? null : rooted(entry.target)))
+			.filter((target): target is string => target !== null && (d === doc || !holds(d.path, target))),
+	);
 }
 
 /** What must finish before `doc`: its `Required` quests, then, for an epic, its children. */

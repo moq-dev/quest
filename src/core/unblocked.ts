@@ -1,7 +1,7 @@
 // Rank ready work without mistaking epic membership for downstream work.
 
 import { handBackWaits } from "./claim";
-import { type Doc, branchQuest, children, entries, permanent, rooted } from "./doc";
+import { type Doc, branchQuest, children, gates, permanent } from "./doc";
 import { ready, treeOrder } from "./ready";
 import { ROOT, check, formatFinding } from "./rules";
 import { type Wait, onMaintainer, waits } from "./waiting";
@@ -20,7 +20,7 @@ export interface RankedQuest {
 export interface Ranking {
 	/** The rank of the root's child that holds `path`, lowest first; the root itself sorts last. */
 	priority(path: string): number;
-	/** Distinct transitive dependents of `path`, excluding epic membership and milestones. */
+	/** Distinct transitive dependents of `path`, excluding epic membership and milestones, including what an epic requiring it holds back. */
 	impact(path: string): number;
 }
 
@@ -37,7 +37,9 @@ export function ranking(docs: Doc[]): Ranking {
 		reverse.set(target, dependents);
 	};
 	for (const doc of docs) {
-		for (const entry of entries(doc, "Required")) depend(rooted(entry.target!)!, doc.path, false);
+		// An epic's `Required` holds back everything under it, so each of those
+		// quests depends on its blockers, milestones' included.
+		for (const target of gates(docs, doc)) depend(target, doc.path, false);
 		for (const child of children(docs, doc)) depend(child, doc.path, true);
 	}
 
@@ -100,7 +102,7 @@ export interface WaitingQuest {
 	pr: string | null;
 	/** Distinct transitive dependents, as `quest unblocked` counts them. */
 	dependents: number;
-	/** No `Required` entry remains, so clearing its waits lets the work go on. */
+	/** No `Required` entry remains on it or an epic above it, so clearing its waits lets the work go on. */
 	ready: boolean;
 	waits: Wait[];
 }

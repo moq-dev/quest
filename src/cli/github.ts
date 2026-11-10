@@ -65,6 +65,8 @@ export interface RequestOptions {
 	body?: unknown;
 	method?: "POST" | "PUT" | "PATCH" | "DELETE";
 	allow?: number[];
+	/** A media type other than JSON, such as `application/vnd.github.diff`. */
+	accept?: string;
 	/** Overrides how the request repeats; the default follows its method and endpoint. */
 	repeat?: Repeat;
 }
@@ -253,7 +255,7 @@ export class GitHub {
 						? options.method && { method: options.method }
 						: { method: options.method ?? "POST", body: JSON.stringify(options.body) }),
 					headers: {
-						Accept: "application/vnd.github+json",
+						Accept: options.accept ?? "application/vnd.github+json",
 						Authorization: `Bearer ${this.deps.token}`,
 						"X-GitHub-Api-Version": "2022-11-28",
 						"User-Agent": "quest",
@@ -495,6 +497,23 @@ export interface Requirements {
 	classic: boolean;
 }
 
+/**
+ * Every rule a branch's active rulesets apply. GitHub Free offers no rulesets on a private repository and
+ * answers 403 with an upgrade notice, so none apply there; any other refusal fails.
+ */
+async function branchRules(github: GitHub, path: string): Promise<ObjectValue[]> {
+	const first = await github.request(path, { allow: [403] });
+	if (first.status !== 403) {
+		const next = link(first, "next");
+		return [...array(await first.json()), ...(next ? await github.all(next) : [])];
+	}
+	const reason = explanation(await first.text());
+	if (reason?.startsWith("Upgrade to GitHub Pro")) return [];
+	throw new Error(
+		`GitHub HTTP 403 for ${new URL(path, API).pathname}; ${reason ?? "check repository access and token permissions"}`,
+	);
+}
+
 /** What `branch` of `repository` requires, read with read access from branch protection and rulesets. */
 export async function requirements(github: GitHub, repository: Repository, branch: string): Promise<Requirements> {
 	const base = `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
@@ -512,7 +531,7 @@ export async function requirements(github: GitHub, repository: Repository, branc
 						app: null,
 					}))
 				: array(legacy.checks).map((row) => ({ name: string(row.context), app: source(row.app_id) }));
-	const rules = await github.all(`${base}/rules/branches/${ref}?per_page=100`);
+	const rules = await branchRules(github, `${base}/rules/branches/${ref}?per_page=100`);
 	const checks = [
 		...classic,
 		...rules

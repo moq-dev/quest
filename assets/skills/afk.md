@@ -1,25 +1,28 @@
 ---
-description: Keep quest work moving while the user is away, leaving every decision for their return.
+description: Keep this session's work going while the user is away, taking your recommendations and deferring merge picks until they return.
 guide: Summaries
-skills: spawn, complete
-omit: grill, Creation, Questions
 ---
 
 The user has stepped away and will not answer.
-Your goal is to keep the work they already agreed to moving, asking nothing, until only work that needs a decision remains.
-Dispatch, limit, recover, and clean up agents, and answer "finish up", "pause", and "status", as `/quest-spawn` and `/quest-complete` below describe.
-This skill takes no arguments: it filters no quests or PRs and bills agents to this session's account.
+Keep this session's work going within its scope: the skill it is running, such as `/quest-run` or `/quest-complete`, or else the task at hand. In a session with no work under way, run `/quest-run`.
+Ask nothing: wherever you or an agent would ask the user, take your recommendation instead, unless the decision is deferred below.
+A deferred question counts as asked, so a skill's loop goes on past it and finishes as that skill describes.
+The skill argument, if any, widens what you may decide, such as "merge whatever you recommend"; act on it within its words.
 
-Make no decisions, not even by acting on your own recommendation; skip each one and leave it for the user:
+Take every decision a later PR review can still undo:
 
-- Start every ready quest that `/quest-spawn` starts without asking; leave each quest it would ask about unstarted.
-- Carry on each action the user already picked, such as a `/quest-merge` pick, until it lands or needs the user again.
-- Dispatch the `/quest-iterate` that `/quest-complete` runs without asking, for a PR with no decision for the user. Pick no skip, `/quest-merge`, or `/quest-delete` for a PR the user has not, beyond the standing `/quest-merge` pick `/quest-complete` gives a PR that changes no user-facing behavior. A started agent still runs `/quest-review` itself when its quest finishes with no decisions, as `/quest-start` describes.
-- Dispatch `/quest-review` for a draft whose reviewer outage has cleared, as `/quest-review` describes; it needs no decision. A reset still ahead is no reason to keep running: give its time in the summary.
-- Answer no decision an agent reports. Its PR stays a draft whose `## Waiting` section lists the decision with a recommendation.
-- Hold `/quest-plan` sessions, stale claims, and suggested follow-ups for the user.
+- On a quest or PR this session works on itself, take your recommendation on each decision, list those choices in the PR body for review, and run `/quest-review` when nothing else remains.
+- Tell each agent you dispatch that the user is away, so it does the same.
+- As a coordinator, dispatch `/quest-iterate` on a PR with open decisions, with your recommended answers in its brief.
 
-As merges land, recompute the ready quests and start any that newly qualify.
-Finish once every agent has reported, every picked action has landed or needs the user, and no quest remains that starts without asking.
+Unless the argument allows it, defer as blockers what no review can undo and what only the user can do:
 
-Write the final summary so a new session can act on it without this one's context, letting the user start fresh on their return: link each quest and PR, give each skipped decision with its options and your recommendation, and describe every follow-up the agents suggested fully enough to hand to `/quest-plan`.
+- Merge picks beyond a standing `/quest-merge` pick, deleting or deprioritizing a quest, closing a PR, and taking over a stale claim or hold.
+- A follow-up's decisions, which wait for its PR's pick.
+- `/quest-plan` sessions, and actions only the user can take, such as granting access or providing a secret.
+
+Carry on each pick the user already made until it lands or needs them again.
+When the work finishes, end with a final summary holding only the blockers, each linked, with its options and your recommendation, so a fresh session can act on it; the choices you took live in the PRs' bodies.
+
+A message that adds to these instructions, such as a newly granted merge or more work, amends them, and afk continues.
+Any other message is the user's return: afk ends. Answer it, run `/quest-unblock` on the quests and drafts among the blockers, then resume the session's skill, which asks the questions it deferred.

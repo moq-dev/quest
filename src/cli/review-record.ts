@@ -1,17 +1,17 @@
 // `quest review` rewrites the `## Review` section of its branch's open PR after each round, so the head
 // it reviewed counts without an agent copying the round into the body by hand.
 import { reviewSection } from "../core";
-import { type Comment, recorded, sessionsComment } from "../github/models";
+import { recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { git } from "./git";
 import { requireRemote, string } from "./github";
 import { type PullModels, type Round, located, parseBase } from "./review";
 
-const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex" };
+const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex", opencode: "opencode" };
 
 /**
  * Model text as one inline code span, so a mention, issue reference, or Markdown in it renders as text.
- * The land gate counts every full SHA the section names, so no full SHA appears in it.
+ * `quest status` takes the last full SHA the section names as its reviewed head, so no full SHA appears in it.
  */
 function code(text: string): string {
 	const flat = text
@@ -28,11 +28,11 @@ const capitalized = (word: string) => word[0]!.toUpperCase() + word.slice(1);
 /** The `## Review` section's text for `round`, without its heading. */
 export function reviewRecord(round: Round): string {
 	const lines = [
-		"Rewritten by `quest review` after each round.",
+		MARK,
 		"",
 		`- Reviewer: ${HARNESSES[round.reviewer]}, ${round.model}, ${round.effort} effort`,
 		`- Session: ${code(round.session)}, round ${round.round}`,
-		// The land gate counts a full SHA here as a review of that head, which an open finding has not passed.
+		// `quest status` counts a full SHA here as a review of that head, which an open finding has not passed.
 		`- Head: ${round.findings.length === 0 ? round.head : `${round.head.slice(0, 12)}, named in full once a round reports no findings`}`,
 		`- Base: ${round.base.ref} at ${round.base.sha.slice(0, 12)}`,
 		`- Score: ${round.score}/10, ${code(round.rationale)}`,
@@ -48,6 +48,58 @@ export function reviewRecord(round: Round): string {
 			`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
 		);
 	return lines.join("\n");
+}
+
+/** What a PR body's `## Review` record says of its latest round, as `reviewRecord` writes it. */
+export interface ReviewSummary {
+	/** The reviewer's harness as the record names it, such as `Codex`. */
+	harness: string;
+	model: string;
+	effort: string;
+	session: string;
+	round: number;
+	/** Null on a record written before rounds were scored. */
+	score: number | null;
+	/** The latest round's findings, open until the next round settles them. */
+	findings: number;
+	/** The round before's findings this round found fixed, and those whose refutation held. */
+	fixed: number;
+	refuted: number;
+}
+
+const MARK = "Rewritten by `quest review` after each round.";
+
+/**
+ * The latest round `body`'s `## Review` section records, or null when `quest review` wrote none there, as when the
+ * section records a skipped review or only the land fixer's fixes.
+ */
+export function parseReview(body: string): ReviewSummary | null {
+	const section = reviewSection(body);
+	if (!section) return null;
+	const all = body.slice(section.start, section.end);
+	const at = all.indexOf(MARK);
+	if (at < 0) return null;
+	const text = all.slice(at);
+	const match = (pattern: RegExp) => {
+		const found = pattern.exec(text);
+		if (!found) throw new Error(`the ## Review record has no line matching ${pattern.source}`);
+		return found;
+	};
+	const reviewer = match(/^- Reviewer: (.+?), (\S+), (\S+) effort\r?$/m);
+	const session = match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
+	const score = /^- Score: (\d+)\/10,/m.exec(text);
+	const items = (prefix: RegExp) => text.split(/\r?\n/).filter((line) => prefix.test(line)).length;
+	return {
+		harness: reviewer[1]!,
+		model: reviewer[2]!,
+		effort: reviewer[3]!,
+		session: session[2]!,
+		round: Number(session[3]),
+		score: score ? Number(score[1]) : null,
+		findings: items(/^ {2}- (High|Medium|Low), /),
+		fixed: items(/^ {2}- Fixed: /),
+		refuted: items(/^ {2}- Refuted: /),
+	};
 }
 
 /** `body` with `record` as its `## Review` section, which it gains when it has none; the rest stays as written. */
@@ -104,18 +156,10 @@ export async function pullModels(
 ): Promise<PullModels | null> {
 	const pull = await openPull(root, baseRef, branch, deps);
 	if ("skipped" in pull) return null;
-	// Sessions that published to the PR after it opened are on kix's sessions comment rather than in the body.
-	const comments = (await pull.client.all(
-		`${repositoryPath(pull.repository)}/issues/${pull.number}/comments?per_page=100`,
-	)) as Comment[];
-	const own = recorded(pull.body);
-	const later = recorded(sessionsComment(comments)?.body ?? "");
-	// Each records its sessions in the order they last pushed, but which record a later push went to cannot be told.
-	const latest = [own, later].flatMap((record) => record.implementers.at(-1)?.model ?? []);
-	return { sizes: own.sizes, implementers: [...own.implementers, ...later.implementers], latest };
+	return recorded(pull.body);
 }
 
-/** Record `round` in the `## Review` section of its branch's open PR. The edit is the token's user's, which the land gate counts only when that user wrote the PR. */
+/** Record `round` in the `## Review` section of its branch's open PR. The edit is the token's user's, which `/quest-merge` counts only when that user wrote the PR. */
 export async function recordRound(root: string, round: Round, deps: ClaimDependencies): Promise<Recorded> {
 	const pull = await openPull(root, round.base.ref, round.branch, deps);
 	if ("skipped" in pull) return pull;

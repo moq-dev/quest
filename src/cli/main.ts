@@ -22,29 +22,18 @@ import {
 	onMaintainer,
 	waiting,
 } from "../core";
-import {
-	AgentInputError,
-	HARNESSES,
-	type HarnessName,
-	type Launch,
-	processDependencies,
-	runAgent,
-	stopAgent,
-	stopAll,
-} from "./agent";
-import {
-	DEFAULT_URL,
-	RunnerInputError,
-	addAccount,
-	listAccounts,
-	login,
-	removeAccount,
-	runRunner,
-} from "../runner/cli";
-import type { Cli } from "../runner/home";
+import { AgentInputError, HARNESSES, type Launch, processDependencies, runAgent, stopAgent, stopAll } from "./agent";
 import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { gate, QUICK_MS } from "./gate";
-import { gitHubDependencies, GitHubInputError, mergedHead, pullRequest, readRemote, remoteRepository } from "./github";
+import {
+	gitHubDependencies,
+	GitHubInputError,
+	mergedHead,
+	pullRequest,
+	readRemote,
+	remoteRepository,
+	type Repository,
+} from "./github";
 import { type Hold, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
 import { apply, pushCommand } from "./land-apply";
@@ -54,8 +43,11 @@ import { watch, type WatchOptions } from "./land-watch";
 import { landed } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
+import { hosts } from "../core/doc";
 import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
 import {
+	REVIEW_HARNESSES,
+	type ReviewHarness,
 	ReviewInputError,
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
@@ -64,13 +56,24 @@ import {
 	roundLines,
 } from "./review";
 import { type Recorded, pullModels, recordRound } from "./review-record";
-import { BASH_MAX_TIMEOUT_MS, HOOKS, WORKTREE_HOOKS, hook, settingsPath, setup } from "./hooks";
+import {
+	BASH_MAX_TIMEOUT_MS,
+	CLAUDE_HOOKS,
+	CODEX_HOOKS,
+	type HookEntry,
+	WORKTREE_HOOKS,
+	hook,
+	setup,
+	targets,
+} from "./hooks";
+import { CHECKED_CONTEXT, USER_ASKED } from "./rules";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
 import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
 import { pullRequestStatus, statusLines } from "./status";
+import { CCUSAGE_MISSING, daysBefore, usage, usageDependencies, usageLines } from "./usage";
 import { waitForActivity, WaitTimeout } from "./wait";
 import { Worktrees } from "./worktree";
 import { HOOK_EVENTS, claudeHook } from "./worktree-hook";
@@ -126,16 +129,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Wait while the 1-minute load average exceeds the host's CPU count or available memory is below " +
 				"min(4 GiB, RAM/4). Each admission in the last minute counts as one more unit of load and one " +
 				"budget less memory: commands start at once while those still fit, and 5 seconds apart while " +
-				"only the raw measures do. The load limit applies only while a gated command still runs. Nested " +
+				"only the raw measures do. The load limit applies only while a gated command still runs. Where a " +
+				"systemd scope owns each running command, the load counts as at least the sum of their peak CPU " +
+				"use in the last minute, and nothing starts while those fill every CPU, so a lull between a " +
+				"command's phases does not free its CPUs. Nested " +
 				"calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +
 				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
 				"cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the environment, as a check " +
 				"that lands PRs should set, the command waits for memory but never for load.\n\n" +
-				"--host holds the whole host, for work such as a benchmark that other work would disturb: it " +
-				"reserves the host at once, starts once no other gated command runs, and every other gated " +
-				"command, quick or priority, waits until it ends. A nested --host runs immediately like any nested " +
-				"call. Windows refuses --host.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
 				"a systemd user scope, or inside a Quest scope through a child cgroup of its own. macOS, and Linux " +
@@ -145,10 +147,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"cancelled.",
 		)
 		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
-		.addOption(new Option("--host", "Hold the whole host, with no other gated command running").conflicts("quick"))
 		.argument("<command>", "Executable to run")
 		.argument("[args...]", "Arguments forwarded verbatim")
-		.action((command: string, args: string[], options: { quick?: boolean; host?: boolean }) => {
+		.action((command: string, args: string[], options: { quick?: boolean }) => {
 			pending = gate([command, ...args], options).catch((error: unknown) => {
 				warn(error instanceof Error ? error.message : String(error));
 				return 1;
@@ -265,9 +266,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Rank ready quests by milestone priority, distinct transitive dependents, then path order. " +
 				"Given a path, print what blocks that quest instead.\n\n" +
-				"Counts exclude structural epic membership. Other prerequisites may remain for dependents. " +
+				"A quest is ready only when neither it nor any epic above it, milestones included, has a ## Required " +
+				"section. Counts exclude structural epic membership but include the quests an epic's ## Required holds " +
+				"back. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
-				"ordered array of {path, dependents, models} objects, where models ranks the {harness, model, effort} " +
+				"ordered array of {path, dependents, hosts, models} objects, where hosts lists the operating systems " +
+				"(linux, macos, windows) under the quest's ## Hosts, empty when it runs anywhere, and models ranks the {harness, model, effort} " +
 				"entries that write the quest: its size's list, or the next size's while a Maintainer: item under its " +
 				"## Waiting leaves a decision open (quest models lists them).\n\n" +
 				"--unclaimed ranks the fetched upstream default branch's tree instead of the checkout, then drops " +
@@ -308,7 +312,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						const byPath = new Map(docs.map((doc) => [doc.path, doc]));
 						print(
 							JSON.stringify(
-								shown.map((quest) => ({ ...quest, models: questWriters(byPath.get(quest.path)!) })),
+								shown.map((quest) => {
+									const doc = byPath.get(quest.path)!;
+									return { ...quest, hosts: hosts(doc), models: questWriters(doc) };
+								}),
 							),
 						);
 						return;
@@ -358,13 +365,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("waiting")
 		.summary("List quests and draft PRs waiting on the maintainer or an outside party")
 		.description(
-			"List every quest with a ## Waiting section and every open draft PR handed back with one (or the " +
-				"older ## Decisions needed): those waiting on the maintainer first, then milestone priority, distinct " +
+			"List every quest with a ## Waiting section and every open draft PR handed back with one: those " +
+				"waiting on the maintainer first, then milestone priority, distinct " +
 				"transitive dependents as quest unblocked counts them, ready before blocked, then path order, with " +
 				"drafts after quests by PR number. A draft ranks as the quest its branch carries, or last when it " +
 				"carries none. Each item opens with who acts, Maintainer: or an outside party such as moq-dev/moq:, " +
-				"followed by the condition and how to check or advance it. A draft's item without a party, and every " +
-				"Decisions needed item, is the maintainer's; a draft's section without items is one maintainer item " +
+				"followed by the condition and how to check or advance it. A draft's item without a party is the " +
+				"maintainer's; a draft's section without items is one maintainer item " +
 				"holding its prose.\n\n" +
 				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the quest's " +
 				"path or the draft's URL, and the item. --json prints an ordered array of {path, pr, dependents, " +
@@ -516,8 +523,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Print a pull request's head, checks, merge state, reviews, reactions, and unresolved review threads " +
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
-				"url, state, draft, head, mergeable, merge-state, review-decision, auto-merge, merge-queue, " +
-				"landing-stopped, and checks, whose state and counts follow each check's latest run; auto-merge gives its method, who enabled it and when, and the head it was " +
+				"url, state, draft, head, mergeable, merge-state, review-decision, review-record, auto-merge, merge-queue, " +
+				"landing-stopped, and checks, whose state and counts follow each check's latest run; review-record gives whether the PR body's ## Review record " +
+				"covers the head, as current, diff-identical (git diff <base>...<head> prints the same as for the head it names), " +
+				"stale, or unknown when GitHub cannot compare them, then the head it names last; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
 				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
@@ -550,8 +559,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	const OWNERSHIP =
 		"Before a session pushes to an existing PR, it takes the PR with iterate, and hands it back with " +
 		"release. A taken PR carries the quest:active label; iterate prints a hold token, the ID of the timeline " +
-		"event that added it, since sessions often share an account. A command refuses while a quest:active or " +
-		"quest:kix label it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
+		"event that added it, since sessions often share an account. A command refuses while a quest:active " +
+		"label it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
 		"holds (one whose body has no Waiting heading). A refusal names the holder's label, age, and " +
 		"token; releasing a stale hold with that token is the user's choice. Given a token, a command refuses " +
 		"unless the token is still the latest add of its label. When two sessions add the label at once, the " +
@@ -578,7 +587,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("ready")
 		.summary("Hand a PR this session holds to reviewers")
 		.description(
-			"Hand a PR this session holds to reviewers: remove the body's Waiting section (or the older Decisions needed) and mark a " +
+			"Hand a PR this session holds to reviewers: remove the body's Waiting section and mark a " +
 				`draft ready for review. The hold stays; it prints the token again.\n\n${OWNERSHIP}`,
 		)
 		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
@@ -594,7 +603,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, or merge at " +
 				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
 				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
-				"first, and once the head has moved. It uses the method --squash or --rebase names, refusing one " +
+				"first, once the head has moved, and while the latest run of any check on the head failed, required " +
+				"or not, naming each; a pending or absent check does not block. It uses the method --squash or --rebase names, refusing one " +
 				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
 				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
 				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
@@ -755,6 +765,20 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			)
 				.choices(EFFORTS)
 				.default("medium"),
+		)
+		.option(
+			"--refuse-forks",
+			"On the own queue, eject each pick whose head is in a fork, or in a deleted repository, before pushing its build, so a fork's code never reaches a private queue runner",
+		)
+		.option(
+			"--bump <owner/repo>",
+			"Keep this repository's flake input in another repository at this repository's base (repeatable): each pass opens or updates that repository's quest-bump PR as the App and lands it",
+			(value: string, previous: Repository[]) => {
+				const match = /^([\w.-]+)\/([\w.-]+)$/.exec(value);
+				if (!match) throw new InvalidArgumentError("expected owner/repo");
+				return [...previous, { owner: match[1], repo: match[2] }];
+			},
+			[] as Repository[],
 		)
 		.action((options: WatchOptions) => {
 			const origin = readRemote(root(), "origin");
@@ -1050,6 +1074,42 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			else for (const e of entries) print(`${e.harness}\t${e.model}\t${e.effort}`);
 		});
 
+	program
+		.command("usage")
+		.summary("Report which models worked on each PR, at what token cost, and how its reviews went")
+		.description(
+			"Report origin's PRs updated since --since and this host's agent sessions active since then. Each " +
+				"Claude Code or Codex session belongs to the PR whose head branch its log last names, when its Codex log, its " +
+				"checkout's remotes, or a Codex log for its directory names this repository, read from " +
+				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
+				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
+				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
+				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
+				"its latest ## Review round's reviewer, round, score, and findings, " +
+				"and the later PRs that list it under ## Caused by. Rollups follow: spend by size, role, harness, model, and " +
+				"effort, and accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +
+				"over the PR's. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
+				"--json prints the same report as one object.\n\n" +
+				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
+				"other failures.",
+		)
+		.option("--since <date>", "First local date to report, as YYYY-MM-DD (default: 7 days ago)", date)
+		.option("--quest <path>", "Report only the PRs of this quest's branch")
+		.option("--pr <number>", "Report only this PR", positiveInteger("--pr"))
+		.option("--json", "Print one JSON object")
+		.action((options: { since?: string; quest?: string; pr?: number; json?: boolean }) => {
+			const github = { github: () => gitHubDependencies(warn), warn };
+			const since = options.since ?? daysBefore(new Date(), 7);
+			settle(
+				usage(root(), { since, quest: options.quest, pr: options.pr }, usageDependencies(github)),
+				(report) => {
+					if (!report.priced) warn(CCUSAGE_MISSING);
+					if (options.json) print(JSON.stringify(report));
+					else for (const line of usageLines(report)) print(line);
+				},
+			);
+		});
+
 	const reviewers = SIZES.map(
 		(size) => `${size} ${REVIEWERS[size].map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}`,
 	).join("; ");
@@ -1060,13 +1120,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
 				"first whose model is not avoided reviews. --exclude-model names each model to avoid; without it, the " +
-				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR " +
-				"and of kix's sessions comment on it. When they name none, an `unknown` model, or two different models, " +
+				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR. " +
+				"When it names none or an `unknown` model, " +
 				"it is any model of the harness running this command, usually the session that just pushed, detected from the " +
-				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; --harness instead avoids " +
-				"every model they name. " +
+				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; with --harness it is " +
+				"none. " +
 				"--harness names the reviewer instead, at its entry's model and effort, and --model and --effort " +
-				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. The " +
+				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. " +
+				"opencode is no size's pick: --harness opencode needs --model, as provider/model, and --effort, its " +
+				"variant. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
 				"The reviewer reaches its model as the user's own CLI " +
@@ -1077,7 +1139,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
 				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
 				"(ANTHROPIC_AWS_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN) only while one is set. A logged-out error names the profile it checked, " +
-				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider.\n\n" +
+				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider. opencode " +
+				"keeps the user's own config and login, and counts as logged out when `opencode models` does not " +
+				"list the model.\n\n" +
 				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
 				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
 				"reviewer's own review (`codex exec review` with custom instructions, or Claude Code's " +
@@ -1098,7 +1162,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
 				"skills catalog, Claude Code with " +
-				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
+				"no settings files, only read tools, and the Bash commands it judges read-only, and opencode with no " +
+				"project config, Claude Code files, or tool but its shell, whose commands run under sandbox-runtime " +
+				"(`srt` on PATH; on Linux it must refuse Unix sockets) with no network, reading only the checkout " +
+				"and its Git directories and writing only a private directory. opencode has no review mode, so its " +
+				"first turn asks for the review in a prompt. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
 				"reviewer, and is told to disregard other instructions and run no builds, tests, or quest commands. " +
 				"The base is fetched first, since the sandbox has no network.\n\n" +
@@ -1125,7 +1193,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"timestamp, or `unknown` when the CLI named none.",
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
-		.addOption(new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(HARNESSES))
+		.addOption(
+			new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(REVIEW_HARNESSES),
+		)
 		.option("--model <model>", "Model the reviewer runs instead")
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option(
@@ -1150,7 +1220,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			(options: {
 				base?: string;
 				branch?: string;
-				harness?: HarnessName;
+				harness?: ReviewHarness;
 				model?: string;
 				effort?: string;
 				excludeModel?: string[];
@@ -1210,82 +1280,6 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				);
 			},
 		);
-
-	const runnerIO = () => ({ stdout: out.stdout, stderr: out.stderr, env: process.env });
-	const runnerFailure = (error: unknown) => {
-		if (error instanceof RunnerInputError) {
-			out.stderr(`error: ${error.message}\n`);
-			return 2;
-		}
-		warn(error instanceof Error ? error.message : String(error));
-		return 1;
-	};
-	const runnerAction = (task: () => number | Promise<number>) => {
-		try {
-			pending = Promise.resolve(task()).catch(runnerFailure);
-		} catch (error) {
-			pending = Promise.resolve(runnerFailure(error));
-		}
-	};
-	const runner = program
-		.command("runner")
-		.summary("Run kix jobs on this machine with its own agent accounts")
-		.description(
-			"Turn this Linux or macOS machine into a kix runner. `quest runner login` connects it to your kix " +
-				"account, `quest runner account add` signs agent accounts in, and `quest runner` runs routed jobs in " +
-				"the foreground until interrupted.\n\n" +
-				"Claude and Codex subscriptions sign in to the pool of the runner's own CLIProxyAPI, which `quest " +
-				"runner` starts on loopback and which rotates between them; every Claude Code job and review and every " +
-				"Codex review goes through it, and kix sees the Claude pool as one account. opencode accounts sign in " +
-				"through opencode's own flow, each in an isolated home. kix stores only an opaque account id, its " +
-				"kind, and its label, and never sees a token. Every job runs inside its project's `nix develop` " +
-				"shell. State lives in $QUEST_RUNNER_HOME, by default $XDG_DATA_HOME/quest/runner.",
-		);
-	runner
-		.command("run", { isDefault: true })
-		.description(
-			"Start the runner's CLIProxyAPI, connect to kix, and run assigned jobs until interrupted. On SIGINT or " +
-				"SIGTERM, or if the proxy exits, running agents stop, their work is published to their job branches, " +
-				"and their jobs move to another runner.",
-		)
-		.option("--slots <count>", "Jobs to run at once", positiveInteger("slots"), 1)
-		.action((options: { slots: number }) => runnerAction(() => runRunner(runnerIO(), options)));
-	runner
-		.command("login")
-		.description(
-			"Connect this machine to your kix account: print a link to approve it while signed in, then wait. " +
-				"The machine keeps its token; the link carries only its hash.",
-		)
-		.option("--url <origin>", "The kix origin", DEFAULT_URL)
-		.option("--name <name>", "The name kix shows for this machine (default: its hostname)")
-		.action((options: { url: string; name?: string }) => runnerAction(() => login(runnerIO(), options)));
-	const account = runner.command("account").description("Add, list, and remove this runner's agent accounts");
-	account
-		.command("add")
-		.description(
-			"Sign an account in. `claude` signs a Claude subscription in to the runner's pool through CLIProxyAPI's " +
-				"own OAuth flow, and `codex` a ChatGPT plan, which only reviews; over SSH, Claude's flow prints its " +
-				"link and takes the pasted callback URL, and Codex's takes a device code. `opencode` runs `opencode " +
-				"auth login` in a new isolated home for an OpenCode Go plan, a ChatGPT plan, or any provider's API key. " +
-				"Signing a pooled subscription in again refreshes its credential.",
-		)
-		.addArgument(new Argument("[cli]", "The agent CLI").choices(["claude", "codex", "opencode"]).default("claude"))
-		.option("--console", "claude: add the Anthropic Console API key in ANTHROPIC_API_KEY to the pool instead")
-		.option("--model <provider/model>", "opencode: the model this account's jobs use (default: opencode's)")
-		.option("--label <label>", "The name the account shows (default: its email or providers)")
-		.action((cli: Cli, options: { console?: boolean; model?: string; label?: string }) =>
-			runnerAction(() =>
-				addAccount(runnerIO(), { cli, console: !!options.console, model: options.model, label: options.label }),
-			),
-		);
-	account
-		.command("list")
-		.description("Print each account's id, CLI, kind, and label, and when a limited account resets")
-		.action(() => runnerAction(() => listAccounts(runnerIO())));
-	account
-		.command("remove <id>")
-		.description("Remove an account and delete its home or pooled credential, signing it out of this machine")
-		.action((id: string) => runnerAction(() => removeAccount(runnerIO(), id)));
 
 	/** Changes on stdout; mentions and check findings on stderr, which fail the command. */
 	const report = (result: Report): number => {
@@ -1394,11 +1388,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("context")
 		.summary("Print the engineering rules agents follow in every task, before the repository's own")
 		.description(
-			"Print the engineering rules agents follow in every task, before the repository's own. The hook " +
-				"`quest setup` installs adds them to each Claude Code session in a repository that uses Quest, so " +
-				"its agents need not run this.",
+			"Print the engineering rules agents follow in every task, before the repository's own. The hooks " +
+				"`quest setup` installs add them to each Claude Code and Codex session in a repository that uses " +
+				"Quest, so its agents need not run this, and check the rules under its last section, Checked, on " +
+				"each tool call, so the context they add leaves that section out.",
 		)
-		.action(() => out.stdout(CONTEXT));
+		.action(() => out.stdout(`${CONTEXT}\n${CHECKED_CONTEXT}`));
 
 	program
 		.command("skill")
@@ -1421,43 +1416,63 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			out.stdout(found.instructions);
 		});
 
+	const listed = (hooks: readonly HookEntry[]) =>
+		hooks.map((h) => (h.matcher ? `${h.event} (${h.matcher})` : h.event)).join(", ");
 	program
 		.command("setup")
-		.summary("Configure your own Claude Code settings for quest work")
+		.summary("Configure your own Claude Code and Codex settings for quest work")
 		.description(
 			"Configure your own Claude Code settings for quest work, in $CLAUDE_CONFIG_DIR/settings.json or else " +
-				"~/.claude/settings.json, keeping every other setting and hook. Touches no repository.\n\n" +
-				`Sets env.BASH_MAX_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a foreground command, such as a blocking ` +
-				"wait, may run 55 minutes: just under the 1h prompt-cache TTL. " +
-				`Installs ${HOOKS.map((h) => (h.matcher ? `${h.event} (${h.matcher})` : h.event)).join(" and ")} hooks, ` +
-				"which add `quest context` to each session and subagent in a repository that uses Quest, and again " +
-				"after compaction, so agents never run it themselves. Each runs `quest hook`, so `quest` must be on " +
-				"the PATH Claude Code starts with.\n\n" +
-				"With --worktrees, also installs " +
+				"~/.claude/settings.json, and Codex's in $CODEX_HOME/hooks.json or else ~/.codex/hooks.json when " +
+				"that directory exists, keeping every other setting and hook. Touches no repository.\n\n" +
+				`Sets Claude Code's env.BASH_MAX_TIMEOUT_MS and env.BASH_DEFAULT_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a ` +
+				"foreground command, such as a blocking wait or a long build, runs 55 minutes without the agent passing " +
+				"a timeout: just under the 1h prompt-cache TTL. " +
+				`Installs Claude Code's ${listed(CLAUDE_HOOKS)} hooks and Codex's ${listed(CODEX_HOOKS)} hooks. ` +
+				"The start hooks add `quest context` to each session and Claude Code subagent in a repository that " +
+				"uses Quest, and again after compaction, so agents never run it themselves. PreToolUse blocks tool " +
+				"calls there that break a rule a program can check: em dashes an agent writes, a push without an " +
+				"explicit refspec, a force-push or rebase, a GitHub post without its `(Written by ...)` footer, and " +
+				"scratch files in /tmp. Stop and SubagentStop refuse to end an agent's turn while a `quest gate` " +
+				"command it started runs in the background. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
+				"with, and Codex asks to trust its hooks once through /hooks.\n\n" +
+				"With --worktrees, also installs Claude Code's " +
 				WORKTREE_HOOKS.map((h) => h.event).join(", ") +
 				" hooks running `quest worktree hook`, which hand Claude Code's worktrees to `quest worktree`; " +
 				"--no-worktrees takes them out, and without either a rerun keeps them as they are. Only one hook " +
 				"can manage Claude's worktrees, so remove any other WorktreeCreate or WorktreeRemove hook first.\n\n" +
-				"Validates the whole file, then writes it once and prints each change; settings that are not a JSON " +
+				"Validates each whole file, then writes it once and prints each change; settings that are not a JSON " +
 				"object, or whose env or hooks are malformed, are an error and stay unchanged. Rerun it after " +
 				"upgrading Quest; it replaces Quest's earlier hooks and changes nothing when all is set.",
 		)
 		.option("--worktrees", "Also install the worktree hooks")
 		.option("--no-worktrees", "Remove the worktree hooks")
-		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
+		.option("--remove", "Remove Quest's hooks, and each timeout while it still holds Quest's value")
 		.action((options: { remove?: boolean; worktrees?: boolean }) => {
-			for (const line of setup(settingsPath(), options)) print(line);
+			for (const target of targets()) {
+				const changes = setup(target, options);
+				for (const line of changes) print(line);
+				if (target.name === "Codex" && changes.length > 0 && !options.remove)
+					print(`${target.path}: review and trust Quest's hooks with /hooks in Codex`);
+			}
 		});
 
 	program
 		.command("hook")
-		.summary("Handle a Claude Code hook event `quest setup` installed, read on stdin")
+		.summary("Handle a Claude Code or Codex hook event `quest setup` installed, read on stdin")
 		.description(
-			"Handle the Claude Code hook event whose JSON input arrives on stdin, for the entries `quest setup` " +
-				"installs. SessionStart and SubagentStart print `quest context` as the session's or subagent's " +
-				"additional context, when the root AGENTS.md or CLAUDE.md of the checkout holding the input's cwd " +
-				"has a line starting with `Quests: `, as `quest init` writes, and nothing otherwise. Exits 1 on " +
-				"malformed input or an event it does not handle.",
+			"Handle the Claude Code or Codex hook event whose JSON input arrives on stdin, for the entries " +
+				"`quest setup` installs, in a repository whose root AGENTS.md or CLAUDE.md, in the checkout holding " +
+				"the input's cwd, has a line starting with `Quests: `, as `quest init` writes; elsewhere it prints " +
+				"nothing. SessionStart and SubagentStart print `quest context` as the session's or subagent's " +
+				"additional context. PreToolUse denies a call that breaks a checked rule, naming the rule: an edit " +
+				"or a commit message or new GitHub post that adds an em dash outside a `>` quote line, a `git push` " +
+				"whose refspecs lack a `:`, a force-push, a `git rebase` or `git pull --rebase`, a new GitHub post " +
+				"whose body lacks a `(Written by ...)` line, or a file written under /tmp. A force-push or rebase the " +
+				`user asked for passes with the \`${USER_ASKED}\` prefix. Stop and SubagentStop refuse to end the ` +
+				"turn, naming each command, while a `quest gate` command the ending agent started runs in Claude " +
+				"Code's background: one whose background ID its transcript holds. Exits 1 on malformed input or an event it " +
+				"does not handle.",
 		)
 		.action(() => {
 			out.stdout(hook(JSON.parse(readFileSync(0, "utf8"))));
@@ -1522,6 +1537,14 @@ function withinRoot(root: string, path: string): string | null {
 	}
 }
 
+/** A local calendar date, as YYYY-MM-DD. */
+function date(value: string): string {
+	const day = new Date(`${value}T00:00:00`);
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(day.getTime()) || daysBefore(day, 0) !== value)
+		throw new InvalidArgumentError("a date must be YYYY-MM-DD");
+	return value;
+}
+
 /** A deadline must be finite, positive, and safe for the platform's timer. */
 function positiveSeconds(value: string): number {
 	const seconds = Number(value);
@@ -1533,7 +1556,7 @@ function positiveSeconds(value: string): number {
 
 /**
  * Stop option parsing before a gated executable, keeping its own flags intact.
- * Quest's global options still apply on either side of `gate`, and its own `--quick` and `--host` after it.
+ * Quest's global options still apply on either side of `gate`, and its own `--quick` after it.
  */
 export function gateBoundary(argv: string[]): string[] {
 	const skip = (index: number, own: string[] = []) => {
@@ -1545,8 +1568,8 @@ export function gateBoundary(argv: string[]): string[] {
 	};
 	const index = skip(0);
 	if (argv[index] !== "gate") return argv;
-	const command = skip(index + 1, ["--quick", "--host"]);
-	if (!argv[command] || ["--", "-h", "--help", "-V", "--version"].includes(argv[command])) return argv;
+	const command = skip(index + 1, ["--quick"]);
+	if (!argv[command] || argv[command].startsWith("-")) return argv;
 	return [...argv.slice(0, command), "--", ...argv.slice(command)];
 }
 

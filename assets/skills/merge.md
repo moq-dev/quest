@@ -1,6 +1,6 @@
 ---
 description: Queue a PR to land, running /quest-iterate first when it needs work.
-guide: Creation, Summaries
+guide: Creation, Summaries, Questions
 ---
 
 This skill runs inline in the session that picked it, never in its own sub-agent: it decides whether the PR's head can land as is, and queues it.
@@ -19,14 +19,16 @@ The head is landable when:
 - every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, and no decision is open;
 - its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base.
 
-A failing optional check does not stop the pick, since the PR's own CI is only a signal: name each one failing on the head, with its URL, when you report the pick, and queue it anyway.
+A head on which any check failed, required or not, needs `/quest-iterate` to fix it or rerun the check, flaky ones included; `quest merge` refuses it, naming each failing check.
 
 Otherwise run `/quest-iterate` on it, saying what it needs: a review of the head, fixes, or decisions, then run this skill again once it finishes; if it stops for the user instead, such as when it cannot push or reaches a design checkpoint, report that.
-Run it in this session, where its grill interview can ask the user; under a coordinator such as `/quest-complete`, hand it back, and the coordinator dispatches it in a sub-agent.
+Run it in this session, where its grill interview can ask the user; under a coordinator such as `/quest-run`, hand it back, and the coordinator dispatches it in a sub-agent.
+A PR that adds follow-ups also needs the answers of the round that picked it recorded before queueing, as the guide's Creation section describes; when the user ran this skill directly, ask which to keep and their open decisions now, then run `/quest-iterate` with the answers unless the head already records them.
 While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
 
 A review counts for the head whose SHA it names: a `## Review` record of a local `quest review` round, or a recorded skip.
-Changes since that head need no new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged, the fixes of a round whose findings were all low severity, a land fixer's recorded mechanical fix that changes no behavior, or changes, such as a hand-resolved merge, that leave the head's diff identical to the reviewed head's: `git diff <remote>/<base>...<head>` prints the same as `git diff <remote>/<base>...<reviewed-head>`.
+`quest status <pr>`'s `review-record` line names that head; `current` or `diff-identical` (the head's diff from the base is unchanged since it) counts, so read it rather than comparing diffs yourself.
+Otherwise, changes since that head need no new review only when they are conflict-free merges from the base branch, a reviewer's suggested patch applied unchanged, the fixes of a round whose findings were all low severity, a land fixer's recorded mechanical fix that changes no behavior, or the pick round's answers recorded in the PR's follow-ups.
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
 
@@ -41,6 +43,5 @@ On an ungated base without a merge queue, it refuses while auto-merge is disable
 There, it also refuses a head that does not contain the current base: run `/quest-iterate` to merge the base.
 
 Report once it is queued, and do not wait for it to merge.
-Plan the PR's suggested follow-ups as soon as it is queued, as if it lands, rather than waiting for the merge, unless a coordinator such as `/quest-complete` called this skill and plans them behind its own questions.
-A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`; it needs the user's pick again, except where `/quest-complete` says an earlier pick still holds.
+A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`; it needs the user's pick again, except where `/quest-run` says an earlier pick still holds.
 Never close a PR to unstick it, and never work around a refused merge; ask instead.

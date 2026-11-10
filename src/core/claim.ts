@@ -8,9 +8,8 @@ import type { Nodes, RootContent } from "mdast";
 import { markdown } from "./doc";
 import { MAINTAINER, type Wait, parseWait } from "./waiting";
 
-// `Decisions needed` is the heading `Waiting` replaced; drafts opened before it
-// still hand back with it.
-const HAND_BACK = /^(?:Waiting|Decisions needed)$/i;
+// The heading that hands a draft back to the maintainer.
+const HAND_BACK = /^waiting$/i;
 
 // The checkbox GitHub renders at the start of a task-list item.
 const TASK = /^\[[ xX]\] /;
@@ -46,17 +45,15 @@ interface HandBack {
 	start: number;
 	/** The next level-1 or level-2 heading's line, or the body's end. */
 	end: number;
-	/** Its heading is `Waiting`, whose items open with their party, rather than the older `Decisions needed`. */
-	waiting: boolean;
 	/** The top-level nodes after its heading. */
 	nodes: RootContent[];
 }
 
 /**
- * Each hand-back section in a PR body: from the start of its `## Waiting` (or
- * older `## Decisions needed`) heading's line to the next level-1 or level-2
- * heading. Only top-level headings count, as Markdown parses them, so an
- * example inside a code fence, a list, or a quote is text.
+ * Each hand-back section in a PR body: from the start of its `## Waiting`
+ * heading's line to the next level-1 or level-2 heading. Only top-level
+ * headings count, as Markdown parses them, so an example inside a code fence,
+ * a list, or a quote is text.
  */
 function handBacks(body: string): HandBack[] {
 	const sections: HandBack[] = [];
@@ -70,10 +67,7 @@ function handBacks(body: string): HandBack[] {
 		const line = body.lastIndexOf("\n", offset - 1) + 1;
 		if (open !== undefined) sections.push({ ...open, end: line });
 		const title = text(node).trim();
-		open =
-			node.depth === 2 && HAND_BACK.test(title)
-				? { start: line, waiting: /^waiting$/i.test(title), nodes: [] }
-				: undefined;
+		open = node.depth === 2 && HAND_BACK.test(title) ? { start: line, nodes: [] } : undefined;
 	}
 	if (open !== undefined) sections.push({ ...open, end: body.length });
 	return sections;
@@ -87,22 +81,21 @@ export function handedBack(body: string): boolean {
 /**
  * What a PR body hands back: one wait per item of each hand-back section's
  * top-level lists, with lines counted in `body`. A draft hands back to the
- * maintainer, so an item that names no party is theirs, as is every
- * `Decisions needed` item, whose format predates parties. A section without
+ * maintainer, so an item that names no party is theirs. A section without
  * items still hands the draft back, so it reads as one maintainer item
  * holding its prose.
  */
 export function handBackWaits(body: string): Wait[] {
 	const found: Wait[] = [];
 	const collapse = (value: string) => value.replace(/\s+/g, " ").trim();
-	for (const { start, waiting, nodes } of handBacks(body)) {
+	for (const { start, nodes } of handBacks(body)) {
 		const items = nodes
 			.filter((node) => node.type === "list")
 			.flatMap((list) => list.children)
 			.map((item): Wait => {
 				// GitHub renders a leading `[ ]` or `[x]` as a task-list checkbox, so the item's text follows it.
 				const entry = { line: item.position?.start.line ?? 1, text: collapse(text(item)).replace(TASK, "") };
-				return (waiting ? parseWait(entry) : null) ?? { ...entry, party: MAINTAINER };
+				return parseWait(entry) ?? { ...entry, party: MAINTAINER };
 			});
 		if (items.length === 0)
 			items.push({

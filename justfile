@@ -4,7 +4,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-# Install the locked dependencies for the CLI and the Worker.
+# Install the locked dependencies.
 install:
     bun install --frozen-lockfile
 
@@ -23,7 +23,6 @@ _check:
     shellcheck scripts/*.sh
     shfmt -d scripts/*.sh
     nixfmt --check flake.nix nix/*.nix
-    just worker-check
 
 # Run tests, including the install scripts and the lifecycle of both builds.
 test:
@@ -37,28 +36,18 @@ _test:
     bash scripts/lifecycle-check.sh "$PWD/dist/quest.js"
     bun run compile
     bash scripts/lifecycle-check.sh "$PWD/dist/quest"
-    just worker-test
 
 # Check that `quest review` runs nothing a reviewed head plants, with the real
-# Codex and Claude Code CLIs. Uses each CLI's login and spends its usage; run it
-# after upgrading either CLI. Arguments go to vitest, such as `-t codex`.
+# Codex, Claude Code, and opencode CLIs. Uses each CLI's login and spends its usage;
+# run it after upgrading any of them. Arguments go to vitest, such as `-t codex`.
 review-sandbox *args:
     QUEST_LIVE=1 bun run vitest run test/live/review-sandbox {{args}}
-
-# Check that a runner job's commands cannot escape its sandbox, with the pinned
-# Claude Code, opencode, and sandbox-runtime and a scripted model, and that the
-# pinned CLIProxyAPI, Claude Code, and Codex report a spent pool as its limit, on
-# Linux. Needs no login; CI runs it nightly (.github/workflows/sandbox.yml). Run
-# it after bumping any.
-runner-sandbox *args:
-    QUEST_LIVE=1 bun run vitest run test/live/runner-sandbox {{args}}
 
 # Apply formatters without changing program behavior.
 fix:
     bun run fix
     shfmt -w scripts/*.sh
     nixfmt flake.nix nix/*.nix
-    bun run --cwd cloudflare fix
 
 # Build the bundled CLI into dist/quest.js.
 build:
@@ -71,35 +60,3 @@ compile:
 # Run the local CLI, for example `just run ready`.
 run *args:
     bun run --silent quest {{args}}
-
-# Check generated binding types, TypeScript, formatting, and deployment bundle.
-worker-check:
-    {{gate}} _worker-check
-
-_worker-check:
-    bun run --cwd cloudflare check
-
-# Run Worker integration tests in the Cloudflare runtime.
-worker-test:
-    {{gate}} _worker-test
-
-_worker-test:
-    bun run --cwd cloudflare test
-
-# Run each Worker test case in its own process, as the scheduled Isolated job does.
-# Pass `--jobs N` or file filters, for example `just worker-test-isolated inbox`.
-worker-test-isolated *args:
-    {{gate}} _worker-test-isolated {{args}}
-
-_worker-test-isolated *args:
-    bun run --cwd cloudflare build
-    bun cloudflare/scripts/isolated.ts {{args}}
-
-# Serve the Worker on localhost with seeded data and a fake GitHub, for checking UI.
-worker-seeded *args:
-    bun run --cwd cloudflare seeded {{args}}
-
-# Apply auth migrations locally and start the Worker.
-worker-dev:
-    bun run --cwd cloudflare migrate
-    bun run --cwd cloudflare dev

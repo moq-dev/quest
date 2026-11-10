@@ -7,7 +7,7 @@
 // coherent, and already done by some other PR - and answering it means asking
 // the forge, so it belongs to the flow that is already talking to it.
 
-import { type Doc, children, entries, has, isEpic, rooted } from "./doc";
+import { type Doc, ancestors, children, entries, has, isEpic, rooted } from "./doc";
 import { comparePaths, normalize } from "./path";
 
 /** One thing standing between a quest and being started. */
@@ -39,10 +39,20 @@ export function renderBlocker(blocker: Blocker, depth = 0): string[] {
 
 /**
  * What blocks `doc`: its `Required` entries, then, for an epic, its children,
- * each epic among them expanded into the quests it still holds. Empty means ready.
+ * each epic among them expanded into the quests it still holds, then each epic
+ * above it with a `## Required` section, nearest first, with that section's
+ * blockers under it. Empty means ready.
  */
 export function blockers(docs: Doc[], doc: Doc): Blocker[] {
-	return expand(docs, new Map(docs.map((d) => [d.path, d])), doc, [doc.path]);
+	const byPath = new Map(docs.map((d) => [d.path, d]));
+	const gated = ancestors(docs, doc.path)
+		.filter((epic) => has(epic, "Required"))
+		.map((epic) => ({
+			path: epic.path,
+			text: epic.path,
+			blockers: required(docs, byPath, epic, [doc.path, epic.path]),
+		}));
+	return [...expand(docs, byPath, doc, [doc.path]), ...gated];
 }
 
 /**
@@ -67,40 +77,47 @@ export function treeOrder(docs: Doc[]): string[] {
  *
  * An epic is not listed while its directory holds other quests; a README with
  * none left is the epic's own remaining work and lists like any other quest.
- * A quest is ready when it has no `## Required` heading.
+ * A quest is ready when neither it nor any epic above it, milestones
+ * included, has a `## Required` heading.
  */
 export function ready(docs: Doc[]): string[] {
 	const byPath = new Map(docs.map((doc) => [doc.path, doc]));
 	return treeOrder(docs).filter((path) => {
 		const doc = byPath.get(path)!;
-		return !isEpic(docs, doc) && !has(doc, "Required");
+		return !isEpic(docs, doc) && ![doc, ...ancestors(docs, path)].some((d) => has(d, "Required"));
 	});
 }
 
 /** The blockers of one document: its `Required` entries, then an epic's children. */
 function expand(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]): Blocker[] {
+	const found = required(docs, byPath, doc, stack);
+	// An unmigrated epic may still list a child under `Required`; name it once.
+	const listed = new Set(found.map((b) => b.path));
+	for (const child of children(docs, doc)) {
+		if (!listed.has(child)) found.push(blocker(docs, byPath, child, child, stack));
+	}
+	return found;
+}
+
+/** The blockers in one document's own `Required` section. */
+function required(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]): Blocker[] {
 	const found: Blocker[] = [];
 	// A heading left standing after its last blocker still reads as blocked to
 	// everything that greps for it, including `quest check`, which reports it.
 	// Calling it ready here would make this the one tool that disagrees.
-	const required = entries(doc, "Required");
-	if (has(doc, "Required") && required.length === 0) {
+	const listed = entries(doc, "Required");
+	if (has(doc, "Required") && listed.length === 0) {
 		found.push({
 			path: null,
 			text: "an empty '## Required' section, which blocks the quest until the heading is removed",
 			blockers: [],
 		});
 	}
-	for (const entry of required) {
+	for (const entry of listed) {
 		// A bullet that does not open with a link into the tree is invalid, and
 		// nothing here can clear it, so it is a blocker with nothing under it.
 		const target = entry.target === null ? null : rooted(entry.target);
 		found.push(blocker(docs, byPath, target !== null && byPath.has(target) ? target : null, entry.text, stack));
-	}
-	// An unmigrated epic may still list a child under `Required`; name it once.
-	const listed = new Set(found.map((b) => b.path));
-	for (const child of children(docs, doc)) {
-		if (!listed.has(child)) found.push(blocker(docs, byPath, child, child, stack));
 	}
 	return found;
 }

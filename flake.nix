@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     # Bun 1.4.4, ahead of `nixpkgs`: 1.4.2 passes its non-blocking stderr to the
     # commands it spawns, which uv aborts on (oven-sh/bun#43868). Drop this input
-    # once `nixpkgs` reaches 1.4.4; bumping `nixpkgs` now would also move opencode.
+    # once `nixpkgs` reaches 1.4.4.
     nixpkgs-bun.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     # A reviewed quest for the dev shell's merge driver, so local merges resolve
@@ -40,50 +40,17 @@
         let
           pkgs = import nixpkgs {
             inherit system;
-            # Claude Code is unfree; the runner package pins it so adapters run a tested version.
-            config.allowUnfreePredicate = pkg: nixpkgs.lib.getName pkg == "claude-code";
             overlays = [ (_: _: { inherit (nixpkgs-bun.legacyPackages.${system}) bun; }) ];
           };
-          inherit (pkgs) opencode;
-          sandboxRuntime = pkgs.callPackage ./nix/sandbox-runtime.nix { };
           quest = pkgs.callPackage ./nix/package.nix { };
           questPinned = pkgs.callPackage "${quest-pinned}/nix/package.nix" { };
-          # https://downloads.claude.ai/claude-code-releases/2.1.305/manifest.zst.json
-          # Keep the tested runner version independent of nixpkgs.
-          claudeCode = pkgs.claude-code.override {
-            manifest = pkgs.lib.importJSON ./nix/claude-code.json;
-          };
-          # `quest runner` with pinned agent CLIs, the CLIProxyAPI that pools its Claude and Codex
-          # accounts, the sandbox-runtime that runs opencode jobs' commands, and on Linux the
-          # bubblewrap and socat Claude Code's sandbox runs its jobs' commands in.
-          runner = pkgs.symlinkJoin {
-            name = "quest-runner-${quest.version}";
-            paths = [ quest ];
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            postBuild = ''
-              wrapProgram $out/bin/quest \
-                --set-default QUEST_RUNNER_CLAUDE ${pkgs.lib.getExe claudeCode} \
-                --set-default QUEST_RUNNER_OPENCODE ${pkgs.lib.getExe opencode} \
-                --set-default QUEST_RUNNER_CODEX ${pkgs.lib.getExe pkgs.codex} \
-                --set-default QUEST_RUNNER_CLIPROXY ${pkgs.lib.getExe pkgs.cliproxyapi} \
-                --set-default QUEST_RUNNER_SRT ${pkgs.lib.getExe sandboxRuntime} ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "--prefix PATH : ${
-                  pkgs.lib.makeBinPath [
-                    pkgs.bubblewrap
-                    pkgs.socat
-                  ]
-                }"}
-            '';
-            meta = quest.meta;
-          };
           manifest = pkgs.lib.importJSON ./package.json;
           # package.json's packageManager pins Bun for CI runners without Nix.
           bunVersion = pkgs.lib.removePrefix "bun@" manifest.packageManager;
-          # The runner drives the pinned opencode through the client of the same release.
-          opencodeClient = manifest.dependencies."@opencode/client";
         in
         {
           packages = {
-            inherit quest runner;
+            inherit quest;
             default = quest;
           };
           apps.default = flake-utils.lib.mkApp { drv = quest; };
@@ -99,6 +66,8 @@
                 jq
                 git
                 gh
+                # Prices `quest usage`'s sessions, pinned with the lock so its JSON stays what the parser reads.
+                ccusage
                 direnv
                 actionlint
                 shellcheck
@@ -106,20 +75,16 @@
                 nixfmt
                 # GNU time, which the gate's cancellation tests put between Bash and their leaf.
                 time
+                # `srt`, which an opencode review runs its commands under, with its seccomp helper on Linux.
+                (callPackage ./nix/sandbox-runtime.nix { })
               ]
               # `flock` (the land daemon's repository lock) and `script` (the tests' terminal), which
-              # self-hosted NixOS runners don't otherwise provide.
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux ];
-            # The runner package's Claude Code, Codex, opencode, CLIProxyAPI, and sandbox-runtime,
-            # for the sandbox boundary tests (test/live/runner-sandbox*.test.ts), which run on Linux.
-            # Named as the runner finds them rather than put on PATH, where they would shadow the user's own.
-            env = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-              QUEST_RUNNER_CLAUDE = pkgs.lib.getExe claudeCode;
-              QUEST_RUNNER_CODEX = pkgs.lib.getExe pkgs.codex;
-              QUEST_RUNNER_CLIPROXY = pkgs.lib.getExe pkgs.cliproxyapi;
-              QUEST_RUNNER_OPENCODE = pkgs.lib.getExe opencode;
-              QUEST_RUNNER_SRT = pkgs.lib.getExe sandboxRuntime;
-            };
+              # self-hosted NixOS runners don't otherwise provide, and the bubblewrap and socat srt runs.
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                pkgs.util-linux
+                pkgs.bubblewrap
+                pkgs.socat
+              ];
           };
           formatter = pkgs.nixfmt;
           checks = {
@@ -127,13 +92,6 @@
             bun-version = pkgs.runCommand "bun-version" { } ''
               if [ "${pkgs.bun.version}" != "${bunVersion}" ]; then
                 echo "package.json pins bun@${bunVersion}, but the flake provides Bun ${pkgs.bun.version}" >&2
-                exit 1
-              fi
-              touch "$out"
-            '';
-            opencode-client = pkgs.runCommand "opencode-client" { } ''
-              if [ "${opencode.version}" != "${opencodeClient}" ]; then
-                echo "package.json pins @opencode/client ${opencodeClient}, but the runner pins opencode ${opencode.version}" >&2
                 exit 1
               fi
               touch "$out"

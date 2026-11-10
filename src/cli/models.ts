@@ -22,10 +22,11 @@ const haiku = (effort: string): Model => ({ harness: "claude", model: "claude-ha
 /**
  * Each size's writers, ranked: a spawn starts the quest on the first that can
  * run, falling through only while nothing is written, since the model that
- * writes a PR runs all its iterates.
+ * writes a PR runs all its iterates. XS runs Haiku at xhigh, which scores about
+ * as Opus low does for a third of its subscription cost per task.
  */
 export const WRITERS: Record<Size, readonly Model[]> = {
-	XS: [haiku("high"), sol("low")],
+	XS: [haiku("xhigh"), sol("low")],
 	S: [opus("low"), sol("medium")],
 	M: [opus("medium"), sol("high")],
 	L: [opus("high"), sol("xhigh")],
@@ -34,7 +35,7 @@ export const WRITERS: Record<Size, readonly Model[]> = {
 
 /**
  * Each PR size's reviewers, ranked: the first whose model is not the latest
- * writer's reviews it, so Opus reviews what Sol changed last, at its own write efforts.
+ * writer's reviews it, so Claude reviews what Sol changed last.
  */
 export const REVIEWERS: Record<Size, readonly Model[]> = {
 	XS: [sol("low"), opus("low")],

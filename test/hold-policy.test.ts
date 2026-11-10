@@ -1,17 +1,17 @@
 import { describe, expect, test } from "vitest";
-import { ACTIVE_LABEL, HOLD_PREFIX, KIX_LABEL, heldToken, isHoldLabel, latestHold } from "../src/core";
+import { ACTIVE_LABEL, HOLD_PREFIX, heldToken, isHoldLabel, latestHold } from "../src/core";
 
 const added = { id: "first", label: ACTIVE_LABEL, time: 1 };
 
 describe("shared hold policy", () => {
-	test("recognizes only the hold labels, not other quest:* or ordinary labels", () => {
+	test("recognizes only the hold label, not other quest:* or ordinary labels", () => {
 		expect(HOLD_PREFIX).toBe("quest:");
 		expect(ACTIVE_LABEL).toBe("quest:active");
-		expect(KIX_LABEL).toBe("quest:kix");
-		for (const label of [ACTIVE_LABEL, KIX_LABEL]) expect(isHoldLabel(label)).toBe(true);
+		expect(isHoldLabel(ACTIVE_LABEL)).toBe(true);
 		// Labels older quest versions added, and quest:merge, hold nothing.
 		for (const label of [
 			"quest",
+			"quest:kix",
 			"bug",
 			"other:quest:active",
 			"quest:merge",

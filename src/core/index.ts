@@ -23,6 +23,8 @@ export {
 	parse,
 	permanent,
 	questBranch,
+	ancestors,
+	gates,
 	requires,
 	resolve,
 	rooted,
@@ -69,7 +71,6 @@ export { type Chunk, type Clean, type Conflict, LABELS, chunks, render, resolveL
 export {
 	HOLD_PREFIX,
 	ACTIVE_LABEL,
-	KIX_LABEL,
 	type HoldEvent,
 	type HoldSnapshot,
 	isHoldLabel,
