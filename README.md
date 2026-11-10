@@ -1716,7 +1716,7 @@ arrives with the guide sections and other skills it builds on, in one call:
 | `quest-review` | Review a PR's branch locally with a model other than its latest writer, then mark it ready for review. |
 | `quest-merge` | Queue a PR to land, running `quest-iterate` first when it needs work. |
 | `quest-complete` | Decide which open PRs to merge, then queue them. |
-| `quest-afk` | Keep starting agreed work while you are away, leaving every decision for your return. |
+| `quest-afk` | Make as much progress as possible while you are away, then walk you through what still needs you. |
 | `quest-unblock` | Settle what quests and draft PRs wait on you, and clear waits that have resolved. |
 | `quest-delete` | Abandon a quest, deleting it in its own PR. |
 
