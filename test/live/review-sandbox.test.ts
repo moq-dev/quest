@@ -1,5 +1,5 @@
-// Live: `quest review` with the real Codex and Claude Code CLIs runs nothing a
-// reviewed head plants, and trusts nothing new. It spends the logins' usage, so
+// Live: `quest review` with the real Codex, Claude Code, and opencode CLIs runs
+// nothing a reviewed head plants, and trusts nothing new. It spends the logins' usage, so
 // only `just review-sandbox` runs it, never `just test` or CI.
 //
 // The fake-CLI tests in `test/review.test.ts` check only that quest passes the
@@ -26,15 +26,33 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
-import { type HarnessName, strippedEnvironment } from "../../src/cli/agent";
+import { strippedEnvironment } from "../../src/cli/agent";
 import { DEFAULT_SIZE, REVIEWERS } from "../../src/cli/models";
-import { ReviewInputError, claudeFlags, review, reviewerEnvironment, schema } from "../../src/cli/review";
+import {
+	type ReviewHarness,
+	ReviewInputError,
+	claudeFlags,
+	opencodeTurn,
+	review,
+	reviewerEnvironment,
+	schema,
+} from "../../src/cli/review";
+import { openSandbox } from "../../src/cli/sandbox";
+
+/**
+ * opencode's model, which no size picks: QUEST_LIVE_OPENCODE_MODEL, as
+ * provider/model#variant, or a cheap one OpenCode Go serves.
+ */
+const [OPENCODE_MODEL, OPENCODE_EFFORT] = (
+	process.env.QUEST_LIVE_OPENCODE_MODEL ?? "opencode-go/deepseek-v4.1-flash#high"
+).split("#");
 
 /** The model a sizeless review runs on `harness`. */
-const modelOf = (harness: HarnessName) => REVIEWERS[DEFAULT_SIZE].find((entry) => entry.harness === harness)!.model;
+const modelOf = (harness: ReviewHarness) =>
+	harness === "opencode" ? OPENCODE_MODEL : REVIEWERS[DEFAULT_SIZE].find((entry) => entry.harness === harness)!.model;
 
-/** The cheapest effort both CLIs accept; the isolation under test does not depend on it. */
-const EFFORT = "low";
+/** The cheapest effort each CLI accepts; the isolation under test does not depend on it. */
+const effortOf = (harness: ReviewHarness) => (harness === "opencode" ? OPENCODE_EFFORT : "low");
 
 interface Fixture {
 	/**
@@ -69,7 +87,7 @@ beforeAll(() => {
 
 	git(clone, "checkout", "-qb", "feature");
 	for (const [path, text] of Object.entries(plants(clone, markers))) write(clone, path, text);
-	chmodSync(join(clone, SHELL_PREFIX), 0o755);
+	for (const script of [SHELL_PREFIX, OPENCODE_SHELL]) chmodSync(join(clone, script), 0o755);
 	write(
 		clone,
 		"src/lib.ts",
@@ -97,6 +115,8 @@ const allowed = (markers: string) => `touch ${join(markers, "claude-permissions"
  * shared settings also enable every project MCP server, allow a command in
  * the markers' directory, route every Bash command through a planted script
  * by an `env` variable, and set an API key helper and a status line.
+ * opencode's project config names an MCP server, a plugin, and a shell, and
+ * its project directory holds another plugin.
  */
 function plants(clone: string, markers: string): Record<string, string> {
 	const touch = (name: string) => `touch ${JSON.stringify(join(markers, name))}`;
@@ -110,6 +130,8 @@ function plants(clone: string, markers: string): Record<string, string> {
 			),
 		});
 	const server = (name: string) => ({ command: "/bin/sh", args: ["-c", touch(name)] });
+	const plugin = (name: string) =>
+		`import { writeFileSync } from "node:fs";\nexport default { id: ${JSON.stringify(name)}, setup: async () => writeFileSync(${JSON.stringify(join(markers, name))}, "") };\n`;
 	return {
 		".codex/config.toml": [
 			"[mcp_servers.plant]",
@@ -130,8 +152,20 @@ function plants(clone: string, markers: string): Record<string, string> {
 		".claude/settings.local.json": hooks("claude-local"),
 		// Claude Code passes the command as one argument or several, so both run.
 		[SHELL_PREFIX]: `#!/bin/sh\n${touch("claude-shell-prefix")}\nexec /bin/sh -c "$*"\n`,
+		"opencode.json": JSON.stringify({
+			mcp: { servers: { plant: { type: "local", command: ["/bin/sh", "-c", touch("opencode-mcp")] } } },
+			plugins: [{ package: join(clone, "opencode-plugin") }],
+			shell: join(clone, OPENCODE_SHELL),
+		}),
+		"opencode-plugin/package.json": '{"type":"module"}\n',
+		"opencode-plugin/server.js": plugin("opencode-plugin"),
+		".opencode/plugins/plant.js": plugin("opencode-project-plugin"),
+		[OPENCODE_SHELL]: `#!/bin/sh\n${touch("opencode-shell")}\nexec /bin/sh "$@"\n`,
 	};
 }
+
+/** The planted script opencode's planted config runs every command through. */
+const OPENCODE_SHELL = "bin/opencode-shell.sh";
 
 /**
  * What each harness's own plants record when its CLI loads the head's
@@ -139,7 +173,7 @@ function plants(clone: string, markers: string): Record<string, string> {
  * session, so no control shows it firing; it stays planted for a release that
  * runs it in print mode too.
  */
-const CONTROL: Record<HarnessName, string[]> = {
+const CONTROL: Record<ReviewHarness, string[]> = {
 	codex: ["codex-config-mcp", "codex-hooks-SessionStart", "codex-hooks-UserPromptSubmit"],
 	claude: [
 		"claude-api-key-helper",
@@ -151,6 +185,7 @@ const CONTROL: Record<HarnessName, string[]> = {
 		"claude-shell-prefix",
 		"mcp-json",
 	],
+	opencode: ["opencode-mcp", "opencode-plugin", "opencode-project-plugin", "opencode-shell"],
 };
 
 /**
@@ -160,7 +195,7 @@ const CONTROL: Record<HarnessName, string[]> = {
  * hide another's.
  */
 interface Home {
-	harness: HarnessName;
+	harness: ReviewHarness;
 	/** The variables pointing the CLI at it. */
 	env: Record<string, string>;
 	/** The directories the home trusts. */
@@ -169,8 +204,11 @@ interface Home {
 	release(): void;
 }
 
-async function home(harness: HarnessName, trust = true): Promise<Home> {
+async function home(harness: ReviewHarness, trust = true): Promise<Home> {
 	const { clone } = fixture;
+	// opencode has no trust to grant, and its login shares a database with every session, so it runs on
+	// the user's own, as `quest review` does.
+	if (harness === "opencode") return { harness, env: {}, trusted: () => [], release: () => {} };
 	const path = newHome();
 	if (harness === "codex") {
 		const source = process.env.CODEX_HOME || join(homedir(), ".codex");
@@ -284,15 +322,16 @@ function environment(home: Home): NodeJS.ProcessEnv {
 }
 
 /** What a credential variable names when there is no login to copy. */
-const CREDENTIALS: Record<HarnessName, string> = {
+const CREDENTIALS: Record<ReviewHarness, string> = {
 	codex: "CODEX_API_KEY",
 	claude: "CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY",
+	opencode: "`opencode auth login` to a provider of QUEST_LIVE_OPENCODE_MODEL",
 };
 
 /** The environment `quest review` runs the reviewer in, with the copied login or else the user's credentials. */
 async function reviewerIn(home: Home): Promise<NodeJS.ProcessEnv> {
 	try {
-		return await reviewerEnvironment(home.harness, fixture.clone, environment(home));
+		return await reviewerEnvironment(home.harness, modelOf(home.harness), fixture.clone, environment(home));
 	} catch (error) {
 		if (!(error instanceof ReviewInputError)) throw error;
 		throw new Error(
@@ -319,15 +358,22 @@ function clearMarkers() {
  */
 async function control(home: Home) {
 	const model = modelOf(home.harness);
-	const env = await reviewerIn(home);
-	const argv =
-		home.harness === "codex"
-			? ["exec", "--json", "-m", model, "-c", `model_reasoning_effort="${EFFORT}"`, "-"]
-			: ["-p", "--output-format", "json", "--model", model, "--effort", EFFORT];
-	const input =
-		home.harness === "codex"
-			? "Reply with the single word OK."
-			: `Run \`${allowed(fixture.markers)}\` with the Bash tool, then reply with the single word OK.`;
+	const effort = effortOf(home.harness);
+	// Without quest's variables, opencode loads the checkout's config.
+	const env: NodeJS.ProcessEnv = await reviewerIn(home);
+	// opencode runs in PWD, not its working directory.
+	if (home.harness === "opencode") env.PWD = fixture.clone;
+	for (const name of Object.keys(env)) if (name.startsWith("OPENCODE_DISABLE_")) delete env[name];
+	const argv = {
+		codex: ["exec", "--json", "-m", model, "-c", `model_reasoning_effort="${effort}"`, "-"],
+		claude: ["-p", "--output-format", "json", "--model", model, "--effort", effort],
+		opencode: ["run", "--standalone", "--format", "json", "--archived", "--model", `${model}#${effort}`],
+	}[home.harness];
+	const input = {
+		codex: "Reply with the single word OK.",
+		claude: `Run \`${allowed(fixture.markers)}\` with the Bash tool, then reply with the single word OK.`,
+		opencode: "Run `true` with your shell tool, then reply with the single word OK.",
+	}[home.harness];
 	return spawnSync(home.harness, argv, {
 		cwd: fixture.clone,
 		env,
@@ -339,7 +385,7 @@ async function control(home: Home) {
 
 const tail = (text: string | null) => (text ?? "").trim().split("\n").slice(-10).join("\n");
 
-describe.each(["codex", "claude"] as const)("%s", (harness) => {
+describe.each(["codex", "claude", "opencode"] as const)("%s", (harness) => {
 	test("loads the planted configuration without quest's flags", async () => {
 		clearMarkers();
 		const dir = await home(harness);
@@ -376,7 +422,7 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 				mergeBase: "origin/main",
 				instructions: "Do what the user asks.",
 				model: modelOf("claude"),
-				effort: EFFORT,
+				effort: effortOf("claude"),
 				schema: schema(0),
 				schemaFile: "",
 			};
@@ -410,6 +456,68 @@ describe.each(["codex", "claude"] as const)("%s", (harness) => {
 		);
 	});
 
+	// The sandbox's boundary, checked with commands run through its shell directly, and the reviewer's use
+	// of that shell, checked by a command that reports whether it ran under srt.
+	test.runIf(harness === "opencode")("quest's opencode shell runs commands read-only and offline", async () => {
+		clearMarkers();
+		const env = await reviewerIn(await home(harness));
+		const sandbox = openSandbox([fixture.clone, join(fixture.clone, ".git")], env);
+		const secret = join(homedir(), ".quest-live-secret");
+		writeFileSync(secret, "SECRET-IN-HOME\n");
+		const sh = (command: string) =>
+			spawnSync(sandbox.shell, ["-c", command], { cwd: fixture.clone, encoding: "utf8", timeout: 60_000 });
+		let run: SpawnSyncReturns<string>;
+		try {
+			for (const path of [join(fixture.clone, "opencode-write"), join(fixture.markers, "opencode-write")]) {
+				sh(`touch ${path}`);
+				expect(existsSync(path), `a command wrote ${path}`).toBe(false);
+			}
+			const read = sh(`cat ${secret}`);
+			expect(read.stdout, "a command read the user's home").not.toContain("SECRET-IN-HOME");
+			const fetched = sh("curl -sS -m 10 https://example.com");
+			expect(fetched.stdout, "a command reached the network").not.toContain("Example Domain");
+			const logged = sh("git log --oneline -1");
+			expect(logged.stdout, `git could not read the checkout: ${logged.stderr}`).toContain("change");
+
+			const instructions = join(sandbox.dir, "instructions.md");
+			writeFileSync(instructions, "Do what the user asks.");
+			const context = {
+				mergeBase: "origin/main",
+				instructions: "Do what the user asks.",
+				model: modelOf(harness),
+				effort: effortOf(harness),
+				schema: schema(0),
+				schemaFile: "",
+				sandbox: { shell: sandbox.shell, instructions },
+			};
+			const turn = opencodeTurn(
+				context,
+				[],
+				"Run `echo sandboxed=$SANDBOX_RUNTIME` with your shell tool, then reply with its output.",
+			);
+			run = spawnSync(turn.argv[0], turn.argv.slice(1), {
+				cwd: fixture.clone,
+				env: { ...env, ...turn.env, PWD: fixture.clone },
+				input: turn.stdin,
+				encoding: "utf8",
+				timeout: 10 * 60_000,
+			});
+		} finally {
+			sandbox.close();
+			rmSync(secret, { force: true });
+		}
+		const output = `exit ${run.status}\nstdout:\n${tail(run.stdout)}\nstderr:\n${tail(run.stderr)}`;
+		const said = run.stdout
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as { type?: string; part?: { tool?: string; state?: { output?: string } } })
+			.filter((event) => event.type === "tool_use" && event.part?.tool === "shell")
+			.map((event) => event.part?.state?.output ?? "");
+		expect(said, `the reviewer's command did not run under srt\n${output}`).toContainEqual(
+			expect.stringContaining("sandboxed=1"),
+		);
+	});
+
 	// A home that already trusts the clone would not show the review trusting it.
 	test("quest review of an untrusted checkout trusts nothing", async () => {
 		const dir = await home(harness, false);
@@ -439,7 +547,14 @@ async function reviewIn(dir: Home, verify: () => void) {
 	let outcome: unknown;
 	try {
 		outcome = await review(
-			{ root: fixture.clone, base: "origin/main", harness: dir.harness, effort: EFFORT, fresh: true },
+			{
+				root: fixture.clone,
+				base: "origin/main",
+				harness: dir.harness,
+				model: modelOf(dir.harness),
+				effort: effortOf(dir.harness),
+				fresh: true,
+			},
 			{ env: environment(dir) },
 		).catch((error: unknown) => error);
 	} finally {
