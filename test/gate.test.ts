@@ -237,13 +237,11 @@ test("a running command that kept every CPU busy holds the host through a lull i
 	]);
 });
 
-test("a gate records the most CPUs its command kept busy in the last minute", async () => {
+/** Run `measure` over `busy`, the CPUs its command keeps busy over each SETTLE_MS, undefined before its scope exists; returns what it publishes. */
+async function measured(busy: (number | undefined)[]) {
 	const state = { now: 0, load: 0, memory: Infinity };
 	const host = testHost(tempDir(), state);
 	host.publish(host.ledger(), [{ id: "build", at: 0, ...me }]);
-	// CPUs busy over each SETTLE_MS: before systemd creates the scope, the first reading, a
-	// build on four CPUs, then its tests on one for over a minute.
-	const busy = [undefined, 0, 4, 4, ...Array(RECENT_MS / SETTLE_MS).fill(1)];
 	let usage: number | undefined;
 	let total = 0;
 	host.usage = () => usage;
@@ -266,9 +264,21 @@ test("a gate records the most CPUs its command kept busy in the last minute", as
 		usage = total;
 	};
 	await measure(host, { id: "build", unit: "quest-gate-build.scope" }, stop.signal);
+	return { published, admissions: host.ledger().admissions };
+}
+
+test("a gate records the most CPUs its command kept busy in the last minute", async () => {
+	// Before systemd creates the scope, an idle first reading, a build on four CPUs, then its
+	// tests on one for over a minute.
+	const { published, admissions } = await measured([undefined, 0, 4, 4, ...Array(RECENT_MS / SETTLE_MS).fill(1)]);
 	// The build's last sample, at 20 s, holds its four CPUs for a minute.
 	expect(published).toEqual([`4 at ${3 * SETTLE_MS}`, `1 at ${4 * SETTLE_MS + RECENT_MS}`]);
-	expect(host.ledger().admissions).toEqual([{ id: "build", at: 0, ...me, cores: 1 }]);
+	expect(admissions).toEqual([{ id: "build", at: 0, ...me, cores: 1 }]);
+});
+
+test("a gate records its command's burst before the first sample", async () => {
+	const { published } = await measured([4, ...Array(RECENT_MS / SETTLE_MS).fill(0)]);
+	expect(published).toEqual([`4 at ${SETTLE_MS}`, `0 at ${SETTLE_MS + RECENT_MS}`]);
 });
 
 test("a priority caller waits for memory, never for load, even while a gated command runs", async () => {

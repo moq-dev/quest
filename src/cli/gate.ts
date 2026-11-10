@@ -568,7 +568,8 @@ export async function admit(
  */
 export async function measure(host: Host, admission: { id: string; unit: string }, signal: AbortSignal) {
 	const samples: { at: number; cores: number }[] = [];
-	let previous: { at: number; usage: number } | undefined;
+	// The command's scope starts with no CPU use, so a burst before the first sample still counts.
+	let previous = { at: host.now(), usage: 0 };
 	let recorded = 0;
 	for (;;) {
 		try {
@@ -581,8 +582,7 @@ export async function measure(host: Host, admission: { id: string; unit: string 
 		const at = host.now();
 		if (usage !== undefined) {
 			// A clock stepped backward yields no rate for its interval.
-			if (previous && at > previous.at)
-				samples.push({ at, cores: (usage - previous.usage) / ((at - previous.at) * 1000) });
+			if (at > previous.at) samples.push({ at, cores: (usage - previous.usage) / ((at - previous.at) * 1000) });
 			previous = { at, usage };
 		}
 		while (samples.length > 0 && samples[0].at <= at - RECENT_MS) samples.shift();
