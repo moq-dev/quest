@@ -72,14 +72,12 @@ and 10 (rust2-queue) to their repository's
 `.github/workflows/queue-build.yml@refs/heads/main` with the maintainer's
 org-admin login. GitHub kept the fields on the Team plan.
 
+Verified 2026-11-10 (/quest-unblock): merge groups on moq-dev/quest, rind
+and rust2 since the restriction ran their `Queue build / Build` jobs to
+success on the restricted groups.
+
 ## Waiting
 
-- moq-dev/quest, rind, rust2: the next merge group's
-  `Queue build / Build` job still runs on the repository's restricted runner
-  group. Check with `gh run list -R moq-dev/<repo> --event merge_group` for a
-  run created after 2026-11-08T04:40Z that leaves no job queued for a runner.
-  If one stalls, revert that group with `-F restricted_to_workflows=false`
-  and fall back to option (2) above.
 - Maintainer: the next time an outside contributor opens a fork PR on
   moq-dev/quest, moq-dev/rind or moq-dev/rust2, check that its workflow runs
   wait for approval.

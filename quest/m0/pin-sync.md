@@ -17,9 +17,9 @@ configuration in kixelated/nixos, drafted on its `quest-pin-sync` branch:
 - `modules/quest-land.nix` passes `--bump` to the quest watcher for every other
   land repository plus moq-dev/studio, moq-dev/kixel.ai, and kixelated/nixos,
   and puts Nix on its `PATH`.
-- `modules/base.nix` enables `system.autoUpgrade` hourly on both hosts from
+- `modules/base.nix` enables `system.autoUpgrade` hourly on the host from
   `git+ssh://git@github.com/kixelated/nixos?ref=main#<host>`, fetched with
-  each host's SSH host key as a read-only deploy key.
+  the host's SSH host key as a read-only deploy key.
 - Check and fixer containers already survive a switch
   (`restartIfChanged = false`), and a watcher's detached fixer supervisor
   outlives its daemon's restart. The batching gate stops its check with it, so
@@ -27,15 +27,18 @@ configuration in kixelated/nixos, drafted on its `quest-pin-sync` branch:
   ([moq.pro cutover](/quest/m0/queue-watcher/pro-cutover.md)).
 
 Once the bump pass is on quest's `main`, bump that branch's quest input to it
-(the watcher rejects `--bump` before then), land it, and switch each host by
-hand once; from then on the hosts upgrade themselves.
+(the watcher rejects `--bump` before then), land it, and switch the host by
+hand once; from then on it upgrades itself.
+
+Decided 2026-11-10 (maintainer, /quest-unblock): nixos2 is retired (it now
+runs Windows), so only nixos needs a deploy key. Done the same day: nixos's
+`/etc/ssh/ssh_host_ed25519_key.pub` is kixelated/nixos's read-only deploy key
+"nixos host (nixos-upgrade)", and `sudo ssh -i /etc/ssh/ssh_host_ed25519_key
+git@github.com` on nixos authenticates as kixelated/nixos. Drop nixos2 from
+the `quest-pin-sync` branch's `system.autoUpgrade` hosts.
 
 ## Waiting
 
-- Maintainer: add each host's `/etc/ssh/ssh_host_ed25519_key.pub` (nixos and
-  nixos2) to kixelated/nixos as a read-only deploy key, since only the
-  repository's owner can grant access to it; check that
-  `sudo systemctl start nixos-upgrade` succeeds on each host.
 - Maintainer: install moq-bot on the kixelated account for kixelated/nixos,
   with the permissions it has on moq-dev, since an App installation needs the
   account owner's consent; check that the quest watcher's journal shows
