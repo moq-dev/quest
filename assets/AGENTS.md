@@ -38,6 +38,10 @@ The observable outcome and important boundaries.
 
 Current decisions, open questions, or implementation guidance.
 
+## Hosts
+
+- macos - the operating systems the work must run on, such as a camera check
+
 ## Waiting
 
 - Maintainer: the decision or action only they can take, and how to check it is done
@@ -64,11 +68,15 @@ Much code that is mechanical stays small, such as applying one rename the same w
 Little code that is mostly judgment is larger, such as a 30-line rewording of a skill, sized M rather than XS.
 An epic carries no size until its last child is deleted; its README is then the epic's remaining work.
 
+`Hosts` lists the operating systems the work must run on: `linux`, `macos`, or `windows`, each optionally followed by ` - why`.
+A quest without it runs anywhere; `quest unblocked --json` reports the list as `hosts` so a dispatcher routes work without reading prose.
+
 `Waiting` lists what the work waits on outside the tree; each item opens with who acts, `Maintainer:` or the outside party, before a colon.
 A decision item gives its options and a recommendation.
 Remove an item once its condition clears, and the heading with its last item.
 
 `Required` lists the quests that must finish before the work starts; an epic's never lists its own quests, which it already waits for.
+An epic's or milestone's `Required` also holds back every quest under it.
 A child that must precede a sibling is in that sibling's `Required`.
 Nothing else orders work within a milestone: `quest unblocked` ranks it by downstream impact, then path.
 When the section is empty, delete it; the quest is now unblocked.
@@ -79,7 +87,7 @@ Run it after creating or updating quests.
 
 ## Summaries
 
-End every quest skill with a final summary in sections, such as the PRs and their states, the open decisions with recommendations, and suggested follow-ups, so a user returning to the session first sees what needs them.
+End every quest skill with a final summary in sections, such as the PRs and their states, the open decisions with recommendations, and the follow-ups each PR adds, so a user returning to the session first sees what needs them.
 
 ## Creation
 
@@ -87,13 +95,15 @@ Quests are created in PRs and reviewed.
 Search the tree and git history first before making a new quest.
 
 Split independently completable work into separate quests.
-A suggested follow-up becomes a quest only through `/quest-plan`, never as an agent-session task or a GitHub issue.
-Suggest a follow-up only when it is worth a quest; drop one you would call optional or worth doing only if it matters.
-Give each suggested follow-up a recommendation, to plan it or to drop it with the reason, so whoever plans them never has to ask which to take.
-Only `/quest-merge` and `/quest-complete` plan follow-ups, once they queue the PR that suggests them: run `/quest-plan` on each recommended one in turn without offering first, one follow-up per run; its interview lets the user drop it.
-`/quest-complete` plans them while its other agents keep running, but after any pick or decision question still waiting to be asked.
-Every other skill and background agent leaves its follow-ups in its PR body for them.
 Group related quests in an epic; its README holds the work no child owns.
+
+Work found along the way that is worth a quest is a follow-up: add it to the PR that found it, as a new quest placed and sized by the rules here and the repository's, or as an edit to the quest that already owns the work; never as an agent-session task or a GitHub issue.
+Drop one you would call optional or worth doing only if it matters.
+Answer each of its decisions you can with your recommendation in its Plan, and list each you cannot as a `Maintainer:` decision item under its `Waiting`.
+The PR body's `## Follow-ups` section links each one with its open decisions, which neither keep the PR a draft nor stop its pick.
+A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks which follow-ups to keep and each open decision, in the Questions form.
+Before it lands, record each answer in its quest's Plan, removing that `Waiting` item, and remove each dropped follow-up, with `quest rm` for a new quest.
+A follow-up for work another repository's quest tree owns stays in `## Follow-ups` for `/quest-plan` there.
 
 A release or pin bump that unblocks work is its own quest.
 
@@ -154,9 +164,8 @@ A PR that leaves work rewrites the quest to what remains, rather than noting it 
 When a quest is complete, review it locally and mark its PR ready for review with `/quest-review`, even if you made choices without asking; list those choices in the PR body for review.
 Only a decision left for the maintainer, an outside condition, or unfinished work keeps it a draft: hand it back with a `## Waiting` section in the body listing them, in the same form as a quest's.
 Tools read only whether that heading is present; a draft without it still belongs to its starter.
-Drafts handed back before `## Waiting` replaced it use `## Decisions needed`, which counts the same.
 A draft suggests `/quest-iterate`; a PR ready for review suggests `/quest-merge`.
-Include a summary of the changes made and suggest follow-up quests based on issues encountered; `/quest-merge` plans them.
+Include a summary of the changes made and the `## Follow-ups` section Creation describes.
 Add a closing keyword for every issue under `Closes`.
 
 ## Deletion
@@ -175,7 +184,7 @@ A long-running coordinator lets compaction bound its context: it keeps what must
 
 Run each agent at an entry of `quest`'s ranked lists unless the repository's `AGENTS.md` names other models: as a native sub-agent on this session's harness, else through `quest agent`.
 Size each `/quest-iterate` you dispatch as a quest, by the work left on its PR, and name that size in its brief.
-Start it on the PR's writer, the model of its first `Implementer:` line, at the entry `quest models <size> --writer <model>` prints, waiting out its usage limit so the other model can review; a PR with no known writer takes its size's first entry that can run.
+Start it on the PR's writer, the model of its first `Implementer:` line, at the entry `quest models <size> --writer <model>` prints, waiting out its usage limit so the other model can review; a PR whose writer no list names, such as `unknown` or a retired model, takes its size's first entry that can run.
 
 `quest agent start --harness <claude|codex> --model <model> --effort <level> --permission-mode <mode> <worktree> <prompt>` runs a headless agent on that CLI's own login; start it as a background command in its own isolated worktree, so the harness reports its exit as it would a sub-agent's.
 `--permission-mode` is Claude Code's permission mode, or Codex's sandbox mode.
@@ -189,7 +198,7 @@ Stop one with `quest agent stop <worktree>`, and each you started that still run
 Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
 Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed the work.
 Then give your recommendation and ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
-Recommend in every prompt, a multiple-choice list included: mark each option you recommend, such as which follow-ups to plan, and give a one-line reason for each you would leave out.
+Recommend in every prompt, a multiple-choice list included: mark each option you recommend, such as which follow-ups to keep, and give a one-line reason for each you would leave out.
 An answer such as "whatever you recommend" picks your recommendations; act on them without asking again.
 Do not use asynchronous question tools.
 

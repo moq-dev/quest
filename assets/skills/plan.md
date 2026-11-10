@@ -9,8 +9,7 @@ Search by the code and behavior the work touches, not only its keywords: a quest
 Show any overlap in the first round.
 
 Interview the user with the grill skill.
-Every follow-up the user picks goes through this interview, including edits to existing quests and to quests in other repositories.
-A background agent that cannot prompt never creates or edits quests itself, so this skill can run in the foreground.
+Run it in the foreground; a background agent that cannot prompt adds its follow-ups to its own PR instead, as the guide's Creation section describes.
 
 Search other quests and epics to keep the larger plan consistent.
 Docs a change makes stale stay in that change.
@@ -31,4 +30,3 @@ When the PR deletes the quest, record its decisions in the PR body's `## Decisio
 New work joins the milestone the user picked, in its directory or an epic's there; an epic groups related quests, and its README holds the work no child owns (the end-to-end test, the docs page).
 
 When done, commit, open the PR as a draft, and run `/quest-review` on it, which reviews the branch, records the `## Review` section, and marks the PR ready.
-Quests planned as follow-ups of an open PR may be committed to that PR instead, whose next push is reviewed as `/quest-review` describes.

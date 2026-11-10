@@ -23,6 +23,8 @@ export {
 	parse,
 	permanent,
 	questBranch,
+	ancestors,
+	gates,
 	requires,
 	resolve,
 	rooted,

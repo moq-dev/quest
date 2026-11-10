@@ -75,8 +75,7 @@ ownership-manifest design:
   2026-11-01 (user, /quest-plan): `quest init` also rewrites a Quest-written
   stub nobody edited when its text is out of date. Amended 2026-11-03
   (maintainer, /quest-unblock): `quest init` writes no Claude hook entries;
-  Quest's worktree hooks are a user-level opt-in, see
-  [user-dev-shell](/quest/m0/user-dev-shell/README.md).)
+  Quest's worktree hooks are a user-level opt-in.)
 - The repository's own tool manager pins the version: mise (release binaries)
   or a nix flake input (any rev, built from source). Quest ships no launcher
   and no pin file; an install outside either is simply unpinned.

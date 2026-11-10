@@ -16,4 +16,4 @@ Also settle in the interview:
 - What each run delivers, and whether anything ends the recurrence.
 
 A recurring gate's Plan also says to remove its path from every `Required` before re-creating it, or its dependents never clear.
-Findings that need their own work are follow-ups for `/quest-plan`.
+Findings that need their own work are follow-ups in its PR, as the guide's Creation section describes.

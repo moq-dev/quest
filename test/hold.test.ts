@@ -207,7 +207,7 @@ describe("taking a PR", () => {
 		expect(await refused(take(PR, undefined, pull.deps()))).toContain("its starter still holds");
 		expect(pull.writes).toEqual([]);
 
-		pull.body = "Summary.\r\n\r\n## Decisions needed\r\n\r\n1. Pick one.\r\n";
+		pull.body = "Summary.\r\n\r\n## Waiting\r\n\r\n1. Pick one.\r\n";
 		expect((await take(PR, undefined, pull.deps())).label).toBe("quest:active");
 	});
 
@@ -266,10 +266,10 @@ describe("taking a PR", () => {
 });
 
 describe("ready", () => {
-	test("drops the Decisions needed section and marks the draft ready, keeping the hold", async () => {
+	test("drops the Waiting section and marks the draft ready, keeping the hold", async () => {
 		const pull = new FakePull();
 		pull.draft = true;
-		pull.body = "Summary.\n\n## Decisions needed\n\n1. Pick one.\n\n## Validation\n\nTests pass.";
+		pull.body = "Summary.\n\n## Waiting\n\n1. Pick one.\n\n## Validation\n\nTests pass.";
 		const hold = await take(PR, undefined, pull.deps());
 		expect(await finish(PR, hold.token, pull.deps())).toEqual(hold);
 		expect(pull.body).toBe("Summary.\n\n## Validation\n\nTests pass.");
@@ -701,11 +701,9 @@ test("drops each Waiting section up to the next heading", () => {
 	);
 });
 
-test("drops each Decisions needed section up to the next heading", () => {
-	expect(withoutHandBack("Summary.\r\n\r\n## Decisions needed\r\n\r\n1. Pick.\r\n### Detail\r\nMore.\r\n")).toBe(
-		"Summary.",
-	);
-	expect(withoutHandBack("# Title\n\n## Decisions needed ##\n- one\n# Next\nkept")).toBe("# Title\n\n# Next\nkept");
+test("drops each Waiting section up to the next heading, whatever its line endings or closing hashes", () => {
+	expect(withoutHandBack("Summary.\r\n\r\n## Waiting\r\n\r\n1. Pick.\r\n### Detail\r\nMore.\r\n")).toBe("Summary.");
+	expect(withoutHandBack("# Title\n\n## Waiting ##\n- one\n# Next\nkept")).toBe("# Title\n\n# Next\nkept");
 });
 
 describe("arguments", () => {

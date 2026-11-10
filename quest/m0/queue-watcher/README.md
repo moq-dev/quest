@@ -123,6 +123,24 @@ repository's, for visibility. The own queue landed in
 [moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540); the rest is
 recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md).
 
+Decided 2026-11-09 (user, /quest-plan), from a workflow audit of
+moq-dev/moq's queue, 2026-11-03 to 11-10: 800 `merge_group` builds at a
+5-minute median, 10% failing; the runner 86-90% busy at 19-22 UTC and 53%
+overall; enqueue to merge at a 47-minute median; and 245 conflict removals
+against 756 merges, 130 of them resolved by the quest merge driver alone.
+
+- Build concurrency, now with the measured data the 2026-11-01 decision
+  asked for: ✅ stay at 1 (rejected: plan concurrency 2 now).
+  [Epic branches](/quest/m0/epic-branches/README.md) cut what reaches
+  `main`'s queue to one PR per epic, so re-measure before building for
+  groups of two.
+- Re-enqueue, for a conflict the merge driver resolved alone: ✅ keep the
+  back of the queue for all (rejected: GitHub's `jump` to the front for
+  those, recommended by the agent for the 95-minute median they wait).
+- Found by the same audit:
+  [a flaky test's second verdict finds its first](/quest/m0/queue-watcher/flaky-signature.md)
+  and [quest merge refuses a head whose checks failed](/quest/m0/queue-watcher/red-heads.md).
+
 Shared shape, for the children to follow:
 
 - The watcher is a long-running host daemon, one per base branch of a

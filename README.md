@@ -48,7 +48,8 @@ quest/
 ```
 
 Folders are **epics**, and the quests in a folder are its children; its
-README lists only what blocks it, never its children. The README is the epic's
+README lists only what blocks it, never its children, and holds back every quest
+under it until that clears. The README is the epic's
 own quest, and it becomes ready once its children have merged. The top folders
 (`m0`, `m1`, ...) are **milestones** that give the work a delivery horizon.
 Finishing a quest deletes its file and edits no README, so PRs that finish
@@ -132,12 +133,13 @@ $ quest --root examples/export unblocked
 1	quest/m0/export.md
 
 $ quest --root examples/export unblocked --json --limit 1
-[{"path":"quest/m0/export.md","dependents":1,"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"low"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
+[{"path":"quest/m0/export.md","dependents":1,"hosts":[],"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"low"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
 ```
 
 Each plain output line contains the count, a tab, and the path. On a terminal,
 a heading explains the count. `--json` prints an ordered array, including `[]`
-when no quests are ready, and gives each quest the ranked `models` that write
+when no quests are ready, and gives each quest the `hosts` its `## Hosts`
+section names (empty when it runs anywhere) and the ranked `models` that write
 it, as [Route work by size](#route-work-by-size) describes; `--limit <count>`
 requires a positive integer.
 Invalid trees fail with diagnostics and no ranking.
@@ -176,7 +178,7 @@ action only the maintainer can take, or the outside party, such as
 ```
 
 A draft PR hands itself back to the maintainer with the same heading in its
-body, or the older `## Decisions needed`.
+body.
 
 `quest waiting` lists every item from both, the maintainer's first, then by
 milestone and the same downstream impact `quest unblocked` counts; a draft
@@ -184,7 +186,7 @@ ranks as the quest its branch carries. Each line gives the dependents, whether
 the quest is otherwise ready or still blocked, its path or the draft's URL, and
 the item; `--maintainer` keeps only the maintainer's, and `--json` prints
 `{path, pr, dependents, ready, waits}` objects. A draft's item that names no
-party, and every `Decisions needed` item, is the maintainer's. Drafts come from
+party is the maintainer's. Drafts come from
 the upstream's open PRs, found as for `unblocked --unclaimed`; without the
 remote, off GitHub, or when GitHub cannot be read, it lists the tree's items
 and warns that drafts were skipped. `/quest-unblock` walks you through them.
@@ -221,8 +223,7 @@ the branch without a PR.
 `--release` deletes the branch, with a lease on its tip, and closes its PR, but
 only while the tip is still an empty commit. Once work is on the branch, hand
 the draft back instead: a `## Waiting` section in its body marks it as
-waiting on the maintainer. Drafts handed back with the older `## Decisions
-needed` heading count the same.
+waiting on the maintainer.
 
 `quest start` exits 0 when done, 3 when it refuses (blocked, held, a branch in
 the way, or work on the branch), 2 for invalid arguments, and 1 for other
@@ -521,7 +522,7 @@ A taken PR carries the `quest:active` label while an agent works on it.
 Sessions often share a GitHub account, so taking it prints a hold token: the
 ID of the timeline event that added the label. Every command refuses while a
 `quest:active` label it holds no token for is on the PR; a draft its starter still holds, one without a
-`## Waiting` (or older `## Decisions needed`) section; and a merged or closed PR, since a push after
+`## Waiting` section; and a merged or closed PR, since a push after
 the merge brings the branch back. The refusal names the holder's label, age,
 and token, so you can decide whether to release a stale hold. When two
 sessions add the label at once, the first added keeps the PR; GitHub records no
@@ -1138,17 +1139,6 @@ build's workflow or the land daemon's sandbox, rather than relying on a slot in
 the host's ledger: a container's gates keep a ledger of their own, yet wait on
 the host's load. `quest agent` drops the variable, as it drops an admission.
 
-`quest gate --host <command>` holds the whole host, for work that other work
-would disturb, such as a benchmark. It records a reservation at once, so no
-other caller is admitted while it waits; it then starts once every gated
-command already running has ended, whatever the load and memory. Until it
-ends, every other gated command waits, quick and priority ones included, and a
-second `--host` caller queues behind it. Only gated work is held off: the
-command should still check for load from outside the gate. A `--host` call
-nested inside a gated command runs at once, like any nested call. Windows,
-where a reused process ID could pass for a holder (see below), refuses
-`--host`.
-
 Each admission records the gate's process ID and, except on Windows, when the
 gate started, and counts as running until that process exits; a reused process
 ID counts as running only on Windows, where it makes a command wait for the
@@ -1224,7 +1214,7 @@ the same for every repository unless its `AGENTS.md` names others:
 
 | Size | Writer | Fallback |
 |---|---|---|
-| XS | Claude Code `claude-haiku-5-5` high | Codex `gpt-6.1-sol` low |
+| XS | Claude Code `claude-haiku-5-5` xhigh | Codex `gpt-6.1-sol` low |
 | S | Claude Code `claude-opus-5-5` low | Codex `gpt-6.1-sol` medium |
 | M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
@@ -1246,7 +1236,7 @@ XS, and `quest models` prints the entry to run:
 
 ```console
 $ quest models XS
-claude	claude-haiku-5-5	high
+claude	claude-haiku-5-5	xhigh
 codex	gpt-6.1-sol	low
 
 $ quest models XS --writer claude-opus-5-5
@@ -1305,12 +1295,17 @@ gateway or provider is set. Variables that would change the reviewer's plugins,
 permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME`, or the default when unset, and any gateway or provider.
+opencode reviews only when `--harness opencode` names it, with `--model` as
+`provider/model` and `--effort` as the model's variant, since no size lists it.
+It keeps the user's own opencode config, such as custom providers, and login,
+and counts as logged out when `opencode models` does not list the model.
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
 quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, with no record in its body
 quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
+quest review --harness opencode --model opencode-go/deepseek-v4-pro --effort high  # an opencode reviewer
 ```
 
 Every turn reviews only the branch's own change, from the merge base of `HEAD`
@@ -1318,9 +1313,10 @@ with the base's tip, so a branch behind its base draws no findings on code the
 base gained since, which a diff against its tip shows as reverted.
 The first round explores the change once. It runs the reviewer's own review,
 `codex exec review` with custom instructions or Claude Code's `/code-review
-<effort> <merge-base>...HEAD` with text after the target, given the range, the
+<effort> <merge-base>...HEAD` with text after the target, or for opencode, which
+has no review mode, a prompt asking for one, given the range, the
 base's `REVIEW.md`, if any, and any earlier findings and responses up front.
-Neither returns a JSON schema itself, so the round resumes that session for one
+None returns a JSON schema itself, so the round resumes that session for one
 turn that reads nothing and reports the review in one schema, with a score from
 0 to 10 for how ready the head is to land and one sentence on why: 10 lands as
 is, 7 to 9 lands after the findings are fixed, 4 to 6 needs rework, and 0 to 3
@@ -1357,16 +1353,28 @@ commands. Codex leaves out its skills catalog; it still loads the user's
 split the login, so the reviewer is told to disregard it. Claude Code loads no settings files, so no
 allow rule, even the user's own, widens that. Codex skips the user's config,
 whose project trust would load the checkout's `.codex/config.toml` and start its
-MCP servers outside the sandbox. Whether those flags isolate is up to each
+MCP servers outside the sandbox. opencode loads no project config, which would
+start the checkout's plugins and MCP servers and name its shell, nor Claude
+Code's files, and has every tool but its shell denied, after the user's own
+rules so none outranks the denial. Its shell runs each command under
+sandbox-runtime (`srt` on `PATH`, which this repository's dev shell provides),
+with no network, reading only the checkout and its Git directories, and writing
+only a private directory; on Linux, `srt` must also refuse Unix sockets, which
+it does only with its seccomp helper, so nixpkgs' plain package is refused.
+Whether those flags isolate is up to each
 CLI's release, so `just review-sandbox`, in this repository, plants project MCP
-servers and hooks for both CLIs on a head, and for Claude Code local settings,
-an allow rule, an `env` shell prefix, an API key helper, and a status line. It
-runs `quest review` with the installed CLIs and copies of your logins, and
-fails if any of it runs, the review trusts a new directory, or the reviewer's
-flags let the planted rule allow a command. A login with no file to copy, such
+servers and hooks for Codex and Claude Code on a head, for Claude Code local settings,
+an allow rule, an `env` shell prefix, an API key helper, and a status line, and
+for opencode an MCP server, plugins, and a shell. It
+runs `quest review` with the installed CLIs and copies of your logins
+(opencode's own, which it shares with every session), and
+fails if any of it runs, the review trusts a new directory, the reviewer's
+flags let the planted rule allow a command, or opencode's shell writes, reads
+your home, reaches the network, or goes unused. `QUEST_LIVE_OPENCODE_MODEL`
+names opencode's model, as `provider/model#variant`. A login with no file to copy, such
 as one in the macOS keychain, needs the CLI's credential exported instead:
 `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, or `CODEX_API_KEY`. It spends real usage, so CI never runs it; run it
-after upgrading either CLI. The base is fetched first, since
+after upgrading any of the CLIs. The base is fetched first, since
 the sandbox has no network. The reviewer follows the base's `AGENTS.md` and `CLAUDE.md`, at the
 root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
@@ -1726,33 +1734,62 @@ The [getting started guide](docs/getting-started.md) covers what happens next.
 quest format and workflow they read before working on a quest outside a skill;
 `quest guide prompting` prints one section.
 
-### Configure Claude Code
+### Configure your agent
 
-`quest setup` configures your own Claude Code settings for quest work, in every
-repository:
+`quest setup` configures your own Claude Code and Codex settings for quest
+work, in every repository:
 
 ```sh
 quest setup
 ```
 
-It sets `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground command such as
-`quest wait` can block for 55 minutes, just under the 1h prompt-cache TTL,
-instead of the 10-minute default.
+It sets Claude Code's `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground
+command such as `quest wait` can block for 55 minutes, just under the 1h
+prompt-cache TTL, instead of the 10-minute default.
 
 It also loads the rules once. The repository's `Quests: ` line has agents run
 `quest context` before any work, which costs a turn and is summarized away
 when the session compacts. Instead, `quest setup` installs a `SessionStart`
-hook (startup, resume, clear, and compact) and a `SubagentStart` hook, each
-running `quest hook`, which adds `quest context` to the session in a
-repository whose root `AGENTS.md` or `CLAUDE.md` has the `Quests: ` line, and
-nothing elsewhere. `quest` must be on the `PATH` Claude Code starts with.
-`quest setup --worktrees` also installs the
+hook (startup, resume, clear, and compact), and for Claude Code a
+`SubagentStart` hook, each running `quest hook`, which adds `quest context` to
+the session in a repository whose root `AGENTS.md` or `CLAUDE.md` has the
+`Quests: ` line, and nothing elsewhere. Codex holds the rules in full, rather
+than spilling them to a file, through the hook's `additionalContextLimit`.
+`quest setup --worktrees` also installs Claude Code's
 [worktree hooks](#claude-code-checkouts).
 
-It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`,
-keeps your other settings, refuses a malformed file unchanged, writes once,
-and prints each change. Rerun it after upgrading. `quest setup --remove` takes
-the hooks out, and the timeout while it still holds Quest's value.
+The rules a program can check are enforced instead of read. A `PreToolUse`
+hook on shell commands and file edits denies, with the rule as the reason:
+
+- an edit, commit message, or new GitHub post that adds an em dash outside a
+  `>` quote line;
+- a `git push` whose refspecs lack a `:`;
+- a force-push, `git rebase`, or `git pull --rebase`, unless the command
+  starts with `QUEST_USER_ASKED=1` because the user asked for it;
+- a new GitHub post (`gh pr create`, `comment`, or `review`, `gh issue create`
+  or `comment`, or `gh api` with a `body` field) without a `(Written by ...)`
+  line;
+- a scratch file written under `/tmp`, outside the checkout, by a redirection,
+  `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit.
+
+It checks only a body on the command line itself: `--body`, a `body=` field,
+`git commit -m`, or `--body-file -` with a here-document. A body file, or one
+piped into `gh`, passes unread, since the file may hold something else by the
+time the command runs; `quest context` keeps the footer and em-dash rules in
+prose for that case. `quest context` still prints these rules,
+under a last `Checked` section that the hook leaves out, for agents without
+it.
+
+`quest` must be on the `PATH` the agent starts with, as for the worktree
+hooks. Codex asks you to trust the hooks once, and after each upgrade that
+changes them, through `/hooks`; `quest review` runs Codex without your
+config, so its reviewers run none of them.
+
+It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`, and
+`$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json`, when that directory exists.
+It keeps your other settings, refuses a malformed file unchanged, writes each
+once, and prints each change. Rerun it after upgrading. `quest setup --remove`
+takes the hooks out, and the timeout while it still holds Quest's value.
 
 ## Where this is going
 
