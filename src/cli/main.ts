@@ -25,16 +25,7 @@ import {
 	onMaintainer,
 	waiting,
 } from "../core";
-import {
-	AgentInputError,
-	HARNESSES,
-	type HarnessName,
-	type Launch,
-	processDependencies,
-	runAgent,
-	stopAgent,
-	stopAll,
-} from "./agent";
+import { AgentInputError, HARNESSES, type Launch, processDependencies, runAgent, stopAgent, stopAll } from "./agent";
 import { ensure, held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { type Views, mainAt, mainCheckout, tracked, viewOf, views } from "./epics";
 import { gate, QUICK_MS } from "./gate";
@@ -59,6 +50,8 @@ import { type ResolveOptions, resolveFile } from "./resolve";
 import { hosts } from "../core/doc";
 import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
 import {
+	REVIEW_HARNESSES,
+	type ReviewHarness,
 	ReviewInputError,
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
@@ -146,10 +139,6 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
 				"cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the environment, as a check " +
 				"that lands PRs should set, the command waits for memory but never for load.\n\n" +
-				"--host holds the whole host, for work such as a benchmark that other work would disturb: it " +
-				"reserves the host at once, starts once no other gated command runs, and every other gated " +
-				"command, quick or priority, waits until it ends. A nested --host runs immediately like any nested " +
-				"call. Windows refuses --host.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
 				"a systemd user scope, or inside a Quest scope through a child cgroup of its own. macOS, and Linux " +
@@ -159,10 +148,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"cancelled.",
 		)
 		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
-		.addOption(new Option("--host", "Hold the whole host, with no other gated command running").conflicts("quick"))
 		.argument("<command>", "Executable to run")
 		.argument("[args...]", "Arguments forwarded verbatim")
-		.action((command: string, args: string[], options: { quick?: boolean; host?: boolean }) => {
+		.action((command: string, args: string[], options: { quick?: boolean }) => {
 			pending = gate([command, ...args], options).catch((error: unknown) => {
 				warn(error instanceof Error ? error.message : String(error));
 				return 1;
@@ -1182,7 +1170,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; with --harness it is " +
 				"none. " +
 				"--harness names the reviewer instead, at its entry's model and effort, and --model and --effort " +
-				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. The " +
+				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. " +
+				"opencode is no size's pick: --harness opencode needs --model, as provider/model, and --effort, its " +
+				"variant. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
 				"The reviewer reaches its model as the user's own CLI " +
@@ -1193,7 +1183,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
 				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
 				"(ANTHROPIC_AWS_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN) only while one is set. A logged-out error names the profile it checked, " +
-				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider.\n\n" +
+				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider. opencode " +
+				"keeps the user's own config and login, and counts as logged out when `opencode models` does not " +
+				"list the model.\n\n" +
 				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
 				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
 				"reviewer's own review (`codex exec review` with custom instructions, or Claude Code's " +
@@ -1214,7 +1206,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
 				"skills catalog, Claude Code with " +
-				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
+				"no settings files, only read tools, and the Bash commands it judges read-only, and opencode with no " +
+				"project config, Claude Code files, or tool but its shell, whose commands run under sandbox-runtime " +
+				"(`srt` on PATH; on Linux it must refuse Unix sockets) with no network, reading only the checkout " +
+				"and its Git directories and writing only a private directory. opencode has no review mode, so its " +
+				"first turn asks for the review in a prompt. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
 				"reviewer, and is told to disregard other instructions and run no builds, tests, or quest commands. " +
 				"The base is fetched first, since the sandbox has no network.\n\n" +
@@ -1241,7 +1237,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"timestamp, or `unknown` when the CLI named none.",
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
-		.addOption(new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(HARNESSES))
+		.addOption(
+			new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(REVIEW_HARNESSES),
+		)
 		.option("--model <model>", "Model the reviewer runs instead")
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
 		.option(
@@ -1266,7 +1264,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			(options: {
 				base?: string;
 				branch?: string;
-				harness?: HarnessName;
+				harness?: ReviewHarness;
 				model?: string;
 				effort?: string;
 				excludeModel?: string[];
@@ -1598,7 +1596,7 @@ function positiveSeconds(value: string): number {
 
 /**
  * Stop option parsing before a gated executable, keeping its own flags intact.
- * Quest's global options still apply on either side of `gate`, and its own `--quick` and `--host` after it.
+ * Quest's global options still apply on either side of `gate`, and its own `--quick` after it.
  */
 export function gateBoundary(argv: string[]): string[] {
 	const skip = (index: number, own: string[] = []) => {
@@ -1610,8 +1608,8 @@ export function gateBoundary(argv: string[]): string[] {
 	};
 	const index = skip(0);
 	if (argv[index] !== "gate") return argv;
-	const command = skip(index + 1, ["--quick", "--host"]);
-	if (!argv[command] || ["--", "-h", "--help", "-V", "--version"].includes(argv[command])) return argv;
+	const command = skip(index + 1, ["--quick"]);
+	if (!argv[command] || argv[command].startsWith("-")) return argv;
 	return [...argv.slice(0, command), "--", ...argv.slice(command)];
 }
 

@@ -1,27 +1,34 @@
 // `quest review`: a model other than the latest writer reviews the committed branch, read-only,
 // picked by the PR's size from the lists in `models.ts`.
 //
-// A branch's first round runs the reviewer CLI's own review, given the scope, the
-// base's REVIEW.md, and any responses up front, then resumes that session for one
-// turn that only reports the review in the schema, since neither CLI's built-in
-// review returns a schema itself. Later rounds resume the same session with the new
+// A branch's first round runs the reviewer CLI's own review, or for opencode, which
+// has none, a review prompt, given the scope, the base's REVIEW.md, and any
+// responses up front, then resumes that session for one turn that only reports the
+// review in the schema, since no CLI's built-in review returns a schema itself. Later rounds resume the same session with the new
 // head and the author's responses, checking only what changed and the open findings,
 // so the reviewer keeps its context and its prompt cache, and a finding the author
 // refuted with evidence does not recur.
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
 
 import { SIZES, type Size, branchQuest, parse, size as questSize } from "../core";
-import { type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
+import { HARNESSES, type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
 import { DEFAULT_SIZE, type Model, REVIEWERS } from "./models";
 import { programEnvironment, requireProgram } from "./program";
+import { type Sandbox, openSandbox } from "./sandbox";
 import type { recorded } from "../github/models";
 import { save } from "./worktree";
+
+/** The CLIs that review: the agent harnesses, and opencode, which reviews only when named. */
+export const REVIEW_HARNESSES = [...HARNESSES, "opencode"] as const;
+export type ReviewHarness = (typeof REVIEW_HARNESSES)[number];
+/** A reviewer: a size list's entry, or one `--harness`, `--model`, and `--effort` name. */
+export type Reviewing = Omit<Model, "harness"> & { harness: ReviewHarness };
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
 export class ReviewInputError extends Error {}
@@ -31,7 +38,7 @@ export class ResponsesError extends ReviewInputError {}
 /** The reviewer's account hit its usage limit on `model`, which resets at `until` (epoch milliseconds) if the CLI named it. */
 export class ReviewLimitError extends Error {
 	constructor(
-		readonly harness: HarnessName,
+		readonly harness: ReviewHarness,
 		readonly until: number | null,
 		readonly model: string,
 	) {
@@ -72,7 +79,7 @@ export interface Usage {
 
 /** One finished round, as `quest review` prints it. */
 export interface Round {
-	reviewer: HarnessName;
+	reviewer: ReviewHarness;
 	model: string;
 	effort: string;
 	/** The branch whose session the round continues. */
@@ -174,7 +181,7 @@ export function runningHarness(env: NodeJS.ProcessEnv): HarnessName {
 
 /** What picks a round's reviewer from its size's list. */
 export interface Choice {
-	harness?: HarnessName;
+	harness?: ReviewHarness;
 	model?: string;
 	effort?: string;
 	/** The models never to pick; without any, the latest writer's is avoided. */
@@ -188,7 +195,7 @@ export interface Choice {
  * the harness running this command, which is usually the session that just
  * pushed, unless `--harness` names the reviewer, which then avoids nothing.
  */
-export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest?: string): (entry: Model) => boolean {
+export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest?: string): (entry: Reviewing) => boolean {
 	const exclude = choice.exclude ?? [];
 	if (exclude.length > 0) return (entry) => exclude.includes(entry.model);
 	if (latest !== undefined && latest !== "unknown") return (entry) => entry.model === latest;
@@ -203,7 +210,7 @@ export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest?: string
  * overriding its model and effort. An override never brings back an avoided
  * model.
  */
-export function pickReviewer(size: Size, choice: Choice, avoided: (entry: Model) => boolean): Model {
+export function pickReviewer(size: Size, choice: Choice, avoided: (entry: Reviewing) => boolean): Reviewing {
 	const list = REVIEWERS[size];
 	const entry =
 		choice.harness === undefined ? list.find((e) => !avoided(e)) : list.find((e) => e.harness === choice.harness);
@@ -257,7 +264,7 @@ export type ReviewOptions = BaseOptions & {
 	/** The checkout to review. */
 	root: string;
 	/** The reviewer; defaults to the first of the size's list whose model is not the latest writer's. */
-	harness?: HarnessName;
+	harness?: ReviewHarness;
 	model?: string;
 	effort?: string;
 	/** The models never to pick; without any, the latest writer's is avoided. */
@@ -296,7 +303,7 @@ export const processDependencies = (): ReviewDependencies => ({ env: process.env
 /** A branch's review session, kept in the clone's common Git directory so every worktree resumes it. */
 interface State {
 	branch: string;
-	reviewer: HarnessName;
+	reviewer: ReviewHarness;
 	session: string;
 	/** Each round's head, the merge base its change started from, and its findings. */
 	rounds: { head: string; mergeBase: string; findings: Finding[] }[];
@@ -326,6 +333,8 @@ export interface Context {
 	schemaFile: string;
 	/** The gateway Codex sends its requests to, from OPENAI_BASE_URL, which Codex itself no longer reads. */
 	openaiBaseUrl?: string;
+	/** opencode's: the sandboxed shell its commands run through, and the file holding `instructions`. */
+	sandbox?: { shell: string; instructions: string };
 }
 
 interface Turn {
@@ -350,6 +359,8 @@ interface Reply {
 
 interface Reader {
 	line(line: string): void;
+	/** Whether to stop the CLI now, as when it would wait out a usage limit; the turn then fails. */
+	stop?(): boolean;
 	/** The turn's reply once the CLI exited with `code`, given the tail of its stderr. */
 	reply(code: number, stderr: string): Reply;
 }
@@ -357,6 +368,13 @@ interface Reader {
 interface Reviewer {
 	/** Exits non-zero when the CLI is logged out. */
 	status: string[];
+	/**
+	 * Whether the status check's output lists `model`, for a CLI that may be
+	 * logged in to some providers but not the model's.
+	 */
+	lists?(output: string[], model: string): boolean;
+	/** Variables every run of the CLI gets, its status check's included. */
+	env: Record<string, string>;
 	/** How the user logs in. */
 	login: string;
 	/** The variable naming the configuration directory, and so the stored login, the status check reads. */
@@ -414,6 +432,7 @@ const CLAUDE_PROVIDERS = ["BEDROCK", "VERTEX", "FOUNDRY", "MANTLE", "ANTHROPIC_A
  */
 const claude: Reviewer = {
 	status: ["claude", "auth", "status"],
+	env: {},
 	login: LOGINS.claude.command,
 	profile: "CLAUDE_CONFIG_DIR",
 	credentials: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
@@ -558,6 +577,7 @@ const claudeEnv = () => ({ CLAUDE_CODE_PROMPT_CACHE_TTL: "1h" });
  */
 const codex: Reviewer = {
 	status: ["codex", "login", "status"],
+	env: {},
 	login: LOGINS.codex.command,
 	profile: "CODEX_HOME",
 	// `codex exec` reads CODEX_API_KEY, though `codex login status` does not count it; it ignores OPENAI_API_KEY.
@@ -648,7 +668,159 @@ function codexFlags(context: Context): string[] {
 	];
 }
 
-const CLIS: Record<HarnessName, Reviewer> = { claude, codex };
+/** opencode's errors for an account's spent usage limit or budget, which it may retry until the reset. */
+const OPENCODE_LIMITS = new Set([
+	"provider.quota",
+	"provider.go-limit",
+	"provider.free-limit",
+	"provider.chatgpt-limit",
+	"provider.budget-limit",
+	"provider.model-budget-limit",
+]);
+
+/**
+ * When an opencode limit error resets, in epoch milliseconds: the `resetsAt`
+ * its provider's response names, or its `retryAfterMs` from `at`, as
+ * opencode's own interface reads it.
+ */
+export function opencodeReset(error: Record<string, unknown>, at: number): number | null {
+	const body = text(record(error.response)?.body) ?? "";
+	const resets = Date.parse(/"resetsAt"\s*:\s*"([^"]+)"/.exec(body)?.[1] ?? "");
+	if (!Number.isNaN(resets)) return resets;
+	const after = error.retryAfterMs;
+	return typeof after === "number" && Number.isFinite(after) && after >= 0 ? at + after : null;
+}
+
+/** A reply that wraps its JSON in a Markdown code fence, as models without an enforced schema may. */
+const unfenced = (reply: string) => /^\s*```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/.exec(reply)?.[1] ?? reply;
+
+/** What opencode is asked to do on a branch's first turn, since it has no review mode of its own. */
+const OPENCODE_REVIEW =
+	"Review this change for bugs: read it with read-only shell commands, such as `git diff`, `git show`, `cat`, " +
+	"and `rg`, and report each problem that holds, with its file, line, and the concrete scenario that breaks.";
+
+/**
+ * opencode loads no project config, which holds plugins, MCP servers, a
+ * shell, and instructions that would run or speak in the reviewer, nor Claude
+ * Code's files, and every tool but its shell is denied: no file writes, web
+ * access, questions, skills, or Code Mode. The shell runs each command under
+ * sandbox-runtime (`sandbox.ts`), with no network, writes only to a private
+ * directory, and reads only the checkout and its Git directories, since the
+ * server itself runs unconfined. No language servers or formatters run, and
+ * no snapshot or share. It keeps the user's config, such as custom providers,
+ * and its login; the denials come last, so none of the user's own rules
+ * outrank them. Sessions are created archived, out of the user's list.
+ */
+const opencode: Reviewer = {
+	status: ["opencode", "models", "--standalone"],
+	lists: (output, model) => output.some((line) => line.trim() === model),
+	env: {
+		OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+		OPENCODE_DISABLE_CLAUDE_CODE: "1",
+		OPENCODE_DISABLE_AUTOUPDATE: "1",
+	},
+	login: "opencode auth login",
+	profile: "XDG_DATA_HOME",
+	credentials: [],
+	routeCredentials: [],
+	connection: [],
+	routes: () => [],
+	unauthorized: /\bprovider\.auth\b/,
+	review: (context, _session, prompt) => opencodeTurn(context, [], `${OPENCODE_REVIEW}\n\n${prompt}`),
+	// `opencode run` takes no schema, so the prompt carries it.
+	resume: (context, session, prompt) =>
+		opencodeTurn(
+			context,
+			["--session", session],
+			`${prompt}\n\nThe response schema:\n\n${JSON.stringify(context.schema)}\n\nReply with only the JSON object.`,
+		),
+	// A spent limit fails the turn as an `error` event, or shows up as a `retry` one, which would
+	// wait for the reset, however far off, so the turn stops there.
+	reader() {
+		let session: string | undefined;
+		// The text since the last tool call, which holds the answer.
+		let reply: string[] = [];
+		let usage: Omit<Usage, "turn"> | undefined;
+		let error: string | undefined;
+		let limited: { until: number | null } | undefined;
+		let stop = false;
+		const failed = (value: unknown, at: number) => {
+			const failure = record(value) ?? {};
+			const message = `${text(failure.type) ?? "error"}: ${text(failure.message) ?? "opencode reported an error"}`;
+			if (OPENCODE_LIMITS.has(text(failure.type) ?? "") || LIMIT.test(message))
+				limited ??= { until: opencodeReset(failure, at) };
+			return message;
+		};
+		return {
+			line(line) {
+				const event = json(line);
+				if (event === undefined) return;
+				session ??= text(event.sessionID);
+				const part = record(event.part);
+				const at = typeof event.timestamp === "number" ? event.timestamp : Date.now();
+				if (event.type === "tool_use") reply = [];
+				if (event.type === "text") reply.push(text(part?.text) ?? "");
+				if (event.type === "step_finish") {
+					const tokens = record(part?.tokens) ?? {};
+					const cache = record(tokens.cache) ?? {};
+					usage ??= { input: 0, cached: 0, output: 0 };
+					usage.input += count(tokens.input) + count(cache.read) + count(cache.write);
+					usage.cached += count(cache.read);
+					usage.output += count(tokens.output) + count(tokens.reasoning);
+				}
+				if (event.type === "error") error = failed(event.error, at);
+				if (event.type === "retry") {
+					const message = failed(event.error, at);
+					if (limited || opencode.unauthorized.test(message)) {
+						error = message;
+						stop = true;
+					}
+				}
+			},
+			stop: () => stop,
+			reply(_code, stderr) {
+				if (!limited && error === undefined && LIMIT.test(stderr)) limited = { until: null };
+				const answer = reply.join("").trim();
+				return { session, text: answer === "" ? undefined : unfenced(answer), usage, error, limited };
+			},
+		};
+	},
+};
+
+/**
+ * One `opencode run` in a private server, configured on every turn since a
+ * resumed session takes its config from the server, not the session.
+ */
+export function opencodeTurn(context: Context, resume: string[], prompt: string): Turn {
+	if (context.sandbox === undefined) throw new Error("opencode reviews only with a sandboxed shell");
+	const deny = (action: string) => ({ action, resource: "*", effect: "deny" });
+	const config = {
+		shell: context.sandbox.shell,
+		instructions: [context.sandbox.instructions],
+		lsp: false,
+		formatter: false,
+		snapshot: false,
+		share: "disabled",
+		permissions: [deny("*"), deny("skill"), { action: "shell", resource: "*", effect: "allow" }],
+	};
+	return {
+		argv: [
+			"opencode",
+			"run",
+			"--standalone",
+			"--format",
+			"json",
+			"--archived",
+			"--model",
+			`${context.model}#${context.effort}`,
+			...resume,
+		],
+		stdin: prompt,
+		env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
+	};
+}
+
+const CLIS: Record<ReviewHarness, Reviewer> = { claude, codex, opencode };
 
 /** Codex's review turn reports all zeros, which is no measurement. */
 const reported = (usage: Omit<Usage, "turn"> | undefined): usage is Omit<Usage, "turn"> =>
@@ -682,9 +854,10 @@ function run(
 			reject(new ReviewInputError((error as Error).message));
 			return;
 		}
+		// opencode runs in PWD rather than its working directory.
 		const child = spawn(program, argv.slice(1), {
 			cwd,
-			env: programEnvironment(env),
+			env: programEnvironment({ ...env, PWD: cwd }),
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
@@ -703,7 +876,14 @@ function run(
 			clearTimeout(killing);
 		};
 		let stderr = "";
-		const lines = boundedLines(LINE_LIMIT, (line) => reader?.line(line));
+		let stopped = false;
+		const lines = boundedLines(LINE_LIMIT, (line) => {
+			reader?.line(line);
+			if (!stopped && reader?.stop?.()) {
+				stopped = true;
+				abort();
+			}
+		});
 		child.stdout.setEncoding("utf8").on("data", (chunk: string) => lines.data(chunk));
 		child.stdout.once("end", () => lines.end());
 		child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
@@ -728,7 +908,7 @@ const ABORT_GRACE_MS = 10_000;
 
 /** The reviewer CLI with the environment it runs in and the error for a login the API rejects. */
 interface Cli {
-	harness: HarnessName;
+	harness: ReviewHarness;
 	reviewer: Reviewer;
 	env: NodeJS.ProcessEnv;
 	/** Thrown when a turn fails on authentication, as a logged-out status check fails. */
@@ -758,21 +938,36 @@ const pick = (env: NodeJS.ProcessEnv, names: string[]) =>
  * shell's API key never overrides a stored subscription login, so a review is
  * billed as the user's own CLI sessions are.
  */
-async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Cli> {
+async function prepare(
+	harness: ReviewHarness,
+	model: string,
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+	signal?: AbortSignal,
+): Promise<Cli> {
 	const reviewer = CLIS[harness];
-	const connected = { ...strippedEnvironment(env), ...pick(env, reviewer.connection) };
+	const connected = { ...strippedEnvironment(env), ...pick(env, reviewer.connection), ...reviewer.env };
 	const routes = reviewer.routes(env);
 	const through = routes.length > 0 ? ` through ${names(routes)}` : "";
 	const loggedOut = `${harness} is not logged in to ${profile(reviewer, env)}${through}; run \`${reviewer.login}\``;
+	// A CLI logged in to some providers passes its status check only for their models.
+	const unlisted =
+		reviewer.lists === undefined
+			? loggedOut
+			: `${harness} lists no model ${model} for ${profile(reviewer, env)}; run \`${reviewer.login}\` for its provider, or name a model \`${reviewer.status.join(" ")}\` lists`;
+	const loggedIn = async (env: NodeJS.ProcessEnv) => {
+		const output: string[] = [];
+		const listed = { line: (line: string) => void output.push(line), reply: () => ({}) };
+		const { code } = await run(reviewer.status, cwd, env, "", listed, signal);
+		return code === 0 && (reviewer.lists === undefined || reviewer.lists(output, model));
+	};
 	const credentials = [...reviewer.credentials, ...(routes.length > 0 ? reviewer.routeCredentials : [])].filter(
 		(name) => env[name],
 	);
 	const withCredentials = { ...connected, ...pick(env, credentials) };
 	const rejected = `${harness} rejected ${names(credentials)}${through}; replace it, or run \`${reviewer.login}\``;
 	if (routes.length > 0) {
-		if ((await run(reviewer.status, cwd, withCredentials, "", undefined, signal)).code !== 0) {
-			throw new ReviewInputError(loggedOut);
-		}
+		if (!(await loggedIn(withCredentials))) throw new ReviewInputError(unlisted);
 		return {
 			harness,
 			reviewer,
@@ -781,22 +976,23 @@ async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv
 			signal,
 		};
 	}
-	if ((await run(reviewer.status, cwd, connected, "", undefined, signal)).code === 0) {
+	if (await loggedIn(connected)) {
 		const ignored =
 			credentials.length > 0 ? `; quest review strips ${names(credentials)} while a stored login exists` : "";
 		return { harness, reviewer, env: connected, unauthorized: `${loggedOut}${ignored}`, signal };
 	}
-	if (credentials.length === 0) throw new ReviewInputError(loggedOut);
+	if (credentials.length === 0) throw new ReviewInputError(unlisted);
 	return { harness, reviewer, env: withCredentials, unauthorized: rejected, signal };
 }
 
-/** The environment `quest review` runs `harness`'s CLI in, for a caller that runs it with the same login. */
+/** The environment `quest review` runs `harness`'s CLI on `model` in, for a caller that runs it with the same login. */
 export async function reviewerEnvironment(
-	harness: HarnessName,
+	harness: ReviewHarness,
+	model: string,
 	cwd: string,
 	env: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv> {
-	return (await prepare(harness, cwd, env)).env;
+	return (await prepare(harness, model, cwd, env)).env;
 }
 
 /**
@@ -1282,6 +1478,18 @@ function recordedLatest(record: ModelsRecord, options: ReviewOptions): string | 
 	return record.implementers.at(-1)?.model ?? undefined;
 }
 
+/** The sandbox opencode's commands run in, reading the checkout at `root` and its Git directories. */
+function sandboxFor(root: string, env: NodeJS.ProcessEnv): Sandbox {
+	const dirs = ["--absolute-git-dir", "--path-format=absolute --git-common-dir"].map((flag) =>
+		git(root, ["rev-parse", ...flag.split(" ")]),
+	);
+	try {
+		return openSandbox([...new Set([root, ...dirs])], env);
+	} catch (error) {
+		throw new ReviewInputError(`opencode reviews only in a sandbox: ${(error as Error).message}`);
+	}
+}
+
 /** Review the checkout's committed branch: one round, resuming the branch's session unless `fresh`. */
 export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Round> {
 	// Native Windows installs the reviewer CLIs as batch shims, which `run` cannot start without a shell.
@@ -1362,7 +1570,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		return { ...last!, usage: [], unchanged: true };
 	}
 
-	const cli = await prepare(harness, root, deps.env, options.signal);
+	const cli = await prepare(harness, picked.model, root, deps.env, options.signal);
 
 	// Named by its bound, so a round on another branch never rewrites the file this one reads.
 	const replySchema = schema(earlier.length);
@@ -1381,22 +1589,37 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const usage: Usage[] = [];
 	let session: string;
 	let reply: Reply;
-	if (!resume) {
-		const prompt = reviewPrompt(change, rules, earlier, options.responses);
-		const first = await turn(cli, reviewer.review(context, randomUUID(), prompt), root, context.model);
-		if (first.session === undefined) throw new Error(`${harness} did not report its session`);
-		session = first.session;
-		if (reported(first.usage)) usage.push({ turn: "review", ...first.usage });
-		reply = await turn(cli, reviewer.resume(context, session, reportPrompt(head, earlier)), root, context.model);
-	} else {
-		session = state!.session;
-		const prompt = laterPrompt({
-			...change,
-			previous: previous!.head,
-			earlier,
-			responses: options.responses,
-		});
-		reply = await turn(cli, reviewer.resume(context, session, prompt), root, context.model);
+	const sandbox = harness === "opencode" ? sandboxFor(root, cli.env) : undefined;
+	try {
+		if (sandbox !== undefined) {
+			const instructions = join(sandbox.dir, "instructions.md");
+			writeFileSync(instructions, context.instructions, { mode: 0o600 });
+			context.sandbox = { shell: sandbox.shell, instructions };
+		}
+		if (!resume) {
+			const prompt = reviewPrompt(change, rules, earlier, options.responses);
+			const first = await turn(cli, reviewer.review(context, randomUUID(), prompt), root, context.model);
+			if (first.session === undefined) throw new Error(`${harness} did not report its session`);
+			session = first.session;
+			if (reported(first.usage)) usage.push({ turn: "review", ...first.usage });
+			reply = await turn(
+				cli,
+				reviewer.resume(context, session, reportPrompt(head, earlier)),
+				root,
+				context.model,
+			);
+		} else {
+			session = state!.session;
+			const prompt = laterPrompt({
+				...change,
+				previous: previous!.head,
+				earlier,
+				responses: options.responses,
+			});
+			reply = await turn(cli, reviewer.resume(context, session, prompt), root, context.model);
+		}
+	} finally {
+		sandbox?.close();
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
 	const { score, rationale, findings: found, earlier: answers } = verdict(reply, earlier.length);

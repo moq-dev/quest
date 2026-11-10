@@ -261,79 +261,6 @@ test("a quick caller starts after at most QUICK_MS, and its admission is recorde
 	expect(slow.ledger().admissions).toEqual([{ id: expect.any(String), at: QUICK_MS, ...me }]);
 });
 
-test("a caller holding the host reserves it, waits out gated commands, and holds off every other caller", async () => {
-	const directory = tempDir();
-	const limits = { load: 4, memory: GiB };
-	// Load and memory never let an ordinary caller in; the holder ignores them.
-	const state = { now: 0, load: 99, memory: 0 };
-	const build = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
-	const ledger = fileHost(directory, () => state.now);
-	expect(ledger.publish(ledger.ledger(), [{ id: "build", at: 0, pid: build.pid }])).toBe(true);
-	const held: string[][] = [];
-	const events: string[] = [];
-	const holder = testHost(directory, state, events);
-	const sleep = holder.sleep;
-	holder.sleep = async (ms, signal) => {
-		await sleep(ms, signal);
-		// Reserved while it waits: no caller gets in, whatever its precedence, even past a quick deadline.
-		for (const precedence of [{}, { quick: true }, { priority: true }, { host: true }]) {
-			const reasons: string[] = [];
-			const controller = new AbortController();
-			const clock = { now: state.now, load: 0, memory: Infinity };
-			const other = testHost(directory, clock);
-			other.sleep = async () => {
-				clock.now += QUICK_MS;
-				if (reasons.length > 1) controller.abort();
-			};
-			await expect(
-				admit(limits, other, controller.signal, (reason) => reasons.push(reason), precedence),
-			).rejects.toThrow();
-			held.push(reasons);
-		}
-		build.kill();
-		await once(build, "exit");
-	};
-	await admit(limits, holder, signal, (reason) => events.push(reason), { host: true });
-	expect(events).toEqual(["commands", `sleep ${SETTLE_MS}`]);
-	expect(held).toEqual(Array(4).fill(["host", "host"]));
-	expect(ledger.ledger().admissions).toEqual([
-		{ id: "build", at: 0, pid: build.pid },
-		{ id: expect.any(String), at: 0, ...me, host: true },
-	]);
-	// A holder that died releases the host, as does one whose process ID another process now has.
-	const exited = spawnSync(process.execPath, ["-e", ""]).pid;
-	const released = tempDir();
-	const after = fileHost(released, () => 0);
-	expect(
-		after.publish(after.ledger(), [
-			{ id: "bench", at: 0, pid: exited, host: true },
-			{ id: "reused", at: 0, pid: process.pid, host: true, start: "an earlier process" },
-		]),
-	).toBe(true);
-	const reasons: string[] = [];
-	await admit(limits, testHost(released, { now: 0, load: 0, memory: Infinity }), signal, (reason) =>
-		reasons.push(reason),
-	);
-	expect(reasons).toEqual([]);
-	expect(after.ledger().admissions.at(-1)).toEqual({ id: expect.any(String), at: 0, ...me });
-	// Nor does a holder wait on an ordinary admission whose process ID another process now has.
-	const reused = tempDir();
-	const ordinary = fileHost(reused, () => 0);
-	const earlier = { id: "build", at: -10 * RECENT_MS, pid: process.pid, start: "an earlier process" };
-	expect(ordinary.publish(ordinary.ledger(), [earlier])).toBe(true);
-	const waited: string[] = [];
-	await admit(
-		limits,
-		testHost(reused, { now: 0, load: 0, memory: Infinity }),
-		signal,
-		(reason) => waited.push(reason),
-		{
-			host: true,
-		},
-	);
-	expect(waited).toEqual([]);
-});
-
 test("a lone quick or priority caller starts at once on load from outside the gate", async () => {
 	// No gated command runs, so the load is work the gate cannot wait out, whatever the precedence.
 	const state = { now: 0, load: 12, memory: Infinity };
@@ -650,16 +577,6 @@ test("a command runs in place with the given environment and its exact exit stat
 	const script = "process.exit(process.env.QUEST_GATE_ADMITTED === '1' ? 7 : 1)";
 	const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
 	expect(await direct([process.execPath, "-e", script], env, cancellation().cancel)).toBe(7);
-});
-
-test("Windows refuses --host, which it could not tell from a reused process ID", async () => {
-	const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-	Object.defineProperty(process, "platform", { value: "win32" });
-	try {
-		await expect(gate([process.execPath, "-e", ""], { host: true })).rejects.toThrow("unsupported on Windows");
-	} finally {
-		Object.defineProperty(process, "platform", platform);
-	}
 });
 
 test("a nested gate runs at once and keeps the exact exit status", async () => {
@@ -1369,7 +1286,7 @@ test("the gated command keeps its own flags, even ones Quest also parses", () =>
 	expect(gateBoundary(["gate", "--version"])).toEqual(["gate", "--version"]);
 	// Gate's own option stays Quest's; the same flag after the executable is the command's.
 	expect(gateBoundary(["gate", "--quick", "ls", "--quick"])).toEqual(["gate", "--quick", "--", "ls", "--quick"]);
-	expect(gateBoundary(["gate", "--host", "ls", "--host"])).toEqual(["gate", "--host", "--", "ls", "--host"]);
+	expect(gateBoundary(["gate", "ls", "--host"])).toEqual(["gate", "--", "ls", "--host"]);
 	expect(gateBoundary(["gate", "--root", "r", "--quick", "ls"])).toEqual([
 		"gate",
 		"--root",
@@ -1397,4 +1314,12 @@ test("global options after gate keep working", async () => {
 test("gate has command help and requires an executable", () => {
 	expect(run("gate", "--help").stdout).toContain("Arguments forwarded verbatim");
 	expect(run("gate").code).toBe(2);
+});
+
+test("gate rejects unknown options before the executable and forwards flags after it", () => {
+	const result = run("gate", "--host", process.execPath, "-e", "process.exit(0)");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain("unknown option '--host'");
+	expect(gateBoundary(["gate", "--unknown", "ls"])).toEqual(["gate", "--unknown", "ls"]);
+	expect(gateBoundary(["gate", "--", "-command"])).toEqual(["gate", "--", "-command"]);
 });
