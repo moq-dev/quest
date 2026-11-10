@@ -34,8 +34,8 @@ Done 2026-11-09 (agent, /quest-start): the cutover's changes are open as
 [moq-dev/moq.pro#3772](https://github.com/moq-dev/moq.pro/pull/3772), which
 adds `main-queue.yml` building `quest-queue/main/**` on `moq-pro-gate` with a
 `Main queue` result job and declares that job required beside `quest land`, and
-[kixelated/nixos#41](https://github.com/kixelated/nixos/pull/41), which
-switches the host's moq.pro instance to the watcher. moq-bot's installation
+a kixelated/nixos change that switches the host's moq.pro instance to the
+watcher. moq-bot's installation
 already has `actions: write` and `checks: write`.
 
 Moved 2026-11-10 (maintainer, /quest-plan): the host's switch, including
