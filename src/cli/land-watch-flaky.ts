@@ -184,7 +184,12 @@ export interface FlakyRound {
  */
 export function recordFlaky(root: string, state: string, round: FlakyRound): string[] {
 	const tests = readFlaky(state);
-	let test = tests.find((item) => signature(item.failure) === signature(round.failure));
+	const quest = round.result.quest;
+	let test =
+		quest === undefined
+			? tests.find((item) => signature(item.failure) === signature(round.failure))
+			: tests.find((item) => item.quest === quest);
+	if (!test && quest !== undefined) return [`flaky ignored ${round.number}: no record of ${quest}`];
 	if (!test) {
 		test = { failure: round.failure, verdicts: [] };
 		tests.push(test);

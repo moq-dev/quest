@@ -3733,7 +3733,7 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		const agent = join(dir, "custom-agent");
 		writeFileSync(agent, `#!/bin/sh\ncat >/dev/null\n${requeueScript}\n`, { mode: 0o755 });
 		await fix(dir, log, [1], agent, ["--model", "actual-model", "-"]);
-		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1]);
+		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1], []);
 		expect(result.agent).toBe("custom-agent");
 		expect(result.model).toBe("actual-model");
 	});
@@ -3751,7 +3751,7 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		vi.stubEnv("OPENAI_BASE_URL", "http://proxy.test/v1");
 		vi.stubEnv("OPENAI_API_KEY", "proxy-client");
 		await fix(dir, log, [1], agent, undefined, undefined, "high");
-		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1]);
+		const [result] = parseFixResult(readFileSync(join(dir, "quest-land-result.json"), "utf8"), [1], []);
 		expect(result).toMatchObject({ agent: "codex", model: "header-model", effort: "high" });
 		expect(author(result)).toBe("codex, header-model, high effort");
 	});
@@ -3829,15 +3829,16 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 
 	test("accepts one multiline Markdown comment per result and rejects a malformed one", () => {
 		const accepted = { number: 1, action: "requeue", reason: "fine", comment: "Line one\n\n- two\r\n\tthree" };
-		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		expect(parseFixResult(JSON.stringify([accepted]), [1], [])).toEqual([accepted]);
 		for (const comment of [7, "", "  \n", "x".repeat(COMMENT_LIMIT + 1), "bell\u0007", "nul\u0000"])
 			expect(() =>
-				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", comment }]), [1]),
+				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", comment }]), [1], []),
 			).toThrow("invalid fixer comment");
 		expect(() =>
 			parseFixResult(
 				JSON.stringify([{ number: 1, action: "requeue", reason: "fine", comment: "ok", extra: true }]),
 				[1],
+				[],
 			),
 		).toThrow("invalid fixer action or fields");
 	});
@@ -3855,7 +3856,7 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 			[{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", log: [0, 2] }],
 			[{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", log: [1.5, 2] }],
 		])
-			expect(() => parseFixResult(JSON.stringify(value), [1])).toThrow();
+			expect(() => parseFixResult(JSON.stringify(value), [1], [])).toThrow();
 		expect(
 			parseFixResult(
 				JSON.stringify([
@@ -3863,15 +3864,16 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 					{ number: 2, action: "requeue", reason: "collateral", blame: false },
 				]),
 				[1, 2],
+				[],
 			),
 		).toHaveLength(2);
 	});
 	test("accepts a one-line failure signature on any PR result", () => {
 		const accepted = { number: 1, action: "requeue", reason: "fine", failure: "cargo test: interop::render" };
-		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		expect(parseFixResult(JSON.stringify([accepted]), [1], [])).toEqual([accepted]);
 		for (const failure of [7, "", "  ", "x".repeat(201), "a\nb", "tab\t"])
 			expect(() =>
-				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure }]), [1]),
+				parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure }]), [1], []),
 			).toThrow("invalid fixer failure");
 		// The base fix has no signature: nothing compares its rounds.
 		expect(() =>
@@ -3882,16 +3884,17 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 		const [result] = parseFixResult(
 			JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure: ` cargo  test: "\`render\`'" ` }]),
 			[1],
+			[],
 		);
 		expect(result.failure).toBe("cargo test: render");
 		expect(() =>
-			parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure: "``" }]), [1]),
+			parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "fine", failure: "``" }]), [1], []),
 		).toThrow("invalid fixer failure");
 	});
 	test("accepts a cause only on a requeue, as one of the known causes", () => {
 		for (const cause of ["flaky", "base", "environment"]) {
-			const accepted = { number: 1, action: "requeue", reason: "fine", cause };
-			expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+			const accepted = { number: 1, action: "requeue", reason: "fine", cause, failure: "render" };
+			expect(parseFixResult(JSON.stringify([accepted]), [1], [])).toEqual([accepted]);
 		}
 		for (const value of [
 			{ number: 1, action: "requeue", reason: "fine", cause: "runner" },
@@ -3899,29 +3902,49 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 			{ number: 1, action: "fixed", head: "a".repeat(40), reason: "fine", cause: "base" },
 			{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", cause: "flaky" },
 		])
-			expect(() => parseFixResult(JSON.stringify([value]), [1])).toThrow("invalid fixer cause");
+			expect(() => parseFixResult(JSON.stringify([value]), [1], [])).toThrow("invalid fixer cause");
 	});
-	test("accepts a disabling commit only on a flaky requeue", () => {
+	test("names a known flaky test by its quest, and requires a flaky requeue to name its test", () => {
+		const quest = "quest/m0/flaky/render.md";
+		const known = [{ failure: "cargo test: render", quest, jobs: [] }];
+		const accepted = { number: 1, action: "requeue", reason: "flaky", cause: "flaky", quest };
+		expect(parseFixResult(JSON.stringify([accepted]), [1], known)).toEqual([accepted]);
+		for (const value of [
+			{ ...accepted, quest: "quest/m0/flaky/other.md" },
+			{ ...accepted, cause: "base" },
+			{ number: 1, action: "requeue", reason: "fine", quest },
+		])
+			expect(() => parseFixResult(JSON.stringify([value]), [1], known)).toThrow("invalid fixer quest");
+		expect(() => parseFixResult(JSON.stringify([accepted]), [1], [])).toThrow("invalid fixer quest");
+		expect(() =>
+			parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "flaky", cause: "flaky" }]), [1], []),
+		).toThrow("a flaky requeue must name its test");
+	});
+	test("accepts a disabling commit only on a known flaky test's requeue", () => {
 		const disable = "d".repeat(40);
+		const quest = "quest/m0/flaky/render.md";
+		const known = [{ failure: "cargo test: render", quest, jobs: [] }];
 		const accepted = {
 			number: 1,
 			action: "requeue",
 			reason: "flaky",
 			cause: "flaky",
 			failure: "cargo test: render",
+			quest,
 			disable,
 		};
-		expect(parseFixResult(JSON.stringify([accepted]), [1])).toEqual([accepted]);
+		expect(parseFixResult(JSON.stringify([accepted]), [1], known)).toEqual([accepted]);
 		for (const value of [
-			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", disable: "short" },
-			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", disable: 7 },
+			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", quest, disable: "short" },
+			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", quest, disable: 7 },
+			{ number: 1, action: "requeue", reason: "flaky", cause: "flaky", failure: "render", disable },
 			{ number: 1, action: "requeue", reason: "flaky", disable },
 			{ number: 1, action: "requeue", reason: "on the base", cause: "base", disable },
 			{ number: 1, action: "requeue", reason: "runner", cause: "environment", disable },
 			{ number: 1, action: "fixed", head: disable, reason: "fine", disable },
 			{ number: 1, action: "handback", diagnosis: "d", recommendation: "r", disable },
 		])
-			expect(() => parseFixResult(JSON.stringify([value]), [1])).toThrow("invalid fixer disable");
+			expect(() => parseFixResult(JSON.stringify([value]), [1], known)).toThrow("invalid fixer disable");
 		expect(() =>
 			parseBaseFix(JSON.stringify({ action: "fixed", head: disable, reason: "fine", disable })),
 		).toThrow();
