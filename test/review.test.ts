@@ -971,19 +971,6 @@ fakes("--base reviews against another branch, fetched first, with that branch's 
 	expect(unknown.stderr).toContain("--base must be <remote>/<branch>");
 });
 
-fakes("a quest's branch in an epic is reviewed against the epic's branch when origin has one", async () => {
-	const s = setup();
-	git(s.repo, "checkout", "-qb", "quest/m0/epic/one", "feature");
-	const alone = await quest("--root", s.repo, "review");
-	expect(alone.code).toBe(0);
-	expect(alone.stdout).toContain(`base ${git(s.repo, "rev-parse", "origin/main")} origin/main\n`);
-
-	git(s.repo, "push", "-q", "origin", "main:refs/heads/quest/m0/epic/README");
-	const epic = await quest("--root", s.repo, "review", "--new");
-	expect(epic.code).toBe(0);
-	expect(epic.stdout).toContain(`base ${git(s.repo, "rev-parse", "origin/main")} origin/quest/m0/epic/README\n`);
-});
-
 fakes("claude reviews read-only with the base's instructions, then reports in the schema", async () => {
 	const s = setup("CODEX_THREAD_ID");
 	// The rules travel inside the command's one double-quoted argument.

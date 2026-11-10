@@ -14,7 +14,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
 
-import { SIZES, type Size, branchQuest, epicBranch, parse, size as questSize } from "../core";
+import { SIZES, type Size, branchQuest, parse, size as questSize } from "../core";
 import { type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
@@ -1132,17 +1132,11 @@ async function remoteGit(root: string, args: string[]): Promise<string> {
 }
 
 /**
- * Fetch `base` into its remote-tracking ref in `root`, which may be a bare
- * clone, and return it as `<remote>/<branch>`. Without `base`, it is the base
- * `reviewed`'s PR targets on origin: its epic's branch when `reviewed` is the
- * branch of a quest in an epic that has one, else origin's default branch.
+ * Fetch `base`, or origin's default branch, into its remote-tracking ref in
+ * `root`, which may be a bare clone, and return it as `<remote>/<branch>`.
  */
-export async function fetchBase(root: string, base?: string, reviewed?: string): Promise<string> {
+export async function fetchBase(root: string, base?: string): Promise<string> {
 	let ref = base;
-	const epic = ref === undefined && reviewed?.startsWith("quest/") ? epicBranch(branchQuest(reviewed)) : null;
-	if (epic !== null && (await remoteGit(root, ["ls-remote", "origin", `refs/heads/${epic}`])) !== "") {
-		ref = `origin/${epic}`;
-	}
 	if (ref === undefined) {
 		const line = (await remoteGit(root, ["ls-remote", "--symref", "origin", "HEAD"])).split("\n")[0] ?? "";
 		const match = /^ref: refs\/heads\/(\S+)\tHEAD$/.exec(line);
@@ -1235,20 +1229,6 @@ function sessionBranch(root: string, name: string | undefined, baseBranch: strin
 	return upstream === "" || upstream === baseBranch ? local : upstream;
 }
 
-/**
- * The branch under review before its base is known, to find that base: as
- * `sessionBranch` reads it with no base to skip, or `undefined` where it
- * would refuse, which it reports once the base is known.
- */
-function reviewedBranch(root: string, name: string | undefined): string | undefined {
-	try {
-		return sessionBranch(root, name, "");
-	} catch (error) {
-		if (error instanceof ReviewInputError) return undefined;
-		throw error;
-	}
-}
-
 /** The detached-`HEAD` refusal, naming the branches whose tip is `HEAD` so the next call can pass one. */
 function detachedMessage(root: string, baseBranch: string): string {
 	const message = "HEAD is detached; pass --branch to name the branch whose review session this continues";
@@ -1316,13 +1296,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	}
 
 	// The reviewer's sandbox has no network, so the base is fetched first, and the size is read from it.
-	const baseRef = options.fetched
-		? options.base
-		: await fetchBase(
-				root,
-				options.base,
-				options.base === undefined ? reviewedBranch(root, options.branch) : undefined,
-			);
+	const baseRef = options.fetched ? options.base : await fetchBase(root, options.base);
 	const { remote, branch: baseBranch } = parseBase(root, baseRef);
 	const branch = sessionBranch(root, options.branch, baseBranch);
 	const tracking = `refs/remotes/${remote}/${baseBranch}`;

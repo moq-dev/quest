@@ -328,7 +328,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						throw new UsageError("--json, --limit, and --unclaimed apply to the ranking; omit the path");
 					}
 					const local = localViews(options.remote);
-					const named = find(local.main.docs, path).path;
+					// A quest planned on its epic's branch alone is in that branch's tree only.
+					const named = (
+						[local.main, ...local.epics.values()]
+							.map((tree) => locate(tree.docs, path))
+							.find((doc) => doc !== null) ?? find(local.main.docs, path)
+					).path;
 					const docs = viewOf(local, named).docs;
 					const doc = locate(docs, named);
 					if (doc === null)
@@ -1168,8 +1173,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("review")
 		.summary("Have a model other than the latest writer review the committed branch, read-only")
 		.description(
-			"Review the checkout's committed branch against its base (--base, else the base its PR targets: the epic's branch " +
-				"on origin for a quest in an epic that has one, else origin's default branch) with a reviewer its size picks, never the " +
+			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
 				"first whose model is not avoided reviews. --exclude-model names each model to avoid; without it, the " +
 				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR. " +
@@ -1236,10 +1240,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"`error: <harness> hit its usage limit; resets <time>`, where <time> is the reset as an ISO 8601 UTC " +
 				"timestamp, or `unknown` when the CLI named none.",
 		)
-		.option(
-			"--base <remote/branch>",
-			"Base branch to review against (default: the branch's epic's branch on origin, for a quest in an epic that has one, else origin's default branch)",
-		)
+		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
 		.addOption(new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(HARNESSES))
 		.option("--model <model>", "Model the reviewer runs instead")
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")

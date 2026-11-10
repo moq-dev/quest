@@ -786,17 +786,20 @@ describe("epic branches", () => {
 			[EPIC_ONE]: null,
 			[EPIC_TWO]: TWO.replace(/\n## Required\n[^]*$/, ""),
 			[ONE]: "# [S] One\n\n## Goal\n\nAfter the epic.\n",
+			// A quest planned on the epic's branch alone, after Two.
+			[THREE]: "# [S] Three\n\n## Goal\n\nAfter Two.\n\n## Required\n\n- [Two](/quest/m0/epic/two.md)\n",
 		});
 
 		const main = clone(bare);
 		git(main, "fetch", "-q", "origin");
 		git(main, "merge", "-q", "--ff-only", "origin/main");
-		expect(await cli("--root", main, "unblocked")).toMatchObject({ code: 0, stdout: `0\t${EPIC_TWO}\n` });
+		expect(await cli("--root", main, "unblocked")).toMatchObject({ code: 0, stdout: `1\t${EPIC_TWO}\n` });
 		expect(await cli("--root", main, "unblocked", "--unclaimed")).toMatchObject({
 			code: 0,
-			stdout: `0\t${EPIC_TWO}\n`,
+			stdout: `1\t${EPIC_TWO}\n`,
 		});
 		expect(await cli("--root", main, "unblocked", EPIC_TWO)).toMatchObject({ code: 0, stdout: "" });
+		expect(await cli("--root", main, "unblocked", THREE)).toMatchObject({ code: 0, stdout: `${EPIC_TWO}\n` });
 		expect(await cli("--root", main, "unblocked", ONE)).toMatchObject({ stdout: `${EPIC_ONE}\n` });
 		expect(await cli("--root", main, "unblocked", EPIC_ONE)).toMatchObject({
 			code: 1,
