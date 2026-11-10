@@ -1454,7 +1454,7 @@ printf '[{"number":%s,"action":"fixed","head":"%s","reason":"preserve both confl
 			const github = { ...world([], []), origin: repo.origin };
 			/** The first flaky requeue, naming render_timeout with the command that ran it. */
 			const first = `[ ! -e .git/quest-land-flaky.json ]
-printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","cause":"flaky","failure":"cargo nextest run --locked --tests: moq-relay render_timeout"}]' "$2" > quest-land-result.json
+printf '[{"number":%s,"action":"requeue","reason":"healthy; flaky test","cause":"flaky","failure":"cargo nextest run --locked --tests: render_timeout"}]' "$2" > quest-land-result.json
 `;
 			/** A requeue naming render_timeout by its known quest, disabling it at the checkout's HEAD after `script`. */
 			const flaky = (script: string) => `${script}
@@ -1480,7 +1480,7 @@ git commit -qm 'disable render_timeout'`;
 					`${disabling("mkdir -p quest/m0/flaky\nprintf '# x\\n' > quest/m0/flaky/render-timeout.md")}\nFAILURE='render_timeout'`,
 				),
 			);
-			fix.round(8, flaky(`${disabling("")}\nFAILURE='cargo nextest run --locked --tests: moq-relay render_timeout'`));
+			fix.round(8, flaky(`${disabling("")}\nFAILURE='cargo nextest run --locked --tests: render_timeout'`));
 			const said: string[][] = [];
 			for (const [index, number] of [5, 6, 7, 8].entries()) {
 				const minute = (index + 1) * 10;
@@ -1557,7 +1557,7 @@ git commit -qm 'disable render_timeout'`;
 			const opened = github.pulls.find((pull) => pull.number === 9)!;
 			expect(opened.title).toBe("quest land: disable the flaky test render-timeout");
 			expect(opened.body).toContain(
-				"The land fixer judged `cargo nextest run --locked --tests: moq-relay render_timeout` flaky 4 times, most recently in",
+				"The land fixer judged `cargo nextest run --locked --tests: render_timeout` flaky 4 times, most recently in",
 			);
 			expect(opened.body).toContain(
 				"#6 ([job 1](https://github.com/upstream/project/actions/runs/60/job/71)), #7 ([job 1](https://github.com/upstream/project/actions/runs/70/job/71))",
@@ -1567,7 +1567,7 @@ git commit -qm 'disable render_timeout'`;
 			expect(opened.body).toContain(`(head ${head})`);
 			expect(readFlaky(state)).toMatchObject([
 				{
-					failure: "cargo nextest run --locked --tests: moq-relay render_timeout",
+					failure: "cargo nextest run --locked --tests: render_timeout",
 					quest: "quest/m0/flaky/render-timeout.md",
 					verdicts: [{ number: 5 }, { number: 6 }, { number: 7 }, { number: 8 }],
 					disable: {

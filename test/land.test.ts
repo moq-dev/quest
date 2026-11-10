@@ -3917,7 +3917,11 @@ printf '[{"number":1,"action":"handback","diagnosis":"saw %s","recommendation":"
 			expect(() => parseFixResult(JSON.stringify([value]), [1], known)).toThrow("invalid fixer quest");
 		expect(() => parseFixResult(JSON.stringify([accepted]), [1], [])).toThrow("invalid fixer quest");
 		expect(() =>
-			parseFixResult(JSON.stringify([{ number: 1, action: "requeue", reason: "flaky", cause: "flaky" }]), [1], []),
+			parseFixResult(
+				JSON.stringify([{ number: 1, action: "requeue", reason: "flaky", cause: "flaky" }]),
+				[1],
+				[],
+			),
 		).toThrow("a flaky requeue must name its test");
 	});
 	test("accepts a disabling commit only on a known flaky test's requeue", () => {
