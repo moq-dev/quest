@@ -1179,7 +1179,8 @@ gate exits with 128 plus the signal's number. How far ownership reaches depends
 on the host:
 
 - Linux with a systemd 254+ user manager, unified cgroup v2, and Linux 5.14+
-  runs the command in its own systemd user scope, as `quest worktree run` does,
+  runs the command in its own systemd user scope in `background.slice`, whose
+  low CPU weight keeps the desktop session ahead of gated work under contention,
   and owns every descendant, including ones that start their own process group
   or session. Only a process that asks another service manager to start it
   escapes.
@@ -1187,7 +1188,7 @@ on the host:
 - macOS, and Linux without such a user manager (as in most containers and on
   Ubuntu 22.04), run the command as the leader of a new session and own its
   process group. A descendant that moves to another process group or session,
-  as a daemon does, is outside it. The session has no controlling terminal: the
+  as a daemon does, is outside it. The command runs under `nice -n 10`. The session has no controlling terminal: the
   command keeps the terminal as its streams, but cannot open `/dev/tty`, and
   Ctrl-Z suspends only Quest. Nothing reports that a process group emptied, so
   the command gets a pipe on descriptor 3, which every descendant inherits
@@ -1195,20 +1196,19 @@ on the host:
   start. A cancelled gate waits until every process holding it has exited,
   including one outside the group that the signal never reached.
 - Windows runs the command under a small Bun stub in a Job Object that kills
-  every process left in it once the stub exits, and lets none break away. It
+  every process left in it once the stub exits, and lets none break away. The
+  stub runs at below-normal priority, which everything it starts inherits. It
   owns every descendant, including detached ones, and stops them once the
   command exits or the gate is killed. Windows has no signals to forward:
   Ctrl-C reaches every process on the console, and killing the gate
   terminates the job.
 
 A nested invocation runs immediately inside the admitted command. A gate inside
-another Quest scope, such as `quest worktree run`, runs its command in a child
-cgroup of its own within that scope, which systemd delegates to the scope's
-processes, so the gate owns its own subtree and the enclosing scope still
-reaches it; a cancelled gate there waits until that child cgroup is empty.
-A scope started by an older Quest, without delegation, keeps
-ownership instead: a scope of the gate's own would take the command out of
-the enclosing one's reach. Internal compiler or test worker parallelism remains
+another Quest scope, such as `quest worktree run`, still runs its command in a
+background scope of its own, so only the gated command yields the CPU, not the
+rest of the enclosing scope. That scope is bound to the enclosing one, so the
+enclosing owner's kill stops it too, and the gate forwards that owner's signals
+to it. Internal compiler or test worker parallelism remains
 the command's responsibility.
 
 This repository's `just check` and `just test` run through the gate.
@@ -1579,8 +1579,6 @@ is empty, and a second signal kills everything at once. A run inside another
 Quest scope, such as a gate's, binds its own scope to that one, so the
 enclosing owner's kill stops it too, and leaves a repeated signal's kill to
 that owner: it may be the copy of SIGTERM that Just forwards.
-The scope is delegated, so a `quest gate` inside it owns its command through a
-child cgroup of the scope.
 Work handed to another service manager, such as `systemd-run` or a container
 daemon, escapes the scope. If the supervisor itself is killed, its command keeps
 running and its scratch is kept; the next `quest worktree` command drops the run

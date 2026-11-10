@@ -1,5 +1,4 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
 	chmodSync,
@@ -741,8 +740,8 @@ test("a nested call, or one inside a Quest scope, leaves its command to the encl
 	if (process.platform !== "linux") return;
 	expect(owner({ QUEST_GATE_ADMITTED: "1" }, gated)).toBe(inside);
 	expect(owner({ QUEST_GATE_ADMITTED: "1" }, child)).toBe(inside);
-	// No such scope runs, so it is not delegated.
-	expect(owner({}, worktree)).toBe(inside);
+	// An unadmitted call runs beside the enclosing scope, not inside it.
+	expect([direct, inside, scope]).not.toContain(owner({}, worktree));
 });
 
 /** Gone, or a zombie its new parent has not reaped yet: either way it runs no code. */
@@ -1039,7 +1038,7 @@ async function insideScope(launch: (command: string[], env: NodeJS.ProcessEnv) =
 		import { direct, group, inside, job, owner, scope } from ${JSON.stringify(gate)};
 		const dir = ${JSON.stringify(dir)};
 		const own = owner(process.env);
-		const kind = new Map([[direct, "direct"], [group, "group"], [inside, "inside"], [job, "job"], [scope, "scope"]]).get(own) ?? "nested";
+		const kind = new Map([[direct, "direct"], [group, "group"], [inside, "inside"], [job, "job"], [scope, "scope"]]).get(own) ?? "bound";
 		let report = { kind };
 		if (${run}) {
 			const never = new AbortController().signal;
@@ -1060,27 +1059,31 @@ async function insideScope(launch: (command: string[], env: NodeJS.ProcessEnv) =
 }
 
 describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () => {
-	test("owns a child cgroup of a delegated scope and removes it", { timeout: 30_000 }, async () => {
+	test("runs its command in a background scope beside the enclosing one", { timeout: 30_000 }, async () => {
 		const report = await insideScope((command, env) => scope(command, env, cancellation().cancel), true);
-		expect(report).toMatchObject({ kind: "nested", status: 7, stopped: true, removed: true });
-		// The child sits inside the enclosing scope, so that scope's cgroup.kill still reaches it.
-		expect(report.path).toMatch(/\/quest-gate-[0-9a-f-]+\.scope\/quest-gate-[0-9a-f-]+$/);
+		expect(report).toMatchObject({ kind: "bound", status: 7, stopped: true, removed: true });
+		// A sibling, so only the gated command yields the CPU, not the rest of the enclosing scope.
+		expect(report.path).toMatch(/\/background\.slice\/quest-gate-[0-9a-f-]+\.scope$/);
 	});
 
-	test("leaves its command to a scope that is not delegated", { timeout: 30_000 }, async () => {
-		// A scope started as a Quest before delegation would have.
-		const unit = `quest-worktree-${randomUUID()}.scope`;
-		const launch = (command: string[], env: NodeJS.ProcessEnv) =>
-			new Promise<number>((resolve, reject) => {
-				const child = spawn(
-					"systemd-run",
-					["--user", "--scope", "--quiet", "--collect", `--unit=${unit}`, "--", ...command],
-					{ env, stdio: "inherit" },
-				);
-				child.once("error", reject);
-				child.once("exit", (code) => resolve(code ?? 1));
-			});
-		expect(await insideScope(launch, false)).toEqual({ kind: "inside" });
+	test("is stopped when the enclosing scope's owner kills it", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const ready = join(dir, "ready");
+		const pid = join(dir, "pid");
+		// Ignoring SIGTERM, it outlives the forwarded signal, so only the bound scope's stop ends it.
+		const command = [
+			"/bin/sh",
+			"-c",
+			`trap '' TERM; sleep 1000 & echo $! > ${quote(pid)}; : > ${quote(ready)}; wait`,
+		];
+		const { stop, kill, cancel } = cancellation();
+		const result = scope(nestedGate(dir, command), outside(), cancel);
+		await until(() => existsSync(ready), "the command to start");
+		stop.abort("SIGTERM");
+		kill.abort();
+		await result;
+		// The enclosing run resolves only once the bound scope is empty too.
+		expect(stopped(Number(readFileSync(pid, "utf8")))).toBe(true);
 	});
 
 	/**
@@ -1136,7 +1139,7 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 		expect(existsSync(leaf.done)).toBe(true);
 	});
 
-	test("cancelled by its caller, signals every process in its child cgroup", { timeout: 30_000 }, async () => {
+	test("cancelled by its caller, signals every process in its scope", { timeout: 30_000 }, async () => {
 		const dir = tempDir();
 		const leaf = signalled(dir, ["SIGTERM"], 200);
 		const abort = join(dir, "abort");
