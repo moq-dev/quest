@@ -74,14 +74,14 @@ test("a skill drops the skills and guide sections it omits from what it builds o
 	const afk = skill("afk")!;
 	expect(afk.omit).toEqual(["grill", "Creation", "Questions"]);
 	const text = afk.instructions;
-	expect(text).toContain(`# /quest-complete\n\n${skill("complete")!.body.trim()}`);
+	expect(text).toContain(`# /quest-run\n\n${skill("run")!.body.trim()}`);
 	expect(text).toContain(`# /quest-merge\n\n${skill("merge")!.body.trim()}`);
 	expect(text).not.toContain("# /quest-grill");
 	expect(text).not.toContain("\n## Creation\n");
 	expect(text).not.toContain("\n## Questions\n");
 	expect(text).toContain("\n## Execution\n");
 	// The omission applies only when afk is the skill composed.
-	expect(skill("complete")!.instructions).toContain("# /quest-grill");
+	expect(skill("run")!.instructions).toContain("# /quest-grill");
 });
 
 /** Claude Code inlines the stub's whole output: the composed skill, then the setup line it echoes. */

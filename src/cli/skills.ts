@@ -13,7 +13,6 @@ import guide from "../../assets/AGENTS.md";
 import context from "../../assets/CONTEXT.md";
 import afk from "../../assets/skills/afk.md";
 import audit from "../../assets/skills/audit.md";
-import complete from "../../assets/skills/complete.md";
 import del from "../../assets/skills/delete.md";
 import exportSkill from "../../assets/skills/export.md";
 import grill from "../../assets/skills/grill.md";
@@ -23,7 +22,7 @@ import merge from "../../assets/skills/merge.md";
 import plan from "../../assets/skills/plan.md";
 import recurring from "../../assets/skills/recurring.md";
 import review from "../../assets/skills/review.md";
-import spawn from "../../assets/skills/spawn.md";
+import run from "../../assets/skills/run.md";
 import start from "../../assets/skills/start.md";
 import unblock from "../../assets/skills/unblock.md";
 
@@ -181,7 +180,6 @@ export function compose(skills: readonly Skill[]): string {
 export const SKILLS: readonly Skill[] = Object.entries({
 	afk,
 	audit,
-	complete,
 	delete: del,
 	export: exportSkill,
 	grill,
@@ -191,7 +189,7 @@ export const SKILLS: readonly Skill[] = Object.entries({
 	plan,
 	recurring,
 	review,
-	spawn,
+	run,
 	start,
 	unblock,
 }).map(([name, text]) => new Skill(name, text));

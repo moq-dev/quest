@@ -21,7 +21,7 @@ Do not edit `CONTRIBUTING.md`, `assets/CONTEXT.md`, `assets/AGENTS.md`, or
   formats, schemas, flags, and on-disk state directly, with no migrations,
   shims, or cleanup of what earlier versions wrote.
 - Starting or spawning quests stops at PR creation. It merges only on a
-  /quest-merge pick, the user's or the standing one /quest-complete gives a PR
+  /quest-merge pick, the user's or the standing one /quest-run gives a PR
   with no user-facing behavior change that adds or expands no quests, and only after repository checks and
   reviews pass.
 - Pull requests land as squash merges.

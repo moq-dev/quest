@@ -1,6 +1,6 @@
 ---
 name: quest-afk
-description: Make as much quest progress as possible while the user is away, taking the recommended course of action, then unblock them on their return.
+description: Run quests while the user is away, taking the recommended course of action and deferring merge decisions until they return.
 allowed-tools: Bash(quest skill afk) PowerShell(quest skill afk)
 ---
 

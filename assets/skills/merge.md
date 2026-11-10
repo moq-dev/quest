@@ -22,7 +22,7 @@ The head is landable when:
 A failing optional check does not stop the pick, since the PR's own CI is only a signal: name each one failing on the head, with its URL, when you report the pick, and queue it anyway.
 
 Otherwise run `/quest-iterate` on it, saying what it needs: a review of the head, fixes, or decisions, then run this skill again once it finishes; if it stops for the user instead, such as when it cannot push or reaches a design checkpoint, report that.
-Run it in this session, where its grill interview can ask the user; under a coordinator such as `/quest-complete`, hand it back, and the coordinator dispatches it in a sub-agent.
+Run it in this session, where its grill interview can ask the user; under a coordinator such as `/quest-run`, hand it back, and the coordinator dispatches it in a sub-agent.
 A PR that adds follow-ups also needs the answers of the round that picked it recorded before queueing, as the guide's Creation section describes; when the user ran this skill directly, ask which to keep and their open decisions now, then run `/quest-iterate` with the answers unless the head already records them.
 While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
 
@@ -42,5 +42,5 @@ On an ungated base without a merge queue, it refuses while auto-merge is disable
 There, it also refuses a head that does not contain the current base: run `/quest-iterate` to merge the base.
 
 Report once it is queued, and do not wait for it to merge.
-A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`; it needs the user's pick again, except where `/quest-complete` says an earlier pick still holds.
+A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`; it needs the user's pick again, except where `/quest-run` says an earlier pick still holds.
 Never close a PR to unstick it, and never work around a refused merge; ask instead.
