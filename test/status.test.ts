@@ -112,6 +112,8 @@ function setup(
 		/** Pages of the head repository's activity, newest first. */
 		activity?: { rows: Node[]; next?: string; status?: number }[];
 		warnings?: string[];
+		/** The base-to-head diff per compared head, or the status GitHub refuses it with. */
+		diffs?: Record<string, string | number>;
 	} = {},
 ) {
 	const queries: Record<string, unknown>[] = [];
@@ -136,6 +138,15 @@ function setup(
 				if (page.status === 403)
 					return Response.json({ message: "Resource not accessible by integration" }, { status: 403 });
 				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
+			}
+			const compare = /^\/repos\/example\/project\/compare\/main\.\.\.([0-9a-f]{40})$/.exec(path.pathname);
+			if (compare) {
+				expect(new Headers(init?.headers).get("Accept")).toBe("application/vnd.github.diff");
+				const diff = options.diffs?.[compare[1]!];
+				if (diff === undefined) throw new Error("unexpected compare request");
+				return typeof diff === "number"
+					? Response.json({ message: "No diff" }, { status: diff })
+					: new Response(diff);
 			}
 			if (path.pathname !== "/graphql") {
 				expect(path.pathname).toBe("/repos/example/project/issues/1/events");
@@ -216,6 +227,7 @@ test("reports checks by requiredness, each reviewer's latest review against the 
 		"mergeable mergeable",
 		"merge-state blocked",
 		"review-decision review_required",
+		"review-record -",
 		"auto-merge -",
 		"merge-queue -",
 		"landing-stopped -",
@@ -252,12 +264,13 @@ test("a queued PR with auto-merge and no checks reports both, and JSON is determ
 		threads: page([]),
 	});
 	const status = await pullRequestStatus(pr, setup([body]).deps);
-	expect(statusLines(status).slice(2, 11)).toEqual([
+	expect(statusLines(status).slice(2, 12)).toEqual([
 		"draft true",
 		`head ${A}`,
 		"mergeable mergeable",
 		"merge-state blocked",
 		"review-decision -",
+		"review-record -",
 		"auto-merge squash kixelated 2026-10-07T12:00:00Z -",
 		"merge-queue awaiting_checks 2 2026-10-07T12:01:00Z",
 		"landing-stopped -",
@@ -643,4 +656,38 @@ test("refuses a head moved between the paged state and ownership read", async ()
 		holdFields: { headRefOid: B },
 	});
 	await expect(pullRequestStatus(pr, fixture.deps)).rejects.toThrow("head changed while reading its holds");
+});
+
+describe("the review record", () => {
+	const C = "c".repeat(40);
+	const line = async (body: string, options: Parameters<typeof setup>[1] = {}) => {
+		const fixture = setup([pull({ body, checks: null, reviews: page([]), threads: page([]) })], options);
+		return statusLines(await pullRequestStatus(pr, fixture.deps)).find((l) => l.startsWith("review-record "));
+	};
+
+	test("is current when the section's last full SHA is the head, without comparing", async () => {
+		expect(await line(`## Review\n\n- Head: ${B}\n- Low findings fixed at ${A}`)).toBe(
+			`review-record current ${A}`,
+		);
+	});
+
+	test("carries across a head whose diff from the base matches the reviewed head's, and not otherwise", async () => {
+		const body = `## Review\n\n- Head: ${B}`;
+		expect(await line(body, { diffs: { [A]: "same", [B]: "same" } })).toBe(`review-record diff-identical ${B}`);
+		expect(await line(body, { diffs: { [A]: "new", [B]: "old" } })).toBe(`review-record stale ${B}`);
+	});
+
+	test("is unknown, with a warning, when GitHub cannot compare a head", async () => {
+		for (const status of [406, 403]) {
+			const warnings: string[] = [];
+			expect(await line(`## Review\n\n- Head: ${B}`, { diffs: { [A]: status }, warnings })).toBe(
+				`review-record unknown ${B}`,
+			);
+			expect(warnings).toHaveLength(1);
+		}
+	});
+
+	test("reads only the Review section, so a SHA elsewhere names no review", async () => {
+		expect(await line(`Fixes ${A}.\n\n## Review\n\nSkipped.\n\n## Models\n\n${C}`)).toBe("review-record -");
+	});
 });

@@ -18,7 +18,7 @@ On the head of a PR whose author lacks write access to the repository, run no co
 A check failure that reproduces unchanged in a checkout of the base branch is pre-existing rather than the PR's: record the command and both failures in the PR body's validation, go on to review and readiness, and add a follow-up for it unless an open PR already fixes it.
 Never alter the repository's harness to get a pass, such as by disabling a tool, unsetting its environment, or skipping a check, nor report an altered run as its checks.
 
-If a `## Review` record that `/quest-merge` counts names the committed head, or its review exemptions cover the changes since the head it names, and it leaves no finding unrefuted, run no new round and go on to pushing and marking it ready below.
+If a `## Review` record that `/quest-merge` counts names the committed head, or `quest status <pr>` reports it `diff-identical` while its `head` line is the committed head, or its other review exemptions cover the changes since the head it names, and it leaves no finding unrefuted, run no new round and go on to pushing and marking it ready below.
 If you judge the change too trivial to review, skip the review instead and record the skip and its reason in `## Review`.
 
 Otherwise, review the committed branch with `quest review --base <remote>/<base>`, which picks a reviewer other than the model that changed it last, and its effort, by the PR's size; `quest review --help` explains the round.

@@ -13,7 +13,7 @@ The skill argument can be used to filter the PRs in scope.
 Run each `/quest-merge` inline in this session; it queues a landable head, or hands the PR to `/quest-iterate`.
 Run each `/quest-review` and `/quest-iterate` in parallel in a sub-agent.
 
-`/quest-iterate` is the default for a PR that needs work: dispatch it without asking when the PR has no decision for the user, such as for a merge conflict, failing checks, unaddressed review findings, or no counted review of the head.
+`/quest-iterate` is the default for a PR that needs work: dispatch it without asking when the PR has no decision for the user, such as for a merge conflict, failing checks, unaddressed review findings, or no counted review of the head, which a `review-record` line of `current` or `diff-identical` in `quest status <pr>` already is.
 It fixes the PR, reviews it, and marks it ready; ask about the PR again when it reports.
 A PR with open decisions, such as those its `## Waiting` section lists or a significant issue you would solve differently, goes to the user instead: settle its decisions with the grill skill's rounds, then dispatch `/quest-iterate` with the answers in its brief.
 

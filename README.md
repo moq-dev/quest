@@ -455,6 +455,7 @@ head 0ade9d977d54c6f48152410532c58e9ea78db3d0
 mergeable conflicting
 merge-state dirty
 review-decision -
+review-record diff-identical 5f1c2e9a8b7d6c5e4f3a2b1c0d9e8f7a6b5c4d3e
 auto-merge -
 merge-queue -
 landing-stopped -
@@ -472,6 +473,7 @@ comes last, and a missing value prints as `-`:
 | --- | --- |
 | `url`, `state`, `draft`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the head SHA. |
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
+| `review-record` | Whether the PR body's [`## Review` record](#review-locally) still covers the head, and the head it names last: `current` when it is the head, `diff-identical` when `git diff <base>...<head>` prints the same as for it, `stale` otherwise, or `unknown` when GitHub cannot compare them, such as a diff too large; `-` when the record names no full SHA. Whose record counts is the reader's call. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
@@ -1413,18 +1415,18 @@ from the branch into the base, found among the upstream's PRs from the
 repository the base's remote pushes to, and prints `record <url>`. The record
 names the reviewer harness, model, and effort, the session and round, the
 reviewed head, the base's short SHA, the score and rationale, each finding with
-its location, and the last round's findings with their dispositions. The land
-gate counts every full SHA the section names as a review of that head, so the
+its location, and the last round's findings with their dispositions. `quest
+status` takes the last full SHA the section names as the reviewed head, so the
 head appears in full only once a round reports no findings, and model text
 appears as inline code, which mentions or links nothing and never holds a full
 SHA. The section runs to the next level-1 or
 level-2 heading, both as Markdown parses them, so an example in a code fence is
-text to the land gate and the record alike; the rest of the body stays as written, and a body without one
+text to `quest status` and the record alike; the rest of the body stays as written, and a body without one
 gains it at the end, unless it ends inside an unclosed code fence or HTML
 comment, which fails the record. With no such PR, or a remote off GitHub, it changes nothing
 and prints `record skipped: <why>`. It edits as the user the GitHub token names
-(`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`), and the land gate counts the
-record only while the PR's author made the body's latest edit, so review your
+(`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`), and `/quest-merge` counts the
+record only on a PR whose author has write access, so review your
 own PRs with your own token. A record GitHub refuses fails the command after the
 round's report, with exit status 1. It exits 0 once the round
 finishes, whatever it found, 2 for invalid arguments or a checkout or CLI that
