@@ -401,10 +401,6 @@ export function fileHost(directory: string, now = Date.now): Host {
  * one, the load is work the gate cannot wait out, as on a freshly booted macOS
  * runner, so the raw load counts as having room.
  *
- * A running command that holds the host keeps everyone else waiting; one that
- * waits to hold it ignores load and memory, and waits only for the gated
- * commands still running to end (see `Precedence`).
- *
  * Each caller decides against the newest ledger and publishes its admission
  * atomically, so concurrent callers never exceed the rule and one always wins
  * while it has room. No fairness promise, and no admission timeout except a
