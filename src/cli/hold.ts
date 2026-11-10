@@ -18,6 +18,7 @@ import {
 } from "./github";
 import { latestContexts } from "../github/checks";
 import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
+import { QUEUE_CHECK } from "./land-queue";
 import { classifyCheck } from "./status";
 import { Refusal, ago } from "./start";
 
@@ -320,10 +321,12 @@ export async function land(
 
 /**
  * Refuse a head on which any check's latest run failed, required or not, naming each: landing it
- * would spend a queue build on a known failure. Pending and absent checks do not block.
+ * would spend a queue build on a known failure. Pending and absent checks do not block, nor does the
+ * own queue's informational check, which reports how a past pick ended rather than the head.
  */
 async function passing(github: GitHub, pr: PullRequest, url: string, sha: string): Promise<void> {
 	const failing = latestContexts(await contexts(github, pr, sha))
+		.filter((context) => context.name !== QUEUE_CHECK)
 		.map(classifyCheck)
 		.filter(({ outcome }) => outcome === "failing")
 		.map(({ check }) => (check.url === null ? check.name : `${check.name} (${check.url})`));

@@ -315,7 +315,12 @@ describe("merge --land", () => {
 			detailsUrl: `https://ci.example/${databaseId}`,
 			checkSuite: { app: { databaseId: 15368 } },
 		});
-		pull.checks = [run(1, "Check", "COMPLETED", "FAILURE"), run(2, "Lint", "IN_PROGRESS", null)];
+		// The own queue's check reports a dropped pick, not the head, so it never blocks a requeue.
+		pull.checks = [
+			run(1, "Check", "COMPLETED", "FAILURE"),
+			run(2, "Lint", "IN_PROGRESS", null),
+			run(4, "quest queue", "COMPLETED", "FAILURE"),
+		];
 		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
 			`head ${HEAD} failed a check: Check (https://ci.example/1)`,
 		);
