@@ -1685,7 +1685,8 @@ agent ID, and a workflow agent's for its workflow run, so the hook binds a
 workflow agent's checkout to the first subagent that starts in it, the workflow
 agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it.
+without its scratch until it reinstalls it. Quest's own refusal, for a gate the
+subagent left running, keeps its checkout instead.
 
 A session's checkout, from `--worktree`, `EnterWorktree`, a background session,
 or remote control, is held by the session that created it and by each session
@@ -1759,9 +1760,10 @@ work, in every repository:
 quest setup
 ```
 
-It sets Claude Code's `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground
-command such as `quest wait` can block for 55 minutes, just under the 1h
-prompt-cache TTL, instead of the 10-minute default.
+It sets Claude Code's `env.BASH_MAX_TIMEOUT_MS` and
+`env.BASH_DEFAULT_TIMEOUT_MS` to 3300000, so a foreground command such as
+`quest wait` or a gated build runs for up to 55 minutes, just under the 1h
+prompt-cache TTL, without the agent passing a timeout or backgrounding it.
 
 It also loads the rules once. The repository's `Quests: ` line has agents run
 `quest context` before any work, which costs a turn and is summarized away
@@ -1788,7 +1790,16 @@ hook on shell commands and file edits denies, with the rule as the reason:
 - a scratch file written under `/tmp`, outside the checkout, by a redirection,
   `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit.
 
-It checks only a body on the command line itself: `--body`, a `body=` field,
+For Claude Code, `Stop` and `SubagentStop` hooks refuse to end an agent's turn
+while a `quest gate` command it started still runs in the background, naming
+each one and telling the agent to block on it: Claude Code stops a subagent's
+background commands when it ends, and a session that ends its turn on one
+leaves its result unread. A command is the agent's when its transcript holds
+the ID Claude Code gave it on backgrounding it, so a sibling's gate does not
+hold an agent. Claude Code lists a command only while it runs, so the
+refusal ends with the gate. Codex runs no such hook.
+
+`quest` must be on the `PATH` the agent starts with, as for the worktree `--body`, a `body=` field,
 `git commit -m`, or `--body-file -` with a here-document. A body file, or one
 piped into `gh`, passes unread, since the file may hold something else by the
 time the command runs; `quest context` keeps the footer and em-dash rules in
@@ -1805,7 +1816,7 @@ It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`, and
 `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json`, when that directory exists.
 It keeps your other settings, refuses a malformed file unchanged, writes each
 once, and prints each change. Rerun it after upgrading. `quest setup --remove`
-takes the hooks out, and the timeout while it still holds Quest's value.
+takes the hooks out, and each timeout while it still holds Quest's value.
 
 ## Where this is going
 

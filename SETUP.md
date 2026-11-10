@@ -68,8 +68,8 @@ to proceed; never delete or rename their files to get past it.
 Claude Code's in `$CLAUDE_CONFIG_DIR/settings.json` (or
 `~/.claude/settings.json`), and Codex's in `$CODEX_HOME/hooks.json` (or
 `~/.codex/hooks.json`) when that directory exists. It sets Claude Code's
-`env.BASH_MAX_TIMEOUT_MS` to 55 minutes, so agents can block on a long wait in
-one call instead of polling. It also adds the rules the `Quests: ` line points
+`env.BASH_MAX_TIMEOUT_MS` and `env.BASH_DEFAULT_TIMEOUT_MS` to 55 minutes, so
+agents can block on a long wait or build in one call instead of polling. It also adds the rules the `Quests: ` line points
 at to every session, and again after compaction, which would otherwise
 summarize them away, and blocks tool calls that break the rules a program can
 check, such as a `git push` without an explicit refspec, through hooks that
