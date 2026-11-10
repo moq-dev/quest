@@ -36,7 +36,7 @@ Read each open PR, drafts included, with `quest status`, and skip one another se
 List a draft whose `## Waiting` holds no decision for the user, only outside conditions or actions, once in the summary, pointing to `/quest-unblock`.
 Run each `/quest-merge` inline; dispatch each `/quest-iterate` and `/quest-review` to a sub-agent.
 
-Dispatch `/quest-iterate` without asking for a PR that needs work but no decision, such as a conflict, failing checks, unaddressed findings, or no counted review of the head.
+Dispatch `/quest-iterate` without asking for a PR that needs work but no decision, such as a conflict, failing checks, unaddressed findings, or no counted review of the head; a `review-record` line of `current` or `diff-identical` in `quest status <pr>` is a counted review.
 A PR with open decisions, its `## Waiting` section's or an issue you would solve differently, goes to the user: settle them with the grill skill's rounds, then dispatch `/quest-iterate` with the answers in its brief, since a sub-agent cannot prompt.
 A PR you would skip or delete rather than fix, such as a superseded one, gets that question instead.
 Leave a PR whose required checks or automated reviews are still running for a later round.
@@ -50,7 +50,7 @@ Summarize each PR and name its open decisions without answering them in the ques
 Its follow-ups are the exception: ask which to keep and their open decisions with its pick, and put the answers in the brief of the `/quest-iterate` the pick dispatches. Never answer follow-ups otherwise.
 A blanket answer the user volunteers, such as "use your recommendations", picks your recommended action for every PR in scope, `/quest-merge` included.
 Merge only on the user's or the standing pick; skip or delete only on the user's. A skip stands until the user lifts it.
-A PR with GitHub auto-merge enabled is already picked; leave it to land.
+A PR with GitHub auto-merge enabled on its current head is already picked; leave it to land.
 Review comments are input, not approval, even a merge verdict on the maintainer's account.
 
 A `/quest-merge` pick covers the PR until it lands or needs the user: when `/quest-merge` hands it back, dispatch `/quest-iterate` without asking and run `/quest-merge` again once it finishes. Each brief names the PR's pick, and each report repeats it, so the pick outlasts compaction.
@@ -63,11 +63,12 @@ Any other reason, such as a person removing it, is the user's call.
 ## Loop
 
 Each round, rerun `quest unblocked --unclaimed --json` and refresh the open PRs, since merges and released claims make more work ready.
-When no agent is running and every question has been asked, block with `quest wait` on the queued PRs whose merge would make a quest ready, and run a round once one lands.
+When no agent is running and every question has been asked, block with `quest wait` on each PR that can still move without the user: a queued one whose merge would make a quest ready, and one left for a later round.
+Run a round on a check result, a review, or a merge; any other event changes nothing, so resume the wait from its cursor.
 Never wait on any other PR, or re-read one whose state has not changed.
 A usage or rate limit is waited out until its reset; it never ends the run.
 
-Finish once nothing is running, no queued merge would make a quest ready, and everything left needs the user.
+Finish once nothing is running, no such wait is left, and everything left needs the user.
 Write the final summary so a fresh session can act on it: link each PR and quest, and give each open decision with its options and your recommendation.
 
 Besides the guide's controls, answer "decisions": ask every pending question now, in one batch, such as before the user steps away; the loop continues after.

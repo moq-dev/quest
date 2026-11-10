@@ -1,5 +1,4 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
 	chmodSync,
@@ -261,6 +260,99 @@ test("a quick caller starts after at most QUICK_MS, and its admission is recorde
 	expect(slow.ledger().admissions).toEqual([{ id: expect.any(String), at: QUICK_MS, ...me }]);
 });
 
+test("waiting callers start in arrival order, a later one first only while the host has room for both", async () => {
+	const limits = { load: 4, memory: GiB };
+	// A build still runs, and an earlier caller waits for its turn.
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
+	const earlier = { id: "earlier", at: 0, ...me, queued: true };
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
+	const events: string[] = [];
+	const host = testHost(directory, state, events);
+	expect(host.publish(host.ledger(), [build, earlier])).toBe(true);
+	const sleep = host.sleep;
+	host.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		// The earlier caller takes its turn.
+		const ledger = host.ledger();
+		const rest = ledger.admissions.filter(({ id }) => id !== "earlier");
+		if (rest.length < ledger.admissions.length)
+			expect(host.publish(ledger, [...rest, { id: "started", at: state.now, ...me }])).toBe(true);
+	};
+	// Alone, this caller would start at once; behind the earlier one, it waits, then spaces itself.
+	await admit(limits, host, signal, (reason) => events.push(reason));
+	expect(events).toEqual(["queue", `sleep ${SETTLE_MS}`, `sleep ${SETTLE_MS}`]);
+	expect(host.ledger().admissions).toEqual([
+		build,
+		{ id: "started", at: SETTLE_MS, ...me },
+		{ id: expect.any(String), at: 2 * SETTLE_MS, ...me },
+	]);
+	// With room for both, it starts at once and leaves the earlier caller's place.
+	const roomy = testHost(tempDir(), { now: 0, load: 2, memory: Infinity }, events);
+	expect(roomy.publish(roomy.ledger(), [build, earlier])).toBe(true);
+	events.length = 0;
+	await admit(limits, roomy, signal, (reason) => events.push(reason));
+	expect(events).toEqual([]);
+	expect(roomy.ledger().admissions).toEqual([build, earlier, { id: expect.any(String), at: 0, ...me }]);
+});
+
+test("a place frees once its gate ends or its caller cancels, or a minute after its last refresh without a start", async () => {
+	const limits = { load: 4, memory: GiB };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
+	const exited = spawnSync(process.execPath, ["-e", ""]).pid;
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
+	const host = testHost(directory, state);
+	expect(
+		host.publish(host.ledger(), [
+			build,
+			{ id: "ended", at: 0, pid: exited, queued: true },
+			{ id: "reused", at: 0, pid: process.pid, start: "an earlier process", queued: true },
+			{ id: "unrefreshed", at: -RECENT_MS, pid: process.pid, queued: true },
+		]),
+	).toBe(true);
+	const events: string[] = [];
+	await admit(limits, testHost(directory, state, events), signal, (reason) => events.push(reason));
+	expect(events).toEqual([]);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: 0, ...me }]);
+	// A place refreshed within the minute still holds, and a cancelled caller behind it leaves the queue.
+	const fresh = { id: "fresh", at: -RECENT_MS / 2, pid: process.pid, queued: true };
+	const queued = testHost(tempDir(), state);
+	expect(queued.publish(queued.ledger(), [build, fresh])).toBe(true);
+	const controller = new AbortController();
+	const waited: string[] = [];
+	queued.sleep = async () => {
+		expect(queued.ledger().admissions).toEqual([build, fresh, expect.objectContaining({ queued: true, ...me })]);
+		controller.abort(new Error("cancelled"));
+	};
+	await expect(admit(limits, queued, controller.signal, (reason) => waited.push(reason))).rejects.toThrow(
+		"cancelled",
+	);
+	expect(waited).toEqual(["queue"]);
+	expect(queued.ledger().admissions).toEqual([build, fresh]);
+});
+
+test("a priority caller goes ahead of the queue, and a quick one starts at its deadline whatever its place", async () => {
+	const limits = { load: 4, memory: GiB };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
+	const earlier = { id: "earlier", at: 0, ...me, queued: true };
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
+	const host = testHost(directory, state);
+	expect(host.publish(host.ledger(), [build, earlier])).toBe(true);
+	const events: string[] = [];
+	await admit(limits, testHost(directory, state, events), signal, undefined, { priority: true });
+	expect(events).toEqual([]);
+	await admit(limits, testHost(directory, state, events), signal, undefined, { quick: true });
+	expect(events).toEqual(Array.from({ length: QUICK_MS / SETTLE_MS }, () => `sleep ${SETTLE_MS}`));
+	expect(host.ledger().admissions).toEqual([
+		build,
+		earlier,
+		{ id: expect.any(String), at: 0, ...me },
+		{ id: expect.any(String), at: QUICK_MS, ...me },
+	]);
+});
+
 test("a lone quick or priority caller starts at once on load from outside the gate", async () => {
 	// No gated command runs, so the load is work the gate cannot wait out, whatever the precedence.
 	const state = { now: 0, load: 12, memory: Infinity };
@@ -348,7 +440,7 @@ test("a caller that dies mid-admission blocks no one past a minute", async () =>
 	await admit({ load: 1, memory: 1 }, testHost(directory, state, events), signal);
 	expect(events).toEqual([]);
 	// The stale draft is gone; one still being written stays.
-	expect(readdirSync(directory).sort()).toEqual(["2", "live.tmp"]);
+	expect(readdirSync(directory).sort()).toEqual(["3", "live.tmp"]);
 	// A version cut short, as by power loss, reads as empty rather than wedging every caller.
 	writeFileSync(join(directory, "100"), "");
 	expect(host.ledger()).toEqual({ version: 100, admissions: [] });
@@ -648,8 +740,8 @@ test("a nested call, or one inside a Quest scope, leaves its command to the encl
 	if (process.platform !== "linux") return;
 	expect(owner({ QUEST_GATE_ADMITTED: "1" }, gated)).toBe(inside);
 	expect(owner({ QUEST_GATE_ADMITTED: "1" }, child)).toBe(inside);
-	// No such scope runs, so it is not delegated.
-	expect(owner({}, worktree)).toBe(inside);
+	// An unadmitted call runs beside the enclosing scope, not inside it.
+	expect([direct, inside, scope]).not.toContain(owner({}, worktree));
 });
 
 /** Gone, or a zombie its new parent has not reaped yet: either way it runs no code. */
@@ -946,7 +1038,7 @@ async function insideScope(launch: (command: string[], env: NodeJS.ProcessEnv) =
 		import { direct, group, inside, job, owner, scope } from ${JSON.stringify(gate)};
 		const dir = ${JSON.stringify(dir)};
 		const own = owner(process.env);
-		const kind = new Map([[direct, "direct"], [group, "group"], [inside, "inside"], [job, "job"], [scope, "scope"]]).get(own) ?? "nested";
+		const kind = new Map([[direct, "direct"], [group, "group"], [inside, "inside"], [job, "job"], [scope, "scope"]]).get(own) ?? "bound";
 		let report = { kind };
 		if (${run}) {
 			const never = new AbortController().signal;
@@ -967,27 +1059,31 @@ async function insideScope(launch: (command: string[], env: NodeJS.ProcessEnv) =
 }
 
 describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () => {
-	test("owns a child cgroup of a delegated scope and removes it", { timeout: 30_000 }, async () => {
+	test("runs its command in a background scope beside the enclosing one", { timeout: 30_000 }, async () => {
 		const report = await insideScope((command, env) => scope(command, env, cancellation().cancel), true);
-		expect(report).toMatchObject({ kind: "nested", status: 7, stopped: true, removed: true });
-		// The child sits inside the enclosing scope, so that scope's cgroup.kill still reaches it.
-		expect(report.path).toMatch(/\/quest-gate-[0-9a-f-]+\.scope\/quest-gate-[0-9a-f-]+$/);
+		expect(report).toMatchObject({ kind: "bound", status: 7, stopped: true, removed: true });
+		// A sibling, so only the gated command yields the CPU, not the rest of the enclosing scope.
+		expect(report.path).toMatch(/\/background\.slice\/quest-gate-[0-9a-f-]+\.scope$/);
 	});
 
-	test("leaves its command to a scope that is not delegated", { timeout: 30_000 }, async () => {
-		// A scope started as a Quest before delegation would have.
-		const unit = `quest-worktree-${randomUUID()}.scope`;
-		const launch = (command: string[], env: NodeJS.ProcessEnv) =>
-			new Promise<number>((resolve, reject) => {
-				const child = spawn(
-					"systemd-run",
-					["--user", "--scope", "--quiet", "--collect", `--unit=${unit}`, "--", ...command],
-					{ env, stdio: "inherit" },
-				);
-				child.once("error", reject);
-				child.once("exit", (code) => resolve(code ?? 1));
-			});
-		expect(await insideScope(launch, false)).toEqual({ kind: "inside" });
+	test("is stopped when the enclosing scope's owner kills it", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const ready = join(dir, "ready");
+		const pid = join(dir, "pid");
+		// Ignoring SIGTERM, it outlives the forwarded signal, so only the bound scope's stop ends it.
+		const command = [
+			"/bin/sh",
+			"-c",
+			`trap '' TERM; sleep 1000 & echo $! > ${quote(pid)}; : > ${quote(ready)}; wait`,
+		];
+		const { stop, kill, cancel } = cancellation();
+		const result = scope(nestedGate(dir, command), outside(), cancel);
+		await until(() => existsSync(ready), "the command to start");
+		stop.abort("SIGTERM");
+		kill.abort();
+		await result;
+		// The enclosing run resolves only once the bound scope is empty too.
+		expect(stopped(Number(readFileSync(pid, "utf8")))).toBe(true);
 	});
 
 	/**
@@ -1043,7 +1139,7 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 		expect(existsSync(leaf.done)).toBe(true);
 	});
 
-	test("cancelled by its caller, signals every process in its child cgroup", { timeout: 30_000 }, async () => {
+	test("cancelled by its caller, signals every process in its scope", { timeout: 30_000 }, async () => {
 		const dir = tempDir();
 		const leaf = signalled(dir, ["SIGTERM"], 200);
 		const abort = join(dir, "abort");

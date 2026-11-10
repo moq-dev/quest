@@ -520,8 +520,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Print a pull request's head, checks, merge state, reviews, reactions, and unresolved review threads " +
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
-				"url, state, draft, head, mergeable, merge-state, review-decision, auto-merge, merge-queue, " +
-				"landing-stopped, and checks, whose state and counts follow each check's latest run; auto-merge gives its method, who enabled it and when, and the head it was " +
+				"url, state, draft, head, mergeable, merge-state, review-decision, review-record, auto-merge, merge-queue, " +
+				"landing-stopped, and checks, whose state and counts follow each check's latest run; review-record gives whether the PR body's ## Review record " +
+				"covers the head, as current, diff-identical (git diff <base>...<head> prints the same as for the head it names), " +
+				"stale, or unknown when GitHub cannot compare them, then the head it names last; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
 				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
@@ -598,7 +600,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, or merge at " +
 				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
 				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
-				"first, and once the head has moved. It uses the method --squash or --rebase names, refusing one " +
+				"first, once the head has moved, and while the latest run of any check on the head failed, required " +
+				"or not, naming each; a pending or absent check does not block. It uses the method --squash or --rebase names, refusing one " +
 				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
 				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
 				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
@@ -759,6 +762,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			)
 				.choices(EFFORTS)
 				.default("medium"),
+		)
+		.option(
+			"--refuse-forks",
+			"On the own queue, eject each pick whose head is in a fork, or in a deleted repository, before pushing its build, so a fork's code never reaches a private queue runner",
 		)
 		.option(
 			"--bump <owner/repo>",
@@ -1415,14 +1422,16 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Configure your own Claude Code settings for quest work, in $CLAUDE_CONFIG_DIR/settings.json or else " +
 				"~/.claude/settings.json, and Codex's in $CODEX_HOME/hooks.json or else ~/.codex/hooks.json when " +
 				"that directory exists, keeping every other setting and hook. Touches no repository.\n\n" +
-				`Sets Claude Code's env.BASH_MAX_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a foreground command, such as a blocking ` +
-				"wait, may run 55 minutes: just under the 1h prompt-cache TTL. " +
+				`Sets Claude Code's env.BASH_MAX_TIMEOUT_MS and env.BASH_DEFAULT_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a ` +
+				"foreground command, such as a blocking wait or a long build, runs 55 minutes without the agent passing " +
+				"a timeout: just under the 1h prompt-cache TTL. " +
 				`Installs Claude Code's ${listed(CLAUDE_HOOKS)} hooks and Codex's ${listed(CODEX_HOOKS)} hooks. ` +
 				"The start hooks add `quest context` to each session and Claude Code subagent in a repository that " +
 				"uses Quest, and again after compaction, so agents never run it themselves. PreToolUse blocks tool " +
 				"calls there that break a rule a program can check: em dashes an agent writes, a push without an " +
 				"explicit refspec, a force-push or rebase, a GitHub post without its `(Written by ...)` footer, and " +
-				"scratch files in /tmp. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
+				"scratch files in /tmp. Stop and SubagentStop refuse to end an agent's turn while a `quest gate` " +
+				"command it started runs in the background. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
 				"with, and Codex asks to trust its hooks once through /hooks.\n\n" +
 				"With --worktrees, also installs Claude Code's " +
 				WORKTREE_HOOKS.map((h) => h.event).join(", ") +
@@ -1435,7 +1444,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--worktrees", "Also install the worktree hooks")
 		.option("--no-worktrees", "Remove the worktree hooks")
-		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
+		.option("--remove", "Remove Quest's hooks, and each timeout while it still holds Quest's value")
 		.action((options: { remove?: boolean; worktrees?: boolean }) => {
 			for (const target of targets()) {
 				const changes = setup(target, options);
@@ -1457,7 +1466,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or a commit message or new GitHub post that adds an em dash outside a `>` quote line, a `git push` " +
 				"whose refspecs lack a `:`, a force-push, a `git rebase` or `git pull --rebase`, a new GitHub post " +
 				"whose body lacks a `(Written by ...)` line, or a file written under /tmp. A force-push or rebase the " +
-				`user asked for passes with the \`${USER_ASKED}\` prefix. Exits 1 on malformed input or an event it ` +
+				`user asked for passes with the \`${USER_ASKED}\` prefix. Stop and SubagentStop refuse to end the ` +
+				"turn, naming each command, while a `quest gate` command the ending agent started runs in Claude " +
+				"Code's background: one whose background ID its transcript holds. Exits 1 on malformed input or an event it " +
 				"does not handle.",
 		)
 		.action(() => {
