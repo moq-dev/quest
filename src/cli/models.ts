@@ -16,17 +16,17 @@ export interface Model {
 export const DEFAULT_SIZE: Size = "M";
 
 const sol = (effort: string): Model => ({ harness: "codex", model: "gpt-6.1-sol", effort });
-const sonnet = (effort: string): Model => ({ harness: "claude", model: "claude-sonnet-5-5", effort });
 const opus = (effort: string): Model => ({ harness: "claude", model: "claude-opus-5-5", effort });
+const haiku = (effort: string): Model => ({ harness: "claude", model: "claude-haiku-5-5", effort });
 
 /**
  * Each size's writers, ranked: a spawn starts the quest on the first that can
  * run, falling through only while nothing is written, since the model that
- * writes a PR runs all its iterates. XS stays off Haiku, which suits one-shot
- * checkable work more than a PR's agent loop.
+ * writes a PR runs all its iterates. XS runs Haiku at xhigh, which scores about
+ * as Opus low does for a third of its subscription cost per task.
  */
 export const WRITERS: Record<Size, readonly Model[]> = {
-	XS: [sonnet("medium"), sol("low")],
+	XS: [haiku("xhigh"), sol("low")],
 	S: [opus("low"), sol("medium")],
 	M: [opus("medium"), sol("high")],
 	L: [opus("high"), sol("xhigh")],

@@ -75,14 +75,26 @@ checkpoints and outages to count by hand:
   - Too thin (0-4 PRs per cell) to move a size; no table changed. Watch
     iterates below the size's effort, and `Implementer:` lines without an
     effort (6 of the 20 lines said `unknown`).
-  - Changed after that run on Anthropic's
-    [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/)
-    rather than tallies (maintainer, 2026-11-09): XS writes on Sonnet 5.5
-    medium instead of Haiku high, which suits one-shot checkable work more
-    than a PR's agent loop. Tally that cell fresh. XL stays on Opus xhigh:
-    the maintainer rejected Fable 5.2 medium, which the guide favors over
-    Opus past high and which zero-data-retention organizations may be
-    refused.
+  - Changed after that run rather than on tallies (maintainer, 2026-11-09):
+    XS writes on Haiku xhigh instead of high. Tally that cell fresh. The
+    source was [mypriors.com/adamholter](https://mypriors.com/adamholter)'s
+    score against subscription cost per task, a 10-benchmark index read
+    off its chart (score, then $ per task), which this check compares each
+    cell with again:
+    - Haiku 5.5: high 30, $0.0034; xhigh 34.6, $0.0053.
+    - Sonnet 5.5: medium 30.7, $0.012; below the frontier at every effort,
+      so rejected for XS though Anthropic's
+      [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/)
+      favors it for scoped coding.
+    - Opus 5.5: low 34.7, $0.015; medium 48, $0.037; high 51.7, $0.052;
+      xhigh 57.3, $0.092; max 58.9, $0.15.
+    - gpt-6.1-sol: low 34.8, $0.0094; medium 46.3, $0.021; high 50.3,
+      $0.034; xhigh 52.5, $0.045.
+    - Fable 5.2: medium 56, $3.8; max 64.6, $26.5. Rejected for XL, which
+      stays on Opus xhigh, on the frontier; zero-data-retention
+      organizations may also be refused Fable.
+    - S looks lopsided: Opus low scores well below its Sol medium fallback,
+      which costs less. Check its tallies before moving it.
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   model of each tier the tables pin. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
@@ -108,8 +120,7 @@ checkpoints and outages to count by hand:
     strips `ANTHROPIC_MODEL`, so the pin must resolve on each route.
     Claude Code 2.1.316's model catalog lists `claude-opus-5-5` with
     `provider_ids` (Bedrock `us.anthropic.claude-opus-5-5`; Vertex and
-    Foundry `claude-opus-5-5`). Find the entry of the newer pin,
-    `claude-sonnet-5-5`, the same way, and
+    Foundry `claude-opus-5-5`). Find the new pin's entry the same way, and
     plan a quest if a provider has none (coordinator, /quest-complete
     follow-ups, 2026-11-03).
 - Run the live sandbox test, `just review-sandbox`, with the CLIs installed
