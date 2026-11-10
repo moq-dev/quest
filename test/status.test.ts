@@ -678,11 +678,13 @@ describe("the review record", () => {
 	});
 
 	test("is unknown, with a warning, when GitHub cannot compare a head", async () => {
-		const warnings: string[] = [];
-		expect(await line(`## Review\n\n- Head: ${B}`, { diffs: { [A]: 406 }, warnings })).toBe(
-			`review-record unknown ${B}`,
-		);
-		expect(warnings).toHaveLength(1);
+		for (const status of [406, 403]) {
+			const warnings: string[] = [];
+			expect(await line(`## Review\n\n- Head: ${B}`, { diffs: { [A]: status }, warnings })).toBe(
+				`review-record unknown ${B}`,
+			);
+			expect(warnings).toHaveLength(1);
+		}
 	});
 
 	test("reads only the Review section, so a SHA elsewhere names no review", async () => {

@@ -224,14 +224,22 @@ async function reviewRecord(
 	const base = encodeURIComponent(string(pull.baseRefName));
 	const diffs: string[] = [];
 	for (const sha of [head, reviewed]) {
-		const response = await github.request(`/repos/${pr.owner}/${pr.repo}/compare/${base}...${sha}`, {
-			accept: "application/vnd.github.diff",
-			allow: [404, 406, 422],
-		});
-		if (!response.ok) {
-			warn(`cannot compare ${sha} with the base, so whether the review of ${reviewed} carries is unknown`);
+		const unknown = (why: string): ReviewRecord => {
+			warn(`cannot compare ${sha} with the base, so whether the review of ${reviewed} carries is unknown${why}`);
 			return { state: "unknown", head: reviewed };
+		};
+		let response: Response;
+		try {
+			response = await github.request(`/repos/${pr.owner}/${pr.repo}/compare/${base}...${sha}`, {
+				accept: "application/vnd.github.diff",
+				allow: [404, 406, 422],
+			});
+		} catch (error) {
+			// A deadline is the caller's to handle; a forbidden or failing compare is not.
+			if (error instanceof GitHubDeadline || !(error instanceof Error)) throw error;
+			return unknown(`: ${error.message}`);
 		}
+		if (!response.ok) return unknown("");
 		diffs.push(await response.text());
 	}
 	return { state: diffs[0] === diffs[1] ? "diff-identical" : "stale", head: reviewed };
