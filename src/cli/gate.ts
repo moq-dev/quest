@@ -15,16 +15,14 @@ import { delegated, nest, questScope, startTime, systemdScopes } from "./supervi
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
  * the gate that runs it, which holds a slot until that command ends, with when that gate started
- * (see `processStart`), so a reused process ID holds nothing. `host` marks a command that holds the
- * whole host (see `Precedence`), from when it starts waiting until it ends. `queued` marks a caller
- * still waiting for its turn instead, as of `at`: it holds a place in the queue, the ledger's order
- * of queued entries, and no slot.
+ * (see `processStart`), so a reused process ID holds nothing. `queued` marks a caller still
+ * waiting for its turn instead, as of `at`: it holds a place in the queue, the ledger's order of
+ * queued entries, and no slot.
  */
 export interface Admission {
 	id: string;
 	at: number;
 	pid?: number;
-	host?: boolean;
 	queued?: boolean;
 	start?: string;
 }
@@ -62,7 +60,7 @@ export interface Limits {
 	memory: number;
 }
 
-export type Waiting = "load" | "memory" | "host" | "commands" | "queue";
+export type Waiting = "load" | "memory" | "queue";
 
 /**
  * Admissions that only fit the host's raw load and memory, not its headroom,
@@ -92,15 +90,10 @@ export const QUICK_MS = RECENT_MS;
  * - `quick`: wait at most QUICK_MS, then start whatever the load and memory.
  *   For a command too cheap to be worth holding back, such as a formatter or a
  *   linter. Once started, it holds a slot like any admission.
- * - `host`: hold the whole host, for work that other work would disturb, such
- *   as a benchmark. It reserves the host at once, so no other caller is
- *   admitted while it waits, then starts once no other gated command runs.
- *   Every other caller, whatever its precedence, waits until it ends.
  */
 export interface Precedence {
 	priority?: boolean;
 	quick?: boolean;
-	host?: boolean;
 }
 
 /** The memory one gated build or test stack is assumed to need. */
@@ -258,7 +251,6 @@ function parse(text: string): Admission[] {
 				typeof entry?.id === "string" &&
 				Number.isFinite(entry?.at) &&
 				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)) &&
-				(entry.host === undefined || entry.host === true) &&
 				(entry.queued === undefined || entry.queued === true) &&
 				(entry.start === undefined || typeof entry.start === "string"),
 		);
@@ -420,12 +412,8 @@ export function fileHost(directory: string, now = Date.now): Host {
  * lasts until its caller is admitted, cancelled, or its gate ends; one whose
  * gate's start time is unknown, as on Windows, could pass for a reused process
  * ID, so its caller refreshes it, and it frees a minute after the last refresh.
- *
- * A running command that holds the host keeps everyone else waiting; one that
- * waits to hold it ignores load, memory, and the queue, and waits only for the
- * gated commands still running to end. A priority caller goes ahead of the
- * queue, and a quick one starts at its deadline whatever its place (see
- * `Precedence`).
+ * A priority caller goes ahead of the queue, and a quick one starts at its
+ * deadline whatever its place (see `Precedence`).
  *
  * Each caller decides against the newest ledger and publishes atomically, so
  * concurrent callers never exceed the rule and one always wins while it has
@@ -441,10 +429,9 @@ export async function admit(
 	const id = randomUUID();
 	// A place in the queue has an id of its own, so publishing the admission adds a new entry.
 	const place = randomUUID();
-	// Every admission names its gate's start, so a reused process ID holds no slot, as for a host holder.
+	// Every admission names its gate's start, so a reused process ID holds no slot.
 	const self = { pid: process.pid, start: processStart(process.pid) };
 	const deadline = precedence.quick ? host.now() + QUICK_MS : Infinity;
-	const queues = !precedence.priority && !precedence.host;
 
 	/** One decision against the newest ledger: true once admitted. */
 	const turn = async (): Promise<boolean> => {
@@ -474,7 +461,10 @@ export async function admit(
 		}
 		const position = kept.findIndex((admission) => admission.id === place);
 		const mine = kept[position];
-		if (queues && (mine === undefined || (mine.start === undefined && mine.at <= now - RECENT_MS / 2))) {
+		if (
+			!precedence.priority &&
+			(mine === undefined || (mine.start === undefined && mine.at <= now - RECENT_MS / 2))
+		) {
 			// Take a place at the back, or refresh one that would otherwise expire where it stands.
 			const entry = { id: place, at: now, ...self, queued: true };
 			host.publish(
@@ -487,23 +477,6 @@ export async function admit(
 		// An admission takes the place of this caller's entry in the queue.
 		const admitted = (at: number) =>
 			host.publish(ledger, [...kept.filter((admission) => admission.id !== place), { id, at, ...self }]);
-		// A command holding the host keeps every other caller out until it ends, quick or not.
-		if (kept.some((admission) => admission.host && admission.id !== id && running.has(admission))) {
-			waiting?.("host");
-			await host.sleep(SETTLE_MS, signal);
-			return false;
-		}
-		if (precedence.host) {
-			// Reserve the host first, so no other caller is admitted while this one waits for the rest.
-			if (!kept.some((admission) => admission.id === id))
-				host.publish(ledger, [...kept, { id, at: now, ...self, host: true }]);
-			else if (!kept.some((admission) => admission.id !== id && running.has(admission))) return true;
-			else {
-				waiting?.("commands");
-				await host.sleep(SETTLE_MS, signal);
-			}
-			return false;
-		}
 		// Recorded like any admission, so it still counts against the others' headroom.
 		if (now >= deadline) return admitted(now);
 		// Priority ignores load, whether or not a gated command runs; memory still applies.
@@ -725,15 +698,11 @@ export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
 const notices: Record<Waiting, string> = {
 	load: "quest gate: waiting for the load average to fall",
 	memory: "quest gate: waiting for free memory",
-	host: "quest gate: waiting for a command holding the whole host to end",
-	commands: "quest gate: holding the host, waiting for gated commands to end",
 	queue: "quest gate: waiting for commands queued earlier to start",
 };
 
 /** Run from the CLI. */
-export async function gate(command: string[], options: { quick?: boolean; host?: boolean } = {}): Promise<number> {
-	// Without a start time, a reused process ID could hold the host for good (see `processStart`).
-	if (options.host && process.platform === "win32") throw new Error("quest gate --host is unsupported on Windows");
+export async function gate(command: string[], options: { quick?: boolean } = {}): Promise<number> {
 	const cancel = interrupts();
 	try {
 		const run = owner();
@@ -749,7 +718,6 @@ export async function gate(command: string[], options: { quick?: boolean; host?:
 				const precedence = {
 					priority: process.env[PRIORITY] === "1",
 					quick: options.quick,
-					host: options.host,
 				};
 				await admit(hostLimits(), fileHost(claimDirectory()), cancel.signal, notice, precedence);
 			} catch (error) {
