@@ -777,7 +777,11 @@ const notices: Record<Waiting, string> = {
 	queue: "quest gate: waiting for commands queued earlier to start",
 };
 
-/** Run from the CLI. */
+/**
+ * Run from the CLI. A failure to measure the command is fatal even when the command succeeded,
+ * since every other gate on the host relies on that accounting; a cancelled command still
+ * reports its cancellation.
+ */
 export async function gate(command: string[], options: { quick?: boolean } = {}): Promise<number> {
 	const cancel = interrupts();
 	try {
@@ -819,8 +823,9 @@ export async function gate(command: string[], options: { quick?: boolean } = {})
 			stop.abort();
 		}
 		const failed = await measuring;
+		if (cancel.signal.aborted) return cancelled(cancel.signal);
 		if (failed) throw failed.error;
-		return cancel.signal.aborted ? cancelled(cancel.signal) : result;
+		return result;
 	} finally {
 		cancel.close();
 	}
