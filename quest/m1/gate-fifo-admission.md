@@ -18,8 +18,8 @@ minutes to be admitted
 Decided 2026-11-09 (maintainer, `/quest-plan` of moq-dev/moq.pro#3751's
 follow-up):
 
-- Plan it: ✅ in m1, beside [gate-cpu-weight](/quest/m1/gate-cpu-weight.md)
-  (rejected: m0; drop).
+- Plan it: ✅ in m1, beside gate-cpu-weight, which yields gated commands'
+  CPU to the interactive session (rejected: m0; drop).
 - Mechanism: ✅ FIFO admission: waiters start in arrival order, with no cost
   estimate (rejected: shortest job first from measured costs, which needs a
   cost model and can starve full gates; a slot reserved for small commands;
@@ -38,7 +38,3 @@ taking a place in it.
 no longer runs; a queued waiter's entry must stay while its gate lives, however
 long it waits, and must not count as an admission against anyone's headroom.
 `admit`'s doc comment, which today promises no fairness, states the new order.
-
-## Related
-
-- [Gate scopes yield the CPU to the interactive session](/quest/m1/gate-cpu-weight.md) - changes where admitted commands run; this changes when they are admitted
