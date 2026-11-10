@@ -59,7 +59,8 @@ one entry per supplied PR, no extra fields. Use one of:
 
 On each entry, add `"failure"`: the test or step the failure log shows
 failing, on one line of at most 200 characters, such as
-`"failure":"cargo test -p moq-relay: interop::render_timeout"`. Name it the
+`"failure":"moq-relay interop::render_timeout"`: a test by its package and
+name alone, without the command that ran it. Name it the
 same way each time the same test or step fails, from the log rather than from
 your fix: quest land keeps fixing a PR while each round makes progress, and
 hands it back when the failure a fix addressed recurs right after it.
@@ -156,7 +157,8 @@ A PR requeued unchanged for the failure the log shows names why it failed in
 - `"environment"`: the failure comes from the runner rather than the code, such as
   a missing tool, a read-only path, a full disk, or an unreachable registry.
 - `"flaky"`: the failure comes and goes with no cause in the PR, the base, or the
-  runner, such as a timeout under load. Name the test in its `failure`.
+  runner, such as a timeout under load. Name the test in its `failure`; an
+  entry without it is rejected.
 
 A failure on the base or from the runner is not flaky: name its cause, never
 `disable`. A PR requeued only because another supplied PR caused the failure takes
@@ -164,7 +166,8 @@ no `cause`. When you cannot tell why the failure happened, hand the PR back.
 The input may list the repository's known flaky tests, each by the
 `failure` an earlier round named, the `merge_group` jobs that showed it, and
 the `quest` path of the follow-up quest that tracks it once disabled.
-When the test you judge flaky is one of them, name it exactly as listed, and
+When the test you judge flaky is one of them, add its `quest` to the entry
+exactly as listed, and
 disable it in a commit of its own: create a `disable` branch from `base`, and
 commit on it only the skip, in the test framework's own form, whose reason
 names that `quest` path, such as `#[ignore = "flaky: /quest/m0/flaky/<name>.md"]`
@@ -176,7 +179,7 @@ A disabled test that is another quest's acceptance test
 leaves that quest as it is: the test still counts as its work. Run the
 [repository checks](#repository-checks) on the branch, and add its full SHA to the
 PR's entry:
-{"number":123,"action":"requeue","cause":"flaky","reason":"healthy; flaky test; ran just check and just test on a scratch merge and the disable branch","failure":"cargo test -p moq-relay: interop::render_timeout","disable":"full 40-character SHA"}
+{"number":123,"action":"requeue","cause":"flaky","reason":"healthy; flaky test; ran just check and just test on a scratch merge and the disable branch","failure":"moq-relay interop::render_timeout","quest":"quest/m0/flaky/render-timeout.md","disable":"full 40-character SHA"}
 quest land opens the commit as a pull request of its own and enqueues it. Never
 disable a test that is not listed. When the repository keeps no `quest/m0/`, or
 the skip needs a protected path or more than a mechanical edit, requeue
