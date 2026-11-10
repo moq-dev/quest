@@ -63,12 +63,11 @@ Any other reason, such as a person removing it, is the user's call.
 ## Loop
 
 Each round, rerun `quest unblocked --unclaimed --json` and refresh the open PRs, since merges and released claims make more work ready.
-When no agent is running and every question has been asked, block with `quest wait` on each PR that can still move without the user: a queued one whose merge would make a quest ready, and one left for a later round.
-Run a round on a check result, a review, or a merge; any other event changes nothing, so resume the wait from its cursor.
-Never wait on any other PR, or re-read one whose state has not changed.
+When no agent is running and every question has been asked, block with `quest wait` on the queued PRs whose merge would make a quest ready, and run a round once one lands or leaves the queue.
+Never wait on any other PR, or re-read one whose state has not changed: list each PR left for a later round in the summary.
 A usage or rate limit is waited out until its reset; it never ends the run.
 
-Finish once nothing is running, no such wait is left, and everything left needs the user.
+Finish once nothing is running, no queued merge would make a quest ready, and every PR left needs the user or a later round.
 Write the final summary so a fresh session can act on it: link each PR and quest, and give each open decision with its options and your recommendation.
 
 Besides the guide's controls, answer "decisions": ask every pending question now, in one batch, such as before the user steps away; the loop continues after.
