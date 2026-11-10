@@ -70,7 +70,7 @@ Decision prompts, chosen options marked ✅:
 Settled by the quest that made a quest's PR target its epic's branch, as the
 agent recommended unless noted:
 
-- The epic's branch is its README's quest branch, `quest/<epic>/README`,
+- The epic's branch is its README's quest branch, `quest/<milestone>/<epic>/README`,
   created from `main` by the first `quest start` under the epic, which also
   opens the epic's draft PR into `main`, handed back with a `## Waiting`
   item until its quests have merged. That PR is the README quest's PR and

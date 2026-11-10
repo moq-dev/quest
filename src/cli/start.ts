@@ -52,9 +52,9 @@ export interface EpicBase {
 	/** The epic's README. */
 	readme: string;
 	branch: string;
-	/** Its tip, fetched; `null` when the branch is missing or a merged PR landed it. */
+	/** Its tip, fetched; `null` when the branch is missing, landed by a merged PR, or holds nothing beyond the default branch. */
 	tip: string | null;
-	/** The tip a missing branch's push leases: a landed one, or "" for none. */
+	/** The tip a missing branch's push leases: a landed or empty one, or "" for none. */
 	lease: string;
 	/** Whether an open PR is from the branch. */
 	open: boolean;
@@ -70,7 +70,8 @@ export interface Base {
  * The base of `path`'s claim. A quest directly under a milestone, and an
  * epic's README, build on the default branch. Any other quest builds on its
  * epic's branch, read as it will be once the default branch is next merged
- * into it, or on the default branch when that branch is missing or landed.
+ * into it, or on the default branch when that branch is missing, landed, or
+ * holds nothing beyond it.
  */
 export async function claimBase(root: string, at: Target, path: string, deps: ClaimDependencies): Promise<Base> {
 	// An epic's README is read from its epic's branch, where its children finish, but builds on the default branch.
@@ -87,6 +88,8 @@ export async function claimBase(root: string, at: Target, path: string, deps: Cl
 	const { claims, landed } = await held(root, at.up, [branch], at.branches);
 	if (claims.length === 0) return missing(landed.get(branch) ?? "");
 	ensure(root, at.up.git, tip);
+	// GitHub opens no PR from a branch with nothing beyond its base, so the claim stacks the epic's commit on it.
+	if (succeeds(root, ["merge-base", "--is-ancestor", tip, at.base])) return missing(tip);
 	return {
 		tree: epicView(root, at.main, tip, deps.warn),
 		epic: own ? null : { readme, branch, tip, lease: tip, open: claims[0].pull !== null },
@@ -167,7 +170,7 @@ async function pushBranch(
  * The tip of `epic`'s branch, which the claim on `path` builds on: created
  * from the default branch when missing, or the one another claim in the epic
  * created first, with a draft PR into the default branch opened when none is.
- * A fork cannot push the upstream's branches, so it refuses a missing one.
+ * A fork cannot push the upstream's branches, so it refuses to create one.
  */
 async function openEpic(root: string, at: Target, epic: EpicBase, tree: Snapshot, path: string): Promise<string> {
 	const { up } = at;
@@ -176,8 +179,9 @@ async function openEpic(root: string, at: Target, epic: EpicBase, tree: Snapshot
 		const github = up.github;
 		if (github !== null && !same(github.head, github.repository)) {
 			throw new Refusal(
-				`${path} is in the epic ${epic.readme}, whose branch ${epic.branch} is not on ` +
-					`${github.repository.owner}/${github.repository.repo}; a fork cannot create it, so a maintainer ` +
+				`${path} is in the epic ${epic.readme}, whose branch ${epic.branch} on ` +
+					`${github.repository.owner}/${github.repository.repo} is missing or holds nothing beyond ` +
+					`${github.defaultBranch}; a fork cannot create it, so a maintainer ` +
 					"starts a quest in the epic first",
 			);
 		}

@@ -710,20 +710,20 @@ describe("epic branches", () => {
 		const work = clone(FORK, { [FORK]: forkBare, [UPSTREAM]: bare });
 		await expect(start(work, github, [], EPIC_ONE)).rejects.toThrow(
 			new Refusal(
-				`${EPIC_ONE} is in the epic ${EPIC_README_PATH}, whose branch ${EPIC_BRANCH} is not on example/project; ` +
-					"a fork cannot create it, so a maintainer starts a quest in the epic first",
+				`${EPIC_ONE} is in the epic ${EPIC_README_PATH}, whose branch ${EPIC_BRANCH} on example/project is ` +
+					"missing or holds nothing beyond main; a fork cannot create it, so a maintainer starts a quest in the epic first",
 			),
 		);
 		expect(github.pulls).toEqual([]);
 
-		git(bare, "branch", EPIC_BRANCH, "main");
+		git(bare, "branch", EPIC_BRANCH, git(bare, "commit-tree", "main^{tree}", "-p", "main", "-m", "open epic"));
 		github.open("example/project", EPIC_BRANCH, "example/project");
 		const started = await start(work, github, [], EPIC_ONE);
 		expect(git(forkBare, "rev-parse", `${started.sha}^`)).toBe(tip(bare, EPIC_BRANCH));
 		expect(github.pulls[1]).toMatchObject({ baseRef: EPIC_BRANCH, head: { repo: { full_name: "me/project" } } });
 	});
 
-	test("an epic's branch a merged PR landed is replaced, and a branch without a PR gets one", async () => {
+	test("an epic's branch a merged PR landed or holding nothing is replaced, and a branch without a PR gets one", async () => {
 		const bare = upstream();
 		git(bare, "branch", EPIC_BRANCH, "main");
 		const github = new FakeGitHub();
@@ -733,11 +733,21 @@ describe("epic branches", () => {
 		expect(tip(bare, EPIC_BRANCH)).not.toBe(landed);
 		expect(git(bare, "rev-parse", `${started.sha}^`)).toBe(tip(bare, EPIC_BRANCH));
 
+		// GitHub opens no PR from a branch with nothing beyond main, so the epic's commit is stacked on it.
+		const empty = upstream();
+		git(empty, "branch", EPIC_BRANCH, "main");
+		const second = await start(clone(UPSTREAM, { [UPSTREAM]: empty }), new FakeGitHub(), [], EPIC_ONE);
+		const stacked = tip(empty, EPIC_BRANCH);
+		expect(git(empty, "rev-parse", `${stacked}^`)).toBe(git(empty, "rev-parse", "main"));
+		expect(git(empty, "rev-parse", `${second.sha}^`)).toBe(stacked);
+
+		// A branch with commits of its own but no PR gets one.
 		const other = upstream();
-		git(other, "branch", EPIC_BRANCH, "main");
+		const opened = git(other, "commit-tree", "main^{tree}", "-p", "main", "-m", "open epic");
+		git(other, "branch", EPIC_BRANCH, opened);
 		const fresh = new FakeGitHub();
-		const second = await start(clone(UPSTREAM, { [UPSTREAM]: other }), fresh, [], EPIC_ONE);
-		expect(git(other, "rev-parse", `${second.sha}^`)).toBe(git(other, "rev-parse", "main"));
+		const third = await start(clone(UPSTREAM, { [UPSTREAM]: other }), fresh, [], EPIC_ONE);
+		expect(git(other, "rev-parse", `${third.sha}^`)).toBe(opened);
 		expect(fresh.pulls).toMatchObject([{ baseRef: "main", head: { ref: EPIC_BRANCH } }, { baseRef: EPIC_BRANCH }]);
 	});
 

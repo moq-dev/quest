@@ -215,8 +215,10 @@ milestone, and an epic's own README, target the upstream default branch. A
 quest in an epic targets the epic's branch, `quest/<milestone>/<epic>/README`,
 so the epic lands on the default branch as one PR once its quests have merged.
 The first claim in an epic creates that branch from the default branch and
-opens the epic's draft PR into it, handed back with a `## Waiting` section
-until its quests have merged. A fork cannot create the branch, so it waits for
+opens the epic's draft PR into the default branch, handed back with a
+`## Waiting` section until its quests have merged. An epic's branch a merged PR
+landed, or one with nothing beyond the default branch, is replaced the same
+way. A fork cannot create the branch, so it waits for
 a maintainer's claim in the epic. It switches your checkout to the
 claim on a new local branch, or fast-forwards that branch if it is already
 checked out. A local branch left from an earlier attempt is not moved: the
@@ -507,7 +509,7 @@ run again on the head, supersedes an earlier run of that name from the same
 app, and a newer commit status supersedes an older one of its context. GitHub's
 own rollup state counts the superseded runs too. A required check
 is one branch protection or a ruleset requires for this PR. `--json` prints the
-same facts as one object with the fields `url`, `state`, `draft`, `head`,
+same facts as one object with the fields `url`, `state`, `draft`, `base`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
 `landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `reactions`,
 `threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
