@@ -212,6 +212,7 @@ test("reports checks by requiredness, each reviewer's latest review against the 
 		`url ${URL_}`,
 		"state open",
 		"draft false",
+		"base main",
 		`head ${A}`,
 		"mergeable mergeable",
 		"merge-state blocked",
@@ -252,8 +253,9 @@ test("a queued PR with auto-merge and no checks reports both, and JSON is determ
 		threads: page([]),
 	});
 	const status = await pullRequestStatus(pr, setup([body]).deps);
-	expect(statusLines(status).slice(2, 11)).toEqual([
+	expect(statusLines(status).slice(2, 12)).toEqual([
 		"draft true",
+		"base main",
 		`head ${A}`,
 		"mergeable mergeable",
 		"merge-state blocked",

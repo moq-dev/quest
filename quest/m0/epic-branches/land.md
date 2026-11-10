@@ -26,7 +26,11 @@ what keeps the branch current with `main`.
   the epic's PR only once no quest of the epic remains.
 - The land watcher's daemons serve one base each and stay on `main`; they
   ignore PRs into an epic's branch.
-
-## Required
-
-- [A quest's PR targets its epic's branch](/quest/m0/epic-branches/branch.md) - opens PRs against an epic's branch, which this lands
+- The sync resolves a quest file the way `quest unblocked` and `quest start`
+  already read the synced branch (`mergeSources` in `src/core/epic.ts`): one
+  deleted on either side stays deleted, so a `main` edit never revives a
+  quest finished on the epic's branch, and one both sides edited keeps the
+  epic's version.
+- Until this lands, `quest merge` refuses a PR into an epic's branch, which
+  has no queue, so this quest's own PR, which targets this epic's branch,
+  and any other epic quest picked before it merge with GitHub's merge button.

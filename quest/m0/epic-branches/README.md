@@ -67,21 +67,28 @@ Decision prompts, chosen options marked ✅:
   culprit links to a whole epic prove too coarse.
 - Milestone: ✅ m0 (rejected: m1).
 
-Recommendations for the children, not settled:
+Settled by the quest that made a quest's PR target its epic's branch, as the
+agent recommended unless noted:
 
 - The epic's branch is its README's quest branch, `quest/<epic>/README`,
   created from `main` by the first `quest start` under the epic, which also
-  opens the epic's draft PR into `main`. That PR is the README quest's PR
-  and holds the epic's own work last.
+  opens the epic's draft PR into `main`, handed back with a `## Waiting`
+  item until its quests have merged. That PR is the README quest's PR and
+  holds the epic's own work last.
 - An epic already partly landed on `main` gets a branch for what remains;
   nothing migrates.
 - A quest whose `Required` names a quest in another epic stays blocked
   until that epic lands on `main`.
-- A `/quest-plan` or `/quest-audit` PR that edits an epic's quests targets
-  the epic's branch once it exists, since the branch has already deleted
-  the finished ones.
+- Changed from the recommendation: `/quest-plan` and `/quest-audit` PRs
+  keep targeting `main`. Readiness reads an epic's branch merged with
+  `main`, so a planning edit counts as soon as it lands, without a second
+  base for planning PRs.
+
+Still open:
+
 - Check that each repository's PR checks and online reviewers run on PRs
-  whose base is not `main`.
+  whose base is not `main`. moq-dev/quest's `Check` workflow runs on PRs
+  into any branch.
 
 ## Related
 

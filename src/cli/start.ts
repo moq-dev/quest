@@ -3,7 +3,8 @@
 // while nothing but the claim commit is on the branch.
 import { randomBytes } from "node:crypto";
 
-import { questBranch } from "../core";
+import { branchEpic, epicBranch, epicOf, questBranch } from "../core";
+import { parent } from "../core/path";
 import {
 	type ClaimDependencies,
 	type OpenPull,
@@ -16,14 +17,20 @@ import {
 	pullsFrom,
 	remoteBranches,
 	repositoryPath,
+	same,
 	upstream,
 	upstreamRefs,
 } from "./claims";
+import { epicView } from "./epics";
 import { GitError, git } from "./git";
 import { object, requireRemote, string } from "./github";
+import { type Snapshot } from "./tree";
 
 /** Someone else holds the quest, or the claim cannot be released; distinct from a failure. */
 export class Refusal extends Error {}
+
+/** A push the remote rejected because its ref was not what the lease expected: someone pushed first. */
+class Rejected extends Refusal {}
 
 export interface Started {
 	branch: string;
@@ -33,46 +40,120 @@ export interface Started {
 	url: string | null;
 }
 
-/** The refusal for a quest the upstream default branch lacks: finished upstream, or not merged yet. */
+/** The refusal for a quest its base lacks: finished there, or not merged yet. */
 export function notUpstream(path: string): Refusal {
-	return new Refusal(`${path} is not on the upstream default branch; update your checkout`);
+	const where =
+		epicOf(path) === null ? "the upstream default branch" : "the upstream default branch or its epic's branch";
+	return new Refusal(`${path} is not on ${where}; update your checkout`);
+}
+
+/** The branch of the epic whose quest is claimed, as the upstream holds it. */
+export interface EpicBase {
+	/** The epic's README. */
+	readme: string;
+	branch: string;
+	/** Its tip, fetched; `null` when the branch is missing or a merged PR landed it. */
+	tip: string | null;
+	/** The tip a missing branch's push leases: a landed one, or "" for none. */
+	lease: string;
+	/** Whether an open PR is from the branch. */
+	open: boolean;
+}
+
+/** Where a quest's claim builds: the tree its readiness is read from, and its epic's branch, if any. */
+export interface Base {
+	tree: Snapshot;
+	epic: EpicBase | null;
 }
 
 /**
- * Claim `path`, a quest ready in the target's upstream tree. Throws `Refusal`
- * when someone else holds it or the upstream tree lacks it. A branch left by
- * a merged PR holds nothing, so the claim replaces it with a lease on its tip.
+ * The base of `path`'s claim. A quest directly under a milestone, and an
+ * epic's README, build on the default branch. Any other quest builds on its
+ * epic's branch, read as it will be once the default branch is next merged
+ * into it, or on the default branch when that branch is missing or landed.
+ */
+export async function claimBase(root: string, at: Target, path: string, deps: ClaimDependencies): Promise<Base> {
+	// An epic's README is read from its epic's branch, where its children finish, but builds on the default branch.
+	const own = branchEpic(questBranch(path)) === path;
+	const readme = own ? path : epicOf(path);
+	if (readme === null) return { tree: at.main.snapshot, epic: null };
+	const branch = questBranch(readme);
+	const tip = at.branches.get(branch);
+	const missing = (lease: string): Base => ({
+		tree: at.main.snapshot,
+		epic: own ? null : { readme, branch, tip: null, lease, open: false },
+	});
+	if (tip === undefined) return missing("");
+	const { claims, landed } = await held(root, at.up, [branch], at.branches);
+	if (claims.length === 0) return missing(landed.get(branch) ?? "");
+	ensure(root, at.up.git, tip);
+	return {
+		tree: epicView(root, at.main, tip, deps.warn),
+		epic: own ? null : { readme, branch, tip, lease: tip, open: claims[0].pull !== null },
+	};
+}
+
+/**
+ * Claim `path`, a quest ready in its base's tree, on that base: the default
+ * branch, or its epic's branch, which is created from the default branch with
+ * a draft PR into it when missing. Throws `Refusal` when someone else holds the
+ * quest or its base lacks it. A branch left by a merged PR holds nothing, so the
+ * claim replaces it with a lease on its tip.
  */
 export async function startQuest(
 	root: string,
-	{ remote, up, base, branches, tree }: Target,
+	at: Target,
+	{ tree, epic }: Base,
 	path: string,
 	title: string,
 	deps: ClaimDependencies,
 ): Promise<Started> {
+	const { remote, up, branches } = at;
 	const branch = questBranch(path);
 	if (!tree.docs.some((doc) => doc.path === path)) throw notUpstream(path);
 	const { claims, landed } = await held(root, up, [branch], branches);
 	const [claim] = claims;
 	if (claim) throw new Refusal(`${path} is held by ${describe(claim.branch, claim.pull, Date.now())}`);
-	// A nonce keeps two claimers on the same base, identity, and second from building the same commit.
-	const nonce = randomBytes(8).toString("hex");
-	const sha = git(root, [
-		"commit-tree",
-		`${base}^{tree}`,
-		"-p",
-		base,
-		"-m",
-		`chore(quest): claim ${path}`,
-		"-m",
-		`Quest-Claim: ${nonce}`,
-	]);
+	const parent = epic === null ? at.base : await openEpic(root, at, epic, tree, path);
+	const sha = claimCommit(root, parent, `chore(quest): claim ${path}`);
 	// The lease expects the landed tip, or no branch at all.
+	await pushBranch(root, at, path, branch, sha, landed.get(branch) ?? "");
+
+	let url: string | null = null;
+	if (up.github === null) {
+		deps.warn(`${remote} is not on GitHub, so the claim branch was pushed without a PR`);
+	} else {
+		url = await openDraft(root, up, remote, path, title, branch, sha, epic?.branch ?? up.github.defaultBranch);
+	}
+
+	checkout(root, branch, sha, deps.warn);
+	return { branch, sha, url };
+}
+
+/** An empty commit on `parent`. A nonce keeps two claimers on the same parent, identity, and second apart. */
+function claimCommit(root: string, parent: string, subject: string): string {
+	const nonce = randomBytes(8).toString("hex");
+	return git(root, ["commit-tree", `${parent}^{tree}`, "-p", parent, "-m", subject, "-m", `Quest-Claim: ${nonce}`]);
+}
+
+/**
+ * Push `sha` to `branch` on the target's remote, leasing `lease`. A rejected
+ * push is a `Refusal` that someone pushed first; one that a branch in the way
+ * refused is a `Refusal` naming it, for claiming `path`.
+ */
+async function pushBranch(
+	root: string,
+	{ remote, up }: Target,
+	path: string,
+	branch: string,
+	sha: string,
+	lease: string,
+): Promise<void> {
 	try {
 		push(
 			root,
 			remote,
-			[`--force-with-lease=refs/heads/${branch}:${landed.get(branch) ?? ""}`, `${sha}:refs/heads/${branch}`],
+			[`--force-with-lease=refs/heads/${branch}:${lease}`, `${sha}:refs/heads/${branch}`],
 			`someone pushed ${branch} first`,
 		);
 	} catch (error) {
@@ -80,16 +161,66 @@ export async function startQuest(
 		const message = await obstructed(root, up, remote, path, branch);
 		throw message === null ? error : new Refusal(message);
 	}
+}
 
-	let url: string | null = null;
-	if (up.github === null) {
-		deps.warn(`${remote} is not on GitHub, so the claim branch was pushed without a PR`);
-	} else {
-		url = await openDraft(root, up, remote, path, title, branch, sha);
+/**
+ * The tip of `epic`'s branch, which the claim on `path` builds on: created
+ * from the default branch when missing, or the one another claim in the epic
+ * created first, with a draft PR into the default branch opened when none is.
+ * A fork cannot push the upstream's branches, so it refuses a missing one.
+ */
+async function openEpic(root: string, at: Target, epic: EpicBase, tree: Snapshot, path: string): Promise<string> {
+	const { up } = at;
+	let tip = epic.tip;
+	if (tip === null) {
+		const github = up.github;
+		if (github !== null && !same(github.head, github.repository)) {
+			throw new Refusal(
+				`${path} is in the epic ${epic.readme}, whose branch ${epic.branch} is not on ` +
+					`${github.repository.owner}/${github.repository.repo}; a fork cannot create it, so a maintainer ` +
+					"starts a quest in the epic first",
+			);
+		}
+		const sha = claimCommit(root, at.base, `chore(quest): open epic ${epic.readme}`);
+		try {
+			await pushBranch(root, at, path, epic.branch, sha, epic.lease);
+			tip = sha;
+		} catch (error) {
+			if (!(error instanceof Rejected)) throw error;
+			// Another claim in the epic created the branch first: build on it.
+			tip = remoteBranches(root, up.git).get(epic.branch) ?? null;
+			if (tip === null) throw error;
+			ensure(root, up.git, tip);
+		}
 	}
+	if (!epic.open && up.github !== null) {
+		const doc = tree.docs.find((d) => d.path === epic.readme);
+		await openEpicPull(up, epic, doc?.title?.text ?? epic.readme);
+	}
+	return tip;
+}
 
-	checkout(root, branch, sha, deps.warn);
-	return { branch, sha, url };
+/**
+ * Open the draft PR that lands `epic`'s branch on the default branch. GitHub
+ * refuses a second open PR between the same branches, so a refusal is fine
+ * while another claim's PR is open.
+ */
+async function openEpicPull(up: Upstream, epic: EpicBase, title: string): Promise<void> {
+	const github = up.github!;
+	const { owner, repo } = github.repository;
+	const file = encodeURI(github.prefix + epic.readme);
+	const main = github.defaultBranch;
+	const body =
+		`Lands the epic [${epic.readme}](https://github.com/${owner}/${repo}/blob/${main}/${file}) on \`${main}\` ` +
+		"as one PR. Its quests' PRs merge into this branch first; the README's own work comes last.\n\n" +
+		`## Waiting\n\n- ${parent(epic.readme)}: its quests merge into this branch first; this PR lands once none remain.\n`;
+	const response = await github.client.request(`${repositoryPath(github.repository)}/pulls`, {
+		body: { title: title.replace(/^\[(XS|S|M|L|XL)\] /, ""), head: epic.branch, base: main, draft: true, body },
+		allow: [422],
+	});
+	if (response.status !== 422) return;
+	const open = pullsFrom(await openPullRequests(github.client, github.repository), epic.branch);
+	if (open.length === 0) throw new Error(`GitHub refused the PR for ${epic.branch}: ${await response.text()}`);
 }
 
 /**
@@ -138,9 +269,9 @@ async function obstructed(
 }
 
 /**
- * Put the checkout on the claim, so work lands on the quest's branch. The claim
- * changes no files, so this carries uncommitted changes along. Whatever cannot
- * be done safely is left as a warning saying what to run.
+ * Put the checkout on the claim, so work lands on the quest's branch, carrying
+ * uncommitted changes along where the claim's base allows. Whatever cannot be
+ * done safely is left as a warning saying what to run.
  */
 function checkout(root: string, branch: string, sha: string, warn: (message: string) => void): void {
 	const ref = `refs/heads/${branch}`;
@@ -166,7 +297,7 @@ function checkout(root: string, branch: string, sha: string, warn: (message: str
 	}
 }
 
-/** Open the draft PR, then keep it only if it is the earliest open PR on the branch. */
+/** Open the draft PR into `base`, then keep it only if it is the earliest open PR on the branch. */
 async function openDraft(
 	root: string,
 	up: Upstream,
@@ -175,20 +306,21 @@ async function openDraft(
 	title: string,
 	branch: string,
 	sha: string,
+	base: string,
 ): Promise<string> {
 	const github = up.github!;
 	const { owner, repo } = github.repository;
 	const fork = github.head.owner !== owner || github.head.repo !== repo;
 	// The quest's path in the repository, which differs from `path` when the tree sits below the top level.
 	const file = encodeURI(github.prefix + path);
-	const body = `Claims [${path}](https://github.com/${owner}/${repo}/blob/${github.defaultBranch}/${file}).`;
+	const body = `Claims [${path}](https://github.com/${owner}/${repo}/blob/${base}/${file}).`;
 	let created: OpenPull;
 	try {
 		const response = await github.client.request(`${repositoryPath(github.repository)}/pulls`, {
 			body: {
 				title: title.replace(/^\[(XS|S|M|L|XL)\] /, ""),
 				head: fork ? `${github.head.owner}:${branch}` : branch,
-				base: github.defaultBranch,
+				base,
 				draft: true,
 				body,
 			},
@@ -243,13 +375,19 @@ export async function releaseQuest(
 	const tip = remoteBranches(root, up.push).get(branch);
 	if (!tip) throw new Error(`${remote} has no branch ${branch} to release`);
 	ensure(root, up.push, tip);
-	const { base } = upstreamRefs(root, up.git);
+	const { base, branches } = upstreamRefs(root, up.git);
+	const epic = epicBranch(path);
+	const epicTip = epic === null ? undefined : branches.get(epic);
+	if (epicTip !== undefined) ensure(root, up.git, epicTip);
 	const parents = git(root, ["rev-list", "--parents", "-n", "1", tip]).split(" ").slice(1);
-	// Only the claim itself: one empty commit straight on the default branch, not one following pushed work.
+	// Only the claim itself: one empty commit straight on the default branch or its epic's branch, not one
+	// following pushed work.
 	const claim =
 		parents.length === 1 &&
 		git(root, ["rev-parse", `${tip}^{tree}`]) === git(root, ["rev-parse", `${parents[0]}^{tree}`]) &&
-		succeeds(root, ["merge-base", "--is-ancestor", parents[0], base]);
+		[base, epicTip].some(
+			(on) => on !== undefined && succeeds(root, ["merge-base", "--is-ancestor", parents[0], on]),
+		);
 	if (!claim) {
 		throw new Refusal(
 			`${branch} on ${remote} has work beyond its empty claim commit; close its PR yourself to abandon that work`,
@@ -318,7 +456,7 @@ function push(root: string, remote: string, args: string[], rejected: string): v
 		if (!(error instanceof GitError)) throw error;
 		const { stdout, stderr } = error;
 		// --porcelain reports each ref on stdout: `!` and `[rejected]` for a ref that is not as expected.
-		if (/^!\t.*\t\[rejected\]/m.test(stdout)) throw new Refusal(rejected);
+		if (/^!\t.*\t\[rejected\]/m.test(stdout)) throw new Rejected(rejected);
 		// stderr may hold only the remote's chatter, so add each refused ref's reason from stdout.
 		const refused = stdout.split("\n").filter((line) => line.startsWith("!"));
 		const detail = [stderr.trim(), ...refused].filter((line) => line !== "").join("\n");

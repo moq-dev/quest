@@ -1,9 +1,26 @@
 import { expect, test } from "vitest";
 
-import { type Doc, blockers, check, owner, parse, ready, renderBlocker, unblocked, waiting } from "../src/core";
+import {
+	type Doc,
+	type Source,
+	blockers,
+	check,
+	mergeSources,
+	owner,
+	parse,
+	ready,
+	renderBlocker,
+	unblocked,
+	waiting,
+} from "../src/core";
 
 /** A valid tree: each spec quest with its blockers, and the READMEs its directories need as epics. */
 function graph(spec: Record<string, string[]>, milestones = ["m0"]): Doc[] {
+	return sources(spec, milestones).map((source) => parse(source.path, source.text));
+}
+
+/** `graph`'s documents as source text. */
+function sources(spec: Record<string, string[]>, milestones = ["m0"]): Source[] {
 	const epics = new Set(["quest/README.md", ...milestones.map((name) => `quest/${name}/README.md`)]);
 	for (const name of Object.keys(spec)) {
 		for (let path = `quest/${name}`; path !== "quest/README.md";) {
@@ -14,15 +31,56 @@ function graph(spec: Record<string, string[]>, milestones = ["m0"]): Doc[] {
 	const paths = new Set([...epics, ...Object.keys(spec).map((name) => `quest/${name}`)]);
 	return [...paths].map((path) => {
 		const dependencies = (spec[path.slice(6)] ?? []).map((name) => `quest/${name}`);
-		return parse(
+		return {
 			path,
-			`# ${epics.has(path) ? "Epic" : "[S] Work"}\n\n## Goal\n\nWork.\n` +
+			text:
+				`# ${epics.has(path) ? "Epic" : "[S] Work"}\n\n## Goal\n\nWork.\n` +
 				(dependencies.length
 					? `\n## Required\n\n${dependencies.map((dep) => `- [Work](/${dep})`).join("\n")}\n`
 					: ""),
-		);
+		};
 	});
 }
+
+test("merging an epic's branch keeps each side's change, deletion first, and the epic's on a clash", () => {
+	const doc = (text: string) => `# [S] Work\n\n## Goal\n\n${text}.\n`;
+	const at = (texts: Record<string, string>) =>
+		Object.entries(texts).map(([name, text]) => ({ path: `quest/m0/${name}.md`, text: doc(text) }));
+	const merged = mergeSources(
+		at({ both: "Base", main: "Base", gone: "Base", dropped: "Base" }),
+		at({ both: "Epic", main: "Base", dropped: "Epic", added: "Epic" }),
+		at({ both: "Main", main: "Main", gone: "Main", fresh: "Main" }),
+	);
+	expect(merged).toEqual(at({ added: "Epic", both: "Epic", fresh: "Main", main: "Main" }));
+});
+
+test("an epic's quests rank from its branch's tree, merged with what the default branch finished", () => {
+	const epic = "quest/m0/epic/README.md";
+	// The epic's branch finished a, dropping its links; the default branch finished x.
+	const base = sources({
+		"m0/epic/a.md": [],
+		"m0/epic/b.md": ["m0/epic/a.md"],
+		"m0/epic/c.md": ["m0/x.md"],
+		"m0/x.md": [],
+		"m0/out.md": ["m0/epic/a.md"],
+	});
+	const branch = sources({ "m0/epic/b.md": [], "m0/epic/c.md": ["m0/x.md"], "m0/x.md": [], "m0/out.md": [] });
+	const main = sources({
+		"m0/epic/a.md": [],
+		"m0/epic/b.md": ["m0/epic/a.md"],
+		"m0/epic/c.md": [],
+		"m0/out.md": ["m0/epic/a.md"],
+	});
+	const merged = mergeSources(base, branch, main);
+	expect(merged.map((source) => source.path)).not.toContain("quest/m0/x.md");
+	const parsed = (all: Source[]) => all.map((source) => parse(source.path, source.text));
+	// The default branch still holds a, which a quest outside the epic waits on until the epic lands.
+	expect(unblocked(parsed(main), new Map([[epic, parsed(merged)]]))).toEqual([
+		{ path: "quest/m0/epic/b.md", dependents: 0 },
+		{ path: "quest/m0/epic/c.md", dependents: 0 },
+	]);
+	expect(unblocked(parsed(main)).map((quest) => quest.path)).toEqual(["quest/m0/epic/a.md", "quest/m0/epic/c.md"]);
+});
 
 test("ranks chains ahead of zero-impact work without changing ready", () => {
 	const docs = graph({ "m0/zero.md": [], "m0/a.md": [], "m0/b.md": ["m0/a.md"], "m0/c.md": ["m0/b.md"] });

@@ -145,8 +145,16 @@ requires a positive integer.
 Invalid trees fail with diagnostics and no ranking.
 `quest-spawn` uses the ranking unless you explicitly select work in another order.
 
-`--unclaimed` ranks the fetched upstream default branch's tree rather than
-your checkout, so a stale checkout cannot offer a finished or deleted quest.
+Each quest is read from the tree its PR builds on. A quest in an epic whose
+branch is on the remote, as [Claim a quest](#claim-a-quest) describes, is read
+from that branch as it will be once your checkout is next merged into it: a
+quest finished on the epic's branch is not offered again and its siblings are
+no longer blocked on it, while a quest outside the epic that requires it waits
+until the epic lands. Epic branches are read as last fetched.
+
+`--unclaimed` ranks the fetched upstream default branch's tree, and its epic
+branches, rather than your checkout, so a stale checkout cannot offer a
+finished or deleted quest.
 It then drops quests someone already holds: the quest's branch on the
 upstream repository, or an open PR from that branch in any repository, forks
 included. A branch whose tip is the head of a merged PR holds nothing, since
@@ -200,16 +208,24 @@ quest start quest/m0/export.md
 quest start --release quest/m0/export.md
 ```
 
-It pushes an empty claim commit, built on the upstream default branch, to the
+It pushes an empty claim commit, built on the branch its PR targets, to the
 quest's branch (its path without `.md`), then opens a draft PR
-from it right away and prints the PR's URL. It switches your checkout to the
+from it right away and prints the PR's URL. A quest directly under a
+milestone, and an epic's own README, target the upstream default branch. A
+quest in an epic targets the epic's branch, `quest/<milestone>/<epic>/README`,
+so the epic lands on the default branch as one PR once its quests have merged.
+The first claim in an epic creates that branch from the default branch and
+opens the epic's draft PR into it, handed back with a `## Waiting` section
+until its quests have merged. A fork cannot create the branch, so it waits for
+a maintainer's claim in the epic. It switches your checkout to the
 claim on a new local branch, or fast-forwards that branch if it is already
 checked out. A local branch left from an earlier attempt is not moved: the
 claim still succeeds, with a warning to switch to it and merge the claim
 commit. A fork pushes to itself and opens the PR on its upstream, found
 as for `unblocked --unclaimed`, so a fork with its own quests claims on
 itself. It reads
-readiness from the upstream default branch it builds on, not your checkout. It
+readiness from the upstream tree it builds on, as `quest unblocked --unclaimed`
+reads it, not your checkout. It
 fails on a tree `quest check` rejects, which can hide a blocker, and refuses a
 blocked quest and one someone else holds; a rejected push means
 another claimer got there first, and when two PRs race, the earliest open one
@@ -451,6 +467,7 @@ $ quest status 128
 url https://github.com/moq-dev/quest/pull/128
 state open
 draft false
+base main
 head 0ade9d977d54c6f48152410532c58e9ea78db3d0
 mergeable conflicting
 merge-state dirty
@@ -470,7 +487,7 @@ comes last, and a missing value prints as `-`:
 
 | Line | Fields |
 | --- | --- |
-| `url`, `state`, `draft`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the head SHA. |
+| `url`, `state`, `draft`, `base`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the branch it merges into; the head SHA. |
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
@@ -1307,7 +1324,7 @@ permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME`, or the default when unset, and any gateway or provider.
 ```sh
-quest review                                  # round 1 against origin's default branch
+quest review                                  # round 1 against its PR's base: its epic's branch, or origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
 quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, with no record in its body

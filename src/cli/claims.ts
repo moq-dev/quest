@@ -15,7 +15,7 @@ import {
 	requireRemote,
 	string,
 } from "./github";
-import { type Snapshot, snapshot } from "./tree";
+import { type Main, mainAt } from "./epics";
 
 /** An open PR, from any head repository, as the claim checks read it. */
 export interface OpenPull {
@@ -137,7 +137,7 @@ async function has(client: GitHub, repository: Repository, path: string): Promis
 }
 
 /** Whether two names are the same repository; GitHub ignores case. */
-function same(a: Repository, b: Repository): boolean {
+export function same(a: Repository, b: Repository): boolean {
 	return a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
 }
 
@@ -334,18 +334,18 @@ export async function mergedPull(
 	return pull?.url ?? null;
 }
 
-/** Where a claim lands: the remote, its upstream, and the upstream default branch's tip and quest tree. */
+/** Where a claim lands: the remote, its upstream, and the upstream's default branch and `quest/*` branches. */
 export interface Target extends UpstreamRefs {
 	remote: string;
 	up: Upstream;
-	tree: Snapshot;
+	main: Main;
 }
 
 /** The target for claims pushed to `remote`, read from the fetched upstream default branch. */
 export async function target(root: string, remote: string, deps: ClaimDependencies): Promise<Target> {
 	const up = await upstream(root, requireRemote(root, remote), deps);
 	const refs = upstreamRefs(root, up.git);
-	return { remote, up, ...refs, tree: snapshot(root, refs.base, deps.warn) };
+	return { remote, up, ...refs, main: mainAt(root, refs.base, deps.warn) };
 }
 
 /** What the upstream holds, read with one `ls-remote`. */

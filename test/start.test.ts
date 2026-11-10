@@ -17,11 +17,17 @@ import {
 	remoteRepository,
 } from "../src/cli/github";
 import { type Output, main } from "../src/cli/main";
-import { Refusal, ago, releaseQuest, startQuest } from "../src/cli/start";
+import { Refusal, ago, claimBase, releaseQuest, startQuest } from "../src/cli/start";
 import { EPIC_README, GIT_SETTINGS, TWO, Tree, configure, initRepository, template, tempDir } from "./fixture";
 
-const ONE = "quest/m0/epic/one.md";
-const BRANCH = "quest/m0/epic/one";
+/** A quest directly under the milestone, whose PR targets the default branch. */
+const ONE = "quest/m0/one.md";
+const BRANCH = "quest/m0/one";
+/** The fixture's quests in its epic, whose PRs target the epic's branch. */
+const EPIC_ONE = "quest/m0/epic/one.md";
+const EPIC_TWO = "quest/m0/epic/two.md";
+const EPIC_README_PATH = "quest/m0/epic/README.md";
+const EPIC_BRANCH = "quest/m0/epic/README";
 const UPSTREAM = "https://github.com/example/project.git";
 const FORK = "https://github.com/me/project.git";
 
@@ -32,15 +38,22 @@ function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-/** A bare repository whose default branch holds the baseline tree. */
+/** The committed baseline tree plus a quest directly under the milestone. */
+const seeded = template((dir) => {
+	Tree.committed(dir).write(ONE, "# [S] One\n\n## Goal\n\nA quest outside any epic.\n");
+	git(dir, "add", "-A");
+	git(dir, "commit", "-q", "-m", "seed");
+});
+
+/** A bare repository whose default branch holds the seeded tree. */
 const upstream = template((dir) => {
-	git(dir, "clone", "-q", "--bare", Tree.committed().path, ".");
+	git(dir, "clone", "-q", "--bare", seeded(), ".");
 	configure(dir, GIT_SETTINGS);
 });
 
-/** The committed baseline, tracking origin's main, with no origin URL until `clone` sets one. */
+/** The seeded tree, tracking origin's main, with no origin URL until `clone` sets one. */
 const baselineClone = template((dir) => {
-	Tree.committed(dir);
+	seeded(dir);
 	git(dir, "remote", "add", "origin", upstream());
 	git(dir, "fetch", "-q", "origin");
 	git(dir, "branch", "-q", "--set-upstream-to", "origin/main");
@@ -60,12 +73,16 @@ function clone(url: string, routes: Record<string, string> = {}): string {
 
 interface Pull {
 	number: number;
+	/** The repository the PR is in. */
 	base: string;
+	/** The branch it merges into. */
+	baseRef: string;
 	head: { ref: string; sha?: string; repo: { full_name: string } | null };
 	draft: boolean;
 	state: string;
 	merged_at?: string | null;
 	body: string;
+	title?: string;
 	created_at: string;
 	updated_at: string;
 	html_url: string;
@@ -113,6 +130,7 @@ class FakeGitHub {
 		const pull: Pull = {
 			number,
 			base,
+			baseRef: "main",
 			head: { ref, repo: { full_name: headRepo } },
 			draft: true,
 			state: "open",
@@ -180,12 +198,20 @@ class FakeGitHub {
 		if (match && method === "POST") {
 			const [owner, ref] = String(body.head).includes(":") ? String(body.head).split(":") : [null, body.head];
 			const headRepo = owner ? `${owner}/${match[1].split("/")[1]}` : match[1];
+			const baseRef = String(body.base);
+			// GitHub refuses a second open PR between the same branches.
+			const duplicate = this.open_(match[1]).some(
+				(pull) => pull.head.ref === ref && pull.head.repo?.full_name === headRepo && pull.baseRef === baseRef,
+			);
+			if (duplicate) return json(422, { message: "Validation Failed" });
 			const pull = this.open(match[1], String(ref), headRepo, {
+				baseRef,
 				draft: body.draft === true,
 				body: String(body.body),
+				title: String(body.title),
 			});
 			this.onCreate?.();
-			return json(201, { ...pull, title: body.title, baseRef: body.base });
+			return json(201, pull);
 		}
 		match = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(url.pathname);
 		if (match && method === "PATCH") {
@@ -215,7 +241,8 @@ function land(work: string, files: Record<string, string | null>): void {
 /** Claim `path` from `work` as `quest start` does, reading the upstream tree first. */
 async function start(work: string, github: FakeGitHub, warnings: string[] = [], path = ONE) {
 	const dependencies = deps(github, warnings);
-	return startQuest(work, await target(work, "origin", dependencies), path, "[S] One", dependencies);
+	const at = await target(work, "origin", dependencies);
+	return startQuest(work, at, await claimBase(work, at, path, dependencies), path, "[S] One", dependencies);
 }
 
 /** The branch tip on a bare repository, or "" when it is missing. */
@@ -244,7 +271,7 @@ describe("start on GitHub", () => {
 		expect(git(bare, "rev-parse", `${started.sha}^`)).toBe(base);
 		expect(git(bare, "rev-parse", `${started.sha}^{tree}`)).toBe(git(bare, "rev-parse", `${base}^{tree}`));
 		expect(git(bare, "log", "-1", "--format=%B", started.sha)).toMatch(
-			/^chore\(quest\): claim quest\/m0\/epic\/one\.md\n\nQuest-Claim: [0-9a-f]{16}$/,
+			/^chore\(quest\): claim quest\/m0\/one\.md\n\nQuest-Claim: [0-9a-f]{16}$/,
 		);
 		expect(git(work, "symbolic-ref", "HEAD")).toBe(`refs/heads/${BRANCH}`);
 		expect(git(work, "rev-parse", "HEAD")).toBe(started.sha);
@@ -259,7 +286,7 @@ describe("start on GitHub", () => {
 		const work = tempDir();
 		initRepository(work);
 		mkdirSync(join(work, "sub"));
-		cpSync(join(Tree.baseline().path, "quest"), join(work, "sub", "quest"), { recursive: true });
+		cpSync(join(seeded(), "quest"), join(work, "sub", "quest"), { recursive: true });
 		git(work, "add", ".");
 		git(work, "commit", "-q", "-m", "seed");
 		git(work, "remote", "add", "origin", UPSTREAM);
@@ -504,7 +531,7 @@ describe("start on GitHub", () => {
 		const work = tempDir();
 		initRepository(work);
 		mkdirSync(join(work, dir));
-		cpSync(join(Tree.baseline().path, "quest"), join(work, dir, "quest"), { recursive: true });
+		cpSync(join(seeded(), "quest"), join(work, dir, "quest"), { recursive: true });
 		git(work, "add", ".");
 		git(work, "commit", "-q", "-m", "seed");
 		git(work, "remote", "add", "origin", FORK);
@@ -541,12 +568,12 @@ describe("start on GitHub", () => {
 	test("refuses a quest missing from the upstream default branch", async () => {
 		const bare = upstream();
 		const work = clone(UPSTREAM, { [UPSTREAM]: bare });
-		const extra = "quest/m0/epic/three.md";
+		const extra = "quest/m0/three.md";
 		writeFileSync(join(work, extra), "# [S] Three\n\n## Goal\n\nOnly local.\n");
 		await expect(start(work, new FakeGitHub(), [], extra)).rejects.toThrow(
 			new Refusal(`${extra} is not on the upstream default branch; update your checkout`),
 		);
-		expect(tip(bare, "quest/m0/epic/three")).toBe("");
+		expect(tip(bare, "quest/m0/three")).toBe("");
 	});
 
 	test("names a branch named after the epic's directory, says whether it merged, and leaves it", async () => {
@@ -558,16 +585,19 @@ describe("start on GitHub", () => {
 		const work = clone(UPSTREAM, { [UPSTREAM]: bare });
 		const refusal = (state: string) =>
 			new Refusal(
-				`${ONE} cannot be claimed: git cannot hold ${BRANCH} on origin beside a branch named after its directory or inside it:\n` +
+				`${EPIC_ONE} cannot be claimed: git cannot hold ${EPIC_BRANCH} on origin beside a branch named after its directory or inside it:\n` +
 					`- quest/m0/epic: ${state}\n` +
 					"Stop and report this; do not delete or rename a branch in the way.",
 			);
 
-		await expect(start(work, github)).rejects.toThrow(refusal("not a merged PR's head"));
+		await expect(start(work, github, [], EPIC_ONE)).rejects.toThrow(refusal("not a merged PR's head"));
 		const pull = github.closed("example/project", "quest/m0/epic", blocker, true);
-		await expect(start(work, github)).rejects.toThrow(refusal(`the head of ${pull.html_url}, which merged`));
+		await expect(start(work, github, [], EPIC_ONE)).rejects.toThrow(
+			refusal(`the head of ${pull.html_url}, which merged`),
+		);
 		expect(tip(bare, "quest/m0/epic")).toBe(blocker);
-		expect(tip(bare)).toBe("");
+		expect(tip(bare, EPIC_BRANCH)).toBe("");
+		expect(tip(bare, "quest/m0/epic/one")).toBe("");
 		expect(github.open_("example/project")).toEqual([]);
 	});
 
@@ -610,6 +640,193 @@ describe("start on GitHub", () => {
 	});
 });
 
+/** Commit `files` on `branch` of `work`'s origin, where `null` deletes one, and push them there. */
+function landOn(work: string, branch: string, files: Record<string, string | null>): void {
+	git(work, "fetch", "-q", "origin", `refs/heads/${branch}`);
+	git(work, "switch", "-q", "--detach", "FETCH_HEAD");
+	for (const [path, text] of Object.entries(files)) {
+		if (text === null) rmSync(join(work, path));
+		else writeFileSync(join(work, path), text);
+	}
+	git(work, "add", "-A");
+	git(work, "commit", "-q", "-m", "land");
+	git(work, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+}
+
+const THREE = "quest/m0/epic/three.md";
+
+describe("epic branches", () => {
+	test("the first claim in an epic opens its branch and PR, and later claims build on them", async () => {
+		const bare = upstream();
+		const github = new FakeGitHub();
+		const started = await start(clone(UPSTREAM, { [UPSTREAM]: bare }), github, [], EPIC_ONE);
+
+		const epic = tip(bare, EPIC_BRANCH);
+		expect(git(bare, "rev-parse", `${epic}^`)).toBe(git(bare, "rev-parse", "main"));
+		expect(git(bare, "rev-parse", `${epic}^{tree}`)).toBe(git(bare, "rev-parse", "main^{tree}"));
+		expect(git(bare, "log", "-1", "--format=%s", epic)).toBe(`chore(quest): open epic ${EPIC_README_PATH}`);
+		expect(git(bare, "rev-parse", `${started.sha}^`)).toBe(epic);
+		expect(started.url).toBe("https://github.com/example/project/pull/2");
+		expect(github.pulls).toMatchObject([
+			{ baseRef: "main", head: { ref: EPIC_BRANCH }, draft: true, title: "Epic" },
+			{ baseRef: EPIC_BRANCH, head: { ref: "quest/m0/epic/one" }, draft: true },
+		]);
+		expect(github.pulls[0].body).toBe(
+			`Lands the epic [${EPIC_README_PATH}](https://github.com/example/project/blob/main/${EPIC_README_PATH}) on ` +
+				"`main` as one PR. Its quests' PRs merge into this branch first; the README's own work comes last.\n\n" +
+				"## Waiting\n\n- quest/m0/epic: its quests merge into this branch first; this PR lands once none remain.\n",
+		);
+		expect(github.pulls[1].body).toBe(
+			`Claims [${EPIC_ONE}](https://github.com/example/project/blob/${EPIC_BRANCH}/${EPIC_ONE}).`,
+		);
+
+		// A quest planned on the epic's branch alone is claimed there, with no second epic PR.
+		const planner = clone(UPSTREAM, { [UPSTREAM]: bare });
+		landOn(planner, EPIC_BRANCH, { [THREE]: "# [S] Three\n\n## Goal\n\nPlanned on the epic's branch.\n" });
+		const third = await start(clone(UPSTREAM, { [UPSTREAM]: bare }), github, [], THREE);
+		expect(git(bare, "rev-parse", `${third.sha}^`)).toBe(tip(bare, EPIC_BRANCH));
+		expect(github.pulls).toHaveLength(3);
+		expect(github.pulls[2]).toMatchObject({ baseRef: EPIC_BRANCH, head: { ref: "quest/m0/epic/three" } });
+	});
+
+	test("two claims in one epic race to open its branch, and share the one that wins", async () => {
+		const bare = upstream();
+		const github = new FakeGitHub();
+		land(clone(UPSTREAM, { [UPSTREAM]: bare }), { [THREE]: "# [S] Three\n\n## Goal\n\nAlso ready.\n" });
+		const [a, b] = [clone(UPSTREAM, { [UPSTREAM]: bare }), clone(UPSTREAM, { [UPSTREAM]: bare })];
+		const [one, three] = await Promise.all([start(a, github, [], EPIC_ONE), start(b, github, [], THREE)]);
+
+		const epic = tip(bare, EPIC_BRANCH);
+		expect(git(bare, "rev-parse", `${one.sha}^`)).toBe(epic);
+		expect(git(bare, "rev-parse", `${three.sha}^`)).toBe(epic);
+		expect(github.open_("example/project").filter((pull) => pull.head.ref === EPIC_BRANCH)).toHaveLength(1);
+	});
+
+	test("a fork cannot open an epic's branch, but claims on one that exists", async () => {
+		const bare = upstream();
+		const forkBare = upstream();
+		const github = new FakeGitHub();
+		github.fork("me/project");
+		const work = clone(FORK, { [FORK]: forkBare, [UPSTREAM]: bare });
+		await expect(start(work, github, [], EPIC_ONE)).rejects.toThrow(
+			new Refusal(
+				`${EPIC_ONE} is in the epic ${EPIC_README_PATH}, whose branch ${EPIC_BRANCH} is not on example/project; ` +
+					"a fork cannot create it, so a maintainer starts a quest in the epic first",
+			),
+		);
+		expect(github.pulls).toEqual([]);
+
+		git(bare, "branch", EPIC_BRANCH, "main");
+		github.open("example/project", EPIC_BRANCH, "example/project");
+		const started = await start(work, github, [], EPIC_ONE);
+		expect(git(forkBare, "rev-parse", `${started.sha}^`)).toBe(tip(bare, EPIC_BRANCH));
+		expect(github.pulls[1]).toMatchObject({ baseRef: EPIC_BRANCH, head: { repo: { full_name: "me/project" } } });
+	});
+
+	test("an epic's branch a merged PR landed is replaced, and a branch without a PR gets one", async () => {
+		const bare = upstream();
+		git(bare, "branch", EPIC_BRANCH, "main");
+		const github = new FakeGitHub();
+		github.closed("example/project", EPIC_BRANCH, tip(bare, EPIC_BRANCH), true);
+		const landed = tip(bare, EPIC_BRANCH);
+		const started = await start(clone(UPSTREAM, { [UPSTREAM]: bare }), github, [], EPIC_ONE);
+		expect(tip(bare, EPIC_BRANCH)).not.toBe(landed);
+		expect(git(bare, "rev-parse", `${started.sha}^`)).toBe(tip(bare, EPIC_BRANCH));
+
+		const other = upstream();
+		git(other, "branch", EPIC_BRANCH, "main");
+		const fresh = new FakeGitHub();
+		const second = await start(clone(UPSTREAM, { [UPSTREAM]: other }), fresh, [], EPIC_ONE);
+		expect(git(other, "rev-parse", `${second.sha}^`)).toBe(git(other, "rev-parse", "main"));
+		expect(fresh.pulls).toMatchObject([{ baseRef: "main", head: { ref: EPIC_BRANCH } }, { baseRef: EPIC_BRANCH }]);
+	});
+
+	test("an epic's README is read from its branch, and the epic's PR holds it once its quests are done", async () => {
+		const work = clone(upstream());
+		expect((await cli("--root", work, "start", EPIC_ONE)).code).toBe(0);
+		const early = await cli("--root", work, "start", EPIC_README_PATH);
+		expect(early.code).toBe(3);
+		expect(early.stderr).toContain(`quest: ${EPIC_README_PATH} is blocked;`);
+
+		// Off GitHub the epic's branch has no PR, so the branch itself holds the README.
+		landOn(work, EPIC_BRANCH, {
+			[EPIC_ONE]: null,
+			[EPIC_TWO]: null,
+			[EPIC_README_PATH]: EPIC_README.replace("# Epic", "# [S] Epic"),
+		});
+		const done = await cli("--root", work, "start", EPIC_README_PATH);
+		expect(done.code, done.stderr).toBe(3);
+		expect(done.stderr).toContain(`quest: ${EPIC_README_PATH} is held by branch ${EPIC_BRANCH}, with no open PR\n`);
+	});
+
+	test("release gives back an epic quest's claim and keeps the epic's branch and PR", async () => {
+		const bare = upstream();
+		const github = new FakeGitHub();
+		const work = clone(UPSTREAM, { [UPSTREAM]: bare });
+		const started = await start(work, github, [], EPIC_ONE);
+		expect(await releaseQuest(work, EPIC_ONE, "origin", deps(github))).toEqual({
+			branch: "quest/m0/epic/one",
+			closed: [started.url],
+		});
+		expect(tip(bare, "quest/m0/epic/one")).toBe("");
+		expect(tip(bare, EPIC_BRANCH)).not.toBe("");
+		expect(github.open_("example/project").map((pull) => pull.head.ref)).toEqual([EPIC_BRANCH]);
+	});
+
+	test("a quest finished on its epic's branch is gone from every reading; outside quests wait for the epic", async () => {
+		const bare = upstream();
+		const work = clone(bare);
+		// A quest outside the epic waits on one inside it.
+		land(work, {
+			[ONE]: "# [S] One\n\n## Goal\n\nAfter the epic.\n\n## Required\n\n- [One](/quest/m0/epic/one.md)\n",
+		});
+		expect((await cli("--root", work, "start", EPIC_ONE)).code).toBe(0);
+		// The epic's PR for One lands on its branch: One is deleted with its links, there alone.
+		landOn(work, EPIC_BRANCH, {
+			[EPIC_ONE]: null,
+			[EPIC_TWO]: TWO.replace(/\n## Required\n[^]*$/, ""),
+			[ONE]: "# [S] One\n\n## Goal\n\nAfter the epic.\n",
+		});
+
+		const main = clone(bare);
+		git(main, "fetch", "-q", "origin");
+		git(main, "merge", "-q", "--ff-only", "origin/main");
+		expect(await cli("--root", main, "unblocked")).toMatchObject({ code: 0, stdout: `0\t${EPIC_TWO}\n` });
+		expect(await cli("--root", main, "unblocked", "--unclaimed")).toMatchObject({
+			code: 0,
+			stdout: `0\t${EPIC_TWO}\n`,
+		});
+		expect(await cli("--root", main, "unblocked", EPIC_TWO)).toMatchObject({ code: 0, stdout: "" });
+		expect(await cli("--root", main, "unblocked", ONE)).toMatchObject({ stdout: `${EPIC_ONE}\n` });
+		expect(await cli("--root", main, "unblocked", EPIC_ONE)).toMatchObject({
+			code: 1,
+			stderr: `quest: ${EPIC_ONE} is finished on its epic's branch, ${EPIC_BRANCH}\n`,
+		});
+		const finished = await cli("--root", main, "start", EPIC_ONE);
+		expect(finished.code).toBe(3);
+		expect((await cli("--root", main, "start", ONE)).code).toBe(3);
+
+		const two = await cli("--root", main, "start", EPIC_TWO);
+		expect(two.code, two.stderr).toBe(0);
+		expect(git(bare, "rev-parse", `${tip(bare, "quest/m0/epic/two")}^`)).toBe(tip(bare, EPIC_BRANCH));
+	});
+
+	test("a quest finished on the default branch unblocks an epic's quest before the branch catches up", async () => {
+		const bare = upstream();
+		const work = clone(bare);
+		land(work, { [THREE]: "# [S] Three\n\n## Goal\n\nAfter One.\n\n## Required\n\n- [One](/quest/m0/one.md)\n" });
+		expect((await cli("--root", work, "start", EPIC_ONE)).code).toBe(0);
+		expect((await cli("--root", work, "start", THREE)).code).toBe(3);
+
+		// One lands on the default branch, after the epic's branch was cut.
+		git(work, "switch", "-q", "--detach", "origin/main");
+		land(work, { [ONE]: null, [THREE]: "# [S] Three\n\n## Goal\n\nAfter One.\n" });
+		const three = await cli("--root", work, "start", THREE);
+		expect(three.code, three.stderr).toBe(0);
+		expect(git(bare, "rev-parse", `${tip(bare, "quest/m0/epic/three")}^`)).toBe(tip(bare, EPIC_BRANCH));
+	});
+});
+
 describe("start on another forge", () => {
 	/** A clone whose origin is a plain bare repository path. */
 	function plain(): { bare: string; work: string } {
@@ -637,7 +854,7 @@ describe("start on another forge", () => {
 		const work = tempDir();
 		initRepository(work);
 		mkdirSync(join(work, "sub"));
-		cpSync(join(Tree.baseline().path, "quest"), join(work, "sub", "quest"), { recursive: true });
+		cpSync(join(seeded(), "quest"), join(work, "sub", "quest"), { recursive: true });
 		git(work, "add", ".");
 		git(work, "commit", "-q", "-m", "seed");
 		git(work, "remote", "add", "origin", bare);
@@ -692,15 +909,11 @@ describe("start on another forge", () => {
 	test("unblocked --unclaimed drops held quests and lists them on stderr", async () => {
 		const { bare, work } = plain();
 		// Two ready quests, so the filter leaves one.
-		land(work, {
-			"quest/m0/epic/README.md": `${EPIC_README}- [Three](/quest/m0/epic/three.md)\n`,
-			"quest/m0/epic/three.md": "# [S] Three\n\n## Goal\n\nAlso ready.\n",
-		});
 		git(bare, "branch", BRANCH, "main");
 
 		expect(await cli("--root", work, "unblocked", "--unclaimed")).toEqual({
 			code: 0,
-			stdout: "0\tquest/m0/epic/three.md\n",
+			stdout: `1\t${EPIC_ONE}\n`,
 			stderr:
 				"quest: origin is not on GitHub, so only its branches were checked for claims\n" +
 				`quest: skipped ${ONE}: held by branch ${BRANCH}, with no open PR\n`,
@@ -717,18 +930,20 @@ describe("start on another forge", () => {
 		land(work, {
 			"quest/m0/epic/README.md": EPIC_README.replace("- [One](/quest/m0/epic/one.md)\n", ""),
 			"quest/m0/epic/two.md": TWO.replace(/\n## Required\n[^]*$/, ""),
-			[ONE]: null,
+			[EPIC_ONE]: null,
 		});
 
-		expect(await cli("--root", behind, "unblocked")).toMatchObject({ stdout: `1\t${ONE}\n` });
+		expect(await cli("--root", behind, "unblocked")).toMatchObject({ stdout: `1\t${EPIC_ONE}\n0\t${ONE}\n` });
 		expect(await cli("--root", behind, "unblocked", "--unclaimed")).toEqual({
 			code: 0,
-			stdout: "0\tquest/m0/epic/two.md\n",
+			stdout: `0\t${EPIC_TWO}\n0\t${ONE}\n`,
 			stderr: "quest: origin is not on GitHub, so only its branches were checked for claims\n",
 		});
-		const finished = await cli("--root", behind, "start", ONE);
+		const finished = await cli("--root", behind, "start", EPIC_ONE);
 		expect(finished.code).toBe(3);
-		expect(finished.stderr).toBe(`quest: ${ONE} is not on the upstream default branch; update your checkout\n`);
+		expect(finished.stderr).toBe(
+			`quest: ${EPIC_ONE} is not on the upstream default branch or its epic's branch; update your checkout\n`,
+		);
 		const ready = await cli("--root", behind, "start", "quest/m0/epic/two.md");
 		expect(ready.code, ready.stderr).toBe(0);
 		expect(tip(bare, "quest/m0/epic/two")).not.toBe("");
@@ -757,7 +972,7 @@ test("waiting lists a draft's items under its URL, ranked as the quest it carrie
 	const bare = upstream();
 	const github = new FakeGitHub();
 	const work = clone(UPSTREAM, { [UPSTREAM]: bare });
-	appendFileSync(join(work, ONE), "\n## Waiting\n\n- moq-dev/moq: a release.\n");
+	appendFileSync(join(work, EPIC_ONE), "\n## Waiting\n\n- moq-dev/moq: a release.\n");
 	github.open("example/project", "quest/m0/epic/two", "example/project", {
 		body: "Work.\n\n## Waiting\n\n- Maintainer: pick a name.\n",
 	});
@@ -768,7 +983,7 @@ test("waiting lists a draft's items under its URL, ranked as the quest it carrie
 			code: 0,
 			stdout:
 				"0\tblocked\thttps://github.com/example/project/pull/1\tMaintainer: pick a name.\n" +
-				`1\tready\t${ONE}\tmoq-dev/moq: a release.\n`,
+				`1\tready\t${EPIC_ONE}\tmoq-dev/moq: a release.\n`,
 			stderr: "",
 		});
 	} finally {

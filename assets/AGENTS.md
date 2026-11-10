@@ -13,6 +13,10 @@ An **epic** is a directory of quests.
 Its children are the quest files in it and the epics one level down; its `README.md` is the epic's own work and lists none of them.
 It completes when its own work is done and every child has merged.
 
+Each epic directly under a milestone has a branch, its README's quest branch `quest/<milestone>/<epic>/README`, that lands on the default branch as one PR, with the README's own work last.
+The PR of every quest inside the epic targets that branch, which the first `quest start` in the epic creates along with the epic's draft PR; any other quest's PR targets the default branch.
+A quest finished on its epic's branch stays on the default branch until the epic lands, so read readiness from `quest unblocked`, not the default branch's files, and review, check, and merge each PR against the base `quest status` prints.
+
 The directories under `quest/` are special epics called **milestones** (`m0`, `m1`, ...) that group work by priority horizon.
 Milestones are permanent.
 

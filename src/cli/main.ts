@@ -9,11 +9,14 @@ import { description, version } from "../../package.json";
 import {
 	type Doc,
 	type RankedQuest,
+	epicBranch,
+	branchEpic,
 	blockers,
 	check,
 	formatFinding,
 	label,
 	lookup,
+	normalize,
 	questBranch,
 	renderBlocker,
 	SIZES,
@@ -32,7 +35,8 @@ import {
 	stopAgent,
 	stopAll,
 } from "./agent";
-import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
+import { ensure, held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
+import { type Views, mainAt, mainCheckout, tracked, viewOf, views } from "./epics";
 import { gate, QUICK_MS } from "./gate";
 import {
 	gitHubDependencies,
@@ -75,10 +79,10 @@ import {
 } from "./hooks";
 import { CHECKED_CONTEXT, USER_ASKED } from "./rules";
 import { heal, init, uninstall } from "./setup";
-import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
+import { Refusal, claimBase, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
-import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
+import { type Snapshot, checkout, collect, load, under } from "./tree";
 import { pullRequestStatus, statusLines } from "./status";
 import { CCUSAGE_MISSING, daysBefore, usage, usageDependencies, usageLines } from "./usage";
 import { waitForActivity, WaitTimeout } from "./wait";
@@ -237,6 +241,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		return findings.length === 0;
 	};
 
+	/** The checkout's trees: its own, and each epic branch's of `remote` as last fetched. */
+	const localViews = (remote: string): Views =>
+		views(root(), mainCheckout(root(), warn), tracked(root(), remote), warn);
+
 	/** Print what blocks `doc`: the themed log on a terminal, else the blocker list with advice on stderr. */
 	const explain = (docs: Doc[], doc: Doc, path: string) => {
 		const found = blockers(docs, doc);
@@ -283,7 +291,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"(linux, macos, windows) under the quest's ## Hosts, empty when it runs anywhere, and models ranks the {harness, model, effort} " +
 				"entries that write the quest: its size's list, or the next size's while a Maintainer: item under its " +
 				"## Waiting leaves a decision open (quest models lists them).\n\n" +
-				"--unclaimed ranks the fetched upstream default branch's tree instead of the checkout, then drops " +
+				"Each quest is read from the tree its PR builds on. A quest in an epic (a directory under a " +
+				"milestone) whose branch, quest/<milestone>/<epic>/README, is on the remote is read from that " +
+				"branch's tree as it will be once the checkout is next merged into it: each quest file as the side " +
+				"that changed it left it, gone when either side deleted it, and the epic's version when both edited " +
+				"it. So a quest finished on its epic's branch is not offered again and its siblings are not blocked " +
+				"on it, while a quest outside the epic that requires it waits until the epic lands. The epic's README " +
+				"is read from the same tree, and every other quest from the checkout. Epic branches are read as " +
+				"last fetched from --remote.\n\n" +
+				"--unclaimed ranks the fetched upstream's default branch and epic branches instead of the checkout, then drops " +
 				"quests someone holds: a quest branch upstream, or an open PR from that branch in any repository. A " +
 				"branch whose tip is a merged PR's head holds nothing; a closed, unmerged PR's branch still does. A " +
 				"GitHub remote's upstream is its repository, or the furthest parent up its fork chain reached " +
@@ -311,18 +327,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					if (options.json || options.limit !== undefined || options.unclaimed) {
 						throw new UsageError("--json, --limit, and --unclaimed apply to the ranking; omit the path");
 					}
-					const docs = load(root());
-					explain(docs, find(docs, path), path);
+					const local = localViews(options.remote);
+					const named = find(local.main.docs, path).path;
+					const docs = viewOf(local, named).docs;
+					const doc = locate(docs, named);
+					if (doc === null)
+						throw new Error(`${named} is finished on its epic's branch, ${epicBranch(named)}`);
+					explain(docs, doc, path);
 					return;
 				}
-				const show = (quests: RankedQuest[], docs: Doc[]) => {
+				const show = (quests: RankedQuest[], trees: Views) => {
 					const shown = quests.slice(0, options.limit);
 					if (options.json) {
-						const byPath = new Map(docs.map((doc) => [doc.path, doc]));
 						print(
 							JSON.stringify(
 								shown.map((quest) => {
-									const doc = byPath.get(quest.path)!;
+									const doc = locate(viewOf(trees, quest.path).docs, quest.path)!;
 									return { ...quest, hosts: hosts(doc), models: questWriters(doc) };
 								}),
 							),
@@ -333,24 +353,38 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						print("Ready quests by milestone and downstream impact (other prerequisites may remain):");
 					for (const quest of shown) print(`${quest.dependents}\t${quest.path}`);
 				};
+				/** Every quest ready in the tree its PR builds on, once each tree passes `quest check`. */
+				const rank = (trees: Views): RankedQuest[] | null => {
+					if (![trees.main, ...trees.epics.values()].map(valid).every(Boolean)) return null;
+					const epics = new Map([...trees.epics].map(([epic, tree]) => [epic, tree.docs]));
+					return unblocked(trees.main.docs, epics);
+				};
 				if (!options.unclaimed) {
-					const tree = checkout(root(), warn);
-					if (valid(tree)) show(unblocked(tree.docs), tree.docs);
+					const local = localViews(options.remote);
+					const ranked = rank(local);
+					if (ranked !== null) show(ranked, local);
 					return;
 				}
-				// Readiness comes from the upstream default branch, so a stale checkout cannot offer
+				// Readiness comes from the upstream's branches, so a stale checkout cannot offer
 				// a deleted quest or one whose prerequisite has since finished.
 				const deps = { github: () => gitHubDependencies(warn), warn };
 				settle(
 					(async () => {
 						const up = await reach(root(), options.remote, deps);
 						const refs = up === null ? null : upstreamRefs(root(), up.git);
-						const tree = refs === null ? checkout(root(), warn) : snapshot(root(), refs.base, warn);
-						if (!valid(tree)) return null;
-						const ranked = unblocked(tree.docs);
+						let trees: Views;
+						if (up === null || refs === null) {
+							trees = views(root(), mainCheckout(root(), warn), new Map(), warn);
+						} else {
+							const epics = new Map([...refs.branches].filter(([branch]) => branchEpic(branch) !== null));
+							for (const tip of epics.values()) ensure(root(), up.git, tip);
+							trees = views(root(), mainAt(root(), refs.base, warn), epics, warn);
+						}
+						const ranked = rank(trees);
+						if (ranked === null) return null;
 						const branches = ranked.map((quest) => questBranch(quest.path));
 						const holdings = up === null ? [] : (await held(root(), up, branches, refs?.branches)).claims;
-						return { ranked, holdings, docs: tree.docs };
+						return { ranked, holdings, trees };
 					})(),
 					(result) => {
 						if (result === null) return 1;
@@ -363,7 +397,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						}
 						show(
 							result.ranked.filter((quest) => !byBranch.has(questBranch(quest.path))),
-							result.docs,
+							result.trees,
 						);
 					},
 				);
@@ -426,14 +460,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("start")
 		.summary("Claim a ready quest with a draft PR, or release that claim")
 		.description(
-			"Claim a ready quest: push an empty claim commit, built on the upstream default branch, to the quest's " +
+			"Claim a ready quest: push an empty claim commit, built on the upstream default branch or its epic's branch, to the quest's " +
 				"branch (its path without .md), then open a draft PR from it right away. Switches the " +
 				"checkout to the claim on a new local branch, or fast-forwards that branch when it is checked out, " +
 				"and prints the PR URL, or the branch off GitHub. A local branch left from an earlier attempt is not " +
 				"moved: the claim still succeeds, with a warning to switch to it and merge the claim commit.\n\n" +
-				"Readiness comes from the fetched upstream default branch's tree, not the checkout. Fails on a tree " +
-				"quest check rejects, which can hide a blocker. Refuses a blocked quest, one missing from the " +
-				"upstream default branch, and one already held: a branch upstream or an open PR from that branch in " +
+				"A quest in an epic (a directory under a milestone) builds on the epic's branch instead, " +
+				"quest/<milestone>/<epic>/README, and opens its PR into it. The first claim in the epic creates that " +
+				"branch from the upstream default branch with an empty commit, and opens its draft PR into the default " +
+				"branch, whose ## Waiting section hands it back until the epic's quests have merged; a branch a merged " +
+				"PR landed is replaced, and a branch without an open PR gets one. A fork cannot create the branch, so " +
+				"it refuses until the upstream has it. An epic's README, and a quest directly under a milestone, build " +
+				"on the default branch.\n\n" +
+				"Readiness comes from the fetched upstream tree the claim builds on, not the checkout: the epic's " +
+				"branch as quest unblocked reads it, or the default branch. Fails on a tree " +
+				"quest check rejects, which can hide a blocker. Refuses a blocked quest, one missing from that " +
+				"tree, and one already held: a branch upstream or an open PR from that branch in " +
 				"any repository. A branch whose tip is a merged PR's head holds nothing, and the claim replaces it " +
 				"with a lease on that tip. A rejected push means someone else pushed the branch first. A branch named after the claim " +
 				"branch's directory, or inside it, refuses the claim too, since git cannot hold both; the refusal names it " +
@@ -447,7 +489,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"to a fork. A failed lookup of a parent's README is an error. Off GitHub, only the branch is pushed, " +
 				"with a warning.\n\n" +
 				"--release deletes the quest's branch on the remote, with a lease on its tip, and closes its PR, only " +
-				"while that tip is still an empty commit.\n\n" +
+				"while that tip is still an empty commit; the epic branch and PR the claim may have opened stay.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token on GitHub. Exits 0 when done, 3 when refused " +
 				"(blocked, held, a branch in the way, or work on the branch), 2 for invalid arguments, and 1 for other " +
 				"failures.",
@@ -466,17 +508,24 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			}
 			settle(
 				(async () => {
-					// Readiness comes from the upstream default branch the claim builds on, not the checkout.
+					// Readiness comes from the upstream branch the claim builds on, not the checkout.
 					const at = await target(root(), options.remote, deps);
-					const doc = locate(at.tree.docs, path);
-					if (doc === null) throw notUpstream(find(load(root()), path).path);
+					// A quest planned on its epic's branch alone is on neither the default branch nor the checkout.
+					const written = normalize(path.replace(/^\//, ""));
+					const named =
+						locate(at.main.snapshot.docs, path)?.path ??
+						locate(load(root()), path)?.path ??
+						(/^quest\/.+\.md$/.test(written) ? written : find([], path).path);
+					const base = await claimBase(root(), at, named, deps);
+					const doc = locate(base.tree.docs, named);
+					if (doc === null) throw notUpstream(named);
 					// A malformed tree can hide a blocker, as a misspelled `## Required` does.
-					if (!valid(at.tree)) return 1;
-					if (blockers(at.tree.docs, doc).length > 0) {
-						explain(at.tree.docs, doc, path);
+					if (!valid(base.tree)) return 1;
+					if (blockers(base.tree.docs, doc).length > 0) {
+						explain(base.tree.docs, doc, path);
 						return 3;
 					}
-					return startQuest(root(), at, doc.path, doc.title?.text ?? doc.path, deps);
+					return startQuest(root(), at, base, doc.path, doc.title?.text ?? doc.path, deps);
 				})(),
 				(started) => {
 					if (typeof started === "number") return started;
@@ -532,7 +581,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Print a pull request's head, checks, merge state, reviews, reactions, and unresolved review threads " +
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
-				"url, state, draft, head, mergeable, merge-state, review-decision, auto-merge, merge-queue, " +
+				"url, state, draft, base (the branch it merges into), head, mergeable, merge-state, review-decision, auto-merge, merge-queue, " +
 				"landing-stopped, and checks, whose state and counts follow each check's latest run; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
 				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
@@ -1119,7 +1168,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("review")
 		.summary("Have a model other than the latest writer review the committed branch, read-only")
 		.description(
-			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
+			"Review the checkout's committed branch against its base (--base, else the base its PR targets: the epic's branch " +
+				"on origin for a quest in an epic that has one, else origin's default branch) with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
 				"first whose model is not avoided reviews. --exclude-model names each model to avoid; without it, the " +
 				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR. " +
@@ -1186,7 +1236,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"`error: <harness> hit its usage limit; resets <time>`, where <time> is the reset as an ISO 8601 UTC " +
 				"timestamp, or `unknown` when the CLI named none.",
 		)
-		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
+		.option(
+			"--base <remote/branch>",
+			"Base branch to review against (default: the branch's epic's branch on origin, for a quest in an epic that has one, else origin's default branch)",
+		)
 		.addOption(new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(HARNESSES))
 		.option("--model <model>", "Model the reviewer runs instead")
 		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")

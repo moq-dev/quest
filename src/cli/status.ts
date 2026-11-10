@@ -24,7 +24,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 	$moreChecks: Boolean!, $moreReviews: Boolean!, $moreThreads: Boolean!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
-			url state isDraft headRefOid headRefName mergeable mergeStateStatus reviewDecision
+			url state isDraft baseRefName headRefOid headRefName mergeable mergeStateStatus reviewDecision
 			headRepository { nameWithOwner }
 			autoMergeRequest { enabledAt mergeMethod commitBody enabledBy { login } }
 			mergeQueueEntry { state position enqueuedAt }
@@ -106,6 +106,8 @@ export interface Status {
 	url: string;
 	state: "open" | "closed" | "merged";
 	draft: boolean;
+	/** The branch the PR merges into: the default branch, or an epic's branch. */
+	base: string;
 	head: string;
 	mergeable: string;
 	mergeState: string;
@@ -336,6 +338,7 @@ function summarize(
 		url,
 		state: lower(pull.state) as Status["state"],
 		draft: pull.isDraft === true,
+		base: string(pull.baseRefName),
 		head,
 		mergeable: lower(pull.mergeable),
 		mergeState: lower(pull.mergeStateStatus),
@@ -409,6 +412,7 @@ export function statusLines(status: Status): string[] {
 		`url ${status.url}`,
 		`state ${status.state}`,
 		`draft ${status.draft}`,
+		`base ${status.base}`,
 		`head ${status.head}`,
 		`mergeable ${status.mergeable}`,
 		`merge-state ${status.mergeState}`,

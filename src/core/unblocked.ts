@@ -2,6 +2,8 @@
 
 import { handBackWaits } from "./claim";
 import { type Doc, branchQuest, children, gates, permanent } from "./doc";
+import { epicOf } from "./epic";
+import { comparePaths } from "./path";
 import { ready, treeOrder } from "./ready";
 import { ROOT, check, formatFinding } from "./rules";
 import { type Wait, onMaintainer, waits } from "./waiting";
@@ -76,14 +78,28 @@ export function ranking(docs: Doc[]): Ranking {
 }
 
 /**
- * Milestone order, descending downstream impact, then existing ready order.
- * Readiness and impact are local facts, independent of claims or outside conditions.
+ * Milestone order, descending downstream impact, then path order. Readiness
+ * and impact are facts of the tree, independent of claims or outside
+ * conditions. Each quest is read from the tree its PR builds on: `epics`'
+ * tree, by epic README, for an epic with a branch, and `main` for the rest.
+ * An epic's README counts as its epic's, since its children finish on that
+ * branch. Validates each tree first.
  */
-export function unblocked(docs: Doc[]): RankedQuest[] {
-	const rank = ranking(docs);
-	return ready(docs)
-		.map((path) => ({ path, dependents: rank.impact(path) }))
-		.sort((a, b) => rank.priority(a.path) - rank.priority(b.path) || b.dependents - a.dependents);
+export function unblocked(main: Doc[], epics: ReadonlyMap<string, Doc[]> = new Map()): RankedQuest[] {
+	const home = (path: string) => epicOf(path) ?? path;
+	const trees: { docs: Doc[]; owns(path: string): boolean }[] = [
+		{ docs: main, owns: (path) => !epics.has(home(path)) },
+		...[...epics].map(([readme, docs]) => ({ docs, owns: (path: string) => home(path) === readme })),
+	];
+	return trees
+		.flatMap(({ docs, owns }) => {
+			const rank = ranking(docs);
+			return ready(docs)
+				.filter(owns)
+				.map((path) => ({ path, dependents: rank.impact(path), priority: rank.priority(path) }));
+		})
+		.sort((a, b) => a.priority - b.priority || b.dependents - a.dependents || comparePaths(a.path, b.path))
+		.map(({ path, dependents }) => ({ path, dependents }));
 }
 
 /** An open draft PR, as `quest waiting` reads its hand-back. */
