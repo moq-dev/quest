@@ -93,8 +93,9 @@ checkpoints and outages to count by hand:
     - Fable 5.2: medium 56, $3.8; max 64.6, $26.5. Rejected for XL, which
       stays on Opus xhigh, on the frontier; zero-data-retention
       organizations may also be refused Fable.
-    - S looks lopsided: Opus low scores well below its Sol medium fallback,
-      which costs less. Check its tallies before moving it.
+    - S looks lopsided: Opus low scores well below its Sol medium fallback
+      (34.7 against 46.3) for $0.006 less a task. Check its tallies before
+      moving it.
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   model of each tier the tables pin. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
