@@ -41,6 +41,8 @@ class FakePull {
 	required: string[] = [];
 	/** The base branch's other ruleset rules. */
 	rules: ObjectValue[] = [];
+	/** The head's check runs, as its `statusCheckRollup` lists them. */
+	checks: ObjectValue[] = [];
 	autoMerge: ObjectValue | null = null;
 	queueEntry: ObjectValue | null = null;
 	labels: string[] = [];
@@ -150,6 +152,18 @@ class FakePull {
 			return { data: { [name]: { clientMutationId: null } } };
 		}
 		if (query.includes("node(id: $id)")) return { data: { node: { autoMergeRequest: this.autoMerge } } };
+		if (query.includes("statusCheckRollup"))
+			return {
+				data: {
+					repository: {
+						object: {
+							statusCheckRollup: {
+								contexts: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: this.checks },
+							},
+						},
+					},
+				},
+			};
 		this.reads++;
 		const read = this.read();
 		this.afterRead?.();
@@ -287,6 +301,29 @@ describe("merge --land", () => {
 		expect(await refused(land(PR, HEAD, "squash", pull.deps()))).toContain("CONTRIBUTING.md or AGENTS.md");
 		expect(pull.writes).toEqual([]);
 		expect(pull.state).toBe("OPEN");
+	});
+
+	test.each([false, true])("refuses a head whose latest run of any check failed (queue: %s)", async (queue) => {
+		const pull = new FakePull();
+		pull.queue = queue;
+		const run = (databaseId: number, name: string, status: string, conclusion: string | null) => ({
+			__typename: "CheckRun",
+			databaseId,
+			name,
+			status,
+			conclusion,
+			detailsUrl: `https://ci.example/${databaseId}`,
+			checkSuite: { app: { databaseId: 15368 } },
+		});
+		pull.checks = [run(1, "Check", "COMPLETED", "FAILURE"), run(2, "Lint", "IN_PROGRESS", null)];
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
+			`head ${HEAD} failed a check: Check (https://ci.example/1)`,
+		);
+		expect(pull.writes).toEqual([]);
+		// A rerun that passed supersedes the failure; a pending check does not block.
+		pull.checks.push(run(3, "Check", "COMPLETED", "SUCCESS"));
+		await land(PR, HEAD, "merge", pull.deps());
+		expect(pull.writes).not.toEqual([]);
 	});
 
 	test("refuses when the token cannot see the auto-merge setting", async () => {

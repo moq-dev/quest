@@ -16,7 +16,9 @@ import {
 	requirements,
 	string,
 } from "./github";
-import { ALLOWS, LAND_CHECK, METHOD_NAMES, enqueue } from "./land";
+import { latestContexts } from "../github/checks";
+import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
+import { classifyCheck } from "./status";
 import { Refusal, ago } from "./start";
 
 export type Method = "merge" | "squash" | "rebase";
@@ -237,6 +239,7 @@ export async function land(
 			throw new Refusal(`${snapshot.url} was retargeted from ${snapshot.base} to ${fresh.base}; land it again`);
 		}
 	};
+	await passing(labels.github, pr, snapshot.url, sha);
 	const needs = await requirements(labels.github, pr, snapshot.base);
 	if (needs.checks.some((check) => check.name === LAND_CHECK)) {
 		if (named !== undefined)
@@ -313,6 +316,21 @@ export async function land(
 			throw error;
 		await submit("mergePullRequest");
 	}
+}
+
+/**
+ * Refuse a head on which any check's latest run failed, required or not, naming each: landing it
+ * would spend a queue build on a known failure. Pending and absent checks do not block.
+ */
+async function passing(github: GitHub, pr: PullRequest, url: string, sha: string): Promise<void> {
+	const failing = latestContexts(await contexts(github, pr, sha))
+		.map(classifyCheck)
+		.filter(({ outcome }) => outcome === "failing")
+		.map(({ check }) => (check.url === null ? check.name : `${check.name} (${check.url})`));
+	if (failing.length > 0)
+		throw new Refusal(
+			`${url} head ${sha} failed ${failing.length === 1 ? "a check" : "checks"}: ${failing.sort().join(", ")}; fix the PR or rerun the check, then land it again`,
+		);
 }
 
 /** GraphQL error types that fault the token or the request, not the PR GitHub would enqueue. */
