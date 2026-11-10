@@ -56,4 +56,3 @@ Open for the implementer, with recommendations:
 ## Related
 
 - [Gate test races](/quest/m0/gate-test-races.md) - the other queue-build failures, which are assertion races, not timeouts
-- [Fixer broken pipe](/quest/m0/queue-watcher/fixer-broken-pipe.md) - why each of these drops came back as a crashed fixer run
