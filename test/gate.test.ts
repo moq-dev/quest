@@ -334,6 +334,106 @@ test("a caller holding the host reserves it, waits out gated commands, and holds
 	expect(waited).toEqual([]);
 });
 
+test("waiting callers start in arrival order, a later one first only while the host has room for both", async () => {
+	const limits = { load: 4, memory: GiB };
+	// A build still runs, and an earlier caller waits for its turn.
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
+	const earlier = { id: "earlier", at: 0, ...me, queued: true };
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
+	const events: string[] = [];
+	const host = testHost(directory, state, events);
+	expect(host.publish(host.ledger(), [build, earlier])).toBe(true);
+	const sleep = host.sleep;
+	host.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		// The earlier caller takes its turn.
+		const ledger = host.ledger();
+		const rest = ledger.admissions.filter(({ id }) => id !== "earlier");
+		if (rest.length < ledger.admissions.length)
+			expect(host.publish(ledger, [...rest, { id: "started", at: state.now, ...me }])).toBe(true);
+	};
+	// Alone, this caller would start at once; behind the earlier one, it waits, then spaces itself.
+	await admit(limits, host, signal, (reason) => events.push(reason));
+	expect(events).toEqual(["queue", `sleep ${SETTLE_MS}`, `sleep ${SETTLE_MS}`]);
+	expect(host.ledger().admissions).toEqual([
+		build,
+		{ id: "started", at: SETTLE_MS, ...me },
+		{ id: expect.any(String), at: 2 * SETTLE_MS, ...me },
+	]);
+	// With room for both, it starts at once and leaves the earlier caller's place.
+	const roomy = testHost(tempDir(), { now: 0, load: 2, memory: Infinity }, events);
+	expect(roomy.publish(roomy.ledger(), [build, earlier])).toBe(true);
+	events.length = 0;
+	await admit(limits, roomy, signal, (reason) => events.push(reason));
+	expect(events).toEqual([]);
+	expect(roomy.ledger().admissions).toEqual([build, earlier, { id: expect.any(String), at: 0, ...me }]);
+});
+
+test("a place frees once its gate ends or its caller cancels, or a minute after its last refresh without a start", async () => {
+	const limits = { load: 4, memory: GiB };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
+	const exited = spawnSync(process.execPath, ["-e", ""]).pid;
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
+	const host = testHost(directory, state);
+	expect(
+		host.publish(host.ledger(), [
+			build,
+			{ id: "ended", at: 0, pid: exited, queued: true },
+			{ id: "reused", at: 0, pid: process.pid, start: "an earlier process", queued: true },
+			{ id: "unrefreshed", at: -RECENT_MS, pid: process.pid, queued: true },
+		]),
+	).toBe(true);
+	const events: string[] = [];
+	await admit(limits, testHost(directory, state, events), signal, (reason) => events.push(reason));
+	expect(events).toEqual([]);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: 0, ...me }]);
+	// A place refreshed within the minute still holds, and a cancelled caller behind it leaves the queue.
+	const fresh = { id: "fresh", at: -RECENT_MS / 2, pid: process.pid, queued: true };
+	const queued = testHost(tempDir(), state);
+	expect(queued.publish(queued.ledger(), [build, fresh])).toBe(true);
+	const controller = new AbortController();
+	const waited: string[] = [];
+	queued.sleep = async () => {
+		expect(queued.ledger().admissions).toEqual([build, fresh, expect.objectContaining({ queued: true, ...me })]);
+		controller.abort(new Error("cancelled"));
+	};
+	await expect(admit(limits, queued, controller.signal, (reason) => waited.push(reason))).rejects.toThrow(
+		"cancelled",
+	);
+	expect(waited).toEqual(["queue"]);
+	expect(queued.ledger().admissions).toEqual([build, fresh]);
+});
+
+test("priority and host callers go ahead of the queue, and a quick one starts at its deadline whatever its place", async () => {
+	const limits = { load: 4, memory: GiB };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
+	const earlier = { id: "earlier", at: 0, ...me, queued: true };
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
+	const host = testHost(directory, state);
+	expect(host.publish(host.ledger(), [build, earlier])).toBe(true);
+	const events: string[] = [];
+	await admit(limits, testHost(directory, state, events), signal, undefined, { priority: true });
+	expect(events).toEqual([]);
+	await admit(limits, testHost(directory, state, events), signal, undefined, { quick: true });
+	expect(events).toEqual(Array.from({ length: QUICK_MS / SETTLE_MS }, () => `sleep ${SETTLE_MS}`));
+	expect(host.ledger().admissions).toEqual([
+		build,
+		earlier,
+		{ id: expect.any(String), at: 0, ...me },
+		{ id: expect.any(String), at: QUICK_MS, ...me },
+	]);
+	// A waiting caller runs no command, so a host holder starts at once ahead of it.
+	const held = testHost(tempDir(), { now: 0, load: 99, memory: 0 }, events);
+	expect(held.publish(held.ledger(), [earlier])).toBe(true);
+	events.length = 0;
+	await admit(limits, held, signal, undefined, { host: true });
+	expect(events).toEqual([]);
+	expect(held.ledger().admissions).toEqual([earlier, { id: expect.any(String), at: 0, ...me, host: true }]);
+});
+
 test("a lone quick or priority caller starts at once on load from outside the gate", async () => {
 	// No gated command runs, so the load is work the gate cannot wait out, whatever the precedence.
 	const state = { now: 0, load: 12, memory: Infinity };
@@ -421,7 +521,7 @@ test("a caller that dies mid-admission blocks no one past a minute", async () =>
 	await admit({ load: 1, memory: 1 }, testHost(directory, state, events), signal);
 	expect(events).toEqual([]);
 	// The stale draft is gone; one still being written stays.
-	expect(readdirSync(directory).sort()).toEqual(["2", "live.tmp"]);
+	expect(readdirSync(directory).sort()).toEqual(["3", "live.tmp"]);
 	// A version cut short, as by power loss, reads as empty rather than wedging every caller.
 	writeFileSync(join(directory, "100"), "");
 	expect(host.ledger()).toEqual({ version: 100, admissions: [] });

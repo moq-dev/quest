@@ -16,17 +16,20 @@ import { delegated, nest, questScope, startTime, systemdScopes } from "./supervi
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
  * the gate that runs it, which holds a slot until that command ends, with when that gate started
  * (see `processStart`), so a reused process ID holds nothing. `host` marks a command that holds the
- * whole host (see `Precedence`), from when it starts waiting until it ends.
+ * whole host (see `Precedence`), from when it starts waiting until it ends. `queued` marks a caller
+ * still waiting for its turn instead, as of `at`: it holds a place in the queue, the ledger's order
+ * of queued entries, and no slot.
  */
 export interface Admission {
 	id: string;
 	at: number;
 	pid?: number;
 	host?: boolean;
+	queued?: boolean;
 	start?: string;
 }
 
-/** One version of the host's admission ledger. Versions only grow; 0 is the empty ledger. */
+/** One version of the host's admission ledger and queue. Versions only grow; 0 is the empty ledger. */
 export interface Ledger {
 	version: number;
 	admissions: Admission[];
@@ -59,7 +62,7 @@ export interface Limits {
 	memory: number;
 }
 
-export type Waiting = "load" | "memory" | "host" | "commands";
+export type Waiting = "load" | "memory" | "host" | "commands" | "queue";
 
 /**
  * Admissions that only fit the host's raw load and memory, not its headroom,
@@ -256,6 +259,7 @@ function parse(text: string): Admission[] {
 				Number.isFinite(entry?.at) &&
 				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)) &&
 				(entry.host === undefined || entry.host === true) &&
+				(entry.queued === undefined || entry.queued === true) &&
 				(entry.start === undefined || typeof entry.start === "string"),
 		);
 	return valid ? (value as Admission[]) : [];
@@ -409,14 +413,23 @@ export function fileHost(directory: string, now = Date.now): Host {
  * one, the load is work the gate cannot wait out, as on a freshly booted macOS
  * runner, so the raw load counts as having room.
  *
- * A running command that holds the host keeps everyone else waiting; one that
- * waits to hold it ignores load and memory, and waits only for the gated
- * commands still running to end (see `Precedence`).
+ * Callers are admitted first come, first served: each records its place in the
+ * queue when it starts waiting, and counts every caller queued ahead of it as
+ * one more recent admission, so it starts before them only while the host has
+ * room for them all. Only the head of the queue waits out the spacing. A place
+ * lasts until its caller is admitted, cancelled, or its gate ends; one whose
+ * gate's start time is unknown, as on Windows, could pass for a reused process
+ * ID, so its caller refreshes it, and it frees a minute after the last refresh.
  *
- * Each caller decides against the newest ledger and publishes its admission
- * atomically, so concurrent callers never exceed the rule and one always wins
- * while it has room. No fairness promise, and no admission timeout except a
- * quick caller's (see `Precedence`).
+ * A running command that holds the host keeps everyone else waiting; one that
+ * waits to hold it ignores load, memory, and the queue, and waits only for the
+ * gated commands still running to end. A priority caller goes ahead of the
+ * queue, and a quick one starts at its deadline whatever its place (see
+ * `Precedence`).
+ *
+ * Each caller decides against the newest ledger and publishes atomically, so
+ * concurrent callers never exceed the rule and one always wins while it has
+ * room. No admission timeout except a quick caller's.
  */
 export async function admit(
 	limits: Limits,
@@ -426,18 +439,30 @@ export async function admit(
 	precedence: Precedence = {},
 ) {
 	const id = randomUUID();
+	// A place in the queue has an id of its own, so publishing the admission adds a new entry.
+	const place = randomUUID();
 	// Every admission names its gate's start, so a reused process ID holds no slot, as for a host holder.
 	const self = { pid: process.pid, start: processStart(process.pid) };
 	const deadline = precedence.quick ? host.now() + QUICK_MS : Infinity;
-	for (;;) {
-		signal.throwIfAborted();
+	const queues = !precedence.priority && !precedence.host;
+
+	/** One decision against the newest ledger: true once admitted. */
+	const turn = async (): Promise<boolean> => {
 		const ledger = host.ledger();
 		// Sampled after the read, so only a backward clock step dates an admission in the future.
 		const now = host.now();
-		// A running admission stays in the ledger past the minute, so later callers still see its slot.
-		const running = new Set(ledger.admissions.filter((admission) => host.running(admission)));
-		const kept = ledger.admissions.filter((admission) => admission.at > now - RECENT_MS || running.has(admission));
-		const recent = kept.filter((admission) => admission.at > now - RECENT_MS);
+		const live = new Set(ledger.admissions.filter((admission) => host.running(admission)));
+		const kept = ledger.admissions.filter((admission) =>
+			admission.queued
+				? // A place whose gate cannot be told from a reused process ID lasts only while refreshed.
+					admission.id === place ||
+					(live.has(admission) && (admission.start !== undefined || admission.at > now - RECENT_MS))
+				: // A running admission stays in the ledger past the minute, so later callers still see its slot.
+					admission.at > now - RECENT_MS || live.has(admission),
+		);
+		const admissions = kept.filter((admission) => !admission.queued);
+		const running = new Set(admissions.filter((admission) => live.has(admission)));
+		const recent = admissions.filter((admission) => admission.at > now - RECENT_MS);
 		if (kept.some((admission) => admission.at > now)) {
 			// Date those now, so they still count and space admissions but expire a minute after
 			// the step. A forward step can only expire admissions up to a minute early.
@@ -445,30 +470,42 @@ export async function admit(
 				ledger,
 				kept.map((admission) => ({ ...admission, at: Math.min(admission.at, now) })),
 			);
-			continue;
+			return false;
 		}
+		const position = kept.findIndex((admission) => admission.id === place);
+		const mine = kept[position];
+		if (queues && (mine === undefined || (mine.start === undefined && mine.at <= now - RECENT_MS / 2))) {
+			// Take a place at the back, or refresh one that would otherwise expire where it stands.
+			const entry = { id: place, at: now, ...self, queued: true };
+			host.publish(
+				ledger,
+				mine ? kept.map((admission) => (admission === mine ? entry : admission)) : [...kept, entry],
+			);
+			return false;
+		}
+		const ahead = kept.slice(0, Math.max(position, 0)).filter((admission) => admission.queued).length;
+		// An admission takes the place of this caller's entry in the queue.
+		const admitted = (at: number) =>
+			host.publish(ledger, [...kept.filter((admission) => admission.id !== place), { id, at, ...self }]);
 		// A command holding the host keeps every other caller out until it ends, quick or not.
 		if (kept.some((admission) => admission.host && admission.id !== id && running.has(admission))) {
 			waiting?.("host");
 			await host.sleep(SETTLE_MS, signal);
-			continue;
+			return false;
 		}
 		if (precedence.host) {
 			// Reserve the host first, so no other caller is admitted while this one waits for the rest.
 			if (!kept.some((admission) => admission.id === id))
 				host.publish(ledger, [...kept, { id, at: now, ...self, host: true }]);
-			else if (!kept.some((admission) => admission.id !== id && running.has(admission))) return;
+			else if (!kept.some((admission) => admission.id !== id && running.has(admission))) return true;
 			else {
 				waiting?.("commands");
 				await host.sleep(SETTLE_MS, signal);
 			}
-			continue;
+			return false;
 		}
-		if (now >= deadline) {
-			// Recorded like any admission, so it still counts against the others' headroom.
-			if (host.publish(ledger, [...kept, { id, at: now, ...self }])) return;
-			continue;
-		}
+		// Recorded like any admission, so it still counts against the others' headroom.
+		if (now >= deadline) return admitted(now);
 		// Priority ignores load, whether or not a gated command runs; memory still applies.
 		const load = precedence.priority ? 0 : running.size > 0 ? host.load() : Math.min(host.load(), limits.load);
 		const memory = host.memory();
@@ -476,19 +513,43 @@ export async function admit(
 		if (load > limits.load) waiting?.("load");
 		else if (memory < limits.memory) waiting?.("memory");
 		else {
-			const headroom =
-				load + recent.length < limits.load && memory - recent.length * limits.memory >= limits.memory;
-			const last = Math.max(-Infinity, ...recent.map((admission) => admission.at));
-			wait = headroom ? 0 : last + SETTLE_MS - now;
-			if (wait <= 0) {
-				// A caller descheduled since sampling would record a stale time, which lets the
-				// next one skip its spacing; decide again once the stall reaches that interval.
-				const at = host.now();
-				if (at - now < SETTLE_MS && host.publish(ledger, [...kept, { id, at, ...self }])) return;
-				continue;
+			// Every caller queued ahead takes a slot before this one, so it starts first only while
+			// the host has room for them all.
+			const taken = recent.length + ahead;
+			const headroom = load + taken < limits.load && memory - taken * limits.memory >= limits.memory;
+			if (!headroom && ahead > 0) waiting?.("queue");
+			else {
+				const last = Math.max(-Infinity, ...recent.map((admission) => admission.at));
+				wait = headroom ? 0 : last + SETTLE_MS - now;
+				if (wait <= 0) {
+					// A caller descheduled since sampling would record a stale time, which lets the
+					// next one skip its spacing; decide again once the stall reaches that interval.
+					const at = host.now();
+					return at - now < SETTLE_MS && admitted(at);
+				}
 			}
 		}
 		await host.sleep(Math.min(wait, deadline - now), signal);
+		return false;
+	};
+
+	try {
+		for (;;) {
+			signal.throwIfAborted();
+			if (await turn()) return;
+		}
+	} finally {
+		// A cancelled caller leaves the queue at once, rather than once its gate ends.
+		for (let ledger = host.ledger(); ledger.admissions.some((admission) => admission.id === place);) {
+			if (
+				host.publish(
+					ledger,
+					ledger.admissions.filter((admission) => admission.id !== place),
+				)
+			)
+				break;
+			ledger = host.ledger();
+		}
 	}
 }
 
@@ -666,6 +727,7 @@ const notices: Record<Waiting, string> = {
 	memory: "quest gate: waiting for free memory",
 	host: "quest gate: waiting for a command holding the whole host to end",
 	commands: "quest gate: holding the host, waiting for gated commands to end",
+	queue: "quest gate: waiting for commands queued earlier to start",
 };
 
 /** Run from the CLI. */
