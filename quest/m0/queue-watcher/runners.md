@@ -2,13 +2,9 @@
 
 ## Goal
 
-The self-hosted `quest-queue`, `rind-queue` and `rust2-queue` runners that
-the kixelated/nixos runner change adds run only
-their own repository's merge-queue builds, and nothing else on the host
-reaches them:
+The self-hosted `quest-queue`, `rind-queue` and `rust2-queue` runners on the
+maintainer's host run only their own repository's merge-queue builds:
 
-- kixelated/nixos's quest-land module creates no check launcher, users,
-  networks, kvm access or storage tagging for a repository in watch mode.
 - Each runner group admits only its repository's queue build.
 - moq-dev/quest, moq-dev/rind and moq-dev/rust2 require approval before
   running workflows from any outside contributor's fork PR, not only a
@@ -17,7 +13,7 @@ reaches them:
 ## Plan
 
 Decided 2026-11-02 (user, /quest-plan of the follow-ups from Claude's review
-of the kixelated/nixos runner change in that day's `/quest-complete` session): ✅ all three
+of the host's runner change in that day's `/quest-complete` session): ✅ all three
 items, m0, ranked right after the public repositories' cutover.
 
 Decided 2026-11-03 (user, /quest-complete grill round), since GitHub matches a
@@ -39,10 +35,9 @@ Done in [moq-dev/quest#439](https://github.com/moq-dev/quest/pull/439):
 - Fork approval: on 2026-11-02 each repository's
   `fork-pr-contributor-approval` policy went from `first_time_contributors`
   to `all_external_contributors`.
-- Watch-mode cleanup:
-  a kixelated/nixos change, stacked on the runner change, generates check launchers, users, networks, staging, KVM grants and
-  storage tagging only for repositories on `quest land serve`, and adds the
-  `quest-land-watch` flake check.
+- Watch-mode cleanup: the host's configuration sets up check machinery only
+  for repositories on `quest land serve` (kixelated/nixos, deployed
+  2026-11-04).
 - Reusable build, first step: each repository's self-hosted job moved into
   `.github/workflows/queue-build.yml`, which `queue.yml` calls by its local
   path. The build job and its caller both run only for `merge_group`, and a
@@ -50,11 +45,6 @@ Done in [moq-dev/quest#439](https://github.com/moq-dev/quest/pull/439):
   main's ruleset requires. This is moq-dev/quest#439 itself,
   [moq-dev/rind#289](https://github.com/moq-dev/rind/pull/289) and
   [moq-dev/rust2#536](https://github.com/moq-dev/rust2/pull/536).
-
-Deployed 2026-11-04 (/quest-unblock): the watch-mode cleanup is live on the
-land host (generation 80, deploy/quest-land b5d46f3); only
-`quest-land-moq-pro-check.socket` remains and `/dev/kvm`'s ACL names no
-check UID.
 
 Second step, 2026-11-07: `queue.yml` calls
 `moq-dev/<repo>/.github/workflows/queue-build.yml@main`, and each contributing
