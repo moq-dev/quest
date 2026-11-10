@@ -4494,6 +4494,35 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(shown(forge)[1]).toBe("success Landed");
 	});
 
+	test("--refuse-forks ejects a fork's pick before any build reaches the runner", async () => {
+		const { forge, pass } = setup({ refuseForks: true });
+		const fork = forge.pull("Fork", { "fork.txt": "f\n" }, { contributor: "outside", edits: true });
+		const gone = forge.pull("Gone", { "gone.txt": "g\n" }, { contributor: "departed", edits: true });
+		gone.headDeleted = true;
+		forge.pull("Own", { "own.txt": "o\n" });
+		expect(await pass()).toEqual(["ejected 1", "ejected 2", "building 3"]);
+		expect(queued(forge, 1)).toBeNull();
+		expect(queued(forge, 2)).toBeNull();
+		expect(fork.landing).toBe(false);
+		expect(forge.comment(1)).toContain("fork pull requests cannot use the private runner");
+		expect(forge.comment(1)).toContain("<!-- quest land: fork_head -->");
+		expect(shown(forge)).toMatchObject({
+			1: "failure Removed from the queue",
+			2: "failure Removed from the queue",
+		});
+	});
+
+	test("--refuse-forks stops a fork's build already under way", async () => {
+		const { forge, queue, pass } = setup();
+		forge.pull("Fork", { "fork.txt": "f\n" }, { contributor: "outside", edits: true });
+		await pass();
+		expect(queued(forge, 1)).not.toBeNull();
+		queue.refuseForks = true;
+		expect(await pass()).toEqual(["ejected 1"]);
+		expect(queued(forge, 1)).toBeNull();
+		expect(shown(forge)[1]).toBe("failure Removed from the queue");
+	});
+
 	test("a failed build is dropped as GitHub's queue removes a PR, and recorded for the land fixer", async () => {
 		const { forge, queue, pass } = setup();
 		const one = forge.pull("One", { "one.txt": "1\n" });

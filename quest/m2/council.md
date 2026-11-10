@@ -62,7 +62,3 @@ Agent's choices, for the implementer to revisit:
 - Online reviewers such as Pullfrog and CodeRabbit stay outside the
   council: they see the PR, so they are not blind. Their findings are
   answered as usual.
-
-## Required
-
-- [opencode reviewers](/quest/m2/review-harnesses.md) - the council's DeepSeek member

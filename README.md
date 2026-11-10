@@ -532,7 +532,8 @@ are not told apart.
 `quest merge` takes no label: the head-pinned auto-merge or merge-queue entry
 it creates is the queue signal, so a queued PR shows no hold. It refuses while
 any session holds the PR, so release your own hold first. `--land` needs the full 40-character
-head SHA and refuses once the head moves.
+head SHA and refuses once the head moves, or while the latest run of any
+check on it failed, required or not, naming each; pending checks do not block.
 It enables auto-merge bound to that SHA, or merges at once when nothing is
 left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
 the repository disallows; otherwise it uses the only method the repository
@@ -1008,6 +1009,13 @@ not; a fork that refuses the push lands by a leased fast-forward of the base.
 It lands only on the base it tested: a base that moved during the build
 rebuilds the pick there, with no attempt counted.
 
+The queue branch's push runs the merged PR's own workflow, so a fork can
+rewrite any guard that lives there. For a queue workflow on a private runner,
+`--refuse-forks` ejects each pick whose head is in a fork, or in a deleted
+repository, before its build is pushed, ending a build already under way:
+it disarms the PR's auto-merge and comments that fork pull requests cannot use
+the private runner, leaving the pick to a maintainer.
+
 A failed build, a build still running after `--timeout` minutes (60), or a
 conflict the quest merge driver cannot merge drops the pick as GitHub's queue
 removes a PR: the watcher records it for the land fixer in `removal-<n>.json`
@@ -1114,6 +1122,14 @@ host has room even counting those, commands start at once: a burst of gated
 test runs on an idle host starts together. Once only the raw load and memory
 have room, commands start one at a time, 5 seconds after the previous admission.
 
+Waiting commands start first come, first served. Each records its place in a
+queue when it starts waiting, and counts every command queued ahead of it as
+one more recent admission: it starts before them only while the host has room
+for all of them, and only the first in line waits out the 5-second spacing. A
+command's wait is therefore bounded by the work queued ahead of it, never by
+commands that started waiting later. A place is freed once its command starts,
+its gate is cancelled, or its gate process exits.
+
 The load limit applies only while a gated command is still running. Otherwise
 the load comes from work the gate cannot wait out, so commands start one at a
 time as if the raw load had room. A freshly booted hosted macOS runner is one
@@ -1128,32 +1144,26 @@ an account missing from it, as in arbitrary-UID containers, uses
 its UID can write it.
 
 Two kinds of command go ahead of the rest. `quest gate --quick <command>` waits
-at most a minute, then starts the command whatever the host's load and memory;
+at most a minute, then starts the command whatever the host's load, memory, and
+place in the queue;
 pass it only for cheap commands, such as a formatter or `quest check`, that cost
 less to run than to hold back. A check that lands PRs goes first: with
 `QUEST_GATE_PRIORITY=1` in its environment, every gate inside the check waits
-for memory but never for load, whether or not other gated commands run. Both
+for memory but never for load or the queue, whether or not other gated commands
+run. Both
 record their admissions, so the other callers count them against the host's
 headroom. Set the variable where the check starts, such as a merge queue
 build's workflow or the land daemon's sandbox, rather than relying on a slot in
 the host's ledger: a container's gates keep a ledger of their own, yet wait on
 the host's load. `quest agent` drops the variable, as it drops an admission.
 
-`quest gate --host <command>` holds the whole host, for work that other work
-would disturb, such as a benchmark. It records a reservation at once, so no
-other caller is admitted while it waits; it then starts once every gated
-command already running has ended, whatever the load and memory. Until it
-ends, every other gated command waits, quick and priority ones included, and a
-second `--host` caller queues behind it. Only gated work is held off: the
-command should still check for load from outside the gate. A `--host` call
-nested inside a gated command runs at once, like any nested call. Windows,
-where a reused process ID could pass for a holder (see below), refuses
-`--host`.
-
 Each admission records the gate's process ID and, except on Windows, when the
 gate started, and counts as running until that process exits; a reused process
 ID counts as running only on Windows, where it makes a command wait for the
-load again. The gate holds no lock while the command runs, and it owns the
+load again. A place in the queue records the same, except that on Windows the
+waiting gate refreshes it, and it frees a minute after the last refresh, so a
+reused process ID cannot hold the queue. The gate holds no lock while the
+command runs, and it owns the
 command's descendants. Once the command exits, any descendant still running is
 killed, so a build or test run leaves nothing behind.
 
@@ -1215,8 +1225,8 @@ first one as Just's copy, not as a second signal: a SIGTERM to Just's process
 group reaches the gate both directly and through Just. A repeated SIGTERM still
 kills, though when sent to Just or the gate alone, or when the two copies
 arrive together, it takes a third; a repeated Ctrl-C, which Just does not
-forward, kills at the second. There is no fairness guarantee, and no timeout except
-`--quick`'s: any other command waits as long as the host stays busy.
+forward, kills at the second. There is no timeout except `--quick`'s: any other
+command waits its turn for as long as the host stays busy.
 
 ## Route work by size
 
@@ -1306,12 +1316,17 @@ gateway or provider is set. Variables that would change the reviewer's plugins,
 permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME`, or the default when unset, and any gateway or provider.
+opencode reviews only when `--harness opencode` names it, with `--model` as
+`provider/model` and `--effort` as the model's variant, since no size lists it.
+It keeps the user's own opencode config, such as custom providers, and login,
+and counts as logged out when `opencode models` does not list the model.
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
 quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, with no record in its body
 quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
+quest review --harness opencode --model opencode-go/deepseek-v4-pro --effort high  # an opencode reviewer
 ```
 
 Every turn reviews only the branch's own change, from the merge base of `HEAD`
@@ -1319,9 +1334,10 @@ with the base's tip, so a branch behind its base draws no findings on code the
 base gained since, which a diff against its tip shows as reverted.
 The first round explores the change once. It runs the reviewer's own review,
 `codex exec review` with custom instructions or Claude Code's `/code-review
-<effort> <merge-base>...HEAD` with text after the target, given the range, the
+<effort> <merge-base>...HEAD` with text after the target, or for opencode, which
+has no review mode, a prompt asking for one, given the range, the
 base's `REVIEW.md`, if any, and any earlier findings and responses up front.
-Neither returns a JSON schema itself, so the round resumes that session for one
+None returns a JSON schema itself, so the round resumes that session for one
 turn that reads nothing and reports the review in one schema, with a score from
 0 to 10 for how ready the head is to land and one sentence on why: 10 lands as
 is, 7 to 9 lands after the findings are fixed, 4 to 6 needs rework, and 0 to 3
@@ -1358,16 +1374,28 @@ commands. Codex leaves out its skills catalog; it still loads the user's
 split the login, so the reviewer is told to disregard it. Claude Code loads no settings files, so no
 allow rule, even the user's own, widens that. Codex skips the user's config,
 whose project trust would load the checkout's `.codex/config.toml` and start its
-MCP servers outside the sandbox. Whether those flags isolate is up to each
+MCP servers outside the sandbox. opencode loads no project config, which would
+start the checkout's plugins and MCP servers and name its shell, nor Claude
+Code's files, and has every tool but its shell denied, after the user's own
+rules so none outranks the denial. Its shell runs each command under
+sandbox-runtime (`srt` on `PATH`, which this repository's dev shell provides),
+with no network, reading only the checkout and its Git directories, and writing
+only a private directory; on Linux, `srt` must also refuse Unix sockets, which
+it does only with its seccomp helper, so nixpkgs' plain package is refused.
+Whether those flags isolate is up to each
 CLI's release, so `just review-sandbox`, in this repository, plants project MCP
-servers and hooks for both CLIs on a head, and for Claude Code local settings,
-an allow rule, an `env` shell prefix, an API key helper, and a status line. It
-runs `quest review` with the installed CLIs and copies of your logins, and
-fails if any of it runs, the review trusts a new directory, or the reviewer's
-flags let the planted rule allow a command. A login with no file to copy, such
+servers and hooks for Codex and Claude Code on a head, for Claude Code local settings,
+an allow rule, an `env` shell prefix, an API key helper, and a status line, and
+for opencode an MCP server, plugins, and a shell. It
+runs `quest review` with the installed CLIs and copies of your logins
+(opencode's own, which it shares with every session), and
+fails if any of it runs, the review trusts a new directory, the reviewer's
+flags let the planted rule allow a command, or opencode's shell writes, reads
+your home, reaches the network, or goes unused. `QUEST_LIVE_OPENCODE_MODEL`
+names opencode's model, as `provider/model#variant`. A login with no file to copy, such
 as one in the macOS keychain, needs the CLI's credential exported instead:
 `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, or `CODEX_API_KEY`. It spends real usage, so CI never runs it; run it
-after upgrading either CLI. The base is fetched first, since
+after upgrading any of the CLIs. The base is fetched first, since
 the sandbox has no network. The reviewer follows the base's `AGENTS.md` and `CLAUDE.md`, at the
 root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
@@ -1664,7 +1692,8 @@ agent ID, and a workflow agent's for its workflow run, so the hook binds a
 workflow agent's checkout to the first subagent that starts in it, the workflow
 agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it.
+without its scratch until it reinstalls it. Quest's own refusal, for a gate the
+subagent left running, keeps its checkout instead.
 
 A session's checkout, from `--worktree`, `EnterWorktree`, a background session,
 or remote control, is held by the session that created it and by each session
@@ -1738,9 +1767,10 @@ work, in every repository:
 quest setup
 ```
 
-It sets Claude Code's `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground
-command such as `quest wait` can block for 55 minutes, just under the 1h
-prompt-cache TTL, instead of the 10-minute default.
+It sets Claude Code's `env.BASH_MAX_TIMEOUT_MS` and
+`env.BASH_DEFAULT_TIMEOUT_MS` to 3300000, so a foreground command such as
+`quest wait` or a gated build runs for up to 55 minutes, just under the 1h
+prompt-cache TTL, without the agent passing a timeout or backgrounding it.
 
 It also loads the rules once. The repository's `Quests: ` line has agents run
 `quest context` before any work, which costs a turn and is summarized away
@@ -1767,7 +1797,16 @@ hook on shell commands and file edits denies, with the rule as the reason:
 - a scratch file written under `/tmp`, outside the checkout, by a redirection,
   `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit.
 
-It checks only a body on the command line itself: `--body`, a `body=` field,
+For Claude Code, `Stop` and `SubagentStop` hooks refuse to end an agent's turn
+while a `quest gate` command it started still runs in the background, naming
+each one and telling the agent to block on it: Claude Code stops a subagent's
+background commands when it ends, and a session that ends its turn on one
+leaves its result unread. A command is the agent's when its transcript holds
+the ID Claude Code gave it on backgrounding it, so a sibling's gate does not
+hold an agent. Claude Code lists a command only while it runs, so the
+refusal ends with the gate. Codex runs no such hook.
+
+`quest` must be on the `PATH` the agent starts with, as for the worktree `--body`, a `body=` field,
 `git commit -m`, or `--body-file -` with a here-document. A body file, or one
 piped into `gh`, passes unread, since the file may hold something else by the
 time the command runs; `quest context` keeps the footer and em-dash rules in
@@ -1784,7 +1823,7 @@ It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`, and
 `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json`, when that directory exists.
 It keeps your other settings, refuses a malformed file unchanged, writes each
 once, and prints each change. Rerun it after upgrading. `quest setup --remove`
-takes the hooks out, and the timeout while it still holds Quest's value.
+takes the hooks out, and each timeout while it still holds Quest's value.
 
 ## Where this is going
 

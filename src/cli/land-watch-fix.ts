@@ -122,6 +122,7 @@ const JUDGED: Record<Cause, string> = {
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
 	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 	labels(first: 100) { nodes { name } }
+	headRepository { nameWithOwner }
 } } }`;
 
 export async function readPull(github: GitHub, id: string): Promise<ObjectValue> {

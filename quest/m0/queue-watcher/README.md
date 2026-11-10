@@ -137,8 +137,6 @@ against 756 merges, 130 of them resolved by the quest merge driver alone.
 - Re-enqueue, for a conflict the merge driver resolved alone: ✅ keep the
   back of the queue for all (rejected: GitHub's `jump` to the front for
   those, recommended by the agent for the 95-minute median they wait).
-- Found by the same audit:
-  [quest merge refuses a head whose checks failed](/quest/m0/queue-watcher/red-heads.md).
 
 Shared shape, for the children to follow:
 

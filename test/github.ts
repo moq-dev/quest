@@ -34,6 +34,8 @@ export type Pull = Issue & {
 	draft?: boolean;
 	/** Opened from this contributor's own fork, which the bot cannot update. */
 	contributor?: string;
+	/** The head's repository was deleted, so GitHub shows none. */
+	headDeleted?: boolean;
 	/** A `## Waiting` section in it hands a draft back to the maintainer. */
 	body?: string;
 	/** Who last edited the body; never edited when absent. */
@@ -519,6 +521,9 @@ export function fakeGitHub(world: World) {
 											mergeStateStatus: mergeState(pull),
 											mergeQueueEntry: pull.queued ? { enqueuedAt: updatedAt } : null,
 											labels: { nodes: (pull.labels ?? []).map((name) => ({ name })) },
+											headRepository: pull.headDeleted
+												? null
+												: { nameWithOwner: holderOf(repo, pull) },
 											autoMergeRequest: pull.landing
 												? { enabledAt: pull.autoMerge?.enabledAt ?? updatedAt }
 												: null,
