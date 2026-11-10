@@ -64,6 +64,8 @@ export interface WatchOptions {
 	fixerEffort: string;
 	/** Repositories whose flake input on this repository each pass bumps to this repository's base. */
 	bump: Repository[];
+	/** On the own queue, eject fork picks before pushing their build, so a fork's code never reaches a private runner. */
+	refuseForks?: boolean;
 }
 
 /**
@@ -817,6 +819,7 @@ export async function watch(
 			state: options.state,
 			method: options.method,
 			timeout: options.timeout,
+			refuseForks: options.refuseForks === true,
 			token,
 			read,
 		};

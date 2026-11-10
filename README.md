@@ -1008,6 +1008,13 @@ not; a fork that refuses the push lands by a leased fast-forward of the base.
 It lands only on the base it tested: a base that moved during the build
 rebuilds the pick there, with no attempt counted.
 
+The queue branch's push runs the merged PR's own workflow, so a fork can
+rewrite any guard that lives there. For a queue workflow on a private runner,
+`--refuse-forks` ejects each pick whose head is in a fork, or in a deleted
+repository, before its build is pushed, ending a build already under way:
+it disarms the PR's auto-merge and comments that fork pull requests cannot use
+the private runner, leaving the pick to a maintainer.
+
 A failed build, a build still running after `--timeout` minutes (60), or a
 conflict the quest merge driver cannot merge drops the pick as GitHub's queue
 removes a PR: the watcher records it for the land fixer in `removal-<n>.json`

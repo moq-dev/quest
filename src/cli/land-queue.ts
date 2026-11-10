@@ -7,6 +7,7 @@ import {
 	GitHub,
 	type GitHubDependencies,
 	object,
+	type ObjectValue,
 	type RequiredCheck,
 	type Repository,
 	requirements,
@@ -75,6 +76,8 @@ export interface OwnQueue {
 	timeout: number;
 	token: (workflows: boolean) => Promise<string>;
 	read: RemoteRead;
+	/** Eject picks whose head is outside the repository before their build is pushed, for a private queue runner. */
+	refuseForks?: boolean;
 	/** Whether this process has pruned the queue branches an earlier one left behind. */
 	pruned?: boolean;
 }
@@ -534,6 +537,11 @@ class Queue {
 	}
 }
 
+/** Whether `pull`'s head is outside `repository`: in a fork, or in one since deleted. */
+const isFork = (pull: ObjectValue, repository: string): boolean =>
+	pull.headRepository == null ||
+	string(object(pull.headRepository).nameWithOwner).toLowerCase() !== repository.toLowerCase();
+
 const landedView = (sha: string): View => ({
 	status: "completed",
 	conclusion: "success",
@@ -590,7 +598,23 @@ export async function ownPass(
 		forgetHeads(state, item.number);
 	}
 	const held = new Set<number>();
-	for (const entry of plan.queue) if (isHeld(await readPull(github, entry.id))) held.add(entry.number);
+	for (const entry of plan.queue) {
+		const pull = await readPull(github, entry.id);
+		if (isHeld(pull)) held.add(entry.number);
+		// Read fresh, since a deleted fork's head shows as no repository, which the plan reads as the base's.
+		else if (queue.refuseForks && isFork(pull, own.name)) {
+			const item = ejection(entry, "fork_head", "fork pull requests cannot use the private runner");
+			if (await eject(github, plan, item)) own.lines.push(`ejected ${entry.number} fork_head`);
+			forgetHeads(state, entry.number);
+			own.ended.add(entry.number);
+			await own.show(entry.number, entry.head, {
+				status: "completed",
+				conclusion: "failure",
+				title: "Removed from the queue",
+				summary: "Fork pull requests cannot use the private runner.",
+			});
+		}
+	}
 
 	if (build) {
 		const tested = build;
@@ -600,7 +624,12 @@ export async function ownPass(
 				item.enabledAt === tested.entry.enabledAt &&
 				item.approved === tested.entry.approved,
 		);
-		if (!entry || held.has(entry.number)) {
+		if (entry && own.ended.has(entry.number)) {
+			// Ejected above, which showed why.
+			await own.end(build);
+			build = undefined;
+			again = true;
+		} else if (!entry || held.has(entry.number)) {
 			// The pick ended: a person disarmed it, a writer pushed, it closed, or another session holds it,
 			// which leaves it armed for when the hold clears.
 			await own.end(build, {

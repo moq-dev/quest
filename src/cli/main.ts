@@ -773,6 +773,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				.default("medium"),
 		)
 		.option(
+			"--refuse-forks",
+			"On the own queue, eject each pick whose head is in a fork, or in a deleted repository, before pushing its build, so a fork's code never reaches a private queue runner",
+		)
+		.option(
 			"--bump <owner/repo>",
 			"Keep this repository's flake input in another repository at this repository's base (repeatable): each pass opens or updates that repository's quest-bump PR as the App and lands it",
 			(value: string, previous: Repository[]) => {
