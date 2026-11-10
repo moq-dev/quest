@@ -1417,14 +1417,16 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Configure your own Claude Code settings for quest work, in $CLAUDE_CONFIG_DIR/settings.json or else " +
 				"~/.claude/settings.json, and Codex's in $CODEX_HOME/hooks.json or else ~/.codex/hooks.json when " +
 				"that directory exists, keeping every other setting and hook. Touches no repository.\n\n" +
-				`Sets Claude Code's env.BASH_MAX_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a foreground command, such as a blocking ` +
-				"wait, may run 55 minutes: just under the 1h prompt-cache TTL. " +
+				`Sets Claude Code's env.BASH_MAX_TIMEOUT_MS and env.BASH_DEFAULT_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a ` +
+				"foreground command, such as a blocking wait or a long build, runs 55 minutes without the agent passing " +
+				"a timeout: just under the 1h prompt-cache TTL. " +
 				`Installs Claude Code's ${listed(CLAUDE_HOOKS)} hooks and Codex's ${listed(CODEX_HOOKS)} hooks. ` +
 				"The start hooks add `quest context` to each session and Claude Code subagent in a repository that " +
 				"uses Quest, and again after compaction, so agents never run it themselves. PreToolUse blocks tool " +
 				"calls there that break a rule a program can check: em dashes an agent writes, a push without an " +
 				"explicit refspec, a force-push or rebase, a GitHub post without its `(Written by ...)` footer, and " +
-				"scratch files in /tmp. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
+				"scratch files in /tmp. Stop and SubagentStop refuse to end an agent's turn while a `quest gate` " +
+				"command it started runs in the background. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
 				"with, and Codex asks to trust its hooks once through /hooks.\n\n" +
 				"With --worktrees, also installs Claude Code's " +
 				WORKTREE_HOOKS.map((h) => h.event).join(", ") +
@@ -1437,7 +1439,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--worktrees", "Also install the worktree hooks")
 		.option("--no-worktrees", "Remove the worktree hooks")
-		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
+		.option("--remove", "Remove Quest's hooks, and each timeout while it still holds Quest's value")
 		.action((options: { remove?: boolean; worktrees?: boolean }) => {
 			for (const target of targets()) {
 				const changes = setup(target, options);
@@ -1459,7 +1461,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or a commit message or new GitHub post that adds an em dash outside a `>` quote line, a `git push` " +
 				"whose refspecs lack a `:`, a force-push, a `git rebase` or `git pull --rebase`, a new GitHub post " +
 				"whose body lacks a `(Written by ...)` line, or a file written under /tmp. A force-push or rebase the " +
-				`user asked for passes with the \`${USER_ASKED}\` prefix. Exits 1 on malformed input or an event it ` +
+				`user asked for passes with the \`${USER_ASKED}\` prefix. Stop and SubagentStop refuse to end the ` +
+				"turn, naming each command, while a `quest gate` command the ending agent started runs in Claude " +
+				"Code's background: one whose background ID its transcript holds. Exits 1 on malformed input or an event it " +
 				"does not handle.",
 		)
 		.action(() => {
