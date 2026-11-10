@@ -1128,6 +1128,14 @@ time as if the raw load had room. A freshly booted hosted macOS runner is one
 such host: work outside the job holds its load above its CPU count for the
 whole job. Available memory is still required.
 
+A running command's load can lull, as between a build's phases, though it will
+soon take the whole host again. So where a systemd scope owns the command, its
+gate samples the scope's CPU use every 5 seconds and records the most CPUs the
+command kept busy over one sample in the last minute. While gated commands run,
+the load counts as at least the sum of those records, and nothing starts while
+they kept every CPU busy. macOS, Windows, and Linux without a systemd user
+manager have no scope to measure, so the load average alone decides there.
+
 A user's admissions on one host are recorded under
 `~/.cache/quest/admissions/<hostname>`, whatever the caller's environment or
 login session. The home directory comes from the user database, not `$HOME`;

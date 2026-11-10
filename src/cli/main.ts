@@ -129,7 +129,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Wait while the 1-minute load average exceeds the host's CPU count or available memory is below " +
 				"min(4 GiB, RAM/4). Each admission in the last minute counts as one more unit of load and one " +
 				"budget less memory: commands start at once while those still fit, and 5 seconds apart while " +
-				"only the raw measures do. The load limit applies only while a gated command still runs. Nested " +
+				"only the raw measures do. The load limit applies only while a gated command still runs. Where a " +
+				"systemd scope owns a running command, the load counts as at least the most CPUs it kept busy in " +
+				"the last minute, so a lull between its phases admits nothing more. Nested " +
 				"calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +
 				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +

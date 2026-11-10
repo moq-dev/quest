@@ -10,14 +10,15 @@ import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
-import { questScope, startTime, systemdScopes } from "./supervise";
+import { questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
  * the gate that runs it, which holds a slot until that command ends, with when that gate started
  * (see `processStart`), so a reused process ID holds nothing. `queued` marks a caller still
  * waiting for its turn instead, as of `at`: it holds a place in the queue, the ledger's order of
- * queued entries, and no slot.
+ * queued entries, and no slot. `cores` is the most CPUs the command kept busy over any
+ * SETTLE_MS of the last RECENT_MS, where its gate measures it (see `measure`).
  */
 export interface Admission {
 	id: string;
@@ -25,6 +26,7 @@ export interface Admission {
 	pid?: number;
 	queued?: boolean;
 	start?: string;
+	cores?: number;
 }
 
 /** One version of the host's admission ledger and queue. Versions only grow; 0 is the empty ledger. */
@@ -51,6 +53,8 @@ export interface Host {
 	 */
 	publish(base: Ledger, admissions: Admission[]): boolean;
 	sleep(ms: number, signal: AbortSignal): Promise<void>;
+	/** CPU microseconds the processes in systemd scope `unit` have used, or undefined while it does not exist. */
+	usage(unit: string): number | undefined;
 }
 
 export interface Limits {
@@ -252,7 +256,8 @@ function parse(text: string): Admission[] {
 				Number.isFinite(entry?.at) &&
 				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)) &&
 				(entry.queued === undefined || entry.queued === true) &&
-				(entry.start === undefined || typeof entry.start === "string"),
+				(entry.start === undefined || typeof entry.start === "string") &&
+				(entry.cores === undefined || (Number.isSafeInteger(entry.cores) && entry.cores >= 0)),
 		);
 	return valid ? (value as Admission[]) : [];
 }
@@ -311,6 +316,8 @@ function remove(file: string) {
  */
 export function fileHost(directory: string, now = Date.now): Host {
 	const path = (version: number) => join(directory, String(version));
+	// A scope's cgroup never moves, so systemd is asked for it once.
+	const groups = new Map<string, string>();
 	const latest = (): number => {
 		let names: string[];
 		try {
@@ -387,6 +394,22 @@ export function fileHost(directory: string, now = Date.now): Host {
 			return true;
 		},
 		sleep: (ms, signal) => sleep(ms, undefined, { signal }),
+		usage(unit) {
+			const group = groups.get(unit) ?? scopeGroup(unit);
+			if (group === undefined) return undefined;
+			groups.set(unit, group);
+			let stat: string;
+			try {
+				stat = readFileSync(join(group, "cpu.stat"), "utf8");
+			} catch (error) {
+				// The scope ended, and systemd removed its cgroup.
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+				throw error;
+			}
+			const usage = stat.match(/^usage_usec (\d+)$/m)?.[1];
+			if (usage === undefined) throw new Error(`gate cannot read the CPU use of ${unit}`);
+			return Number(usage);
+		},
 	};
 }
 
@@ -405,6 +428,12 @@ export function fileHost(directory: string, now = Date.now): Host {
  * one, the load is work the gate cannot wait out, as on a freshly booted macOS
  * runner, so the raw load counts as having room.
  *
+ * A running command's load can lull, as between a build's phases, while it will
+ * soon take the whole host again. So where gates measure their commands (see
+ * `measure`), the load counts as at least the CPUs those commands kept busy at
+ * their busiest in the last minute, and nothing is admitted while they kept
+ * every CPU busy.
+ *
  * Callers are admitted first come, first served: each records its place in the
  * queue when it starts waiting, and counts every caller queued ahead of it as
  * one more recent admission, so it starts before them only while the host has
@@ -417,7 +446,8 @@ export function fileHost(directory: string, now = Date.now): Host {
  *
  * Each caller decides against the newest ledger and publishes atomically, so
  * concurrent callers never exceed the rule and one always wins while it has
- * room. No admission timeout except a quick caller's.
+ * room. No admission timeout except a quick caller's. Resolves with the
+ * admission's id.
  */
 export async function admit(
 	limits: Limits,
@@ -425,7 +455,7 @@ export async function admit(
 	signal: AbortSignal,
 	waiting?: (reason: Waiting) => void,
 	precedence: Precedence = {},
-) {
+): Promise<string> {
 	const id = randomUUID();
 	// A place in the queue has an id of its own, so publishing the admission adds a new entry.
 	const place = randomUUID();
@@ -480,10 +510,15 @@ export async function admit(
 		// Recorded like any admission, so it still counts against the others' headroom.
 		if (now >= deadline) return admitted(now);
 		// Priority ignores load, whether or not a gated command runs; memory still applies.
-		const load = precedence.priority ? 0 : running.size > 0 ? host.load() : Math.min(host.load(), limits.load);
+		const used = precedence.priority ? 0 : [...running].reduce((sum, admission) => sum + (admission.cores ?? 0), 0);
+		const load = precedence.priority
+			? 0
+			: running.size > 0
+				? Math.max(host.load(), used)
+				: Math.min(host.load(), limits.load);
 		const memory = host.memory();
 		let wait = SETTLE_MS;
-		if (load > limits.load) waiting?.("load");
+		if (load > limits.load || used >= limits.load) waiting?.("load");
 		else if (memory < limits.memory) waiting?.("memory");
 		else {
 			// Every caller queued ahead takes a slot before this one, so it starts first only while
@@ -509,7 +544,7 @@ export async function admit(
 	try {
 		for (;;) {
 			signal.throwIfAborted();
-			if (await turn()) return;
+			if (await turn()) return id;
 		}
 	} finally {
 		// A cancelled caller leaves the queue at once, rather than once its gate ends.
@@ -522,6 +557,41 @@ export async function admit(
 			)
 				break;
 			ledger = host.ledger();
+		}
+	}
+}
+
+/**
+ * Until `signal` aborts, sample the CPU use of the admitted command in systemd scope `unit` every
+ * SETTLE_MS, and keep its admission's `cores` at the most CPUs it kept busy over one sample in the
+ * last RECENT_MS, rounded, so other callers count it at its busiest rather than at a lull.
+ */
+export async function measure(host: Host, admission: { id: string; unit: string }, signal: AbortSignal) {
+	const samples: { at: number; cores: number }[] = [];
+	let previous: { at: number; usage: number } | undefined;
+	let recorded = 0;
+	for (;;) {
+		try {
+			await host.sleep(SETTLE_MS, signal);
+		} catch (error) {
+			if (signal.aborted) return;
+			throw error;
+		}
+		const usage = host.usage(admission.unit);
+		const at = host.now();
+		if (usage !== undefined) {
+			// A clock stepped backward yields no rate for its interval.
+			if (previous && at > previous.at)
+				samples.push({ at, cores: (usage - previous.usage) / ((at - previous.at) * 1000) });
+			previous = { at, usage };
+		}
+		while (samples.length > 0 && samples[0].at <= at - RECENT_MS) samples.shift();
+		const cores = Math.round(Math.max(0, ...samples.map((sample) => sample.cores)));
+		for (let ledger = host.ledger(); cores !== recorded; ledger = host.ledger()) {
+			const mine = ledger.admissions.find(({ id }) => id === admission.id);
+			if (mine === undefined) throw new Error(`gate lost its admission ${admission.id} from the ledger`);
+			const updated = ledger.admissions.map((entry) => (entry === mine ? { ...mine, cores } : entry));
+			if (host.publish(ledger, updated)) recorded = cores;
 		}
 	}
 }
@@ -587,20 +657,20 @@ export const inside: Owner = plain(true);
  * owner's kill stops the gate's scope too, and the gate forwards that owner's signals to it.
  */
 const background =
-	(enclosing: string | null): Owner =>
+	(unit: string, enclosing: string | null): Owner =>
 	(command, env, cancel) =>
-		systemdScopes.run(`quest-gate-${randomUUID()}.scope`, process.cwd(), command, {
+		systemdScopes.run(unit, process.cwd(), command, {
 			env,
 			cancel,
 			within: enclosing,
 			slice: "background.slice",
 		});
 
-/** Run the command in a background scope of its own, outside any Quest scope (see `background`). */
-export const scope: Owner = background(null);
+/** Run the command in background scope `unit`, a new name, outside any Quest scope (see `background`). */
+export const scope = (unit: string): Owner => background(unit, null);
 
-/** Run the command in a background scope bound to the Quest scope `enclosing` (see `background`). */
-export const bound = (enclosing: string): Owner => background(enclosing);
+/** Run the command in background scope `unit`, a new name, bound to the Quest scope `enclosing` (see `background`). */
+export const bound = (unit: string, enclosing: string): Owner => background(unit, enclosing);
 
 /**
  * On Windows, run the command under a stub in a kill-on-close Job Object that forbids breakaway
@@ -682,20 +752,22 @@ const TOKEN = 3;
  * The strongest owner this host offers. A nested call runs inside its admitted command, which an
  * enclosing Quest owner also signals when it is Quest's group or a Quest scope (see `inside`). A
  * call inside a Quest scope runs its command in a background scope bound to it. Linux owns descendants through a systemd scope, and settles for a process group,
- * like macOS, without a systemd user manager. Windows owns them through a Job Object.
+ * like macOS, without a systemd user manager. Windows owns them through a Job Object. A systemd
+ * scope also lets the gate measure its command's CPU use (see `measure`), so `unit` names it.
  */
-export function owner(env = process.env, cgroup = "/proc/self/cgroup"): Owner {
+export function owner(env = process.env, cgroup = "/proc/self/cgroup"): { run: Owner; unit?: string } {
 	// A Quest scope around this process holds the command too, since it shares the cgroup or an ancestor.
 	const enclosing = process.platform === "linux" ? questScope(cgroup) : undefined;
-	if (env[ADMITTED] === "1") return env[GROUP] === "1" || enclosing ? inside : direct;
-	if (process.platform === "win32") return job;
-	if (enclosing) return bound(enclosing.unit);
-	if (process.platform !== "linux") return group;
+	if (env[ADMITTED] === "1") return { run: env[GROUP] === "1" || enclosing ? inside : direct };
+	if (process.platform === "win32") return { run: job };
+	const unit = `quest-gate-${randomUUID()}.scope`;
+	if (enclosing) return { run: bound(unit, enclosing.unit), unit };
+	if (process.platform !== "linux") return { run: group };
 	try {
 		systemdScopes.check();
-		return scope;
+		return { run: scope(unit), unit };
 	} catch {
-		return group;
+		return { run: group };
 	}
 }
 
@@ -709,7 +781,8 @@ const notices: Record<Waiting, string> = {
 export async function gate(command: string[], options: { quick?: boolean } = {}): Promise<number> {
 	const cancel = interrupts();
 	try {
-		const run = owner();
+		const { run, unit } = owner();
+		let admitted: { host: Host; id: string } | undefined;
 		// A nested invocation executes inside the already admitted command.
 		if (process.env[ADMITTED] !== "1") {
 			const shown = new Set<Waiting>();
@@ -723,13 +796,30 @@ export async function gate(command: string[], options: { quick?: boolean } = {})
 					priority: process.env[PRIORITY] === "1",
 					quick: options.quick,
 				};
-				await admit(hostLimits(), fileHost(claimDirectory()), cancel.signal, notice, precedence);
+				const host = fileHost(claimDirectory());
+				admitted = { host, id: await admit(hostLimits(), host, cancel.signal, notice, precedence) };
 			} catch (error) {
 				if (cancel.signal.aborted) return cancelled(cancel.signal);
 				throw error;
 			}
 		}
-		const result = await run(command, { ...process.env, [ADMITTED]: "1" }, cancel);
+		const stop = new AbortController();
+		// Held as a value until the command ends, so a failure never goes unhandled meanwhile.
+		const measuring =
+			admitted !== undefined && unit !== undefined
+				? measure(admitted.host, { id: admitted.id, unit }, stop.signal).then(
+						() => undefined,
+						(error: unknown) => ({ error }),
+					)
+				: undefined;
+		let result: number;
+		try {
+			result = await run(command, { ...process.env, [ADMITTED]: "1" }, cancel);
+		} finally {
+			stop.abort();
+		}
+		const failed = await measuring;
+		if (failed) throw failed.error;
 		return cancel.signal.aborted ? cancelled(cancel.signal) : result;
 	} finally {
 		cancel.close();

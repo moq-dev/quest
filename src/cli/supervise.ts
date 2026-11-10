@@ -207,7 +207,7 @@ function signalScope(unit: string, signal: NodeJS.Signals, done: (error?: string
 }
 
 /** The scope's cgroup directory, or undefined once systemd no longer knows the unit. */
-function scopeGroup(unit: string): string | undefined {
+export function scopeGroup(unit: string): string | undefined {
 	const group = execFileSync("systemctl", ["--user", "show", "--property=ControlGroup", "--value", unit], {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
