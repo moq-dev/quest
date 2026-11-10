@@ -64,7 +64,7 @@ Any other reason, such as a person removing it, is the user's call.
 
 Each round, rerun `quest unblocked --unclaimed --json` and refresh the open PRs, since merges and released claims make more work ready.
 When no agent is running and every question has been asked, block with `quest wait` on the queued PRs whose merge would make a quest ready, and run a round once one lands or leaves the queue.
-Never wait on any other PR, or re-read one whose state has not changed: list each PR left for a later round in the summary.
+Never wait on any other PR, or re-read one whose state has not changed: list each PR left for a later round in the summary, with its pick.
 A usage or rate limit is waited out until its reset; it never ends the run.
 
 Finish once nothing is running, no queued merge would make a quest ready, and every PR left needs the user or a later round.
