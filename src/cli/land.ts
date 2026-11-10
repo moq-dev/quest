@@ -107,7 +107,8 @@ export type Reason =
 	| "head_moved"
 	| "not_pinned"
 	| "tree_mismatch"
-	| "merge_refused";
+	| "merge_refused"
+	| "fork_head";
 
 /** The hidden line an ejection comment carries, which `quest status` reads. */
 export const EJECTED = /^<!-- quest land: ([a-z_]+) -->$/m;
