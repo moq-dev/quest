@@ -40,7 +40,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 ## Public API
 
 - Report the public API and wire impact of every change in the PR description.
-- A breaking change marks its title with `!` and says how to migrate.
+- A breaking change to the public API or wire marks its title with `!` and says how to migrate; a behavior change alone takes no `!`.
 - Keep things private until a current or planned consumer needs them.
 - Never add `foo_with_x`, `foo_checked`, or a compatibility shim. Make the breaking change to `foo` instead.
 - Let the type system make misuse unrepresentable.

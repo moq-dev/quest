@@ -1,11 +1,13 @@
 // The rules from `quest context` that a program can check, enforced on an
-// agent's tool calls by `quest hook` instead of read as prose. Each check
-// stays narrow enough to never block legitimate work: it judges only what the
-// call itself shows, and lets through what it cannot tell apart.
+// agent's tool calls and turn ends by `quest hook` instead of read as prose.
+// Each check stays narrow enough to never block legitimate work: it judges
+// only what the call or stop itself shows, and lets through what it cannot
+// tell apart.
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import { REFERENCE_MARKER, lines } from "../core";
 import { parse } from "./shell";
 
 const EM_DASH = String.fromCharCode(0x2014);
@@ -32,6 +34,71 @@ export const RULES = {
 export const CHECKED_CONTEXT = `## Checked\n\n${Object.values(RULES)
 	.map((rule) => `- ${rule}`)
 	.join("\n")}\n`;
+
+/**
+ * Whether the checkout holding `cwd` points its agents at `quest context`:
+ * its root `AGENTS.md` or `CLAUDE.md` has a line starting with Quest's
+ * reference marker. Found without running git, since every session waits on it.
+ */
+export function usesQuest(cwd: string): boolean {
+	for (let dir = cwd; ; dir = dirname(dir)) {
+		if (existsSync(join(dir, ".git"))) {
+			return ["AGENTS.md", "CLAUDE.md"].some((name) => {
+				try {
+					return lines(readFileSync(join(dir, name), "utf8")).some((line) =>
+						line.startsWith(REFERENCE_MARKER),
+					);
+				} catch {
+					return false;
+				}
+			});
+		}
+		if (dirname(dir) === dir) return false;
+	}
+}
+
+/** The fields of a Claude Code `Stop` or `SubagentStop` hook's JSON input that `runningGates` reads. */
+export interface StopInput {
+	hook_event_name: string;
+	cwd: string;
+	/** Stop: the session's transcript. */
+	transcript_path?: string;
+	/** SubagentStop: the subagent's own transcript; empty where Claude Code keeps none. */
+	agent_transcript_path?: string;
+	/** The session's background work still in flight, its subagents' included. */
+	background_tasks?: { id: string; type: string; command?: string }[];
+}
+
+/** A shell command line that runs `quest gate`, directly or through `bun run quest` and the like. */
+const GATE = /(^|[^\w-])quest\s+gate(\s|$)/;
+
+/**
+ * The `quest gate` commands still running in the background that the agent
+ * ending its turn started, in a repository that uses Quest. Claude Code lists
+ * the whole session's background work, subagents' included, so a command
+ * counts as this agent's when its transcript holds the ID Claude Code gave the
+ * command on backgrounding it (`ID: <id>`); without a transcript, every one
+ * counts. Claude Code stops a subagent's background commands when it ends, so
+ * ending on one loses its result, and it lists a command only while it runs,
+ * so a refusal lasts no longer than the gate. Input without the list, from a
+ * Claude Code older than it, has none.
+ */
+export function runningGates(input: StopInput): string[] {
+	const gates = (input.background_tasks ?? []).filter(
+		(task) => task.type === "shell" && typeof task.command === "string" && GATE.test(task.command),
+	);
+	if (gates.length === 0 || !usesQuest(input.cwd)) return [];
+	const path = input.hook_event_name === "SubagentStop" ? input.agent_transcript_path : input.transcript_path;
+	let transcript: string | undefined;
+	try {
+		transcript = path ? readFileSync(path, "utf8") : undefined;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	return gates
+		.filter((task) => transcript === undefined || transcript.includes(`ID: ${task.id}`))
+		.map((task) => task.command!);
+}
 
 /** What a denial adds to `rewrite`: the way through for a rebase or force-push the user asked for. */
 const ASKED = ` If the user asked for this in their own words, prefix the command with \`${USER_ASKED}\`.`;

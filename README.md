@@ -455,6 +455,7 @@ head 0ade9d977d54c6f48152410532c58e9ea78db3d0
 mergeable conflicting
 merge-state dirty
 review-decision -
+review-record diff-identical 5f1c2e9a8b7d6c5e4f3a2b1c0d9e8f7a6b5c4d3e
 auto-merge -
 merge-queue -
 landing-stopped -
@@ -472,6 +473,7 @@ comes last, and a missing value prints as `-`:
 | --- | --- |
 | `url`, `state`, `draft`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the head SHA. |
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
+| `review-record` | Whether the PR body's [`## Review` record](#review-locally) still covers the head, and the head it names last: `current` when it is the head, `diff-identical` when `git diff <base>...<head>` prints the same as for it, `stale` otherwise, or `unknown` when GitHub cannot compare them, such as a diff too large; `-` when the record names no full SHA. Whose record counts is the reader's call. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
@@ -532,7 +534,8 @@ are not told apart.
 `quest merge` takes no label: the head-pinned auto-merge or merge-queue entry
 it creates is the queue signal, so a queued PR shows no hold. It refuses while
 any session holds the PR, so release your own hold first. `--land` needs the full 40-character
-head SHA and refuses once the head moves.
+head SHA and refuses once the head moves, or while the latest run of any
+check on it failed, required or not, naming each; pending checks do not block.
 It enables auto-merge bound to that SHA, or merges at once when nothing is
 left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
 the repository disallows; otherwise it uses the only method the repository
@@ -1008,6 +1011,13 @@ not; a fork that refuses the push lands by a leased fast-forward of the base.
 It lands only on the base it tested: a base that moved during the build
 rebuilds the pick there, with no attempt counted.
 
+The queue branch's push runs the merged PR's own workflow, so a fork can
+rewrite any guard that lives there. For a queue workflow on a private runner,
+`--refuse-forks` ejects each pick whose head is in a fork, or in a deleted
+repository, before its build is pushed, ending a build already under way:
+it disarms the PR's auto-merge and comments that fork pull requests cannot use
+the private runner, leaving the pick to a maintainer.
+
 A failed build, a build still running after `--timeout` minutes (60), or a
 conflict the quest merge driver cannot merge drops the pick as GitHub's queue
 removes a PR: the watcher records it for the land fixer in `removal-<n>.json`
@@ -1413,18 +1423,18 @@ from the branch into the base, found among the upstream's PRs from the
 repository the base's remote pushes to, and prints `record <url>`. The record
 names the reviewer harness, model, and effort, the session and round, the
 reviewed head, the base's short SHA, the score and rationale, each finding with
-its location, and the last round's findings with their dispositions. The land
-gate counts every full SHA the section names as a review of that head, so the
+its location, and the last round's findings with their dispositions. `quest
+status` takes the last full SHA the section names as the reviewed head, so the
 head appears in full only once a round reports no findings, and model text
 appears as inline code, which mentions or links nothing and never holds a full
 SHA. The section runs to the next level-1 or
 level-2 heading, both as Markdown parses them, so an example in a code fence is
-text to the land gate and the record alike; the rest of the body stays as written, and a body without one
+text to `quest status` and the record alike; the rest of the body stays as written, and a body without one
 gains it at the end, unless it ends inside an unclosed code fence or HTML
 comment, which fails the record. With no such PR, or a remote off GitHub, it changes nothing
 and prints `record skipped: <why>`. It edits as the user the GitHub token names
-(`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`), and the land gate counts the
-record only while the PR's author made the body's latest edit, so review your
+(`GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`), and `/quest-merge` counts the
+record only on a PR whose author has write access, so review your
 own PRs with your own token. A record GitHub refuses fails the command after the
 round's report, with exit status 1. It exits 0 once the round
 finishes, whatever it found, 2 for invalid arguments or a checkout or CLI that
@@ -1690,7 +1700,8 @@ agent ID, and a workflow agent's for its workflow run, so the hook binds a
 workflow agent's checkout to the first subagent that starts in it, the workflow
 agent itself. Another `SubagentStop` hook that keeps a subagent running defeats
 this: Claude continues the subagent without a `SubagentStart`, so it works on
-without its scratch until it reinstalls it.
+without its scratch until it reinstalls it. Quest's own refusal, for a gate the
+subagent left running, keeps its checkout instead.
 
 A session's checkout, from `--worktree`, `EnterWorktree`, a background session,
 or remote control, is held by the session that created it and by each session
@@ -1764,9 +1775,10 @@ work, in every repository:
 quest setup
 ```
 
-It sets Claude Code's `env.BASH_MAX_TIMEOUT_MS` to 3300000, so a foreground
-command such as `quest wait` can block for 55 minutes, just under the 1h
-prompt-cache TTL, instead of the 10-minute default.
+It sets Claude Code's `env.BASH_MAX_TIMEOUT_MS` and
+`env.BASH_DEFAULT_TIMEOUT_MS` to 3300000, so a foreground command such as
+`quest wait` or a gated build runs for up to 55 minutes, just under the 1h
+prompt-cache TTL, without the agent passing a timeout or backgrounding it.
 
 It also loads the rules once. The repository's `Quests: ` line has agents run
 `quest context` before any work, which costs a turn and is summarized away
@@ -1793,7 +1805,16 @@ hook on shell commands and file edits denies, with the rule as the reason:
 - a scratch file written under `/tmp`, outside the checkout, by a redirection,
   `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit.
 
-It checks only a body on the command line itself: `--body`, a `body=` field,
+For Claude Code, `Stop` and `SubagentStop` hooks refuse to end an agent's turn
+while a `quest gate` command it started still runs in the background, naming
+each one and telling the agent to block on it: Claude Code stops a subagent's
+background commands when it ends, and a session that ends its turn on one
+leaves its result unread. A command is the agent's when its transcript holds
+the ID Claude Code gave it on backgrounding it, so a sibling's gate does not
+hold an agent. Claude Code lists a command only while it runs, so the
+refusal ends with the gate. Codex runs no such hook.
+
+`quest` must be on the `PATH` the agent starts with, as for the worktree `--body`, a `body=` field,
 `git commit -m`, or `--body-file -` with a here-document. A body file, or one
 piped into `gh`, passes unread, since the file may hold something else by the
 time the command runs; `quest context` keeps the footer and em-dash rules in
@@ -1810,7 +1831,7 @@ It edits `$CLAUDE_CONFIG_DIR/settings.json`, or `~/.claude/settings.json`, and
 `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json`, when that directory exists.
 It keeps your other settings, refuses a malformed file unchanged, writes each
 once, and prints each change. Rerun it after upgrading. `quest setup --remove`
-takes the hooks out, and the timeout while it still holds Quest's value.
+takes the hooks out, and each timeout while it still holds Quest's value.
 
 ## Where this is going
 

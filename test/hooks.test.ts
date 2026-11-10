@@ -8,6 +8,7 @@ import { expect, test } from "vitest";
 import { REFERENCE_LINE } from "../src/core";
 import {
 	BASH_MAX_TIMEOUT_MS,
+	CLAUDE_ENV,
 	CLAUDE_HOOKS,
 	CODEX_HOOKS,
 	CONTEXT_LIMIT,
@@ -37,9 +38,10 @@ test("setup creates the settings file with the timeout and every hook, then chan
 	expect(setup(claude(path))).toEqual([
 		`${path}: installed Quest's hooks`,
 		`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS}`,
+		`${path}: env.BASH_DEFAULT_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS}`,
 	]);
 	const settings = read(path);
-	expect(settings.env).toEqual({ BASH_MAX_TIMEOUT_MS });
+	expect(settings.env).toEqual(CLAUDE_ENV);
 	for (const { event, matcher } of CLAUDE_HOOKS)
 		expect(settings.hooks[event]).toEqual([{ ...(matcher ? { matcher } : {}), hooks: [ours] }]);
 	const written = readFileSync(path, "utf8");
@@ -52,16 +54,17 @@ test("setup replaces a different timeout, and removal leaves the user's own", ()
 	const path = join(tempDir(), "settings.json");
 	writeFileSync(path, JSON.stringify({ env: { FOO: "1", BASH_MAX_TIMEOUT_MS: "600000" } }));
 	expect(setup(claude(path))).toContain(`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS} (was "600000")`);
-	expect(read(path).env).toEqual({ FOO: "1", BASH_MAX_TIMEOUT_MS });
+	expect(read(path).env).toEqual({ FOO: "1", ...CLAUDE_ENV });
 	expect(setup(claude(path), { remove: true })).toEqual([
 		`${path}: removed Quest's hooks`,
 		`${path}: removed env.BASH_MAX_TIMEOUT_MS`,
+		`${path}: removed env.BASH_DEFAULT_TIMEOUT_MS`,
 	]);
 	expect(read(path)).toEqual({ env: { FOO: "1" } });
 
-	writeFileSync(path, JSON.stringify({ env: { BASH_MAX_TIMEOUT_MS: "600000" } }));
+	writeFileSync(path, JSON.stringify({ env: { BASH_MAX_TIMEOUT_MS: "600000", BASH_DEFAULT_TIMEOUT_MS: "1000" } }));
 	expect(setup(claude(path), { remove: true })).toEqual([]);
-	expect(read(path)).toEqual({ env: { BASH_MAX_TIMEOUT_MS: "600000" } });
+	expect(read(path)).toEqual({ env: { BASH_MAX_TIMEOUT_MS: "600000", BASH_DEFAULT_TIMEOUT_MS: "1000" } });
 });
 
 test("setup keeps other settings and hooks in place", () => {
@@ -73,7 +76,7 @@ test("setup keeps other settings and hooks in place", () => {
 	expect(Object.keys(settings)).toEqual(["theme", "hooks", "env"]);
 	expect(settings.hooks.SessionStart[0]).toEqual(theirs);
 	expect(settings.hooks.SessionStart).toHaveLength(2);
-	expect(setup(claude(path), { remove: true })).toHaveLength(2);
+	expect(setup(claude(path), { remove: true })).toHaveLength(3);
 	expect(read(path)).toEqual({ theme: "dark", hooks: { SessionStart: [theirs] }, env: { A: "1" } });
 });
 
@@ -224,7 +227,45 @@ test("PreToolUse denies a call that breaks a checked rule, only where the reposi
 	expect(() => hook({ hook_event_name: "PreToolUse", cwd })).toThrow("tool_name");
 });
 
+/** A background task as Claude Code lists it in a Stop hook's input. */
+const shell = (id: string, command: string) => ({ id, type: "shell", status: "running", description: id, command });
+
+test.each([
+	["Stop", "transcript_path"],
+	["SubagentStop", "agent_transcript_path"],
+])("%s refuses while a gate the agent started runs in the background", (event, key) => {
+	const cwd = checkout(`${REFERENCE_LINE}\n`);
+	const transcript = join(tempDir(), "agent.jsonl");
+	writeFileSync(
+		transcript,
+		'{"content":"Command running in background with ID: b1. Output is being written to: x"}\n',
+	);
+	const stop = {
+		hook_event_name: event,
+		cwd,
+		[key]: transcript,
+		stop_hook_active: true,
+		background_tasks: [
+			shell("b1", "cd repo && quest gate just test > .tmp/test.log 2>&1"),
+			// Another agent's gate, and this agent's command that is not a gate.
+			shell("b2", "bun run --silent quest gate just check"),
+			shell("b3", "npm run dev"),
+			{ id: "a1", type: "subagent", status: "running", description: "review" },
+		],
+	};
+	const output = JSON.parse(hook(stop));
+	expect(output.decision).toBe("block");
+	expect(output.reason).toContain("- cd repo && quest gate just test");
+	expect(output.reason).not.toContain("just check");
+	// Without a transcript, each running gate counts as the agent's.
+	expect(JSON.parse(hook({ ...stop, [key]: "" })).reason).toContain("just check");
+	// It lets the turn end once the gate ends, and outside a repository that uses Quest.
+	expect(hook({ ...stop, background_tasks: stop.background_tasks.slice(1) })).toBe("");
+	expect(hook({ ...stop, cwd: checkout(null) })).toBe("");
+	expect(() => hook({ hook_event_name: event, cwd })).toThrow("background_tasks");
+});
+
 test("hook refuses malformed input and events it does not handle", () => {
 	expect(() => hook({ cwd: "/" })).toThrow("hook_event_name");
-	expect(() => hook({ hook_event_name: "Stop", cwd: "/" })).toThrow("quest setup");
+	expect(() => hook({ hook_event_name: "Notification", cwd: "/" })).toThrow("quest setup");
 });
