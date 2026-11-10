@@ -1,6 +1,6 @@
 ---
 name: quest-afk
-description: Run quests while the user is away, taking the recommended course of action and deferring merge decisions until they return.
+description: Keep this session's work going while the user is away, taking your recommendations and deferring merge picks until they return.
 allowed-tools: Bash(quest skill afk) PowerShell(quest skill afk)
 ---
 

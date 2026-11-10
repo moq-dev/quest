@@ -24,7 +24,7 @@ const write = (root, path, text) => {
 };
 const read = (root, path) => readFileSync(join(root, path), "utf8");
 const assertFile = (root, path, expected) => assert.equal(read(root, path), expected, `user content changed: ${path}`);
-const skills = ["audit", "delete", "export", "import", "iterate", "merge", "plan", "run", "start"];
+const skills = ["audit", "complete", "delete", "export", "import", "iterate", "merge", "plan", "run", "spawn", "start"];
 const destinations = [".claude/skills", ".agents/skills"];
 try {
 	// Run the caller's binary in place, so the cleanup below never deletes an executable it just ran:

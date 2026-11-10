@@ -70,20 +70,6 @@ test("a skill prints its own instructions first, then what it builds on, each on
 	expect(text.split("\n## Questions\n").length).toBe(2);
 });
 
-test("a skill drops the skills and guide sections it omits from what it builds on", () => {
-	const afk = skill("afk")!;
-	expect(afk.omit).toEqual(["grill", "Creation", "Questions"]);
-	const text = afk.instructions;
-	expect(text).toContain(`# /quest-run\n\n${skill("run")!.body.trim()}`);
-	expect(text).toContain(`# /quest-merge\n\n${skill("merge")!.body.trim()}`);
-	expect(text).not.toContain("# /quest-grill");
-	expect(text).not.toContain("\n## Creation\n");
-	expect(text).not.toContain("\n## Questions\n");
-	expect(text).toContain("\n## Execution\n");
-	// The omission applies only when afk is the skill composed.
-	expect(skill("run")!.instructions).toContain("# /quest-grill");
-});
-
 /** Claude Code inlines the stub's whole output: the composed skill, then the setup line it echoes. */
 test.each(SKILLS.map((skill) => [skill.name, skill] as const))("%s fits inline in Claude Code", (_, skill) => {
 	const echoed = /; echo "([^"]*)"`/.exec(skill.stubs[".claude/skills"])![1]!;

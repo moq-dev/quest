@@ -182,6 +182,26 @@ Run no more sub-agents at once than the harness allows; queue the rest and start
 Relay no interim report: resume a sub-agent that ended its turn on one, telling it to block until its work finishes.
 A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
 
+Start each sub-agent in the background with its own isolated worktree, since agents cannot write to a worktree their parent created.
+It reports only when done or blocked, and never waits on GitHub CI, reviews, or merges; stay silent on its interim notifications.
+As each reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
+Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in the brief of each agent started after, and report it once.
+
+A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result.
+Resume that agent by messaging it, or with `quest agent resume` for a headless one, so it keeps its context and checkout.
+If it cannot be resumed, start a new one with the same brief plus its PR, its checkout, and the token of any hold it took, which `quest status <pr>` shows, so it continues that work and keeps the hold.
+While the error persists, such as a rate limit before its reset, resume and start nothing until it clears, and report it once.
+
+Answer these requests at any point, without stopping running agents:
+
+- "finish up": start nothing new, let running agents report, then clean up and write the final summary.
+- "pause": start nothing new until the user says to resume; reports are handled as usual.
+- "status": a compact list of each agent with its quest or PR, state, and how long ago it started or last reported.
+
+Once every sub-agent has finished, remove each agent checkout `quest worktree status` lists with `quest worktree remove`, since Claude never removes a subagent's checkout; it refuses one holding unpreserved work.
+Remove other local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
+Leave the worktree you are running in and any holding uncommitted work or refused removal; list those in your summary.
+
 Run each agent at an entry of `quest`'s ranked lists unless the repository's `AGENTS.md` names other models: as a native sub-agent on this session's harness, else through `quest agent`.
 Size each `/quest-iterate` you dispatch as a quest, by the work left on its PR, and name that size in its brief.
 Start it on the PR's writer, the model of its first `Implementer:` line, at the entry `quest models <size> --writer <model>` prints, waiting out its usage limit so the other model can review; a PR whose writer no list names, such as `unknown` or a retired model, takes its size's first entry that can run.
