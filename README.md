@@ -1114,6 +1114,14 @@ host has room even counting those, commands start at once: a burst of gated
 test runs on an idle host starts together. Once only the raw load and memory
 have room, commands start one at a time, 5 seconds after the previous admission.
 
+Waiting commands start first come, first served. Each records its place in a
+queue when it starts waiting, and counts every command queued ahead of it as
+one more recent admission: it starts before them only while the host has room
+for all of them, and only the first in line waits out the 5-second spacing. A
+command's wait is therefore bounded by the work queued ahead of it, never by
+commands that started waiting later. A place is freed once its command starts,
+its gate is cancelled, or its gate process exits.
+
 The load limit applies only while a gated command is still running. Otherwise
 the load comes from work the gate cannot wait out, so commands start one at a
 time as if the raw load had room. A freshly booted hosted macOS runner is one
@@ -1128,11 +1136,13 @@ an account missing from it, as in arbitrary-UID containers, uses
 its UID can write it.
 
 Two kinds of command go ahead of the rest. `quest gate --quick <command>` waits
-at most a minute, then starts the command whatever the host's load and memory;
+at most a minute, then starts the command whatever the host's load, memory, and
+place in the queue;
 pass it only for cheap commands, such as a formatter or `quest check`, that cost
 less to run than to hold back. A check that lands PRs goes first: with
 `QUEST_GATE_PRIORITY=1` in its environment, every gate inside the check waits
-for memory but never for load, whether or not other gated commands run. Both
+for memory but never for load or the queue, whether or not other gated commands
+run. Both
 record their admissions, so the other callers count them against the host's
 headroom. Set the variable where the check starts, such as a merge queue
 build's workflow or the land daemon's sandbox, rather than relying on a slot in
@@ -1142,7 +1152,10 @@ the host's load. `quest agent` drops the variable, as it drops an admission.
 Each admission records the gate's process ID and, except on Windows, when the
 gate started, and counts as running until that process exits; a reused process
 ID counts as running only on Windows, where it makes a command wait for the
-load again. The gate holds no lock while the command runs, and it owns the
+load again. A place in the queue records the same, except that on Windows the
+waiting gate refreshes it, and it frees a minute after the last refresh, so a
+reused process ID cannot hold the queue. The gate holds no lock while the
+command runs, and it owns the
 command's descendants. Once the command exits, any descendant still running is
 killed, so a build or test run leaves nothing behind.
 
@@ -1204,8 +1217,8 @@ first one as Just's copy, not as a second signal: a SIGTERM to Just's process
 group reaches the gate both directly and through Just. A repeated SIGTERM still
 kills, though when sent to Just or the gate alone, or when the two copies
 arrive together, it takes a third; a repeated Ctrl-C, which Just does not
-forward, kills at the second. There is no fairness guarantee, and no timeout except
-`--quick`'s: any other command waits as long as the host stays busy.
+forward, kills at the second. There is no timeout except `--quick`'s: any other
+command waits its turn for as long as the host stays busy.
 
 ## Route work by size
 
