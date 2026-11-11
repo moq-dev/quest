@@ -1085,11 +1085,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("usage")
 		.summary("Report which models worked on each PR, at what token cost, and how its reviews went")
 		.description(
-			"Report origin's PRs updated since --since and this host's agent sessions active since then. Each " +
+			"Report origin's PRs updated since --since and this host's agent sessions active since then. A " +
+				"session a PR's ## Review record names, opencode's included, belongs to that PR as reviewing. Any other " +
 				"Claude Code or Codex session belongs to the PR whose head branch its log last names, when its Codex log, its " +
 				"checkout's remotes, or a Codex log for its directory names this repository, read from " +
 				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
-				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
+				"reviewing when Codex marks it a review, implementing when it began " +
 				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
 				"each reviewer's latest ## Review round, with its round, score, and findings, " +
@@ -1137,7 +1138,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"--harness names the only reviewer instead of the pair, at its entry's model and effort, and --model and " +
 				"--effort override that reviewer's, or without --harness, the size pick's; a repository whose AGENTS.md names other reviewers " +
 				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
-				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle. When the latest writer changes the size's pick, the new pick's first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the other and fails the " +
+				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the other and fails the " +
 				"run, saving neither round. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +

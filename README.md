@@ -1335,8 +1335,9 @@ names other reviewers needs. The second reviewer's model is avoided like any
 other, which, without `--harness`, is an error. A `--harness` run keeps the other
 reviewers' sessions for the pair's next run, and refuses while one has
 findings to settle, so a head never passes one reviewer alone while the other's
-findings are open. When the latest writer changes the size's pick, the new
-pick's first session settles the open findings of the reviewer it replaces. An unknown harness, a size whose
+findings are open. When the latest writer changes the size's pick to one with
+no session on the branch, its first session settles the open findings of the
+reviewer it replaces. An unknown harness, a size whose
 every reviewer is avoided, or a missing or logged-out CLI, is an error
 rather than a same-model review, as is a login the API rejects mid-round, such
 as an expired or revoked token. The reviewer reaches its model as the user's own CLI does:
@@ -1504,15 +1505,15 @@ moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) esti
 
 [ccusage](https://github.com/ccusage/ccusage)'s `session --json` reads and
 prices the sessions, at each model's API list price, which subscriptions do
-not bill, so the cost is an estimate. `quest usage` ties each Claude Code or
-Codex session to the PR whose head branch its log last names, reading only the
+not bill, so the cost is an estimate. A session a PR's `## Review` record names,
+opencode's included, is that PR's, reviewing. `quest usage` ties any other
+Claude Code or Codex session to the PR whose head branch its log last names, reading only the
 branch, directory, remote, start time, and effort from `$CLAUDE_CONFIG_DIR` (or
 `~/.config/claude` and `~/.claude`) and `$CODEX_HOME` (or `~/.codex`), never a
 prompt or reply. Since another repository may use the same branch name, the
 session must also be this repository's, as its Codex log, its checkout's
 remotes, or, once the checkout is deleted, a Codex log for that exact directory
-names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
-it or Codex marks it a review, implementing when it began before the PR opened,
+names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. Such a session is reviewing when Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. Each PR shows its `## Models` size and implementers; each reviewer's latest `quest review` round's
 reviewer, round, score, open findings, and the last round's findings fixed or
 refuted; the land fixer's fixes; and the later PRs that list it under
