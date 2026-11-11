@@ -895,6 +895,24 @@ fakes("a detached checkout continues the session of the branch --branch names", 
 	expect(s.calls().filter((c) => c.argv[1] === "review")).toHaveLength(1);
 });
 
+fakes("another worktree resumes Codex's session, and starts opencode's anew in its own checkout", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_OPENCODE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	const other = join(s.repo, ".tmp", "other");
+	git(s.repo, "worktree", "add", "-q", "--detach", other);
+	write(other, ".tmp/responses.md", "1. Refuted: src/lib.ts:1 sets it.\n");
+	const responses = join(other, ".tmp", "responses.md");
+	const round = await quest("--root", other, "review", "--branch", "feature", "--responses", responses);
+	expect(round.stderr).toBe("");
+	const [picked, deepseek] = round.stdout.split("\nreviewer opencode ");
+	expect(picked).toContain("session thread-1\nround 2\n");
+	expect(deepseek).toContain("round 1\n");
+	const runs = s.opencodeCalls().filter((call) => call.argv[0] === "run");
+	expect(runs.at(-2)!.argv).not.toContain("--session");
+	expect(runs.at(-1)!.cwd).toBe(other);
+});
+
 fakes("a differently named branch continues the session --branch names, and without it has its own", async () => {
 	const s = setup();
 	expect((await quest("--root", s.repo, "review")).stdout).toContain("round 1\n");
@@ -1823,6 +1841,7 @@ test("saved sessions are read only in the current format, or refused naming --ne
 	const session = {
 		reviewer: "codex",
 		session: "thread-1",
+		root: "/repo",
 		rounds: [{ head: "a", mergeBase: "m", findings: [finding] }],
 		last: {},
 		given: { instructions: "i", rules: null },
@@ -1838,6 +1857,7 @@ test("saved sessions are read only in the current format, or refused naming --ne
 		{ sessions: [{ ...session, last: undefined }] },
 		{ sessions: [{ ...session, given: undefined }] },
 		{ sessions: [{ ...session, session: undefined }] },
+		{ sessions: [{ ...session, root: undefined }] },
 	])
 		expect(() => parseState(older)).toThrow(/--new/);
 });

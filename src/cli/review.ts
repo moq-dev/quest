@@ -316,6 +316,8 @@ interface State {
 interface Session {
 	reviewer: ReviewHarness;
 	session: string;
+	/** The checkout the session started in. */
+	root: string;
 	/** Each round's head, the merge base its change started from, and its findings. */
 	rounds: { head: string; mergeBase: string; findings: Finding[] }[];
 	/** The session's last round, which a round on the same head with nothing to settle repeats. */
@@ -377,6 +379,8 @@ interface Reader {
 }
 
 interface Reviewer {
+	/** Whether a session stays in the checkout it started in, so a round from another worktree starts a new one. */
+	bound?: true;
 	/** Exits non-zero when the CLI is logged out. */
 	status: string[];
 	/**
@@ -737,6 +741,8 @@ const opencode: Reviewer = {
 	connection: [],
 	routes: () => [],
 	unauthorized: /\bprovider\.auth\b/,
+	// A resumed session runs in the directory it started in, and fails once that worktree is gone.
+	bound: true,
 	review: (context, _session, prompt) => opencodeTurn(context, [], `${OPENCODE_REVIEW}\n\n${prompt}`),
 	// `opencode run` takes no schema, so the prompt carries it.
 	resume: (context, session, prompt) =>
@@ -1403,6 +1409,7 @@ export function parseState(value: unknown): State {
 			(session) =>
 				typeof session?.reviewer === "string" &&
 				typeof session.session === "string" &&
+				typeof session.root === "string" &&
 				Array.isArray(session.rounds) &&
 				session.rounds.length > 0 &&
 				session.rounds.every((round) => Array.isArray(round?.findings)) &&
@@ -1673,8 +1680,9 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 	// Responses answer findings by number; a reviewer with none of its own would read others' as its own.
 	const answered = earlier.length > 0 ? responses : undefined;
 	// A round checks only what changed since the last one when nothing but the head changed: the same
-	// reviewer, base, instructions, and REVIEW.md, and a range the last round's covers. Anything else starts
-	// a new session that reviews the whole change, since a resumed one keeps its first instructions.
+	// reviewer, base, instructions, and REVIEW.md, a range the last round's covers, and for a reviewer bound
+	// to its checkout, the same one. Anything else starts a new session that reviews the whole change, since a
+	// resumed one keeps its first instructions.
 	const last = stored?.last;
 	const resume =
 		previous !== undefined &&
@@ -1684,6 +1692,7 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 		last.model === picked.model &&
 		last.effort === picked.effort &&
 		last.base.ref === shared.base.ref &&
+		(!reviewer.bound || stored!.root === root) &&
 		covers(root, previous.mergeBase, change.mergeBase);
 
 	// The last round already passed this head, and has nothing left to settle; it repeats against the run's base
@@ -1777,7 +1786,7 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 					},
 		unchanged: false,
 	};
-	return { round, session: { reviewer: harness, session, rounds, last: round, given } };
+	return { round, session: { reviewer: harness, session, root, rounds, last: round, given } };
 }
 
 /**

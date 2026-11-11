@@ -1399,8 +1399,9 @@ reviewer settles only its own findings, and gets `--responses` only when it has
 some, so on the same head only a reviewer with findings runs. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. Each reviewer's session is kept per branch in the clone's
-common Git directory, so any worktree of the clone resumes it; `--new` starts
-over. `--branch` names the branch instead of the checked-out one, which a
+common Git directory, so any worktree of the clone resumes it, except opencode's,
+which stays in the checkout it started in, so another worktree starts a new one;
+`--new` starts over. `--branch` names the branch instead of the checked-out one, which a
 detached `HEAD` requires, such as a checkout of a branch another worktree
 holds, so its rounds continue that branch's session.
 

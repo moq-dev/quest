@@ -1168,7 +1168,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
 				"repeats that round, marked unchanged, so on the same head only a reviewer with findings to settle runs. " +
-				"--new starts new sessions. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"--new starts new sessions. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
 				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
