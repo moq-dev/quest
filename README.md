@@ -1311,10 +1311,10 @@ size. Each size ranks its reviewers, the same for every repository:
 
 | PR size | Reviewer | When Sol changed it last |
 |---|---|---|
-| XS | Codex `gpt-6.1-sol` low | Claude Code `claude-opus-5-5` low |
+| XS | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
 | S | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` low |
-| M, or none | Codex `gpt-6.1-sol` medium | Claude Code `claude-opus-5-5` medium |
-| L | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` high |
+| M, or none | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` medium |
+| L | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
 | XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` xhigh |
 
 Beside it, opencode `opencode-go/deepseek-v4.1-flash` at `high` reviews the
