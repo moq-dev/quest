@@ -210,7 +210,9 @@ Once every sub-agent has finished, remove each agent checkout `quest worktree st
 Remove other local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
 Leave the worktree you are running in and any holding uncommitted work or refused removal; list those in your summary.
 
-Run each agent at an entry of `quest`'s ranked lists unless the repository's `AGENTS.md` names other models: as a native sub-agent on this session's harness, else through `quest agent`.
+Run each agent at an entry of `quest`'s ranked lists unless the repository's `AGENTS.md` names other models.
+In T3 Code on Linux, run Codex workers through `quest agent` in a `quest worktree create` checkout: delegated chat threads accumulate in Codex Recents.
+Else use a native sub-agent on this session's harness, or `quest agent` for another harness.
 Size each `/quest-iterate` you dispatch as a quest, by the work left on its PR, and name that size in its brief.
 Start it on the PR's writer, the model of its first `Implementer:` line, at the entry `quest models <size> --writer <model>` prints, waiting out its usage limit so the other model can review; a PR whose writer no list names, such as `unknown` or a retired model, takes its size's first entry that can run.
 
