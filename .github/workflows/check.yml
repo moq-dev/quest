@@ -52,7 +52,7 @@ jobs:
       # that never ran as failed. Main checks the flake's macOS build,
       # and tags check the released binaries.
       matrix:
-        runner: [ubuntu-latest, macos-14]
+        runner: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
