@@ -433,6 +433,10 @@ describe("usage", () => {
 		// #9's claim of the same branch named ses_1 before #10 resumed it, so #10, the newer, takes it.
 		// Its record and #10's tally the same branch, so the rollup counts the tally once, from #10.
 		const body9 = `${body10.slice(body10.indexOf("## Review"))}\n\n## Models\n\n- Size: L\n- Implementer: Claude Code, claude-opus-5-5, high effort\n`;
+		const fork13 = body10
+			.slice(body10.indexOf("## Review"))
+			.replaceAll(THREAD, "thread-fork")
+			.replaceAll("ses_1", "ses_fork");
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
 		const pulls = [
@@ -454,15 +458,16 @@ describe("usage", () => {
 				updated_at: "2026-11-06T00:00:00Z",
 				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
 			}),
-			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 			// The fork's newer PR has no implementer to count its tally for, so #7 still counts the fork's.
-			pr(13, "quest/m0/a", body10.slice(body10.indexOf("## Review")), "2026-11-04T00:00:00Z", {
+			// Its own sessions, so it takes none of #10's.
+			pr(13, "quest/m0/a", fork13, "2026-11-04T00:00:00Z", {
 				state: "open",
 				merged_at: null,
 				closed_at: null,
 				updated_at: "2026-11-06T00:00:00Z",
 				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
 			}),
+			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 		];
 		const requests: string[] = [];
 		const fetch = async (input: string | URL | Request) => {
@@ -518,7 +523,7 @@ describe("usage", () => {
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {
 		const { root, deps, priced } = setup();
 		const report = await usage(root, { since: "2026-11-05" }, deps(priced));
-		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7]);
+		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7, 13]);
 		const ten = report.pulls.find((p) => p.number === 10)!;
 		expect(ten.sessions.map((s) => [s.harness, s.session, s.role, s.effort])).toEqual([
 			["claude", CLAUDE, "implementing", "high"],
@@ -583,6 +588,7 @@ describe("usage", () => {
 			[10, 0],
 			[9, 0],
 			[7, 0],
+			[13, 0],
 		]);
 		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8, null]);
 	});
