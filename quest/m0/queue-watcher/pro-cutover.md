@@ -48,8 +48,9 @@ planned there.
   in moq.pro or the host's configuration.
 - `moq-pro-gate` is a repository runner, not an org runner group, and
   `release`'s `gate.yml` still uses it, so restricting it to the queue
-  workflow, as [Harden the queue runners](/quest/m0/queue-watcher/runners.md)
-  did for the public queues, waits for moq.pro's Land release quest.
+  workflow, as the public repositories' `quest-queue`, `rind-queue` and
+  `rust2-queue` groups are limited to their `queue-build.yml@refs/heads/main`,
+  waits for moq.pro's Land release quest.
 
 ## Waiting
 
