@@ -15,7 +15,7 @@ Decided 2026-11-09 (user, /quest-plan, from a comparison with
 and `/reflect`):
 
 - What does the plan cover?
-  - ✅ The [verification rule](/quest/m0/real-surface.md) and this audit
+  - ✅ The verification rule in `quest context` and this audit
   - Rejected: either alone
 - A rule that agents settle by experiment what running something would
   answer, instead of asking?
@@ -81,7 +81,7 @@ Baseline, from the hand scan of 2026-11-09 (typed messages from
 - A proposal the maintainer steered simpler: 10.
 - Misread intent or target: 7.
 - Output handed back without running or looking at it: 7, which
-  [the verification rule](/quest/m0/real-surface.md) owns.
+  the verification rule in `quest context` owns.
 - Reports a problem instead of fixing it, or fixes an arbitrary top few: 6.
 - Asks a routine choice: 4, beside 14 answers that only picked the
   recommendation.
@@ -100,7 +100,5 @@ Baseline, from the hand scan of 2026-11-09 (typed messages from
 
 ## Related
 
-- [Passing checks is not verification](/quest/m0/real-surface.md) - the
-  first class this audit re-measures
 - [Model check](/quest/m1/model-check.md) - tallies the same PR records by
   model and effort
