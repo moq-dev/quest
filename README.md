@@ -1533,6 +1533,32 @@ prints it as one object. Without `ccusage` on `PATH`, it says how to install it
 and reports the PRs' records alone. Each host reports its own sessions; the
 land fixer's container keeps no session log, so its fixes show without tokens.
 
+### Typed messages
+
+`quest messages` prints the messages a person typed to agents on this host
+since `--since` (a local `YYYY-MM-DD`, by default 7 days ago), oldest first,
+for a periodic audit of what agents keep getting wrong:
+
+```console
+$ quest messages --since 2026-11-10
+2026-11-10T17:39:10.552Z claude moq-dev/quest 5f0c2a7e-9d3b-4c1a-8e6f-2b7d4a9c1e03
+  quest-spawn
+```
+
+Each message shows its time, harness, repository (the checkout's GitHub
+`origin`, else its directory), and session, then its text; `--json` prints an
+array of `{time, harness, repository, session, text}`. It prints no agent
+reply, tool call or output, harness reminder, or prompt an agent or scheduler
+wrote, and tells them apart by the sender each source records, not by
+wording. T3 Code records whether a person or an agent created each message, so
+the sessions it drives are read from its state (`$T3CODE_HOME`, or `~/.t3`)
+and nowhere else. Other Claude Code sessions count the turns Claude Code marks
+as a human's, with its reminders dropped and a slash command spelled as typed;
+other Codex sessions count the content Codex marks as the user's, outside
+headless (`codex exec`) and sub-agent sessions. A log or record in a shape it
+does not know fails the command rather than being skipped. Output goes to
+stdout only; nothing is stored or posted.
+
 ## Headless agents
 
 `quest agent` runs one headless agent turn per call on the agent CLI's own

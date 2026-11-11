@@ -1,6 +1,7 @@
 // The `quest` command line: argument parsing and output around the core.
 
 import { readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { relative, resolve, sep } from "node:path";
 
 import { Argument, Command, CommanderError, InvalidArgumentError, Option } from "commander";
@@ -67,6 +68,7 @@ import {
 	targets,
 } from "./hooks";
 import { CHECKED_CONTEXT, USER_ASKED } from "./rules";
+import { messageLines, messages } from "./messages";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -1126,6 +1128,30 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					else for (const line of usageLines(report)) print(line);
 				},
 			);
+		});
+
+	program
+		.command("messages")
+		.summary("Print the messages a person typed to agents on this host")
+		.description(
+			"Print each message a person typed to a Claude Code or Codex session on this host since --since, oldest " +
+				"first, with its time, harness, repository, and session, and nothing else: no agent reply, tool call or " +
+				"output, harness reminder, or prompt an agent or scheduler wrote. Sessions T3 Code drives are read from " +
+				"its state ($T3CODE_HOME, or ~/.t3), which records whether a person or an agent sent each message. " +
+				"Other Claude Code sessions, from $CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude), count a turn " +
+				"Claude Code marks as a human's; other Codex sessions, from $CODEX_HOME (or ~/.codex), count the " +
+				"content Codex marks as the user's, outside headless and sub-agent sessions. The repository is the " +
+				"checkout's GitHub origin, else the directory. Output goes to stdout only; nothing is stored or " +
+				"posted. --json prints a JSON array of {time, harness, repository, session, text}.\n\n" +
+				"Exits 0 when done, 2 for invalid arguments, and 1 for other failures, such as a log or T3 Code " +
+				"record in a shape quest does not know.",
+		)
+		.option("--since <date>", "First local date to print, as YYYY-MM-DD (default: 7 days ago)", date)
+		.option("--json", "Print a JSON array")
+		.action((options: { since?: string; json?: boolean }) => {
+			const found = messages(options.since ?? daysBefore(new Date(), 7), { env: process.env, home: homedir() });
+			if (options.json) print(JSON.stringify(found));
+			else for (const line of messageLines(found)) print(line);
 		});
 
 	const reviewers = SIZES.map(
