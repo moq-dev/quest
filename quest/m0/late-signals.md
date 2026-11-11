@@ -8,8 +8,9 @@ while it waits in a merge queue. `quest merge` refuses such a head, naming
 the finding or comment, and a queued PR that draws one leaves the queue
 until it is fixed or refuted.
 
-Non-goal: failed checks, which `quest merge` already refuses
-([moq-dev/quest#601](https://github.com/moq-dev/quest/pull/601)).
+Non-goal: failed checks on the head, which `quest merge` already refuses
+([moq-dev/quest#601](https://github.com/moq-dev/quest/pull/601)), and a
+failed run on an earlier head, below.
 
 ## Plan
 
@@ -28,15 +29,16 @@ must refuse:
 
 Agent's choices, for the implementer to revisit:
 
-- `quest merge` reads the reviews and comments posted after the head's
-  commit, by an online reviewer or an account with write access, and
-  refuses while one holds a finding or decision the head has not
-  answered. `quest status` prints them, so `/quest-merge` sees them
-  before it picks.
+- `quest merge` reads the reviews posted after the head's commit, and
+  the comments the decision under `## Waiting` picks, and refuses while
+  one holds a finding or decision the head has not answered.
+  `quest status` prints them, so `/quest-merge` sees them before it
+  picks.
 - The land watcher re-reads queued PRs and dequeues one that draws a
   finding, so CONTRIBUTING's "online findings already posted are addressed
-  at merge, never waited for" still holds: nothing waits, but a finding
-  that arrives before the merge is addressed.
+  at merge, never waited for" still holds: nothing waits for a reviewer,
+  but a finding that arrives before the merge takes the PR out of the
+  queue until it is fixed or refuted.
 - [moq-dev/moq#8372](https://github.com/moq-dev/moq/pull/8372) merged with
   a red `platform.yml` dispatch run on an earlier head, which no check on
   its final head showed. Leave it to moq-dev/moq, since one case is not a

@@ -53,8 +53,9 @@ Agent's choices, for the implementer to revisit. Each run:
   lands; the rest named a PR that left the work to a planned follow-up
   or kept older behavior.
 - `quest messages` returns every human turn, so set aside machine-written
-  ones yourself: bare skill invocations, pasted relays and logs, and
-  accepted suggested prompts (about 175 of 1,452 on 2026-11-11).
+  ones yourself: bare skill invocations, pasted relays and logs, accepted
+  suggested prompts, compaction and clear commands, and Codex's question
+  replies (about 175 of 1,452 on 2026-11-11).
 - Group them into classes by the agent behavior behind them. A class is
   the same behavior in two or more PRs or messages; one failure is not a
   class.
@@ -79,9 +80,10 @@ Agent's choices, for the implementer to revisit. Each run:
   edits no `AGENTS.md`, `CONTRIBUTING.md`, or skill.
 - Tally the decision prompts per skill: how often the answer was the
   agent's own recommendation. Propose a change only where that is nearly
-  always. `quest messages` drops structured answers, so this waits on
-  [question answers](/quest/m0/question-answers.md); until then, count
-  only typed answers that just pick the recommendation.
+  always. `quest messages` drops Claude Code's and T3 Code's structured
+  answers and returns Codex's as text without the recommended option, so
+  this waits on [question answers](/quest/m0/question-answers.md); until
+  then, count only typed answers that just pick the recommendation.
 - moq-dev/quest is public, and typed messages can name customers and
   private repositories. The PR and its quests give counts and classes in
   the agent's words, never a message's text, and name no moq-dev/moq.pro
@@ -123,9 +125,9 @@ messages 2026-10-26 to 11-11, classed by one sub-agent, approximate):
   races 2 (one maybe, one runtime). All 7 culprits passed a local Sol
   review. The routing audit's sample of 30 earlier escapes split 6, 17,
   and 7, with 5 races.
-- Landed past an open signal, catchable: 3 in moq-dev/moq. A review
-  finding posted after enqueue, a recorded decision the head lacked, and
-  a red platform run. [Late signals](/quest/m0/late-signals.md) takes the
+- Landed past an open signal: 3 in moq-dev/moq, 2 catchable and 1
+  maybe. A review finding posted after enqueue, a recorded decision the
+  head lacked, and a red platform run. [Late signals](/quest/m0/late-signals.md) takes the
   first two; `quest merge`'s refusal of failed checks
   ([moq-dev/quest#601](https://github.com/moq-dev/quest/pull/601)) covers
   none of them.

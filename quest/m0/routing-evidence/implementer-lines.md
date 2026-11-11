@@ -15,7 +15,8 @@ PRs merged in moq-dev/moq, moq-dev/moq.pro, and moq-dev/quest since
 2026-11-09 with a `## Models` record whose implementers `quest usage`
 dropped, nearly all Claude Code sessions. `implementer()` in
 `src/github/models.ts` matches the model as `[^,\s]+`, so it rejects
-`Claude Code, Opus 5.5, medium effort` (36 lines),
+`Claude Code, Opus 5.5, <effort> effort` (36 lines, at every effort or
+none),
 `Claude Code, Claude Opus 5.5, ...` (9), `Claude, Haiku 5.5, ...`, and
 `claude-haiku-5-5, effort not reported`. Every Claude row in usage's
 accuracy by implementer, and so

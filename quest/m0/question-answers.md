@@ -12,9 +12,10 @@ Plan asks for before any change to how agents ask.
 
 ## Plan
 
-Today `quest messages` drops these answers: T3 Code records them as
-server-created (`readT3Messages` in `src/cli/messages.ts`), and Claude
-Code returns them as tool results, not human turns. The 2026-11-11 audit
+Today `quest messages` drops most of these answers: T3 Code records them
+as server-created (`readT3Messages` in `src/cli/messages.ts`), and Claude
+Code returns them as tool results, not human turns. Codex's replies come
+through as text, without the option it recommended. The 2026-11-11 audit
 found only 6 structured replies among 1,452 messages, and so could count
 only typed answers that picked the recommendation.
 
@@ -23,5 +24,5 @@ Agent's choices, for the implementer to revisit:
 - Print an answer as its own kind of record beside typed messages, with
   the question's header and the skill the session ran, when its log names
   one. Keep messages' rules: stdout only, nothing stored or posted.
-- Codex sessions on this host also call `request_user_input`; read its
-  answers the same way.
+- Read Codex's question from its log beside the reply `quest messages`
+  already returns, so its recommended option is known too.
