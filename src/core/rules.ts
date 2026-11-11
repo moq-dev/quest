@@ -301,7 +301,10 @@ function membership(found: Finding[], known: Set<string>, docs: Doc[]) {
  * A link to a finished milestone is removed. Milestones are permanent, so
  * unlike a finished quest, which is deleted, the link would keep resolving and
  * block its quest forever. A milestone is finished once its directory holds no
- * other quest and its README has no `## Required`.
+ * other quest and its README has no `## Required`. Its `## Scheduled` date
+ * does not count: a date holds back only the quests under it, which an empty
+ * milestone has none of, and reading it here would make `quest check` change
+ * verdict on that day with no commit.
  *
  * Readiness stays a grep for the heading; this rule is what keeps that answer
  * true once the milestone empties. A root entry naming a milestone is the
