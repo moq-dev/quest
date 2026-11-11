@@ -64,9 +64,15 @@ class BaseCheckError extends Error {}
 /** A fix that edits protected paths beyond what the base merge carries: only a maintainer's push lands it. */
 export class ProtectedEdit extends Error {}
 
-/** The failure log's lines the fixer cited, first to last; the comment bounds them. */
-export function cited(log: string, [first, last]: [number, number]): string {
+/**
+ * The failure log a handback quotes: the lines the fixer cited, else the tail of the gate's failing
+ * output, so a fixer that failed for its own reasons still shows why the gate dropped the PR. The
+ * fixer's own output stays in its job log on the host; the comment's reason names its error.
+ */
+export function handbackLog(log: string, lines?: [number, number]): string {
+	if (!lines) return readLog(log, "tail").trimEnd().split("\n").slice(-100).join("\n");
 	if (!existsSync(log)) return "";
+	const [first, last] = lines;
 	return readFileSync(log, "utf8")
 		.split("\n")
 		.slice(first - 1, last)
@@ -74,10 +80,10 @@ export function cited(log: string, [first, last]: [number, number]): string {
 		.trimEnd();
 }
 
-/** Read a bounded window of the job's log, or "" when it is missing or not a regular file. */
+/** Read a bounded window of a log, or "" when it is missing or not a regular file. */
 function readLog(path: string, window: "head" | "tail"): string {
-	if (!existsSync(`${path}.log`)) return "";
-	const fd = openSync(`${path}.log`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+	if (!path || !existsSync(path)) return "";
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
 		const stat = fstatSync(fd);
 		if (!stat.isFile()) return "";
@@ -87,11 +93,6 @@ function readLog(path: string, window: "head" | "tail"): string {
 	} finally {
 		closeSync(fd);
 	}
-}
-
-/** Read a bounded tail, retaining the complete per-job log for host diagnosis. */
-export function fixerLog(path: string): string {
-	return readLog(path, "tail").trimEnd().split("\n").slice(-100).join("\n");
 }
 
 /**
@@ -108,7 +109,7 @@ export const ADMITTED = "quest land fixer: admitted";
  */
 function deadline(path: string, job: Process, now: number, timeout: number): number {
 	if (job.admitted === undefined) {
-		const match = new RegExp(`^${ADMITTED} (\\d{1,15})$`, "m").exec(readLog(path, "head"));
+		const match = new RegExp(`^${ADMITTED} (\\d{1,15})$`, "m").exec(readLog(`${path}.log`, "head"));
 		if (match) {
 			// Kept within [started, now], so a wrong clock or a forged line cannot move it out of the run.
 			job.admitted = Math.min(Math.max(Number(match[1]) * 1000, job.started), now);
@@ -1188,9 +1189,7 @@ async function collectJob(
 						: "missing result; run /quest-iterate",
 				"handback",
 				author(result),
-				!error && result?.action === "handback" && result.log && job.log
-					? cited(job.log, result.log)
-					: fixerLog(path),
+				handbackLog(job.log ?? "", !error && result?.action === "handback" ? result.log : undefined),
 				// The marker `quest status` reads, now that no ejection comment precedes this one.
 				job.parked && leaves ? (job.reason ?? "failed_checks") : undefined,
 				error && job.resolutions?.[number]

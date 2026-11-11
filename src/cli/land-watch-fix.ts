@@ -12,12 +12,11 @@ import { checksSection } from "./land-checks";
 import { type Cause, EFFORT_VARIABLE, type FixResult, knownFlaky, parseFixResult, readFixResult } from "./land-fix";
 import {
 	author,
-	cited,
 	COLLECTION_ATTEMPTS,
 	comment,
 	conflictFailure,
 	FixerRefusal,
-	fixerLog,
+	handbackLog,
 	fixerMarkdown,
 	fixerText,
 	history,
@@ -688,7 +687,7 @@ async function collect(
 				: "missing result; run /quest-iterate",
 		`handback ${name}`,
 		attribution,
-		!handback && result?.action === "handback" && result.log ? cited(job.log, result.log) : fixerLog(path),
+		handbackLog(job.log, !handback && result?.action === "handback" ? result.log : undefined),
 		job.reason,
 		job.resolution ? (room) => resolutionSection(number, job.resolution!, room) : undefined,
 	);

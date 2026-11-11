@@ -1688,7 +1688,11 @@ git commit -qm 'disable render_timeout'`;
 		expect(handback).toContain("<pre>The merge queue removed");
 		expect(history(state, 9)!.rounds).toMatchObject([{ outcome: "handback" }]);
 		// A crash ends the pick too, with a round of its own.
-		expect(github.comments[11].at(-1)!.body).toContain("fixer crashed (exit 3)");
+		// Its handback names the crash as the reason and quotes the gate's failure, not the fixer's output.
+		const crash = github.comments[11].at(-1)!.body;
+		expect(crash).toContain("fixer crashed (exit 3)");
+		expect(crash).toContain("FAIL queue.test.ts</pre>");
+		expect(crash).not.toContain("agent crashed");
 		expect(history(state, 11)!.rounds).toMatchObject([
 			{ outcome: "handback", before: crashed, failure: "Check / test: just test" },
 		]);
