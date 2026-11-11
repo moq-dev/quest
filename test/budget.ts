@@ -13,7 +13,7 @@ const CPU_BUDGET_MS = 10_000;
  * This process's CPU time and that of every child it waited for, in milliseconds. A child counts
  * once reaped, as when a test awaits it. Node reports only its own time (`process.cpuUsage`).
  */
-function spent(): number {
+export function spent(): number {
 	const stat = readFileSync("/proc/self/stat", "utf8");
 	// The command name, in parentheses, may hold spaces; utime, stime, cutime, and cstime follow it
 	// as fields 14 to 17.
