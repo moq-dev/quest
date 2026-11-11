@@ -130,12 +130,6 @@ jobs:
       - name: Check that the gate admits and owns its command's descendants
         shell: bash
         run: bash scripts/gate-check.sh "$RUNNER_TEMP/quest"
-      # Check's suite runs on Linux and Windows only.
-      - name: Check the gate's owners natively
-        if: runner.os == 'macOS'
-        run: |
-          bun install --frozen-lockfile
-          bun run test test/gate.test.ts
 
   # Hosted macOS runners can queue past the timeout, which then reports a job
   # that never ran as failed. Pull requests skip these; tags, which publish the
@@ -155,6 +149,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps: *check-steps
+
+  # Check's suite runs on Linux and Windows only, so the gate's macOS owner is
+  # tested natively before a tag publishes.
+  gate-macos:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/gate-macos.yml
 
   windows:
     name: check (${{ matrix.target }})
@@ -192,7 +192,7 @@ jobs:
           ./scripts/install-check.ps1 -Method archive -Target $env:TARGET -Tag $tag -ReleaseDirectory (Resolve-Path release).Path
 
   publish:
-    needs: [check, macos, windows]
+    needs: [check, macos, gate-macos, windows]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10
