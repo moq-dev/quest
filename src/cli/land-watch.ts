@@ -63,7 +63,7 @@ export interface WatchOptions {
 	/** The fixer's `model_reasoning_effort`. */
 	fixerEffort: string;
 	/** Patterns of tags fetched from GitHub into each fixer checkout. */
-	fixerTags: string[];
+	fixerTag: string[];
 	/** Repositories whose flake input on this repository each pass bumps to this repository's base. */
 	bump: Repository[];
 	/** On the own queue, eject fork picks before pushing their build, so a fork's code never reaches a private runner. */
@@ -811,7 +811,7 @@ export async function watch(
 					fixer: options.fixer,
 					jobs: options.fixerJobs,
 					effort: options.fixerEffort,
-					tags: options.fixerTags,
+					tags: options.fixerTag,
 					timeout: 60,
 					token,
 					read,
