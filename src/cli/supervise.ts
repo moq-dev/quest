@@ -378,7 +378,16 @@ function contain(
 			if (!forwards(cancel.signal)) return;
 			const name = requested(cancel.signal);
 			signalled = true;
-			signalGroup(group!, name);
+			try {
+				signalGroup(group!, name);
+			} catch (error) {
+				// Such as EPERM from a process running as another user: signal what this process can.
+				process.stderr.write(
+					`quest: cannot signal every process in ${describe.name}, only its command: ${error}\n`,
+				);
+				child.kill(name);
+				drain.abort();
+			}
 		};
 		const terminate = () => {
 			stop();
