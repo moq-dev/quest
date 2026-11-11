@@ -64,6 +64,8 @@ export interface FixContext {
 	effort: string;
 	/** Minutes a fixer may run from its admission. */
 	timeout: number;
+	/** Patterns of tags, such as `deploy-*`, fetched from GitHub into each fixer checkout so its checks can read them. */
+	tags: string[];
 	token: (workflows: boolean) => Promise<string>;
 	read: RemoteRead;
 }
@@ -354,13 +356,17 @@ async function take(
 	// The round begins its pick's history, unless it continues that pick.
 	if (history(state, number)?.pick !== entry.enabledAt)
 		save(historyPath(state, number), { pick: entry.enabledAt, rounds: [] } satisfies History);
+	const tags = context.tags.map((pattern) => `+refs/tags/${pattern}:refs/tags/${pattern}`);
+	// Pruning drops a tag GitHub no longer has, so a check never reads one deleted there.
 	await context.read(context.root, [
 		"fetch",
 		"--quiet",
 		"--no-tags",
+		"--prune",
 		baseRemote({ repository }),
 		base.sha,
 		removal.head,
+		...tags,
 	]);
 	let log = removal.log;
 	if (conflict) {
@@ -422,6 +428,7 @@ async function take(
 				`${removal.head}:refs/heads/batch`,
 				`${base.sha}:refs/heads/base`,
 				`${removal.head}:refs/heads/pr-${number}`,
+				...tags,
 			],
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
 			base.sha,
