@@ -47,8 +47,9 @@ Agent's choices, for the implementer to revisit. Each run:
   class.
 - Classify each escape named under `## Caused by` as catchable from the
   culprit's diff, including one a reviewer might plausibly have caught, or
-  as runtime: a nightly-only or platform lane, a test the gate skipped, or
-  a race. Each runtime class's follow-up belongs to the repository that
+  as runtime: a nightly-only or platform lane, or a test the gate skipped.
+  Tag races separately; a race is runtime only when the diff does not show
+  it. Each runtime class's follow-up belongs to the repository that
   owns that gate, so it goes in the run PR's `## Follow-ups` for
   `/quest-plan` there, as the guide's Creation section says (user,
   2026-11-11, [routing evidence](/quest/m0/routing-evidence/README.md)).

@@ -66,8 +66,10 @@ Baseline from the 2026-11-11 audit, at API list price:
   $21.7. Review cost per PR: Sol low $0.10, medium $0.20, high $0.67,
   xhigh $0.69. Local reviews were under 3% of spend.
 - Sol findings per reviewed branch: low 0.03 (XS, 68 branches); S medium
-  0.30 (176) against S high 0.67 (12); M medium 0.41 (177) against M xhigh
-  1.44 (9); L high 1.43 (35). About 90% of findings were fixed and 3-5%
+  0.30 (176) against S high 0.67 (12); M medium 0.41 (177) against M high
+  0.67 (3) and M xhigh 1.44 (9); L high 1.43 (35). Read from each branch's
+  saved review rounds under the clones' `.git/quest/review/`, by the size
+  and effort of its last round. About 90% of findings were fixed and 3-5%
   refuted.
 - Escapes: 42 of 1,983 merged PRs (2.1%) were later named under
   `## Caused by`. That is a floor, since the convention began 11-04 to
