@@ -1,4 +1,5 @@
-// How the online reviewers did on each PR, read from GitHub: any bot account that posts reviews, and any review whose
+// How the online reviewers did on each PR, read from GitHub: any bot account whose review has a body or opens a
+// thread, and any review whose
 // body opens with `Automated review by <name>`, as a reviewer posting under a person's account does. A finding is a
 // review thread one opens, or a `[P<n>]` line in its review body; whoever answers it says whether it was taken.
 import { type GitHub, type ObjectValue, type Repository, array, object } from "./github";
@@ -28,24 +29,32 @@ export function classify(body: string): Answer {
 	return ACCEPTED.has(word) ? "accepted" : DECLINED.has(word) ? "declined" : "unclassified";
 }
 
-/** The finding lines of a review body: `[P1] ...`, or `P1 — ...` with a dash after the bare marker. */
+/**
+ * The finding lines of a review body, `[P1] ...` or `P1 — ...` with a dash after the bare marker, each keyed by its
+ * title and how many earlier lines of the body share that title.
+ */
 export function bodyFindings(body: string): string[] {
-	return [...body.matchAll(/^[ \t]*(?:[-*][ \t]+)?(?:\[P\d\]|P\d[ \t]+[—–-])[ \t:—–-]*(\S.*)$/gm)].map((match) =>
+	const seen = new Map<string, number>();
+	return [...body.matchAll(/^[ \t]*(?:[-*][ \t]+)?(?:\[P\d\]|P\d[ \t]+[—–-])[ \t:—–-]*(\S.*)$/gm)].map((match) => {
 		// A later round that relists a finding repeats its title, or its location when it leads; the rest may change.
-		match[1]!
+		const title = match[1]!
 			.split(/ [—–] | \(|: |\. /)[0]!
 			.replaceAll("`", "")
 			.replace(/\s+/g, " ")
 			.trim()
-			.toLowerCase(),
-	);
+			.toLowerCase();
+		const count = seen.get(title) ?? 0;
+		seen.set(title, count + 1);
+		return count ? `${title} #${count + 1}` : title;
+	});
 }
 
+const THREAD_COMMENT = "author { __typename login } body pullRequestReview { id }";
 const FIELDS = {
 	reviews: "id url author { __typename login } body submittedAt commit { oid }",
 	reviewThreads:
-		"isResolved resolvedBy { __typename login } " +
-		"comments(first: 100) { pageInfo { hasNextPage } nodes { author { __typename login } body pullRequestReview { id } } }",
+		"id isResolved resolvedBy { __typename login } " +
+		`comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT} } }`,
 	comments: "author { __typename login } body createdAt",
 } as const;
 type Connection = keyof typeof FIELDS;
@@ -74,7 +83,10 @@ async function read(client: GitHub, repository: Repository, numbers: number[]): 
 		);
 		const found = object(data.repository);
 		for (const number of batch) {
-			const pull = object(found[`p${number}`]);
+			const value = found[`p${number}`];
+			if (value === null || value === undefined)
+				throw new Error(`GitHub has no PR #${number} in ${repository.owner}/${repository.repo} for this token`);
+			const pull = object(value);
 			const nodes = { head: String(pull.headRefOid) } as Activity;
 			const cursors: Partial<Record<Connection, string>> = {};
 			for (const name of CONNECTIONS) {
@@ -109,6 +121,23 @@ async function read(client: GitHub, repository: Repository, numbers: number[]): 
 			left = next;
 		}
 	}
+	// A long thread's later comments matter when none of its first hundred answers it.
+	for (const nodes of pulls.values())
+		for (const thread of nodes.reviewThreads) {
+			const comments = object(thread.comments);
+			const all = array(comments.nodes);
+			for (let info = object(comments.pageInfo); info.hasNextPage === true;) {
+				const data = await client.graphql(
+					"query($id: ID!, $after: String!) { node(id: $id) { ... on PullRequestReviewThread { " +
+						`comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT} } } } } }`,
+					{ id: String(thread.id), after: String(info.endCursor) },
+				);
+				const page = object(object(data.node).comments);
+				all.push(...array(page.nodes));
+				info = object(page.pageInfo);
+			}
+			thread.comments = { nodes: all };
+		}
 	return pulls;
 }
 
@@ -167,10 +196,7 @@ export function onlineReviews(pull: Activity): OnlineReview[] {
 	// A review that only replies in threads has an empty body; one that opens a thread or has a body is a pass.
 	const opened = new Set<string>();
 	for (const thread of pull.reviewThreads) {
-		const comments = object(thread.comments);
-		if (object(comments.pageInfo).hasNextPage === true)
-			throw new Error("a review thread has over 100 comments, more than quest usage reads");
-		const [first, ...replies] = array(comments.nodes);
+		const [first, ...replies] = array(object(thread.comments).nodes);
 		const opener = first?.pullRequestReview ? byId.get(String(object(first.pullRequestReview).id)) : undefined;
 		const reviewer = opener?.reviewer;
 		if (!opener || !reviewer) continue;
@@ -208,7 +234,7 @@ export function onlineReviews(pull: Activity): OnlineReview[] {
 		}
 		return titles.map((title) => JSON.stringify([pass.reviewer, title]));
 	});
-	// A comment answers the pass it links, else the latest before it with findings, when it links one or its first
+	// A comment answers each pass it links, else the latest before it with findings, when it links one or its first
 	// word takes a side; a reviewer bot's own comments, such as its summaries and outage notices, answer nothing.
 	const reviewers = new Set(passes.map((pass) => pass.reviewer));
 	for (const comment of [...pull.comments].sort(
@@ -219,16 +245,18 @@ export function onlineReviews(pull: Activity): OnlineReview[] {
 		const body = String(comment.body ?? "");
 		const at = Date.parse(String(comment.createdAt));
 		const links = new Set([...body.matchAll(ANCHOR)].map((match) => match[0]));
-		const linked = passes.findIndex((pass) => links.has(pass.url.slice(pass.url.lastIndexOf("#"))));
-		let target = linked;
-		if (target < 0)
-			for (const [index, pass] of passes.entries()) if (pass.at <= at && lists[index]!.length) target = index;
 		const answer = classify(body);
-		if (target < 0 || (linked < 0 && answer === "unclassified")) continue;
-		for (const id of lists[target]!) {
-			const finding = listed.get(id)!;
-			finding.answer ??= answer;
+		let targets = passes.flatMap((pass, index) =>
+			links.has(pass.url.slice(pass.url.lastIndexOf("#"))) ? [index] : [],
+		);
+		if (!targets.length && answer !== "unclassified") {
+			for (const [index, pass] of passes.entries()) if (pass.at <= at && lists[index]!.length) targets = [index];
 		}
+		for (const target of targets)
+			for (const id of lists[target]!) {
+				const finding = listed.get(id)!;
+				finding.answer ??= answer;
+			}
 	}
 	for (const finding of listed.values()) {
 		const later = passes.some((pass, index) => index > finding.last && pass.reviewer === finding.reviewer);

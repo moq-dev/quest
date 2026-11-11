@@ -1108,7 +1108,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"each reviewer's latest ## Review round, with its round, score, and findings, " +
 				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
 				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
-				"is a bot that posts reviews, or a review whose body opens with Automated review by <name>; a finding is a " +
+				"is a bot whose review has a body or opens a thread, or a review whose body opens with Automated review by <name>; a finding is a " +
 				"review thread it opens or a [P<n>] line in its review body, and its first answer's first word takes or " +
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +

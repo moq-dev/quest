@@ -1525,18 +1525,20 @@ reviewer, round, score, open findings, and the last round's findings fixed or
 refuted; the land fixer's fixes; the later PRs that list it under
 `## Caused by`; and each online reviewer's record, read from GitHub.
 
-An online reviewer is any bot account that posts reviews, or a review whose
-body opens with `Automated review by <name>`, as a reviewer posting under a
-person's account does. It reviewed the final head when one of its reviews with
+An online reviewer is any bot account whose review has a body or opens a
+thread, as a reply-only review does not, or a review whose body opens with
+`Automated review by <name>`, as a reviewer posting under a person's account
+does. It reviewed the final head when one of its reviews with
 a body or a new thread is at the PR's last head. Its findings are the review
 threads it opens and the `[P<n>]` (or `P<n> —`) lines in its review bodies,
-one finding per title across its reviews. A finding is accepted, declined, or
+one finding per title across its reviews (a repeated title in one review is
+another finding). A finding is accepted, declined, or
 unclassified by the first word of its first answer: a reply in its thread, or
 for a body finding, a PR comment that links its review or opens with an
 accepting word (`Fixed`, `Agreed`, `Applied`, `Right`, `Confirmed`,
 `Covered`, `Taken`) or a declining one (`Declined`, `Declining`, `Refuted`,
 `Not`). One with no answer counts as accepted when the reviewer settled it, by
-resolving its own thread or leaving it out of a later review, and as
+a bot resolving its own thread or a later review leaving it out, and as
 unanswered otherwise.
 
 Rollups follow: spend by size, role, harness, model, and effort; accuracy

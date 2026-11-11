@@ -39,6 +39,10 @@ describe("classify", () => {
 });
 
 describe("bodyFindings", () => {
+	test("two findings that share a title in one body stay two", () => {
+		expect(bodyFindings("[P1] Guard null (GET)\n[P2] Guard null (POST)")).toEqual(["guard null", "guard null #2"]);
+	});
+
 	test("reads bracketed and dashed markers, keyed by title", () => {
 		const body = [
 			"Automated review by review (OpenAI)",
@@ -120,10 +124,10 @@ describe("onlineReviews", () => {
 				// The bot's own notice answers nothing, nor does a comment that neither links a pass nor takes a side.
 				{ author: bot("frog"), body: "Fixed: credit restored.", createdAt: "2026-11-06T12:30:00Z" },
 				{ author: person, body: "Design change: narrowed.", createdAt: "2026-11-06T12:40:00Z" },
-				// Answers d2's findings, which d2 links, though d3 came between.
+				// Answers the findings of both reviews it links, though d3 came between.
 				{
 					author: person,
-					body: "Re [review](https://github.com/acme/proj/pull/1#pullrequestreview-d2): declining both.",
+					body: "Declining: [one](https://github.com/acme/proj/pull/1#pullrequestreview-d1), [two](https://github.com/acme/proj/pull/1#pullrequestreview-d2).",
 					createdAt: "2026-11-06T14:30:00Z",
 				},
 			],
@@ -132,12 +136,12 @@ describe("onlineReviews", () => {
 			{
 				reviewer: "dot (X)",
 				finalHead: true,
-				// Keep it (relisted, answered unclassified), Rename it (settled), Guard it (answered unclassified),
-				// Docs (open in the last pass), and the two threads.
+				// Keep it (relisted), Rename it, and Guard it, all declined though Rename it was settled; Docs (open in
+				// the last pass); and the two threads.
 				findings: 6,
-				accepted: 2,
-				declined: 0,
-				unclassified: 2,
+				accepted: 1,
+				declined: 3,
+				unclassified: 0,
 				unanswered: 2,
 			},
 			{

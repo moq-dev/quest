@@ -754,7 +754,7 @@ const tokens = (t: Tokens) =>
 const mean = (sum: number, count: number) => (count ? (sum / count).toFixed(1) : "-");
 const percent = (part: number, whole: number) => (whole ? `${Math.round((100 * part) / whole)}%` : "-");
 const answers = (r: Omit<OnlineReview, "reviewer" | "finalHead">) =>
-	`${r.findings} findings: ${r.accepted} accepted, ${r.declined} declined, ${r.unclassified} unclassified, ${r.unanswered} unanswered`;
+	`${r.findings} finding${r.findings === 1 ? "" : "s"}: ${r.accepted} accepted, ${r.declined} declined, ${r.unclassified} unclassified, ${r.unanswered} unanswered`;
 
 /** Rows of cells, each column padded to its widest cell. */
 function table(rows: string[][]): string[] {

@@ -430,18 +430,15 @@ describe("usage", () => {
 							{
 								isResolved: false,
 								resolvedBy: null,
+								id: "t1",
+								// The answer is on the thread's second page of comments.
 								comments: {
-									pageInfo: { hasNextPage: false },
+									pageInfo: { hasNextPage: true, endCursor: "c1" },
 									nodes: [
 										{
 											author: { __typename: "Bot", login: "rabbit" },
 											body: "Bug.",
 											pullRequestReview: { id: "r1" },
-										},
-										{
-											author: { __typename: "User", login: "acme" },
-											body: "Fixed.",
-											pullRequestReview: { id: "r2" },
 										},
 									],
 								},
@@ -455,7 +452,24 @@ describe("usage", () => {
 			const url = new URL(String(input));
 			requests.push(url.pathname);
 			if (url.pathname === "/graphql") {
-				const { query } = JSON.parse(String(init?.body)) as { query: string };
+				const { query, variables } = JSON.parse(String(init?.body)) as {
+					query: string;
+					variables: Record<string, unknown>;
+				};
+				if (variables.id === "t1" && variables.after === "c1")
+					return json({
+						data: {
+							node: {
+								comments: connection([
+									{
+										author: { __typename: "User", login: "acme" },
+										body: "Fixed.",
+										pullRequestReview: { id: "r2" },
+									},
+								]),
+							},
+						},
+					});
 				const numbers = [...query.matchAll(/p(\d+): pullRequest/g)].map((match) => Number(match[1]));
 				return json({
 					data: { repository: Object.fromEntries(numbers.map((number) => [`p${number}`, activity(number)])) },
@@ -576,7 +590,7 @@ describe("usage", () => {
 		const text = usageLines(report).join("\n");
 		expect(text).toContain("#10 L merged: PR 10 (quest/m0/a)");
 		expect(text).toContain(
-			"online review: rabbit[bot], at the final head; 1 findings: 1 accepted, 0 declined, 0 unclassified, 0 unanswered",
+			"online review: rabbit[bot], at the final head; 1 finding: 1 accepted, 0 declined, 0 unclassified, 0 unanswered",
 		);
 		expect(text).toContain(
 			"rabbit[bot]  reviewed 1/2 (50%), final head 1 (50%), 1.0 findings per PR reviewed, 100% accepted;",
