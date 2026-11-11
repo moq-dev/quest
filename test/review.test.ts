@@ -1542,6 +1542,10 @@ fakes("a round on the head the last round passed runs no reviewer and repeats th
 	expect(JSON.parse(again.stdout).rounds).toMatchObject(
 		rounds.map((round: object) => ({ ...round, usage: [], unchanged: true })),
 	);
+	// S picks the same reviewers as the default M, so its rounds repeat and report the size given.
+	const resized = await quest("--root", s.repo, "review", "--json", "--size", "S");
+	expect(s.calls()).toHaveLength(calls);
+	expect(JSON.parse(resized.stdout).rounds).toMatchObject(rounds.map(() => ({ size: "S", sizeFrom: "--size" })));
 	const repeated = (await quest("--root", s.repo, "review")).stdout;
 	expect(repeated.split("unchanged round 1 reviewed this head and found nothing; no reviewer ran\n")).toHaveLength(3);
 

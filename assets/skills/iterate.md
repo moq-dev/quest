@@ -14,7 +14,7 @@ Your `Implementer:` line ends with the size your brief gives the work, as `Imple
 Read the PR, its linked issues and quest, the reviews and comments posted on it, and the surrounding code.
 `quest status <pr>` reports its checks, reviews by head, and unresolved threads in one call.
 Judge the approach before touching anything: would you take a different one?
-`/quest-review`'s design checkpoint counts each reviewer's rounds on the branch across sessions, so it may fall due in this one.
+`/quest-review`'s design checkpoint counts the rounds of each reviewer's session on the branch, including those earlier agents ran, so it may fall due in this one.
 
 Settle every decision this PR needs with the grill skill's interview, starting from the user's feedback: those its `## Waiting` section lists, those your judgment of the approach or the review findings raise, and any you find along the way.
 Record the settled decisions in this PR description's `## Decisions` section as the paper trail, then implement them.

@@ -1686,9 +1686,11 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 		last.base.ref === shared.base.ref &&
 		covers(root, previous.mergeBase, change.mergeBase);
 
-	// The last round already passed this head, and has nothing left to settle; it repeats against the run's base.
+	// The last round already passed this head, and has nothing left to settle; it repeats against the run's base
+	// and size.
 	if (resume && previous!.head === change.head && previous!.mergeBase === change.mergeBase && earlier.length === 0) {
-		return { round: { ...last!, base: shared.base, usage: [], unchanged: true }, session: stored! };
+		const { size, from: sizeFrom } = shared.sized;
+		return { round: { ...last!, base: shared.base, size, sizeFrom, usage: [], unchanged: true }, session: stored! };
 	}
 
 	const cli = await prepare(harness, picked.model, root, shared.env, shared.signal);
