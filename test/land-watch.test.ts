@@ -1691,7 +1691,7 @@ git commit -qm 'disable render_timeout'`;
 		// Its handback names the crash as the reason and quotes the gate's failure, not the fixer's output.
 		const crash = github.comments[11].at(-1)!.body;
 		expect(crash).toContain("fixer crashed (exit 3)");
-		expect(crash).toContain("FAIL queue.test.ts</pre>");
+		expect(crash).toContain("running tests\nFAIL queue.test.ts");
 		expect(crash).not.toContain("agent crashed");
 		expect(history(state, 11)!.rounds).toMatchObject([
 			{ outcome: "handback", before: crashed, failure: "Check / test: just test" },
