@@ -1382,6 +1382,8 @@ function load(path: string): unknown {
 		return JSON.parse(readFileSync(path, "utf8"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		if (error instanceof SyntaxError)
+			throw new ReviewInputError("the saved review sessions are not JSON; pass --new");
 		throw error;
 	}
 }
@@ -1568,8 +1570,9 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const kept = options.harness === undefined ? [] : sessions.filter((each) => !seats.some((s) => s.session === each));
 	const unsettled = kept.filter((each) => each.rounds.at(-1)!.findings.length > 0);
 	if (unsettled.length > 0) {
+		const names = unsettled.map((each) => each.reviewer).join(" and ");
 		throw new ReviewInputError(
-			`the branch's ${unsettled.map((each) => each.reviewer).join(" and ")} session has findings to settle; run quest review without --harness, or pass --new`,
+			`${names} still ${unsettled.length > 1 ? "have" : "has"} findings to settle on this branch; run quest review without --harness to settle them`,
 		);
 	}
 	if (seats.every((seat) => seat.session === undefined) && options.responses !== undefined) {

@@ -1849,6 +1849,10 @@ fakes("a session saved by an older quest is refused before the reviewer runs", a
 	expect(refused.code).not.toBe(0);
 	expect(refused.stderr).toMatch(/--new/);
 	expect(s.calls().length).toBe(calls);
+	writeFileSync(path, "{");
+	const truncated = await quest("--root", s.repo, "review");
+	expect(truncated.code).toBe(2);
+	expect(truncated.stderr).toContain("not JSON; pass --new");
 	expect((await quest("--root", s.repo, "review", "--new")).code).toBe(0);
 });
 
@@ -1892,6 +1896,6 @@ fakes("--harness reviews alone, keeping the other reviewer's session unless it h
 	const calls = t.calls().length;
 	const refused = await quest("--root", t.repo, "review", "--harness", "codex");
 	expect(refused.code).toBe(2);
-	expect(refused.stderr).toContain("the branch's opencode session has findings to settle");
+	expect(refused.stderr).toContain("opencode still has findings to settle on this branch");
 	expect(t.calls()).toHaveLength(calls);
 });
