@@ -35,7 +35,7 @@ Guidance:
   its own commands. Word the shared rule for any repository, beside
   "Reproduce bugs before fixing them", and say where the result goes: the
   PR body's validation. A repository's own instructions name its surfaces.
-- `assets/CONTEXT.md` is at 9,612 of the 10,000 characters `CONTEXT_LIMIT`
+- `assets/CONTEXT.md` is at 9,676 of the 10,000 characters `CONTEXT_LIMIT`
   allows (`src/cli/hooks.ts`), so make room in the same PR if the rule does
   not fit, and follow `quest guide prompting`.
 - A change with no behavior to exercise, such as one to `quest/` or docs,

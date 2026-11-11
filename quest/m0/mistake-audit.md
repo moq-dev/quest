@@ -75,8 +75,9 @@ Baseline, from the hand scan of 2026-11-09 (typed messages from
 
 - 579 mid-session messages, about 227 machine-written, about 352 typed, 68
   of them corrections or redirects.
-- Stalls until nudged: 17 typed, plus the coordinator relays that
-  [the stop hook](/quest/m0/token-waste/stop-hook.md) already owns.
+- Stalls until nudged: 17 typed, plus the coordinator relays that the
+  stop hook of [moq-dev/quest#600](https://github.com/moq-dev/quest/pull/600)
+  targets; check first whether they fell after it landed.
 - A proposal the maintainer steered simpler: 10.
 - Misread intent or target: 7.
 - Output handed back without running or looking at it: 7, which
@@ -103,5 +104,3 @@ Baseline, from the hand scan of 2026-11-09 (typed messages from
   first class this audit re-measures
 - [Model check](/quest/m1/model-check.md) - tallies the same PR records by
   model and effort
-- [A turn cannot end on a running gate](/quest/m0/token-waste/stop-hook.md) -
-  owns the largest class in the baseline
