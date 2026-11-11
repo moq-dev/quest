@@ -38,5 +38,3 @@ Agent's choices, for the implementer to revisit:
 
 - [Review table](/quest/m0/routing-evidence/review-table.md) - the baseline
   the shadow steps down from
-- [Review tallies](/quest/m0/routing-evidence/review-tallies.md) - counts the
-  shadow's findings across rounds

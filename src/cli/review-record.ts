@@ -5,7 +5,7 @@ import { recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { git } from "./git";
 import { requireRemote, string } from "./github";
-import { type PullModels, type Round, located, parseBase } from "./review";
+import { type PullModels, type Round, SEVERITIES, type Tally, located, parseBase } from "./review";
 
 const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex", opencode: "opencode" };
 
@@ -25,8 +25,35 @@ function code(text: string): string {
 
 const capitalized = (word: string) => word[0]!.toUpperCase() + word.slice(1);
 
-/** The `## Review` section's text for a run's `rounds` of the same head, without its heading. */
-export function reviewRecord(rounds: Round[]): string {
+/** A tally's counts, as the record's `Rounds:` line and `quest usage` write them. */
+export interface Counts {
+	rounds: number;
+	findings: Tally["findings"];
+	fixed: number;
+	refuted: number;
+	open: number;
+}
+
+/** The counts as the record's `Rounds:` line ends, after the rounds, naming only the severities found. */
+export function findingsText(counts: Omit<Counts, "rounds">): string {
+	const total = SEVERITIES.reduce((sum, severity) => sum + counts.findings[severity], 0);
+	const severities = SEVERITIES.filter((severity) => counts.findings[severity] > 0)
+		.map((severity) => `${severity} ${counts.findings[severity]}`)
+		.join(", ");
+	return `findings ${total}${severities && ` (${severities})`}: fixed ${counts.fixed}, refuted ${counts.refuted}, open ${counts.open}`;
+}
+
+/** A tally's counts, where a finding neither fixed nor refuted is open. */
+const counted = (tally: Tally): Counts => ({
+	...tally,
+	open: SEVERITIES.reduce((sum, severity) => sum + tally.findings[severity], 0) - tally.fixed - tally.refuted,
+});
+
+/**
+ * The `## Review` section's text for a run's `rounds` of the same head, without its heading, with every tally
+ * on the branch: each round's reviewer's beside its round, and a reviewer the run left out on its own.
+ */
+export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 	const [shared] = rounds;
 	const clean = rounds.every((round) => round.findings.length === 0);
 	const lines = [
@@ -43,6 +70,9 @@ export function reviewRecord(rounds: Round[]): string {
 			`- Session: ${code(round.session)}, round ${round.round}`,
 			`- Score: ${round.score}/10, ${code(round.rationale)}`,
 		);
+		const tally = tallies.find((each) => each.reviewer === round.reviewer);
+		if (tally === undefined) throw new Error(`no tally for ${round.reviewer}'s round`);
+		lines.push(`- Rounds: ${tally.rounds}; ${findingsText(counted(tally))}`);
 		if (round.findings.length === 0) lines.push("- Findings: none");
 		else lines.push("- Findings, open until the next round settles them:");
 		for (const finding of round.findings)
@@ -54,24 +84,28 @@ export function reviewRecord(rounds: Round[]): string {
 				`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
 			);
 	}
+	for (const tally of tallies.filter((each) => !rounds.some((round) => round.reviewer === each.reviewer)))
+		lines.push(
+			"",
+			`- Reviewer: ${HARNESSES[tally.reviewer]}, ${tally.model}, ${tally.effort} effort`,
+			`- Rounds: ${tally.rounds}; ${findingsText(counted(tally))}`,
+		);
 	return lines.join("\n");
 }
 
-/** What a PR body's `## Review` record says of one reviewer's latest round, as `reviewRecord` writes it. */
+/** What a PR body's `## Review` record says of one reviewer, as `reviewRecord` writes it. */
 export interface ReviewSummary {
 	/** The reviewer's harness as the record names it, such as `Codex`. */
 	harness: string;
 	model: string;
 	effort: string;
-	session: string;
-	round: number;
-	/** Null on a record written before rounds were scored. */
+	/** Its latest session and round, null when the latest run left it out. */
+	session: string | null;
+	round: number | null;
+	/** Null when the latest run left it out, or on a record written before rounds were scored. */
 	score: number | null;
-	/** The latest round's findings, open until the next round settles them. */
-	findings: number;
-	/** The round before's findings this round found fixed, and those whose refutation held. */
-	fixed: number;
-	refuted: number;
+	/** Its findings across every round on the branch, null on a record written before tallies. */
+	tally: Counts | null;
 }
 
 const MARK = "Rewritten by `quest review` after each round.";
@@ -99,21 +133,49 @@ export function parseReview(body: string): ReviewSummary[] {
 			return found;
 		};
 		const reviewer = match(/^- Reviewer: (.+?), (\S+), (\S+) effort\r?$/m);
-		const session = match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
+		const tally = parseCounts(text);
+		// A reviewer the latest run left out has only its tally.
+		const session =
+			tally !== null && !/^- Session: /m.test(text)
+				? null
+				: match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
 		const score = /^- Score: (\d+)\/10,/m.exec(text);
-		const items = (prefix: RegExp) => text.split(/\r?\n/).filter((line) => prefix.test(line)).length;
 		return {
 			harness: reviewer[1]!,
 			model: reviewer[2]!,
 			effort: reviewer[3]!,
-			session: session[2]!,
-			round: Number(session[3]),
+			session: session && session[2]!,
+			round: session && Number(session[3]),
 			score: score ? Number(score[1]) : null,
-			findings: items(/^ {2}- (High|Medium|Low), /),
-			fixed: items(/^ {2}- Fixed: /),
-			refuted: items(/^ {2}- Refuted: /),
+			tally,
 		};
 	});
+}
+
+/** A block's `Rounds:` line, or null without one; malformed or inconsistent counts fail. */
+function parseCounts(text: string): Counts | null {
+	const line = /^- Rounds: (.*?)\r?$/m.exec(text);
+	if (!line) return null;
+	const found = /^(\d+); findings (\d+)(?: \(([^)]*)\))?: fixed (\d+), refuted (\d+), open (\d+)$/.exec(line[1]!);
+	if (!found) throw new Error(`the ## Review record's Rounds line is malformed: ${line[1]}`);
+	const findings = { high: 0, medium: 0, low: 0 };
+	for (const part of found[3]?.split(", ") ?? []) {
+		const [severity, count] = part.split(" ");
+		if (!SEVERITIES.includes(severity as keyof typeof findings) || !/^\d+$/.test(count ?? ""))
+			throw new Error(`the ## Review record's Rounds line is malformed: ${line[1]}`);
+		findings[severity as keyof typeof findings] = Number(count);
+	}
+	const counts = {
+		rounds: Number(found[1]),
+		findings,
+		fixed: Number(found[4]),
+		refuted: Number(found[5]),
+		open: Number(found[6]),
+	};
+	const total = SEVERITIES.reduce((sum, severity) => sum + findings[severity], 0);
+	if (total !== Number(found[2]) || counts.fixed + counts.refuted + counts.open !== total)
+		throw new Error(`the ## Review record's Rounds line does not add up: ${line[1]}`);
+	return counts;
 }
 
 /** `body` with `record` as its `## Review` section, which it gains when it has none; the rest stays as written. */
@@ -174,11 +236,16 @@ export async function pullModels(
 }
 
 /** Record a run's `rounds` in the `## Review` section of their branch's open PR. The edit is the token's user's, which `/quest-merge` counts only when that user wrote the PR. */
-export async function recordRounds(root: string, rounds: Round[], deps: ClaimDependencies): Promise<Recorded> {
+export async function recordRounds(
+	root: string,
+	rounds: Round[],
+	tallies: Tally[],
+	deps: ClaimDependencies,
+): Promise<Recorded> {
 	const [shared] = rounds;
 	const pull = await openPull(root, shared!.base.ref, shared!.branch, deps);
 	if ("skipped" in pull) return pull;
-	const next = withReview(pull.body, reviewRecord(rounds));
+	const next = withReview(pull.body, reviewRecord(rounds, tallies));
 	if (next !== pull.body) await pull.client.request(pull.path, { method: "PATCH", body: { body: next } });
 	return { url: pull.url };
 }

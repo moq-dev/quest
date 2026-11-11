@@ -307,9 +307,29 @@ export const processDependencies = (): ReviewDependencies => ({ env: process.env
  * A branch's review sessions, one per reviewer, kept in the clone's common Git directory so every worktree
  * resumes them. They are in the order the last run reported them, which numbers their findings.
  */
+/** One reviewer's findings across every round on a branch, which a `--new` session continues. */
+export interface Tally {
+	reviewer: ReviewHarness;
+	/** Its latest round's model and effort. */
+	model: string;
+	effort: string;
+	rounds: number;
+	/** Each finding it raised, once however many rounds keep it open, by its latest severity. */
+	findings: Record<(typeof SEVERITIES)[number], number>;
+	fixed: number;
+	refuted: number;
+}
+
+/** What a run of `quest review` gives: each reviewer's round, and every tally on the branch, the run's first. */
+export interface Reviewed {
+	rounds: Round[];
+	tallies: Tally[];
+}
+
 interface State {
 	branch: string;
 	sessions: Session[];
+	tallies: Tally[];
 }
 
 /** One reviewer's session on a branch. */
@@ -1405,8 +1425,18 @@ export function parseState(value: unknown): State {
 		typeof state === "object" &&
 		state !== null &&
 		Array.isArray(state.sessions) &&
+		Array.isArray(state.tallies) &&
+		state.tallies.every(
+			(tally) =>
+				typeof tally?.reviewer === "string" &&
+				typeof tally.rounds === "number" &&
+				typeof tally.fixed === "number" &&
+				typeof tally.refuted === "number" &&
+				SEVERITIES.every((severity) => typeof tally.findings?.[severity] === "number"),
+		) &&
 		state.sessions.every(
 			(session) =>
+				state.tallies!.some((tally) => tally.reviewer === session?.reviewer) &&
 				typeof session?.reviewer === "string" &&
 				typeof session.session === "string" &&
 				typeof session.root === "string" &&
@@ -1524,7 +1554,7 @@ function sandboxFor(root: string, env: NodeJS.ProcessEnv): Sandbox {
  * and `SECOND_REVIEWER`, or only `--harness`'s, each resuming its session on the branch unless `fresh`.
  * Every reviewer runs at once, and the first to fail stops the others and fails the whole, saving no round.
  */
-export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Round[]> {
+export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Reviewed> {
 	// Native Windows installs the reviewer CLIs as batch shims, which `run` cannot start without a shell.
 	if (process.platform === "win32")
 		throw new ReviewInputError("quest review does not support native Windows yet; use WSL");
@@ -1558,8 +1588,8 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const statePath = sessionFile(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
 	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
-	const stored = options.fresh ? undefined : load(statePath);
-	const sessions = stored === undefined ? [] : parseState(stored).sessions;
+	const saved = savedState(statePath, options.fresh);
+	const sessions = options.fresh || saved === undefined ? [] : saved.sessions;
 	// The last run numbered each session's findings after those of the sessions before it.
 	const firsts = new Map<Session, number>();
 	let next = 1;
@@ -1643,8 +1673,68 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	// The first failure stopped the others, so it is the one to report.
 	if (controller.signal.aborted) throw controller.signal.reason;
 	const done = results.map((result) => (result as PromiseFulfilledResult<Seated>).value);
-	save(statePath, { branch, sessions: [...done.map((each) => each.session), ...kept] } satisfies State);
-	return done.map((each) => each.round);
+	const tallies = tallied(
+		saved?.tallies ?? [],
+		done.map((each, i) => ({ round: each.round, settles: seats[i]!.session?.reviewer })),
+	);
+	save(statePath, { branch, sessions: [...done.map((each) => each.session), ...kept], tallies } satisfies State);
+	return { rounds: done.map((each) => each.round), tallies };
+}
+
+/**
+ * A branch's saved state, or undefined when it has none. `--new` drops the sessions but continues their tallies,
+ * so it reads them too, starting them over only when the state is one this quest cannot read, which is what
+ * `--new` is for.
+ */
+function savedState(path: string, fresh: boolean | undefined): State | undefined {
+	try {
+		const stored = load(path);
+		return stored === undefined ? undefined : parseState(stored);
+	} catch (error) {
+		if (fresh && error instanceof ReviewInputError) return undefined;
+		throw error;
+	}
+}
+
+/**
+ * `tallies` after a run's `rounds`, the run's reviewers first. A round counts its findings for its own reviewer
+ * and settles the last round's for the reviewer that raised them, `settles`, which is another when the round
+ * replaced it; one it keeps open moves to its own count, since the round reports it again.
+ */
+export function tallied(tallies: Tally[], rounds: { round: Round; settles?: ReviewHarness }[]): Tally[] {
+	const by = new Map(tallies.map((tally) => [tally.reviewer, { ...tally, findings: { ...tally.findings } }]));
+	for (const { round, settles } of rounds) {
+		if (round.unchanged) continue;
+		const settled = round.earlier?.findings ?? [];
+		if (settled.length > 0) {
+			const raiser = settles === undefined ? undefined : by.get(settles);
+			if (raiser === undefined) throw new Error(`no tally holds the findings ${round.reviewer}'s round settles`);
+			for (const finding of settled) {
+				if (finding.disposition === "fixed") raiser.fixed++;
+				else if (finding.disposition === "refuted") raiser.refuted++;
+				else raiser.findings[finding.severity]--;
+			}
+		}
+		const own = by.get(round.reviewer) ?? {
+			reviewer: round.reviewer,
+			model: round.model,
+			effort: round.effort,
+			rounds: 0,
+			findings: { high: 0, medium: 0, low: 0 },
+			fixed: 0,
+			refuted: 0,
+		};
+		own.model = round.model;
+		own.effort = round.effort;
+		own.rounds++;
+		for (const finding of round.findings) own.findings[finding.severity]++;
+		by.set(round.reviewer, own);
+	}
+	const run = rounds.map(({ round }) => round.reviewer);
+	return [
+		...run.flatMap((reviewer) => by.get(reviewer) ?? []),
+		...[...by.values()].filter((tally) => !run.includes(tally.reviewer)),
+	];
 }
 
 /** What every reviewer of a run shares: the branch, its base, its change, and what a session is given. */

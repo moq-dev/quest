@@ -12,7 +12,8 @@ import { discoveryEnv, git } from "./git";
 import { fixes } from "./land-fixer";
 import { MERGER } from "./land-watch-fix";
 import { type GitHub, type ObjectValue, type Repository, githubRepository, link, requireRemote } from "./github";
-import { type ReviewSummary, parseReview } from "./review-record";
+import { type Counts, type ReviewSummary, findingsText, parseReview } from "./review-record";
+import { SEVERITIES } from "./review";
 
 /** A session's tokens, and their cost at the model's API list price, which subscriptions do not bill. */
 export interface Tokens {
@@ -66,7 +67,7 @@ export interface PullRow {
 	handedBack: boolean;
 	size: Size | null;
 	implementers: { harness: string; model: string; effort: string; size: Size | null }[];
-	/** Each reviewer's latest round, as the PR's `## Review` record names them. */
+	/** Each reviewer the PR's `## Review` record names, with its latest round and its tally. */
 	review: ReviewSummary[];
 	/** Who made each mechanical fix the land fixer recorded, or `quest land watch` for a base merge it made alone. */
 	landFixes: string[];
@@ -93,16 +94,13 @@ export interface AccuracyRow {
 	pulls: number;
 	merged: number;
 	handedBack: number;
+	/** PRs whose record tallies their reviews; a record written before tallies counts for none of what follows. */
 	reviewed: number;
 	/** The reviewers' latest rounds on these PRs that have a score, and the scores' sum. */
 	scored: number;
 	score: number;
-	/** The sum of each reviewed PR's longest session's rounds. */
-	rounds: number;
-	/** Sums over every reviewer's latest round. */
-	findings: number;
-	fixed: number;
-	refuted: number;
+	/** Every reviewer's findings across every round on these PRs, and as `rounds`, each PR's most rounds. */
+	tally: Counts;
 	/** The land fixer's model-run fixes, leaving out the watcher's own base merges. */
 	landFixes: number;
 	/** Later PRs naming these PRs under `## Caused by`. */
@@ -590,10 +588,7 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 					reviewed: 0,
 					scored: 0,
 					score: 0,
-					rounds: 0,
-					findings: 0,
-					fixed: 0,
-					refuted: 0,
+					tally: { rounds: 0, findings: { high: 0, medium: 0, low: 0 }, fixed: 0, refuted: 0, open: 0 },
 					landFixes: 0,
 					fixes: 0,
 				};
@@ -604,18 +599,20 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			if (each.handedBack) row.handedBack++;
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
-			if (each.review.length > 0) {
+			const tallied = each.review.filter((review) => review.tally !== null);
+			if (tallied.length > 0) {
 				row.reviewed++;
-				row.rounds += Math.max(...each.review.map((review) => review.round));
+				row.tally.rounds += Math.max(...tallied.map((review) => review.tally!.rounds));
 			}
-			for (const review of each.review) {
-				if (review.score !== null) {
+			for (const { score, tally } of tallied) {
+				if (score !== null) {
 					row.scored++;
-					row.score += review.score;
+					row.score += score;
 				}
-				row.findings += review.findings;
-				row.fixed += review.fixed;
-				row.refuted += review.refuted;
+				for (const severity of SEVERITIES) row.tally.findings[severity] += tally!.findings[severity];
+				row.tally.fixed += tally!.fixed;
+				row.tally.refuted += tally!.refuted;
+				row.tally.open += tally!.open;
 			}
 		}
 	}
@@ -665,7 +662,8 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		const reviewers = new Map<string, { number: number; effort: string }>();
 		for (const row of [...allRows].sort((a, b) => a.number - b.number))
 			for (const review of row.review)
-				reviewers.set(review.session, { number: row.number, effort: review.effort });
+				if (review.session !== null)
+					reviewers.set(review.session, { number: row.number, effort: review.effort });
 		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };
@@ -718,7 +716,7 @@ export function usageLines(report: Usage): string[] {
 			lines.push(`  implementer: ${i.harness}, ${i.model}, ${i.effort} effort${i.size ? ` (${i.size})` : ""}`);
 		for (const r of row.review)
 			lines.push(
-				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; round ${r.round}, score ${r.score ?? "-"}/10, ${r.findings} open, last round ${r.fixed} fixed and ${r.refuted} refuted`,
+				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; ${r.round === null ? "not in the latest run" : `round ${r.round}, score ${r.score ?? "-"}/10`}; ${r.tally === null ? "no tally" : `rounds ${r.tally.rounds}, ${findingsText(r.tally)}`}`,
 			);
 		if (row.landFixes.length) lines.push(`  land fixes: ${row.landFixes.join("; ")}`);
 		if (row.fixedBy.length) lines.push(`  fixed later by: ${row.fixedBy.map((n) => `#${n}`).join(", ")}`);
@@ -755,7 +753,7 @@ export function usageLines(report: Usage): string[] {
 					a.harness,
 					a.model,
 					a.effort,
-					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: score ${mean(a.score, a.scored)}, rounds ${mean(a.rounds, a.reviewed)}, ${a.findings} open, ${a.fixed} fixed, ${a.refuted} refuted; ${a.landFixes} land fixes, ${a.fixes} later fixes`,
+					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: score ${mean(a.score, a.scored)}, rounds ${mean(a.tally.rounds, a.reviewed)}, ${findingsText(a.tally)}; ${a.landFixes} land fixes, ${a.fixes} later fixes`,
 				]),
 			),
 		);

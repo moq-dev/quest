@@ -6,7 +6,10 @@ import { afterEach, expect, test, vi } from "vitest";
 import { type Output, main } from "../src/cli/main";
 import { REVIEWERS } from "../src/cli/models";
 import {
+	type Finding,
 	type Round,
+	type Settled,
+	type Tally,
 	authored,
 	baseInstructions,
 	nextStep,
@@ -15,6 +18,7 @@ import {
 	runningHarness,
 	parseState,
 	sessionFile,
+	tallied,
 	verdict,
 } from "../src/cli/review";
 import { withReview } from "../src/cli/review-record";
@@ -446,7 +450,9 @@ fakes("a quest branch is reviewed at its quest's size on the base, which its own
 	expect(sized.stdout).toContain("\nreviewer codex gpt-6.1-sol medium\n");
 	// A checkout on another branch, as the runner's review checkout is, takes the size of the branch it names.
 	git(s.repo, "checkout", "-qb", "kix-review/job1");
-	const [runner] = await review(
+	const {
+		rounds: [runner],
+	} = await review(
 		{ root: s.repo, base: "origin/main", sizeBranch: "quest/m0/big" },
 		{ env: { ...process.env, CLAUDECODE: "1" } },
 	);
@@ -1290,7 +1296,13 @@ fakes("--new starts over, and a first round takes no responses", async () => {
 	const fresh = await quest("--root", s.repo, "review", "--new", "--responses", responses);
 	expect(fresh.code).toBe(2);
 	expect(fresh.stderr).toContain("has none to resume");
-	expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain("round 1\n");
+	const restarted = await quest("--root", s.repo, "review", "--new", "--json");
+	expect(JSON.parse(restarted.stdout).rounds[0].round).toBe(1);
+	// The dropped sessions' findings stay open in their reviewers' tallies, which the new sessions continue.
+	expect(JSON.parse(restarted.stdout).tallies.map((t: Tally) => [t.reviewer, t.rounds, t.findings.high])).toEqual([
+		["codex", 2, 2],
+		["opencode", 2, 2],
+	]);
 });
 
 /** Commit `edit` to origin's `next` branch, leaving the checkout on `feature`; no flags change. */
@@ -1457,12 +1469,14 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 				"- Reviewer: Codex, gpt-6.1-sol, medium effort",
 				"- Session: `thread-1`, round 1",
 				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
+				"- Rounds: 1; findings 1 (high 1): fixed 0, refuted 0, open 1",
 				"- Findings, open until the next round settles them:",
 				"  - High, `src/lib.ts:2`: `Off by one`",
 				"",
 				"- Reviewer: opencode, opencode-go/deepseek-v4.1-flash, high effort",
 				"- Session: `ses_1`, round 1",
 				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
+				"- Rounds: 1; findings 1 (high 1): fixed 0, refuted 0, open 1",
 				"- Findings, open until the next round settles them:",
 				"  - High, `src/lib.ts:2`: `Off by one`",
 				"",
@@ -1494,6 +1508,8 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 		expect(record).toContain(`- Head: ${git(s.repo, "rev-parse", "HEAD").slice(0, 12)},`);
 		expect(record).toContain("- Session: `thread-1`, round 2\n");
 		expect(record).toContain("- Score: 9/10, `Fixes #3.`\n");
+		// The refuted finding counts beside the new one, across both rounds.
+		expect(record).toContain("- Rounds: 2; findings 2 (high 2): fixed 0, refuted 1, open 1\n");
 		expect(record).toContain(
 			`  - High, \`src/lib.ts\`: \`\`Ping @someone about \`${base.slice(0, 12)}\` in #12\`\`\n`,
 		);
@@ -1846,7 +1862,16 @@ test("saved sessions are read only in the current format, or refused naming --ne
 		last: {},
 		given: { instructions: "i", rules: null },
 	};
-	const current = { branch: "feature", sessions: [session] };
+	const tally = {
+		reviewer: "codex",
+		model: "m",
+		effort: "e",
+		rounds: 1,
+		findings: { high: 0, medium: 0, low: 1 },
+		fixed: 0,
+		refuted: 0,
+	};
+	const current = { branch: "feature", sessions: [session], tallies: [tally] };
 	expect(parseState(current)).toEqual(current);
 	for (const older of [
 		null,
@@ -1858,6 +1883,10 @@ test("saved sessions are read only in the current format, or refused naming --ne
 		{ sessions: [{ ...session, given: undefined }] },
 		{ sessions: [{ ...session, session: undefined }] },
 		{ sessions: [{ ...session, root: undefined }] },
+		// Saved before tallies, or with a session no tally counts.
+		{ branch: "feature", sessions: [session] },
+		{ branch: "feature", sessions: [session], tallies: [] },
+		{ branch: "feature", sessions: [session], tallies: [{ ...tally, findings: { high: 0, low: 1 } }] },
 	])
 		expect(() => parseState(older)).toThrow(/--new/);
 });
@@ -1947,4 +1976,107 @@ fakes("a new size pick settles the open findings of the reviewer it replaces", a
 	]);
 	const review = s.calls().find((call) => call.argv.includes("--session-id"))!;
 	expect(review.stdin).toContain("Fixed at src/lib.ts:1.");
+	// Sol's finding stays Sol's, fixed, while the pick that replaced it counts its own.
+	expect(
+		JSON.parse(round.stdout).tallies.map((t: Tally) => [t.reviewer, t.rounds, t.findings.high, t.fixed]),
+	).toEqual([
+		["claude", 1, 1, 0],
+		["opencode", 2, 0, 0],
+		["codex", 1, 1, 1],
+	]);
+});
+
+test("a tally counts each finding once, by who raised it, through every round", () => {
+	const finding = (severity: Finding["severity"], title: string): Finding => ({
+		file: "a.ts",
+		line: 1,
+		severity,
+		title,
+		body: "b",
+	});
+	const settled = (f: Finding, disposition: Settled["disposition"], number: number): Settled => ({
+		...f,
+		number,
+		disposition,
+		reason: "r",
+	});
+	const base = {
+		model: "m",
+		effort: "high",
+		branch: "feature",
+		size: "M",
+		sizeFrom: "default",
+		session: "s",
+		base: { ref: "origin/main", sha: "a".repeat(40) },
+		head: "b".repeat(40),
+		usage: [],
+		score: 8,
+		rationale: "r",
+		earlier: null,
+		unchanged: false,
+	} satisfies Omit<Round, "reviewer" | "round" | "findings">;
+	const [a, b, c] = [finding("high", "a"), finding("medium", "b"), finding("low", "c")];
+	const first = tallied([], [{ round: { ...base, reviewer: "codex", round: 1, findings: [a, b, c] } }]);
+	// A kept-open finding is reported again, and its new severity replaces its old one.
+	const second = tallied(first, [
+		{
+			round: {
+				...base,
+				reviewer: "codex",
+				round: 2,
+				findings: [{ ...b, severity: "high" }],
+				earlier: {
+					head: base.head,
+					findings: [settled(a, "fixed", 1), settled(b, "open", 2), settled(c, "refuted", 3)],
+				},
+			},
+			settles: "codex",
+		},
+	]);
+	expect(second).toEqual([
+		{
+			reviewer: "codex",
+			model: "m",
+			effort: "high",
+			rounds: 2,
+			findings: { high: 2, medium: 0, low: 1 },
+			fixed: 1,
+			refuted: 1,
+		},
+	]);
+	expect(first[0]!.rounds).toBe(1);
+	// A round that repeats the last one counts nothing; a replacing reviewer takes over what it keeps open.
+	const third = tallied(second, [
+		{ round: { ...base, reviewer: "codex", round: 2, findings: [], unchanged: true } },
+		{
+			round: {
+				...base,
+				reviewer: "claude",
+				round: 1,
+				findings: [{ ...b, severity: "high" }],
+				earlier: { head: base.head, findings: [settled({ ...b, severity: "high" }, "open", 1)] },
+			},
+			settles: "codex",
+		},
+	]);
+	expect(third.map((t) => [t.reviewer, t.rounds, t.findings, t.fixed, t.refuted])).toEqual([
+		["codex", 2, { high: 1, medium: 0, low: 1 }, 1, 1],
+		["claude", 1, { high: 1, medium: 0, low: 0 }, 0, 0],
+	]);
+	expect(() =>
+		tallied(
+			[],
+			[
+				{
+					round: {
+						...base,
+						reviewer: "claude",
+						round: 1,
+						findings: [],
+						earlier: { head: base.head, findings: [settled(a, "fixed", 1)] },
+					},
+				},
+			],
+		),
+	).toThrow(/no tally/);
 });

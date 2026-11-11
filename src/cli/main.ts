@@ -1205,7 +1205,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
 				"repeats that round, marked unchanged, so on the same head only a reviewer with findings to settle runs. " +
-				"--new starts new sessions. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
+				"--new starts new sessions, continuing each reviewer's tally of its findings on the branch. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
 				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
@@ -1297,17 +1297,17 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					},
 				);
 				pending = run.then(
-					async (rounds) => {
+					async ({ rounds, tallies }) => {
 						// The rounds are saved in their sessions either way, so their report prints before a failed record.
 						let record: Recorded | undefined;
 						let failure: unknown;
 						try {
-							record = await recordRounds(root(), rounds, github);
+							record = await recordRounds(root(), rounds, tallies, github);
 						} catch (error) {
 							failure = error;
 						}
 						if (options.json)
-							print(JSON.stringify({ rounds, record: record ?? null, next: nextStep(rounds) }));
+							print(JSON.stringify({ rounds, tallies, record: record ?? null, next: nextStep(rounds) }));
 						else {
 							for (const line of roundLines(rounds)) print(line);
 							if (record !== undefined)

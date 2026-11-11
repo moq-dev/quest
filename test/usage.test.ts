@@ -6,7 +6,7 @@ import { describe, expect, test } from "vitest";
 
 import { implementer } from "../src/github/models";
 import { fixes } from "../src/cli/land-fixer";
-import type { Round } from "../src/cli/review";
+import type { Round, Tally } from "../src/cli/review";
 import { parseReview, reviewRecord } from "../src/cli/review-record";
 import { type Priced, parseCcusage, readClaudeLog, readCodexLog, usage, usageLines } from "../src/cli/usage";
 import { tempDir } from "./fixture";
@@ -217,8 +217,30 @@ describe("PR records", () => {
 		earlier: null,
 	};
 
-	test("reads back each reviewer's round quest review records, after the land fixer's lines", () => {
-		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord([round, second])}\n\n## Models\n\n- Size: L\n`;
+	const tally = (
+		reviewer: Tally["reviewer"],
+		rounds: number,
+		findings: Tally["findings"],
+		fixed: number,
+		refuted: number,
+	): Tally => ({
+		reviewer,
+		model: "m",
+		effort: "high",
+		rounds,
+		findings,
+		fixed,
+		refuted,
+	});
+	const tallies = [
+		tally("codex", 3, { high: 1, medium: 1, low: 2 }, 2, 1),
+		tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0),
+		tally("claude", 2, { high: 2, medium: 0, low: 0 }, 1, 0),
+	];
+
+	test("reads back each reviewer's round and tally quest review records, after the land fixer's lines", () => {
+		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord([round, second], tallies)}\n\n## Models\n\n- Size: L\n`;
+		expect(body).toContain("\n- Rounds: 3; findings 4 (high 1, medium 1, low 2): fixed 2, refuted 1, open 1\n");
 		expect(parseReview(body)).toEqual([
 			{
 				harness: "Codex",
@@ -227,9 +249,7 @@ describe("PR records", () => {
 				session: THREAD,
 				round: 3,
 				score: 7,
-				findings: 1,
-				fixed: 2,
-				refuted: 1,
+				tally: { rounds: 3, findings: { high: 1, medium: 1, low: 2 }, fixed: 2, refuted: 1, open: 1 },
 			},
 			{
 				harness: "opencode",
@@ -238,16 +258,39 @@ describe("PR records", () => {
 				session: "ses_1",
 				round: 1,
 				score: 10,
-				findings: 0,
-				fixed: 0,
-				refuted: 0,
+				tally: { rounds: 1, findings: { high: 0, medium: 0, low: 0 }, fixed: 0, refuted: 0, open: 0 },
+			},
+			// A reviewer the run left out, such as the pick a new one replaced, keeps its tally.
+			{
+				harness: "Claude Code",
+				model: "m",
+				effort: "high",
+				session: null,
+				round: null,
+				score: null,
+				tally: { rounds: 2, findings: { high: 2, medium: 0, low: 0 }, fixed: 1, refuted: 0, open: 1 },
 			},
 		]);
 		// An open finding keeps the head short; once no reviewer reports one, it is named in full.
 		expect(body).not.toContain("b".repeat(40));
-		const clean = reviewRecord([{ ...round, findings: [] }, second]);
+		const clean = reviewRecord([{ ...round, findings: [] }, second], tallies);
 		expect(clean).toContain(`- Head: ${"b".repeat(40)}\n`);
 		expect(fixes(body)).toEqual(["codex, gpt-6.1-sol, medium effort"]);
+	});
+
+	test("a record written before tallies has none, and a Rounds line that does not add up fails", () => {
+		const record = reviewRecord([second], [tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0)]);
+		const older = `## Review\n\n${record.replace(/^- Rounds: .*\n/m, "")}\n`;
+		expect(parseReview(older)[0]!.tally).toBeNull();
+		for (const line of [
+			"1; findings 1 (high 1): fixed 0, refuted 0, open 0",
+			"1; findings 2 (high 1): fixed 1, refuted 0, open 1",
+			"1; findings 1 (severe 1): fixed 1, refuted 0, open 0",
+			"one",
+		])
+			expect(() =>
+				parseReview(`## Review\n\n${record.replace(/^- Rounds: .*$/m, `- Rounds: ${line}`)}\n`),
+			).toThrow(/Rounds line/);
 	});
 
 	test("a skipped review or a fixer-only section has no round", () => {
@@ -374,12 +417,18 @@ describe("usage", () => {
 			"- Reviewer: Codex, gpt-6.1-sol, high effort",
 			`- Session: \`${THREAD}\`, round 2`,
 			"- Score: 9/10, `Fine.`",
+			"- Rounds: 2; findings 2 (high 1, low 1): fixed 1, refuted 1, open 0",
 			"- Findings: none",
 			"",
 			"- Reviewer: opencode, opencode-go/deepseek-v4.1-flash, high effort",
 			"- Session: `ses_1`, round 1",
 			"- Score: 8/10, `Fine.`",
+			"- Rounds: 1; findings 0: fixed 0, refuted 0, open 0",
 			"- Findings: none",
+			"",
+			// A reviewer the latest run left out, such as one a new size pick replaced, has only its tally.
+			"- Reviewer: Claude Code, claude-opus-5-5, high effort",
+			"- Rounds: 1; findings 1 (medium 1): fixed 1, refuted 0, open 0",
 		].join("\n");
 		// #9's claim of the same branch named ses_1 before #10 resumed it, so #10, the newer, takes it.
 		const body9 = body10.slice(body10.indexOf("## Review"));
@@ -492,11 +541,16 @@ describe("usage", () => {
 			["L", "reviewing", "codex", 1],
 			["L", "reviewing", "opencode", 4],
 		]);
-		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.rounds, a.fixes])).toEqual([
-			["S", "gpt-6.1-sol", 1, 1, 17, 2, 1],
-			["L", "claude-opus-5-5", 1, 1, 17, 2, 1],
+		const tally = { rounds: 2, findings: { high: 1, medium: 1, low: 1 }, fixed: 2, refuted: 1, open: 0 };
+		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.tally, a.fixes])).toEqual([
+			["S", "gpt-6.1-sol", 1, 1, 17, tally, 1],
+			["L", "claude-opus-5-5", 1, 1, 17, tally, 1],
 		]);
 		const text = usageLines(report).join("\n");
+		expect(text).toContain(
+			"  review: Claude Code, claude-opus-5-5, high effort; not in the latest run; rounds 1, findings 1 (medium 1): fixed 1, refuted 0, open 0\n",
+		);
+		expect(text).toContain("rounds 2.0, findings 3 (high 1, medium 1, low 1): fixed 2, refuted 1, open 0;");
 		expect(text).toContain("#10 L merged: PR 10 (quest/m0/a)");
 		expect(text).toContain("fixed later by: #11");
 		expect(text).not.toContain("SECRET");
@@ -519,6 +573,6 @@ describe("usage", () => {
 			[9, 0],
 			[7, 0],
 		]);
-		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8]);
+		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8, null]);
 	});
 });
