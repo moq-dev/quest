@@ -555,10 +555,10 @@ export async function requirements(github: GitHub, repository: Repository, branc
 }
 
 /**
- * Whether a merged PR in `repository` had exactly `commit` as its head, as when it was squash-merged;
- * false for a commit GitHub does not have.
+ * Whether a merged PR in `repository` had `commit` as its head or below it, as when `quest land` merged
+ * the base into the head before squashing; false for a commit GitHub does not have.
  */
-export async function mergedHead(github: GitHub, repository: Repository, commit: string): Promise<boolean> {
+export async function mergedHolds(github: GitHub, repository: Repository, commit: string): Promise<boolean> {
 	const data = await github.graphql(
 		"query($owner: String!, $name: String!, $oid: GitObjectID!) { repository(owner: $owner, name: $name) { " +
 			"object(oid: $oid) { ... on Commit { associatedPullRequests(first: 100) { nodes { merged headRefOid } } } } } }",
@@ -567,7 +567,21 @@ export async function mergedHead(github: GitHub, repository: Repository, commit:
 	const found = object(data.repository).object;
 	const pulls = found === null || found === undefined ? undefined : object(found).associatedPullRequests;
 	if (pulls === null || pulls === undefined) return false; // Unknown, or not a commit.
-	return array(object(pulls).nodes).some((pull) => pull.merged === true && pull.headRefOid === commit);
+	for (const pull of array(object(pulls).nodes)) {
+		if (pull.merged !== true) continue;
+		const head = string(pull.headRefOid);
+		if (head === commit) return true;
+		// Association alone is no proof the merged head still reaches the commit, such as after a force push.
+		// Comparing from the head leaves no commits or files to send when it does.
+		const response = await github.request(
+			`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/compare/${head}...${commit}`,
+			{
+				allow: [404],
+			},
+		);
+		if (response.ok && Number(object(await response.json()).ahead_by) === 0) return true;
+	}
+	return false;
 }
 
 /** A login, a committer name without spaces, or `-` for a deleted account. */

@@ -1616,7 +1616,7 @@ supervisors left in their scopes, waits until they are empty, and so releases
 the checkout; it leaves runs whose supervisor is alive to that supervisor.
 
 Release deletes only declared scratch, and refuses a path that Git does not
-ignore, that holds tracked files or another Git worktree, or that is reached
+ignore, that holds tracked files or another repository or worktree, or that is reached
 through a symbolic link; links at or inside scratch are removed, never followed.
 Missing paths are skipped, so release can be rerun. The checkout, its Git state,
 and untracked files stay in place, and `status` charges what remains. A failed
@@ -1643,16 +1643,18 @@ modified or untracked files and any commit, at `HEAD` or under the checkout's
 own refs such as `refs/bisect/`, that no branch or remote-tracking ref
 reaches. A squash-merged change leaves its commits unreached, so they count as
 preserved only when the GitHub upstream that holds origin's claims has a merged
-PR whose head is exactly that commit; other commits need no forge or token.
-It then prunes the scratch and refuses ignored files that remain, leaving the
-checkout released, before `git worktree remove` deletes it. A checkout already
+PR whose head is that commit or descends from it, as when `quest land` merged
+the base into the head; other commits need no forge or token. Every ignored
+path is build output that removal deletes, declared as scratch or not, except
+one holding a nested repository or worktree, which it refuses. Only then does
+`git worktree remove` delete the checkout. A checkout already
 removed with `git worktree remove` only drops its record, as with `release`.
 New checkouts initialize their submodules recursively before returning. Restoring
 one preserves its existing submodule pins and local work. Creation verifies any
 new module tips not reached by remote-tracking branches (such as SHA-fetched
 pins or cloned tags) against origin and records them under
 `refs/remotes/quest-pins/`, outside origin's branch-prune namespace. Removal also checks
-submodules' files outside declared scratch and every module store, including deinitialized ones;
+submodules' files and every module store, including deinitialized ones;
 commits at their HEAD or refs must be reachable from a remote-tracking ref,
 since module stores and their local branches are deleted with the checkout, and
 a module store must have no linked worktrees of its own.
