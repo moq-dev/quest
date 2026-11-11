@@ -8,7 +8,8 @@ Rules a program can check are enforced instead of read. The epic finishes by
 re-measuring the baseline below with `quest usage` and token-max over a
 week of sessions and recording the comparison in its closing PR.
 
-Non-goal: the online reviewers (CodeRabbit and Pullfrog are free and stay).
+Non-goal: the online reviewers (CodeRabbit, and Pullfrog on moq-dev/moq,
+which Pullfrog for OSS pays for, are free and stay).
 
 ## Plan
 
@@ -34,14 +35,17 @@ Decision prompts, chosen options marked ✅:
 
 - Milestone: ✅ m0 (rejected: m1).
 - Online reviewers: ✅ keep CodeRabbit and Pullfrog, which are free
-  (rejected: drop them).
+  (rejected: drop them). Changed 2026-11-10 (user): Pullfrog spent the
+  OpenCode Go plan outside moq-dev/moq, so it stays only there, and
+  [a second local review](/quest/m0/deepseek-review.md) replaces it.
 - Rules to hooks or lint: first not planned, then ✅ planned the same day
   (user, adopting practices from the research below).
 - Adopted 2026-11-05 (user) from a survey of AI-heavy developers' setups
   (Theo's tstack, jdx's jouet, Matt Pocock's skills, HumanLayer, Mitchell
   Hashimoto), chosen ✅ and rejected listed:
   - ✅ Mechanical rules become hooks or lint, so their prose leaves the
-    always-loaded rules ([rule checks](/quest/m0/token-waste/rule-checks.md)).
+    always-loaded rules, done in
+    [moq-dev/quest#553](https://github.com/moq-dev/quest/pull/553).
   - ✅ A review round budget by severity, after Theo's `sol-loop`
     ([moq-dev/quest#514](https://github.com/moq-dev/quest/pull/514)).
   - ✅ `quest usage` moves from m1 into this epic, so its closing
@@ -65,7 +69,3 @@ Decision prompts, chosen options marked ✅:
 - The milestone re-cut the maintainer raised (m1 additive improvements, m2
   semver-breaking features) is moq-dev/moq's own plan: ✅ re-plan moq
   separately (rejected: make it quest's convention; not now).
-
-## Related
-
-- [Model check](/quest/m0/model-check.md) - audits the size tables the review quest changes

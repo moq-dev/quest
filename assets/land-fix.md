@@ -44,9 +44,12 @@ behavior changes or review must be handed back.
 Build tools may fetch the dependencies the repository's manifests and lockfiles
 name: from their package registries, such as crates.io, npm, PyPI, and the Go
 module proxy, and from `github.com` and `codeload.github.com` for git
-dependencies. Do not build with `--offline` to avoid them. These fetches are the
-only GitHub contact allowed: never call GitHub's API yourself (`gh`,
-`api.github.com`), push, or reach any other host.
+dependencies. Do not build with `--offline` to avoid them. The repository's
+checks may also reach the services their own tests use, such as a payment
+provider's test mode or a media download: run them as they are, and never stop
+them or hand a PR back for it. Dependency fetches are your only GitHub contact:
+never call GitHub's API yourself (`gh`, `api.github.com`), push, or reach any
+other host.
 
 Write `quest-land-result.json` in the repository root: a JSON array with exactly
 one entry per supplied PR, no extra fields. Use one of:
@@ -56,7 +59,8 @@ one entry per supplied PR, no extra fields. Use one of:
 
 On each entry, add `"failure"`: the test or step the failure log shows
 failing, on one line of at most 200 characters, such as
-`"failure":"cargo test -p moq-relay: interop::render_timeout"`. Name it the
+`"failure":"moq-relay interop::render_timeout"`: a test by its package and
+name alone, without the command that ran it. Name it the
 same way each time the same test or step fails, from the log rather than from
 your fix: quest land keeps fixing a PR while each round makes progress, and
 hands it back when the failure a fix addressed recurs right after it.
@@ -85,7 +89,9 @@ and `just test`: this prompt asks you to run them, so they are no standing guida
 to ignore, and a PR's diff never names them for you. Where the base names none, run
 each touched language's own type check and linter beside its build and test. A
 `requeue` of an unchanged head runs the same checks on a scratch merge kept off its
-branch, since the base may have moved under it. Name each command you ran in the
+branch, since the base may have moved under it. Run them in the repository's dev
+shell, if it has one, entered from the tree they check rather than from `base`,
+since a merge can change the shell's inputs. Name each command you ran in the
 reason. A PR you cannot get passing mechanically, or whose checks you cannot run,
 goes back as a handback quoting the command and the output line that shows why in
 the diagnosis.
@@ -151,7 +157,8 @@ A PR requeued unchanged for the failure the log shows names why it failed in
 - `"environment"`: the failure comes from the runner rather than the code, such as
   a missing tool, a read-only path, a full disk, or an unreachable registry.
 - `"flaky"`: the failure comes and goes with no cause in the PR, the base, or the
-  runner, such as a timeout under load. Name the test in its `failure`.
+  runner, such as a timeout under load. Name the test in its `failure`; an
+  entry without it is rejected.
 
 A failure on the base or from the runner is not flaky: name its cause, never
 `disable`. A PR requeued only because another supplied PR caused the failure takes
@@ -159,7 +166,8 @@ no `cause`. When you cannot tell why the failure happened, hand the PR back.
 The input may list the repository's known flaky tests, each by the
 `failure` an earlier round named, the `merge_group` jobs that showed it, and
 the `quest` path of the follow-up quest that tracks it once disabled.
-When the test you judge flaky is one of them, name it exactly as listed, and
+When the test you judge flaky is one of them, add its `quest` to the entry
+exactly as listed, and
 disable it in a commit of its own: create a `disable` branch from `base`, and
 commit on it only the skip, in the test framework's own form, whose reason
 names that `quest` path, such as `#[ignore = "flaky: /quest/m0/flaky/<name>.md"]`
@@ -171,7 +179,7 @@ A disabled test that is another quest's acceptance test
 leaves that quest as it is: the test still counts as its work. Run the
 [repository checks](#repository-checks) on the branch, and add its full SHA to the
 PR's entry:
-{"number":123,"action":"requeue","cause":"flaky","reason":"healthy; flaky test; ran just check and just test on a scratch merge and the disable branch","failure":"cargo test -p moq-relay: interop::render_timeout","disable":"full 40-character SHA"}
+{"number":123,"action":"requeue","cause":"flaky","reason":"healthy; flaky test; ran just check and just test on a scratch merge and the disable branch","failure":"moq-relay interop::render_timeout","quest":"quest/m0/flaky/render-timeout.md","disable":"full 40-character SHA"}
 quest land opens the commit as a pull request of its own and enqueues it. Never
 disable a test that is not listed. When the repository keeps no `quest/m0/`, or
 the skip needs a protected path or more than a mechanical edit, requeue

@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { git } from "./git";
+import { type StopInput, runningGates } from "./rules";
 import {
 	Busy,
 	type Merged,
@@ -189,7 +190,7 @@ async function subagentCheckout(worktrees: Worktrees, input: HookInput): Promise
  * `.worktrees/`, with derived defaults, and prints its path; an existing checkout of that name in the
  * repository is restored instead.
  * WorktreeRemove removes the checkout after recursive safety checks. SubagentStop releases the subagent's own
- * checkout, and SubagentStart restores it, telling the subagent when its scratch was deleted. A checkout made
+ * checkout, unless `quest hook` refuses the stop for a running gate, and SubagentStart restores it, telling the subagent when its scratch was deleted. A checkout made
  * for a session rather than a subagent is held by each session that creates it or starts in it, and SessionEnd
  * releases it once the last ends; SessionStart claims it again, likewise telling the session.
  */
@@ -247,6 +248,8 @@ export async function claudeHook(
 			return record.phase === "released" ? reinstall("SubagentStart", record.scratch) : undefined;
 		}
 		case "SubagentStop": {
+			// `quest hook` refuses this stop, and Claude continues the subagent without a SubagentStart.
+			if (runningGates(hook as StopInput).length > 0) return undefined;
 			const record = await subagentCheckout(worktrees, hook);
 			if (record) await waiting(() => worktrees.release(record.id, [WORKSPACE]));
 			return undefined;

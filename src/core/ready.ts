@@ -1,23 +1,24 @@
-// Whether a quest can be started, read from the same `Required` sections and
-// epic directories the rules validate.
+// Whether a quest can be started, read from the same `Required` and
+// `Scheduled` sections and epic directories the rules validate.
 //
-// Readiness is a property of the tree alone, which is what makes it cheap and
-// deterministic: a finished quest is deleted, so a blocker that still resolves
-// is still open. Liveness is the other question - a quest can be ready,
+// Readiness is a property of the tree and the date alone, which is what makes
+// it cheap and deterministic: a finished quest is deleted, so a blocker that
+// still resolves is still open. Liveness is the other question - a quest can be ready,
 // coherent, and already done by some other PR - and answering it means asking
 // the forge, so it belongs to the flow that is already talking to it.
 
-import { type Doc, children, entries, has, isEpic, rooted } from "./doc";
+import { type Doc, SCHEDULED, ancestors, children, entries, has, isEpic, pending, rooted } from "./doc";
 import { comparePaths, normalize } from "./path";
 
 /** One thing standing between a quest and being started. */
 export interface Blocker {
 	/**
-	 * The quest or epic that has to finish first. `null` is an entry that
-	 * is not a quest, which `quest check` rejects and nothing here can clear.
+	 * The quest or epic that has to finish first. `null` is a `## Scheduled`
+	 * date, or an entry that is not a quest, which `quest check` rejects and
+	 * nothing here can clear.
 	 */
 	path: string | null;
-	/** The dependency as written, whitespace collapsed. */
+	/** The dependency as written, whitespace collapsed; a date opens with `Scheduled: `. */
 	text: string;
 	/**
 	 * The still-open quests under a required epic, which is what an
@@ -38,11 +39,22 @@ export function renderBlocker(blocker: Blocker, depth = 0): string[] {
 }
 
 /**
- * What blocks `doc`: its `Required` entries, then, for an epic, its children,
- * each epic among them expanded into the quests it still holds. Empty means ready.
+ * What blocks `doc` on `today`, a `YYYY-MM-DD` date: its `Scheduled` date
+ * until it arrives, its `Required` entries, then, for an epic, its children,
+ * each epic among them expanded into the quests it still holds, then each epic
+ * above it that holds its quests back, nearest first, with its own date and
+ * `Required` blockers under it. Empty means ready.
  */
-export function blockers(docs: Doc[], doc: Doc): Blocker[] {
-	return expand(docs, new Map(docs.map((d) => [d.path, d])), doc, [doc.path]);
+export function blockers(docs: Doc[], doc: Doc, today: string): Blocker[] {
+	const byPath = new Map(docs.map((d) => [d.path, d]));
+	const gated = ancestors(docs, doc.path)
+		.map((epic) => ({
+			path: epic.path,
+			text: epic.path,
+			blockers: [...scheduled(epic, today), ...required(docs, byPath, epic, [doc.path, epic.path])],
+		}))
+		.filter((epic) => epic.blockers.length > 0);
+	return [...scheduled(doc, today), ...expand(docs, byPath, doc, [doc.path]), ...gated];
 }
 
 /**
@@ -63,44 +75,63 @@ export function treeOrder(docs: Doc[]): string[] {
 }
 
 /**
- * Every quest that can be started now, in tree order.
+ * Every quest that can be started on `today`, a `YYYY-MM-DD` date, in tree order.
  *
  * An epic is not listed while its directory holds other quests; a README with
  * none left is the epic's own remaining work and lists like any other quest.
- * A quest is ready when it has no `## Required` heading.
+ * A quest is ready when neither it nor any epic above it, milestones
+ * included, has a `## Required` heading or a `## Scheduled` date after `today`.
  */
-export function ready(docs: Doc[]): string[] {
+export function ready(docs: Doc[], today: string): string[] {
 	const byPath = new Map(docs.map((doc) => [doc.path, doc]));
 	return treeOrder(docs).filter((path) => {
 		const doc = byPath.get(path)!;
-		return !isEpic(docs, doc) && !has(doc, "Required");
+		return (
+			!isEpic(docs, doc) &&
+			![doc, ...ancestors(docs, path)].some(
+				(d) => has(d, "Required") || entries(d, SCHEDULED).some((entry) => pending(entry, today)),
+			)
+		);
 	});
+}
+
+/** The `Scheduled` items still holding `doc` back on `today`, labelled with their heading. */
+function scheduled(doc: Doc, today: string): Blocker[] {
+	return entries(doc, SCHEDULED)
+		.filter((entry) => pending(entry, today))
+		.map((entry) => ({ path: null, text: `${SCHEDULED}: ${entry.text}`, blockers: [] }));
 }
 
 /** The blockers of one document: its `Required` entries, then an epic's children. */
 function expand(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]): Blocker[] {
+	const found = required(docs, byPath, doc, stack);
+	// An unmigrated epic may still list a child under `Required`; name it once.
+	const listed = new Set(found.map((b) => b.path));
+	for (const child of children(docs, doc)) {
+		if (!listed.has(child)) found.push(blocker(docs, byPath, child, child, stack));
+	}
+	return found;
+}
+
+/** The blockers in one document's own `Required` section. */
+function required(docs: Doc[], byPath: Map<string, Doc>, doc: Doc, stack: string[]): Blocker[] {
 	const found: Blocker[] = [];
 	// A heading left standing after its last blocker still reads as blocked to
 	// everything that greps for it, including `quest check`, which reports it.
 	// Calling it ready here would make this the one tool that disagrees.
-	const required = entries(doc, "Required");
-	if (has(doc, "Required") && required.length === 0) {
+	const listed = entries(doc, "Required");
+	if (has(doc, "Required") && listed.length === 0) {
 		found.push({
 			path: null,
 			text: "an empty '## Required' section, which blocks the quest until the heading is removed",
 			blockers: [],
 		});
 	}
-	for (const entry of required) {
+	for (const entry of listed) {
 		// A bullet that does not open with a link into the tree is invalid, and
 		// nothing here can clear it, so it is a blocker with nothing under it.
 		const target = entry.target === null ? null : rooted(entry.target);
 		found.push(blocker(docs, byPath, target !== null && byPath.has(target) ? target : null, entry.text, stack));
-	}
-	// An unmigrated epic may still list a child under `Required`; name it once.
-	const listed = new Set(found.map((b) => b.path));
-	for (const child of children(docs, doc)) {
-		if (!listed.has(child)) found.push(blocker(docs, byPath, child, child, stack));
 	}
 	return found;
 }

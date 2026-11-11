@@ -44,10 +44,10 @@ Each run:
 
 ## Waiting
 
-- moq-dev/quest: two weeks pass since the last release (v0.2.0 once it
+- moq-dev/quest: two weeks pass since the last release (v0.2.1 once it
   ships); check `gh release list -R moq-dev/quest --limit 1`
 
 ## Required
 
-- [Cut a release with the worktree hooks](/quest/m1/release.md) - v0.2.0 is
+- [Cut a release with the worktree hooks](/quest/m1/release.md) - v0.2.1 is
   the first release this cadence follows

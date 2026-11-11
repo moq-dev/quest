@@ -35,8 +35,8 @@ and mark them ready after checks pass. Merge only within the user's authorized
 scope and after required repository checks and reviews pass. Never block on a
 CodeRabbit review; it is optional.
 Quest execution stops at PR creation; it merges only on a /quest-merge pick.
-`/quest-complete` picks a maintainer's PR that changes no user-facing behavior
-without asking.
+`/quest-run` picks a maintainer's PR that changes no user-facing behavior
+and adds or expands no quests without asking.
 
 On a PR whose author has write access, the PR body's `## Review` record of a
 local `quest review` round satisfies the required review `/quest-merge` describes when it names

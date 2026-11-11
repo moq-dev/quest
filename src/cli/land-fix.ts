@@ -45,7 +45,7 @@ export function readFixResult(root: string): string {
 }
 
 /** The known flaky tests the daemon left in `root`'s `.git`, if any, as the agent's input lists them. */
-function knownFlaky(root: string): KnownFlaky[] {
+export function knownFlaky(root: string): KnownFlaky[] {
 	const path = join(root, ".git", FLAKY_INPUT);
 	if (!existsSync(path)) return [];
 	const value = json(readBounded(path, "known flaky tests"));
@@ -86,9 +86,10 @@ export const signature = (failure: string) => failure.replace(/[`'"]/g, "").repl
  * is fixed or handed back, never requeued. A handback's `log` cites the failure log's lines, first
  * to last, that show the failure, which its comment quotes. `failure` names the failing test or step,
  * the signature the stop rules compare across a pick's rounds. A requeue of the PR's own failure names
- * its `cause`; one of a known flaky test's may carry `disable`: the tip of the fixer's `disable` branch,
- * a commit on the base that skips the test and adds its follow-up quest, which the daemon opens as a PR
- * of its own.
+ * its `cause`. A flaky one names its test by `failure`, or, for a known flaky test, by that entry's
+ * `quest`, so a reworded name never splits one test's record. Only a known one may carry `disable`:
+ * the tip of the fixer's `disable` branch, a commit on the base that skips the test and adds its
+ * follow-up quest, which the daemon opens as a PR of its own.
  */
 export type FixResult = {
 	agent?: string;
@@ -98,7 +99,7 @@ export type FixResult = {
 	comment?: string;
 	failure?: string;
 } & (
-	| { number: number; action: "requeue"; reason: string; cause?: Cause; disable?: string }
+	| { number: number; action: "requeue"; reason: string; cause?: Cause; quest?: string; disable?: string }
 	| { number: number; action: "fixed"; head: string; reason: string }
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
 );
@@ -122,7 +123,7 @@ function json(text: string): unknown {
 }
 
 /** Reject extra fields, multiline reasons, and oversized values in one result entry; `pr` allows a PR's own fields. */
-function validate(item: any, pr: boolean): void {
+function validate(item: any, pr: boolean, known: KnownFlaky[] = []): void {
 	const named = pr ? ["number"] : [];
 	const fields =
 		item.action === "fixed"
@@ -166,8 +167,15 @@ function validate(item: any, pr: boolean): void {
 		if (item.action !== "requeue" || !CAUSES.includes(item.cause)) throw new Error("invalid fixer cause");
 		metadata.push("cause");
 	}
+	if (pr && "quest" in item) {
+		if (item.cause !== "flaky" || !known.some((test) => test.quest === item.quest))
+			throw new Error("invalid fixer quest: not a known flaky test's");
+		metadata.push("quest");
+	}
+	if (pr && item.cause === "flaky" && !("quest" in item) && !("failure" in item))
+		throw new Error("a flaky requeue must name its test");
 	if (pr && "disable" in item) {
-		if (item.cause !== "flaky" || typeof item.disable !== "string" || !/^[a-f0-9]{40}$/.test(item.disable))
+		if (!("quest" in item) || typeof item.disable !== "string" || !/^[a-f0-9]{40}$/.test(item.disable))
 			throw new Error("invalid fixer disable");
 		metadata.push("disable");
 	}
@@ -201,7 +209,7 @@ function validate(item: any, pr: boolean): void {
 }
 
 /** Reject extra fields, duplicate/missing PRs, multiline reasons, oversized comments, and oversized output. */
-export function parseFixResult(text: string, numbers: number[]): FixResult[] {
+export function parseFixResult(text: string, numbers: number[], known: KnownFlaky[]): FixResult[] {
 	const value = json(text);
 	if (!Array.isArray(value) || value.length !== numbers.length)
 		throw new Error("fixer must return every PR exactly once");
@@ -210,7 +218,7 @@ export function parseFixResult(text: string, numbers: number[]): FixResult[] {
 		if (!item || typeof item !== "object" || !numbers.includes(item.number) || seen.has(item.number))
 			throw new Error("invalid or duplicate fixer PR");
 		seen.add(item.number);
-		validate(item, true);
+		validate(item, true, known);
 		if ("failure" in item) item.failure = signature(item.failure);
 	}
 	return value as FixResult[];
@@ -324,7 +332,7 @@ export async function fix(
 		);
 		child.once("close", (code) => (code === 0 ? done() : reject(new FixerAgentError(code ?? 1))));
 	});
-	const parse = (text: string) => (numbers.length ? parseFixResult(text, numbers) : parseBaseFix(text));
+	const parse = (text: string) => (numbers.length ? parseFixResult(text, numbers, flaky) : parseBaseFix(text));
 	const results = parse(readFixResult(root));
 	const index = argv.findIndex((arg) => arg === "-m" || arg === "--model");
 	const ranModel =

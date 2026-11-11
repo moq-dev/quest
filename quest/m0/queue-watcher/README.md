@@ -48,13 +48,12 @@ Decision prompts, selected options marked ✅:
   - ✅ moq first, since it lands the most PRs and so proves the design
     fastest. moq-dev/quest, moq.pro, rust2 and rind stay on the host
     `quest land` gate until moq proves it, then
-    [follow](/quest/m0/queue-watcher/follow.md).
+    follow (done 2026-11-03; proven from a fork on the PR that deleted it).
   - All five at once
   - moq and quest
 - Runners:
-  - ✅ Self-hosted on nixos: `merge_group` builds run on the host's runner
-    (kixelated/nixos `modules/ci-runners.nix`, runner `moq-ci`, label
-    `moq-queue`), for warm caches and no GitHub minutes
+  - ✅ Self-hosted on the maintainer's host: `merge_group` builds run on its
+    runner (label `moq-queue`), for warm caches and no GitHub minutes
   - GitHub-hosted
 - Interim:
   - Keep improving the host gate
@@ -122,6 +121,19 @@ third-party queue. The maintainer expects the own queue to become every
 repository's, for visibility. The own queue landed in
 [moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540); the rest is
 recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md).
+
+Decided 2026-11-09 (user, /quest-plan), from a workflow audit of
+moq-dev/moq's queue, 2026-11-03 to 11-10: 800 `merge_group` builds at a
+5-minute median, 10% failing; the runner 86-90% busy at 19-22 UTC and 53%
+overall; enqueue to merge at a 47-minute median; and 245 conflict removals
+against 756 merges, 130 of them resolved by the quest merge driver alone.
+
+- Build concurrency, now with the measured data the 2026-11-01 decision
+  asked for: ✅ stay at 1 (rejected: plan concurrency 2 now).
+  Re-measure before building for groups of two.
+- Re-enqueue, for a conflict the merge driver resolved alone: ✅ keep the
+  back of the queue for all (rejected: GitHub's `jump` to the front for
+  those, recommended by the agent for the 95-minute median they wait).
 
 Shared shape, for the children to follow:
 

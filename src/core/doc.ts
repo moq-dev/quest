@@ -158,6 +158,50 @@ export function entries(doc: Doc, section: string): Entry[] {
 	return doc.entries.filter((e) => e.section === section);
 }
 
+/** The section naming the operating systems a quest must run on. */
+export const HOSTS = "Hosts";
+
+/** The operating systems a `## Hosts` item may name. */
+export const HOST = ["linux", "macos", "windows"] as const;
+export type Host = (typeof HOST)[number];
+
+/** The host a `## Hosts` item names, as `macos` or `macos - why`, or `null` if it names none. */
+export function hostOf(entry: Entry): Host | null {
+	const match = /^(\S+)(?: - .+)?$/.exec(entry.text);
+	const host = match?.[1];
+	return HOST.find((h) => h === host) ?? null;
+}
+
+/** The hosts a quest must run on, sorted and deduplicated; empty means any. */
+export function hosts(doc: Doc): Host[] {
+	const named = new Set(entries(doc, HOSTS).map(hostOf));
+	return HOST.filter((h) => named.has(h));
+}
+
+/** The section holding the date a quest waits for before it can start. */
+export const SCHEDULED = "Scheduled";
+
+/** The calendar date a `## Scheduled` item names, as `2027-01-15` or `2027-01-15 - why`, or `null` if it names none. */
+export function dateOf(entry: Entry): string | null {
+	const match = /^(\d{4})-(\d{2})-(\d{2})(?: - .+)?$/.exec(entry.text);
+	if (!match) return null;
+	const [year, month, day] = match.slice(1, 4).map(Number);
+	// `Date.UTC` rolls 2027-02-30 over into March; only a real day survives the round trip.
+	const date = new Date(Date.UTC(year, month - 1, day));
+	const real = date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+	return real ? match[0].slice(0, 10) : null;
+}
+
+/**
+ * Whether a `## Scheduled` item still holds its quest back on `today`, a
+ * `YYYY-MM-DD` date: its date is later, or it names none, which nothing but
+ * an edit can clear.
+ */
+export function pending(entry: Entry, today: string): boolean {
+	const date = dateOf(entry);
+	return date === null || date > today;
+}
+
 function isReadme(path: string): boolean {
 	return fileName(path) === "README.md";
 }
@@ -210,6 +254,27 @@ export function children(docs: readonly Doc[], doc: Doc): string[] {
  */
 export function isEpic(docs: readonly Doc[], doc: Doc): boolean {
 	return permanent(doc.path) || docs.some((d) => holds(doc.path, d.path));
+}
+
+/**
+ * The epic READMEs above `path`, nearest first, milestones and the root
+ * included. Their `Required` sections gate everything under them.
+ */
+export function ancestors(docs: readonly Doc[], path: string): Doc[] {
+	return docs.filter((d) => holds(d.path, path)).sort((a, b) => depth(b.path) - depth(a.path));
+}
+
+/**
+ * The `Required` targets of `doc` and of every epic above it: what gates its
+ * start. An epic's entry for a quest it holds is skipped above that epic, as
+ * `quest check` already reports it and it would otherwise read as a cycle.
+ */
+export function gates(docs: readonly Doc[], doc: Doc): string[] {
+	return [doc, ...ancestors(docs, doc.path)].flatMap((d) =>
+		entries(d, "Required")
+			.map((entry) => (entry.target === null ? null : rooted(entry.target)))
+			.filter((target): target is string => target !== null && (d === doc || !holds(d.path, target))),
+	);
 }
 
 /** What must finish before `doc`: its `Required` quests, then, for an epic, its children. */

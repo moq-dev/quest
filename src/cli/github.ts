@@ -65,6 +65,8 @@ export interface RequestOptions {
 	body?: unknown;
 	method?: "POST" | "PUT" | "PATCH" | "DELETE";
 	allow?: number[];
+	/** A media type other than JSON, such as `application/vnd.github.diff`. */
+	accept?: string;
 	/** Overrides how the request repeats; the default follows its method and endpoint. */
 	repeat?: Repeat;
 }
@@ -253,7 +255,7 @@ export class GitHub {
 						? options.method && { method: options.method }
 						: { method: options.method ?? "POST", body: JSON.stringify(options.body) }),
 					headers: {
-						Accept: "application/vnd.github+json",
+						Accept: options.accept ?? "application/vnd.github+json",
 						Authorization: `Bearer ${this.deps.token}`,
 						"X-GitHub-Api-Version": "2022-11-28",
 						"User-Agent": "quest",

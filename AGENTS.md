@@ -3,6 +3,7 @@ Keep the core independent of a particular repository, agent, or issue tracker.
 - Read `CONTRIBUTING.md` before making changes or preparing a PR.
 - Keep the rules every task loads in `assets/CONTEXT.md`, within the 10,000 characters Claude Code shows of a hook's context; the workflow sections skills share in the guide, `assets/AGENTS.md`; and skills in `assets/skills/`, each explaining only its own workflow and naming the guide sections and skills it builds on.
 - Installing or running a skill never authorizes remote writes or merges beyond the user's request.
+- Plan work on the maintainer's own machines and hosts, such as host services, runners, and deploys, in kixelated/nixos's quest tree, not here. Quests here name a host only by its role, such as "the maintainer's host", and point to that repository for its work.
 
 Do not edit `CONTRIBUTING.md`, `assets/CONTEXT.md`, `assets/AGENTS.md`, or
 `assets/skills/` unless the user asks for that work.
@@ -21,8 +22,8 @@ Do not edit `CONTRIBUTING.md`, `assets/CONTEXT.md`, `assets/AGENTS.md`, or
   formats, schemas, flags, and on-disk state directly, with no migrations,
   shims, or cleanup of what earlier versions wrote.
 - Starting or spawning quests stops at PR creation. It merges only on a
-  /quest-merge pick, the user's or the standing one /quest-complete gives a PR
-  with no user-facing behavior change, and only after repository checks and
+  /quest-merge pick, the user's or the standing one /quest-run gives a PR
+  with no user-facing behavior change that adds or expands no quests, and only after repository checks and
   reviews pass.
 - Pull requests land as squash merges.
 - Do not comment on repositories outside kixelated/moq-dev without approval.

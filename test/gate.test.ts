@@ -13,7 +13,7 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { constants } from "node:os";
+import { constants, hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -31,6 +31,7 @@ import {
 	type Host,
 	hostLimits,
 	linuxMemory,
+	measure,
 	type Owner,
 	owner,
 	processStart,
@@ -42,8 +43,26 @@ import {
 } from "../src/cli/gate";
 import { forwards, foregroundStat, statProcess } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
-import { questScope } from "../src/cli/supervise";
+import { alive as ownerAlive, questScope } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
+
+// Linux reports a /proc read that races a process's exit as ESRCH rather than ENOENT, so fail
+// one process's stat read with either code, without timing.
+const racing = vi.hoisted(() => ({ read: undefined as { path: string; code: string } | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	return {
+		...fs,
+		readFileSync: (...args: Parameters<typeof fs.readFileSync>) => {
+			if (racing.read && args[0] === racing.read.path) {
+				throw Object.assign(new Error(`${racing.read.code}: no such process, read`), {
+					code: racing.read.code,
+				});
+			}
+			return fs.readFileSync(...args);
+		},
+	};
+});
 
 const GiB = 2 ** 30;
 
@@ -193,6 +212,75 @@ test("a running admission keeps its slot past the minute, and a finished one exp
 	expect(host.ledger()).toEqual({ version: 100, admissions: [] });
 });
 
+test("a running command that kept every CPU busy holds the host through a lull in the load", async () => {
+	const events: string[] = [];
+	// Between a build's phases, the load average falls below the host's CPUs.
+	const state = { now: 0, load: 1, memory: Infinity };
+	const host = testHost(tempDir(), state, events);
+	const build = { id: "build", at: -10 * RECENT_MS, ...me, cores: 4 };
+	expect(host.publish(host.ledger(), [build])).toBe(true);
+	const sleep = host.sleep;
+	host.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		// Its busiest minute now left one CPU free.
+		const ledger = host.ledger();
+		host.publish(
+			ledger,
+			ledger.admissions.map((admission) => (admission.id === build.id ? { ...build, cores: 3 } : admission)),
+		);
+	};
+	await admit({ load: 4, memory: GiB }, host, signal, (reason) => events.push(reason));
+	expect(events).toEqual(["load", `sleep ${SETTLE_MS}`]);
+	expect(host.ledger().admissions).toEqual([
+		{ ...build, cores: 3 },
+		{ id: expect.any(String), at: SETTLE_MS, ...me },
+	]);
+});
+
+/** Run `measure` over `busy`, the CPUs its command keeps busy over each SETTLE_MS, undefined before its scope exists; returns what it publishes. */
+async function measured(busy: (number | undefined)[]) {
+	const state = { now: 0, load: 0, memory: Infinity };
+	const host = testHost(tempDir(), state);
+	host.publish(host.ledger(), [{ id: "build", at: 0, ...me }]);
+	let usage: number | undefined;
+	let total = 0;
+	host.usage = () => usage;
+	const published: string[] = [];
+	const publish = host.publish;
+	host.publish = (base, admissions) => {
+		published.push(`${admissions[0].cores} at ${state.now}`);
+		return publish(base, admissions);
+	};
+	const stop = new AbortController();
+	host.sleep = async (ms) => {
+		if (busy.length === 0) {
+			stop.abort();
+			throw stop.signal.reason;
+		}
+		state.now += ms;
+		const cores = busy.shift();
+		if (cores === undefined) return;
+		total += cores * ms * 1000;
+		usage = total;
+	};
+	await measure(host, { id: "build", unit: "quest-gate-build.scope" }, stop.signal);
+	return { published, admissions: host.ledger().admissions };
+}
+
+test("a gate records the most CPUs its command kept busy in the last minute", async () => {
+	// Before systemd creates the scope, an idle first reading, a build on four CPUs, then its
+	// tests on one for over a minute.
+	const { published, admissions } = await measured([undefined, 0, 4, 4, ...Array(RECENT_MS / SETTLE_MS).fill(1)]);
+	// The build's last sample, at 20 s, holds its four CPUs for a minute.
+	expect(published).toEqual([`4 at ${3 * SETTLE_MS}`, `1 at ${4 * SETTLE_MS + RECENT_MS}`]);
+	expect(admissions).toEqual([{ id: "build", at: 0, ...me, cores: 1 }]);
+});
+
+test("a gate records its command's burst before the first sample", async () => {
+	const { published } = await measured([4, ...Array(RECENT_MS / SETTLE_MS).fill(0)]);
+	expect(published).toEqual([`4 at ${SETTLE_MS}`, `0 at ${SETTLE_MS + RECENT_MS}`]);
+});
+
 test("a priority caller waits for memory, never for load, even while a gated command runs", async () => {
 	const directory = tempDir();
 	const state = { now: 0, load: 99, memory: 0 };
@@ -243,77 +331,97 @@ test("a quick caller starts after at most QUICK_MS, and its admission is recorde
 	expect(slow.ledger().admissions).toEqual([{ id: expect.any(String), at: QUICK_MS, ...me }]);
 });
 
-test("a caller holding the host reserves it, waits out gated commands, and holds off every other caller", async () => {
-	const directory = tempDir();
+test("waiting callers start in arrival order, a later one first only while the host has room for both", async () => {
 	const limits = { load: 4, memory: GiB };
-	// Load and memory never let an ordinary caller in; the holder ignores them.
-	const state = { now: 0, load: 99, memory: 0 };
-	const build = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"]);
-	const ledger = fileHost(directory, () => state.now);
-	expect(ledger.publish(ledger.ledger(), [{ id: "build", at: 0, pid: build.pid }])).toBe(true);
-	const held: string[][] = [];
+	// A build still runs, and an earlier caller waits for its turn.
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
+	const earlier = { id: "earlier", at: 0, ...me, queued: true };
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
 	const events: string[] = [];
-	const holder = testHost(directory, state, events);
-	const sleep = holder.sleep;
-	holder.sleep = async (ms, signal) => {
+	const host = testHost(directory, state, events);
+	expect(host.publish(host.ledger(), [build, earlier])).toBe(true);
+	const sleep = host.sleep;
+	host.sleep = async (ms, signal) => {
 		await sleep(ms, signal);
-		// Reserved while it waits: no caller gets in, whatever its precedence, even past a quick deadline.
-		for (const precedence of [{}, { quick: true }, { priority: true }, { host: true }]) {
-			const reasons: string[] = [];
-			const controller = new AbortController();
-			const clock = { now: state.now, load: 0, memory: Infinity };
-			const other = testHost(directory, clock);
-			other.sleep = async () => {
-				clock.now += QUICK_MS;
-				if (reasons.length > 1) controller.abort();
-			};
-			await expect(
-				admit(limits, other, controller.signal, (reason) => reasons.push(reason), precedence),
-			).rejects.toThrow();
-			held.push(reasons);
-		}
-		build.kill();
-		await once(build, "exit");
+		// The earlier caller takes its turn.
+		const ledger = host.ledger();
+		const rest = ledger.admissions.filter(({ id }) => id !== "earlier");
+		if (rest.length < ledger.admissions.length)
+			expect(host.publish(ledger, [...rest, { id: "started", at: state.now, ...me }])).toBe(true);
 	};
-	await admit(limits, holder, signal, (reason) => events.push(reason), { host: true });
-	expect(events).toEqual(["commands", `sleep ${SETTLE_MS}`]);
-	expect(held).toEqual(Array(4).fill(["host", "host"]));
-	expect(ledger.ledger().admissions).toEqual([
-		{ id: "build", at: 0, pid: build.pid },
-		{ id: expect.any(String), at: 0, ...me, host: true },
+	// Alone, this caller would start at once; behind the earlier one, it waits, then spaces itself.
+	await admit(limits, host, signal, (reason) => events.push(reason));
+	expect(events).toEqual(["queue", `sleep ${SETTLE_MS}`, `sleep ${SETTLE_MS}`]);
+	expect(host.ledger().admissions).toEqual([
+		build,
+		{ id: "started", at: SETTLE_MS, ...me },
+		{ id: expect.any(String), at: 2 * SETTLE_MS, ...me },
 	]);
-	// A holder that died releases the host, as does one whose process ID another process now has.
+	// With room for both, it starts at once and leaves the earlier caller's place.
+	const roomy = testHost(tempDir(), { now: 0, load: 2, memory: Infinity }, events);
+	expect(roomy.publish(roomy.ledger(), [build, earlier])).toBe(true);
+	events.length = 0;
+	await admit(limits, roomy, signal, (reason) => events.push(reason));
+	expect(events).toEqual([]);
+	expect(roomy.ledger().admissions).toEqual([build, earlier, { id: expect.any(String), at: 0, ...me }]);
+});
+
+test("a place frees once its gate ends or its caller cancels, or a minute after its last refresh without a start", async () => {
+	const limits = { load: 4, memory: GiB };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
 	const exited = spawnSync(process.execPath, ["-e", ""]).pid;
-	const released = tempDir();
-	const after = fileHost(released, () => 0);
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
+	const host = testHost(directory, state);
 	expect(
-		after.publish(after.ledger(), [
-			{ id: "bench", at: 0, pid: exited, host: true },
-			{ id: "reused", at: 0, pid: process.pid, host: true, start: "an earlier process" },
+		host.publish(host.ledger(), [
+			build,
+			{ id: "ended", at: 0, pid: exited, queued: true },
+			{ id: "reused", at: 0, pid: process.pid, start: "an earlier process", queued: true },
+			{ id: "unrefreshed", at: -RECENT_MS, pid: process.pid, queued: true },
 		]),
 	).toBe(true);
-	const reasons: string[] = [];
-	await admit(limits, testHost(released, { now: 0, load: 0, memory: Infinity }), signal, (reason) =>
-		reasons.push(reason),
-	);
-	expect(reasons).toEqual([]);
-	expect(after.ledger().admissions.at(-1)).toEqual({ id: expect.any(String), at: 0, ...me });
-	// Nor does a holder wait on an ordinary admission whose process ID another process now has.
-	const reused = tempDir();
-	const ordinary = fileHost(reused, () => 0);
-	const earlier = { id: "build", at: -10 * RECENT_MS, pid: process.pid, start: "an earlier process" };
-	expect(ordinary.publish(ordinary.ledger(), [earlier])).toBe(true);
+	const events: string[] = [];
+	await admit(limits, testHost(directory, state, events), signal, (reason) => events.push(reason));
+	expect(events).toEqual([]);
+	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: 0, ...me }]);
+	// A place refreshed within the minute still holds, and a cancelled caller behind it leaves the queue.
+	const fresh = { id: "fresh", at: -RECENT_MS / 2, pid: process.pid, queued: true };
+	const queued = testHost(tempDir(), state);
+	expect(queued.publish(queued.ledger(), [build, fresh])).toBe(true);
+	const controller = new AbortController();
 	const waited: string[] = [];
-	await admit(
-		limits,
-		testHost(reused, { now: 0, load: 0, memory: Infinity }),
-		signal,
-		(reason) => waited.push(reason),
-		{
-			host: true,
-		},
+	queued.sleep = async () => {
+		expect(queued.ledger().admissions).toEqual([build, fresh, expect.objectContaining({ queued: true, ...me })]);
+		controller.abort(new Error("cancelled"));
+	};
+	await expect(admit(limits, queued, controller.signal, (reason) => waited.push(reason))).rejects.toThrow(
+		"cancelled",
 	);
-	expect(waited).toEqual([]);
+	expect(waited).toEqual(["queue"]);
+	expect(queued.ledger().admissions).toEqual([build, fresh]);
+});
+
+test("a priority caller goes ahead of the queue, and a quick one starts at its deadline whatever its place", async () => {
+	const limits = { load: 4, memory: GiB };
+	const build = { id: "build", at: -10 * RECENT_MS, ...me };
+	const earlier = { id: "earlier", at: 0, ...me, queued: true };
+	const directory = tempDir();
+	const state = { now: 0, load: 3, memory: Infinity };
+	const host = testHost(directory, state);
+	expect(host.publish(host.ledger(), [build, earlier])).toBe(true);
+	const events: string[] = [];
+	await admit(limits, testHost(directory, state, events), signal, undefined, { priority: true });
+	expect(events).toEqual([]);
+	await admit(limits, testHost(directory, state, events), signal, undefined, { quick: true });
+	expect(events).toEqual(Array.from({ length: QUICK_MS / SETTLE_MS }, () => `sleep ${SETTLE_MS}`));
+	expect(host.ledger().admissions).toEqual([
+		build,
+		earlier,
+		{ id: expect.any(String), at: 0, ...me },
+		{ id: expect.any(String), at: QUICK_MS, ...me },
+	]);
 });
 
 test("a lone quick or priority caller starts at once on load from outside the gate", async () => {
@@ -403,7 +511,7 @@ test("a caller that dies mid-admission blocks no one past a minute", async () =>
 	await admit({ load: 1, memory: 1 }, testHost(directory, state, events), signal);
 	expect(events).toEqual([]);
 	// The stale draft is gone; one still being written stays.
-	expect(readdirSync(directory).sort()).toEqual(["2", "live.tmp"]);
+	expect(readdirSync(directory).sort()).toEqual(["3", "live.tmp"]);
 	// A version cut short, as by power loss, reads as empty rather than wedging every caller.
 	writeFileSync(join(directory, "100"), "");
 	expect(host.ledger()).toEqual({ version: 100, admissions: [] });
@@ -634,16 +742,6 @@ test("a command runs in place with the given environment and its exact exit stat
 	expect(await direct([process.execPath, "-e", script], env, cancellation().cancel)).toBe(7);
 });
 
-test("Windows refuses --host, which it could not tell from a reused process ID", async () => {
-	const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-	Object.defineProperty(process, "platform", { value: "win32" });
-	try {
-		await expect(gate([process.execPath, "-e", ""], { host: true })).rejects.toThrow("unsupported on Windows");
-	} finally {
-		Object.defineProperty(process, "platform", platform);
-	}
-});
-
 test("a nested gate runs at once and keeps the exact exit status", async () => {
 	// A gated recipe that calls another one must not wait for admission twice.
 	vi.stubEnv("QUEST_GATE_ADMITTED", "1");
@@ -706,15 +804,17 @@ test("a nested call, or one inside a Quest scope, leaves its command to the encl
 	});
 	expect(questScope(terminal)).toBeUndefined();
 	expect(questScope(cgroup(`${unit}-not`))).toBeUndefined();
-	if (process.platform === "win32") return expect(owner({ QUEST_GATE_ADMITTED: "1" })).toBe(direct);
+	if (process.platform === "win32") return expect(owner({ QUEST_GATE_ADMITTED: "1" }).run).toBe(direct);
 	// The enclosing owner signals the command too unless it was not one of Quest's.
-	expect(owner({ QUEST_GATE_ADMITTED: "1" }, terminal)).toBe(direct);
-	expect(owner({ QUEST_GATE_ADMITTED: "1", QUEST_GATE_GROUP: "1" }, terminal)).toBe(inside);
+	expect(owner({ QUEST_GATE_ADMITTED: "1" }, terminal)).toEqual({ run: direct });
+	expect(owner({ QUEST_GATE_ADMITTED: "1", QUEST_GATE_GROUP: "1" }, terminal)).toEqual({ run: inside });
 	if (process.platform !== "linux") return;
-	expect(owner({ QUEST_GATE_ADMITTED: "1" }, gated)).toBe(inside);
-	expect(owner({ QUEST_GATE_ADMITTED: "1" }, child)).toBe(inside);
-	// No such scope runs, so it is not delegated.
-	expect(owner({}, worktree)).toBe(inside);
+	expect(owner({ QUEST_GATE_ADMITTED: "1" }, gated)).toEqual({ run: inside });
+	expect(owner({ QUEST_GATE_ADMITTED: "1" }, child)).toEqual({ run: inside });
+	// An unadmitted call runs beside the enclosing scope, not inside it, in a scope the gate names.
+	const beside = owner({}, worktree);
+	expect([direct, inside]).not.toContain(beside.run);
+	expect(beside.unit).toMatch(/^quest-gate-[0-9a-f-]+\.scope$/);
 });
 
 /** Gone, or a zombie its new parent has not reaped yet: either way it runs no code. */
@@ -743,10 +843,13 @@ function descendant(dir: string, rest: string, { leave = false } = {}) {
 	};
 }
 
+/** A systemd scope owner with a new unit, as the gate names one. */
+const scoped: Owner = (command, env, cancel) => scope(`quest-gate-${randomUUID()}.scope`)(command, env, cancel);
+
 const owners: [string, Owner][] =
 	process.platform === "linux"
 		? [
-				["a systemd scope", scope],
+				["a systemd scope", scoped],
 				["a process group", group],
 			]
 		: process.platform === "win32"
@@ -989,8 +1092,21 @@ describe.skipIf(process.platform === "win32")("an outermost gate owning a proces
 describe.runIf(process.platform === "linux")("a systemd scope", () => {
 	test("also stops a descendant that left its process group", { timeout: 30_000 }, async () => {
 		const { command, pid } = descendant(tempDir(), "exit 3", { leave: true });
-		expect(await scope(command, process.env, cancellation().cancel)).toBe(3);
+		expect(await scoped(command, process.env, cancellation().cancel)).toBe(3);
 		await until(() => stopped(pid()), "the daemon to stop");
+	});
+
+	test("reports its CPU use to the gate until it ends", { timeout: 30_000 }, async () => {
+		const host = fileHost(tempDir());
+		const unit = `quest-gate-${randomUUID()}.scope`;
+		const done = join(tempDir(), "done");
+		expect(host.usage(unit)).toBeUndefined();
+		const spin = ["/bin/sh", "-c", `while [ ! -e ${quote(done)} ]; do :; done`];
+		const result = scope(unit)(spin, process.env, cancellation().cancel);
+		await until(() => (host.usage(unit) ?? 0) > 0, "the scope's CPU use to show");
+		writeFileSync(done, "");
+		expect(await result).toBe(0);
+		await until(() => host.usage(unit) === undefined, "systemd to remove the scope");
 	});
 });
 
@@ -1008,20 +1124,21 @@ async function insideScope(launch: (command: string[], env: NodeJS.ProcessEnv) =
 		script,
 		`import { spawnSync } from "node:child_process";
 		import { existsSync, readFileSync, writeFileSync } from "node:fs";
-		import { direct, group, inside, job, owner, scope } from ${JSON.stringify(gate)};
+		import { direct, group, inside, job, owner } from ${JSON.stringify(gate)};
 		const dir = ${JSON.stringify(dir)};
-		const own = owner(process.env);
-		const kind = new Map([[direct, "direct"], [group, "group"], [inside, "inside"], [job, "job"], [scope, "scope"]]).get(own) ?? "nested";
+		const { run: own, unit } = owner(process.env);
+		const kind = unit ? "scope" : new Map([[direct, "direct"], [group, "group"], [inside, "inside"], [job, "job"]]).get(own);
 		let report = { kind };
 		if (${run}) {
 			const never = new AbortController().signal;
-			const command = "cat /proc/self/cgroup > " + dir + "/cgroup; sleep 1000 & echo $! > " + dir + "/pid; exit 7";
+			const command = "cat /proc/self/cgroup > " + dir + "/cgroup; systemctl --user show --property=BindsTo --value " + unit + " > " + dir + "/binds; sleep 1000 & echo $! > " + dir + "/pid; exit 7";
 			const status = await own(["/bin/sh", "-c", command], process.env, { signal: never, kill: never });
 			const path = readFileSync(dir + "/cgroup", "utf8").trim().slice(3);
 			const pid = readFileSync(dir + "/pid", "utf8").trim();
 			const ps = spawnSync("ps", ["-o", "stat=", "-p", pid], { encoding: "utf8" });
 			const stopped = ps.status !== 0 || ps.stdout.trim().startsWith("Z");
-			report = { kind, status, path, stopped, removed: !existsSync("/sys/fs/cgroup" + path) };
+			const binds = readFileSync(dir + "/binds", "utf8").trim();
+			report = { kind, status, path, binds, stopped, removed: !existsSync("/sys/fs/cgroup" + path) };
 		}
 		writeFileSync(${JSON.stringify(result)}, JSON.stringify(report));`,
 	);
@@ -1032,27 +1149,33 @@ async function insideScope(launch: (command: string[], env: NodeJS.ProcessEnv) =
 }
 
 describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () => {
-	test("owns a child cgroup of a delegated scope and removes it", { timeout: 30_000 }, async () => {
-		const report = await insideScope((command, env) => scope(command, env, cancellation().cancel), true);
-		expect(report).toMatchObject({ kind: "nested", status: 7, stopped: true, removed: true });
-		// The child sits inside the enclosing scope, so that scope's cgroup.kill still reaches it.
-		expect(report.path).toMatch(/\/quest-gate-[0-9a-f-]+\.scope\/quest-gate-[0-9a-f-]+$/);
+	test("runs its command in a background scope beside the enclosing one", { timeout: 30_000 }, async () => {
+		const report = await insideScope((command, env) => scoped(command, env, cancellation().cancel), true);
+		expect(report).toMatchObject({ kind: "scope", status: 7, stopped: true, removed: true });
+		// Bound to the enclosing scope, a gate's scope here, so that scope's owner stops it too.
+		expect(report.binds).toMatch(/^quest-gate-[0-9a-f-]+\.scope$/);
+		// A sibling, so only the gated command yields the CPU, not the rest of the enclosing scope.
+		expect(report.path).toMatch(/\/background\.slice\/quest-gate-[0-9a-f-]+\.scope$/);
 	});
 
-	test("leaves its command to a scope that is not delegated", { timeout: 30_000 }, async () => {
-		// A scope started as a Quest before delegation would have.
-		const unit = `quest-worktree-${randomUUID()}.scope`;
-		const launch = (command: string[], env: NodeJS.ProcessEnv) =>
-			new Promise<number>((resolve, reject) => {
-				const child = spawn(
-					"systemd-run",
-					["--user", "--scope", "--quiet", "--collect", `--unit=${unit}`, "--", ...command],
-					{ env, stdio: "inherit" },
-				);
-				child.once("error", reject);
-				child.once("exit", (code) => resolve(code ?? 1));
-			});
-		expect(await insideScope(launch, false)).toEqual({ kind: "inside" });
+	test("is stopped when the enclosing scope's owner kills it", { timeout: 30_000 }, async () => {
+		const dir = tempDir();
+		const ready = join(dir, "ready");
+		const pid = join(dir, "pid");
+		// Ignoring SIGTERM, it outlives the forwarded signal, so only the bound scope's stop ends it.
+		const command = [
+			"/bin/sh",
+			"-c",
+			`trap '' TERM; sleep 1000 & echo $! > ${quote(pid)}; : > ${quote(ready)}; wait`,
+		];
+		const { stop, kill, cancel } = cancellation();
+		const result = scoped(nestedGate(dir, command), outside(), cancel);
+		await until(() => existsSync(ready), "the command to start");
+		stop.abort("SIGTERM");
+		kill.abort();
+		await result;
+		// The enclosing run resolves only once the bound scope is empty too.
+		expect(stopped(Number(readFileSync(pid, "utf8")))).toBe(true);
 	});
 
 	/**
@@ -1069,7 +1192,7 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 			`import { existsSync } from "node:fs";
 			import { direct, inside, owner } from ${JSON.stringify(gate)};
 			import { cancelled, interrupts } from ${JSON.stringify(interrupt)};
-			const own = owner(process.env);
+			const { run: own } = owner(process.env);
 			if (own === direct || own === inside) process.exit(90);
 			const signals = interrupts();
 			const stop = new AbortController();
@@ -1099,7 +1222,7 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 		const dir = tempDir();
 		const leaf = signalled(dir, ["SIGTERM"], 200);
 		const { stop, cancel } = cancellation();
-		const result = scope(nestedGate(dir, phase(dir, leaf.script)), outside(), cancel);
+		const result = scoped(nestedGate(dir, phase(dir, leaf.script)), outside(), cancel);
 		await created(leaf.ready);
 		stop.abort("SIGTERM");
 		expect(await result).toBe(128 + constants.signals.SIGTERM);
@@ -1108,13 +1231,13 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 		expect(existsSync(leaf.done)).toBe(true);
 	});
 
-	test("cancelled by its caller, signals every process in its child cgroup", { timeout: 30_000 }, async () => {
+	test("cancelled by its caller, signals every process in its scope", { timeout: 30_000 }, async () => {
 		const dir = tempDir();
 		const leaf = signalled(dir, ["SIGTERM"], 200);
 		const abort = join(dir, "abort");
 		// The shell waits on the leaf in the background, so only a signal to the whole cgroup reaches it.
 		const command = ["/bin/sh", "-c", `${quote(process.execPath)} ${quote(leaf.script)} & wait`];
-		const result = scope(nestedGate(dir, command, abort), outside(), cancellation().cancel);
+		const result = scoped(nestedGate(dir, command, abort), outside(), cancellation().cancel);
 		await created(leaf.ready);
 		writeFileSync(abort, "");
 		expect(await result).toBe(128 + constants.signals.SIGTERM);
@@ -1145,6 +1268,24 @@ function detached(dir: string, rest: string) {
 		pid: () => Number(readFileSync(pid, "utf8")),
 	};
 }
+
+describe.runIf(process.platform === "linux")("a process that exits while its stat is read", () => {
+	const pid = 4242;
+	const identity = { host: hostname(), pid, start: "1" };
+	afterEach(() => (racing.read = undefined));
+
+	test.each(["ENOENT", "ESRCH"])("reads as gone when the stat read fails with %s", (code) => {
+		racing.read = { path: `/proc/${pid}/stat`, code };
+		expect(processStart(pid)).toBeUndefined();
+		expect(ownerAlive(identity)).toBe(false);
+	});
+
+	test("surfaces any other read error", () => {
+		racing.read = { path: `/proc/${pid}/stat`, code: "EACCES" };
+		expect(() => processStart(pid)).toThrow("EACCES");
+		expect(() => ownerAlive(identity)).toThrow("EACCES");
+	});
+});
 
 describe("the Windows job stub", () => {
 	test("passes the exact exit status and restores the caller's environment", async () => {
@@ -1218,7 +1359,7 @@ test("the checkout's Bun config hands a gated command no .env files from its dir
 
 describe.runIf(process.platform === "win32")("a job object", () => {
 	test("is the gate's owner outside an admitted command", () => {
-		expect(owner({})).toBe(job);
+		expect(owner({})).toEqual({ run: job });
 	});
 
 	test("keeps the exact exit status and stops a detached descendant", { timeout: 30_000 }, async () => {
@@ -1333,7 +1474,7 @@ test("the gated command keeps its own flags, even ones Quest also parses", () =>
 	expect(gateBoundary(["gate", "--version"])).toEqual(["gate", "--version"]);
 	// Gate's own option stays Quest's; the same flag after the executable is the command's.
 	expect(gateBoundary(["gate", "--quick", "ls", "--quick"])).toEqual(["gate", "--quick", "--", "ls", "--quick"]);
-	expect(gateBoundary(["gate", "--host", "ls", "--host"])).toEqual(["gate", "--host", "--", "ls", "--host"]);
+	expect(gateBoundary(["gate", "ls", "--host"])).toEqual(["gate", "--", "ls", "--host"]);
 	expect(gateBoundary(["gate", "--root", "r", "--quick", "ls"])).toEqual([
 		"gate",
 		"--root",
@@ -1361,4 +1502,12 @@ test("global options after gate keep working", async () => {
 test("gate has command help and requires an executable", () => {
 	expect(run("gate", "--help").stdout).toContain("Arguments forwarded verbatim");
 	expect(run("gate").code).toBe(2);
+});
+
+test("gate rejects unknown options before the executable and forwards flags after it", () => {
+	const result = run("gate", "--host", process.execPath, "-e", "process.exit(0)");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain("unknown option '--host'");
+	expect(gateBoundary(["gate", "--unknown", "ls"])).toEqual(["gate", "--unknown", "ls"]);
+	expect(gateBoundary(["gate", "--", "-command"])).toEqual(["gate", "--", "-command"]);
 });

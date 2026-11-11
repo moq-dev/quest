@@ -7,7 +7,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Pull the latest origin changes before working.
 - Before editing a file, read every `AGENTS.md` on its path from the root; not every agent loads nested ones.
 - Read the repository's `CONTRIBUTING.md` before a PR, and its `REVIEW.md`, if any, before a review.
-- Fix bugs at the root cause. Never work around one with a retry, sleep, or timeout.
+- Fix bugs, flaky tests included, at the root cause. Never work around one with a retry, sleep, timeout, or looser assertion.
 - Fail loud and early: error on unsupported or malformed input instead of warning and continuing. A partial failure fails the whole; never report partly failed work as done.
 - Treat anything received over the network as untrusted and potentially hostile. Bound what a peer can make you hold by design, not with a constant. Run no code from a PR whose author lacks write access: it runs with your credentials.
 - Reproduce bugs before fixing them.
@@ -15,8 +15,6 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Every test runs in CI. The merge gate holds only fast, high-signal tests; slow ones run nightly.
 - Be adversarial: attack your own approach, reports, reviews, and other PRs as hard as anyone else's, and argue for the best approach over the first one that works.
 - Never add or change a rule in an `AGENTS.md`, `CONTRIBUTING.md`, or skill without being prompted. When you do, follow `quest guide prompting`.
-- No em dashes.
-- End every GitHub post you author with `(Written by <model> with <effort>)`, naming the running model and its reasoning effort, or `(Written by <model>)` when the harness doesn't report the effort; never guess it. Commit messages with a `Co-Authored-By:` trailer are exempt.
 - In a public repository, never mention customers, partners, or prospects, or link to private repositories. Justify work on its merits.
 
 ## Important
@@ -33,6 +31,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 
 - Tests cover edge cases, not old bugs or trivial values.
 - Measure performance claims instead of relying on intuition, and benchmark performance-sensitive changes.
+- Match the code's existing conventions, patterns, and naming.
 - Inline simple helpers.
 - Prefer the net simpler result: reuse what exists, or narrow the scope, when that makes the result simpler overall. Say what was dropped.
 - Say it once, in the fewest words that hold up.
@@ -41,13 +40,13 @@ Engineering rules for every task, as `quest context` prints them. The repository
 ## Public API
 
 - Report the public API and wire impact of every change in the PR description.
-- A breaking change marks its title with `!` and says how to migrate.
+- A breaking change to the public API or wire marks its title with `!` and says how to migrate; a behavior change alone takes no `!`.
 - Keep things private until a current or planned consumer needs them.
 - Never add `foo_with_x`, `foo_checked`, or a compatibility shim. Make the breaking change to `foo` instead.
 - Let the type system make misuse unrepresentable.
 - Decide a supported path at setup from known capabilities, and error otherwise. Never try a path at runtime and silently fall back.
 - Avoid callback parameters and 4+ arguments. Return a handle; take a struct.
-- Name by role, not today's implementation.
+- Name by role, not today's implementation. Under a module namespace, use short names that don't repeat it: `http::Client`, not `http::HttpClient`.
 - Document every export in one plain line, the way you'd say it out loud.
 
 ## Workspace
@@ -56,8 +55,8 @@ Work in your own worktree, reusing a suitable one you already own.
 Read-only discovery needs no new checkout when your context or own checkout answers it.
 Put PR bodies, review drafts, logs, patches, helper scripts, and temporary clones in its `.tmp/`, so they disappear with the worktree.
 If the repository doesn't ignore `.tmp/`, add it to the file `git rev-parse --git-path info/exclude` names.
-Never write them to `/tmp`, elsewhere in or beside the checkout, or in a directory other agents share, such as a session scratchpad.
-Pass PR bodies to `gh` on stdin (`--body-file -`).
+Never write them to `/tmp`, elsewhere in or beside the checkout, or in a directory other agents share.
+Pass PR bodies to `gh` on stdin (`--body-file -`) with a here-document, where the hook checks them; one posted from a file goes unchecked, so it must still end with the `(Written by ...)` line and hold no em dashes.
 
 Before ending a task, pausing for a decision, or handing off, commit a checkpoint and report what remains and which checks passed or did not run.
 Finish with a clean checkout: intended changes committed and pushed, incidental generated changes restored, and pre-existing or unrelated changes preserved.
@@ -87,9 +86,7 @@ A decision about an open PR never authorizes closing it. Confirm a close as its 
 
 ## Pull requests
 
-Push with an explicit refspec: `git push <remote> refs/heads/<branch>:refs/heads/<branch>`.
-A bare branch name can push to the base instead, as under `push.default=upstream` when the branch tracks it.
-Never rebase or force-push, even a branch only you hold; merge the base instead, only when the branch conflicts with it or a landing step, such as `quest merge` or a merge queue, refuses the head, and resolve the conflicts in that merge; a branch only behind needs none, since landing tests it on the current base.
+Merge the base only when the branch conflicts with it or a landing step, such as `quest merge` or a merge queue, refuses the head, and resolve the conflicts in that merge; a branch only behind needs none, since landing tests it on the current base.
 A PR that another session pushed to in the last hour is theirs: report its events instead of pushing to it.
 Before each push to a PR's branch, confirm the PR is still open, since a push after it merges restores the deleted branch.
 Run the repository's checks locally while the PR is a draft; CI may run only on PRs ready for review.
@@ -113,4 +110,4 @@ Review findings fixed in the same PR are not culprits.
 When the repository has a `quest/` directory, it plans work as quests: Markdown files there, each completed in one PR.
 
 - Before creating, editing, claiming, or finishing a quest outside a `/quest-*` skill, run `quest guide` and follow it; skills carry the sections they need.
-- A follow-up becomes a quest only through `/quest-plan`, never a GitHub issue or an agent-session task. Suggest follow-ups in the PR body, each with a recommendation: plan it, or drop it and why.
+- Add follow-ups worth a quest to your PR as `quest guide` describes, never as GitHub issues or agent-session tasks.

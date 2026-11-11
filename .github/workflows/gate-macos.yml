@@ -1,0 +1,52 @@
+name: Gate (macOS)
+
+# The gate owns commands through a process group on macOS, which Check's Linux
+# suite does not reach. Pull requests that change the gate run its tests here,
+# and Release calls this before publishing. It is not a required check, so a
+# slow hosted macOS queue holds back no merge.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/gate-macos.yml
+      - src/cli/gate.ts
+      - src/cli/supervise.ts
+      - src/cli/interrupt.ts
+      - test/gate.test.ts
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-macos-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    name: gate (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Nix doesn't run on Intel macOS; package.json's packageManager pins the flake's Bun.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      # The cancellation tests run their phase under Just and GNU time, as the dev shell has them.
+      - name: Install Just and GNU time
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install just gnu-time
+          echo "$(brew --prefix gnu-time)/libexec/gnubin" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - name: Check the gate's owners natively
+        run: bun run test test/gate.test.ts
