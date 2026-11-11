@@ -310,6 +310,13 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		);
 		expect(existsSync(join(clone, ".git"))).toBe(true);
 		rmSync(join(record.path, "cache"), { recursive: true });
+		const mirror = join(record.path, "cache", "mirror.git");
+		mkdirSync(mirror, { recursive: true });
+		git(mirror, "init", "-q", "--bare");
+		await expect(worktrees.remove(record.id)).rejects.toThrow(
+			`ignored path holds a Git repository or worktree: ${mirror}`,
+		);
+		rmSync(join(record.path, "cache"), { recursive: true });
 		const agent = await worktrees.create(record.path, "agent", 10_000_000);
 		await expect(worktrees.remove(record.id)).rejects.toThrow(
 			`ignored path holds a Git repository or worktree: ${agent.path}`,

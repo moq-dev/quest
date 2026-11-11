@@ -319,11 +319,17 @@ export function diskUsage(path: string, seen = new Set<string>(), skip = new Set
 	return bytes;
 }
 
-/** The first repository or linked worktree, marked by a `.git` entry, at or under `path`; symlinks are never followed. */
+/**
+ * The first repository or linked worktree, marked by a `.git` entry, or bare repository, holding `HEAD`,
+ * `objects/`, and `refs/`, at or under `path`; symlinks are never followed.
+ */
 function repositoryWithin(path: string): string | undefined {
 	if (!entry(path)?.isDirectory()) return undefined;
 	const children = readdirSync(path, { withFileTypes: true });
+	const has = (name: string, directory: boolean) =>
+		children.some((child) => child.name === name && (directory ? child.isDirectory() : child.isFile()));
 	if (children.some((child) => child.name === ".git")) return path;
+	if (has("HEAD", false) && has("objects", true) && has("refs", true)) return path;
 	for (const child of children) {
 		const found = child.isDirectory() ? repositoryWithin(join(path, child.name)) : undefined;
 		if (found) return found;
