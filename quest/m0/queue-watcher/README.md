@@ -130,9 +130,7 @@ against 756 merges, 130 of them resolved by the quest merge driver alone.
 
 - Build concurrency, now with the measured data the 2026-11-01 decision
   asked for: ✅ stay at 1 (rejected: plan concurrency 2 now).
-  [Epic branches](/quest/m0/epic-branches/README.md) cut what reaches
-  `main`'s queue to one PR per epic, so re-measure before building for
-  groups of two.
+  Re-measure before building for groups of two.
 - Re-enqueue, for a conflict the merge driver resolved alone: ✅ keep the
   back of the queue for all (rejected: GitHub's `jump` to the front for
   those, recommended by the agent for the 95-minute median they wait).
