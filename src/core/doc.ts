@@ -178,6 +178,30 @@ export function hosts(doc: Doc): Host[] {
 	return HOST.filter((h) => named.has(h));
 }
 
+/** The section holding the date a quest waits for before it can start. */
+export const SCHEDULED = "Scheduled";
+
+/** The calendar date a `## Scheduled` item names, as `2027-01-15` or `2027-01-15 - why`, or `null` if it names none. */
+export function dateOf(entry: Entry): string | null {
+	const match = /^(\d{4})-(\d{2})-(\d{2})(?: - .+)?$/.exec(entry.text);
+	if (!match) return null;
+	const [year, month, day] = match.slice(1, 4).map(Number);
+	// `Date.UTC` rolls 2027-02-30 over into March; only a real day survives the round trip.
+	const date = new Date(Date.UTC(year, month - 1, day));
+	const real = date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+	return real ? match[0].slice(0, 10) : null;
+}
+
+/**
+ * Whether a `## Scheduled` item still holds its quest back on `today`, a
+ * `YYYY-MM-DD` date: its date is later, or it names none, which nothing but
+ * an edit can clear.
+ */
+export function pending(entry: Entry, today: string): boolean {
+	const date = dateOf(entry);
+	return date === null || date > today;
+}
+
 function isReadme(path: string): boolean {
 	return fileName(path) === "README.md";
 }

@@ -21,6 +21,8 @@ import {
 	HOST,
 	HOSTS,
 	hostOf,
+	SCHEDULED,
+	dateOf,
 	isEpic,
 	owner,
 	permanent,
@@ -39,14 +41,14 @@ import { MAINTAINER, WAITING, parseWait } from "./waiting";
  * literally, so a typo turns a blocked quest ready and fails nowhere else: the
  * closed vocabulary is what catches it.
  */
-export const HEADINGS = ["Goal", "Plan", "Hosts", "Waiting", "Required", "Closes", "Related"];
+export const HEADINGS = ["Goal", "Plan", "Hosts", "Waiting", "Scheduled", "Required", "Closes", "Related"];
 
 /**
  * Sections whose whole content is a list. A heading left standing after its
  * last entry was removed is a bug: an empty `Required` blocks its quest
  * forever.
  */
-export const LIST_SECTIONS = ["Hosts", "Waiting", "Required", "Closes", "Related"];
+export const LIST_SECTIONS = ["Hosts", "Waiting", "Scheduled", "Required", "Closes", "Related"];
 
 /** The permanent root epic; the one document nothing has to list. */
 export const ROOT = "quest/README.md";
@@ -181,6 +183,18 @@ function headings(found: Finding[], docs: Doc[], doc: Doc) {
 		}
 	}
 
+	// Readiness compares the date as text, so anything but a real `YYYY-MM-DD`
+	// would block the quest forever. A second date only says the same thing worse.
+	entries(doc, SCHEDULED).forEach((entry, index) => {
+		const message =
+			dateOf(entry) === null
+				? `'## ${SCHEDULED}' item must be a date, as 'YYYY-MM-DD' optionally followed by ' - why'`
+				: index > 0
+					? `'## ${SCHEDULED}' holds one date; keep the one the work waits for`
+					: null;
+		if (message !== null) found.push({ path: doc.path, line: entry.line, message });
+	});
+
 	// `quest waiting` sorts on who acts, so an item that does not name its
 	// party would hide a decision the maintainer owes.
 	for (const entry of entries(doc, WAITING)) {
@@ -287,7 +301,10 @@ function membership(found: Finding[], known: Set<string>, docs: Doc[]) {
  * A link to a finished milestone is removed. Milestones are permanent, so
  * unlike a finished quest, which is deleted, the link would keep resolving and
  * block its quest forever. A milestone is finished once its directory holds no
- * other quest and its README has no `## Required`.
+ * other quest and its README has no `## Required`. Its `## Scheduled` date
+ * does not count: a date holds back only the quests under it, which an empty
+ * milestone has none of, and reading it here would make `quest check` change
+ * verdict on that day with no commit.
  *
  * Readiness stays a grep for the heading; this rule is what keeps that answer
  * true once the milestone empties. A root entry naming a milestone is the

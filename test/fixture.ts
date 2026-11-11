@@ -24,6 +24,9 @@ import { type Output, main } from "../src/cli/main";
 import { type Terminal } from "../src/cli/theme";
 import { checkout, load } from "../src/cli/tree";
 
+/** The date tests read readiness on, so a `## Scheduled` date never depends on the wall clock. */
+export const TODAY = "2026-11-10";
+
 export const ROOT_README = `# Quests
 
 ## Goal
@@ -209,16 +212,16 @@ export class Tree {
 		return check(tree.docs, tree.exists).map(formatFinding);
 	}
 
-	/** The rendered blocker chain: one line per blocker, nesting indented. */
-	blockers(path: string): string[] {
+	/** The rendered blocker chain on `today`: one line per blocker, nesting indented. */
+	blockers(path: string, today = TODAY): string[] {
 		const docs = load(this.path);
 		const doc = lookup(docs, path);
 		if (doc === null) throw new Error(`${path} is not a quest`);
-		return blockers(docs, doc).flatMap((blocker) => renderBlocker(blocker));
+		return blockers(docs, doc, today).flatMap((blocker) => renderBlocker(blocker));
 	}
 
-	ready(): string[] {
-		return ready(load(this.path));
+	ready(today = TODAY): string[] {
+		return ready(load(this.path), today);
 	}
 
 	/** Run the CLI against this tree. */

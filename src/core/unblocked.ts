@@ -76,12 +76,13 @@ export function ranking(docs: Doc[]): Ranking {
 }
 
 /**
- * Milestone order, descending downstream impact, then existing ready order.
- * Readiness and impact are local facts, independent of claims or outside conditions.
+ * The quests ready on `today`, a `YYYY-MM-DD` date: milestone order, descending
+ * downstream impact, then existing ready order. Readiness and impact are local
+ * facts, independent of claims or outside conditions.
  */
-export function unblocked(docs: Doc[]): RankedQuest[] {
+export function unblocked(docs: Doc[], today: string): RankedQuest[] {
 	const rank = ranking(docs);
-	return ready(docs)
+	return ready(docs, today)
 		.map((path) => ({ path, dependents: rank.impact(path) }))
 		.sort((a, b) => rank.priority(a.path) - rank.priority(b.path) || b.dependents - a.dependents);
 }
@@ -102,7 +103,7 @@ export interface WaitingQuest {
 	pr: string | null;
 	/** Distinct transitive dependents, as `quest unblocked` counts them. */
 	dependents: number;
-	/** No `Required` entry remains on it or an epic above it, so clearing its waits lets the work go on. */
+	/** No `Required` entry or future `Scheduled` date remains on it or an epic above it, so clearing its waits lets the work go on. */
 	ready: boolean;
 	waits: Wait[];
 }
@@ -112,12 +113,12 @@ export interface WaitingQuest {
  * back with one: those waiting on the maintainer first, then milestone order,
  * descending downstream impact, ready before blocked, then tree order, with
  * drafts after quests in the order given. A draft ranks as the quest its branch
- * carries, or last when it carries none. Validates the tree first, as
- * `unblocked` does.
+ * carries, or last when it carries none. Readiness is as of `today`, a
+ * `YYYY-MM-DD` date. Validates the tree first, as `unblocked` does.
  */
-export function waiting(docs: Doc[], drafts: Draft[] = []): WaitingQuest[] {
+export function waiting(docs: Doc[], today: string, drafts: Draft[] = []): WaitingQuest[] {
 	const rank = ranking(docs);
-	const startable = new Set(ready(docs));
+	const startable = new Set(ready(docs, today));
 	const maintainer = (quest: WaitingQuest) => (quest.waits.some(onMaintainer) ? 0 : 1);
 	const priority = (quest: WaitingQuest) => (quest.path === null ? Infinity : rank.priority(quest.path));
 	const byPath = new Map(docs.map((doc) => [doc.path, doc]));

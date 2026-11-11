@@ -207,6 +207,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			code = 1;
 		});
 
+	/** The local calendar date as `## Scheduled` writes it, `YYYY-MM-DD`. */
+	const today = () => {
+		const now = new Date();
+		const pad = (n: number) => String(n).padStart(2, "0");
+		return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+	};
+
 	/** The quest document `path` names, as the tree writes it, as the shell completes it, or as a filesystem path. */
 	const locate = (docs: Doc[], path: string): Doc | null => {
 		const inside = withinRoot(root(), path);
@@ -230,7 +237,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	/** Print what blocks `doc`: the themed log on a terminal, else the blocker list with advice on stderr. */
 	const explain = (docs: Doc[], doc: Doc, path: string) => {
-		const found = blockers(docs, doc);
+		const found = blockers(docs, doc, today());
 		if (theme) {
 			// The themed log already names every blocker; stderr keeps only the advice.
 			for (const line of theme.blockers(new Map(docs.map((d) => [d.path, d])), doc, found)) print(line);
@@ -267,8 +274,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Rank ready quests by milestone priority, distinct transitive dependents, then path order. " +
 				"Given a path, print what blocks that quest instead.\n\n" +
 				"A quest is ready only when neither it nor any epic above it, milestones included, has a ## Required " +
-				"section. Counts exclude structural epic membership but include the quests an epic's ## Required holds " +
-				"back. Other prerequisites may remain for dependents. " +
+				"section or a ## Scheduled date after today's local date. Counts exclude structural epic membership " +
+				"but include the quests an epic's ## Required holds back. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
 				"ordered array of {path, dependents, hosts, models} objects, where hosts lists the operating systems " +
 				"(linux, macos, windows) under the quest's ## Hosts, empty when it runs anywhere, and models ranks the {harness, model, effort} " +
@@ -326,7 +333,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				};
 				if (!options.unclaimed) {
 					const tree = checkout(root(), warn);
-					if (valid(tree)) show(unblocked(tree.docs), tree.docs);
+					if (valid(tree)) show(unblocked(tree.docs, today()), tree.docs);
 					return;
 				}
 				// Readiness comes from the upstream default branch, so a stale checkout cannot offer
@@ -338,7 +345,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						const refs = up === null ? null : upstreamRefs(root(), up.git);
 						const tree = refs === null ? checkout(root(), warn) : snapshot(root(), refs.base, warn);
 						if (!valid(tree)) return null;
-						const ranked = unblocked(tree.docs);
+						const ranked = unblocked(tree.docs, today());
 						const branches = ranked.map((quest) => questBranch(quest.path));
 						const holdings = up === null ? [] : (await held(root(), up, branches, refs?.branches)).claims;
 						return { ranked, holdings, docs: tree.docs };
@@ -373,8 +380,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"followed by the condition and how to check or advance it. A draft's item without a party is the " +
 				"maintainer's; a draft's section without items is one maintainer item " +
 				"holding its prose.\n\n" +
-				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the quest's " +
-				"path or the draft's URL, and the item. --json prints an ordered array of {path, pr, dependents, " +
+				"Prints one line per item: dependents, ready or blocked (whether Required entries or a future " +
+				"Scheduled date remain), the quest's path or the draft's URL, and the item. --json prints an ordered array of {path, pr, dependents, " +
 				"ready, waits: [{line, party, text}]} objects, where pr is the draft's URL or null and path is the " +
 				"quest, the quest a draft carries, or null. --maintainer keeps only the items the maintainer settles. " +
 				"Invalid trees fail before printing. Outside conditions are never checked, nor whether another " +
@@ -391,7 +398,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const tree = checkout(root(), warn);
 			if (!valid(tree)) return;
 			settle(openDrafts(root(), options.remote, { github: () => gitHubDependencies(warn), warn }), (drafts) => {
-				const found = waiting(tree.docs, drafts)
+				const found = waiting(tree.docs, today(), drafts)
 					.map((quest) =>
 						options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest,
 					)
@@ -463,7 +470,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					if (doc === null) throw notUpstream(find(load(root()), path).path);
 					// A malformed tree can hide a blocker, as a misspelled `## Required` does.
 					if (!valid(at.tree)) return 1;
-					if (blockers(at.tree.docs, doc).length > 0) {
+					if (blockers(at.tree.docs, doc, today()).length > 0) {
 						explain(at.tree.docs, doc, path);
 						return 3;
 					}
