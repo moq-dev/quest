@@ -52,7 +52,3 @@ Open for the implementer, with recommendations:
   ([gate measured CPU](https://github.com/moq-dev/quest/pull/607) is in
   flight) over a second implementation.
 - Remove the per-test wall overrides that only existed to survive load.
-
-## Related
-
-- [Gate test races](/quest/m0/gate-test-races.md) - the other queue-build failures, which are assertion races, not timeouts

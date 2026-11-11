@@ -2,8 +2,8 @@
 // systemd user scope, named once and never reused, so its cgroup holds every descendant that does
 // not ask another service manager to start it. Other hosts fail explicitly; only the gate settles
 // for a process group there (see `group` in gate.ts).
-import { type ChildProcessWithoutNullStreams, execFile, execFileSync, spawn } from "node:child_process";
-import { closeSync, existsSync, constants as fs, openSync, readFileSync, watch, writeSync } from "node:fs";
+import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process";
+import { closeSync, existsSync, constants as fs, openSync, readdirSync, readFileSync, watch, writeSync } from "node:fs";
 import { constants, hostname } from "node:os";
 // Cgroup paths are POSIX paths, also in the tests that parse them on Windows.
 import { join } from "node:path/posix";
@@ -184,26 +184,41 @@ export function kill(group: string): void {
 	}
 }
 
-/** Whether the cgroup still holds a process, or `otherwise` when that cannot be read. */
-function populatedOr(group: string, otherwise: boolean): boolean {
-	try {
-		return populated(group);
-	} catch {
-		return otherwise;
+/**
+ * Send `signal` to every process in the cgroup tree, as systemd's default `KillMode=control-group`
+ * stops a unit; cgroup v2 offers only SIGKILL (`cgroup.kill`) itself. It signals from this process,
+ * which handles the signal, rather than through a helper such as `systemctl kill`: inside a Quest
+ * scope, a helper starts in the enclosing cgroup while that scope's owner may still be signalling
+ * it, and would die of the very signal it forwards. Like systemd, it repeats until a pass finds no
+ * process it has not signalled, so one forked meanwhile gets it too.
+ */
+function signalGroup(group: string, signal: NodeJS.Signals): void {
+	const signalled = new Set<number>();
+	for (let fresh = true; fresh;) {
+		fresh = false;
+		for (const pid of members(group)) {
+			if (signalled.has(pid)) continue;
+			signalled.add(pid);
+			fresh = true;
+			try {
+				process.kill(pid, signal);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			}
+		}
 	}
 }
 
-/**
- * Send `signal` to every process in the scope, as systemd's default `KillMode=control-group` stops
- * a unit, then call `done`. cgroup v2 offers only SIGKILL (`cgroup.kill`) itself.
- */
-function signalScope(unit: string, signal: NodeJS.Signals, done: (error?: string) => void): void {
-	execFile(
-		"systemctl",
-		["--user", "kill", "--kill-whom=all", `--signal=${signal}`, unit],
-		{ encoding: "utf8" },
-		(error, _stdout, stderr) => done(error ? stderr.trim() || error.message : undefined),
-	);
+/** The processes in the cgroup and every cgroup below it; none once it is removed. */
+function members(group: string): number[] {
+	try {
+		const own = readFileSync(join(group, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number);
+		const children = readdirSync(group, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+		return [...own, ...children.flatMap((child) => members(join(group, child.name)))];
+	} catch (error) {
+		if (["ENOENT", "ENODEV"].includes((error as NodeJS.ErrnoException).code ?? "")) return [];
+		throw error;
+	}
 }
 
 /** The scope's cgroup directory, or undefined once systemd no longer knows the unit. */
@@ -296,7 +311,6 @@ export const systemdScopes: Scopes = {
 				name: unit,
 				unsupported: UNSUPPORTED,
 				launcher: "systemd-run",
-				signal: (name, done) => signalScope(unit, name, done),
 				emptied: () => stopBound(unit),
 				bound: Boolean(enclosing),
 			},
@@ -315,8 +329,6 @@ interface Containment {
 	unsupported: string;
 	/** The program that starts the handshake shell. */
 	launcher: string;
-	/** Send `name` to every process in the cgroup, then call `done`, with why when it could not. */
-	signal(name: NodeJS.Signals, done: (error?: string) => void): void;
 	/** Stop what the cgroup's end leaves to systemd, once the cgroup is empty. */
 	emptied(): Promise<void>;
 	/**
@@ -366,15 +378,7 @@ function contain(
 			if (!forwards(cancel.signal)) return;
 			const name = requested(cancel.signal);
 			signalled = true;
-			describe.signal(name, (error) => {
-				// The cgroup empties once its last process exits, which leaves nothing to signal.
-				if (!error || !group || !populatedOr(group, true)) return;
-				process.stderr.write(
-					`quest: cannot signal every process in ${describe.name}, only its command: ${error}\n`,
-				);
-				child.kill(name);
-				drain.abort();
-			});
+			signalGroup(group!, name);
 		};
 		const terminate = () => {
 			stop();

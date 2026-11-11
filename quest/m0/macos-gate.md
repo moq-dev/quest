@@ -60,5 +60,4 @@ first as runner flakiness).
 
 ## Related
 
-- [Gate tests pass deterministically](/quest/m0/gate-test-races.md) - Linux assertion races in the same file
 - [Test CPU timeout](/quest/m0/test-cpu-timeout.md) - timeouts from load rather than a hang
