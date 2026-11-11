@@ -1332,7 +1332,10 @@ and Claude Code from Codex. `--harness` names the only reviewer instead of
 the pair, at its entry's model and effort, and `--model` and `--effort`
 override the size pick's or that reviewer's, as a repository whose `AGENTS.md`
 names other reviewers needs. The second reviewer's model is avoided like any
-other, which, without `--harness`, is an error. An unknown harness, a size whose
+other, which, without `--harness`, is an error. A `--harness` run keeps the other
+reviewers' sessions for the pair's next run, and refuses while one has
+findings to settle, so a head never passes one reviewer alone while the other's
+findings are open. An unknown harness, a size whose
 every reviewer is avoided, or a missing or logged-out CLI, is an error
 rather than a same-model review, as is a login the API rejects mid-round, such
 as an expired or revoked token. The reviewer reaches its model as the user's own CLI does:

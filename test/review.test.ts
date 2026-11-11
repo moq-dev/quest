@@ -1816,7 +1816,13 @@ test("the next step stops for the design checkpoint when a reviewer's every thir
 
 test("saved sessions are read only in the current format, or refused naming --new", () => {
 	const finding = { severity: "low", file: "a.ts", line: 1, title: "t", body: "b" };
-	const session = { reviewer: "codex", rounds: [{ head: "a", mergeBase: "m", findings: [finding] }], last: {} };
+	const session = {
+		reviewer: "codex",
+		session: "thread-1",
+		rounds: [{ head: "a", mergeBase: "m", findings: [finding] }],
+		last: {},
+		given: { instructions: "i", rules: null },
+	};
 	const current = { branch: "feature", sessions: [session] };
 	expect(parseState(current)).toEqual(current);
 	for (const older of [
@@ -1824,7 +1830,10 @@ test("saved sessions are read only in the current format, or refused naming --ne
 		// One reviewer's session, as quest saved it before the second reviewer.
 		{ branch: "feature", ...session },
 		{ sessions: [{ ...session, rounds: [{ head: "a", findings: 1 }] }] },
+		{ sessions: [{ ...session, rounds: [] }] },
 		{ sessions: [{ ...session, last: undefined }] },
+		{ sessions: [{ ...session, given: undefined }] },
+		{ sessions: [{ ...session, session: undefined }] },
 	])
 		expect(() => parseState(older)).toThrow(/--new/);
 });
@@ -1853,4 +1862,36 @@ fakes("a reviewer's failure stops the other and saves neither round", async () =
 	vi.stubEnv("FAKE_OPENCODE_LIMITED", undefined);
 	// No round was saved, so the next one needs no responses.
 	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+});
+
+fakes("--harness reviews alone, keeping the other reviewer's session unless it has findings to settle", async () => {
+	const s = setup();
+	const clean = JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] });
+	vi.stubEnv("FAKE_REPLY", clean);
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	const opencode = s.opencodeCalls().length;
+	write(s.repo, "src/lib.ts", "export const x = 4;\n");
+	git(s.repo, "commit", "-qam", "more");
+	const alone = await quest("--root", s.repo, "review", "--harness", "codex");
+	expect(alone.code, alone.stderr).toBe(0);
+	expect(alone.stdout).not.toContain("reviewer opencode");
+	expect(s.opencodeCalls()).toHaveLength(opencode);
+	// The pair's next run resumes the kept session on the new head.
+	const pair = await quest("--root", s.repo, "review", "--json");
+	expect(pair.code, pair.stderr).toBe(0);
+	expect(JSON.parse(pair.stdout).rounds.map((r: Round) => [r.reviewer, r.round])).toEqual([
+		["codex", 2],
+		["opencode", 2],
+	]);
+
+	// Its open findings keep a head from passing the size's pick alone.
+	const t = setup();
+	vi.stubEnv("FAKE_REPLY", clean);
+	vi.stubEnv("FAKE_OPENCODE_REPLY", JSON.stringify({ score: 8, rationale: "One gap.", findings: [FINDING] }));
+	expect((await quest("--root", t.repo, "review")).code).toBe(0);
+	const calls = t.calls().length;
+	const refused = await quest("--root", t.repo, "review", "--harness", "codex");
+	expect(refused.code).toBe(2);
+	expect(refused.stderr).toContain("the branch's opencode session has findings to settle");
+	expect(t.calls()).toHaveLength(calls);
 });

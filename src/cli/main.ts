@@ -1092,7 +1092,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
 				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
-				"its latest ## Review round's reviewer, round, score, and findings, " +
+				"each reviewer's latest ## Review round, with its round, score, and findings, " +
 				"and the later PRs that list it under ## Caused by. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, and accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
@@ -1137,7 +1137,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"--harness names the only reviewer instead of the pair, at its entry's model and effort, and --model and " +
 				"--effort override the size pick's model and effort; a repository whose AGENTS.md names other reviewers " +
 				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
-				"--effort, its variant. The reviewers run at once, and the first to fail stops the other and fails the " +
+				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle. The reviewers run at once, and the first to fail stops the other and fails the " +
 				"run, saving neither round. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +

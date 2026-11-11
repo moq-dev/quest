@@ -1399,9 +1399,15 @@ export function parseState(value: unknown): State {
 		Array.isArray(state.sessions) &&
 		state.sessions.every(
 			(session) =>
-				Array.isArray(session?.rounds) &&
+				typeof session?.reviewer === "string" &&
+				typeof session.session === "string" &&
+				Array.isArray(session.rounds) &&
+				session.rounds.length > 0 &&
 				session.rounds.every((round) => Array.isArray(round?.findings)) &&
-				session.last !== undefined,
+				typeof session.last === "object" &&
+				session.last !== null &&
+				typeof session.given === "object" &&
+				session.given !== null,
 		);
 	if (!valid) throw new ReviewInputError("the saved review sessions are not ones quest review reads; pass --new");
 	return state as State;
@@ -1556,8 +1562,20 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		const session = sessions.find((each) => each.reviewer === reviewer.harness);
 		return { reviewer, session, first: session === undefined ? 1 : firsts.get(session)! };
 	});
+	// A run of the pair drops another reviewer's session, as when the latest writer changed the size's pick.
+	// A run of --harness's reviewer alone keeps the others for the pair's next run, and refuses to pass a
+	// head while one of them still has findings it cannot settle.
+	const kept = options.harness === undefined ? [] : sessions.filter((each) => !seats.some((s) => s.session === each));
+	const unsettled = kept.filter((each) => each.rounds.at(-1)!.findings.length > 0);
+	if (unsettled.length > 0) {
+		throw new ReviewInputError(
+			`the branch's ${unsettled.map((each) => each.reviewer).join(" and ")} session has findings to settle; run quest review without --harness, or pass --new`,
+		);
+	}
 	if (seats.every((seat) => seat.session === undefined) && options.responses !== undefined) {
-		throw new ResponsesError("--responses answers a previous round, and this branch has none to resume");
+		throw new ResponsesError(
+			"--responses answers a previous round, and each reviewer of this run has none to resume",
+		);
 	}
 	const open = seats.reduce((sum, seat) => sum + (seat.session?.rounds.at(-1)!.findings.length ?? 0), 0);
 	if (open > 0 && options.responses === undefined) {
@@ -1608,7 +1626,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	// The first failure stopped the others, so it is the one to report.
 	if (controller.signal.aborted) throw controller.signal.reason;
 	const done = results.map((result) => (result as PromiseFulfilledResult<Seated>).value);
-	save(statePath, { branch, sessions: done.map((each) => each.session) } satisfies State);
+	save(statePath, { branch, sessions: [...done.map((each) => each.session), ...kept] } satisfies State);
 	return done.map((each) => each.round);
 }
 
@@ -1665,9 +1683,9 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 		last.base.ref === shared.base.ref &&
 		covers(root, previous.mergeBase, change.mergeBase);
 
-	// The last round already passed this head, and has nothing left to settle.
+	// The last round already passed this head, and has nothing left to settle; it repeats against the run's base.
 	if (resume && previous!.head === change.head && previous!.mergeBase === change.mergeBase && earlier.length === 0) {
-		return { round: { ...last!, usage: [], unchanged: true }, session: stored! };
+		return { round: { ...last!, base: shared.base, usage: [], unchanged: true }, session: stored! };
 	}
 
 	const cli = await prepare(harness, picked.model, root, shared.env, shared.signal);

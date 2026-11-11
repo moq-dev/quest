@@ -26,7 +26,7 @@ It reads the latest implementing model, and on a branch that is not a quest's th
 Pass `--exclude-model` or `--size` only for a PR whose body cannot hold the record.
 Where the repository's root instructions name other reviewers, pass them with `--harness`, `--model`, and `--effort`, which runs that reviewer alone.
 Run it in the foreground; a round takes minutes.
-Open the draft PR before the first round: each round rewrites the PR body's `## Review` section with its reviewer, session and round, base and head, score, and each finding's disposition, naming the head's full SHA only once a round reports no findings.
+Open the draft PR before the first round: each round rewrites the PR body's `## Review` section with its base and head, then each reviewer's session and round, score, and each finding's disposition, naming the head's full SHA only once no reviewer reports a finding.
 Write a round's record by hand only when it printed `record skipped`, as on another author's fork, and add context only after the record, since the next round rewrites the section.
 
 Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.

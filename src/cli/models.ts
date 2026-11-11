@@ -36,8 +36,8 @@ export const WRITERS: Record<Size, readonly Model[]> = {
 
 /**
  * Each PR size's reviewers, ranked: the first whose model is not the latest
- * writer's reviews it, so Claude reviews what Sol changed last, and
- * `SECOND_REVIEWER` reviews the same head after it.
+ * writer's reviews it, so Claude reviews what Sol changed last, while
+ * `SECOND_REVIEWER` reviews the same head beside it.
  */
 export const REVIEWERS: Record<Size, readonly Model[]> = {
 	XS: [sol("low"), opus("low")],
@@ -48,7 +48,7 @@ export const REVIEWERS: Record<Size, readonly Model[]> = {
 };
 
 /**
- * The second reviewer of every PR, after its size's: DeepSeek through opencode, a model family no writer
+ * The second reviewer of every PR, beside its size's: DeepSeek through opencode, a model family no writer
  * runs, for every size, since a review costs it about $0.05.
  */
 export const SECOND_REVIEWER: Reviewing = {
