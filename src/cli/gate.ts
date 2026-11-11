@@ -712,7 +712,17 @@ export const group: Owner = (command, env, cancel) =>
 			try {
 				process.kill(-child.pid!, name);
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code === "ESRCH") return;
+				// macOS refuses a group of only zombies with EPERM, where Linux signals them.
+				if (code !== "EPERM" || process.platform !== "darwin") throw error;
+				const ps = spawnSync("/bin/ps", ["-A", "-o", "pgid=,stat="], { encoding: "utf8" });
+				if (ps.status !== 0) throw error;
+				const live = ps.stdout.split("\n").some((line) => {
+					const [pgid, stat] = line.trim().split(/\s+/);
+					return Number(pgid) === child.pid && !stat!.startsWith("Z");
+				});
+				if (live) throw error;
 			}
 		};
 		let signalled = false;
