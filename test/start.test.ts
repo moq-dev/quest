@@ -867,7 +867,9 @@ describe("epic branches", () => {
 		});
 		const refused = await cli("--root", work, "start", four);
 		expect(refused.code).toBe(3);
-		expect(refused.stderr).toContain(`${four} changed on the default branch after ${EPIC_BRANCH} was cut`);
+		expect(refused.stderr).toContain(
+			`${four} is ready only with changes the default branch made after ${EPIC_BRANCH}`,
+		);
 		expect(tip(bare, "quest/m0/epic/four")).toBe("");
 	});
 
@@ -882,6 +884,40 @@ describe("epic branches", () => {
 		const result = await cli("--root", work, "unblocked");
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain("quest/m0/one.md");
+	});
+
+	test("a directory the epic's branch refills after the default branch emptied it still exists", async () => {
+		const bare = upstream();
+		const work = clone(bare);
+		mkdirSync(join(work, "src"));
+		land(work, { "src/old.ts": "old\n" });
+		expect((await cli("--root", work, "start", EPIC_ONE)).code).toBe(0);
+		landOn(work, EPIC_BRANCH, {
+			"src/new.ts": "new\n",
+			[EPIC_TWO]: TWO.replace("Another quest.", "See [src](/src)."),
+		});
+		git(work, "switch", "-q", "--detach", "origin/main");
+		land(work, { "src/old.ts": null });
+		// A checkout keeps no empty directory, as rmSync of its last file does.
+		rmSync(join(work, "src"), { recursive: true });
+		git(work, "fetch", "-q", "origin");
+		const result = await cli("--root", work, "unblocked");
+		expect(result.code, result.stderr).toBe(0);
+	});
+
+	test("a claim carries the default branch's change to a README above the quest that made it ready", async () => {
+		const bare = upstream();
+		const work = clone(bare);
+		const gated = `${EPIC_README}\n## Required\n\n- [One](/quest/m0/one.md)\n`;
+		land(work, { [EPIC_README_PATH]: gated });
+		git(bare, "branch", EPIC_BRANCH, git(bare, "commit-tree", "main^{tree}", "-p", "main", "-m", "open epic"));
+		expect((await cli("--root", work, "start", EPIC_ONE)).code).toBe(3);
+		land(work, { [ONE]: null, [EPIC_README_PATH]: EPIC_README });
+		const one = await cli("--root", work, "start", EPIC_ONE);
+		expect(one.code, one.stderr).toBe(0);
+		const claim = tip(bare, "quest/m0/epic/one");
+		expect(git(bare, "rev-parse", `${claim}^2`)).toBe(git(bare, "rev-parse", "main"));
+		expect(readFileSync(join(work, EPIC_README_PATH), "utf8")).toBe(EPIC_README);
 	});
 });
 

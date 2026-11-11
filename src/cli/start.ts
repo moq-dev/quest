@@ -58,6 +58,8 @@ export interface EpicBase {
 	lease: string;
 	/** Whether an open PR is from the branch. */
 	open: boolean;
+	/** Whether the quest's readiness was read from a change the default branch made after the branch was cut. */
+	behind: boolean;
 }
 
 /** Where a quest's claim builds: the tree its readiness is read from, and its epic's branch, if any. */
@@ -82,7 +84,7 @@ export async function claimBase(root: string, at: Target, path: string, deps: Cl
 	const tip = at.branches.get(branch);
 	const missing = (lease: string): Base => ({
 		tree: at.main.snapshot,
-		epic: own ? null : { readme, branch, tip: null, lease, open: false },
+		epic: own ? null : { readme, branch, tip: null, lease, open: false, behind: false },
 	});
 	if (tip === undefined) return missing("");
 	const { claims, landed } = await held(root, at.up, [branch], at.branches);
@@ -90,9 +92,12 @@ export async function claimBase(root: string, at: Target, path: string, deps: Cl
 	ensure(root, at.up.git, tip);
 	// GitHub opens no PR from a branch with nothing beyond its base, so the claim stacks the epic's commit on it.
 	if (succeeds(root, ["merge-base", "--is-ancestor", tip, at.base])) return missing(tip);
+	const tree = epicView(root, at.main, tip, deps.warn);
 	return {
-		tree: epicView(root, at.main, tip, deps.warn),
-		epic: own ? null : { readme, branch, tip, lease: tip, open: claims[0].pull !== null },
+		tree,
+		epic: own
+			? null
+			: { readme, branch, tip, lease: tip, open: claims[0].pull !== null, behind: tree.behind(path) },
 	};
 }
 
@@ -118,7 +123,14 @@ export async function startQuest(
 	const [claim] = claims;
 	if (claim) throw new Refusal(`${path} is held by ${describe(claim.branch, claim.pull, Date.now())}`);
 	const parent = epic === null ? at.base : await openEpic(root, at, epic, tree, path);
-	const parents = epic === null ? [parent] : claimParents(root, parent, at.base, path, epic.branch);
+	// The claim carries the default branch's change its readiness was read from.
+	const parents = epic?.behind ? [parent, at.base] : [parent];
+	if (epic?.behind && mergedTree(root, parent, at.base) === null) {
+		throw new Refusal(
+			`${path} is ready only with changes the default branch made after ${epic.branch} was cut, and ` +
+				`merging the default branch into ${epic.branch} conflicts; merge it there first`,
+		);
+	}
 	const sha = claimCommit(root, parents, `chore(quest): claim ${path}`);
 	// The lease expects the landed tip, or no branch at all.
 	await pushBranch(root, at, path, branch, sha, landed.get(branch) ?? "");
@@ -155,33 +167,6 @@ function mergedTree(root: string, a: string, b: string): string | null {
 		if (error instanceof GitError && error.status === 1) return null;
 		throw error;
 	}
-}
-
-/**
- * The parents of the claim on `path` in the epic whose branch is at `tip`:
- * `main` too when the default branch changed `path` since the branch was cut
- * and the branch did not, as when a quest is planned on the default branch,
- * since its readiness was read from that change. Refuses when that merge
- * conflicts.
- */
-function claimParents(root: string, tip: string, main: string, path: string, branch: string): string[] {
-	const blob = (commit: string) => {
-		try {
-			return git(root, ["rev-parse", "--verify", "-q", `${commit}:${path}`]);
-		} catch (error) {
-			if (error instanceof GitError) return null;
-			throw error;
-		}
-	};
-	const was = blob(git(root, ["merge-base", tip, main]));
-	if (blob(main) === was || blob(tip) !== was) return [tip];
-	if (mergedTree(root, tip, main) === null) {
-		throw new Refusal(
-			`${path} changed on the default branch after ${branch} was cut, and merging the default branch ` +
-				`into ${branch} conflicts; merge it there first`,
-		);
-	}
-	return [tip, main];
 }
 
 /**

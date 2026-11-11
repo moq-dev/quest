@@ -5,7 +5,8 @@
 // default branch reaches the epic's branch only at that merge, so neither tree
 // alone answers.
 
-import { type Source, branchEpic, epicOf, mergeSources, parse } from "../core";
+import { type Source, branchEpic, epicOf, isQuest, mergeSources, parse } from "../core";
+import { parent } from "../core/path";
 import { GitError, git } from "./git";
 import { type Note, type Snapshot, checkout, committedSources, sources } from "./tree";
 
@@ -39,18 +40,40 @@ export function viewOf(views: Views, path: string): Snapshot {
 	return views.epics.get(epicOf(path) ?? path) ?? views.main;
 }
 
+/** An epic branch's tree as `epicView` reads it. */
+export interface EpicView extends Snapshot {
+	/** Whether the branch itself lacks this reading of `path` or of a README above it, which decide its readiness. */
+	behind(path: string): boolean;
+}
+
 /** The tree the epic branch at `tip`, a local commit, holds once `main` is next merged into it. */
-export function epicView(root: string, main: Main, tip: string, note: Note): Snapshot {
+export function epicView(root: string, main: Main, tip: string, note: Note): EpicView {
 	const base = git(root, ["merge-base", main.commit, tip]);
 	const [was, epic] = [committedSources(root, base, note), committedSources(root, tip, note)];
 	const merged = mergeSources(was.sources, epic.sources, main.sources);
+	const texts = new Map(merged.map((source) => [source.path, source.text]));
+	const own = new Map(epic.sources.map((source) => [source.path, source.text]));
+	// Git's merge decides other paths, directories included; a conflicted path stays, as git leaves it.
+	let tree: string;
+	try {
+		tree = git(root, ["merge-tree", "--write-tree", main.commit, tip]);
+	} catch (error) {
+		if (!(error instanceof GitError) || error.status !== 1) throw error;
+		tree = error.stdout;
+	}
+	const after = committedSources(root, tree.split("\n")[0], note);
 	return {
 		docs: merged.map((source) => parse(source.path, source.text)),
-		// As mergeSources keeps documents: a path either side deleted stays deleted, one either side added exists.
+		// A checkout's uncommitted additions count too.
 		exists: (path) =>
-			was.exists(path)
-				? main.snapshot.exists(path) && epic.exists(path)
-				: main.snapshot.exists(path) || epic.exists(path),
+			path.startsWith("quest/") && isQuest(path)
+				? texts.has(path)
+				: after.exists(path) || (!was.exists(path) && main.snapshot.exists(path)),
+		behind(path) {
+			const above: string[] = [];
+			for (let dir = parent(path); dir.startsWith("quest/"); dir = parent(dir)) above.push(`${dir}/README.md`);
+			return [path, ...above].some((at) => texts.get(at) !== own.get(at));
+		},
 	};
 }
 
