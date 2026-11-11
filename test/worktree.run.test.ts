@@ -204,10 +204,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", ()
 		kill.abort();
 		expect(await result).toBe(143);
 		// The gate killed the supervisor with everything else in its scope, and systemd the run's own.
-		for (let tries = 0; !stopped(leaf.pid()); tries++) {
-			if (tries === 200) throw new Error("the run's scope outlived the gate's");
-			await new Promise((resolve) => setTimeout(resolve, 25));
-		}
+		while (!stopped(leaf.pid())) await new Promise((resolve) => setTimeout(resolve, 25));
 		expect(await worktrees.stop(record.id)).toMatchObject({ phase: "released", runs: [] });
 	});
 });

@@ -823,11 +823,9 @@ function stopped(pid: number): boolean {
 	return ps.status !== 0 || ps.stdout.trim().startsWith("Z");
 }
 
-async function until(done: () => boolean, what: string) {
-	for (let tries = 0; !done(); tries++) {
-		if (tries === 200) throw new Error(`timed out waiting for ${what}`);
-		await new Promise((resolve) => setTimeout(resolve, 25));
-	}
+/** Polls until done; the test's wall bound catches a wait that never ends. */
+async function until(done: () => boolean) {
+	while (!done()) await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
 /** A command that starts a descendant which outlives it unless owned, recording its PID. */
@@ -886,7 +884,7 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 	test("keeps the exact exit status and stops descendants left behind", async () => {
 		const { command, pid } = descendant(tempDir(), "exit 7");
 		expect(await run(command, process.env, cancellation().cancel)).toBe(7);
-		await until(() => stopped(pid()), "the orphan to stop");
+		await until(() => stopped(pid()));
 	});
 
 	test("cancelling stops a grandchild", async () => {
@@ -895,10 +893,10 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 		const { command, pid } = descendant(dir, `: > ${JSON.stringify(ready)}; wait`);
 		const { stop, cancel } = cancellation();
 		const result = run(command, process.env, cancel);
-		await until(() => existsSync(ready), "the command to start");
+		await created(ready);
 		stop.abort("SIGTERM");
 		expect(await result).toBe(128 + constants.signals.SIGTERM);
-		await until(() => stopped(pid()), "the grandchild to stop");
+		await until(() => stopped(pid()));
 	});
 
 	for (const name of ["SIGTERM", "SIGHUP"] as const)
@@ -912,7 +910,7 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 			// The leaf runs until signalled, so a gate that left it running never returns.
 			expect(await result).toBe(128 + constants.signals[name]);
 			expect(leaf.log()).toEqual([name]);
-			await until(() => stopped(leaf.pid()), "the leaf to stop");
+			await until(() => stopped(leaf.pid()));
 		});
 
 	test("lets a cancelled phase finish its cleanup after its wrappers exit", async () => {
@@ -937,7 +935,7 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 		kill.abort();
 		// Signalled, whether Just exited on the first signal or the second killed it.
 		expect(await result).toBeGreaterThan(128);
-		await until(() => stopped(leaf.pid()), "the leaf to stop");
+		await until(() => stopped(leaf.pid()));
 	});
 
 	for (const name of ["SIGTERM", "SIGHUP"] as const)
@@ -963,11 +961,11 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 		const { command, pid } = descendant(dir, `trap '' TERM; : > ${JSON.stringify(ready)}; wait`);
 		const { stop, kill, cancel } = cancellation();
 		const result = run(command, process.env, cancel);
-		await until(() => existsSync(ready), "the command to start");
+		await created(ready);
 		stop.abort("SIGTERM");
 		kill.abort();
 		expect(await result).not.toBe(0);
-		await until(() => stopped(pid()), "the grandchild to stop");
+		await until(() => stopped(pid()));
 	});
 });
 
@@ -1055,7 +1053,7 @@ describe.skipIf(process.platform === "win32")("an outermost gate owning a proces
 		await run.handled(2);
 		run.gate("SIGTERM");
 		await run.exited;
-		await until(() => stopped(leaf.pid()), "the leaf to stop");
+		await until(() => stopped(leaf.pid()));
 	});
 
 	test("a repeated SIGINT, which Just does not forward, kills a command still cleaning up", async () => {
@@ -1067,7 +1065,7 @@ describe.skipIf(process.platform === "win32")("an outermost gate owning a proces
 		await run.handled(1);
 		run.group("SIGINT");
 		await run.exited;
-		await until(() => stopped(leaf.pid()), "the leaf to stop");
+		await until(() => stopped(leaf.pid()));
 	});
 });
 
@@ -1075,7 +1073,7 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 	test("also stops a descendant that left its process group", async () => {
 		const { command, pid } = descendant(tempDir(), "exit 3", { leave: true });
 		expect(await scoped(command, process.env, cancellation().cancel)).toBe(3);
-		await until(() => stopped(pid()), "the daemon to stop");
+		await until(() => stopped(pid()));
 	});
 
 	test("reports its CPU use to the gate until it ends", async () => {
@@ -1085,10 +1083,10 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 		expect(host.usage(unit)).toBeUndefined();
 		const spin = ["/bin/sh", "-c", `while [ ! -e ${quote(done)} ]; do :; done`];
 		const result = scope(unit)(spin, process.env, cancellation().cancel);
-		await until(() => (host.usage(unit) ?? 0) > 0, "the scope's CPU use to show");
+		await until(() => (host.usage(unit) ?? 0) > 0);
 		writeFileSync(done, "");
 		expect(await result).toBe(0);
-		await until(() => host.usage(unit) === undefined, "systemd to remove the scope");
+		await until(() => host.usage(unit) === undefined);
 	});
 });
 
@@ -1152,7 +1150,7 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 		];
 		const { stop, kill, cancel } = cancellation();
 		const result = scoped(nestedGate(dir, command), outside(), cancel);
-		await until(() => existsSync(ready), "the command to start");
+		await created(ready);
 		stop.abort("SIGTERM");
 		kill.abort();
 		await result;
@@ -1347,7 +1345,7 @@ describe.runIf(process.platform === "win32")("a job object", () => {
 	test("keeps the exact exit status and stops a detached descendant", async () => {
 		const { command, pid } = detached(tempDir(), "process.exit(7);");
 		expect(await job(command, process.env, cancellation().cancel)).toBe(7);
-		await until(() => !running(pid()), "the detached descendant to stop");
+		await until(() => !running(pid()));
 	});
 
 	test("killing stops the command and a detached descendant", async () => {
@@ -1359,10 +1357,10 @@ describe.runIf(process.platform === "win32")("a job object", () => {
 		);
 		const { kill, cancel } = cancellation();
 		const result = job(command, process.env, cancel);
-		await until(() => existsSync(ready), "the command to start");
+		await created(ready);
 		kill.abort();
 		expect(await result).not.toBe(0);
-		await until(() => !running(pid()), "the detached descendant to stop");
+		await until(() => !running(pid()));
 	});
 });
 
@@ -1383,7 +1381,7 @@ describe.skipIf(process.platform === "win32")("a process group", () => {
 		const { stop, cancel } = cancellation();
 		const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
 		const result = group([process.execPath, bin, "gate", process.execPath, child], env, cancel);
-		await until(() => existsSync(ready), "the command to start");
+		await created(ready);
 		stop.abort("SIGINT");
 		expect(await result).toBe(128 + constants.signals.SIGINT);
 		expect(readFileSync(count, "utf8")).toBe("1");

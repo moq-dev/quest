@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { startFixer, collectFixers } from "../src/cli/land-fixer";
 import type { GitHubDependencies } from "../src/cli/github";
 import type { Plan } from "../src/cli/land";
+import { created } from "./fixture";
 
 // Linux only, like the land daemon: the fixture uses mkfifo and POSIX shells.
 test.skipIf(process.platform === "win32")(
@@ -107,14 +108,11 @@ test.skipIf(process.platform === "win32")(
 				state,
 				readdirSync(state).find((name) => /^fix-job-.*\.json$/.test(name))!,
 			);
-			const deadline = Date.now() + 5000;
-			while (!existsSync(ready) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 10));
-			expect(existsSync(ready)).toBe(true);
+			await created(ready);
 			expect(JSON.parse(readFileSync(path, "utf8")).identity).toMatch(/^[0-9a-f-]+:\d+$/);
 			expect(await collectFixers(root, state, deps, async () => "fake")).toEqual([]);
 			writeFileSync(release, "continue\n");
-			while (!existsSync(`${path}.exit`) && Date.now() < deadline)
-				await new Promise((done) => setTimeout(done, 10));
+			await created(`${path}.exit`);
 			expect(readFileSync(`${path}.exit`, "utf8")).toBe("101");
 			const output = readFileSync(`${path}.log`, "utf8");
 			expect(output).toContain("prefix-0\n");
