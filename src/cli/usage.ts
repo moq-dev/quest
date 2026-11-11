@@ -66,7 +66,8 @@ export interface PullRow {
 	handedBack: boolean;
 	size: Size | null;
 	implementers: { harness: string; model: string; effort: string; size: Size | null }[];
-	review: ReviewSummary | null;
+	/** Each reviewer's latest round, as the PR's `## Review` record names them. */
+	review: ReviewSummary[];
 	/** Who made each mechanical fix the land fixer recorded, or `quest land watch` for a base merge it made alone. */
 	landFixes: string[];
 	/** Later PRs that list it under `## Caused by`. */
@@ -93,11 +94,12 @@ export interface AccuracyRow {
 	merged: number;
 	handedBack: number;
 	reviewed: number;
-	/** The reviewed PRs whose latest round has a score, and the scores' sum. */
+	/** The reviewers' latest rounds on these PRs that have a score, and the scores' sum. */
 	scored: number;
 	score: number;
-	/** Sums over the reviewed PRs' latest rounds. */
+	/** The sum of each reviewed PR's longest session's rounds. */
 	rounds: number;
+	/** Sums over every reviewer's latest round. */
 	findings: number;
 	fixed: number;
 	refuted: number;
@@ -596,16 +598,18 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			if (each.handedBack) row.handedBack++;
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
-			if (each.review) {
+			if (each.review.length > 0) {
 				row.reviewed++;
-				if (each.review.score !== null) {
+				row.rounds += Math.max(...each.review.map((review) => review.round));
+			}
+			for (const review of each.review) {
+				if (review.score !== null) {
 					row.scored++;
-					row.score += each.review.score;
+					row.score += review.score;
 				}
-				row.rounds += each.review.round;
-				row.findings += each.review.findings;
-				row.fixed += each.review.fixed;
-				row.refuted += each.review.refuted;
+				row.findings += review.findings;
+				row.fixed += review.fixed;
+				row.refuted += review.refuted;
 			}
 		}
 	}
@@ -650,7 +654,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	const priced = deps.ccusage(options.since);
 	let unattributed: Usage["unattributed"] = null;
 	if (priced !== null) {
-		const reviewers = new Set(rows.flatMap((row) => (row.review ? [row.review.session] : [])));
+		const reviewers = new Set(rows.flatMap((row) => row.review.map((review) => review.session)));
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
 		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
 		if (!narrowed) {
@@ -702,8 +706,7 @@ export function usageLines(report: Usage): string[] {
 		lines.push("", `#${row.number} ${row.size ?? "-"} ${state}: ${row.title} (${row.branch})`);
 		for (const i of row.implementers)
 			lines.push(`  implementer: ${i.harness}, ${i.model}, ${i.effort} effort${i.size ? ` (${i.size})` : ""}`);
-		const r = row.review;
-		if (r)
+		for (const r of row.review)
 			lines.push(
 				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; round ${r.round}, score ${r.score ?? "-"}/10, ${r.findings} open, last round ${r.fixed} fixed and ${r.refuted} refuted`,
 			);

@@ -1,5 +1,6 @@
 // `quest review`: a model other than the latest writer reviews the committed branch, read-only,
-// picked by the PR's size from the lists in `models.ts`.
+// picked by the PR's size from the lists in `models.ts`, and the second reviewer reviews the same head
+// beside it, each in its own session.
 //
 // A branch's first round runs the reviewer CLI's own review, or for opencode, which
 // has none, a review prompt, given the scope, the base's REVIEW.md, and any
@@ -18,7 +19,7 @@ import { SIZES, type Size, branchQuest, parse, size as questSize } from "../core
 import { HARNESSES, type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
-import { DEFAULT_SIZE, type Model, REVIEWERS } from "./models";
+import { DEFAULT_SIZE, type Model, REVIEWERS, SECOND_REVIEWER } from "./models";
 import { programEnvironment, requireProgram } from "./program";
 import { type Sandbox, openSandbox } from "./sandbox";
 import type { recorded } from "../github/models";
@@ -64,6 +65,8 @@ export interface Finding {
 
 /** A finding of the last round, with what became of it by this one. */
 export interface Settled extends Finding {
+	/** Its number in the last round, counted across every reviewer's findings in order. */
+	number: number;
 	disposition: (typeof DISPOSITIONS)[number];
 	/** One sentence citing the fix or the refutation's evidence, or why it still holds. */
 	reason: string;
@@ -77,7 +80,7 @@ export interface Usage {
 	output: number;
 }
 
-/** One finished round, as `quest review` prints it. */
+/** One reviewer's finished round, as `quest review` prints it. */
 export interface Round {
 	reviewer: ReviewHarness;
 	model: string;
@@ -105,7 +108,7 @@ export interface Round {
 	unchanged: boolean;
 }
 
-/** A reply's verdict on the reviewed head; `earlier` settles the last round's findings by their 1-based number. */
+/** A reply's verdict on the reviewed head; `earlier` settles the last round's findings by their number. */
 export type Verdict = Pick<Round, "score" | "rationale" | "findings"> & {
 	earlier: { finding: number; disposition: Settled["disposition"]; reason: string }[];
 };
@@ -300,9 +303,17 @@ export interface ReviewDependencies {
 
 export const processDependencies = (): ReviewDependencies => ({ env: process.env });
 
-/** A branch's review session, kept in the clone's common Git directory so every worktree resumes it. */
+/**
+ * A branch's review sessions, one per reviewer, kept in the clone's common Git directory so every worktree
+ * resumes them. They are in the order the last run reported them, which numbers their findings.
+ */
 interface State {
 	branch: string;
+	sessions: Session[];
+}
+
+/** One reviewer's session on a branch. */
+interface Session {
 	reviewer: ReviewHarness;
 	session: string;
 	/** Each round's head, the merge base its change started from, and its findings. */
@@ -1024,9 +1035,9 @@ async function turn(cli: Cli, call: Turn, cwd: string, model: string): Promise<R
 
 /**
  * The verdict in a reply, checked against `schema` so a malformed reply fails rather than reads as clean,
- * and settling each of the last round's `earlier` findings exactly once.
+ * and settling each of the last round's `earlier` findings, numbered from `first`, exactly once.
  */
-export function verdict(reply: { structured?: unknown; text?: string }, earlier: number): Verdict {
+export function verdict(reply: { structured?: unknown; text?: string }, earlier: number, first = 1): Verdict {
 	let value = reply.structured;
 	if (value === undefined) {
 		try {
@@ -1086,7 +1097,7 @@ export function verdict(reply: { structured?: unknown; text?: string }, earlier:
 		};
 	});
 	const numbers = settled.map((answer) => answer.finding).sort((a, b) => a - b);
-	if (numbers.length !== earlier || numbers.some((n, i) => n !== i + 1)) {
+	if (numbers.length !== earlier || numbers.some((n, i) => n !== first + i)) {
 		throw new Error(`the reviewer's reply does not settle each of the last round's ${earlier} finding(s) once`);
 	}
 	// A finding still open is one this round reports again; one left out of `findings` would read as clean.
@@ -1196,9 +1207,9 @@ export interface Rules {
 /** Where a finding is: its `path:line`, or its path when no single line fits. */
 export const located = (finding: Finding) => (finding.line === null ? finding.file : `${finding.file}:${finding.line}`);
 
-/** The last round's findings, numbered, which a round settles. */
-function earlierList(earlier: Finding[]): string {
-	const list = earlier.map((f, i) => `${i + 1}. ${f.severity} ${located(f)} ${f.title}`).join("\n");
+/** The last round's findings, numbered from `first`, after the other reviewers' before them, which a round settles. */
+function earlierList(earlier: Finding[], first: number): string {
+	const list = earlier.map((f, i) => `${first + i}. ${f.severity} ${located(f)} ${f.title}`).join("\n");
 	return `The last review reported these findings, numbered:\n\n<earlier-findings>\n${list}\n</earlier-findings>`;
 }
 
@@ -1213,6 +1224,7 @@ function responseParts(responses: string | undefined): string[] {
 	if (responses === undefined) return [];
 	return [
 		`The author responded to the findings of an earlier review:\n\n<responses>\n${responses}\n</responses>`,
+		"A response to a number outside your findings answers another reviewer's; weigh it only as context.",
 		"Verify each response. A fix holds only if the head fixes the problem. A refutation holds only when it " +
 			"cites evidence you can check and cannot rebut: a `path:line`, a command's output, or a recorded maintainer " +
 			"decision. An uncited refutation is a claim to verify; keep its finding unless you verify the claim yourself.",
@@ -1244,7 +1256,13 @@ function scope({ base, mergeBase, head }: Change): string {
  * A session's review turn, which the CLI's own review runs with everything the round needs up front: the
  * change, the base's REVIEW.md, and the findings and responses of an earlier session it answers.
  */
-export function reviewPrompt(change: Change, rules: Rules | null, earlier: Finding[] = [], responses?: string): string {
+export function reviewPrompt(
+	change: Change,
+	rules: Rules | null,
+	earlier: Finding[] = [],
+	responses?: string,
+	first = 1,
+): string {
 	return [
 		scope(change),
 		// The rules outrank the built-in review's defaults; a session that resumes keeps them.
@@ -1255,18 +1273,18 @@ export function reviewPrompt(change: Change, rules: Rules | null, earlier: Findi
 						"They take precedence over the review's defaults: drop the findings they exclude, and check anything they ask for.",
 					`<review-rules>\n${rules.text}\n</review-rules>`,
 				]),
-		...(earlier.length > 0 ? [earlierList(earlier), settling("in your review")] : []),
+		...(earlier.length > 0 ? [earlierList(earlier, first), settling("in your review")] : []),
 		...responseParts(responses),
 		`${SEVERITY} End with a score from 0 to 10 for how ready the head is to land, and one sentence on why.`,
 	].join("\n\n");
 }
 
 /** A session's second turn, which reports the review turn's result in the schema without reviewing again. */
-export function reportPrompt(head: string, earlier: Finding[] = []): string {
+export function reportPrompt(head: string, earlier: Finding[] = [], first = 1): string {
 	return [
 		`Report your review above as JSON matching the response schema: every finding that holds at the head ${head}. ` +
 			"Read no files and run no commands: the review above already holds every finding, its severity, and the score.",
-		...(earlier.length > 0 ? [earlierList(earlier), settling("in `earlier`, as your review did,")] : []),
+		...(earlier.length > 0 ? [earlierList(earlier, first), settling("in `earlier`, as your review did,")] : []),
 		REPORT,
 	].join("\n\n");
 }
@@ -1276,6 +1294,8 @@ export interface LaterRound extends Change {
 	previous: string;
 	/** The findings of the review of `previous`. */
 	earlier: Finding[];
+	/** The number of the first of `earlier`; 1 unless another reviewer's findings come before them. */
+	first?: number;
 	responses?: string;
 }
 
@@ -1292,7 +1312,7 @@ export function laterPrompt(round: LaterRound): string {
 			`already. \`git diff ${previous} ${head}\` shows what changed, along with any base commits merged in ` +
 			"since, which are not part of the change.",
 	];
-	if (round.earlier.length > 0) parts.push(earlierList(round.earlier), settling("in `earlier`"));
+	if (round.earlier.length > 0) parts.push(earlierList(round.earlier, round.first ?? 1), settling("in `earlier`"));
 	parts.push(
 		...responseParts(responses),
 		`Report as JSON matching the response schema every finding that holds at ${head}: those still open, and any new ones.`,
@@ -1367,30 +1387,24 @@ function load(path: string): unknown {
 }
 
 /**
- * A saved session, read before its reviewer runs. A session saved before
- * moq-dev/quest#508 kept only each round's finding count, which no round can
- * settle: one with findings is refused, naming `--new`, rather than failing
- * after the reviewer spent its round. One saved before moq-dev/quest#514 has
- * no `last` round, so it never resumes and its next round reviews anew.
+ * A branch's saved sessions, read before any reviewer runs, so a file this
+ * quest cannot resume is refused, naming `--new`, rather than failing after a
+ * reviewer spent its round.
  */
 export function parseState(value: unknown): State {
 	const state = value as Partial<State> | null;
-	const refuse = (why: string) =>
-		new ReviewInputError(`the saved review session ${why}; pass --new to start a new session`);
-	if (typeof state !== "object" || state === null || !Array.isArray(state.rounds)) {
-		throw refuse("is not one quest review reads");
-	}
-	const rounds = state.rounds.map((round) => {
-		const findings: unknown = round?.findings;
-		if (Array.isArray(findings)) return round;
-		if (findings === 0) return { ...round, findings: [] };
-		throw refuse(
-			typeof findings === "number"
-				? `was saved by an older quest and keeps only its last round's finding count (${findings}), not the findings to settle`
-				: "has a round with no findings list",
+	const valid =
+		typeof state === "object" &&
+		state !== null &&
+		Array.isArray(state.sessions) &&
+		state.sessions.every(
+			(session) =>
+				Array.isArray(session?.rounds) &&
+				session.rounds.every((round) => Array.isArray(round?.findings)) &&
+				session.last !== undefined,
 		);
-	});
-	return { ...state, rounds } as State;
+	if (!valid) throw new ReviewInputError("the saved review sessions are not ones quest review reads; pass --new");
+	return state as State;
 }
 
 /**
@@ -1490,8 +1504,12 @@ function sandboxFor(root: string, env: NodeJS.ProcessEnv): Sandbox {
 	}
 }
 
-/** Review the checkout's committed branch: one round, resuming the branch's session unless `fresh`. */
-export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Round> {
+/**
+ * Review the checkout's committed branch: one round of each reviewer on the same head, the size's pick
+ * and `SECOND_REVIEWER`, or only `--harness`'s, each resuming its session on the branch unless `fresh`.
+ * Every reviewer runs at once, and the first to fail stops the others and fails the whole, saving no round.
+ */
+export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Round[]> {
 	// Native Windows installs the reviewer CLIs as batch shims, which `run` cannot start without a shell.
 	if (process.platform === "win32")
 		throw new ReviewInputError("quest review does not support native Windows yet; use WSL");
@@ -1513,26 +1531,38 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const needed = options.size === undefined || (options.exclude ?? []).length === 0;
 	const record = needed ? await deps.models?.(root, baseRef, branch) : undefined;
 	const sized = reviewSize(root, baseSha, options.sizeBranch ?? branch, options.size, recordedSize(record, options));
-	const picked = pickReviewer(sized.size, options, authored(options, deps.env, recordedLatest(record, options)));
-	const harness = picked.harness;
-	const reviewer = CLIS[harness];
+	const avoided = authored(options, deps.env, recordedLatest(record, options));
+	const picked = [pickReviewer(sized.size, options, avoided)];
+	// A named reviewer replaces the pair, as for a repository whose instructions name its own.
+	if (options.harness === undefined) {
+		if (avoided(SECOND_REVIEWER))
+			throw new ReviewInputError(`${SECOND_REVIEWER.model} is avoided; pass --harness to name a single reviewer`);
+		picked.push(SECOND_REVIEWER);
+	}
 
 	const statePath = sessionFile(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
 	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
 	const stored = options.fresh ? undefined : load(statePath);
-	const state =
-		stored === undefined || (stored as Partial<State> | null)?.reviewer !== harness
-			? undefined
-			: parseState(stored);
-	const previous = state?.rounds.at(-1);
-	if (previous === undefined && options.responses !== undefined) {
+	const sessions = stored === undefined ? [] : parseState(stored).sessions;
+	// The last run numbered each session's findings after those of the sessions before it.
+	const firsts = new Map<Session, number>();
+	let next = 1;
+	for (const session of sessions) {
+		firsts.set(session, next);
+		next += session.rounds.at(-1)!.findings.length;
+	}
+	const seats = picked.map((reviewer): Seat => {
+		const session = sessions.find((each) => each.reviewer === reviewer.harness);
+		return { reviewer, session, first: session === undefined ? 1 : firsts.get(session)! };
+	});
+	if (seats.every((seat) => seat.session === undefined) && options.responses !== undefined) {
 		throw new ResponsesError("--responses answers a previous round, and this branch has none to resume");
 	}
-	const earlier = previous?.findings ?? [];
-	if (earlier.length > 0 && options.responses === undefined) {
+	const open = seats.reduce((sum, seat) => sum + (seat.session?.rounds.at(-1)!.findings.length ?? 0), 0);
+	if (open > 0 && options.responses === undefined) {
 		throw new ResponsesError(
-			`the last round reported ${earlier.length} finding(s); pass --responses with a fix or refutation for each`,
+			`the last round reported ${open} finding(s); pass --responses with a fix or refutation for each`,
 		);
 	}
 
@@ -1551,34 +1581,104 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const rules = exists(root, baseSha, "REVIEW.md") ? { sha: baseSha, text: show(root, baseSha, "REVIEW.md") } : null;
 	// Digests of content only, so a base that moved without changing them restates nothing.
 	const given = { instructions: digest(JSON.stringify(files)), rules: rules && digest(rules.text) };
+
+	const controller = new AbortController();
+	const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+	const shared: Shared = {
+		root,
+		branch,
+		base: { ref: baseRef, sha: baseSha },
+		sized,
+		change,
+		files,
+		rules,
+		given,
+		dir,
+		env: deps.env,
+		signal,
+	};
+	const results = await Promise.allSettled(
+		seats.map((seat) =>
+			reviewWith(shared, seat, options.responses).catch((error: unknown) => {
+				controller.abort(error);
+				throw error;
+			}),
+		),
+	);
+	// The first failure stopped the others, so it is the one to report.
+	if (controller.signal.aborted) throw controller.signal.reason;
+	const done = results.map((result) => (result as PromiseFulfilledResult<Seated>).value);
+	save(statePath, { branch, sessions: done.map((each) => each.session) } satisfies State);
+	return done.map((each) => each.round);
+}
+
+/** What every reviewer of a run shares: the branch, its base, its change, and what a session is given. */
+interface Shared {
+	root: string;
+	branch: string;
+	base: Round["base"];
+	sized: { size: Size; from: string };
+	change: Change;
+	files: { path: string; text: string }[];
+	rules: Rules | null;
+	given: Session["given"];
+	/** The directory holding the branch's sessions and the reply schemas. */
+	dir: string;
+	env: NodeJS.ProcessEnv;
+	signal: AbortSignal;
+}
+
+/** A reviewer of the run, with its saved session, if any, whose last findings are numbered from `first`. */
+interface Seat {
+	reviewer: Reviewing;
+	session?: Session;
+	first: number;
+}
+
+/** A reviewer's finished round and its session as saved. */
+interface Seated {
+	round: Round;
+	session: Session;
+}
+
+/** One reviewer's round, resuming its session when nothing but the head changed. */
+async function reviewWith(shared: Shared, seat: Seat, responses: string | undefined): Promise<Seated> {
+	const { root, change, given, rules } = shared;
+	const { reviewer: picked, session: stored, first } = seat;
+	const harness = picked.harness;
+	const reviewer = CLIS[harness];
+	const previous = stored?.rounds.at(-1);
+	const earlier = previous?.findings ?? [];
+	// Responses answer findings by number; a reviewer with none of its own would read others' as its own.
+	const answered = earlier.length > 0 ? responses : undefined;
 	// A round checks only what changed since the last one when nothing but the head changed: the same
 	// reviewer, base, instructions, and REVIEW.md, and a range the last round's covers. Anything else starts
 	// a new session that reviews the whole change, since a resumed one keeps its first instructions.
-	const last = state?.last;
+	const last = stored?.last;
 	const resume =
 		previous !== undefined &&
 		last !== undefined &&
-		state!.given.instructions === given.instructions &&
-		state!.given.rules === given.rules &&
+		stored!.given.instructions === given.instructions &&
+		stored!.given.rules === given.rules &&
 		last.model === picked.model &&
 		last.effort === picked.effort &&
-		last.base.ref === baseRef &&
-		covers(root, previous.mergeBase, mergeBase);
+		last.base.ref === shared.base.ref &&
+		covers(root, previous.mergeBase, change.mergeBase);
 
 	// The last round already passed this head, and has nothing left to settle.
-	if (resume && previous!.head === head && previous!.mergeBase === mergeBase && earlier.length === 0) {
-		return { ...last!, usage: [], unchanged: true };
+	if (resume && previous!.head === change.head && previous!.mergeBase === change.mergeBase && earlier.length === 0) {
+		return { round: { ...last!, usage: [], unchanged: true }, session: stored! };
 	}
 
-	const cli = await prepare(harness, picked.model, root, deps.env, options.signal);
+	const cli = await prepare(harness, picked.model, root, shared.env, shared.signal);
 
 	// Named by its bound, so a round on another branch never rewrites the file this one reads.
 	const replySchema = schema(earlier.length);
-	const schemaFile = join(dir, `schema-${earlier.length}.json`);
+	const schemaFile = join(shared.dir, `schema-${earlier.length}.json`);
 	save(schemaFile, replySchema);
 	const context: Context = {
-		mergeBase,
-		instructions: instructionsPrompt(baseSha, files),
+		mergeBase: change.mergeBase,
+		instructions: instructionsPrompt(shared.base.sha, shared.files),
 		model: picked.model,
 		effort: picked.effort,
 		schema: replySchema,
@@ -1597,45 +1697,43 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			context.sandbox = { shell: sandbox.shell, instructions };
 		}
 		if (!resume) {
-			const prompt = reviewPrompt(change, rules, earlier, options.responses);
-			const first = await turn(cli, reviewer.review(context, randomUUID(), prompt), root, context.model);
-			if (first.session === undefined) throw new Error(`${harness} did not report its session`);
-			session = first.session;
-			if (reported(first.usage)) usage.push({ turn: "review", ...first.usage });
+			const prompt = reviewPrompt(change, rules, earlier, answered, first);
+			const opened = await turn(cli, reviewer.review(context, randomUUID(), prompt), root, context.model);
+			if (opened.session === undefined) throw new Error(`${harness} did not report its session`);
+			session = opened.session;
+			if (reported(opened.usage)) usage.push({ turn: "review", ...opened.usage });
 			reply = await turn(
 				cli,
-				reviewer.resume(context, session, reportPrompt(head, earlier)),
+				reviewer.resume(context, session, reportPrompt(change.head, earlier, first)),
 				root,
 				context.model,
 			);
 		} else {
-			session = state!.session;
-			const prompt = laterPrompt({
-				...change,
-				previous: previous!.head,
-				earlier,
-				responses: options.responses,
-			});
+			session = stored!.session;
+			const prompt = laterPrompt({ ...change, previous: previous!.head, earlier, first, responses: answered });
 			reply = await turn(cli, reviewer.resume(context, session, prompt), root, context.model);
 		}
 	} finally {
 		sandbox?.close();
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
-	const { score, rationale, findings: found, earlier: answers } = verdict(reply, earlier.length);
+	const { score, rationale, findings: found, earlier: answers } = verdict(reply, earlier.length, first);
 
-	const rounds = [...(resume ? state!.rounds : []), { head, mergeBase, findings: found }];
+	const rounds = [
+		...(resume ? stored!.rounds : []),
+		{ head: change.head, mergeBase: change.mergeBase, findings: found },
+	];
 	const round: Round = {
 		reviewer: harness,
 		model: context.model,
 		effort: context.effort,
-		branch,
-		size: sized.size,
-		sizeFrom: sized.from,
+		branch: shared.branch,
+		size: shared.sized.size,
+		sizeFrom: shared.sized.from,
 		session,
 		round: rounds.length,
-		base: { ref: baseRef, sha: baseSha },
-		head,
+		base: shared.base,
+		head: change.head,
 		usage,
 		score,
 		rationale,
@@ -1648,63 +1746,74 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 						findings: answers
 							.sort((a, b) => a.finding - b.finding)
 							.map(({ finding, disposition, reason }) => ({
-								...earlier[finding - 1],
+								...earlier[finding - first]!,
+								number: finding,
 								disposition,
 								reason,
 							})),
 					},
 		unchanged: false,
 	};
-	save(statePath, { branch, reviewer: harness, session, rounds, last: round, given } satisfies State);
-	return round;
+	return { round, session: { reviewer: harness, session, rounds, last: round, given } };
 }
 
 /**
- * The author's next step after `round`, printed last so each step of the
+ * The author's next step after a run's `rounds`, printed last so each step of the
  * procedure arrives when it applies: handling findings that are all low
- * severity without another round, the design checkpoint on every third round
- * that reports others, else answering them, or nothing left to do.
+ * severity without another round, the design checkpoint when a reviewer's
+ * every third round reports others, else answering them, or nothing left to do.
  */
-export function nextStep(round: Round): string {
-	if (round.findings.length === 0) return "next done: no findings remain on this head";
-	if (round.findings.every((finding) => finding.severity === "low"))
+export function nextStep(rounds: Round[]): string {
+	const findings = rounds.flatMap((round) => round.findings);
+	if (findings.length === 0) return "next done: no findings remain on this head";
+	if (findings.every((finding) => finding.severity === "low"))
 		return "next finish: fix or refute each finding, commit, rerun the checks, then add a line after the PR body's review record naming the new head's full SHA and each finding's disposition; run no further round";
-	if (round.round % 3 === 0)
+	if (rounds.some((round) => round.findings.length > 0 && round.round % 3 === 0))
 		return "next checkpoint: before fixing these findings, reconsider the approach and let the user decide, as /quest-review describes";
 	return "next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number";
 }
 
-/** The plain report: one record per line, then each finding with its body indented. */
-export function roundLines(round: Round): string[] {
+/**
+ * The plain report: the size, base, and head the reviewers share, then each reviewer's round, one record per
+ * line, and its findings, numbered across the reviewers in order, each with its body indented.
+ */
+export function roundLines(rounds: Round[]): string[] {
+	const [shared] = rounds;
 	const lines = [
-		`reviewer ${round.reviewer} ${round.model} ${round.effort}`,
-		`size ${round.size} ${round.sizeFrom}`,
-		`session ${round.session}`,
-		`round ${round.round}`,
-		`base ${round.base.sha} ${round.base.ref}`,
-		`head ${round.head}`,
-		...(round.unchanged
-			? [`unchanged round ${round.round} reviewed this head and found nothing; no reviewer ran`]
-			: []),
-		...round.usage.map((u) => `usage ${u.turn} input ${u.input} cached ${u.cached} output ${u.output}`),
-		`score ${round.score} ${round.rationale.replace(/\s+/g, " ").trim()}`,
-		`findings ${round.findings.length}`,
+		`size ${shared!.size} ${shared!.sizeFrom}`,
+		`base ${shared!.base.sha} ${shared!.base.ref}`,
+		`head ${shared!.head}`,
 	];
-	for (const finding of round.findings) {
+	let number = 0;
+	for (const round of rounds) {
 		lines.push(
 			"",
-			`${finding.severity} ${located(finding)} ${finding.title}`,
-			...finding.body.split("\n").map((l) => `  ${l}`),
+			`reviewer ${round.reviewer} ${round.model} ${round.effort}`,
+			`session ${round.session}`,
+			`round ${round.round}`,
+			...(round.unchanged
+				? [`unchanged round ${round.round} reviewed this head and found nothing; no reviewer ran`]
+				: []),
+			...round.usage.map((u) => `usage ${u.turn} input ${u.input} cached ${u.cached} output ${u.output}`),
+			`score ${round.score} ${round.rationale.replace(/\s+/g, " ").trim()}`,
+			`findings ${round.findings.length}`,
 		);
-	}
-	const settled = round.earlier?.findings ?? [];
-	if (settled.length > 0) lines.push("", `earlier ${settled.length} ${round.earlier!.head}`);
-	for (const finding of settled) {
-		lines.push(
-			"",
-			`${finding.disposition} ${finding.severity} ${located(finding)} ${finding.title}`,
-			`  ${finding.reason.replace(/\s+/g, " ").trim()}`,
-		);
+		for (const finding of round.findings) {
+			lines.push(
+				"",
+				`${++number}. ${finding.severity} ${located(finding)} ${finding.title}`,
+				...finding.body.split("\n").map((l) => `  ${l}`),
+			);
+		}
+		const settled = round.earlier?.findings ?? [];
+		if (settled.length > 0) lines.push("", `earlier ${settled.length} ${round.earlier!.head}`);
+		for (const finding of settled) {
+			lines.push(
+				"",
+				`${finding.number}. ${finding.disposition} ${finding.severity} ${located(finding)} ${finding.title}`,
+				`  ${finding.reason.replace(/\s+/g, " ").trim()}`,
+			);
+		}
 	}
 	return lines;
 }

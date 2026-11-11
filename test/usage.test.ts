@@ -177,35 +177,82 @@ describe("PR records", () => {
 					severity: "high",
 					title: "x",
 					body: "b",
+					number: 1,
 					disposition: "fixed",
 					reason: "done",
 				},
-				{ file: "b", line: 2, severity: "low", title: "y", body: "b", disposition: "refuted", reason: "holds" },
-				{ file: "c", line: 3, severity: "low", title: "z", body: "b", disposition: "fixed", reason: "done" },
+				{
+					file: "b",
+					line: 2,
+					severity: "low",
+					title: "y",
+					body: "b",
+					number: 2,
+					disposition: "refuted",
+					reason: "holds",
+				},
+				{
+					file: "c",
+					line: 3,
+					severity: "low",
+					title: "z",
+					body: "b",
+					number: 3,
+					disposition: "fixed",
+					reason: "done",
+				},
 			],
 		},
 		unchanged: false,
 	};
 
-	test("reads back the round quest review records, after the land fixer's lines", () => {
-		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord(round)}\n\n## Models\n\n- Size: L\n`;
-		expect(parseReview(body)).toEqual({
-			harness: "Codex",
-			model: "gpt-6.1-sol",
-			effort: "high",
-			session: THREAD,
-			round: 3,
-			score: 7,
-			findings: 1,
-			fixed: 2,
-			refuted: 1,
-		});
+	const second: Round = {
+		...round,
+		reviewer: "opencode",
+		model: "opencode-go/deepseek-v4.1-flash",
+		session: "ses_1",
+		round: 1,
+		score: 10,
+		findings: [],
+		earlier: null,
+	};
+
+	test("reads back each reviewer's round quest review records, after the land fixer's lines", () => {
+		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord([round, second])}\n\n## Models\n\n- Size: L\n`;
+		expect(parseReview(body)).toEqual([
+			{
+				harness: "Codex",
+				model: "gpt-6.1-sol",
+				effort: "high",
+				session: THREAD,
+				round: 3,
+				score: 7,
+				findings: 1,
+				fixed: 2,
+				refuted: 1,
+			},
+			{
+				harness: "opencode",
+				model: "opencode-go/deepseek-v4.1-flash",
+				effort: "high",
+				session: "ses_1",
+				round: 1,
+				score: 10,
+				findings: 0,
+				fixed: 0,
+				refuted: 0,
+			},
+		]);
+		// An open finding keeps the head short; once no reviewer reports one, it is named in full.
+		expect(body).not.toContain("b".repeat(40));
+		const clean = reviewRecord([{ ...round, findings: [] }, second]);
+		expect(clean).toContain(`- Head: ${"b".repeat(40)}\n`);
 		expect(fixes(body)).toEqual(["codex, gpt-6.1-sol, medium effort"]);
 	});
 
 	test("a skipped review or a fixer-only section has no round", () => {
-		expect(parseReview("## Review\n\nSkipped: too trivial to need one.\n")).toBeNull();
-		expect(parseReview("## Review\n\nmechanical fix by quest land watch: `merged main` (head x)\n")).toBeNull();
+		expect(parseReview("## Review\n\nSkipped: too trivial to need one.\n")).toEqual([]);
+		expect(parseReview("## Review\n\nmechanical fix by quest land watch: `merged main` (head x)\n")).toEqual([]);
 		expect(fixes("## Review\n\nmechanical fix by quest land watch: `merged main` (head x)\n")).toEqual([
 			"quest land watch",
 		]);
@@ -321,9 +368,17 @@ describe("usage", () => {
 			"",
 			"Rewritten by `quest review` after each round.",
 			"",
+			`- Head: ${"b".repeat(40)}`,
+			`- Base: origin/main at ${"a".repeat(12)}`,
+			"",
 			"- Reviewer: Codex, gpt-6.1-sol, high effort",
 			`- Session: \`${THREAD}\`, round 2`,
 			"- Score: 9/10, `Fine.`",
+			"- Findings: none",
+			"",
+			"- Reviewer: opencode, opencode-go/deepseek-v4.1-flash, high effort",
+			"- Session: `ses_1`, round 1",
+			"- Score: 8/10, `Fine.`",
 			"- Findings: none",
 		].join("\n");
 		const body11 =
@@ -433,8 +488,8 @@ describe("usage", () => {
 			["L", "reviewing", "codex", 1],
 		]);
 		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.rounds, a.fixes])).toEqual([
-			["S", "gpt-6.1-sol", 1, 1, 9, 2, 1],
-			["L", "claude-opus-5-5", 1, 1, 9, 2, 1],
+			["S", "gpt-6.1-sol", 1, 1, 17, 2, 1],
+			["L", "claude-opus-5-5", 1, 1, 17, 2, 1],
 		]);
 		const text = usageLines(report).join("\n");
 		expect(text).toContain("#10 L merged: PR 10 (quest/m0/a)");
@@ -459,6 +514,6 @@ describe("usage", () => {
 			[9, 0],
 			[7, 0],
 		]);
-		expect(quest.pulls[0]!.review?.score).toBe(9);
+		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8]);
 	});
 });

@@ -44,7 +44,7 @@ import { landed } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { hosts } from "../core/doc";
-import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
+import { DEFAULT_SIZE, REVIEWERS, SECOND_REVIEWER, WRITERS, questWriters, writerAt } from "./models";
 import {
 	REVIEW_HARNESSES,
 	type ReviewHarness,
@@ -55,7 +55,7 @@ import {
 	nextStep,
 	roundLines,
 } from "./review";
-import { type Recorded, pullModels, recordRound } from "./review-record";
+import { type Recorded, pullModels, recordRounds } from "./review-record";
 import {
 	BASH_MAX_TIMEOUT_MS,
 	CLAUDE_HOOKS,
@@ -1126,16 +1126,19 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
-				"first whose model is not avoided reviews. --exclude-model names each model to avoid; without it, the " +
+				"first whose model is not avoided reviews, and beside it, on the same head and in its own session, " +
+				`${SECOND_REVIEWER.harness} ${SECOND_REVIEWER.model} ${SECOND_REVIEWER.effort} for every size. ` +
+				"--exclude-model names each model to avoid; without it, the " +
 				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR. " +
 				"When it names none or an `unknown` model, " +
 				"it is any model of the harness running this command, usually the session that just pushed, detected from the " +
 				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; with --harness it is " +
 				"none. " +
-				"--harness names the reviewer instead, at its entry's model and effort, and --model and --effort " +
-				"override the model and effort; a repository whose AGENTS.md names other reviewers passes them. " +
-				"opencode is no size's pick: --harness opencode needs --model, as provider/model, and --effort, its " +
-				"variant. The " +
+				"--harness names the only reviewer instead of the pair, at its entry's model and effort, and --model and " +
+				"--effort override the size pick's model and effort; a repository whose AGENTS.md names other reviewers " +
+				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
+				"--effort, its variant. The reviewers run at once, and the first to fail stops the other and fails the " +
+				"run, saving neither round. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
 				"The reviewer reaches its model as the user's own CLI " +
@@ -1156,13 +1159,16 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"any, and any responses up front, then resumes that session for one turn that reports the review in one " +
 				"JSON schema without reading anything again. --responses gives the author's fixes and refutations of " +
 				"the last round's findings, required while that round reported any; the reply settles each of those " +
-				"findings, by its number in the prompt, as fixed, refuted, or still open. A later round resumes the " +
+				"findings, by its number in the prompt, as fixed, refuted, or still open. Findings are numbered across " +
+				"the reviewers in the order the round printed them, and each reviewer settles only its own, given " +
+				"--responses only when it has some. A later round resumes the " +
 				"session and checks only what changed since the last round's head and those findings when nothing " +
 				"but the head changed: the same model, effort, and base, a merge base the last round's covers, as " +
 				"when the base moved on, and the same applicable AGENTS.md, CLAUDE.md, and REVIEW.md. Otherwise it " +
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
-				"repeats that round, marked unchanged. --new starts a new session. The session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
+				"repeats that round, marked unchanged, so on the same head only a reviewer with findings to settle runs. " +
+				"--new starts new sessions. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
 				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
@@ -1177,22 +1183,24 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
 				"reviewer, and is told to disregard other instructions and run no builds, tests, or quest commands. " +
 				"The base is fetched first, since the sandbox has no network.\n\n" +
-				"Prints the reviewer, model, and effort, the size and where it came from, session, round, base, head, an " +
+				"Prints the size and where it came from, base, and head, then for each reviewer its harness, model, and " +
+				"effort, session, round, an " +
 				"unchanged line for a repeated round, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
-				"its one-sentence rationale, the finding count, each finding, then the last round's findings with " +
-				"their dispositions, then the `record` line below and a last `next` line naming the author's next step: " +
+				"its one-sentence rationale, the finding count, each finding by its number, then the last round's findings with " +
+				"their numbers and dispositions; then the `record` line below and a last `next` line naming the author's next step: " +
 				"`next finish` when every finding is low severity, to fix or refute them without another round, " +
-				"`next checkpoint` on every third round that reports other findings, to reconsider the approach " +
+				"`next checkpoint` when a reviewer's every third round reports other findings, to reconsider the approach " +
 				"before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
-				"the same as one object.\n\n" +
+				"one object: `rounds`, one per reviewer, `record`, and `next`.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
-				"user the GitHub token names, keeping the rest of the body, and prints `record <url>`: the reviewer, " +
-				"session and round, the reviewed head, base, score, and each finding with its disposition. With no " +
+				"user the GitHub token names, keeping the rest of the body, and prints `record <url>`: the reviewed " +
+				"head, named in full only once no reviewer reports a finding, the base, and each reviewer, its " +
+				"session and round, score, and each finding with its disposition. With no " +
 				"such PR, or a remote off GitHub, it prints `record skipped: <why>` and changes nothing.\n\n" +
 				"Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
-				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when the reviewer's " +
+				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when a reviewer's " +
 				"account hit its usage limit, and 1 for other failures, including a PR GitHub will not show or a record it " +
 				"refuses. A malformed `## Models` field the round reads, such as a Size line naming no size or an " +
 				"Implementer line naming no model, is a usage error, unless --size or --exclude-model replaces it. A usage limit prints one line, " +
@@ -1201,10 +1209,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--base <remote/branch>", "Base branch to review against (default: origin's default branch)")
 		.addOption(
-			new Option("--harness <name>", "Reviewer to run instead of the size's pick").choices(REVIEW_HARNESSES),
+			new Option(
+				"--harness <name>",
+				"The only reviewer to run, instead of the size's pick and the second",
+			).choices(REVIEW_HARNESSES),
 		)
-		.option("--model <model>", "Model the reviewer runs instead")
-		.option("--effort <level>", "Reasoning effort the reviewer runs at instead")
+		.option("--model <model>", "Model the size's pick, or --harness's reviewer, runs instead")
+		.option("--effort <level>", "Reasoning effort the size's pick, or --harness's reviewer, runs at instead")
 		.option(
 			"--exclude-model <model>",
 			"A model never picked to review it, instead of the PR's latest writer; repeat for each",
@@ -1249,22 +1260,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					},
 				);
 				pending = run.then(
-					async (round) => {
-						// The round is saved in its session either way, so its report prints before a failed record.
+					async (rounds) => {
+						// The rounds are saved in their sessions either way, so their report prints before a failed record.
 						let record: Recorded | undefined;
 						let failure: unknown;
 						try {
-							record = await recordRound(root(), round, github);
+							record = await recordRounds(root(), rounds, github);
 						} catch (error) {
 							failure = error;
 						}
 						if (options.json)
-							print(JSON.stringify({ ...round, record: record ?? null, next: nextStep(round) }));
+							print(JSON.stringify({ rounds, record: record ?? null, next: nextStep(rounds) }));
 						else {
-							for (const line of roundLines(round)) print(line);
+							for (const line of roundLines(rounds)) print(line);
 							if (record !== undefined)
 								print("url" in record ? `record ${record.url}` : `record skipped: ${record.skipped}`);
-							print(nextStep(round));
+							print(nextStep(rounds));
 						}
 						if (failure === undefined) return 0;
 						warn(
