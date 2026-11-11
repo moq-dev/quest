@@ -189,9 +189,10 @@ export function parseCcusage(text: string): Priced[] {
 
 /**
  * Visit each line of the file at `path`, reading it in bounded chunks since logs reach gigabytes. The last line is
- * marked incomplete when no newline ends it, as while its session is still writing it.
+ * marked incomplete when no newline ends it, as while its session is still writing it. Reading stops once `visit`
+ * returns false.
  */
-function eachLine(path: string, visit: (line: string, complete: boolean) => void): void {
+export function eachLine(path: string, visit: (line: string, complete: boolean) => boolean | void): void {
 	const fd = openSync(path, "r");
 	try {
 		const chunk = Buffer.alloc(1 << 22);
@@ -200,7 +201,7 @@ function eachLine(path: string, visit: (line: string, complete: boolean) => void
 			const data = rest.length ? Buffer.concat([rest, chunk.subarray(0, read)]) : chunk.subarray(0, read);
 			let start = 0;
 			for (let end = data.indexOf(10); end >= 0; end = data.indexOf(10, start)) {
-				if (end > start) visit(data.toString("utf8", start, end), true);
+				if (end > start && visit(data.toString("utf8", start, end), true) === false) return;
 				start = end + 1;
 			}
 			rest = Buffer.from(data.subarray(start));
@@ -212,7 +213,7 @@ function eachLine(path: string, visit: (line: string, complete: boolean) => void
 }
 
 /** One JSON record of a log line, or null for an incomplete last line. */
-function parseLine(path: string, line: string, complete: boolean): Record<string, unknown> | null {
+export function parseLine(path: string, line: string, complete: boolean): Record<string, unknown> | null {
 	try {
 		return JSON.parse(line) as Record<string, unknown>;
 	} catch (error) {
@@ -221,8 +222,8 @@ function parseLine(path: string, line: string, complete: boolean): Record<string
 	}
 }
 
-/** Claude Code's session logs by session ID, from each config directory ccusage reads. */
-function claudeLogs(deps: UsageDependencies): Map<string, string> {
+/** Claude Code's session logs by session ID, from each config directory ccusage reads, once each. */
+export function claudeLogs(deps: { env: NodeJS.ProcessEnv; home: string }): Map<string, string> {
 	const configured = deps.env.CLAUDE_CONFIG_DIR?.split(",")
 		.map((dir) => dir.trim())
 		.filter(Boolean);

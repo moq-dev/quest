@@ -25,7 +25,7 @@ and `/reflect`):
     reverses the guide's "block on user decisions"
 - Which inputs?
   - ✅ The forge's records and the maintainer's typed messages, through
-    [the typed-messages command](/quest/m0/typed-messages.md)
+    `quest messages`
   - Rejected: forge records only; transcripts through a script each run
 - What gates each run?
   - ✅ A week since the last run, as a `## Waiting` item, the way
@@ -41,7 +41,7 @@ Agent's choices, for the implementer to revisit. Each run:
   moq-dev/moq, moq-dev/moq.pro, and moq-dev/quest, for each PR's review
   rounds, findings fixed and refuted, hand-backs, and the later PRs naming
   it under `## Caused by`; the diffs of those culprits and their fixes;
-  and the typed messages.
+  and the typed messages from `quest messages --since <date> --json`.
 - Group them into classes by the agent behavior behind them. A class is
   the same behavior in two or more PRs or messages; one failure is not a
   class.
@@ -67,8 +67,7 @@ Agent's choices, for the implementer to revisit. Each run:
 - The run's PR rewrites this quest at this path, or at the same path in
   the lowest open milestone once m0 completes: the new baseline, what to
   check first, and a `## Waiting` item for one week after the run's date,
-  checked with `date`. The first run has no such item; it waits only on
-  the command.
+  checked with `date`. The first run has no such item.
 
 Baseline, from the hand scan of 2026-11-09 (typed messages from
 2026-10-26 to 2026-11-10, classed by three sub-agents, counts unverified):
@@ -92,11 +91,6 @@ Baseline, from the hand scan of 2026-11-09 (typed messages from
 - Forge, since 2026-11-06: 65 of 416 merged moq-dev/moq PRs and 14 of 80
   merged moq-dev/quest PRs carry "Caused by" in the body, a phrase search.
   Use `quest usage`'s parsed links instead.
-
-## Required
-
-- [quest prints the maintainer's typed messages](/quest/m0/typed-messages.md) -
-  the command each run reads the typed messages through
 
 ## Related
 
