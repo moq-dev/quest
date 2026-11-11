@@ -39,7 +39,7 @@ Run each `/quest-merge` inline; dispatch each `/quest-iterate` and `/quest-revie
 Dispatch `/quest-iterate` without asking for a PR that needs work but no decision, such as a conflict, failing checks, unaddressed findings, or no counted review of the head; a `review-record` line of `current` or `diff-identical` in `quest status <pr>` is a counted review.
 A PR with open decisions, its `## Waiting` section's or an issue you would solve differently, goes to the user: settle them with the grill skill's rounds, then dispatch `/quest-iterate` with the answers in its brief, since a sub-agent cannot prompt.
 A PR you would skip or delete rather than fix, such as a superseded one, gets that question instead.
-Leave a PR whose required checks or automated reviews are still running for a later round.
+Leave a PR whose required checks are still running for a later round; an optional automated reviewer that has not posted, such as one rate-limited or skipping drafts, is not waited on.
 
 A PR whose author has write access and that changes no user-facing behavior carries a standing `/quest-merge` pick, unless the repository's `CONTRIBUTING.md` opts out: run `/quest-merge` on it without asking, and name it as auto-picked in the summary.
 That covers only tests, benchmarks, CI, internal docs or comments, and behavior-preserving code. Anything users or other repositories get, such as CLI behavior or output, shipped skills or rules, user-facing docs, dependencies, or release artifacts, needs the user's pick, as does adding or expanding quests.
