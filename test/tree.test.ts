@@ -746,3 +746,72 @@ describe("parser changes", () => {
 		tree().append("quest/m0/epic/one.md", "\nWrite to <a@b.c>.\n").accepts();
 	});
 });
+
+describe("scheduled", () => {
+	const scheduled = (date: string) => `\n## Scheduled\n\n- ${date}\n`;
+
+	test("a date blocks its quest until that day arrives", () => {
+		const t = tree().append("quest/m0/epic/one.md", scheduled("2026-11-11 - the filing window opens"));
+		t.accepts();
+		expect(t.ready("2026-11-10")).toEqual([]);
+		expect(t.blockers("quest/m0/epic/one.md", "2026-11-10")).toEqual([
+			"Scheduled: 2026-11-11 - the filing window opens",
+		]);
+		expect(t.ready("2026-11-11")).toEqual(["quest/m0/epic/one.md"]);
+		expect(t.blockers("quest/m0/epic/one.md", "2026-11-11")).toEqual([]);
+		expect(t.ready("2027-01-01")).toEqual(["quest/m0/epic/one.md"]);
+	});
+
+	test("an epic's or milestone's date holds back every quest under it", () => {
+		for (const readme of ["quest/m0/epic/README.md", "quest/m0/README.md"]) {
+			const t = tree().append(readme, scheduled("2027-03-01"));
+			t.accepts();
+			expect(t.ready("2027-02-28")).toEqual([]);
+			expect(t.blockers("quest/m0/epic/two.md", "2027-02-28")).toEqual([
+				"quest/m0/epic/one.md",
+				readme,
+				"  Scheduled: 2027-03-01",
+			]);
+			expect(t.ready("2027-03-01")).toEqual(["quest/m0/epic/one.md"]);
+		}
+	});
+
+	test("a date is listed before Required entries, on the quest and on an epic above it", () => {
+		const t = tree()
+			.append("quest/m0/epic/two.md", scheduled("2027-01-15"))
+			.append(
+				"quest/m0/epic/README.md",
+				`${scheduled("2027-01-01")}\n## Required\n\n- [Other](/quest/m0/other.md)\n`,
+			)
+			.write("quest/m0/other.md", "# [S] Other\n\n## Goal\n\nWork.\n");
+		t.accepts();
+		expect(t.blockers("quest/m0/epic/two.md", "2026-12-01")).toEqual([
+			"Scheduled: 2027-01-15",
+			"quest/m0/epic/one.md",
+			"quest/m0/epic/README.md",
+			"  Scheduled: 2027-01-01",
+			"  quest/m0/other.md",
+		]);
+	});
+
+	test.each(["2027-1-15", "2027-02-30", "Jan 15 2027", "2027-01-15 why", "after [One](/quest/m0/epic/one.md)"])(
+		"an item that is not a real date is rejected and blocks: %j",
+		(item) => {
+			const t = tree().append("quest/m0/epic/one.md", scheduled(item));
+			t.rejects("'## Scheduled' item must be a date, as 'YYYY-MM-DD' optionally followed by ' - why'");
+			expect(t.ready("2999-01-01")).toEqual([]);
+		},
+	);
+
+	test("a second date is rejected", () => {
+		tree()
+			.append("quest/m0/epic/one.md", "\n## Scheduled\n\n- 2027-01-15\n- 2027-02-15\n")
+			.rejects("quest/m0/epic/one.md:10: '## Scheduled' holds one date");
+	});
+
+	test("an empty section is rejected and blocks nothing", () => {
+		const t = tree().append("quest/m0/epic/one.md", "\n## Scheduled\n");
+		t.rejects("'## Scheduled' is empty");
+		expect(t.ready()).toEqual(["quest/m0/epic/one.md"]);
+	});
+});

@@ -47,6 +47,10 @@ Current decisions, open questions, or implementation guidance.
 - Maintainer: the decision or action only they can take, and how to check it is done
 - moq-dev/moq: a condition another party must meet, and how to check or advance it
 
+## Scheduled
+
+- 2027-01-15 - the first day the work may start, such as when a filing window opens
+
 ## Required
 
 - [Blocker](/quest/foo/bar.md) - what it delivers that this needs, so the list reads without opening it
@@ -74,6 +78,10 @@ A quest without it runs anywhere; `quest unblocked --json` reports the list as `
 `Waiting` lists what the work waits on outside the tree; each item opens with who acts, `Maintainer:` or the outside party, before a colon.
 A decision item gives its options and a recommendation.
 Remove an item once its condition clears, and the heading with its last item.
+
+`Scheduled` holds one date, `YYYY-MM-DD` on the local calendar, optionally followed by ` - why`.
+The quest is blocked until that day, and an epic's or milestone's date blocks every quest under it.
+A date clears on its own, so unlike a `Waiting` item it needs no one to act; a past one can stay until the quest finishes.
 
 `Required` lists the quests that must finish before the work starts; an epic's never lists its own quests, which it already waits for.
 An epic's or milestone's `Required` also holds back every quest under it.

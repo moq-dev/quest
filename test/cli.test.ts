@@ -3,7 +3,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { version } from "../package.json";
 import { Tree, run, tempDir } from "./fixture";
@@ -233,4 +233,21 @@ test.each(["0", "-1", "1.5", "NaN", "Infinity", "9007199254740992"])("unblocked 
 	expect(result.code).toBe(2);
 	expect(result.stdout).toBe("");
 	expect(result.stderr).toContain("limit must be a positive safe integer");
+});
+
+test("unblocked reads Scheduled dates on the local calendar day", () => {
+	const tree = Tree.baseline().append("quest/m0/epic/one.md", "\n## Scheduled\n\n- 2026-11-11 - the window opens\n");
+	vi.useFakeTimers({ toFake: ["Date"] });
+	try {
+		vi.setSystemTime(new Date(2026, 10, 10, 23, 59));
+		expect(tree.run("unblocked").stdout).toBe("");
+		const out = tree.run("unblocked", "quest/m0/epic/one.md");
+		expect(out.stdout).toBe("Scheduled: 2026-11-11 - the window opens\n");
+		expect(out.stderr).toContain("quest: blocked by Scheduled: 2026-11-11 - the window opens\n");
+		vi.setSystemTime(new Date(2026, 10, 11, 0, 0));
+		expect(tree.run("unblocked").stdout).toBe("1\tquest/m0/epic/one.md\n");
+		expect(tree.run("unblocked", "quest/m0/epic/one.md").stdout).toBe("");
+	} finally {
+		vi.useRealTimers();
+	}
 });

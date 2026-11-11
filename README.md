@@ -97,7 +97,7 @@ $ quest --root examples/export unblocked
 
 $ quest --root examples/export unblocked quest/m0/download.md
 ! [S] Add a download button        quest/m0/download.md
-  Required:
+  Blocked by:
     [S] Add a CSV export endpoint  quest/m0/export.md
 ```
 
@@ -162,6 +162,23 @@ lookup, such as an expired token or a network error, fails the command rather
 than picking a different upstream. `--remote` picks a remote other than `origin`.
 Off GitHub, only branches are checked.
 Neither form inspects outside conditions.
+
+## Schedule work for a date
+
+Work that must not start before a day, such as a yearly filing, says so in a
+`## Scheduled` section holding one date, optionally followed by why:
+
+```markdown
+## Scheduled
+
+- 2027-01-15 - the filing window opens
+```
+
+Until that day on your local calendar the quest is blocked: `quest unblocked`
+leaves it out, `quest unblocked <path>` names the date, and `quest start`
+refuses it. On an epic or milestone README, the date holds back every quest
+under it. A past date no longer blocks. `quest check` rejects anything but one
+real `YYYY-MM-DD` date.
 
 ## Find what waits on you
 

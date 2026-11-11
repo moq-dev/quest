@@ -21,6 +21,8 @@ import {
 	HOST,
 	HOSTS,
 	hostOf,
+	SCHEDULED,
+	dateOf,
 	isEpic,
 	owner,
 	permanent,
@@ -39,14 +41,14 @@ import { MAINTAINER, WAITING, parseWait } from "./waiting";
  * literally, so a typo turns a blocked quest ready and fails nowhere else: the
  * closed vocabulary is what catches it.
  */
-export const HEADINGS = ["Goal", "Plan", "Hosts", "Waiting", "Required", "Closes", "Related"];
+export const HEADINGS = ["Goal", "Plan", "Hosts", "Waiting", "Scheduled", "Required", "Closes", "Related"];
 
 /**
  * Sections whose whole content is a list. A heading left standing after its
  * last entry was removed is a bug: an empty `Required` blocks its quest
  * forever.
  */
-export const LIST_SECTIONS = ["Hosts", "Waiting", "Required", "Closes", "Related"];
+export const LIST_SECTIONS = ["Hosts", "Waiting", "Scheduled", "Required", "Closes", "Related"];
 
 /** The permanent root epic; the one document nothing has to list. */
 export const ROOT = "quest/README.md";
@@ -180,6 +182,18 @@ function headings(found: Finding[], docs: Doc[], doc: Doc) {
 			});
 		}
 	}
+
+	// Readiness compares the date as text, so anything but a real `YYYY-MM-DD`
+	// would block the quest forever. A second date only says the same thing worse.
+	entries(doc, SCHEDULED).forEach((entry, index) => {
+		const message =
+			dateOf(entry) === null
+				? `'## ${SCHEDULED}' item must be a date, as 'YYYY-MM-DD' optionally followed by ' - why'`
+				: index > 0
+					? `'## ${SCHEDULED}' holds one date; keep the one the work waits for`
+					: null;
+		if (message !== null) found.push({ path: doc.path, line: entry.line, message });
+	});
 
 	// `quest waiting` sorts on who acts, so an item that does not name its
 	// party would hide a decision the maintainer owes.

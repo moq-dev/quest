@@ -74,7 +74,7 @@ describe("unblocked <path>", () => {
 		expect(out.code).toBe(0);
 		expect(out.stdout).toBe(
 			`${sgr("90", "!")} ${sgr("32", "[S]")} Two    quest/m0/epic/two.md\n` +
-				"  Required:\n" +
+				"  Blocked by:\n" +
 				`    ${sgr("32", "[S]")} One  quest/m0/epic/one.md\n`,
 		);
 		// The log names the blockers, so stderr keeps only the advice.
@@ -86,7 +86,7 @@ describe("unblocked <path>", () => {
 		const out = Tree.baseline().runOn(NO_COLOUR, "unblocked", "quest/m0/README.md");
 		expect(out.stdout).toBe(
 			"! M0           quest/m0/README.md\n" +
-				"  Required:\n" +
+				"  Blocked by:\n" +
 				"    Epic       quest/m0/epic/README.md\n" +
 				"      [S] One  quest/m0/epic/one.md\n" +
 				"      [S] Two  quest/m0/epic/two.md\n",
@@ -106,7 +106,7 @@ describe("unblocked <path>", () => {
 	test("an entry that is not a quest prints as written", () => {
 		const tree = Tree.baseline().append("quest/m0/epic/one.md", "\n## Required\n\n- the design review\n");
 		expect(tree.runOn(NO_COLOUR, "unblocked", "quest/m0/epic/one.md").stdout).toBe(
-			"! [S] One  quest/m0/epic/one.md\n  Required:\n    the design review\n",
+			"! [S] One  quest/m0/epic/one.md\n  Blocked by:\n    the design review\n",
 		);
 	});
 });
