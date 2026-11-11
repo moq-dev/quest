@@ -1571,15 +1571,22 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		const session = sessions.find((each) => each.reviewer === reviewer.harness);
 		return { reviewer, session, first: session === undefined ? 1 : firsts.get(session)! };
 	});
-	// A run of the pair drops another reviewer's session, as when the latest writer changed the size's pick.
-	// A run of --harness's reviewer alone keeps the others for the pair's next run, and refuses to pass a
-	// head while one of them still has findings it cannot settle.
-	const kept = options.harness === undefined ? [] : sessions.filter((each) => !seats.some((s) => s.session === each));
-	const unsettled = kept.filter((each) => each.rounds.at(-1)!.findings.length > 0);
-	if (unsettled.length > 0) {
-		const names = unsettled.map((each) => each.reviewer).join(" and ");
+	const unseated = () => sessions.filter((each) => !seats.some((seat) => seat.session === each));
+	const unsettled = (list: Session[]) => list.filter((each) => each.rounds.at(-1)!.findings.length > 0);
+	// When the latest writer changed the size's pick, the new pick's first session settles the open findings
+	// of the reviewer it replaces, by their numbers, so they are never dropped unanswered.
+	const replaced =
+		options.harness === undefined && seats[0]!.session === undefined ? unsettled(unseated())[0] : undefined;
+	if (replaced !== undefined) seats[0] = { ...seats[0]!, session: replaced, first: firsts.get(replaced)! };
+	// A run of the pair drops the other sessions. A run of --harness's reviewer alone keeps them for the pair's
+	// next run. Either refuses to pass a head while one of them still has findings it cannot settle.
+	const others = unseated();
+	const kept = options.harness === undefined ? [] : others;
+	const open = unsettled(others);
+	if (open.length > 0) {
+		const names = open.map((each) => each.reviewer).join(" and ");
 		throw new ReviewInputError(
-			`${names} still ${unsettled.length > 1 ? "have" : "has"} findings to settle on this branch; run quest review without --harness to settle them`,
+			`${names} still ${open.length > 1 ? "have" : "has"} findings to settle on this branch; settle them in a run of that reviewer with --responses, or pass --new to drop them`,
 		);
 	}
 	if (seats.every((seat) => seat.session === undefined) && options.responses !== undefined) {
@@ -1587,10 +1594,10 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 			"--responses answers a previous round, and each reviewer of this run has none to resume",
 		);
 	}
-	const open = seats.reduce((sum, seat) => sum + (seat.session?.rounds.at(-1)!.findings.length ?? 0), 0);
-	if (open > 0 && options.responses === undefined) {
+	const settling = seats.reduce((sum, seat) => sum + (seat.session?.rounds.at(-1)!.findings.length ?? 0), 0);
+	if (settling > 0 && options.responses === undefined) {
 		throw new ResponsesError(
-			`the last round reported ${open} finding(s); pass --responses with a fix or refutation for each`,
+			`the last round reported ${settling} finding(s); pass --responses with a fix or refutation for each`,
 		);
 	}
 
@@ -1656,7 +1663,10 @@ interface Shared {
 	signal: AbortSignal;
 }
 
-/** A reviewer of the run, with its saved session, if any, whose last findings are numbered from `first`. */
+/**
+ * A reviewer of the run, with its saved session, if any, whose last findings are numbered from `first`: its own,
+ * or the replaced reviewer's, whose findings its new session settles.
+ */
 interface Seat {
 	reviewer: Reviewing;
 	session?: Session;
@@ -1687,6 +1697,7 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 	const resume =
 		previous !== undefined &&
 		last !== undefined &&
+		stored!.reviewer === harness &&
 		stored!.given.instructions === given.instructions &&
 		stored!.given.rules === given.rules &&
 		last.model === picked.model &&

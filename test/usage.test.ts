@@ -463,6 +463,8 @@ describe("usage", () => {
 			["claude", CLAUDE, "implementing", "high"],
 			["codex", THREAD, "reviewing", "high"],
 			["codex", "11111111-1111-1111-1111-111111111111", "iterating", "high"],
+			// No log quest reads names opencode's session, but the review record does.
+			["opencode", "ses_1", "reviewing", "high"],
 			["claude", OWNED, "iterating", null],
 		]);
 		expect(ten.fixedBy).toEqual([11]);
@@ -474,18 +476,19 @@ describe("usage", () => {
 		expect(report.pulls.find((p) => p.number === 9)!.sessions).toEqual([]);
 		expect(report.pulls.find((p) => p.number === 7)!.sessions).toEqual([]);
 		expect(report.unattributed).toEqual({
-			sessions: 5,
-			input: 50,
-			cacheWrite: 100,
-			cacheRead: 150,
-			output: 200,
-			cost: 30,
+			sessions: 4,
+			input: 40,
+			cacheWrite: 80,
+			cacheRead: 120,
+			output: 160,
+			cost: 26,
 		});
 		expect(report.spend.map((s) => [s.size, s.role, s.harness, s.cost])).toEqual([
 			["L", "implementing", "claude", 5],
 			["L", "iterating", "claude", 7],
 			["L", "iterating", "codex", 2],
 			["L", "reviewing", "codex", 1],
+			["L", "reviewing", "opencode", 4],
 		]);
 		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.rounds, a.fixes])).toEqual([
 			["S", "gpt-6.1-sol", 1, 1, 17, 2, 1],

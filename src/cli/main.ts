@@ -1135,9 +1135,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; with --harness it is " +
 				"none. " +
 				"--harness names the only reviewer instead of the pair, at its entry's model and effort, and --model and " +
-				"--effort override the size pick's model and effort; a repository whose AGENTS.md names other reviewers " +
+				"--effort override that reviewer's, or without --harness, the size pick's; a repository whose AGENTS.md names other reviewers " +
 				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
-				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle. The reviewers run at once, and the first to fail stops the other and fails the " +
+				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle. When the latest writer changes the size's pick, the new pick's first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the other and fails the " +
 				"run, saving neither round. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +

@@ -1923,3 +1923,28 @@ fakes("--harness reviews alone, keeping the other reviewer's session unless it h
 	expect(refused.stderr).toContain("opencode still has findings to settle on this branch");
 	expect(t.calls()).toHaveLength(calls);
 });
+
+fakes("a new size pick settles the open findings of the reviewer it replaces", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_OPENCODE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	// Sol wrote the fix, so Opus replaces it as the size's pick.
+	write(s.repo, "src/lib.ts", "export const x = 4;\n");
+	git(s.repo, "commit", "-qam", "fix");
+	const sol = ["--exclude-model", "gpt-6.1-sol"];
+	const unanswered = await quest("--root", s.repo, "review", ...sol);
+	expect(unanswered.code).toBe(2);
+	expect(unanswered.stderr).toContain("the last round reported 1 finding(s)");
+	write(s.repo, ".tmp/responses.md", "1. Fixed at src/lib.ts:1.\n");
+	const responses = join(s.repo, ".tmp", "responses.md");
+	const round = await quest("--root", s.repo, "review", ...sol, "--responses", responses, "--json");
+	expect(round.code, round.stderr).toBe(0);
+	const [opus] = JSON.parse(round.stdout).rounds;
+	expect([opus.reviewer, opus.round, opus.earlier.findings.map((f: { number: number }) => f.number)]).toEqual([
+		"claude",
+		1,
+		[1],
+	]);
+	const review = s.calls().find((call) => call.argv.includes("--session-id"))!;
+	expect(review.stdin).toContain("Fixed at src/lib.ts:1.");
+});

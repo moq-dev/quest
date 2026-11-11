@@ -1335,7 +1335,8 @@ names other reviewers needs. The second reviewer's model is avoided like any
 other, which, without `--harness`, is an error. A `--harness` run keeps the other
 reviewers' sessions for the pair's next run, and refuses while one has
 findings to settle, so a head never passes one reviewer alone while the other's
-findings are open. An unknown harness, a size whose
+findings are open. When the latest writer changes the size's pick, the new
+pick's first session settles the open findings of the reviewer it replaces. An unknown harness, a size whose
 every reviewer is avoided, or a missing or logged-out CLI, is an error
 rather than a same-model review, as is a login the API rejects mid-round, such
 as an expired or revoked token. The reviewer reaches its model as the user's own CLI does:

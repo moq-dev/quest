@@ -468,17 +468,18 @@ function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
 }
 
 /**
- * Attribute each priced session to the PR whose head branch its log last named, among those still open when the
- * session reached the branch and headed from the repository its log, checkout, or directory names, and give it a role: reviewing when
- * a PR's review record names it or Codex marks it a review, implementing when it began before its PR opened, and
- * iterating otherwise. Returns the sessions on no PR here.
+ * Attribute each priced session to the PR whose review record names it, as reviewing, even one whose log quest
+ * cannot read, such as opencode's. Attribute any other to the PR whose head branch its log last named, among
+ * those still open when the session reached the branch and headed from the repository its log, checkout, or
+ * directory names, and give it a role: reviewing when Codex marks it a review, implementing when it began before
+ * its PR opened, and iterating otherwise. Returns the sessions on no PR here.
  */
 function attribute(
 	sessions: Priced[],
 	logs: (SessionLog | null)[],
 	pulls: Pull[],
 	rows: Map<number, PullRow>,
-	reviewers: Set<string>,
+	reviewers: Map<string, { row: PullRow; effort: string }>,
 ): Priced[] {
 	const byBranch = new Map<string, Pull[]>();
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
@@ -486,6 +487,13 @@ function attribute(
 	const unattributed: Priced[] = [];
 	const owned = owners(logs);
 	sessions.forEach((session, index) => {
+		const id = sessionId(session);
+		const named = reviewers.get(id);
+		if (named) {
+			const { harness, models } = session;
+			named.row.sessions.push({ harness, session: id, role: "reviewing", effort: named.effort, models });
+			return;
+		}
 		const log = logs[index];
 		const branches = log ? [...log.branches].sort((a, b) => b[1].last - a[1].last) : [];
 		let found: Pull | undefined;
@@ -510,16 +518,10 @@ function attribute(
 			unattributed.push(session);
 			return;
 		}
-		const id = sessionId(session);
 		row.sessions.push({
 			harness: session.harness,
 			session: id,
-			role:
-				log.review || reviewers.has(id)
-					? "reviewing"
-					: log.started < found.created
-						? "implementing"
-						: "iterating",
+			role: log.review ? "reviewing" : log.started < found.created ? "implementing" : "iterating",
 			effort: log.effort,
 			models: session.models,
 		});
@@ -654,7 +656,11 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	const priced = deps.ccusage(options.since);
 	let unattributed: Usage["unattributed"] = null;
 	if (priced !== null) {
-		const reviewers = new Set(rows.flatMap((row) => row.review.map((review) => review.session)));
+		const reviewers = new Map(
+			rows.flatMap((row) =>
+				row.review.map((review) => [review.session, { row, effort: review.effort }] as const),
+			),
+		);
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
 		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
 		if (!narrowed) {
