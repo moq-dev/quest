@@ -161,8 +161,11 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 		const sources = provenance.map(
 			(each) => (each as { provenance?: { type?: unknown } } | null)?.provenance?.type,
 		);
-		if (sources.length !== content.length || sources.some((type) => typeof type !== "string"))
+		if (sources.length !== content.length)
 			throw new Error(`${path} has a user turn whose provenance does not cover each part`);
+		const unknown = sources.find((type) => !CODEX_SOURCES.has(type as string));
+		if (unknown !== undefined || sources.includes(undefined))
+			throw new Error(`${path} has a user turn with an unknown provenance: ${String(unknown)}`);
 		const text = content
 			.filter((part, i) => sources[i] === "user" && typeof part?.text === "string")
 			.map((part) => part.text as string)
@@ -179,6 +182,9 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 	});
 	return messages;
 }
+
+/** Who Codex says wrote a part of a user turn: the person, or the instructions, harness, or skill it added. */
+const CODEX_SOURCES = new Set(["user", "agents_md", "harness", "skills"]);
 
 /** T3 Code's agent names, as the harness names `quest usage` reports. */
 const T3_DRIVERS: Record<string, string> = { claudeAgent: "claude", codex: "codex" };

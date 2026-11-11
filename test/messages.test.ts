@@ -161,6 +161,7 @@ describe("readCodexMessages", () => {
 			{ content_item_kinds: ["user.text", "unknown"] },
 			{ content_item_metadata: [{ provenance: { type: "user" } }] },
 			{ content_item_metadata: [{ provenance: { type: "user" } }, { kind: "user" }] },
+			{ content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "plugin" } }] },
 		]) {
 			const path = join(tempDir(), "rollout.jsonl");
 			writeFileSync(path, lines(codexMeta({}), turn(meta)));
