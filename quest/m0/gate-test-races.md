@@ -31,10 +31,6 @@ each race by `git blame` once it is reproduced.
 Decided 2026-11-10 (user, /quest-plan follow-up from /quest-complete):
 
 - Scope: ✅ its own quest, separate from the timeout work (rejected: fold
-  into [test CPU timeout](/quest/m0/test-cpu-timeout.md); leave it to the
+  into the test CPU timeout quest; leave it to the
   flaky-test watcher).
 - Milestone: ✅ m0 (rejected: m1).
-
-## Related
-
-- [Test CPU timeout](/quest/m0/test-cpu-timeout.md) - the queue build's timeout failures

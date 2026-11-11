@@ -941,26 +941,21 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 	});
 
 	for (const name of ["SIGTERM", "SIGHUP"] as const)
-		test(
-			`delivers ${name} once to a command under a nested gate, without killing it`,
-			async () => {
-				const dir = tempDir();
-				const leaf = signalled(dir, [name], 200);
-				const { stop, cancel } = cancellation();
-				const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
-				// Just also forwards SIGTERM to its own child, the nested gate, on top of the owner's.
-				const nested = [process.execPath, config, bin, "gate", process.execPath, leaf.script]
-					.map(quote)
-					.join(" ");
-				const result = run(just(dir, nested), env, cancel);
-				await created(leaf.ready);
-				stop.abort(name);
-				expect(await result).toBe(128 + constants.signals[name]);
-				expect(leaf.log()).toEqual([name]);
-				// The leaf finished its own cleanup: neither gate killed it.
-				expect(existsSync(leaf.done)).toBe(true);
-			},
-		);
+		test(`delivers ${name} once to a command under a nested gate, without killing it`, async () => {
+			const dir = tempDir();
+			const leaf = signalled(dir, [name], 200);
+			const { stop, cancel } = cancellation();
+			const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
+			// Just also forwards SIGTERM to its own child, the nested gate, on top of the owner's.
+			const nested = [process.execPath, config, bin, "gate", process.execPath, leaf.script].map(quote).join(" ");
+			const result = run(just(dir, nested), env, cancel);
+			await created(leaf.ready);
+			stop.abort(name);
+			expect(await result).toBe(128 + constants.signals[name]);
+			expect(leaf.log()).toEqual([name]);
+			// The leaf finished its own cleanup: neither gate killed it.
+			expect(existsSync(leaf.done)).toBe(true);
+		});
 
 	test("killing stops a command that ignores the request", async () => {
 		const dir = tempDir();
@@ -1021,39 +1016,33 @@ function outermostUnderJust(dir: string, command: string[]) {
 }
 
 describe.skipIf(process.platform === "win32")("an outermost gate owning a process group under Just", () => {
-	test(
-		"takes Just's copy of a SIGTERM it already handled as the same cancellation",
-		async () => {
-			const dir = tempDir();
-			const leaf = signalled(dir, ["SIGTERM"], 200);
-			const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
-			await created(leaf.ready);
-			// A SIGTERM to Just's process group reaches the gate directly and again through Just, whose
-			// copy may come only after the gate handled the first.
-			run.gate("SIGTERM");
-			await run.handled(1);
-			run.just("SIGTERM");
-			await run.handled(2);
-			await run.exited;
-			expect(leaf.log()).toEqual(["SIGTERM"]);
-			// The leaf finished its own cleanup: the gate did not take Just's copy as a second signal.
-			expect(existsSync(leaf.done)).toBe(true);
-		},
-	);
+	test("takes Just's copy of a SIGTERM it already handled as the same cancellation", async () => {
+		const dir = tempDir();
+		const leaf = signalled(dir, ["SIGTERM"], 200);
+		const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
+		await created(leaf.ready);
+		// A SIGTERM to Just's process group reaches the gate directly and again through Just, whose
+		// copy may come only after the gate handled the first.
+		run.gate("SIGTERM");
+		await run.handled(1);
+		run.just("SIGTERM");
+		await run.handled(2);
+		await run.exited;
+		expect(leaf.log()).toEqual(["SIGTERM"]);
+		// The leaf finished its own cleanup: the gate did not take Just's copy as a second signal.
+		expect(existsSync(leaf.done)).toBe(true);
+	});
 
-	test(
-		"lets the command finish its cleanup after a SIGTERM to Just's process group",
-		async () => {
-			const dir = tempDir();
-			const leaf = signalled(dir, ["SIGTERM"], 200);
-			const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
-			await created(leaf.ready);
-			run.group("SIGTERM");
-			await run.exited;
-			expect(leaf.log()).toEqual(["SIGTERM"]);
-			expect(existsSync(leaf.done)).toBe(true);
-		},
-	);
+	test("lets the command finish its cleanup after a SIGTERM to Just's process group", async () => {
+		const dir = tempDir();
+		const leaf = signalled(dir, ["SIGTERM"], 200);
+		const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
+		await created(leaf.ready);
+		run.group("SIGTERM");
+		await run.exited;
+		expect(leaf.log()).toEqual(["SIGTERM"]);
+		expect(existsSync(leaf.done)).toBe(true);
+	});
 
 	test("a SIGTERM beyond Just's copy kills a command still cleaning up", async () => {
 		const dir = tempDir();
@@ -1069,20 +1058,17 @@ describe.skipIf(process.platform === "win32")("an outermost gate owning a proces
 		await until(() => stopped(leaf.pid()), "the leaf to stop");
 	});
 
-	test(
-		"a repeated SIGINT, which Just does not forward, kills a command still cleaning up",
-		async () => {
-			const dir = tempDir();
-			const leaf = signalled(dir, ["SIGINT"]);
-			const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
-			await created(leaf.ready);
-			run.group("SIGINT");
-			await run.handled(1);
-			run.group("SIGINT");
-			await run.exited;
-			await until(() => stopped(leaf.pid()), "the leaf to stop");
-		},
-	);
+	test("a repeated SIGINT, which Just does not forward, kills a command still cleaning up", async () => {
+		const dir = tempDir();
+		const leaf = signalled(dir, ["SIGINT"]);
+		const run = outermostUnderJust(dir, [process.execPath, leaf.script]);
+		await created(leaf.ready);
+		run.group("SIGINT");
+		await run.handled(1);
+		run.group("SIGINT");
+		await run.exited;
+		await until(() => stopped(leaf.pid()), "the leaf to stop");
+	});
 });
 
 describe.runIf(process.platform === "linux")("a systemd scope", () => {
