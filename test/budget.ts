@@ -1,6 +1,6 @@
 // Fails a test that spends more than CPU_BUDGET_MS of CPU, counting its hooks and the processes it
 // spawned and waited for. A wall-clock limit would instead measure the host's load, so the wall
-// timeout in vitest.config.ts only catches hangs.
+// timeout in vitest.config.ts only catches a test awaiting what never comes.
 
 import { readFileSync } from "node:fs";
 
