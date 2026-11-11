@@ -37,7 +37,7 @@ Decision prompts, chosen options marked ✅:
 - Online reviewers: ✅ keep CodeRabbit and Pullfrog, which are free
   (rejected: drop them). Changed 2026-11-10 (user): Pullfrog spent the
   OpenCode Go plan outside moq-dev/moq, so it stays only there, and
-  [a second local review](/quest/m0/deepseek-review.md) replaces it.
+  a second local review, by DeepSeek in `quest review`, replaces it.
 - Rules to hooks or lint: first not planned, then ✅ planned the same day
   (user, adopting practices from the research below).
 - Adopted 2026-11-05 (user) from a survey of AI-heavy developers' setups
