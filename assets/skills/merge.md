@@ -23,7 +23,7 @@ A head on which any check failed, required or not, needs `/quest-iterate` to fix
 
 Otherwise run `/quest-iterate` on it, saying what it needs: a review of the head, fixes, or decisions, then run this skill again once it finishes; if it stops for the user instead, such as when it cannot push or reaches a design checkpoint, report that.
 Run it in this session, where its grill interview can ask the user; under a coordinator such as `/quest-run`, hand it back, and the coordinator dispatches it in a sub-agent.
-A PR that adds follow-ups also needs the answers of the round that picked it recorded before queueing, as the guide's Creation section describes; when the user ran this skill directly, ask which to keep and their open decisions now, then run `/quest-iterate` with the answers unless the head already records them.
+A PR that adds follow-ups also needs the answers of the round that picked it recorded before queueing, as the guide's Creation section describes; when the user ran this skill directly, ask about each follow-up now in a question of its own, then run `/quest-iterate` with the answers unless the head already records them.
 While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
 
 A review counts for the head whose SHA it names: a `## Review` record of a local `quest review` round, or a recorded skip.
