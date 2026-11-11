@@ -1,9 +1,10 @@
-# [M] Split S and M writers between two Opus efforts
+# [M] Split XS, S and M writers between two arms
 
 ## Goal
 
-`quest unblocked --json` routes each S quest to Opus low or medium, and
-each M quest to Opus medium or high, 50/50. The split is stable per quest,
+`quest unblocked --json` routes each XS quest to Sonnet 5.5 high or Opus
+low, each S quest to Opus low or medium, and each M quest to Opus medium
+or high, 50/50. The split is stable per quest,
 and the review table stays fixed while it runs. Each `Implementer:` line
 records its arm, iterates stay on the PR's arm, and
 `quest usage` reports cost, rounds, findings, hand-backs, and later
@@ -18,6 +19,20 @@ Decided 2026-11-11 (user, /quest-plan,
   - ✅ S Opus low against medium, and M Opus medium against high
   - Rejected: XS Haiku xhigh against Opus low, since XS PRs rarely draw
     findings and the signal would be weak
+- Amended 2026-11-11 (user, /quest-run): XS writers moved from Haiku
+  xhigh to Sonnet 5.5 high, after two Haiku agents in a row ran out of
+  context under a 100k auto-compact window. Does XS get an arm?
+  - ✅ Sonnet high against Opus low: published results disagree on this
+    pair at about the same cost. Anthropic's
+    [cost guide](https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence)
+    has them even on its SWE-bench Pro subset (87.6% and 87.4%, about
+    $0.11 per solved task), while
+    [Artificial Analysis](https://artificialanalysis.ai/models/comparisons/claude-sonnet-5-5-high-vs-claude-opus-5-5-low)
+    has Sonnet high 12.6 points ahead on Terminal-Bench 4.0 and Opus low
+    about 40% cheaper per task. XS PRs rarely draw findings, so cost,
+    rounds, and hand-backs carry most of its signal.
+  - Rejected: Sonnet medium against high, since both sources put medium
+    clearly below high; no XS arm
 - Escapes are too rare to separate the arms, about 2% of PRs. Compare
   first-round findings from the fixed review table, rounds, hand-backs,
   and cost, and report escapes alongside.
