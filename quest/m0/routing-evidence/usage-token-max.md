@@ -39,6 +39,11 @@ The audit found today's failures:
   quest reads only the parent's log, so 72% of host spend was unattributed.
 - `fixedBy` counted context links, such as moq-dev/quest#558 linking #494,
   and fixes still open or closed unmerged, such as moq-dev/moq#8476.
+  The 2026-11-11 [mistake audit](/quest/m0/mistake-audit.md) found 9 of
+  20 culprit pairs that week were such artifacts: links on a "No single
+  PR" or "None" line, a "(fixed by #N)" aside, a note after the bullets,
+  a closed duplicate fix, and an unmerged culprit. Test against
+  moq-dev/moq#8471, #8426, #8483, #8427, #8371, and #8493.
 
 ## Waiting
 

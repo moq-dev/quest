@@ -28,8 +28,11 @@ and `/reflect`):
     `quest messages`
   - Rejected: forge records only; transcripts through a script each run
 - What gates each run?
-  - ✅ A week since the last run, as a `## Waiting` item, the way
-    [the release cut](/quest/m1/release-cut.md) waits
+  - ✅ A week since the last run, the way
+    [the release cut](/quest/m1/release-cut.md) waits. The decision named a
+    `## Waiting` item because quests could not yet be held until a date;
+    since `## Scheduled` exists, the run holds the date there (agent,
+    2026-11-11).
   - Rejected: each milestone, as
     [the model check](/quest/m1/model-check.md) runs, since m0 has been
     open since 2026-09-26; each release cut
@@ -38,10 +41,20 @@ and `/reflect`):
 Agent's choices, for the implementer to revisit. Each run:
 
 - Read, since the last run's date: `quest usage --since <date> --json` in
-  moq-dev/moq, moq-dev/moq.pro, and moq-dev/quest, for each PR's review
-  rounds, findings fixed and refuted, hand-backs, and the later PRs naming
-  it under `## Caused by`; the diffs of those culprits and their fixes;
-  and the typed messages from `quest messages --since <date> --json`.
+  moq-dev/moq, moq-dev/moq.pro, and moq-dev/quest (each clone's root as
+  `--root`), for each PR's review rounds, findings fixed and refuted,
+  hand-backs, and the later PRs naming it under `## Caused by`; the diffs
+  of those culprits and their fixes; and the typed messages from
+  `quest messages --since <date> --json`.
+- Read each culprit pair's `## Caused by` line before counting it. On
+  2026-11-11 only 7 of 20 pairs were escapes: `fixedBy` takes every link
+  in the section, including "No single PR" lines and unmerged PRs, until
+  [the token-max attribution](/quest/m0/routing-evidence/usage-token-max.md)
+  lands; the rest named a PR that left the work to a planned follow-up
+  or kept older behavior.
+- `quest messages` returns every human turn, so set aside machine-written
+  ones yourself: bare skill invocations, pasted relays and logs, and
+  accepted suggested prompts (about 175 of 1,452 on 2026-11-11).
 - Group them into classes by the agent behavior behind them. A class is
   the same behavior in two or more PRs or messages; one failure is not a
   class.
@@ -53,9 +66,6 @@ Agent's choices, for the implementer to revisit. Each run:
   owns that gate, so it goes in the run PR's `## Follow-ups` for
   `/quest-plan` there, as the guide's Creation section says (user,
   2026-11-11, [routing evidence](/quest/m0/routing-evidence/README.md)).
-  The 2026-11-11 audit sampled 30 escapes: catchable 6, maybe 17, and not
-  from the diff 7. The 5 races fell across those columns, since race and
-  catchability were classified separately.
 - Before proposing a fix, find the quest, check, or rule that already owns
   the class, and report whether its count fell since that landed. A rule
   whose class still recurs is the case for moving it up a level.
@@ -69,39 +79,77 @@ Agent's choices, for the implementer to revisit. Each run:
   edits no `AGENTS.md`, `CONTRIBUTING.md`, or skill.
 - Tally the decision prompts per skill: how often the answer was the
   agent's own recommendation. Propose a change only where that is nearly
-  always.
+  always. `quest messages` drops structured answers, so this waits on
+  [question answers](/quest/m0/question-answers.md); until then, count
+  only typed answers that just pick the recommendation.
 - moq-dev/quest is public, and typed messages can name customers and
   private repositories. The PR and its quests give counts and classes in
-  the agent's words, never a message's text; quotes stay in `.tmp/`.
+  the agent's words, never a message's text, and name no moq-dev/moq.pro
+  PR or path; quotes stay in `.tmp/`.
 - Leave model and effort tallies to
   [the model check](/quest/m1/model-check.md).
 - The run's PR rewrites this quest at this path, or at the same path in
   the lowest open milestone once m0 completes: the new baseline, what to
-  check first, and a `## Waiting` item for one week after the run's date,
-  checked with `date`. The first run has no such item.
+  check first, and a `## Scheduled` date one week after the run's date,
+  checked with `date`.
 
-Baseline, from the hand scan of 2026-11-09 (typed messages from
-2026-10-26 to 2026-11-10, classed by three sub-agents, counts unverified):
+Check first next run:
 
-- 579 mid-session messages, about 227 machine-written, about 352 typed, 68
-  of them corrections or redirects.
-- Stalls until nudged: 17 typed, plus the coordinator relays that the
-  stop hook of [moq-dev/quest#600](https://github.com/moq-dev/quest/pull/600)
-  targets; check first whether they fell after it landed.
-- A proposal the maintainer steered simpler: 10.
-- Misread intent or target: 7.
-- Output handed back without running or looking at it: 7, which
-  the verification rule in `quest context` owns.
-- Reports a problem instead of fixing it, or fixes an arbitrary top few: 6.
-- Asks a routine choice: 4, beside 14 answers that only picked the
-  recommendation.
-- Repeated by hand: `/quest-complete` or `/quest-spawn` about 36 times,
-  "any new PRs?" 15, and away mode entered 14 times. A session on
-  2026-11-10 was already weighing one skill for the first; check what it
-  planned before proposing anything.
-- Forge, since 2026-11-06: 65 of 416 merged moq-dev/moq PRs and 14 of 80
-  merged moq-dev/quest PRs carry "Caused by" in the body, a phrase search.
-  Use `quest usage`'s parsed links instead.
+- Stalls after the stop hook of
+  [moq-dev/quest#600](https://github.com/moq-dev/quest/pull/600) (landed
+  2026-11-10T18:34Z): 3.8 per 100 typed messages after it against 6.5
+  before, on only 27 hours and 3 stalls.
+- Hand-run `/quest-complete` after `/quest-run`
+  ([moq-dev/quest#608](https://github.com/moq-dev/quest/pull/608), landed
+  2026-11-10T20:04Z): 6.6 a day in its first day against 5.2 before, with
+  3 `/quest-run` runs; `/quest-spawn` fell from 4.1 to 0.9 a day.
+- Output handed back unchecked, after the verification rule of
+  [moq-dev/quest#625](https://github.com/moq-dev/quest/pull/625) landed
+  2026-11-11T18:43Z: no data yet.
+- Heads that landed past a finding or decision, after
+  [late signals](/quest/m0/late-signals.md) lands.
+- Whether moq-dev/moq and moq-dev/moq.pro planned the runtime follow-ups
+  of moq-dev/quest's 2026-11-11 run PR, and whether their escapes recurred.
+
+Baseline from the 2026-11-11 run (PRs updated 2026-11-09 to 11-11; typed
+messages 2026-10-26 to 11-11, classed by one sub-agent, approximate):
+
+- PRs: moq-dev/moq 194 (158 merged), moq-dev/moq.pro 150 (99), and
+  moq-dev/quest 69 (59). Hand-backs: 4, 20, and 0. 57 of the 316 merged
+  PRs record implementers that `quest usage` drops, which
+  [implementer lines](/quest/m0/routing-evidence/implementer-lines.md)
+  fixes.
+- Escapes: 7 real of 20 culprit pairs. Catchable 2, maybe 2, runtime 3;
+  races 2 (one maybe, one runtime). All 7 culprits passed a local Sol
+  review. The routing audit's sample of 30 earlier escapes split 6, 17,
+  and 7, with 5 races.
+- Landed past an open signal, catchable: 3 in moq-dev/moq. A review
+  finding posted after enqueue, a recorded decision the head lacked, and
+  a red platform run. [Late signals](/quest/m0/late-signals.md) takes the
+  first two; `quest merge`'s refusal of failed checks
+  ([moq-dev/quest#601](https://github.com/moq-dev/quest/pull/601)) covers
+  none of them.
+- A scoped gate skipped a test the change reached, runtime: 2, one each in
+  moq-dev/moq and moq-dev/moq.pro.
+- A shell pipeline under `pipefail` whose reader exits early, a race: 1
+  this week in moq-dev/moq.pro, its third fix there.
+- Named a PR that deferred the work, or kept older behavior, as a
+  culprit: 4 in moq-dev/moq, which
+  [Caused by culprits](/quest/m0/caused-by-culprits.md) takes.
+- Typed mid-session messages, per 100, before 2026-11-09 (841) then after
+  (131): stalls until nudged 6.5 then 4.6; proposals steered simpler 4.8
+  then 0; misread intent 1.9 then 3.1; reported instead of fixed 0.7 then
+  2.3; routine choices asked 3.4 then 1.5; answers that only picked the
+  recommendation 7.7 then 3.8 (`/quest-plan` 11, `/quest-complete` 10,
+  `/quest-spawn` 6, `/quest-iterate` 1, unknown skill 42). The after
+  window is under 3 days.
+- `quest messages` counts more than the 2026-11-09 hand scan: 1,088
+  mid-session messages to its 579 over the same days, likely from the
+  Codex and T3 Code threads and worktree directories it covers.
+
+## Scheduled
+
+- 2026-11-18 - one week after the 2026-11-11 run
 
 ## Related
 
