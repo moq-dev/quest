@@ -22,7 +22,7 @@ what keeps the branch current with `main`.
   conflicting head is merged with `main` before it is enqueued.
 - A PR already open against the epic's branch conflicts with it after a
   sync as it would with `main`; nothing new handles that.
-- `/quest-merge` and `/quest-complete` say where a pick lands, and offer
+- `/quest-merge` and `/quest-run` say where a pick lands, and offer
   the epic's PR only once no quest of the epic remains.
 - The land watcher's daemons serve one base each and stay on `main`; they
   ignore PRs into an epic's branch.

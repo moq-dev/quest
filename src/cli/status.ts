@@ -13,6 +13,7 @@ import {
 } from "./github";
 import { checksState, contextOutcome, latestContexts } from "../github/checks";
 import { EJECTED, pinned } from "./land";
+import { reviewSection } from "../core";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
 
 /**
@@ -24,7 +25,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 	$moreChecks: Boolean!, $moreReviews: Boolean!, $moreThreads: Boolean!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
-			url state isDraft baseRefName headRefOid headRefName mergeable mergeStateStatus reviewDecision
+			url body baseRefName state isDraft headRefOid headRefName mergeable mergeStateStatus reviewDecision
 			headRepository { nameWithOwner }
 			autoMergeRequest { enabledAt mergeMethod commitBody enabledBy { login } }
 			mergeQueueEntry { state position enqueuedAt }
@@ -102,6 +103,17 @@ export interface Thread {
 	url: string;
 }
 
+/**
+ * The head the PR body's `## Review` section names last, the latest reviewed one: a round's record, or a line after
+ * it for low-severity fixes or a skip. `current` is the PR's head; `diff-identical` an earlier head whose diff from
+ * the base (`git diff <base>...<sha>`) matches the head's; `unknown` one GitHub cannot compare, such as a diff too
+ * large to render.
+ */
+export interface ReviewRecord {
+	state: "current" | "diff-identical" | "stale" | "unknown";
+	head: string;
+}
+
 export interface Status {
 	url: string;
 	state: "open" | "closed" | "merged";
@@ -123,6 +135,8 @@ export interface Status {
 	checks: { state: string | null; passed: number; failing: Check[]; pending: Check[] };
 	/** Each reviewer's latest submitted review, oldest first. */
 	reviews: Review[];
+	/** Null when the `## Review` section names no full SHA. */
+	reviewRecord: ReviewRecord | null;
 	reactions: Reaction[];
 	/** Unresolved review threads, oldest first. */
 	threads: Thread[];
@@ -186,8 +200,51 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 	if (ownership.head !== first!.headRefOid)
 		throw new Error("the PR head changed while reading its holds; rerun quest status");
 	const status = summarize(first!, rollup, contexts, reviewNodes, threadNodes);
+	status.reviewRecord = await reviewRecord(github, pr, first!, deps.warn);
 	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
+}
+
+async function reviewRecord(
+	github: GitHub,
+	pr: PullRequest,
+	pull: ObjectValue,
+	warn: (message: string) => void,
+): Promise<ReviewRecord | null> {
+	const body = typeof pull.body === "string" ? pull.body : "";
+	const section = reviewSection(body);
+	// Only the last SHA, so a body naming many costs no more requests than one.
+	const reviewed =
+		section &&
+		body
+			.slice(section.start, section.end)
+			.match(/\b[0-9a-f]{40}\b/g)
+			?.at(-1);
+	if (!reviewed) return null;
+	const head = string(pull.headRefOid);
+	if (reviewed === head) return { state: "current", head: reviewed };
+	const base = encodeURIComponent(string(pull.baseRefName));
+	const diffs: string[] = [];
+	for (const sha of [head, reviewed]) {
+		const unknown = (why: string): ReviewRecord => {
+			warn(`cannot compare ${sha} with the base, so whether the review of ${reviewed} carries is unknown${why}`);
+			return { state: "unknown", head: reviewed };
+		};
+		let response: Response;
+		try {
+			response = await github.request(`/repos/${pr.owner}/${pr.repo}/compare/${base}...${sha}`, {
+				accept: "application/vnd.github.diff",
+				allow: [404, 406, 422],
+			});
+		} catch (error) {
+			// A deadline is the caller's to handle; a forbidden or failing compare is not.
+			if (error instanceof GitHubDeadline || !(error instanceof Error)) throw error;
+			return unknown(`: ${error.message}`);
+		}
+		if (!response.ok) return unknown("");
+		diffs.push(await response.text());
+	}
+	return { state: diffs[0] === diffs[1] ? "diff-identical" : "stale", head: reviewed };
 }
 
 /** Repository activity types that move a branch to a new head, including merges into it. */
@@ -366,6 +423,7 @@ function summarize(
 					},
 		checks,
 		reviews: [...latest.values()],
+		reviewRecord: null,
 		reactions,
 		threads,
 		holds: [],
@@ -417,6 +475,9 @@ export function statusLines(status: Status): string[] {
 		`mergeable ${status.mergeable}`,
 		`merge-state ${status.mergeState}`,
 		`review-decision ${dash(status.reviewDecision)}`,
+		status.reviewRecord === null
+			? "review-record -"
+			: `review-record ${status.reviewRecord.state} ${status.reviewRecord.head}`,
 		status.autoMerge === null
 			? "auto-merge -"
 			: `auto-merge ${status.autoMerge.method} ${status.autoMerge.enabledBy} ${status.autoMerge.enabledAt} ${dash(status.autoMerge.head)}`,

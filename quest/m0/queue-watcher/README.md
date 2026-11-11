@@ -48,13 +48,12 @@ Decision prompts, selected options marked ✅:
   - ✅ moq first, since it lands the most PRs and so proves the design
     fastest. moq-dev/quest, moq.pro, rust2 and rind stay on the host
     `quest land` gate until moq proves it, then
-    [follow](/quest/m0/queue-watcher/follow.md).
+    follow (done 2026-11-03; proven from a fork on the PR that deleted it).
   - All five at once
   - moq and quest
 - Runners:
-  - ✅ Self-hosted on nixos: `merge_group` builds run on the host's runner
-    (kixelated/nixos `modules/ci-runners.nix`, runner `moq-ci`, label
-    `moq-queue`), for warm caches and no GitHub minutes
+  - ✅ Self-hosted on the maintainer's host: `merge_group` builds run on its
+    runner (label `moq-queue`), for warm caches and no GitHub minutes
   - GitHub-hosted
 - Interim:
   - Keep improving the host gate
@@ -137,9 +136,6 @@ against 756 merges, 130 of them resolved by the quest merge driver alone.
 - Re-enqueue, for a conflict the merge driver resolved alone: ✅ keep the
   back of the queue for all (rejected: GitHub's `jump` to the front for
   those, recommended by the agent for the 95-minute median they wait).
-- Found by the same audit:
-  [a flaky test's second verdict finds its first](/quest/m0/queue-watcher/flaky-signature.md)
-  and [quest merge refuses a head whose checks failed](/quest/m0/queue-watcher/red-heads.md).
 
 Shared shape, for the children to follow:
 

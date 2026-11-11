@@ -36,6 +36,7 @@ import {
 	readFixResult,
 	signature,
 	parseBaseFix,
+	knownFlaky,
 	parseFixResult,
 	type BaseFix,
 	type FixResult,
@@ -980,7 +981,7 @@ async function collectJob(
 			job,
 			deps,
 			timeout,
-			() => (job.results = parseFixResult(readFixResult(job.checkout), job.numbers)),
+			() => (job.results = parseFixResult(readFixResult(job.checkout), job.numbers, knownFlaky(job.checkout))),
 		)
 	)
 		return output;

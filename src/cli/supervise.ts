@@ -1,21 +1,9 @@
 // Linux process ownership for supervised checkout commands and gated ones. Each run gets its own
 // systemd user scope, named once and never reused, so its cgroup holds every descendant that does
-// not ask another service manager to start it. The scope is delegated, so a gate inside it owns its
-// command through a child cgroup of its own (see `nest`). Other hosts fail explicitly; only the
-// gate settles for a process group there (see `group` in gate.ts).
+// not ask another service manager to start it. Other hosts fail explicitly; only the gate settles
+// for a process group there (see `group` in gate.ts).
 import { type ChildProcessWithoutNullStreams, execFile, execFileSync, spawn } from "node:child_process";
-import {
-	closeSync,
-	existsSync,
-	constants as fs,
-	mkdirSync,
-	openSync,
-	readdirSync,
-	readFileSync,
-	rmdirSync,
-	watch,
-	writeSync,
-} from "node:fs";
+import { closeSync, existsSync, constants as fs, openSync, readFileSync, watch, writeSync } from "node:fs";
 import { constants, hostname } from "node:os";
 // Cgroup paths are POSIX paths, also in the tests that parse them on Windows.
 import { join } from "node:path/posix";
@@ -83,6 +71,8 @@ export interface RunOptions {
 	 * owner, since it may be a copy of the one that owner delivered, as Just forwards SIGTERM.
 	 */
 	within?: string | null;
+	/** The slice the scope runs in; the user manager's default, `app.slice`, when omitted. */
+	slice?: string;
 }
 
 export interface Scopes {
@@ -217,7 +207,7 @@ function signalScope(unit: string, signal: NodeJS.Signals, done: (error?: string
 }
 
 /** The scope's cgroup directory, or undefined once systemd no longer knows the unit. */
-function scopeGroup(unit: string): string | undefined {
+export function scopeGroup(unit: string): string | undefined {
 	const group = execFileSync("systemctl", ["--user", "show", "--property=ControlGroup", "--value", unit], {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
@@ -225,6 +215,26 @@ function scopeGroup(unit: string): string | undefined {
 	if (!group) return undefined;
 	if (!group.endsWith(`/${unit}`)) throw new Error(`unexpected cgroup for ${unit}: ${group}`);
 	return join("/sys/fs/cgroup", group);
+}
+
+/**
+ * The gate scopes bound to `unit` (see `RunOptions.within`). systemd stops them once `unit` stops,
+ * but only after its cgroup empties, so whoever confirms `unit` stopped must wait for them too.
+ */
+function boundTo(unit: string): string[] {
+	const show = execFileSync("systemctl", ["--user", "show", "--property=Id,BindsTo", "quest-gate-*.scope"], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	return show
+		.split("\n\n")
+		.filter((entry) => /^BindsTo=(.*)$/m.exec(entry)?.[1].split(" ").includes(unit))
+		.map((entry) => /^Id=(.*)$/m.exec(entry)![1]);
+}
+
+/** Kill every gate scope bound to `unit` and resolve once each is empty. */
+async function stopBound(unit: string): Promise<void> {
+	for (const bound of boundTo(unit)) await systemdScopes.stop(bound);
 }
 
 export const systemdScopes: Scopes = {
@@ -248,14 +258,16 @@ export const systemdScopes: Scopes = {
 
 	live(unit) {
 		const group = scopeGroup(unit);
-		return group !== undefined && populated(group);
+		return (group !== undefined && populated(group)) || boundTo(unit).some((bound) => systemdScopes.live(bound));
 	},
 
 	async stop(unit) {
 		const group = scopeGroup(unit);
-		if (group === undefined) return;
-		kill(group);
-		await vacated(group);
+		if (group !== undefined) {
+			kill(group);
+			await vacated(group);
+		}
+		await stopBound(unit);
 	},
 
 	run(unit, cwd, command, options = {}) {
@@ -271,8 +283,7 @@ export const systemdScopes: Scopes = {
 				"--collect",
 				`--unit=${unit}`,
 				...bound,
-				// A gate inside the scope runs its command in a child cgroup of its own (see `nest`).
-				"--property=Delegate=yes",
+				...(options.slice ? [`--slice=${options.slice}`] : []),
 				"--expand-environment=no",
 				"--",
 				"/bin/sh",
@@ -285,8 +296,8 @@ export const systemdScopes: Scopes = {
 				name: unit,
 				unsupported: UNSUPPORTED,
 				launcher: "systemd-run",
-				signal: (_group, name, done) => signalScope(unit, name, done),
-				inside: false,
+				signal: (name, done) => signalScope(unit, name, done),
+				emptied: () => stopBound(unit),
 				bound: Boolean(enclosing),
 			},
 			cwd,
@@ -304,15 +315,10 @@ interface Containment {
 	unsupported: string;
 	/** The program that starts the handshake shell. */
 	launcher: string;
-	/** Send `name` to every process in the cgroup `group`, then call `done`, with why when it could not. */
-	signal(group: string, name: NodeJS.Signals, done: (error?: string) => void): void;
-	/**
-	 * Whether the cgroup lies within an enclosing Quest scope, whose owner delivers each signal it
-	 * receives to every process in the scope, this cgroup's included. A signal this process received
-	 * then already reached them all, so it is not delivered again, and they get to finish their
-	 * cleanup as if it had been.
-	 */
-	inside: boolean;
+	/** Send `name` to every process in the cgroup, then call `done`, with why when it could not. */
+	signal(name: NodeJS.Signals, done: (error?: string) => void): void;
+	/** Stop what the cgroup's end leaves to systemd, once the cgroup is empty. */
+	emptied(): Promise<void>;
 	/**
 	 * Whether an enclosing Quest owner kills this cgroup at its own second signal, so a repeated
 	 * signal this process receives, which may be a copy of that owner's, leaves the kill to it.
@@ -357,14 +363,10 @@ function contain(
 			interrupted = cancelled(cancel.signal);
 			// The shell reads end-of-file and never starts the command.
 			if (!admitted) return admission.destroy();
-			if (!(describe.inside ? forwards(cancel.signal, true) : forwards(cancel.signal))) {
-				// The enclosing scope's owner already signalled every process here (see `inside`).
-				signalled = describe.inside;
-				return;
-			}
+			if (!forwards(cancel.signal)) return;
 			const name = requested(cancel.signal);
 			signalled = true;
-			describe.signal(group!, name, (error) => {
+			describe.signal(name, (error) => {
 				// The cgroup empties once its last process exits, which leaves nothing to signal.
 				if (!error || !group || !populatedOr(group, true)) return;
 				process.stderr.write(
@@ -426,6 +428,7 @@ function contain(
 						if (signalled) await vacated(group, drain.signal);
 						kill(group);
 						await vacated(group);
+						await describe.emptied();
 					} catch (error) {
 						throw new Retained(
 							`cannot confirm that ${describe.name} stopped: ${error instanceof Error ? error.message : error}`,
@@ -447,61 +450,6 @@ function contain(
 	});
 }
 
-/** Remove an empty cgroup and any empty child cgroups left in it; one already gone is fine. */
-function prune(group: string): void {
-	let entries;
-	try {
-		entries = readdirSync(group, { withFileTypes: true });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-		throw error;
-	}
-	for (const entry of entries) if (entry.isDirectory()) prune(join(group, entry.name));
-	try {
-		rmdirSync(group);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
-}
-
-/**
- * Send `signal` to every process in the cgroup and its children, until a pass finds none it has not
- * signalled yet, as systemd does for a unit, then call `done`.
- */
-function signalGroup(group: string, signal: NodeJS.Signals, done: (error?: string) => void): void {
-	const sent = new Set<number>();
-	const pass = (dir: string): boolean => {
-		let found = false;
-		let entries;
-		try {
-			entries = readdirSync(dir, { withFileTypes: true });
-			for (const line of readFileSync(join(dir, "cgroup.procs"), "utf8").split("\n")) {
-				const pid = Number(line);
-				if (!line || sent.has(pid)) continue;
-				sent.add(pid);
-				found = true;
-				try {
-					process.kill(pid, signal);
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-				}
-			}
-		} catch (error) {
-			// The cgroup was removed while it was read.
-			if (["ENOENT", "ENODEV"].includes((error as NodeJS.ErrnoException).code ?? "")) return found;
-			throw error;
-		}
-		for (const entry of entries) if (entry.isDirectory() && pass(join(dir, entry.name))) found = true;
-		return found;
-	};
-	try {
-		while (pass(group));
-	} catch (error) {
-		return done(error instanceof Error ? error.message : String(error));
-	}
-	done();
-}
-
 /** Matches a Quest scope's unit as a component of a cgroup path. */
 const QUEST_SCOPE = /\/(quest-[a-z]+-[0-9a-f-]+\.scope)(?=\/|$)/g;
 
@@ -516,57 +464,4 @@ export function questScope(self = "/proc/self/cgroup"): { unit: string; group: s
 		?.slice(3);
 	const unit = path === undefined ? undefined : [...path.matchAll(QUEST_SCOPE)].at(-1)?.[1];
 	return unit === undefined ? undefined : { unit, group: join("/sys/fs/cgroup", path!) };
-}
-
-/**
- * Whether systemd delegated the scope's cgroup subtree, so its processes may create child cgroups.
- * A scope from a Quest that predates delegation, or a manager that cannot be asked, is not.
- */
-export function delegated(unit: string): boolean {
-	try {
-		return (
-			execFileSync("systemctl", ["--user", "show", "--property=Delegate", "--value", unit], {
-				encoding: "utf8",
-				stdio: ["ignore", "pipe", "pipe"],
-			}).trim() === "yes"
-		);
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Run a command in a new child cgroup of `parent`, inside a delegated Quest scope, like a scope of
- * its own (see `Scopes.run`): every descendant stays in the child, which the enclosing scope's
- * `cgroup.kill` also reaches, and the child is removed once empty. The handshake shell moves itself
- * into the child before it reports, so nothing it starts runs outside it.
- */
-export async function nest(
-	parent: string,
-	name: string,
-	cwd: string,
-	command: string[],
-	options: RunOptions = {},
-): Promise<number> {
-	const group = join(parent, name);
-	const unsupported = `quest gate cannot run the command in a child cgroup of its Quest scope (${group})`;
-	mkdirSync(group);
-	let status: number;
-	try {
-		status = await contain(
-			// Writing 0 to cgroup.procs moves the writing process, the shell itself.
-			["/bin/sh", "-c", `echo 0 >"$0/cgroup.procs" || exit 125; ${handshake}`, group],
-			(path) => join("/sys/fs/cgroup", path) === group,
-			{ name: group, unsupported, launcher: "/bin/sh", signal: signalGroup, inside: true, bound: true },
-			cwd,
-			command,
-			options,
-		);
-	} catch (error) {
-		// The cgroup may still hold processes.
-		if (!(error instanceof Retained)) prune(group);
-		throw error;
-	}
-	prune(group);
-	return status;
 }

@@ -1,4 +1,4 @@
-// A PR body's `## Review` record, which `quest review` writes and the land gate reads.
+// A PR body's `## Review` record, which `quest review` writes and `quest status` reads.
 
 import { markdown } from "./doc";
 

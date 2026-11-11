@@ -9,8 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { REFERENCE_MARKER, lines } from "../core";
-import { broken } from "./rules";
+import { type StopInput, broken, runningGates, usesQuest } from "./rules";
 import { CONTEXT } from "./skills";
 import { HOOK_EVENTS } from "./worktree-hook";
 
@@ -42,12 +41,15 @@ const SESSION = "startup|resume|clear|compact";
  * The entries `quest setup` installs for Claude Code. SessionStart prints the
  * rules; SubagentStart gives each subagent the same rules, since it starts
  * without the session's. PreToolUse blocks the calls that break a rule a
- * program can check.
+ * program can check. Stop and SubagentStop refuse to end a turn while a gate
+ * the agent started still runs in the background.
  */
 export const CLAUDE_HOOKS: readonly HookEntry[] = [
 	{ event: "SessionStart", matcher: SESSION },
 	{ event: "SubagentStart" },
 	{ event: "PreToolUse", matcher: "Bash|Write|Edit|MultiEdit" },
+	{ event: "Stop" },
+	{ event: "SubagentStop" },
 ];
 
 /**
@@ -62,7 +64,7 @@ export const CODEX_HOOKS: readonly HookEntry[] = [
 
 /**
  * A settings file `quest setup` writes: its path, its hooks, and whether it is
- * Claude Code's, which also holds the foreground timeout cap and takes the
+ * Claude Code's, which also holds the foreground timeouts and takes the
  * worktree hooks.
  */
 export interface Target {
@@ -101,6 +103,16 @@ export const WORKTREE_HOOKS: readonly HookEntry[] = HOOK_EVENTS.map((event) => (
  */
 export const BASH_MAX_TIMEOUT_MS = "3300000";
 
+/**
+ * The environment `quest setup` sets in Claude Code's settings: the cap, and the
+ * same as the default timeout, so a long foreground command runs to the end
+ * without the agent passing a timeout or backgrounding it.
+ */
+export const CLAUDE_ENV: Readonly<Record<string, string>> = {
+	BASH_MAX_TIMEOUT_MS,
+	BASH_DEFAULT_TIMEOUT_MS: BASH_MAX_TIMEOUT_MS,
+};
+
 /** The user settings file Claude Code reads: in `CLAUDE_CONFIG_DIR` when set, else `~/.claude`. */
 export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
 	const dir = env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
@@ -110,11 +122,10 @@ export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
 type Json = Record<string, unknown>;
 
 /**
- * Set Quest's settings in `target`'s file: its hooks, and in Claude Code's the
- * foreground timeout cap and the worktree hooks when `worktrees` is true, or
- * when it is unset and the file already has them. With `remove`, take Quest's
- * hooks out, and
- * the cap while it still holds Quest's value. Keeps every other setting and
+ * Set Quest's settings in `target`'s file: its hooks, and in Claude Code's
+ * `CLAUDE_ENV` and the worktree hooks when `worktrees` is true, or when it is
+ * unset and the file already has them. With `remove`, take Quest's hooks out,
+ * and each `CLAUDE_ENV` variable that still holds Quest's value. Keeps every other setting and
  * hook, and writes once. Returns a line per change. A file that is not a JSON
  * object, or whose `env` or `hooks` is malformed, throws before anything is
  * written.
@@ -141,20 +152,21 @@ export function setup(target: Target, options: { remove?: boolean; worktrees?: b
 	const changes: string[] = [];
 	let updated = hooked;
 	if (hooked !== settings) changes.push(`${path}: ${remove ? "removed" : "installed"} Quest's hooks`);
-	const cap = env.BASH_MAX_TIMEOUT_MS;
-	if (!target.claude) {
-		// Only Claude Code's settings hold the cap.
-	} else if (remove) {
-		if (cap === BASH_MAX_TIMEOUT_MS) {
-			const { BASH_MAX_TIMEOUT_MS: _, ...rest } = env;
-			updated = { ...updated, env: rest };
-			if (Object.keys(rest).length === 0) delete updated.env;
-			changes.push(`${path}: removed env.BASH_MAX_TIMEOUT_MS`);
-		}
-	} else if (cap !== BASH_MAX_TIMEOUT_MS) {
-		updated = { ...updated, env: { ...env, BASH_MAX_TIMEOUT_MS } };
-		const was = cap === undefined ? "" : ` (was ${JSON.stringify(cap)})`;
-		changes.push(`${path}: env.BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS}${was}`);
+	// Only Claude Code's settings hold the timeouts.
+	const next: Json = { ...env };
+	for (const [key, value] of Object.entries(target.claude ? CLAUDE_ENV : {})) {
+		const current = env[key];
+		if (remove) {
+			if (current !== value) continue;
+			delete next[key];
+			changes.push(`${path}: removed env.${key}`);
+		} else if (current !== value) {
+			next[key] = value;
+			const was = current === undefined ? "" : ` (was ${JSON.stringify(current)})`;
+			changes.push(`${path}: env.${key}=${value}${was}`);
+		} else continue;
+		updated = { ...updated, env: next };
+		if (Object.keys(next).length === 0) delete updated.env;
 	}
 	if (changes.length === 0) return [];
 	mkdirSync(dirname(path), { recursive: true });
@@ -261,13 +273,18 @@ interface HookInput {
 	tool_input?: Record<string, unknown>;
 }
 
+/** What a Stop or SubagentStop refusal tells the agent, after the gates it names. */
+const BLOCK_ON_GATES =
+	"Block on each with the harness's wait until it ends, then end your turn. A subagent's background commands stop when it ends, and a session that ends its turn on one leaves its result unread.";
+
 /**
  * What `quest hook` prints for the Claude Code or Codex hook event in `input`,
  * or "" when it adds nothing, in a repository whose root instructions carry
  * Quest's reference line. SessionStart and SubagentStart add `quest context`
  * to the session's context, so its agents never run the command themselves.
  * PreToolUse denies a tool call that breaks a rule `broken` checks, giving the
- * rule as the reason.
+ * rule as the reason. Stop and SubagentStop refuse to end the turn while a gate
+ * the agent started runs in the background (see `runningGates`).
  */
 export function hook(input: unknown): string {
 	const value = input as Partial<HookInput> | null;
@@ -298,29 +315,19 @@ export function hook(input: unknown): string {
 				},
 			});
 		}
-		default:
-			throw new Error(`quest hook does not handle ${event}; run \`quest setup\` again to update your hooks`);
-	}
-}
-
-/**
- * Whether the checkout holding `cwd` points its agents at `quest context`:
- * its root `AGENTS.md` or `CLAUDE.md` has a line starting with Quest's
- * reference marker. Found without running git, since every session waits on it.
- */
-function usesQuest(cwd: string): boolean {
-	for (let dir = cwd; ; dir = dirname(dir)) {
-		if (existsSync(join(dir, ".git"))) {
-			return ["AGENTS.md", "CLAUDE.md"].some((name) => {
-				try {
-					return lines(readFileSync(join(dir, name), "utf8")).some((line) =>
-						line.startsWith(REFERENCE_MARKER),
-					);
-				} catch {
-					return false;
-				}
+		case "Stop":
+		case "SubagentStop": {
+			if (!Array.isArray((value as StopInput).background_tasks))
+				throw new Error(`expected a ${event} hook's JSON input with background_tasks; upgrade Claude Code`);
+			const gates = runningGates(value as StopInput);
+			if (gates.length === 0) return "";
+			const named = gates.map((command) => `- ${command}`).join("\n");
+			return JSON.stringify({
+				decision: "block",
+				reason: `\`quest gate\` commands you started still run in the background:\n${named}\n${BLOCK_ON_GATES}`,
 			});
 		}
-		if (dirname(dir) === dir) return false;
+		default:
+			throw new Error(`quest hook does not handle ${event}; run \`quest setup\` again to update your hooks`);
 	}
 }

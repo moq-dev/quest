@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from "../src/cli/supervise";
 import { GitHub, mergedHead } from "../src/cli/github";
+import { REFERENCE_LINE } from "../src/core";
 import { main } from "../src/cli/main";
 import { Worktrees, canonical, derivedDefaults, diskUsage } from "../src/cli/worktree";
 import { claudeHook } from "../src/cli/worktree-hook";
@@ -981,6 +982,19 @@ describe("Claude Code hooks", { timeout: 20_000 }, () => {
 		// A subagent without isolation runs in this checkout too, but stops under another ID.
 		expect(await claudeHook(subagent("SubagentStop", path, "other"), worktrees, noForge)).toBeUndefined();
 		expect(existsSync(join(path, "cache"))).toBe(true);
+		// `quest hook` refuses the stop of a subagent whose gate still runs, so it keeps its checkout.
+		writeFileSync(join(path, "AGENTS.md"), `${REFERENCE_LINE}\n`);
+		const gate = {
+			id: "b1",
+			type: "shell",
+			status: "running",
+			description: "test",
+			command: "quest gate just test",
+		};
+		const gated = { ...subagent("SubagentStop", path, "abc"), agent_transcript_path: "", background_tasks: [gate] };
+		expect(await claudeHook(gated, worktrees, noForge)).toBeUndefined();
+		expect(existsSync(join(path, "cache"))).toBe(true);
+		rmSync(join(path, "AGENTS.md"));
 		await claudeHook(subagent("SubagentStop", join(path, "cache", "nested"), "abc"), worktrees, noForge);
 		expect(existsSync(join(path, "cache"))).toBe(false);
 		expect(worktrees.status().records[0].phase).toBe("released");

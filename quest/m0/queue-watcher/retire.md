@@ -6,11 +6,10 @@ Once no repository lands through `quest land serve` any more, the batching
 gate is gone: `quest land serve`'s batching, parking,
 halting, and squash-push code, its tests, and its README and `CONTRIBUTING.md`
 sections are deleted, keeping only what the watcher and `quest land apply`
-use. The host's `quest land serve` instances and check containers are
-removed from kixelated/nixos, while the fixer container and the watcher
-instances stay. The unreported `quest land` check and `quest merge --land`'s
-pinned auto-merge for it stay, since the watcher's own queue reads its picks
-from them.
+use. Removing the host's `quest land serve` instances is planned in
+kixelated/nixos's tree. The unreported `quest land` check and
+`quest merge --land`'s pinned auto-merge for it stay, since the watcher's own
+queue reads its picks from them.
 
 ## Plan
 
@@ -35,5 +34,4 @@ the own queue relies on so GitHub never merges a pick itself.
 
 ## Required
 
-- [The other repositories follow](/quest/m0/queue-watcher/follow.md) - the public repositories' queues are proven
 - [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - the last repository leaves the gate

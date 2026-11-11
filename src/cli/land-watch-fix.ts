@@ -9,7 +9,7 @@ import { UNREFUSED } from "./hold";
 import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";
-import { type Cause, EFFORT_VARIABLE, type FixResult, parseFixResult, readFixResult } from "./land-fix";
+import { type Cause, EFFORT_VARIABLE, type FixResult, knownFlaky, parseFixResult, readFixResult } from "./land-fix";
 import {
 	author,
 	cited,
@@ -122,6 +122,7 @@ const JUDGED: Record<Cause, string> = {
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
 	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 	labels(first: 100) { nodes { name } }
+	headRepository { nameWithOwner }
 } } }`;
 
 export async function readPull(github: GitHub, id: string): Promise<ObjectValue> {
@@ -481,7 +482,7 @@ async function collect(
 		!job.error &&
 		!job.handback &&
 		!settle(path, job, deps, context.timeout, () => {
-			job.result = parseFixResult(readFixResult(job.checkout), [number])[0];
+			job.result = parseFixResult(readFixResult(job.checkout), [number], knownFlaky(job.checkout))[0];
 		})
 	)
 		return [];

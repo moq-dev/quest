@@ -78,14 +78,14 @@ export function ranking(docs: Doc[]): Ranking {
 }
 
 /**
- * Milestone order, descending downstream impact, then path order. Readiness
- * and impact are facts of the tree, independent of claims or outside
- * conditions. Each quest is read from the tree its PR builds on: `epics`'
+ * The quests ready on `today`, a `YYYY-MM-DD` date: milestone order,
+ * descending downstream impact, then path order. Readiness and impact are
+ * facts of the tree, independent of claims or outside conditions. Each quest is read from the tree its PR builds on: `epics`'
  * tree, by epic README, for an epic with a branch, and `main` for the rest.
  * An epic's README counts as its epic's, since its children finish on that
  * branch. Validates each tree first.
  */
-export function unblocked(main: Doc[], epics: ReadonlyMap<string, Doc[]> = new Map()): RankedQuest[] {
+export function unblocked(main: Doc[], today: string, epics: ReadonlyMap<string, Doc[]> = new Map()): RankedQuest[] {
 	const home = (path: string) => epicOf(path) ?? path;
 	const trees: { docs: Doc[]; owns(path: string): boolean }[] = [
 		{ docs: main, owns: (path) => !epics.has(home(path)) },
@@ -94,7 +94,7 @@ export function unblocked(main: Doc[], epics: ReadonlyMap<string, Doc[]> = new M
 	return trees
 		.flatMap(({ docs, owns }) => {
 			const rank = ranking(docs);
-			return ready(docs)
+			return ready(docs, today)
 				.filter(owns)
 				.map((path) => ({ path, dependents: rank.impact(path), priority: rank.priority(path) }));
 		})
@@ -118,7 +118,7 @@ export interface WaitingQuest {
 	pr: string | null;
 	/** Distinct transitive dependents, as `quest unblocked` counts them. */
 	dependents: number;
-	/** No `Required` entry remains on it or an epic above it, so clearing its waits lets the work go on. */
+	/** No `Required` entry or future `Scheduled` date remains on it or an epic above it, so clearing its waits lets the work go on. */
 	ready: boolean;
 	waits: Wait[];
 }
@@ -128,12 +128,12 @@ export interface WaitingQuest {
  * back with one: those waiting on the maintainer first, then milestone order,
  * descending downstream impact, ready before blocked, then tree order, with
  * drafts after quests in the order given. A draft ranks as the quest its branch
- * carries, or last when it carries none. Validates the tree first, as
- * `unblocked` does.
+ * carries, or last when it carries none. Readiness is as of `today`, a
+ * `YYYY-MM-DD` date. Validates the tree first, as `unblocked` does.
  */
-export function waiting(docs: Doc[], drafts: Draft[] = []): WaitingQuest[] {
+export function waiting(docs: Doc[], today: string, drafts: Draft[] = []): WaitingQuest[] {
 	const rank = ranking(docs);
-	const startable = new Set(ready(docs));
+	const startable = new Set(ready(docs, today));
 	const maintainer = (quest: WaitingQuest) => (quest.waits.some(onMaintainer) ? 0 : 1);
 	const priority = (quest: WaitingQuest) => (quest.path === null ? Infinity : rank.priority(quest.path));
 	const byPath = new Map(docs.map((doc) => [doc.path, doc]));

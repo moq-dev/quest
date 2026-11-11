@@ -133,7 +133,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Wait while the 1-minute load average exceeds the host's CPU count or available memory is below " +
 				"min(4 GiB, RAM/4). Each admission in the last minute counts as one more unit of load and one " +
 				"budget less memory: commands start at once while those still fit, and 5 seconds apart while " +
-				"only the raw measures do. The load limit applies only while a gated command still runs. Nested " +
+				"only the raw measures do. The load limit applies only while a gated command still runs. Where a " +
+				"systemd scope owns each running command, the load counts as at least the sum of their peak CPU " +
+				"use in the last minute, and nothing starts while those fill every CPU, so a lull between a " +
+				"command's phases does not free its CPUs. Nested " +
 				"calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +
 				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
@@ -208,6 +211,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			code = 1;
 		});
 
+	/** The local calendar date as `## Scheduled` writes it, `YYYY-MM-DD`. */
+	const today = () => {
+		const now = new Date();
+		const pad = (n: number) => String(n).padStart(2, "0");
+		return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+	};
+
 	/** The quest document `path` names, as the tree writes it, as the shell completes it, or as a filesystem path. */
 	const locate = (docs: Doc[], path: string): Doc | null => {
 		const inside = withinRoot(root(), path);
@@ -235,7 +245,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	/** Print what blocks `doc`: the themed log on a terminal, else the blocker list with advice on stderr. */
 	const explain = (docs: Doc[], doc: Doc, path: string) => {
-		const found = blockers(docs, doc);
+		const found = blockers(docs, doc, today());
 		if (theme) {
 			// The themed log already names every blocker; stderr keeps only the advice.
 			for (const line of theme.blockers(new Map(docs.map((d) => [d.path, d])), doc, found)) print(line);
@@ -272,8 +282,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Rank ready quests by milestone priority, distinct transitive dependents, then path order. " +
 				"Given a path, print what blocks that quest instead.\n\n" +
 				"A quest is ready only when neither it nor any epic above it, milestones included, has a ## Required " +
-				"section. Counts exclude structural epic membership but include the quests an epic's ## Required holds " +
-				"back. Other prerequisites may remain for dependents. " +
+				"section or a ## Scheduled date after today's local date. Counts exclude structural epic membership " +
+				"but include the quests an epic's ## Required holds back. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
 				"ordered array of {path, dependents, hosts, models} objects, where hosts lists the operating systems " +
 				"(linux, macos, windows) under the quest's ## Hosts, empty when it runs anywhere, and models ranks the {harness, model, effort} " +
@@ -350,7 +360,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				const rank = (trees: Views): RankedQuest[] | null => {
 					if (![trees.main, ...trees.epics.values()].map(valid).every(Boolean)) return null;
 					const epics = new Map([...trees.epics].map(([epic, tree]) => [epic, tree.docs]));
-					return unblocked(trees.main.docs, epics);
+					return unblocked(trees.main.docs, today(), epics);
 				};
 				if (!options.unclaimed) {
 					const local = localViews(options.remote);
@@ -409,8 +419,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"followed by the condition and how to check or advance it. A draft's item without a party is the " +
 				"maintainer's; a draft's section without items is one maintainer item " +
 				"holding its prose.\n\n" +
-				"Prints one line per item: dependents, ready or blocked (whether Required entries remain), the quest's " +
-				"path or the draft's URL, and the item. --json prints an ordered array of {path, pr, dependents, " +
+				"Prints one line per item: dependents, ready or blocked (whether Required entries or a future " +
+				"Scheduled date remain), the quest's path or the draft's URL, and the item. --json prints an ordered array of {path, pr, dependents, " +
 				"ready, waits: [{line, party, text}]} objects, where pr is the draft's URL or null and path is the " +
 				"quest, the quest a draft carries, or null. --maintainer keeps only the items the maintainer settles. " +
 				"Invalid trees fail before printing. Outside conditions are never checked, nor whether another " +
@@ -427,7 +437,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const tree = checkout(root(), warn);
 			if (!valid(tree)) return;
 			settle(openDrafts(root(), options.remote, { github: () => gitHubDependencies(warn), warn }), (drafts) => {
-				const found = waiting(tree.docs, drafts)
+				const found = waiting(tree.docs, today(), drafts)
 					.map((quest) =>
 						options.maintainer ? { ...quest, waits: quest.waits.filter(onMaintainer) } : quest,
 					)
@@ -514,7 +524,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					if (doc === null) throw notUpstream(named);
 					// A malformed tree can hide a blocker, as a misspelled `## Required` does.
 					if (!valid(base.tree)) return 1;
-					if (blockers(base.tree.docs, doc).length > 0) {
+					if (blockers(base.tree.docs, doc, today()).length > 0) {
 						explain(base.tree.docs, doc, path);
 						return 3;
 					}
@@ -574,8 +584,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Print a pull request's head, checks, merge state, reviews, reactions, and unresolved review threads " +
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
-				"url, state, draft, base (the branch it merges into), head, mergeable, merge-state, review-decision, auto-merge, merge-queue, " +
-				"landing-stopped, and checks, whose state and counts follow each check's latest run; auto-merge gives its method, who enabled it and when, and the head it was " +
+				"url, state, draft, base (the branch it merges into), head, mergeable, merge-state, review-decision, review-record, auto-merge, merge-queue, " +
+				"landing-stopped, and checks, whose state and counts follow each check's latest run; review-record gives whether the PR body's ## Review record " +
+				"covers the head, as current, diff-identical (git diff <base>...<head> prints the same as for the head it names), " +
+				"stale, or unknown when GitHub cannot compare them, then the head it names last; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
 				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
@@ -652,7 +664,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Land a PR's reviewed head: enable auto-merge bound to the full head SHA --land names, or merge at " +
 				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
 				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
-				"first, and once the head has moved. It uses the method --squash or --rebase names, refusing one " +
+				"first, once the head has moved, and while the latest run of any check on the head failed, required " +
+				"or not, naming each; a pending or absent check does not block. It uses the method --squash or --rebase names, refusing one " +
 				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
 				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
 				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
@@ -813,6 +826,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			)
 				.choices(EFFORTS)
 				.default("medium"),
+		)
+		.option(
+			"--refuse-forks",
+			"On the own queue, eject each pick whose head is in a fork, or in a deleted repository, before pushing its build, so a fork's code never reaches a private queue runner",
 		)
 		.option(
 			"--bump <owner/repo>",
@@ -1469,14 +1486,16 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Configure your own Claude Code settings for quest work, in $CLAUDE_CONFIG_DIR/settings.json or else " +
 				"~/.claude/settings.json, and Codex's in $CODEX_HOME/hooks.json or else ~/.codex/hooks.json when " +
 				"that directory exists, keeping every other setting and hook. Touches no repository.\n\n" +
-				`Sets Claude Code's env.BASH_MAX_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a foreground command, such as a blocking ` +
-				"wait, may run 55 minutes: just under the 1h prompt-cache TTL. " +
+				`Sets Claude Code's env.BASH_MAX_TIMEOUT_MS and env.BASH_DEFAULT_TIMEOUT_MS to ${BASH_MAX_TIMEOUT_MS}, so a ` +
+				"foreground command, such as a blocking wait or a long build, runs 55 minutes without the agent passing " +
+				"a timeout: just under the 1h prompt-cache TTL. " +
 				`Installs Claude Code's ${listed(CLAUDE_HOOKS)} hooks and Codex's ${listed(CODEX_HOOKS)} hooks. ` +
 				"The start hooks add `quest context` to each session and Claude Code subagent in a repository that " +
 				"uses Quest, and again after compaction, so agents never run it themselves. PreToolUse blocks tool " +
 				"calls there that break a rule a program can check: em dashes an agent writes, a push without an " +
 				"explicit refspec, a force-push or rebase, a GitHub post without its `(Written by ...)` footer, and " +
-				"scratch files in /tmp. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
+				"scratch files in /tmp. Stop and SubagentStop refuse to end an agent's turn while a `quest gate` " +
+				"command it started runs in the background. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
 				"with, and Codex asks to trust its hooks once through /hooks.\n\n" +
 				"With --worktrees, also installs Claude Code's " +
 				WORKTREE_HOOKS.map((h) => h.event).join(", ") +
@@ -1489,7 +1508,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--worktrees", "Also install the worktree hooks")
 		.option("--no-worktrees", "Remove the worktree hooks")
-		.option("--remove", "Remove Quest's hooks, and env.BASH_MAX_TIMEOUT_MS while it still holds Quest's value")
+		.option("--remove", "Remove Quest's hooks, and each timeout while it still holds Quest's value")
 		.action((options: { remove?: boolean; worktrees?: boolean }) => {
 			for (const target of targets()) {
 				const changes = setup(target, options);
@@ -1511,7 +1530,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or a commit message or new GitHub post that adds an em dash outside a `>` quote line, a `git push` " +
 				"whose refspecs lack a `:`, a force-push, a `git rebase` or `git pull --rebase`, a new GitHub post " +
 				"whose body lacks a `(Written by ...)` line, or a file written under /tmp. A force-push or rebase the " +
-				`user asked for passes with the \`${USER_ASKED}\` prefix. Exits 1 on malformed input or an event it ` +
+				`user asked for passes with the \`${USER_ASKED}\` prefix. Stop and SubagentStop refuse to end the ` +
+				"turn, naming each command, while a `quest gate` command the ending agent started runs in Claude " +
+				"Code's background: one whose background ID its transcript holds. Exits 1 on malformed input or an event it " +
 				"does not handle.",
 		)
 		.action(() => {

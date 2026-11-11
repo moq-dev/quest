@@ -11,6 +11,7 @@ import {
 	waiting,
 	withoutHandBack,
 } from "../src/core";
+import { TODAY } from "./fixture";
 
 /** A tree of two milestones and their quests. */
 function tree(m0: Record<string, string>, m1: Record<string, string> = {}): Doc[] {
@@ -60,7 +61,7 @@ test("lists the maintainer's waits first, then by milestone and impact", () => {
 		},
 		{ "decide.md": "\n## Waiting\n\n- Maintainer: pick a provider.\n- Hetzner: verify the account.\n" },
 	);
-	expect(waiting(docs)).toEqual([
+	expect(waiting(docs, TODAY)).toEqual([
 		{
 			path: "quest/m1/decide.md",
 			pr: null,
@@ -86,8 +87,8 @@ test("ties keep path order, as unblocked does", () => {
 		"z.md": "\n## Waiting\n\n- Maintainer: pick one.\n",
 		"a.md": "\n## Waiting\n\n- Maintainer: pick another.\n",
 	});
-	expect(unblocked(docs).map((quest) => quest.path)).toEqual(["quest/m0/a.md", "quest/m0/z.md"]);
-	expect(waiting(docs).map((quest) => quest.path)).toEqual(["quest/m0/a.md", "quest/m0/z.md"]);
+	expect(unblocked(docs, TODAY).map((quest) => quest.path)).toEqual(["quest/m0/a.md", "quest/m0/z.md"]);
+	expect(waiting(docs, TODAY).map((quest) => quest.path)).toEqual(["quest/m0/a.md", "quest/m0/z.md"]);
 });
 
 test("a draft hands back with Waiting, not the retired Decisions needed heading", () => {
@@ -174,7 +175,7 @@ test("drafts rank as the quest they carry, after quests on a tie, and last when 
 		{ "c.md": "\n## Required\n\n- [B](/quest/m0/b.md)\n" },
 	);
 	const draft = (url: string, branch: string, body: string) => ({ url, branch, body });
-	const found = waiting(docs, [
+	const found = waiting(docs, TODAY, [
 		draft("https://example.com/pull/1", "quest-plan/x", "## Waiting\n\n- Maintainer: plan it.\n"),
 		draft("https://example.com/pull/2", "quest/m0/b", "## Waiting\n\n- Maintainer: pick b.\n"),
 		draft("https://example.com/pull/3", "quest/m0/a", "## Waiting\n\n- moq-dev/moq: a release.\n"),
