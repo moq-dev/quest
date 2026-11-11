@@ -171,12 +171,12 @@ const OPENCODE_SHELL = "bin/opencode-shell.sh";
  * What each harness's own plants record when its CLI loads the head's
  * configuration. Claude Code draws a status line only in an interactive
  * session, so no control shows it firing; it stays planted for a release that
- * runs it in print mode too.
+ * runs it in print mode too. Its API key helper runs only beside a credential
+ * from the environment, which its own test supplies.
  */
 const CONTROL: Record<ReviewHarness, string[]> = {
 	codex: ["codex-config-mcp", "codex-hooks-SessionStart", "codex-hooks-UserPromptSubmit"],
 	claude: [
-		"claude-api-key-helper",
 		"claude-local-SessionStart",
 		"claude-local-UserPromptSubmit",
 		"claude-permissions",
@@ -356,11 +356,11 @@ function clearMarkers() {
  * its planted rule allows, which runs it through the planted shell prefix. It
  * blocks, so it carries its own bound for a hung CLI.
  */
-async function control(home: Home) {
+async function control(home: Home, extra: NodeJS.ProcessEnv = {}) {
 	const model = modelOf(home.harness);
 	const effort = effortOf(home.harness);
 	// Without quest's variables, opencode loads the checkout's config.
-	const env: NodeJS.ProcessEnv = await reviewerIn(home);
+	const env: NodeJS.ProcessEnv = { ...(await reviewerIn(home)), ...extra };
 	// opencode runs in PWD, not its working directory.
 	if (home.harness === "opencode") env.PWD = fixture.clone;
 	for (const name of Object.keys(env)) if (name.startsWith("OPENCODE_DISABLE_")) delete env[name];
@@ -454,6 +454,44 @@ describe.each(["codex", "claude", "opencode"] as const)("%s", (harness) => {
 		expect(denied, `the reviewer never tried the allowed command, so its denial is unchecked\n${output}`).toContain(
 			allowed(fixture.markers),
 		);
+	});
+
+	// Claude Code runs a project's apiKeyHelper only when a credential comes from the environment, which
+	// `quest review` passes through, never beside a stored login alone. A placeholder key fires it and
+	// then fails to authenticate, so neither turn spends usage.
+	test.runIf(harness === "claude")("quest's reviewer flags skip the planted API key helper", async () => {
+		const key = { ANTHROPIC_API_KEY: "sk-ant-quest-live-placeholder" };
+		clearMarkers();
+		const dir = await home(harness);
+		let run: SpawnSyncReturns<string>;
+		try {
+			run = await control(dir, key);
+			const output = `exit ${run.status}\nstdout:\n${tail(run.stdout)}\nstderr:\n${tail(run.stderr)}`;
+			expect(recorded(), `the helper did not fire, so its check would pass vacuously\n${output}`).toContain(
+				"claude-api-key-helper",
+			);
+			clearMarkers();
+			const context = {
+				mergeBase: "origin/main",
+				instructions: "Do what the user asks.",
+				model: modelOf("claude"),
+				effort: effortOf("claude"),
+				schema: schema(0),
+				schemaFile: "",
+			};
+			const [program, ...args] = claudeFlags(context);
+			run = spawnSync(program, args, {
+				cwd: fixture.clone,
+				env: { ...(await reviewerIn(dir)), ...key },
+				input: "Reply with the single word OK.",
+				encoding: "utf8",
+				timeout: 10 * 60_000,
+			});
+		} finally {
+			dir.release();
+		}
+		const output = `exit ${run.status}\nstdout:\n${tail(run.stdout)}\nstderr:\n${tail(run.stderr)}`;
+		expect(recorded(), `planted configuration ran\n${output}`).toEqual([]);
 	});
 
 	// The sandbox's boundary, checked with commands run through its shell directly, and the reviewer's use
