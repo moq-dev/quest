@@ -482,6 +482,14 @@ describe("merge --land", () => {
 		}
 	});
 
+	test.each(["UNKNOWN", "BLOCKED"])("--direct merges at once in %s with auto-merge off", async (state) => {
+		const pull = new FakePull();
+		pull.allowAutoMerge = false;
+		pull.mergeState = state;
+		await land(PR, HEAD, "squash", pull.deps(), true);
+		expect(pull.writes).toEqual([`mergePullRequest ${HEAD} SQUASH`]);
+	});
+
 	test.each(["behind", "diverged"])(
 		"refuses a stale ungated head (%s), then accepts it after a base merge",
 		async (status) => {

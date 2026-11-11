@@ -1011,6 +1011,7 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 			fixer: fix.wrapper,
 			jobs,
 			effort: "high",
+			tags: ["deploy-*"],
 			timeout: 60,
 			token: async () => "token",
 			read: readRemote,
@@ -1083,13 +1084,18 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		github.checkLogs = {
 			90: `\uFEFF2026-11-01T12:02:00.1234567Z ${"x".repeat(30_000)}\n2026-11-01T12:02:01.1234567Z FAIL pr.test.ts\n`,
 		};
-		fix.round(5, fixScript("fixed.txt"));
+		// The checkout gets GitHub's matching tags, without one GitHub deleted or one the pattern misses.
+		git(repo.origin, "tag", "deploy-1", base);
+		git(repo.origin, "tag", "other-1", base);
+		git(context.root, "fetch", "--quiet", repo.origin, `${base}:refs/tags/deploy-0`);
+		fix.round(5, `git tag -l > '${fix.tools}/tags'\n${fixScript("fixed.txt")}`);
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
 			"removed 5 failed_checks fix",
 			"fixing 5",
 		]);
 		expect(github.comments[5][0].body).toContain("The land fixer works on it in the background");
 		await exited(state);
+		expect(readFileSync(join(fix.tools, "tags"), "utf8")).toBe("deploy-1\n");
 		// The wrapper got the removal's full log followed by the PR's own checks, the PR, and the effort.
 		const [call] = fix.calls();
 		const [effort, input, number] = call.split(" ");
@@ -1685,7 +1691,11 @@ git commit -qm 'disable render_timeout'`;
 		expect(handback).toContain("<pre>The merge queue removed");
 		expect(history(state, 9)!.rounds).toMatchObject([{ outcome: "handback" }]);
 		// A crash ends the pick too, with a round of its own.
-		expect(github.comments[11].at(-1)!.body).toContain("fixer crashed (exit 3)");
+		// Its handback names the crash as the reason and quotes the gate's failure, not the fixer's output.
+		const crash = github.comments[11].at(-1)!.body;
+		expect(crash).toContain("fixer crashed (exit 3)");
+		expect(crash).toContain("running tests\nFAIL queue.test.ts");
+		expect(crash).not.toContain("agent crashed");
 		expect(history(state, 11)!.rounds).toMatchObject([
 			{ outcome: "handback", before: crashed, failure: "Check / test: just test" },
 		]);

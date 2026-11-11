@@ -2635,7 +2635,7 @@ ${options.raw ? `exec '${agent}' "$@"` : options.pipe ? `quest land fix --agent 
 		{ mode: 0o755 },
 	);
 	// Fail a check so the ordinary ejection and launcher paths run.
-	writeFileSync(state.sandbox, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+	writeFileSync(state.sandbox, "#!/bin/sh\necho 'FAIL gate check'\nexit 1\n", { mode: 0o755 });
 	const root = forge.clone();
 	const finished = eventFile(state.state, (name) => name.endsWith(".exit"));
 	const ready = options.blocked ? eventFile(tools, (name) => name === "ready") : undefined;
@@ -3103,7 +3103,8 @@ fi`);
 		["default.nix", fixedScript("default.nix"), {}, "off-limits fixer edit"],
 		[".gitmodules", fixedScript(".gitmodules"), {}, "off-limits fixer edit"],
 		["fork", fixedScript(), { fork: true }, "fork does not allow maintainer edits"],
-		["crash", "exit 17", {}, "fixer crashed"],
+		// The fixer's own failure is the reason; the quote is still the gate's failing check.
+		["crash", "echo 'agent output' >&2; exit 17", {}, "fixer crashed"],
 		["invalid result", "printf '{}' > quest-land-result.json", { raw: true }, "invalid fixer result"],
 		["symlink result", 'ln -s "$1" quest-land-result.json', { raw: true }, "invalid fixer result"],
 	] as const)("hands back %s without requeueing", async (_name, script, options, message) => {
@@ -3114,6 +3115,8 @@ fi`);
 		expect(fixture.pull.head).toBe(fixture.plan.queue[0].head);
 		expect(fixture.forge.comment(1)).toContain(message);
 		expect(fixture.forge.comment(1)).toContain("<!-- quest land fixer:");
+		expect(fixture.forge.comment(1)).toContain("FAIL gate check");
+		expect(fixture.forge.comment(1)).not.toContain("agent output");
 	});
 	const minutes = (value: number) => value * 60_000;
 	/** Collect at each minute mark, expecting the fixer to stay running until the last two terminate it. */
@@ -4642,6 +4645,7 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 			fixer: wrapper,
 			jobs: 1,
 			effort: "medium",
+			tags: [],
 			timeout: 60,
 			token: queue.token,
 			read: readRemote,

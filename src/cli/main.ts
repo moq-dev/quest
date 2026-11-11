@@ -1,6 +1,7 @@
 // The `quest` command line: argument parsing and output around the core.
 
 import { readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { relative, resolve, sep } from "node:path";
 
 import { Argument, Command, CommanderError, InvalidArgumentError, Option } from "commander";
@@ -28,7 +29,7 @@ import { gate, QUICK_MS } from "./gate";
 import {
 	gitHubDependencies,
 	GitHubInputError,
-	mergedHead,
+	mergedHolds,
 	pullRequest,
 	readRemote,
 	remoteRepository,
@@ -67,6 +68,7 @@ import {
 	targets,
 } from "./hooks";
 import { CHECKED_CONTEXT, USER_ASKED } from "./rules";
+import { messageLines, messages } from "./messages";
 import { heal, init, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -620,7 +622,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"whose commit body pins the head, with the method named, else squash, else any method the " +
 				"repository and the base's rulesets allow, as only a queue signal, since quest land applies its own " +
 				"method. On an ungated base with auto-merge disabled, it refuses " +
-				"unless --direct is passed. Follow the repository landing instructions in CONTRIBUTING.md or " +
+				"unless --direct is passed, which merges at once without waiting for pending checks. Follow the repository landing instructions in CONTRIBUTING.md or " +
 				"AGENTS.md; never retry with --direct unless the user asks. GitHub keeps auto-merge across a " +
 				"writer's push, so disable it before pushing to the PR; quest status and quest wait report a head " +
 				"that moved since auto-merge was enabled.\n\n" +
@@ -630,7 +632,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.requiredOption("--land <sha>", "Land this full 40-character head SHA")
 		.addOption(new Option("--squash", "Squash and merge").conflicts("rebase"))
 		.option("--rebase", "Rebase and merge")
-		.option("--direct", "Allow landing when repository auto-merge is disabled")
+		.option("--direct", "Merge at once when repository auto-merge is disabled; wait for checks to pass first")
 		.action((value: string, options: { land: string; squash?: boolean; rebase?: boolean; direct?: boolean }) => {
 			const pr = pullRequest(value, root());
 			if (!/^[\da-f]{40}$/i.test(options.land)) throw new UsageError("--land needs a full 40-character SHA");
@@ -774,6 +776,16 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				.default("medium"),
 		)
 		.option(
+			"--fixer-tag <pattern>",
+			"Fetch the tags matching this pattern (repeatable), such as `deploy-*`, from GitHub into each fixer checkout, so checks that read them, such as which commit is deployed, run there as in the queue's build",
+			(value: string, previous: string[]) => {
+				if (!/^[\w.*/-]+$/.test(value) || value.startsWith("-") || value.includes(".."))
+					throw new InvalidArgumentError("expected a tag name pattern, such as deploy-*");
+				return [...previous, value];
+			},
+			[] as string[],
+		)
+		.option(
 			"--refuse-forks",
 			"On the own queue, eject each pick whose head is in a fork, or in a deleted repository, before pushing its build, so a fork's code never reaches a private queue runner",
 		)
@@ -905,15 +917,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		const origin = readRemote(repository, "origin");
 		if (origin === null) return false; // No forge to ask.
 		const up = await upstream(repository, origin, { github: () => gitHubDependencies(warn), warn });
-		return up.github !== null && mergedHead(up.github.client, up.github.repository, commit);
+		return up.github !== null && mergedHolds(up.github.client, up.github.repository, commit);
 	};
 	worktree
 		.command("remove <id>")
 		.description(
 			"Delete a finished checkout and drop its record after recursive safety checks. Refuses while supervised runs are live, " +
-				"and refuses modified, untracked, or ignored files beyond the declared scratch, and commits no branch " +
-				"or remote-tracking ref reaches, unless the GitHub upstream that holds origin's claims merged a PR whose head is exactly " +
-				"that commit. Submodules must have no changed or ignored files and no commits their remote refs do not reach, including in deinitialized module stores, and module stores must have no linked worktrees of their own. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
+				"and refuses modified or untracked files, an ignored path holding a nested repository or worktree, and commits no branch " +
+				"or remote-tracking ref reaches, unless the GitHub upstream that holds origin's claims merged a PR whose head is " +
+				"that commit or descends from it. Every other ignored path, declared as scratch or not, is deleted with the checkout. Submodules must have no changed files and no commits their remote refs do not reach, including in deinitialized module stores, and module stores must have no linked worktrees of their own.",
 		)
 		.action((id: string) => settled(state().remove(id, merged)));
 	worktree
@@ -1116,6 +1128,30 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					else for (const line of usageLines(report)) print(line);
 				},
 			);
+		});
+
+	program
+		.command("messages")
+		.summary("Print the messages a person typed to agents on this host")
+		.description(
+			"Print each message a person typed to a Claude Code or Codex session on this host since --since, oldest " +
+				"first, with its time, harness, repository, and session, and nothing else: no agent reply, tool call or " +
+				"output, harness reminder, or prompt an agent or scheduler wrote. Sessions T3 Code drives are read from " +
+				"its state ($T3CODE_HOME, or ~/.t3), which records whether a person or an agent sent each message. " +
+				"Other Claude Code sessions, from $CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude), count a turn " +
+				"Claude Code marks as a human's; other Codex sessions, from $CODEX_HOME (or ~/.codex), count the " +
+				"content Codex marks as the user's, outside headless and sub-agent sessions. The repository is the " +
+				"checkout's GitHub origin, else the directory. Output goes to stdout only; nothing is stored or " +
+				"posted. --json prints a JSON array of {time, harness, repository, session, text}.\n\n" +
+				"Exits 0 when done, 2 for invalid arguments, and 1 for other failures, such as a log or T3 Code " +
+				"record in a shape quest does not know.",
+		)
+		.option("--since <date>", "First local date to print, as YYYY-MM-DD (default: 7 days ago)", date)
+		.option("--json", "Print a JSON array")
+		.action((options: { since?: string; json?: boolean }) => {
+			const found = messages(options.since ?? daysBefore(new Date(), 7), { env: process.env, home: homedir() });
+			if (options.json) print(JSON.stringify(found));
+			else for (const line of messageLines(found)) print(line);
 		});
 
 	const reviewers = SIZES.map(

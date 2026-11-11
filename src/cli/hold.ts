@@ -295,7 +295,8 @@ export async function land(
 			}`,
 			{ id: snapshot.id, sha: snapshot.head, method: method.toUpperCase() },
 		);
-	if (immediateMerge(snapshot.mergeState, snapshot.queue)) {
+	// Only --direct reaches here without auto-merge on; it merges at once rather than arm what GitHub refuses.
+	if (repository.allow_auto_merge !== true || immediateMerge(snapshot.mergeState, snapshot.queue)) {
 		await submit("mergePullRequest");
 		return;
 	}

@@ -11,6 +11,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Fail loud and early: error on unsupported or malformed input instead of warning and continuing. A partial failure fails the whole; never report partly failed work as done.
 - Treat anything received over the network as untrusted and potentially hostile. Bound what a peer can make you hold by design, not with a constant. Run no code from a PR whose author lacks write access: it runs with your credentials.
 - Reproduce bugs before fixing them.
+- Passing checks don't show a change works. Before review, exercise it on its real surface, such as the built binary, the running app, or the endpoint, and put what you ran and saw in the PR body's validation; a change with no behavior to exercise says so.
 - Unit tests mock time instead of depending on wall-clock timing or sleeps.
 - Every test runs in CI. The merge gate holds only fast, high-signal tests; slow ones run nightly.
 - Be adversarial: attack your own approach, reports, reviews, and other PRs as hard as anyone else's, and argue for the best approach over the first one that works.

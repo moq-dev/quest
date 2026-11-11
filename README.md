@@ -571,8 +571,9 @@ base moved into a conflict, the command fails: fix the PR, for example with
 On a base with neither the `quest land` check nor a merge queue, it refuses
 while repository auto-merge is disabled. Follow the repository’s own landing
 instructions in CONTRIBUTING.md or AGENTS.md, such as its label queue; never
-retry with `--direct` unless the user asks. `--direct` permits the usual landing
-behavior despite that repository setting.
+retry with `--direct` unless the user asks. `--direct` merges such a head at
+once, pinned to its SHA, without waiting for pending checks, so wait for them
+to pass before landing.
 On such a base, it also compares the live base against that head and refuses a
 head that is behind or diverged: merge the base, rerun the repository's checks,
 and land the new head. This is a preflight check; GitHub can still move the base
@@ -929,7 +930,10 @@ its PR still waits as the queue dropped it:
   last 20,000 characters of each failing GitHub Actions job's log. At most `--fixer-jobs` (2) run at once; the rest wait
   for a slot. `--fixer-effort` (medium) sets the fixer's
   `model_reasoning_effort`, passed to the wrapper in `QUEST_LAND_FIXER_EFFORT`,
-  which `quest land fix --effort` reads by default.
+  which `quest land fix --effort` reads by default. Each `--fixer-tag`
+  pattern, such as `deploy-*`, fetches the matching tags from GitHub into
+  the checkout, pruning those GitHub deleted, so a check that reads them
+  runs there as in the queue's build.
 
 Each finished round is recorded in its pick's history, as the host gate
 records its rounds: `fixed` for a fixer commit, `merged` for a clean merge,
@@ -1529,6 +1533,32 @@ prints it as one object. Without `ccusage` on `PATH`, it says how to install it
 and reports the PRs' records alone. Each host reports its own sessions; the
 land fixer's container keeps no session log, so its fixes show without tokens.
 
+### Typed messages
+
+`quest messages` prints the messages a person typed to agents on this host
+since `--since` (a local `YYYY-MM-DD`, by default 7 days ago), oldest first,
+for a periodic audit of what agents keep getting wrong:
+
+```console
+$ quest messages --since 2026-11-10
+2026-11-10T17:39:10.552Z claude moq-dev/quest 5f0c2a7e-9d3b-4c1a-8e6f-2b7d4a9c1e03
+  quest-spawn
+```
+
+Each message shows its time, harness, repository (the checkout's GitHub
+`origin`, else its directory), and session, then its text; `--json` prints an
+array of `{time, harness, repository, session, text}`. It prints no agent
+reply, tool call or output, harness reminder, or prompt an agent or scheduler
+wrote, and tells them apart by the sender each source records, not by
+wording. T3 Code records whether a person or an agent created each message, so
+the sessions it drives are read from its state (`$T3CODE_HOME`, or `~/.t3`)
+and nowhere else. Other Claude Code sessions count the turns Claude Code marks
+as a human's, with its reminders dropped and a slash command spelled as typed;
+other Codex sessions count the content Codex marks as the user's, outside
+headless (`codex exec`) and sub-agent sessions. A log or record in a shape it
+does not know fails the command rather than being skipped. Output goes to
+stdout only; nothing is stored or posted.
+
 ## Headless agents
 
 `quest agent` runs one headless agent turn per call on the agent CLI's own
@@ -1635,7 +1665,7 @@ supervisors left in their scopes, waits until they are empty, and so releases
 the checkout; it leaves runs whose supervisor is alive to that supervisor.
 
 Release deletes only declared scratch, and refuses a path that Git does not
-ignore, that holds tracked files or another Git worktree, or that is reached
+ignore, that holds tracked files or another repository or worktree, or that is reached
 through a symbolic link; links at or inside scratch are removed, never followed.
 Missing paths are skipped, so release can be rerun. The checkout, its Git state,
 and untracked files stay in place, and `status` charges what remains. A failed
@@ -1662,16 +1692,18 @@ modified or untracked files and any commit, at `HEAD` or under the checkout's
 own refs such as `refs/bisect/`, that no branch or remote-tracking ref
 reaches. A squash-merged change leaves its commits unreached, so they count as
 preserved only when the GitHub upstream that holds origin's claims has a merged
-PR whose head is exactly that commit; other commits need no forge or token.
-It then prunes the scratch and refuses ignored files that remain, leaving the
-checkout released, before `git worktree remove` deletes it. A checkout already
+PR whose head is that commit or descends from it, as when `quest land` merged
+the base into the head; other commits need no forge or token. Every ignored
+path is build output that removal deletes, declared as scratch or not, except
+one holding a nested repository or worktree, which it refuses. Only then does
+`git worktree remove` delete the checkout. A checkout already
 removed with `git worktree remove` only drops its record, as with `release`.
 New checkouts initialize their submodules recursively before returning. Restoring
 one preserves its existing submodule pins and local work. Creation verifies any
 new module tips not reached by remote-tracking branches (such as SHA-fetched
 pins or cloned tags) against origin and records them under
 `refs/remotes/quest-pins/`, outside origin's branch-prune namespace. Removal also checks
-submodules' files outside declared scratch and every module store, including deinitialized ones;
+submodules' files and every module store, including deinitialized ones;
 commits at their HEAD or refs must be reachable from a remote-tracking ref,
 since module stores and their local branches are deleted with the checkout, and
 a module store must have no linked worktrees of its own.

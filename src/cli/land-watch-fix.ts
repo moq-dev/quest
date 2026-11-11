@@ -12,12 +12,11 @@ import { checksSection } from "./land-checks";
 import { type Cause, EFFORT_VARIABLE, type FixResult, knownFlaky, parseFixResult, readFixResult } from "./land-fix";
 import {
 	author,
-	cited,
 	COLLECTION_ATTEMPTS,
 	comment,
 	conflictFailure,
 	FixerRefusal,
-	fixerLog,
+	handbackLog,
 	fixerMarkdown,
 	fixerText,
 	history,
@@ -64,6 +63,8 @@ export interface FixContext {
 	effort: string;
 	/** Minutes a fixer may run from its admission. */
 	timeout: number;
+	/** Patterns of tags, such as `deploy-*`, fetched from GitHub into each fixer checkout so its checks can read them. */
+	tags: string[];
 	token: (workflows: boolean) => Promise<string>;
 	read: RemoteRead;
 }
@@ -354,13 +355,17 @@ async function take(
 	// The round begins its pick's history, unless it continues that pick.
 	if (history(state, number)?.pick !== entry.enabledAt)
 		save(historyPath(state, number), { pick: entry.enabledAt, rounds: [] } satisfies History);
+	const tags = context.tags.map((pattern) => `+refs/tags/${pattern}:refs/tags/${pattern}`);
+	// Pruning drops a tag GitHub no longer has, so a check never reads one deleted there.
 	await context.read(context.root, [
 		"fetch",
 		"--quiet",
 		"--no-tags",
+		"--prune",
 		baseRemote({ repository }),
 		base.sha,
 		removal.head,
+		...tags,
 	]);
 	let log = removal.log;
 	if (conflict) {
@@ -422,6 +427,7 @@ async function take(
 				`${removal.head}:refs/heads/batch`,
 				`${base.sha}:refs/heads/base`,
 				`${removal.head}:refs/heads/pr-${number}`,
+				...tags,
 			],
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
 			base.sha,
@@ -688,7 +694,7 @@ async function collect(
 				: "missing result; run /quest-iterate",
 		`handback ${name}`,
 		attribution,
-		!handback && result?.action === "handback" && result.log ? cited(job.log, result.log) : fixerLog(path),
+		handbackLog(job.log, !handback && result?.action === "handback" ? result.log : undefined),
 		job.reason,
 		job.resolution ? (room) => resolutionSection(number, job.resolution!, room) : undefined,
 	);

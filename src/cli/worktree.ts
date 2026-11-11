@@ -1,5 +1,6 @@
 // Git checkouts under a shared disk budget. Release prunes declared scratch in place, by hand or
-// once the last supervised run in the checkout stops. Remove deletes a checkout that holds no unpreserved work.
+// once the last supervised run in the checkout stops. Remove deletes a checkout that holds no unpreserved work,
+// counting every ignored path as scratch.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -153,17 +154,6 @@ function exclude(repository: string): void {
 	writeFileSync(file, `${old}${old && !old.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
 }
 
-/** The first linked worktree of any repository, marked by a `.git` file, at or under `path`; symlinks are never followed. */
-function linkedWorktree(path: string): string | undefined {
-	if (!entry(path)?.isDirectory()) return undefined;
-	if (entry(join(path, ".git"))?.isFile()) return path;
-	for (const child of readdirSync(path)) {
-		const found = child === ".git" ? undefined : linkedWorktree(join(path, child));
-		if (found) return found;
-	}
-	return undefined;
-}
-
 /**
  * Git's lock reason for the checkout actually at `path`, read through its own `.git` file and
  * administrative directory, so a root replaced by another checkout reports that checkout's lock.
@@ -307,7 +297,7 @@ function unreached(root: string): string[] {
 	return [...tips].filter((tip) => git(root, ["rev-list", "-n1", tip, "--not", "--branches", "--remotes"]));
 }
 
-/** Whether the forge merged a change, such as a squash-merged PR, whose head is exactly `commit`. */
+/** Whether the forge merged a change, such as a squash-merged PR, whose head is or descends from `commit`. */
 export type Merged = (repository: string, commit: string) => Promise<boolean>;
 
 /**
@@ -329,11 +319,17 @@ export function diskUsage(path: string, seen = new Set<string>(), skip = new Set
 	return bytes;
 }
 
-/** The first repository or linked worktree, marked by a `.git` entry, at or under `path`; symlinks are never followed. */
+/**
+ * The first repository or linked worktree, marked by a `.git` entry, or bare repository, holding `HEAD`,
+ * `objects/`, and `refs/`, at or under `path`; symlinks are never followed.
+ */
 function repositoryWithin(path: string): string | undefined {
 	if (!entry(path)?.isDirectory()) return undefined;
 	const children = readdirSync(path, { withFileTypes: true });
+	const has = (name: string, directory: boolean) =>
+		children.some((child) => child.name === name && (directory ? child.isDirectory() : child.isFile()));
 	if (children.some((child) => child.name === ".git")) return path;
+	if (has("HEAD", false) && has("objects", true) && has("refs", true)) return path;
 	for (const child of children) {
 		const found = child.isDirectory() ? repositoryWithin(join(path, child.name)) : undefined;
 		if (found) return found;
@@ -731,7 +727,7 @@ export class Worktrees {
 					throw new Error(`scratch includes tracked files: ${tracked.slice(0, 20).join(", ")}`);
 				if (!ignored(owner, [local]).has(local)) throw new Error(`scratch must be ignored by Git: ${path}`);
 			}
-			// Another checkout, such as one created inside this one, is work rather than scratch.
+			// Another repository or checkout, such as one created inside this one, is work rather than scratch.
 			const registered = checkouts(record.repository)
 				.map((checkout) => checkout.path)
 				.filter((path) => path !== root);
@@ -741,8 +737,8 @@ export class Worktrees {
 				const target = canonical(join(root, path));
 				const nested =
 					registered.find((checkout) => checkout === target || checkout.startsWith(target + sep)) ??
-					linkedWorktree(join(root, path));
-				if (nested) throw new Error(`scratch contains a Git worktree: ${path} holds ${nested}`);
+					repositoryWithin(join(root, path));
+				if (nested) throw new Error(`scratch contains a Git repository or worktree: ${path} holds ${nested}`);
 			}
 			// Removal unlinks symlinks rather than following them; force skips paths an overlapping parent removed.
 			for (const path of paths) rmSync(join(root, path), { recursive: true, force: true });
@@ -764,9 +760,9 @@ export class Worktrees {
 	}
 	/**
 	 * Deletes a finished checkout and drops its record after checking files and commits recursively. Refuses while supervised runs
-	 * are live, and refuses a checkout holding modified, untracked, or ignored files beyond its
-	 * declared scratch, or a commit no branch or remote-tracking ref reaches. Such a commit counts as
-	 * preserved only when `merged` reports a merged change whose head is exactly that commit.
+	 * are live, and refuses a checkout holding modified or untracked files, an ignored path holding a
+	 * repository or worktree, or a commit no branch or remote-tracking ref reaches. Such a commit counts as
+	 * preserved only when `merged` reports a merged change that holds it. Every other ignored path is scratch.
 	 */
 	async remove(id: string, merged: Merged = async () => false): Promise<WorktreeRecord> {
 		// The forge is asked outside the lock; the locked pass below inspects the checkout again.
@@ -795,16 +791,14 @@ export class Worktrees {
 			const kept = unreached(root).filter((commit) => !landed.has(commit));
 			if (kept.length)
 				throw new Error(
-					`commits that no branch or remote-tracking ref reaches, and no merged change has as its head: ${kept.join(", ")}`,
+					`commits that no branch or remote-tracking ref reaches, and no merged change holds: ${kept.join(", ")}`,
 				);
-			this.prune(registry, record);
-			const left = [root, ...modules].flatMap((repository) =>
-				changes(repository, true).map((change) => `${repository}: ${change}`),
-			);
-			if (left.length)
-				throw new Error(
-					`ignored files outside the declared scratch remain, so the checkout was only released: ${left.slice(0, 20).join(", ")}`,
-				);
+			// Ignored paths are build output, except a nested repository or worktree, whose commits and files are work.
+			for (const repository of [root, ...modules])
+				for (const change of changes(repository, true)) {
+					const nested = repositoryWithin(join(repository, change.slice(3)));
+					if (nested) throw new Error(`ignored path holds a Git repository or worktree: ${nested}`);
+				}
 			const reason = `quest worktree ${record.id}`;
 			git(record.repository, ["worktree", "unlock", record.path]);
 			try {
