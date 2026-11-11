@@ -4,10 +4,12 @@
 
 `quest usage` reports, for each online reviewer on each PR: whether it
 reviewed the final head, how many findings it raised, and how many were
-fixed, declined, or left unanswered. The online reviewers are CodeRabbit,
-Pullfrog, and the Dot, ChatGPT's reviewer that posts as the maintainer.
-Rollups per reviewer and repository give coverage, findings per PR, and
-acceptance. The data comes from GitHub; the PR body gains nothing.
+accepted, declined, or left unanswered. A reviewer is any bot account that
+posts reviews, plus any review whose body opens with
+`Automated review by <name>`, such as the Dot, ChatGPT's reviewer that
+posts as the maintainer. Rollups per reviewer and repository give coverage,
+findings per PR, and acceptance. The data comes from GitHub; the PR body
+gains nothing, and no reviewer is named in the code.
 
 ## Plan
 
@@ -15,7 +17,8 @@ Decided 2026-11-11 (user, /quest-plan,
 [routing evidence](/quest/m0/routing-evidence/README.md)): measure the
 online reviewers in usage instead of recording them in PR bodies.
 
-How the 2026-11-11 audit identified each, for the implementer to verify:
+What the 2026-11-11 audit saw of today's reviewers, to check the generic
+rules against rather than to code in:
 
 - CodeRabbit (`coderabbitai[bot]`) posts inline threads tagged Major or
   Minor. "✅ Addressed in commit(s)" is its own check. "✅ Confirmed as
@@ -37,6 +40,10 @@ Agent's choices, for the implementer to revisit:
 
 - Read threads through GraphQL `reviewThreads` in pages, since REST's
   hourly quota is shared and an earlier audit exhausted it.
+- A finding is a review thread, or a `[P<n>]` line in a review body, the
+  marker Codex's reviewers use. Comments outside reviews, such as outage
+  notices, are not findings.
 - Classify a reply as accepted or declined from its first word ("Fixed",
-  "Agreed", "Applied", or "Declined", "Refuted", "Not"). Count an
-  unclassifiable reply as answered.
+  "Agreed", "Applied", or "Declined", "Refuted", "Not"). Report a reply
+  that fits neither as a fourth state, answered but unclassified, so the
+  rule's misses stay visible.

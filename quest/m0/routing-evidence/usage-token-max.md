@@ -29,8 +29,10 @@ The audit found today's failures:
 
 - `quest usage` stops at a Claude Code transcript with an interleaved,
   malformed line in the middle of the file, such as line 1385 of a moq
-  session on 2026-11-04. Claude Code writes these, so the reader skips and
-  counts them rather than failing.
+  session on 2026-11-04. Claude Code writes these, so failing on one would
+  stop every report on the host. The reader skips each one and prints how
+  many lines it skipped in how many sessions, so the undercount is visible
+  rather than silent. Report the corruption upstream to Claude Code.
 - ccusage folds sub-agent records into their parent's session ID, and
   quest reads only the parent's log, so 72% of host spend was unattributed.
 - `fixedBy` counted context links, such as moq-dev/quest#558 linking #494,

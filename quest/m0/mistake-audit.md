@@ -46,11 +46,15 @@ Agent's choices, for the implementer to revisit. Each run:
   the same behavior in two or more PRs or messages; one failure is not a
   class.
 - Classify each escape named under `## Caused by` as catchable from the
-  culprit's diff or needing runtime, such as a nightly-only or platform
-  lane, a test the gate skipped, or a race. File each runtime class as a
-  follow-up in the repository that owns that gate (user, 2026-11-11,
-  [routing evidence](/quest/m0/routing-evidence/README.md)). The 2026-11-11
-  audit sampled 30 escapes: 6 catchable, 17 maybe, 7 runtime, and 5 races.
+  culprit's diff, including one a reviewer might plausibly have caught, or
+  as runtime: a nightly-only or platform lane, a test the gate skipped, or
+  a race. Each runtime class's follow-up belongs to the repository that
+  owns that gate, so it goes in the run PR's `## Follow-ups` for
+  `/quest-plan` there, as the guide's Creation section says (user,
+  2026-11-11, [routing evidence](/quest/m0/routing-evidence/README.md)).
+  The 2026-11-11 audit sampled 30 escapes: catchable 6, maybe 17, and not
+  from the diff 7. The 5 races fell across those columns, since race and
+  catchability were classified separately.
 - Before proposing a fix, find the quest, check, or rule that already owns
   the class, and report whether its count fell since that landed. A rule
   whose class still recurs is the case for moving it up a level.
