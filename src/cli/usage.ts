@@ -564,6 +564,11 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 
 function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	const rows = new Map<string, AccuracyRow>();
+	// A branch's saved tallies span every PR from it, so only its newest PR with a tally counts them.
+	const newest = new Map<string, number>();
+	for (const each of pulls)
+		if (each.review.some((review) => review.tally !== null))
+			newest.set(each.branch, Math.max(newest.get(each.branch) ?? 0, each.number));
 	for (const each of pulls) {
 		// A session that pushed twice is one implementer of the PR, whether or not each line names its size.
 		const distinct = new Map(
@@ -599,7 +604,8 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			if (each.handedBack) row.handedBack++;
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
-			const tallied = each.review.filter((review) => review.tally !== null);
+			const tallied =
+				newest.get(each.branch) === each.number ? each.review.filter((review) => review.tally !== null) : [];
 			if (tallied.length > 0) {
 				row.reviewed++;
 				row.tally.rounds += Math.max(...tallied.map((review) => review.tally!.rounds));

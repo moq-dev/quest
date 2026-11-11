@@ -431,7 +431,8 @@ describe("usage", () => {
 			"- Rounds: 1; findings 1 (medium 1): fixed 1, refuted 0, open 0",
 		].join("\n");
 		// #9's claim of the same branch named ses_1 before #10 resumed it, so #10, the newer, takes it.
-		const body9 = body10.slice(body10.indexOf("## Review"));
+		// Its record and #10's tally the same branch, so the rollup counts the tally once, from #10.
+		const body9 = `${body10.slice(body10.indexOf("## Review"))}\n\n## Models\n\n- Size: L\n- Implementer: Claude Code, claude-opus-5-5, high effort\n`;
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
 		const pulls = [
@@ -544,7 +545,7 @@ describe("usage", () => {
 		const tally = { rounds: 2, findings: { high: 1, medium: 1, low: 1 }, fixed: 2, refuted: 1, open: 0 };
 		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.tally, a.fixes])).toEqual([
 			["S", "gpt-6.1-sol", 1, 1, 17, tally, 1],
-			["L", "claude-opus-5-5", 1, 1, 17, tally, 1],
+			["L", "claude-opus-5-5", 2, 1, 17, tally, 1],
 		]);
 		const text = usageLines(report).join("\n");
 		expect(text).toContain(

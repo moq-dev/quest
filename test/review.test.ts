@@ -1298,10 +1298,12 @@ fakes("--new starts over, and a first round takes no responses", async () => {
 	expect(fresh.stderr).toContain("has none to resume");
 	const restarted = await quest("--root", s.repo, "review", "--new", "--json");
 	expect(JSON.parse(restarted.stdout).rounds[0].round).toBe(1);
-	// The dropped sessions' findings stay open in their reviewers' tallies, which the new sessions continue.
-	expect(JSON.parse(restarted.stdout).tallies.map((t: Tally) => [t.reviewer, t.rounds, t.findings.high])).toEqual([
-		["codex", 2, 2],
-		["opencode", 2, 2],
+	// The new sessions continue their reviewers' tallies, less the findings the dropped sessions left unsettled.
+	expect(
+		JSON.parse(restarted.stdout).tallies.map((t: Tally) => [t.reviewer, t.rounds, t.findings.high, t.fixed]),
+	).toEqual([
+		["codex", 2, 1, 0],
+		["opencode", 2, 1, 0],
 	]);
 });
 

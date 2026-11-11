@@ -303,10 +303,6 @@ export interface ReviewDependencies {
 
 export const processDependencies = (): ReviewDependencies => ({ env: process.env });
 
-/**
- * A branch's review sessions, one per reviewer, kept in the clone's common Git directory so every worktree
- * resumes them. They are in the order the last run reported them, which numbers their findings.
- */
 /** One reviewer's findings across every round on a branch, which a `--new` session continues. */
 export interface Tally {
 	reviewer: ReviewHarness;
@@ -314,7 +310,10 @@ export interface Tally {
 	model: string;
 	effort: string;
 	rounds: number;
-	/** Each finding it raised, once however many rounds keep it open, by its latest severity. */
+	/**
+	 * Each finding it raised, once however many rounds keep it open, by its latest severity. One a replacing
+	 * reviewer keeps open becomes that reviewer's, since its round reports it again unlinked to the earlier one.
+	 */
 	findings: Record<(typeof SEVERITIES)[number], number>;
 	fixed: number;
 	refuted: number;
@@ -326,6 +325,10 @@ export interface Reviewed {
 	tallies: Tally[];
 }
 
+/**
+ * A branch's review sessions, one per reviewer, kept in the clone's common Git directory so every worktree
+ * resumes them. They are in the order the last run reported them, which numbers their findings.
+ */
 interface State {
 	branch: string;
 	sessions: Session[];
@@ -1674,7 +1677,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	if (controller.signal.aborted) throw controller.signal.reason;
 	const done = results.map((result) => (result as PromiseFulfilledResult<Seated>).value);
 	const tallies = tallied(
-		saved?.tallies ?? [],
+		options.fresh ? dropped(saved) : (saved?.tallies ?? []),
 		done.map((each, i) => ({ round: each.round, settles: seats[i]!.session?.reviewer })),
 	);
 	save(statePath, { branch, sessions: [...done.map((each) => each.session), ...kept], tallies } satisfies State);
@@ -1683,7 +1686,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 
 /**
  * A branch's saved state, or undefined when it has none. `--new` drops the sessions but continues their tallies,
- * so it reads them too, starting them over only when the state is one this quest cannot read, which is what
+ * less the findings it drops unsettled, so it reads them too, starting them over only when the state is one this quest cannot read, which is what
  * `--new` is for.
  */
 function savedState(path: string, fresh: boolean | undefined): State | undefined {
@@ -1694,6 +1697,19 @@ function savedState(path: string, fresh: boolean | undefined): State | undefined
 		if (fresh && error instanceof ReviewInputError) return undefined;
 		throw error;
 	}
+}
+
+/**
+ * The saved tallies without the findings `--new` drops unsettled, so a finding no session can settle stays
+ * open nowhere, and one the new session reports again counts once.
+ */
+function dropped(saved: State | undefined): Tally[] {
+	const tallies = (saved?.tallies ?? []).map((tally) => ({ ...tally, findings: { ...tally.findings } }));
+	for (const session of saved?.sessions ?? []) {
+		const tally = tallies.find((each) => each.reviewer === session.reviewer)!;
+		for (const finding of session.rounds.at(-1)!.findings) tally.findings[finding.severity]--;
+	}
+	return tallies;
 }
 
 /**

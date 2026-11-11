@@ -1408,7 +1408,8 @@ keeps its default. Each reviewer's session is kept per branch in the clone's
 common Git directory, so any worktree of the clone resumes it, except opencode's,
 which stays in the checkout it started in, so another worktree starts a new one;
 `--new` starts new sessions, but continues each reviewer's tally of its findings
-on the branch, unless the saved state is one this quest cannot read. `--branch` names the branch instead of the checked-out one, which a
+on the branch, less those it drops unsettled, unless the saved state is one
+this quest cannot read. `--branch` names the branch instead of the checked-out one, which a
 detached `HEAD` requires, such as a checkout of a branch another worktree
 holds, so its rounds continue that branch's session.
 
@@ -1467,8 +1468,10 @@ its location, and the last round's findings with their dispositions. The
 tally, as `- Rounds: 3; findings 4 (high 1, medium 3): fixed 3, refuted 1, open 0`,
 counts the reviewer's rounds on the branch and each finding it raised once,
 by its latest severity, however many rounds keep it open. A finding counts
-for the reviewer that raised it, even when a new size pick's reviewer settles
-it, and a reviewer the run left out keeps a block with only its tally. `quest status` takes the last full SHA the section names as the
+for the reviewer that raised it when a new size pick's reviewer fixes or
+refutes it, but one that reviewer keeps open becomes its own, since its round
+reports it again. `--new` drops the findings it leaves unsettled from the
+tallies. A reviewer the run left out keeps a block with only its tally. `quest status` takes the last full SHA the section names as the
 reviewed head, so the head appears in full only once no reviewer reports a
 finding, and model text
 appears as inline code, which mentions or links nothing and never holds a full
@@ -1532,7 +1535,9 @@ findings across every round; the land fixer's fixes; and the later PRs that list
 
 Rollups follow: spend by size, role, harness, model, and effort, and accuracy
 by size and implementer, which sums the tallies, so it counts every finding
-caught before merge; a record written before tallies counts as unreviewed there. An `Implementer:` line's own size, as
+caught before merge. Since a branch's tallies span every PR from it, only its
+newest PR in the report counts them, and a record written before tallies
+counts as unreviewed. An `Implementer:` line's own size, as
 `(iterate, XS)`, counts over the PR's. Sessions on no PR here, from any
 repository or agent ccusage reads, total on an `Unattributed` line. `--pr` and
 `--quest` narrow the report to one PR or one quest's branch, and `--json`

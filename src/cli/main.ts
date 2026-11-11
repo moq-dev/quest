@@ -1105,9 +1105,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"before the PR opened, and iterating otherwise. An opencode session, whose log quest does not read, belongs to the newest PR whose " +
 				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
-				"each reviewer's latest ## Review round, with its round, score, and findings, " +
+				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, " +
 				"and the later PRs that list it under ## Caused by. Rollups follow: spend by size, role, harness, model, and " +
-				"effort, and accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +
+				"effort, and accuracy by size and implementer, summing each branch's tallies once, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
@@ -1205,7 +1205,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
 				"repeats that round, marked unchanged, so on the same head only a reviewer with findings to settle runs. " +
-				"--new starts new sessions, continuing each reviewer's tally of its findings on the branch. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
+				"--new starts new sessions, continuing each reviewer's tally of its findings on the branch, less those it drops unsettled. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
 				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
@@ -1230,11 +1230,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"`next checkpoint` when a reviewer's every third round reports other findings, to reconsider the approach " +
 				"before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
-				"one object: `rounds`, one per reviewer, `record`, and `next`.\n\n" +
+				"one object: `rounds`, one per reviewer, `tallies`, every reviewer's findings across the branch's rounds, `record`, and `next`.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
 				"user the GitHub token names, keeping the rest of the body, and prints `record <url>`: the reviewed " +
 				"head, named in full only once no reviewer reports a finding, the base, and each reviewer, its " +
-				"session and round, score, and each finding with its disposition. With no " +
+				"session and round, score, its tally of findings across the branch's rounds, and each finding with its disposition. With no " +
 				"such PR, or a remote off GitHub, it prints `record skipped: <why>` and changes nothing.\n\n" +
 				"Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when a reviewer's " +
