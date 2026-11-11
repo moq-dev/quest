@@ -620,7 +620,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"whose commit body pins the head, with the method named, else squash, else any method the " +
 				"repository and the base's rulesets allow, as only a queue signal, since quest land applies its own " +
 				"method. On an ungated base with auto-merge disabled, it refuses " +
-				"unless --direct is passed. Follow the repository landing instructions in CONTRIBUTING.md or " +
+				"unless --direct is passed, which merges at once without waiting for pending checks. Follow the repository landing instructions in CONTRIBUTING.md or " +
 				"AGENTS.md; never retry with --direct unless the user asks. GitHub keeps auto-merge across a " +
 				"writer's push, so disable it before pushing to the PR; quest status and quest wait report a head " +
 				"that moved since auto-merge was enabled.\n\n" +
@@ -630,7 +630,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.requiredOption("--land <sha>", "Land this full 40-character head SHA")
 		.addOption(new Option("--squash", "Squash and merge").conflicts("rebase"))
 		.option("--rebase", "Rebase and merge")
-		.option("--direct", "Allow landing when repository auto-merge is disabled")
+		.option("--direct", "Merge at once when repository auto-merge is disabled; wait for checks to pass first")
 		.action((value: string, options: { land: string; squash?: boolean; rebase?: boolean; direct?: boolean }) => {
 			const pr = pullRequest(value, root());
 			if (!/^[\da-f]{40}$/i.test(options.land)) throw new UsageError("--land needs a full 40-character SHA");
