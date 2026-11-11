@@ -54,8 +54,8 @@ Agent's choices, for the implementer to revisit. Each run:
   or kept older behavior.
 - `quest messages` returns every human turn, so set aside machine-written
   ones yourself: bare skill invocations, pasted relays and logs, accepted
-  suggested prompts, compaction and clear commands, and Codex's question
-  replies (about 175 of 1,452 on 2026-11-11).
+  suggested prompts, `/compact`, `/clear`, and `/goal` commands, and
+  Codex's question replies (about 175 of 1,452 on 2026-11-11).
 - Group them into classes by the agent behavior behind them. A class is
   the same behavior in two or more PRs or messages; one failure is not a
   class.
