@@ -49,6 +49,9 @@ checkpoints and outages to count by hand:
   it unasked. Replacing a stale model id with the same vendor's newer one,
   below, needs no decision, as this check always did.
 
+- Read [routing evidence](/quest/m0/routing-evidence/README.md)'s readout
+  and baseline first: its shadow reviews and writer A/B measure the cells
+  that observational tallies cannot separate.
 - Baseline from m0's routing audit
   ([moq-dev/quest#584](https://github.com/moq-dev/quest/pull/584)): the 25
   PRs merged from 2026-11-07T22:30:45Z, when routing landed in
@@ -103,9 +106,11 @@ checkpoints and outages to count by hand:
   [moq-dev/quest#361](https://github.com/moq-dev/quest/pull/361).
   - The review efforts follow the PR's size since
     [moq-dev/quest#493](https://github.com/moq-dev/quest/pull/493) (user,
-    2026-11-04): Sol low, medium, medium, high, and xhigh for XS to XL since
-    the [token waste](/quest/m0/token-waste/README.md) audit (user,
-    2026-11-05; it had high and xhigh for M and L), and Opus low, low,
+    2026-11-04): Sol medium, medium, high, xhigh, and xhigh for XS to XL
+    once [the review table](/quest/m0/routing-evidence/review-table.md)
+    lands (user, 2026-11-11). It restores the efforts the
+    [token waste](/quest/m0/token-waste/README.md) audit lowered to low,
+    medium, medium, high, and xhigh on 2026-11-05, and raises XS. Opus low, low,
     medium, high, and xhigh when Sol wrote the code (agent's choice). They replaced Codex `xhigh` and Claude `high` (maintainer,
     2026-11-03), for which Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
     `/code-review high`, and codex-cli 0.166.0 ran `gpt-6.1-sol` with
@@ -156,3 +161,8 @@ checkpoints and outages to count by hand:
 ## Required
 
 - [moq-dev adoption](/quest/m0/README.md) - m0 completes first
+
+## Related
+
+- [Routing evidence](/quest/m0/routing-evidence/README.md) - the experiments
+  and records these tallies read
