@@ -468,18 +468,19 @@ function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
 }
 
 /**
- * Attribute each priced session to the PR whose review record names it, as reviewing, even one whose log quest
- * cannot read, such as opencode's. Attribute any other to the PR whose head branch its log last named, among
- * those still open when the session reached the branch and headed from the repository its log, checkout, or
- * directory names, and give it a role: reviewing when Codex marks it a review, implementing when it began before
- * its PR opened, and iterating otherwise. Returns the sessions on no PR here.
+ * Attribute each priced session to the PR whose head branch its log last named, among those still open when the
+ * session reached the branch and headed from the repository its log, checkout, or directory names, and give it a
+ * role: reviewing when a PR's review record names it or Codex marks it a review, implementing when it began before
+ * its PR opened, and iterating otherwise. A session whose log quest cannot read, such as opencode's, is the
+ * reviewing session of the PR whose record names it, the newest when a branch's later PR resumed it. Returns the
+ * sessions on no PR here.
  */
 function attribute(
 	sessions: Priced[],
 	logs: (SessionLog | null)[],
 	pulls: Pull[],
 	rows: Map<number, PullRow>,
-	reviewers: Map<string, { row: PullRow; effort: string }>,
+	reviewers: Map<string, { number: number; effort: string }>,
 ): Priced[] {
 	const byBranch = new Map<string, Pull[]>();
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
@@ -489,12 +490,14 @@ function attribute(
 	sessions.forEach((session, index) => {
 		const id = sessionId(session);
 		const named = reviewers.get(id);
-		if (named) {
+		const log = logs[index];
+		if (!log && named) {
+			const row = rows.get(named.number);
 			const { harness, models } = session;
-			named.row.sessions.push({ harness, session: id, role: "reviewing", effort: named.effort, models });
+			if (row) row.sessions.push({ harness, session: id, role: "reviewing", effort: named.effort, models });
+			else unattributed.push(session);
 			return;
 		}
-		const log = logs[index];
 		const branches = log ? [...log.branches].sort((a, b) => b[1].last - a[1].last) : [];
 		let found: Pull | undefined;
 		for (const [branch, seen] of branches) {
@@ -521,7 +524,7 @@ function attribute(
 		row.sessions.push({
 			harness: session.harness,
 			session: id,
-			role: log.review ? "reviewing" : log.started < found.created ? "implementing" : "iterating",
+			role: log.review || named ? "reviewing" : log.started < found.created ? "implementing" : "iterating",
 			effort: log.effort,
 			models: session.models,
 		});
@@ -651,17 +654,17 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 			(branch === undefined || each.branch === branch),
 	);
 	const narrowed = options.pr !== undefined || branch !== undefined;
-	const rows = pullRows(all, repository).filter((row) => pulls.some((each) => each.number === row.number));
+	const allRows = pullRows(all, repository);
+	const rows = allRows.filter((row) => pulls.some((each) => each.number === row.number));
 	const byNumber = new Map(rows.map((row) => [row.number, row]));
 	const priced = deps.ccusage(options.since);
 	let unattributed: Usage["unattributed"] = null;
 	if (priced !== null) {
-		const reviewers = new Map(
-			rows.flatMap((row) =>
-				row.review.map((review) => [review.session, { row, effort: review.effort }] as const),
-			),
-		);
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
+		const reviewers = new Map<string, { number: number; effort: string }>();
+		for (const row of [...allRows].sort((a, b) => a.number - b.number))
+			for (const review of row.review)
+				reviewers.set(review.session, { number: row.number, effort: review.effort });
 		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };

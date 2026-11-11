@@ -381,13 +381,15 @@ describe("usage", () => {
 			"- Score: 8/10, `Fine.`",
 			"- Findings: none",
 		].join("\n");
+		// #9's claim of the same branch named ses_1 before #10 resumed it, so #10, the newer, takes it.
+		const body9 = body10.slice(body10.indexOf("## Review"));
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
 		const pulls = [
 			pr(11, "fix/a", body11, "2026-11-06T20:00:00Z"),
 			pr(10, "quest/m0/a", body10, "2026-11-06T10:00:00Z"),
 			// The same branch's earlier claim, closed before any session reached the branch.
-			pr(9, "quest/m0/a", "", "2026-11-01T00:00:00Z", {
+			pr(9, "quest/m0/a", body9, "2026-11-01T00:00:00Z", {
 				merged_at: null,
 				closed_at: "2026-11-02T00:00:00Z",
 				updated_at: "2026-11-06T00:00:00Z",

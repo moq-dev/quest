@@ -1085,13 +1085,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("usage")
 		.summary("Report which models worked on each PR, at what token cost, and how its reviews went")
 		.description(
-			"Report origin's PRs updated since --since and this host's agent sessions active since then. A " +
-				"session a PR's ## Review record names, opencode's included, belongs to that PR as reviewing. Any other " +
+			"Report origin's PRs updated since --since and this host's agent sessions active since then. Each " +
 				"Claude Code or Codex session belongs to the PR whose head branch its log last names, when its Codex log, its " +
 				"checkout's remotes, or a Codex log for its directory names this repository, read from " +
 				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
-				"reviewing when Codex marks it a review, implementing when it began " +
-				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
+				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
+				"before the PR opened, and iterating otherwise. An opencode session, whose log quest does not read, belongs to the newest PR whose " +
+				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
 				"each reviewer's latest ## Review round, with its round, score, and findings, " +
 				"and the later PRs that list it under ## Caused by. Rollups follow: spend by size, role, harness, model, and " +
