@@ -57,9 +57,7 @@ function notes(): { note: (message: string) => void; seen: string[] } {
 const LINK = "quest/m0/epic/one.md:11: link does not resolve: ../../../dependency/missing.md";
 const SKIPPED = "skipped links into submodule dependency: no local git directory holds its pinned commit";
 
-// Cases run up to ~35 real Git processes. Process creation on the Windows ARM runner
-// costs ~80-250 ms while other test files start, so the 5 s unit-test default is too short.
-describe("committed submodule links", { timeout: 20_000 }, () => {
+describe("committed submodule links", () => {
 	test("snapshot validation resolves links inside an initialized gitlink", () => {
 		const { tree, head } = fixture();
 		tree.accepts();
@@ -136,7 +134,7 @@ describe("committed submodule links", { timeout: 20_000 }, () => {
 	});
 });
 
-describe("checkout submodule links", { timeout: 20_000 }, () => {
+describe("checkout submodule links", () => {
 	afterEach(() => {
 		vi.unstubAllEnvs();
 	});

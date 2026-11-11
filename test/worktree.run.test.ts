@@ -77,7 +77,7 @@ function stopped(pid: number): boolean {
 	}
 }
 
-describe.runIf(process.platform === "linux")("supervised runs under systemd", { timeout: 30_000 }, () => {
+describe.runIf(process.platform === "linux")("supervised runs under systemd", () => {
 	it("forwards arguments and status, stops orphaned descendants, then releases", async () => {
 		const { dir, home, worktrees, record } = await fixture();
 		const pidFile = join(dir, "orphan");

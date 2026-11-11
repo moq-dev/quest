@@ -4,16 +4,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { move, remove } from "../src/core";
 import { openPullRequests } from "../src/cli/claims";
 import { GitHub, type GitHubDependencies } from "../src/cli/github";
 import { main } from "../src/cli/main";
 import { EPIC_README, M0_README, ROOT_README, TWO, Tree, initRepository, tempDir } from "./fixture";
-
-// Each test spawns git up to a dozen times, which a busy Windows runner can stretch past 5 s.
-vi.setConfig({ testTimeout: 30_000 });
 
 function git(dir: string, ...args: string[]): string {
 	return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

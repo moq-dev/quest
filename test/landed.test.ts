@@ -2,14 +2,11 @@
 
 import { execFileSync } from "node:child_process";
 
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 
 import { Tree } from "./fixture";
 
 const FINDING = "neither deletes nor edits its quest since main";
-
-// Each test spawns git up to a dozen times, which a busy Windows runner can stretch past 5 s.
-vi.setConfig({ testTimeout: 30_000 });
 
 /** The baseline tree committed on `main`, then checked out on `branch`. */
 function repo(branch: string): Tree {

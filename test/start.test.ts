@@ -25,9 +25,6 @@ const BRANCH = "quest/m0/epic/one";
 const UPSTREAM = "https://github.com/example/project.git";
 const FORK = "https://github.com/me/project.git";
 
-// Each test spawns git a few dozen times, which takes seconds on Windows runners.
-vi.setConfig({ testTimeout: 30_000 });
-
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
