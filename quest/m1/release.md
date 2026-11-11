@@ -12,7 +12,8 @@ work. Later releases follow [Cut a release](/quest/m1/release-cut.md).
 `package.json` to 0.2.0 (pre-1.0 with breaking changes since v0.1.0, so a
 minor bump) and made SETUP.md treat v0.1.0 as no release. The v0.2.0 tag,
 pushed on 2026-11-10 at 2572be9c, published nothing: its Release run failed
-on macOS ([macOS release jobs](/quest/m0/macos-gate.md)).
+on macOS, which [moq-dev/quest#624](https://github.com/moq-dev/quest/pull/624)
+fixed.
 
 Decided 2026-11-10 (maintainer, /quest-unblock): ✅ ship v0.2.1 once macOS
 passes, leaving v0.2.0 a tag with no release (rejected: move the v0.2.0 tag).
@@ -27,7 +28,3 @@ since CONTRIBUTING.md reserves release tags for them. Then:
   and [run 41660575051](https://github.com/moq-dev/quest/actions/runs/41660575051)).
 - Then drop SETUP.md's v0.1.0 caveat and the "next release" notes in
   README.md and docs/windows.md.
-
-## Required
-
-- [macOS release jobs](/quest/m0/macos-gate.md) - Release's macOS jobs run and pass, so the tag publishes
