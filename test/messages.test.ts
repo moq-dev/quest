@@ -133,17 +133,39 @@ describe("readCodexMessages", () => {
 		}
 	});
 
-	test("fails on a user turn without provenance, which cannot be told apart", () => {
+	test("reads a record written with spaces", () => {
 		const path = join(tempDir(), "rollout.jsonl");
 		writeFileSync(
 			path,
-			lines(codexMeta({}), {
-				type: "response_item",
-				timestamp: "2026-11-06T10:01:00Z",
-				payload: { role: "user", content: [{ type: "input_text", text: "hi" }] },
-			}),
+			`${JSON.stringify(codexMeta({}))}\n${JSON.stringify(codexTurn("2026-11-06T10:01:00Z", [["hi", "user"]]), null, 1).replaceAll("\n", "")}\n`,
 		);
-		expect(() => readCodexMessages(path, SINCE, plain)).toThrow(/provenance/);
+		expect(readCodexMessages(path, SINCE, plain).map((m) => m.text)).toEqual(["hi"]);
+	});
+
+	test("fails on a user turn whose provenance does not cover each part, which cannot be told apart", () => {
+		const turn = (meta: object | undefined) => ({
+			type: "response_item",
+			timestamp: "2026-11-06T10:01:00Z",
+			payload: {
+				role: "user",
+				content: [
+					{ type: "input_text", text: "hi" },
+					{ type: "input_text", text: "there" },
+				],
+				internal_chat_message_metadata_passthrough: meta,
+			},
+		});
+		for (const meta of [
+			undefined,
+			{},
+			{ content_item_kinds: ["user.text", "unknown"] },
+			{ content_item_metadata: [{ provenance: { type: "user" } }] },
+			{ content_item_metadata: [{ provenance: { type: "user" } }, { kind: "user" }] },
+		]) {
+			const path = join(tempDir(), "rollout.jsonl");
+			writeFileSync(path, lines(codexMeta({}), turn(meta)));
+			expect(() => readCodexMessages(path, SINCE, plain)).toThrow(/provenance/);
+		}
 	});
 });
 

@@ -142,26 +142,29 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 			else throw new Error(`${path} names no directory`);
 			return true;
 		}
-		if (!line.includes('"role":"user"')) return;
+		if (!/"role"\s*:\s*"user"/.test(line)) return;
 		const record = parseLine(path, line, complete);
 		const item = record?.payload as Record<string, unknown> | undefined;
 		if (record?.type !== "response_item" || item?.role !== "user") return;
 		const at = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
 		if (Number.isNaN(at)) throw new Error(`${path} has a user turn without a timestamp`);
 		if (at < since) return;
-		const meta = item.internal_chat_message_metadata_passthrough as Record<string, unknown> | undefined;
-		if (meta === undefined)
-			throw new Error(
-				`${path} has a user turn without Codex's provenance metadata, so typed text cannot be told apart`,
-			);
-		const provenance = Array.isArray(meta.content_item_metadata) ? meta.content_item_metadata : [];
 		const content = Array.isArray(item.content) ? item.content : [];
+		const meta = item.internal_chat_message_metadata_passthrough as Record<string, unknown> | undefined;
+		const provenance = meta?.content_item_metadata;
+		if (!Array.isArray(provenance)) {
+			// A compaction replays earlier turns, already read where they were typed, without their provenance.
+			const kinds = meta?.content_item_kinds;
+			if (Array.isArray(kinds) && kinds.length > 0 && kinds.every((kind) => kind === "unknown")) return;
+			throw new Error(`${path} has a user turn without Codex's provenance, so typed text cannot be told apart`);
+		}
+		const sources = provenance.map(
+			(each) => (each as { provenance?: { type?: unknown } } | null)?.provenance?.type,
+		);
+		if (sources.length !== content.length || sources.some((type) => typeof type !== "string"))
+			throw new Error(`${path} has a user turn whose provenance does not cover each part`);
 		const text = content
-			.filter(
-				(part, i) =>
-					(provenance[i] as { provenance?: { type?: unknown } } | undefined)?.provenance?.type === "user" &&
-					typeof part?.text === "string",
-			)
+			.filter((part, i) => sources[i] === "user" && typeof part?.text === "string")
 			.map((part) => part.text as string)
 			.join("\n")
 			.trim();
