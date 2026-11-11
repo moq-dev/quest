@@ -571,8 +571,9 @@ base moved into a conflict, the command fails: fix the PR, for example with
 On a base with neither the `quest land` check nor a merge queue, it refuses
 while repository auto-merge is disabled. Follow the repository’s own landing
 instructions in CONTRIBUTING.md or AGENTS.md, such as its label queue; never
-retry with `--direct` unless the user asks. `--direct` permits the usual landing
-behavior despite that repository setting.
+retry with `--direct` unless the user asks. `--direct` merges such a head at
+once, pinned to its SHA, without waiting for pending checks, so wait for them
+to pass before landing.
 On such a base, it also compares the live base against that head and refuses a
 head that is behind or diverged: merge the base, rerun the repository's checks,
 and land the new head. This is a preflight check; GitHub can still move the base
