@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from "../src/cli/supervise";
-import { GitHub, mergedHead } from "../src/cli/github";
+import { GitHub, mergedHolds } from "../src/cli/github";
 import { REFERENCE_LINE } from "../src/core";
 import { main } from "../src/cli/main";
 import { Worktrees, canonical, derivedDefaults, diskUsage } from "../src/cli/worktree";
@@ -231,11 +231,13 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		const record = await worktrees.create(repo, "work", 10_000_000, "HEAD", ["cache"]);
 		mkdirSync(join(record.path, "cache"));
 		writeFileSync(join(record.path, "cache", "artifact"), "disposable");
+		// Ignored build output nobody declared is scratch too.
+		writeFileSync(join(record.path, ".env"), "disposable");
 		writeFileSync(join(record.path, "file"), "pushed\n");
 		git(record.path, "commit", "-am", "pushed");
 		const head = git(record.path, "rev-parse", "HEAD");
 		await expect(worktrees.remove(record.id, forge)).rejects.toThrow(
-			`remote-tracking ref reaches, and no merged change has as its head: ${head}`,
+			`remote-tracking ref reaches, and no merged change holds: ${head}`,
 		);
 		expect(forge.mock.calls).toEqual([[record.repository, head]]);
 		git(record.path, "update-ref", "refs/remotes/origin/work", "HEAD");
@@ -260,7 +262,7 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		await worktrees.remove(gone.id);
 		expect(worktrees.status().records).toEqual([]);
 	});
-	it("removes a squash-merged checkout only when a merged change's head is exactly its commit", async () => {
+	it("removes a squash-merged checkout only when a merged change holds its commit", async () => {
 		const { repo, worktrees } = fixture();
 		const record = await worktrees.create(repo, "work", 10_000_000);
 		git(record.path, "commit", "--allow-empty", "-m", "first");
@@ -299,20 +301,32 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		await expect(worktrees.remove(record.id)).rejects.toThrow(marked);
 		git(record.path, "update-ref", "-d", "refs/bisect/bad");
 		kept();
+		// A repository or another checkout under an ignored path is work, even nested deep in scratch.
+		const clone = join(record.path, "cache", "deep", "clone");
+		mkdirSync(clone, { recursive: true });
+		git(clone, "init", "-q");
+		await expect(worktrees.remove(record.id)).rejects.toThrow(
+			`ignored path holds a Git repository or worktree: ${clone}`,
+		);
+		expect(existsSync(join(clone, ".git"))).toBe(true);
+		rmSync(join(record.path, "cache"), { recursive: true });
+		const mirror = join(record.path, "cache", "mirror.git");
+		mkdirSync(mirror, { recursive: true });
+		git(mirror, "init", "-q", "--bare");
+		await expect(worktrees.remove(record.id)).rejects.toThrow(
+			`ignored path holds a Git repository or worktree: ${mirror}`,
+		);
+		rmSync(join(record.path, "cache"), { recursive: true });
+		const agent = await worktrees.create(record.path, "agent", 10_000_000);
+		await expect(worktrees.remove(record.id)).rejects.toThrow(
+			`ignored path holds a Git repository or worktree: ${agent.path}`,
+		);
+		await worktrees.remove(agent.id);
+		kept();
 		orphan(home, "orphan.scope");
 		live.add("orphan.scope");
 		await expect(worktrees.remove(record.id)).rejects.toThrow("supervised runs are live");
 		live.delete("orphan.scope");
-		// Ignored files nobody declared as scratch stay; the declared scratch is pruned first.
-		mkdirSync(join(record.path, "cache"));
-		writeFileSync(join(record.path, ".env"), "secret");
-		await expect(worktrees.remove(record.id)).rejects.toThrow(
-			"declared scratch remain, so the checkout was only released:",
-		);
-		expect(existsSync(join(record.path, "cache"))).toBe(false);
-		expect(readFileSync(join(record.path, ".env"), "utf8")).toBe("secret");
-		expect(worktrees.status().records[0].phase).toBe("released");
-		rmSync(join(record.path, ".env"));
 		// A clean submodule whose commits its remote has does not prevent removal.
 		const sub = repository(join(root, "sub"));
 		git(record.path, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", sub, "sub");
@@ -515,10 +529,15 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		writeFileSync(join(nested, "file"), "local work");
 		await expect(worktrees.remove(record.id)).rejects.toThrow("modified or untracked");
 		git(nested, "checkout", "--", "file");
-		writeFileSync(join(nested, ".env"), "ignored work");
-		await expect(worktrees.remove(record.id)).rejects.toThrow("ignored files");
-		expect(readFileSync(join(nested, ".env"), "utf8")).toBe("ignored work");
-		rmSync(join(nested, ".env"));
+		const clone = join(nested, "cache", "clone");
+		mkdirSync(clone, { recursive: true });
+		git(clone, "init", "-q");
+		await expect(worktrees.remove(record.id)).rejects.toThrow(
+			`ignored path holds a Git repository or worktree: ${clone}`,
+		);
+		rmSync(join(nested, "cache"), { recursive: true });
+		// Ignored build output in a submodule is scratch.
+		writeFileSync(join(nested, ".env"), "build output");
 		git(
 			nested,
 			"-c",
@@ -625,21 +644,31 @@ describe("worktrees", { timeout: 20_000 }, () => {
 		expect(() => worktrees.release(record.id)).toThrow("ownership/lock changed");
 		expect(() => worktrees.restore(record.id)).toThrow("ownership/lock changed");
 	});
-	it("refuses scratch that contains another Git worktree", async () => {
+	it("refuses scratch that contains another Git repository or worktree", async () => {
 		const { root, repo, worktrees } = fixture();
 		const outer = await worktrees.create(repo, "outer", 10_000_000, "HEAD", [".worktrees"]);
 		// Created from inside the outer checkout, so it lands in the outer checkout's ignored .worktrees/.
 		const inner = await worktrees.create(outer.path, "inner", 10_000_000);
 		expect(inner.path).toBe(join(outer.path, ".worktrees", "inner"));
-		expect(() => worktrees.release(outer.id)).toThrow("scratch contains a Git worktree");
+		expect(() => worktrees.release(outer.id)).toThrow("scratch contains a Git repository or worktree");
 		expect(existsSync(join(inner.path, "file"))).toBe(true);
 		// A linked worktree of an unrelated repository, such as an agent's checkout under an ignored directory.
 		const other = await worktrees.create(repo, "other", 10_000_000, "HEAD", ["cache"]);
 		const foreign = repository(join(root, "foreign"));
 		git(foreign, "worktree", "add", "--detach", join(other.path, "cache", "agent"));
-		expect(() => worktrees.release(other.id)).toThrow("scratch contains a Git worktree: cache");
+		expect(() => worktrees.release(other.id)).toThrow("scratch contains a Git repository or worktree: cache");
 		expect(existsSync(join(other.path, "cache", "agent", "file"))).toBe(true);
-		expect(worktrees.status().records.map((record) => record.phase)).toEqual(["active", "active", "active"]);
+		// A temporary clone is a repository whose commits and files are work too.
+		const cloned = await worktrees.create(repo, "cloned", 10_000_000, "HEAD", ["cache"]);
+		repository(join(cloned.path, "cache", "clone"));
+		expect(() => worktrees.release(cloned.id)).toThrow("scratch contains a Git repository or worktree: cache");
+		expect(existsSync(join(cloned.path, "cache", "clone", "file"))).toBe(true);
+		expect(worktrees.status().records.map((record) => record.phase)).toEqual([
+			"active",
+			"active",
+			"active",
+			"active",
+		]);
 	});
 	it.skipIf(process.platform === "win32")("refuses a root replaced by a link to another checkout", async () => {
 		const { repo, worktrees } = fixture();
@@ -853,10 +882,21 @@ describe("supervised runs", { timeout: 20_000 }, () => {
 });
 
 describe("merged PR heads on GitHub", () => {
-	/** GitHub answering the commit query with `found`, recording the variables it was sent. */
-	function github(found: unknown) {
+	/**
+	 * GitHub answering the commit query with `found` and each compare from a head with `ahead`, or 404
+	 * for a head it lacks, recording the variables and compares it was sent.
+	 */
+	function github(found: unknown, ahead: Record<string, number> = {}) {
 		const sent: unknown[] = [];
-		const fetch = (async (_url: unknown, init?: RequestInit) => {
+		const fetch = (async (url: unknown, init?: RequestInit) => {
+			const compare = /\/compare\/(.+)$/.exec(String(url))?.[1];
+			if (compare) {
+				sent.push(compare);
+				const head = compare.split("...")[0];
+				return head in ahead
+					? Response.json({ ahead_by: ahead[head] })
+					: Response.json({ message: "Not Found" }, { status: 404 });
+			}
 			sent.push(JSON.parse(String(init?.body)).variables);
 			return Response.json({ data: { repository: { object: found } } });
 		}) as typeof globalThis.fetch;
@@ -865,20 +905,29 @@ describe("merged PR heads on GitHub", () => {
 	const repository = { owner: "example", repo: "project" };
 	const pulls = (...nodes: unknown[]) => ({ associatedPullRequests: { nodes } });
 
-	it("accepts only a merged PR whose head is exactly the commit", async () => {
+	it("accepts a merged PR whose head is the commit or descends from it", async () => {
 		const { sent, client } = github(pulls({ merged: true, headRefOid: "abc" }));
-		expect(await mergedHead(client, repository, "abc")).toBe(true);
+		expect(await mergedHolds(client, repository, "abc")).toBe(true);
 		expect(sent).toEqual([{ owner: "example", name: "project", oid: "abc" }]);
-		// A PR that contains the commit below a later head, or was closed unmerged, is no evidence.
-		expect(await mergedHead(github(pulls({ merged: true, headRefOid: "later" })).client, repository, "abc")).toBe(
+		// `quest land` merged the base into the head before squashing it.
+		const landed = github(pulls({ merged: false, headRefOid: "open" }, { merged: true, headRefOid: "landed" }), {
+			open: 0,
+			landed: 0,
+		});
+		expect(await mergedHolds(landed.client, repository, "abc")).toBe(true);
+		expect(landed.sent.slice(1)).toEqual(["landed...abc"]);
+		// The merged head no longer reaches the commit, as after a force push, or GitHub cannot compare them.
+		const forced = github(pulls({ merged: true, headRefOid: "later" }), { later: 1 });
+		expect(await mergedHolds(forced.client, repository, "abc")).toBe(false);
+		expect(await mergedHolds(github(pulls({ merged: true, headRefOid: "later" })).client, repository, "abc")).toBe(
 			false,
 		);
-		expect(await mergedHead(github(pulls({ merged: false, headRefOid: "abc" })).client, repository, "abc")).toBe(
+		expect(await mergedHolds(github(pulls({ merged: false, headRefOid: "abc" })).client, repository, "abc")).toBe(
 			false,
 		);
 		// GitHub does not have the commit, or the object is not a commit.
-		expect(await mergedHead(github(null).client, repository, "abc")).toBe(false);
-		expect(await mergedHead(github({}).client, repository, "abc")).toBe(false);
+		expect(await mergedHolds(github(null).client, repository, "abc")).toBe(false);
+		expect(await mergedHolds(github({}).client, repository, "abc")).toBe(false);
 	});
 });
 

@@ -28,7 +28,7 @@ import { gate, QUICK_MS } from "./gate";
 import {
 	gitHubDependencies,
 	GitHubInputError,
-	mergedHead,
+	mergedHolds,
 	pullRequest,
 	readRemote,
 	remoteRepository,
@@ -915,15 +915,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		const origin = readRemote(repository, "origin");
 		if (origin === null) return false; // No forge to ask.
 		const up = await upstream(repository, origin, { github: () => gitHubDependencies(warn), warn });
-		return up.github !== null && mergedHead(up.github.client, up.github.repository, commit);
+		return up.github !== null && mergedHolds(up.github.client, up.github.repository, commit);
 	};
 	worktree
 		.command("remove <id>")
 		.description(
 			"Delete a finished checkout and drop its record after recursive safety checks. Refuses while supervised runs are live, " +
-				"and refuses modified, untracked, or ignored files beyond the declared scratch, and commits no branch " +
-				"or remote-tracking ref reaches, unless the GitHub upstream that holds origin's claims merged a PR whose head is exactly " +
-				"that commit. Submodules must have no changed or ignored files and no commits their remote refs do not reach, including in deinitialized module stores, and module stores must have no linked worktrees of their own. Prunes the scratch first, so a refusal over ignored files leaves the checkout released.",
+				"and refuses modified or untracked files, an ignored path holding a nested repository or worktree, and commits no branch " +
+				"or remote-tracking ref reaches, unless the GitHub upstream that holds origin's claims merged a PR whose head is " +
+				"that commit or descends from it. Every other ignored path, declared as scratch or not, is deleted with the checkout. Submodules must have no changed files and no commits their remote refs do not reach, including in deinitialized module stores, and module stores must have no linked worktrees of their own.",
 		)
 		.action((id: string) => settled(state().remove(id, merged)));
 	worktree
