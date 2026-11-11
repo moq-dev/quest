@@ -1106,9 +1106,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
 				"each reviewer's latest ## Review round, with its round, score, and findings, " +
-				"and the later PRs that list it under ## Caused by. Rollups follow: spend by size, role, harness, model, and " +
-				"effort, and accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +
-				"over the PR's. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
+				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
+				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
+				"is a bot that posts reviews, or a review whose body opens with Automated review by <name>; a finding is a " +
+				"review thread it opens or a [P<n>] line in its review body, and its first answer's first word takes or " +
+				"declines it. Rollups follow: spend by size, role, harness, model, and " +
+				"effort, accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +
+				"over the PR's, and each online reviewer's coverage and findings over the merged PRs. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
 				"other failures.",

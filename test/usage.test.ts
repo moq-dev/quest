@@ -406,9 +406,61 @@ describe("usage", () => {
 			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 		];
 		const requests: string[] = [];
-		const fetch = async (input: string | URL | Request) => {
+		const connection = (nodes: object[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
+		// #10's final head got a bot's review with one thread, which the agent fixed.
+		const activity = (number: number) => ({
+			headRefOid: "b".repeat(40),
+			reviews: connection(
+				number === 10
+					? [
+							{
+								id: "r1",
+								url: "https://github.com/acme/proj/pull/10#pullrequestreview-1",
+								author: { __typename: "Bot", login: "rabbit" },
+								body: "One finding.",
+								submittedAt: "2026-11-06T15:00:00Z",
+								commit: { oid: "b".repeat(40) },
+							},
+						]
+					: [],
+			),
+			reviewThreads: connection(
+				number === 10
+					? [
+							{
+								isResolved: false,
+								resolvedBy: null,
+								comments: {
+									pageInfo: { hasNextPage: false },
+									nodes: [
+										{
+											author: { __typename: "Bot", login: "rabbit" },
+											body: "Bug.",
+											pullRequestReview: { id: "r1" },
+										},
+										{
+											author: { __typename: "User", login: "acme" },
+											body: "Fixed.",
+											pullRequestReview: { id: "r2" },
+										},
+									],
+								},
+							},
+						]
+					: [],
+			),
+			comments: connection([]),
+		});
+		const fetch = async (input: string | URL | Request, init?: RequestInit) => {
 			const url = new URL(String(input));
 			requests.push(url.pathname);
+			if (url.pathname === "/graphql") {
+				const { query } = JSON.parse(String(init?.body)) as { query: string };
+				const numbers = [...query.matchAll(/p(\d+): pullRequest/g)].map((match) => Number(match[1]));
+				return json({
+					data: { repository: Object.fromEntries(numbers.map((number) => [`p${number}`, activity(number)])) },
+				});
+			}
 			if (url.pathname === "/repos/acme/proj")
 				return json({
 					owner: { login: "acme" },
@@ -496,8 +548,39 @@ describe("usage", () => {
 			["S", "gpt-6.1-sol", 1, 1, 17, 2, 1],
 			["L", "claude-opus-5-5", 1, 1, 17, 2, 1],
 		]);
+		expect(ten.online).toEqual([
+			{
+				reviewer: "rabbit[bot]",
+				finalHead: true,
+				findings: 1,
+				accepted: 1,
+				declined: 0,
+				unclassified: 0,
+				unanswered: 0,
+			},
+		]);
+		// #11 and #10 merged; #9 closed and #7 is open, so neither counts.
+		expect(report.online).toEqual([
+			{
+				reviewer: "rabbit[bot]",
+				merged: 2,
+				reviewed: 1,
+				finalHead: 1,
+				findings: 1,
+				accepted: 1,
+				declined: 0,
+				unclassified: 0,
+				unanswered: 0,
+			},
+		]);
 		const text = usageLines(report).join("\n");
 		expect(text).toContain("#10 L merged: PR 10 (quest/m0/a)");
+		expect(text).toContain(
+			"online review: rabbit[bot], at the final head; 1 findings: 1 accepted, 0 declined, 0 unclassified, 0 unanswered",
+		);
+		expect(text).toContain(
+			"rabbit[bot]  reviewed 1/2 (50%), final head 1 (50%), 1.0 findings per PR reviewed, 100% accepted;",
+		);
 		expect(text).toContain("fixed later by: #11");
 		expect(text).not.toContain("SECRET");
 		expect(JSON.stringify(report)).not.toContain("SECRET");
