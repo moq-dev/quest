@@ -49,8 +49,9 @@ planned there.
 - `moq-pro-gate` is a repository runner, not an org runner group, and
   `release`'s `gate.yml` still uses it, so restricting it to the queue
   workflow, as the public repositories' `quest-queue`, `rind-queue` and
-  `rust2-queue` groups are limited to their `queue-build.yml@refs/heads/main`,
-  waits for moq.pro's Land release quest.
+  `rust2-queue` groups are limited to their
+  `.github/workflows/queue-build.yml@refs/heads/main`, waits for moq.pro's
+  Land release quest.
 
 ## Waiting
 
