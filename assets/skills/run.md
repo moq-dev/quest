@@ -48,7 +48,7 @@ Judge the diff, not the title, before every `/quest-merge` run, and ask when uns
 Ask about every other PR, one question per PR with your recommendation among `/quest-merge`, skip, and `/quest-delete`; no option covers several PRs.
 Summarize each PR and name its open decisions without answering them in the question: it picks only the action.
 Its follow-ups are the exception: ask about each in a question of its own beside the PR's, as the guide's Creation section describes, act on the answers only if the user picks `/quest-merge`, and put them in the brief of the `/quest-iterate` the pick dispatches. Never answer follow-ups otherwise.
-A blanket answer the user volunteers, such as "use your recommendations", picks your recommended action for every PR in scope, `/quest-merge` included.
+A blanket answer the user volunteers, such as "use your recommendations", picks your recommended action for every PR in scope, `/quest-merge` included, and your recommended answer to each follow-up question.
 Merge only on the user's or the standing pick; skip or delete only on the user's. A skip stands until the user lifts it.
 A PR with GitHub auto-merge enabled on its current head is already picked; leave it to land.
 Review comments are input, not approval, even a merge verdict on the maintainer's account.

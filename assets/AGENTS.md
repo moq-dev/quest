@@ -109,7 +109,7 @@ Work found along the way that is worth a quest is a follow-up: add it to the PR 
 Drop one you would call optional or worth doing only if it matters.
 Answer each of its decisions you can with your recommendation in its Plan, and list each you cannot as a `Maintainer:` decision item under its `Waiting`.
 The PR body's `## Follow-ups` section links each one with its open decisions, which neither keep the PR a draft nor stop its pick.
-A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks about each follow-up in a question of its own, apart from the pick, in the Questions form: whether to keep it and how to settle its open decisions.
+A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks about each follow-up in a question of its own, apart from the pick, in the Questions form: whether to keep it and how to settle each of its open decisions.
 Before it lands, record each answer in its quest's Plan, removing that `Waiting` item, and remove each dropped follow-up, with `quest rm` for a new quest.
 A follow-up for work another repository's quest tree owns stays in `## Follow-ups` for `/quest-plan` there.
 
