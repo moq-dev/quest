@@ -472,7 +472,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"quest/<milestone>/<epic>/README, and opens its PR into it. The first claim in the epic creates that " +
 				"branch from the upstream default branch with an empty commit, and opens its draft PR into the default " +
 				"branch, whose ## Waiting section hands it back until the epic's quests have merged; a branch a merged " +
-				"PR landed, or one with nothing beyond the default branch, is replaced, and a branch without an open PR gets one. A fork cannot create the branch, so " +
+				"PR landed, or one with nothing beyond the default branch, is replaced, and a branch without an open PR gets one. When the default branch " +
+				"changed the quest's file since the epic's branch was cut, as when it was planned there, the claim commit also merges " +
+				"the default branch, and the claim is refused when that merge conflicts. A fork cannot create the branch, so " +
 				"it refuses until the upstream has it. An epic's README, and a quest directly under a milestone, build " +
 				"on the default branch.\n\n" +
 				"Readiness comes from the fetched upstream tree the claim builds on, not the checkout: the epic's " +

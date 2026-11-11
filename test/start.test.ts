@@ -3,7 +3,7 @@
 // github.com remote name reach a local bare repository.
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, test, vi } from "vitest";
@@ -836,7 +836,52 @@ describe("epic branches", () => {
 		land(work, { [ONE]: null, [THREE]: "# [S] Three\n\n## Goal\n\nAfter One.\n" });
 		const three = await cli("--root", work, "start", THREE);
 		expect(three.code, three.stderr).toBe(0);
-		expect(git(bare, "rev-parse", `${tip(bare, "quest/m0/epic/three")}^`)).toBe(tip(bare, EPIC_BRANCH));
+		// The claim merges the default branch's edit to Three, which its readiness was read from.
+		const claim = tip(bare, "quest/m0/epic/three");
+		expect(git(bare, "rev-parse", `${claim}^1`, `${claim}^2`)).toBe(
+			`${tip(bare, EPIC_BRANCH)}\n${git(bare, "rev-parse", "main")}`,
+		);
+		expect(git(bare, "show", `${claim}:${THREE}`)).toBe("# [S] Three\n\n## Goal\n\nAfter One.");
+		const released = await cli("--root", work, "start", "--release", THREE);
+		expect(released.code, released.stderr).toBe(0);
+		expect(tip(bare, "quest/m0/epic/three")).toBe("");
+	});
+
+	test("a quest planned on the default branch after its epic's branch is cut is claimed with that plan", async () => {
+		const bare = upstream();
+		const work = clone(bare);
+		expect((await cli("--root", work, "start", EPIC_ONE)).code).toBe(0);
+		git(work, "switch", "-q", "--detach", "origin/main");
+		land(work, { [THREE]: "# [S] Three\n\n## Goal\n\nPlanned on main.\n" });
+		const three = await cli("--root", work, "start", THREE);
+		expect(three.code, three.stderr).toBe(0);
+		expect(readFileSync(join(work, THREE), "utf8")).toBe("# [S] Three\n\n## Goal\n\nPlanned on main.\n");
+
+		// A merge that conflicts elsewhere is refused rather than claimed without the plan.
+		const four = "quest/m0/epic/four.md";
+		landOn(work, EPIC_BRANCH, { [EPIC_TWO]: TWO.replace("Another quest.", "Edited on the epic.") });
+		git(work, "switch", "-q", "--detach", "origin/main");
+		land(work, {
+			[four]: "# [S] Four\n\n## Goal\n\nPlanned on main.\n",
+			[EPIC_TWO]: TWO.replace("Another quest.", "Edited on main."),
+		});
+		const refused = await cli("--root", work, "start", four);
+		expect(refused.code).toBe(3);
+		expect(refused.stderr).toContain(`${four} changed on the default branch after ${EPIC_BRANCH} was cut`);
+		expect(tip(bare, "quest/m0/epic/four")).toBe("");
+	});
+
+	test("a link the default branch broke after an epic's branch was cut fails the epic's reading", async () => {
+		const bare = upstream();
+		const work = clone(bare);
+		expect((await cli("--root", work, "start", EPIC_ONE)).code).toBe(0);
+		landOn(work, EPIC_BRANCH, { [EPIC_TWO]: TWO.replace("Another quest.", "See [One](/quest/m0/one.md).") });
+		git(work, "switch", "-q", "--detach", "origin/main");
+		land(work, { [ONE]: null });
+		git(work, "fetch", "-q", "origin");
+		const result = await cli("--root", work, "unblocked");
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("quest/m0/one.md");
 	});
 });
 

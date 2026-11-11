@@ -42,11 +42,15 @@ export function viewOf(views: Views, path: string): Snapshot {
 /** The tree the epic branch at `tip`, a local commit, holds once `main` is next merged into it. */
 export function epicView(root: string, main: Main, tip: string, note: Note): Snapshot {
 	const base = git(root, ["merge-base", main.commit, tip]);
-	const epic = committedSources(root, tip, note);
-	const merged = mergeSources(committedSources(root, base, note).sources, epic.sources, main.sources);
+	const [was, epic] = [committedSources(root, base, note), committedSources(root, tip, note)];
+	const merged = mergeSources(was.sources, epic.sources, main.sources);
 	return {
 		docs: merged.map((source) => parse(source.path, source.text)),
-		exists: (path) => main.snapshot.exists(path) || epic.exists(path),
+		// As mergeSources keeps documents: a path either side deleted stays deleted, one either side added exists.
+		exists: (path) =>
+			was.exists(path)
+				? main.snapshot.exists(path) && epic.exists(path)
+				: main.snapshot.exists(path) || epic.exists(path),
 	};
 }
 

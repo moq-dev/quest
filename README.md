@@ -235,7 +235,10 @@ The first claim in an epic creates that branch from the default branch and
 opens the epic's draft PR into the default branch, handed back with a
 `## Waiting` section until its quests have merged. An epic's branch a merged PR
 landed, or one with nothing beyond the default branch, is replaced the same
-way. A fork cannot create the branch, so it waits for
+way. When the default branch changed the quest's file since the epic's branch
+was cut, as when it was planned there, the claim commit also merges the
+default branch, and the claim is refused when that merge conflicts. A fork
+cannot create the branch, so it waits for
 a maintainer's claim in the epic. It switches your checkout to the
 claim on a new local branch, or fast-forwards that branch if it is already
 checked out. A local branch left from an earlier attempt is not moved: the

@@ -118,7 +118,8 @@ export async function startQuest(
 	const [claim] = claims;
 	if (claim) throw new Refusal(`${path} is held by ${describe(claim.branch, claim.pull, Date.now())}`);
 	const parent = epic === null ? at.base : await openEpic(root, at, epic, tree, path);
-	const sha = claimCommit(root, parent, `chore(quest): claim ${path}`);
+	const parents = epic === null ? [parent] : claimParents(root, parent, at.base, path, epic.branch);
+	const sha = claimCommit(root, parents, `chore(quest): claim ${path}`);
 	// The lease expects the landed tip, or no branch at all.
 	await pushBranch(root, at, path, branch, sha, landed.get(branch) ?? "");
 
@@ -133,10 +134,54 @@ export async function startQuest(
 	return { branch, sha, url };
 }
 
-/** An empty commit on `parent`. A nonce keeps two claimers on the same parent, identity, and second apart. */
-function claimCommit(root: string, parent: string, subject: string): string {
+/**
+ * A commit on `parents` with no change of its own: one parent's tree, or a
+ * clean merge of two. A nonce keeps two claimers on the same parents,
+ * identity, and second apart.
+ */
+function claimCommit(root: string, parents: string[], subject: string): string {
 	const nonce = randomBytes(8).toString("hex");
-	return git(root, ["commit-tree", `${parent}^{tree}`, "-p", parent, "-m", subject, "-m", `Quest-Claim: ${nonce}`]);
+	const tree = parents.length === 1 ? `${parents[0]}^{tree}` : mergedTree(root, parents[0], parents[1]);
+	if (tree === null) throw new Error(`${parents.join(" and ")} do not merge cleanly`);
+	const links = parents.flatMap((parent) => ["-p", parent]);
+	return git(root, ["commit-tree", tree, ...links, "-m", subject, "-m", `Quest-Claim: ${nonce}`]);
+}
+
+/** The tree of merging `a` and `b`, or `null` when they conflict. */
+function mergedTree(root: string, a: string, b: string): string | null {
+	try {
+		return git(root, ["merge-tree", "--write-tree", a, b]).split("\n")[0];
+	} catch (error) {
+		if (error instanceof GitError && error.status === 1) return null;
+		throw error;
+	}
+}
+
+/**
+ * The parents of the claim on `path` in the epic whose branch is at `tip`:
+ * `main` too when the default branch changed `path` since the branch was cut
+ * and the branch did not, as when a quest is planned on the default branch,
+ * since its readiness was read from that change. Refuses when that merge
+ * conflicts.
+ */
+function claimParents(root: string, tip: string, main: string, path: string, branch: string): string[] {
+	const blob = (commit: string) => {
+		try {
+			return git(root, ["rev-parse", "--verify", "-q", `${commit}:${path}`]);
+		} catch (error) {
+			if (error instanceof GitError) return null;
+			throw error;
+		}
+	};
+	const was = blob(git(root, ["merge-base", tip, main]));
+	if (blob(main) === was || blob(tip) !== was) return [tip];
+	if (mergedTree(root, tip, main) === null) {
+		throw new Refusal(
+			`${path} changed on the default branch after ${branch} was cut, and merging the default branch ` +
+				`into ${branch} conflicts; merge it there first`,
+		);
+	}
+	return [tip, main];
 }
 
 /**
@@ -185,7 +230,7 @@ async function openEpic(root: string, at: Target, epic: EpicBase, tree: Snapshot
 					"starts a quest in the epic first",
 			);
 		}
-		const sha = claimCommit(root, at.base, `chore(quest): open epic ${epic.readme}`);
+		const sha = claimCommit(root, [at.base], `chore(quest): open epic ${epic.readme}`);
 		try {
 			await pushBranch(root, at, path, epic.branch, sha, epic.lease);
 			tip = sha;
@@ -384,14 +429,18 @@ export async function releaseQuest(
 	const epicTip = epic === null ? undefined : branches.get(epic);
 	if (epicTip !== undefined) ensure(root, up.git, epicTip);
 	const parents = git(root, ["rev-list", "--parents", "-n", "1", tip]).split(" ").slice(1);
-	// Only the claim itself: one empty commit straight on the default branch or its epic's branch, not one
-	// following pushed work.
+	// Only the claim itself, not one following pushed work: one empty commit straight on the default branch or
+	// its epic's branch, or a clean merge of the epic's branch and the default branch.
+	const on = (commit: string, branch: string | undefined) =>
+		branch !== undefined && succeeds(root, ["merge-base", "--is-ancestor", commit, branch]);
+	const treeOf = (commit: string) => git(root, ["rev-parse", `${commit}^{tree}`]);
 	const claim =
-		parents.length === 1 &&
-		git(root, ["rev-parse", `${tip}^{tree}`]) === git(root, ["rev-parse", `${parents[0]}^{tree}`]) &&
-		[base, epicTip].some(
-			(on) => on !== undefined && succeeds(root, ["merge-base", "--is-ancestor", parents[0], on]),
-		);
+		parents.length === 1
+			? treeOf(tip) === treeOf(parents[0]) && (on(parents[0], base) || on(parents[0], epicTip))
+			: parents.length === 2 &&
+				on(parents[0], epicTip) &&
+				on(parents[1], base) &&
+				treeOf(tip) === mergedTree(root, parents[0], parents[1]);
 	if (!claim) {
 		throw new Refusal(
 			`${branch} on ${remote} has work beyond its empty claim commit; close its PR yourself to abandon that work`,
