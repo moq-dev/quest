@@ -66,7 +66,8 @@ export interface PullRow {
 	handedBack: boolean;
 	size: Size | null;
 	implementers: { harness: string; model: string; effort: string; size: Size | null }[];
-	review: ReviewSummary | null;
+	/** Each reviewer's latest round, as the PR's `## Review` record names them. */
+	review: ReviewSummary[];
 	/** Who made each mechanical fix the land fixer recorded, or `quest land watch` for a base merge it made alone. */
 	landFixes: string[];
 	/** Later PRs that list it under `## Caused by`. */
@@ -93,11 +94,12 @@ export interface AccuracyRow {
 	merged: number;
 	handedBack: number;
 	reviewed: number;
-	/** The reviewed PRs whose latest round has a score, and the scores' sum. */
+	/** The reviewers' latest rounds on these PRs that have a score, and the scores' sum. */
 	scored: number;
 	score: number;
-	/** Sums over the reviewed PRs' latest rounds. */
+	/** The sum of each reviewed PR's longest session's rounds. */
 	rounds: number;
+	/** Sums over every reviewer's latest round. */
 	findings: number;
 	fixed: number;
 	refuted: number;
@@ -467,16 +469,18 @@ function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
 
 /**
  * Attribute each priced session to the PR whose head branch its log last named, among those still open when the
- * session reached the branch and headed from the repository its log, checkout, or directory names, and give it a role: reviewing when
- * a PR's review record names it or Codex marks it a review, implementing when it began before its PR opened, and
- * iterating otherwise. Returns the sessions on no PR here.
+ * session reached the branch and headed from the repository its log, checkout, or directory names, and give it a
+ * role: reviewing when a PR's review record names it or Codex marks it a review, implementing when it began before
+ * its PR opened, and iterating otherwise. A session whose log quest cannot read, such as opencode's, is the
+ * reviewing session of the PR whose record names it, the newest when a branch's later PR resumed it. Returns the
+ * sessions on no PR here.
  */
 function attribute(
 	sessions: Priced[],
 	logs: (SessionLog | null)[],
 	pulls: Pull[],
 	rows: Map<number, PullRow>,
-	reviewers: Set<string>,
+	reviewers: Map<string, { number: number; effort: string }>,
 ): Priced[] {
 	const byBranch = new Map<string, Pull[]>();
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
@@ -484,7 +488,16 @@ function attribute(
 	const unattributed: Priced[] = [];
 	const owned = owners(logs);
 	sessions.forEach((session, index) => {
+		const id = sessionId(session);
+		const named = reviewers.get(id);
 		const log = logs[index];
+		if (!log && named) {
+			const row = rows.get(named.number);
+			const { harness, models } = session;
+			if (row) row.sessions.push({ harness, session: id, role: "reviewing", effort: named.effort, models });
+			else unattributed.push(session);
+			return;
+		}
 		const branches = log ? [...log.branches].sort((a, b) => b[1].last - a[1].last) : [];
 		let found: Pull | undefined;
 		for (const [branch, seen] of branches) {
@@ -508,16 +521,10 @@ function attribute(
 			unattributed.push(session);
 			return;
 		}
-		const id = sessionId(session);
 		row.sessions.push({
 			harness: session.harness,
 			session: id,
-			role:
-				log.review || reviewers.has(id)
-					? "reviewing"
-					: log.started < found.created
-						? "implementing"
-						: "iterating",
+			role: log.review || named ? "reviewing" : log.started < found.created ? "implementing" : "iterating",
 			effort: log.effort,
 			models: session.models,
 		});
@@ -596,16 +603,18 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			if (each.handedBack) row.handedBack++;
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
-			if (each.review) {
+			if (each.review.length > 0) {
 				row.reviewed++;
-				if (each.review.score !== null) {
+				row.rounds += Math.max(...each.review.map((review) => review.round));
+			}
+			for (const review of each.review) {
+				if (review.score !== null) {
 					row.scored++;
-					row.score += each.review.score;
+					row.score += review.score;
 				}
-				row.rounds += each.review.round;
-				row.findings += each.review.findings;
-				row.fixed += each.review.fixed;
-				row.refuted += each.review.refuted;
+				row.findings += review.findings;
+				row.fixed += review.fixed;
+				row.refuted += review.refuted;
 			}
 		}
 	}
@@ -645,13 +654,17 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 			(branch === undefined || each.branch === branch),
 	);
 	const narrowed = options.pr !== undefined || branch !== undefined;
-	const rows = pullRows(all, repository).filter((row) => pulls.some((each) => each.number === row.number));
+	const allRows = pullRows(all, repository);
+	const rows = allRows.filter((row) => pulls.some((each) => each.number === row.number));
 	const byNumber = new Map(rows.map((row) => [row.number, row]));
 	const priced = deps.ccusage(options.since);
 	let unattributed: Usage["unattributed"] = null;
 	if (priced !== null) {
-		const reviewers = new Set(rows.flatMap((row) => (row.review ? [row.review.session] : [])));
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
+		const reviewers = new Map<string, { number: number; effort: string }>();
+		for (const row of [...allRows].sort((a, b) => a.number - b.number))
+			for (const review of row.review)
+				reviewers.set(review.session, { number: row.number, effort: review.effort });
 		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };
@@ -702,8 +715,7 @@ export function usageLines(report: Usage): string[] {
 		lines.push("", `#${row.number} ${row.size ?? "-"} ${state}: ${row.title} (${row.branch})`);
 		for (const i of row.implementers)
 			lines.push(`  implementer: ${i.harness}, ${i.model}, ${i.effort} effort${i.size ? ` (${i.size})` : ""}`);
-		const r = row.review;
-		if (r)
+		for (const r of row.review)
 			lines.push(
 				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; round ${r.round}, score ${r.score ?? "-"}/10, ${r.findings} open, last round ${r.fixed} fixed and ${r.refuted} refuted`,
 			);

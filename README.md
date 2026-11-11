@@ -1313,6 +1313,11 @@ size. Each size ranks its reviewers, the same for every repository:
 | L | Codex `gpt-6.1-sol` high | Claude Code `claude-opus-5-5` high |
 | XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` xhigh |
 
+Beside it, opencode `opencode-go/deepseek-v4.1-flash` at `high` reviews the
+same head for every size, in its own session, so each head is read by a model
+family no writer runs, at about $0.05 a review. Both run at once; the first to
+fail, such as on a usage limit, stops the other, and the round saves neither.
+
 A quest branch takes its quest's size, read from the base branch's tip so a
 change cannot lower its own review; any other PR, such as a skill's own, takes
 the `Size:` line of the `## Models` record in its open PR's body, and a PR with
@@ -1323,9 +1328,16 @@ names it, since each session moves its line last whenever it pushes, or
 Without a record, or when its last line names an `unknown` model, the harness
 running the command, usually the session that
 just pushed, is taken to be the latest writer, so Codex reviews from Claude Code
-and Claude Code from Codex. `--harness` names the reviewer instead, at its entry's model and
-effort, and `--model` and `--effort` override those, as a repository whose
-`AGENTS.md` names other reviewers needs. An unknown harness, a size whose
+and Claude Code from Codex. `--harness` names the only reviewer instead of
+the pair, at its entry's model and effort, and `--model` and `--effort`
+override the size pick's or that reviewer's, as a repository whose `AGENTS.md`
+names other reviewers needs. The second reviewer's model is avoided like any
+other, which, without `--harness`, is an error. A `--harness` run keeps the other
+reviewers' sessions for the pair's next run, and refuses while one has
+findings to settle, so a head never passes one reviewer alone while the other's
+findings are open. When the latest writer changes the size's pick to one with
+no session on the branch, its first session settles the open findings of the
+reviewer it replaces. An unknown harness, a size whose
 every reviewer is avoided, or a missing or logged-out CLI, is an error
 rather than a same-model review, as is a login the API rejects mid-round, such
 as an expired or revoked token. The reviewer reaches its model as the user's own CLI does:
@@ -1343,9 +1355,8 @@ gateway or provider is set. Variables that would change the reviewer's plugins,
 permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME`, or the default when unset, and any gateway or provider.
-opencode reviews only when `--harness opencode` names it, with `--model` as
-`provider/model` and `--effort` as the model's variant, since no size lists it.
-It keeps the user's own opencode config, such as custom providers, and login,
+`--harness opencode` runs opencode alone, with `--model` as `provider/model`
+and `--effort` as the model's variant, since no size lists it. It keeps the user's own opencode config, such as custom providers, and login,
 and counts as logged out when `opencode models` does not list the model.
 ```sh
 quest review                                  # round 1 against origin's default branch
@@ -1353,7 +1364,7 @@ quest review --responses .tmp/responses.md    # round 2: the new head, with fixe
 quest review --base origin/release --new      # a new session against another base
 quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, with no record in its body
 quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
-quest review --harness opencode --model opencode-go/deepseek-v4-pro --effort high  # an opencode reviewer
+quest review --harness opencode --model opencode-go/deepseek-v4-pro --effort high  # opencode alone, on another model
 ```
 
 Every turn reviews only the branch's own change, from the merge base of `HEAD`
@@ -1381,14 +1392,18 @@ same applicable `AGENTS.md`, `CLAUDE.md`, and `REVIEW.md`. Otherwise it starts a
 new session that reviews the whole change and still weighs the responses. A
 round that would resume on the head the last round reviewed, when that round
 found nothing, runs no reviewer and repeats that round, marked `unchanged`. A refutation stands only when it cites evidence the
-reviewer can check. The prompt numbers the last round's findings, and the reply
+reviewer can check. Findings are numbered across the reviewers, in the order
+the round printed them. The prompt numbers the last round's findings, and the reply
 settles each by its number as fixed, refuted, or still open, with a one-sentence
 reason; a reply that skips or repeats one, or keeps more open than it reports,
-fails like any malformed reply. A first round's schema has no such list. Resuming keeps the
+fails like any malformed reply. A first round's schema has no such list. Each
+reviewer settles only its own findings, and gets `--responses` only when it has
+some, so on the same head only a reviewer with findings runs. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
-keeps its default. The session is kept per branch in the clone's
-common Git directory, so any worktree of the clone resumes it; `--new` starts
-over. `--branch` names the branch instead of the checked-out one, which a
+keeps its default. Each reviewer's session is kept per branch in the clone's
+common Git directory, so any worktree of the clone resumes it, except opencode's,
+which stays in the checkout it started in, so another worktree starts a new one;
+`--new` starts over. `--branch` names the branch instead of the checked-out one, which a
 detached `HEAD` requires, such as a checkout of a branch another worktree
 holds, so its rounds continue that branch's session.
 
@@ -1428,21 +1443,24 @@ root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
 given at the start of each session, and chooses the review's stance, such as adversarial.
 
-It prints the reviewer, model, and effort, the size and its source, session, round, base, head,
+It prints the size and its source, base, and head, then for each reviewer its
+harness, model, and effort, session, round,
 an `unchanged` line for a repeated round, a `usage` line per turn (input tokens, the part read from the prompt cache, and output), the
-finding count, then each finding as severity, `path:line`, and title over its
+finding count, then each finding as its number, severity, `path:line`, and title over its
 indented body, then `earlier` with the last round's head and its findings, each
-as its disposition, severity, `path:line`, and title over its reason, and last
-a `record` line. `--json` prints the same as one object.
+as its number, disposition, severity, `path:line`, and title over its reason; last
+come a `record` line and a `next` line. `--json` prints one object with
+`rounds`, one per reviewer, `record`, and `next`.
 
 After each round, `quest review` rewrites the `## Review` section of the open PR
 from the branch into the base, found among the upstream's PRs from the
 repository the base's remote pushes to, and prints `record <url>`. The record
-names the reviewer harness, model, and effort, the session and round, the
-reviewed head, the base's short SHA, the score and rationale, each finding with
-its location, and the last round's findings with their dispositions. `quest
-status` takes the last full SHA the section names as the reviewed head, so the
-head appears in full only once a round reports no findings, and model text
+names the reviewed head and the base's short SHA, then for each reviewer its
+harness, model, and effort, the session and round, the score and rationale,
+each finding with its location, and the last round's findings with their
+dispositions. `quest status` takes the last full SHA the section names as the
+reviewed head, so the head appears in full only once no reviewer reports a
+finding, and model text
 appears as inline code, which mentions or links nothing and never holds a full
 SHA. The section runs to the next level-1 or
 level-2 heading, both as Markdown parses them, so an example in a code fence is
@@ -1455,7 +1473,7 @@ record only on a PR whose author has write access, so review your
 own PRs with your own token. A record GitHub refuses fails the command after the
 round's report, with exit status 1. It exits 0 once the round
 finishes, whatever it found, 2 for invalid arguments or a checkout or CLI that
-cannot be reviewed, including a login the API rejects, 3 when the reviewer's
+cannot be reviewed, including a login the API rejects, 3 when a reviewer's
 account hit its usage limit, and 1 for other failures. A usage limit prints one
 line, `error: <harness> hit its usage limit; resets <time>`, where `<time>` is
 the reset as an ISO 8601 UTC timestamp, or `unknown` when the CLI named none.
@@ -1496,7 +1514,8 @@ session must also be this repository's, as its Codex log, its checkout's
 remotes, or, once the checkout is deleted, a Codex log for that exact directory
 names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
 it or Codex marks it a review, implementing when it began before the PR opened,
-and iterating otherwise. Each PR shows its `## Models` size and implementers; its latest `quest review` round's
+and iterating otherwise. An opencode session, whose log quest does not read, is
+the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers; each reviewer's latest `quest review` round's
 reviewer, round, score, open findings, and the last round's findings fixed or
 refuted; the land fixer's fixes; and the later PRs that list it under
 `## Caused by`.

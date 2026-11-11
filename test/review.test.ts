@@ -172,9 +172,10 @@ if (argv[1] === "review") {
 	event({ type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 80, output_tokens: 7 } });
 }
 `,
-	// Logs the config each turn gets, with its instructions file's text, which is gone once the round ends.
-	// FAKE_LOGGED_OUT lists only a free model, FAKE_REJECTED fails a turn on authentication, and FAKE_LIMITED
-	// has the findings turn retry a spent limit until it is stopped. The findings reply comes in a code fence.
+	// Logs the config each turn gets, with its instructions file's text, which is gone once the round ends, apart
+	// from the other CLIs, since it reviews beside them. Its own FAKE_OPENCODE_* variables fail it: LOGGED_OUT lists
+	// only a free model, REJECTED fails a turn on authentication, and LIMITED has the findings turn retry a spent
+	// limit until it is stopped. REPLY replaces FAKE_REPLY for it alone. The findings reply comes in a code fence.
 	opencode: `
 const fs = require("node:fs");
 const argv = process.argv.slice(2);
@@ -182,20 +183,20 @@ const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(OPENCODE|PWD$)/.test(k)));
 const config = process.env.OPENCODE_CONFIG_CONTENT && JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
 const instructions = config && fs.readFileSync(config.instructions[0], "utf8");
-fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, config, instructions, cwd: process.cwd() }) + "\\n");
+fs.appendFileSync(process.env.FAKE_LOG + ".opencode", JSON.stringify({ argv, stdin, env, config, instructions, cwd: process.cwd() }) + "\\n");
 if (argv[0] === "models") {
 	console.log("opencode/free");
-	if (!process.env.FAKE_LOGGED_OUT) console.log("opencode-go/kimi");
+	if (!process.env.FAKE_OPENCODE_LOGGED_OUT) console.log("opencode-go/deepseek-v4.1-flash\\nopencode-go/kimi");
 	process.exit(0);
 }
 const session = argv.includes("--session") ? argv[argv.indexOf("--session") + 1] : "ses_1";
 const event = (type, fields) => console.log(JSON.stringify({ type, timestamp: 1900000000000, sessionID: session, ...fields }));
-if (process.env.FAKE_REJECTED) {
+if (process.env.FAKE_OPENCODE_REJECTED) {
 	event("error", { error: { type: "provider.auth", message: "Invalid API key" } });
 	process.exit(1);
 }
-if (process.env.FAKE_LIMITED && argv.includes("--session")) {
-	const body = process.env.FAKE_LIMITED === "unknown" ? "{}" : JSON.stringify({ resetsAt: "2030-03-17T17:46:40Z" });
+if (process.env.FAKE_OPENCODE_LIMITED && argv.includes("--session")) {
+	const body = process.env.FAKE_OPENCODE_LIMITED === "unknown" ? "{}" : JSON.stringify({ resetsAt: "2030-03-17T17:46:40Z" });
 	event("retry", { attempt: 1, error: { type: "provider.go-limit", message: "Usage limit reached", response: { body } } });
 	setInterval(() => {}, 1000);
 	return;
@@ -209,6 +210,7 @@ if (!argv.includes("--session")) {
 	event("text", { part: { type: "text", text: "Checking the findings." } });
 	event("tool_use", { part: { type: "tool", tool: "shell", state: { status: "completed" } } });
 	event("step_finish", tokens(10, 5, 2));
+	if (process.env.FAKE_OPENCODE_REPLY) process.env.FAKE_REPLY = process.env.FAKE_OPENCODE_REPLY;
 	${REPLY}
 	event("text", { part: { type: "text", text: "\`\`\`json\\n" + reply.slice(0, 20) } });
 	event("text", { part: { type: "text", text: reply.slice(20) + "\\n\`\`\`" } });
@@ -240,16 +242,20 @@ function write(dir: string, path: string, text: string) {
 interface Setup {
 	repo: string;
 	bin: string;
-	/** Every logged invocation of a fake CLI. */
-	calls(): {
-		argv: string[];
-		stdin: string;
-		env: Record<string, string>;
-		cwd: string;
-		// opencode's config, and the text of its instructions file.
-		config?: { shell: string; permissions: unknown };
-		instructions?: string;
-	}[];
+	/** Every logged invocation of the fake Codex and Claude Code. */
+	calls(): Call[];
+	/** Every logged invocation of the fake opencode. */
+	opencodeCalls(): Call[];
+}
+
+interface Call {
+	argv: string[];
+	stdin: string;
+	env: Record<string, string>;
+	cwd: string;
+	// opencode's config, and the text of its instructions file.
+	config?: { shell: string; permissions: unknown };
+	instructions?: string;
 }
 
 /** Credentials and routes the running session may hold, cleared so each test sets its own. */
@@ -318,6 +324,10 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 		"FAKE_LOGGED_OUT",
 		"FAKE_REJECTED",
 		"FAKE_LIMITED",
+		"FAKE_OPENCODE_LOGGED_OUT",
+		"FAKE_OPENCODE_REJECTED",
+		"FAKE_OPENCODE_LIMITED",
+		"FAKE_OPENCODE_REPLY",
 		"FAKE_HANG",
 		"FAKE_DISPOSITION",
 	]) {
@@ -325,17 +335,14 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
 	if (host === "CODEX_THREAD_ID") vi.stubEnv("CODEX_THREAD_ID", "parent");
-	return {
-		repo,
-		bin,
-		calls: () =>
-			existsSync(log)
-				? readFileSync(log, "utf8")
-						.trim()
-						.split("\n")
-						.map((line) => JSON.parse(line))
-				: [],
-	};
+	const read = (path: string) =>
+		existsSync(path)
+			? readFileSync(path, "utf8")
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line))
+			: [];
+	return { repo, bin, calls: () => read(log), opencodeCalls: () => read(`${log}.opencode`) };
 }
 
 async function quest(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -428,18 +435,22 @@ fakes("a quest branch is reviewed at its quest's size on the base, which its own
 
 	const result = await quest("--root", s.repo, "review");
 	expect(result.stderr).toBe("");
-	expect(result.stdout).toContain("reviewer codex gpt-6.1-sol high\nsize L quest/m0/big.md\n");
+	expect(result.stdout).toMatch(/^size L quest\/m0\/big.md\n/);
+	expect(result.stdout).toContain("\nreviewer codex gpt-6.1-sol high\n");
+	// The second reviewer runs at its own effort, whatever the size.
+	expect(result.stdout).toContain("\nreviewer opencode opencode-go/deepseek-v4.1-flash high\n");
 
 	// --size overrides the quest's.
 	const sized = await quest("--root", s.repo, "review", "--size", "S", "--new");
-	expect(sized.stdout).toContain("reviewer codex gpt-6.1-sol medium\nsize S --size\n");
+	expect(sized.stdout).toMatch(/^size S --size\n/);
+	expect(sized.stdout).toContain("\nreviewer codex gpt-6.1-sol medium\n");
 	// A checkout on another branch, as the runner's review checkout is, takes the size of the branch it names.
 	git(s.repo, "checkout", "-qb", "kix-review/job1");
-	const runner = await review(
+	const [runner] = await review(
 		{ root: s.repo, base: "origin/main", sizeBranch: "quest/m0/big" },
 		{ env: { ...process.env, CLAUDECODE: "1" } },
 	);
-	expect([runner.size, runner.sizeFrom, runner.effort]).toEqual(["L", "quest/m0/big.md", "high"]);
+	expect([runner!.size, runner!.sizeFrom, runner!.effort]).toEqual(["L", "quest/m0/big.md", "high"]);
 	git(s.repo, "checkout", "-q", "quest/m0/big");
 	const invalid = await quest("--root", s.repo, "review", "--size", "XXL", "--new");
 	expect(invalid.code).not.toBe(0);
@@ -457,7 +468,7 @@ fakes("--exclude-model picks the reviewer from the PR's implementers instead of 
 	const s = setup(null);
 	const result = await quest("--root", s.repo, "review", "--exclude-model", "gpt-6.1-sol", "--json");
 	expect(result.stderr).toBe("");
-	const round = JSON.parse(result.stdout);
+	const [round, second] = JSON.parse(result.stdout).rounds;
 	expect([round.reviewer, round.model, round.effort, round.size, round.sizeFrom]).toEqual([
 		"claude",
 		"claude-opus-5-5",
@@ -465,11 +476,16 @@ fakes("--exclude-model picks the reviewer from the PR's implementers instead of 
 		"M",
 		"default",
 	]);
+	expect(second.model).toBe("opencode-go/deepseek-v4.1-flash");
 
 	const both = ["--exclude-model", "gpt-6.1-sol", "--exclude-model", "claude-opus-5-5"];
 	const none = await quest("--root", s.repo, "review", ...both, "--new");
 	expect(none.code).toBe(2);
 	expect(none.stderr).toContain("every M reviewer (gpt-6.1-sol, claude-opus-5-5) is avoided");
+	// Nor does the second reviewer review a change it is named as writing.
+	const deepseek = await quest("--root", s.repo, "review", "--exclude-model", "opencode-go/deepseek-v4.1-flash");
+	expect(deepseek.code).toBe(2);
+	expect(deepseek.stderr).toContain("opencode-go/deepseek-v4.1-flash is avoided; pass --harness");
 });
 
 fakes("an unknown harness is an error, never a same-model review", async () => {
@@ -683,7 +699,10 @@ fakes.each([
 	git(s.repo, "commit", "-qam", "more");
 	const resumed = await quest("--root", s.repo, "review", "--json");
 	expect(resumed.code, resumed.stderr).toBe(0);
-	expect(JSON.parse(resumed.stdout)).toMatchObject({ round: 2, session: JSON.parse(first.stdout).session });
+	expect(JSON.parse(resumed.stdout).rounds[0]).toMatchObject({
+		round: 2,
+		session: JSON.parse(first.stdout).rounds[0].session,
+	});
 	const calls = s.calls();
 	expect(calls.map((c) => c.argv[0])).toEqual(["auth", "-p", "-p", "auth", "-p"]);
 	for (const call of calls) {
@@ -876,6 +895,24 @@ fakes("a detached checkout continues the session of the branch --branch names", 
 	expect(s.calls().filter((c) => c.argv[1] === "review")).toHaveLength(1);
 });
 
+fakes("another worktree resumes Codex's session, and starts opencode's anew in its own checkout", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_OPENCODE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	const other = join(s.repo, ".tmp", "other");
+	git(s.repo, "worktree", "add", "-q", "--detach", other);
+	write(other, ".tmp/responses.md", "1. Refuted: src/lib.ts:1 sets it.\n");
+	const responses = join(other, ".tmp", "responses.md");
+	const round = await quest("--root", other, "review", "--branch", "feature", "--responses", responses);
+	expect(round.stderr).toBe("");
+	const [picked, deepseek] = round.stdout.split("\nreviewer opencode ");
+	expect(picked).toContain("session thread-1\nround 2\n");
+	expect(deepseek).toContain("round 1\n");
+	const runs = s.opencodeCalls().filter((call) => call.argv[0] === "run");
+	expect(runs.at(-2)!.argv).not.toContain("--session");
+	expect(runs.at(-1)!.cwd).toBe(other);
+});
+
 fakes("a differently named branch continues the session --branch names, and without it has its own", async () => {
 	const s = setup();
 	expect((await quest("--root", s.repo, "review")).stdout).toContain("round 1\n");
@@ -955,17 +992,30 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	const base = git(s.repo, "rev-parse", "origin/main");
 	expect(result.stdout).toBe(
 		[
-			"reviewer codex gpt-6.1-sol medium",
 			"size M default",
-			"session thread-1",
-			"round 1",
 			`base ${base} origin/main`,
 			`head ${head}`,
+			"",
+			"reviewer codex gpt-6.1-sol medium",
+			"session thread-1",
+			"round 1",
 			"usage findings input 100 cached 80 output 7",
 			"score 8 Lands once the off-by-one is fixed.",
 			"findings 1",
 			"",
-			"high src/lib.ts:2 Off by one",
+			"1. high src/lib.ts:2 Off by one",
+			"  average([3]) is 0.",
+			"",
+			// The second reviewer reviews the same head, its findings numbered after the first's.
+			"reviewer opencode opencode-go/deepseek-v4.1-flash high",
+			"session ses_1",
+			"round 1",
+			"usage review input 10 cached 0 output 6",
+			"usage findings input 50 cached 20 output 7",
+			"score 8 Lands once the off-by-one is fixed.",
+			"findings 1",
+			"",
+			"2. high src/lib.ts:2 Off by one",
 			"  average([3]) is 0.",
 			// The fixture's origin is a local path, which can have no PR.
 			"record skipped: origin is not on GitHub",
@@ -1011,6 +1061,9 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	const replySchema = JSON.parse(readFileSync(schema, "utf8"));
 	expect(replySchema.required).toEqual(["score", "rationale", "findings"]);
 	expect(replySchema.properties.earlier).toBeUndefined();
+	const deepseek = s.opencodeCalls().filter((call) => call.argv[0] === "run");
+	expect(deepseek).toHaveLength(2);
+	for (const call of deepseek) expect(call.argv).toContain("opencode-go/deepseek-v4.1-flash#high");
 });
 
 fakes("--base reviews against another branch, fetched first, with that branch's instructions", async () => {
@@ -1045,7 +1098,7 @@ fakes("claude reviews read-only with the base's instructions, then reports in th
 	moveBase(s.repo, (dir) => write(dir, "REVIEW.md", 'Flag "magic" numbers \\ constants.\n'));
 	const result = await quest("--root", s.repo, "review", "--model", "opus", "--effort", "low", "--json");
 	expect(result.code).toBe(0);
-	const round = JSON.parse(result.stdout);
+	const [round] = JSON.parse(result.stdout).rounds;
 	expect(round.reviewer).toBe("claude");
 	expect(round.model).toBe("opus");
 	expect(round.effort).toBe("low");
@@ -1089,7 +1142,7 @@ fakes(
 		const s = setup();
 		const result = await quest("--root", s.repo, ...OPENCODE, "--json");
 		expect(result.code, result.stderr).toBe(0);
-		const round = JSON.parse(result.stdout);
+		const [round] = JSON.parse(result.stdout).rounds;
 		expect(round.reviewer).toBe("opencode");
 		expect(round.session).toBe("ses_1");
 		expect(round.usage).toEqual([
@@ -1098,7 +1151,7 @@ fakes(
 		]);
 		expect(round.findings).toEqual([FINDING]);
 
-		const [status, first, second] = s.calls();
+		const [status, first, second] = s.opencodeCalls();
 		expect(status.argv).toEqual(["models", "--standalone"]);
 		expect(first.stdin).toMatch(/^Review this change for bugs/);
 		expect(first.stdin).toContain("BASE-REVIEW rule");
@@ -1139,14 +1192,14 @@ fakes("opencode names no default model, so --harness opencode needs --model and 
 
 fakes("opencode counts as logged out when it lists no such model, or its provider rejects the login", async () => {
 	const s = setup();
-	vi.stubEnv("FAKE_LOGGED_OUT", "1");
+	vi.stubEnv("FAKE_OPENCODE_LOGGED_OUT", "1");
 	const out = await quest("--root", s.repo, ...OPENCODE);
 	expect(out.code).toBe(2);
 	expect(out.stderr).toContain(
 		"opencode lists no model opencode-go/kimi for its default profile (XDG_DATA_HOME is unset); run `opencode auth login` for its provider",
 	);
-	vi.stubEnv("FAKE_LOGGED_OUT", undefined);
-	vi.stubEnv("FAKE_REJECTED", "1");
+	vi.stubEnv("FAKE_OPENCODE_LOGGED_OUT", undefined);
+	vi.stubEnv("FAKE_OPENCODE_REJECTED", "1");
 	const rejected = await quest("--root", s.repo, ...OPENCODE);
 	expect(rejected.code).toBe(2);
 	expect(rejected.stderr).toContain(
@@ -1159,7 +1212,7 @@ fakes.for([
 	["unknown", "opencode hit its usage limit; resets unknown"],
 ] as const)("opencode stops retrying a spent usage limit and exits 3 (%s)", async ([variant, message]) => {
 	const s = setup();
-	vi.stubEnv("FAKE_LIMITED", variant);
+	vi.stubEnv("FAKE_OPENCODE_LIMITED", variant);
 	const result = await quest("--root", s.repo, ...OPENCODE);
 	expect(result.stderr).toBe(`error: ${message}\n`);
 	expect(result.code).toBe(3);
@@ -1179,7 +1232,7 @@ test.runIf(process.platform === "linux")("opencode refuses an srt that lets comm
 	expect(result.code).toBe(2);
 	expect(result.stderr).toContain("lets commands make Unix sockets");
 	// Only the status check ran.
-	expect(s.calls()).toHaveLength(1);
+	expect(s.opencodeCalls()).toHaveLength(1);
 });
 
 fakes("a later round resumes the session with the new head and the author's responses", async () => {
@@ -1195,15 +1248,23 @@ fakes("a later round resumes the session with the new head and the author's resp
 	write(s.repo, ".tmp/responses.md", "Fixed at src/lib.ts:1.\n");
 	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	const later = await quest("--root", s.repo, "review", "--responses", responses);
-	expect(later.code).toBe(0);
+	expect(later.code, later.stderr).toBe(0);
 	expect(later.stdout).toContain("round 2\n");
 	expect(later.stdout).toContain("findings 0\n");
 	expect(later.stdout).toMatch(/\nnext done: no findings remain on this head\n$/);
 	// The round settles the last round's finding, by its number in the prompt.
 	const first = git(s.repo, "rev-parse", "HEAD~1");
 	expect(later.stdout).toContain(
-		`earlier 1 ${first}\n\nfixed high src/lib.ts:2 Off by one\n  Checked against the head.\n`,
+		`earlier 1 ${first}\n\n1. fixed high src/lib.ts:2 Off by one\n  Checked against the head.\n`,
 	);
+	// The second reviewer's finding came after the first's, so it keeps that number.
+	expect(later.stdout).toContain(
+		`earlier 1 ${first}\n\n2. fixed high src/lib.ts:2 Off by one\n  Checked against the head.\n`,
+	);
+	const deepseek = s.opencodeCalls().at(-1)!;
+	expect(deepseek.argv).toContain("--session");
+	expect(deepseek.stdin).toContain("<earlier-findings>\n2. high src/lib.ts:2 Off by one\n</earlier-findings>");
+	expect(deepseek.stdin).toContain("Fixed at src/lib.ts:1.");
 
 	const calls = s.calls();
 	const resumed = calls.at(-1)!;
@@ -1266,8 +1327,10 @@ fakes.each([
 		const base = flags.includes("--base") ? [] : ["--base", "origin/next"];
 		const round = await quest("--root", s.repo, "review", ...base, ...flags);
 		expect(round.code, round.stderr).toBe(0);
-		expect(round.stdout).toContain("round 1\n");
-		expect(round.stdout).not.toContain("unchanged");
+		// --effort sets only the size pick's, so only the second reviewer may repeat its round.
+		const [picked] = round.stdout.split("\nreviewer opencode ");
+		expect(picked).toContain("round 1\n");
+		expect(picked).not.toContain("unchanged");
 		expect(s.calls().at(-2)!.argv[1]).toBe("review");
 	},
 );
@@ -1386,12 +1449,19 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 				"",
 				"Rewritten by `quest review` after each round.",
 				"",
+				// The land gate counts a full SHA, which a head with an open finding does not earn.
+				`- Head: ${head.slice(0, 12)}, named in full once no reviewer reports a finding`,
+				`- Base: origin/main at ${base.slice(0, 12)}`,
+				"",
 				// The body's `## Models` record sizes the PR S.
 				"- Reviewer: Codex, gpt-6.1-sol, medium effort",
 				"- Session: `thread-1`, round 1",
-				// The land gate counts a full SHA, which a head with an open finding does not earn.
-				`- Head: ${head.slice(0, 12)}, named in full once a round reports no findings`,
-				`- Base: origin/main at ${base.slice(0, 12)}`,
+				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
+				"- Findings, open until the next round settles them:",
+				"  - High, `src/lib.ts:2`: `Off by one`",
+				"",
+				"- Reviewer: opencode, opencode-go/deepseek-v4.1-flash, high effort",
+				"- Session: `ses_1`, round 1",
 				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
 				"- Findings, open until the next round settles them:",
 				"  - High, `src/lib.ts:2`: `Off by one`",
@@ -1421,9 +1491,8 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 		expect(second.code).toBe(0);
 		expect(JSON.parse(second.stdout).record).toEqual({ url: "https://github.com/acme/widget/pull/7" });
 		const record = pull.body.split("## Review\r\n\n")[1]!.split("\n\n## Models")[0];
-		expect(record).toContain(
-			`- Session: \`thread-1\`, round 2\n- Head: ${git(s.repo, "rev-parse", "HEAD").slice(0, 12)},`,
-		);
+		expect(record).toContain(`- Head: ${git(s.repo, "rev-parse", "HEAD").slice(0, 12)},`);
+		expect(record).toContain("- Session: `thread-1`, round 2\n");
 		expect(record).toContain("- Score: 9/10, `Fixes #3.`\n");
 		expect(record).toContain(
 			`  - High, \`src/lib.ts\`: \`\`Ping @someone about \`${base.slice(0, 12)}\` in #12\`\`\n`,
@@ -1486,20 +1555,33 @@ fakes("a round on the head the last round passed runs no reviewer and repeats th
 	const again = await quest("--root", s.repo, "review", "--json");
 	expect(again.code, again.stderr).toBe(0);
 	expect(s.calls()).toHaveLength(calls);
-	const { record: _, ...round } = JSON.parse(first.stdout);
-	expect(JSON.parse(again.stdout)).toMatchObject({ ...round, usage: [], unchanged: true });
-	expect((await quest("--root", s.repo, "review")).stdout).toContain(
-		"unchanged round 1 reviewed this head and found nothing; no reviewer ran\n",
+	expect(s.opencodeCalls()).toHaveLength(3);
+	const { rounds } = JSON.parse(first.stdout);
+	expect(JSON.parse(again.stdout).rounds).toMatchObject(
+		rounds.map((round: object) => ({ ...round, usage: [], unchanged: true })),
 	);
+	// S picks the same reviewers as the default M, so its rounds repeat and report the size given.
+	const resized = await quest("--root", s.repo, "review", "--json", "--size", "S");
+	expect(s.calls()).toHaveLength(calls);
+	expect(JSON.parse(resized.stdout).rounds).toMatchObject(rounds.map(() => ({ size: "S", sizeFrom: "--size" })));
+	const repeated = (await quest("--root", s.repo, "review")).stdout;
+	expect(repeated.split("unchanged round 1 reviewed this head and found nothing; no reviewer ran\n")).toHaveLength(3);
 
-	// A round with findings to settle runs on the same head, since a refutation needs no new commit.
+	// A round with findings to settle runs on the same head, since a refutation needs no new commit, while a
+	// reviewer with none repeats its round.
 	vi.stubEnv("FAKE_REPLY", undefined);
 	const t = setup();
+	vi.stubEnv("FAKE_OPENCODE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	expect((await quest("--root", t.repo, "review")).code).toBe(0);
+	const opencode = t.opencodeCalls().length;
 	write(t.repo, ".tmp/responses.md", "1. Refuted: src/lib.ts:1 sets it.\n");
 	const refuted = await quest("--root", t.repo, "review", "--responses", join(t.repo, ".tmp", "responses.md"));
-	expect(refuted.stdout).toContain("round 2\n");
+	expect(refuted.code, refuted.stderr).toBe(0);
+	const [picked, second] = refuted.stdout.split("\nreviewer opencode ");
+	expect(picked).toContain("round 2\n");
+	expect(second).toContain("unchanged round 1");
 	expect(t.calls().at(-1)!.stdin).toContain("Refuted: src/lib.ts:1 sets it.");
+	expect(t.opencodeCalls()).toHaveLength(opencode);
 });
 
 fakes("a later round checks only what changed since the reviewed head, and the open findings", async () => {
@@ -1526,11 +1608,11 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 		// Sol wrote it, so Opus reviews it at L's effort, though Claude Code runs the command.
 		const sol = await quest("--root", s.repo, "review");
 		expect(sol.stderr).toBe("");
-		expect(sol.stdout).toContain("reviewer claude claude-opus-5-5 high\nsize L ## Models\n");
+		expect(sol.stdout).toMatch(/^size L ## Models\n[\s\S]*\nreviewer claude claude-opus-5-5 high\n/);
 
 		// Flags override the record.
 		const flagged = await quest("--root", s.repo, "review", "--new", "--size", "XS", "--exclude-model", "x");
-		expect(flagged.stdout).toContain("reviewer codex gpt-6.1-sol low\nsize XS --size\n");
+		expect(flagged.stdout).toMatch(/^size XS --size\n[\s\S]*\nreviewer codex gpt-6.1-sol low\n/);
 
 		// Only the latest implementer is avoided, whoever wrote earlier.
 		pull.body = body("- Implementer: Codex, unknown, unknown effort", "- Implementer: Codex, gpt-6.1-sol, high");
@@ -1552,7 +1634,7 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 		expect(nameless.code).toBe(2);
 		expect(nameless.stderr).toContain("names no model in: Implementer: Codex");
 		const both = await quest("--root", s.repo, "review", "--new", "--size", "S", "--exclude-model", "gpt-6.1-sol");
-		expect(both.stdout).toContain("reviewer claude claude-opus-5-5 low\nsize S --size\n");
+		expect(both.stdout).toMatch(/^size S --size\n[\s\S]*\nreviewer claude claude-opus-5-5 low\n/);
 		pull.body = body("- Size: S", "- Size: M");
 		expect((await quest("--root", s.repo, "review", "--new")).stderr).toContain("names 2 sizes");
 
@@ -1738,29 +1820,46 @@ test("each changed directory keeps its own instructions, and a directory's symli
 	]);
 });
 
-test("the next step stops for the design checkpoint on every third round that reports findings", () => {
+test("the next step stops for the design checkpoint when a reviewer's every third round reports findings", () => {
 	const round = (number: number, findings: number, severity = "medium") =>
 		({ round: number, findings: Array.from({ length: findings }, () => ({ severity })) }) as unknown as Round;
-	expect(nextStep(round(3, 1))).toMatch(/^next checkpoint: /);
-	expect(nextStep(round(6, 2))).toMatch(/^next checkpoint: /);
-	expect(nextStep(round(4, 1))).toMatch(/^next respond: /);
-	expect(nextStep(round(3, 0))).toMatch(/^next done: /);
-	expect(nextStep(round(3, 2, "low"))).toMatch(/^next finish: /);
-	expect(nextStep(round(4, 1, "low"))).toMatch(/^next finish: /);
+	expect(nextStep([round(3, 1)])).toMatch(/^next checkpoint: /);
+	expect(nextStep([round(6, 2)])).toMatch(/^next checkpoint: /);
+	expect(nextStep([round(4, 1)])).toMatch(/^next respond: /);
+	expect(nextStep([round(3, 0)])).toMatch(/^next done: /);
+	expect(nextStep([round(3, 2, "low")])).toMatch(/^next finish: /);
+	expect(nextStep([round(4, 1, "low")])).toMatch(/^next finish: /);
+	// Across reviewers: any finding not low needs another round, and a clean third round is no checkpoint.
+	expect(nextStep([round(1, 1, "low"), round(1, 1)])).toMatch(/^next respond: /);
+	expect(nextStep([round(3, 0), round(1, 1)])).toMatch(/^next respond: /);
+	expect(nextStep([round(1, 1), round(3, 1)])).toMatch(/^next checkpoint: /);
+	expect(nextStep([round(3, 0), round(1, 0)])).toMatch(/^next done: /);
 });
 
-test("a saved session reads in each format an older quest wrote, or is refused naming --new", () => {
+test("saved sessions are read only in the current format, or refused naming --new", () => {
 	const finding = { severity: "low", file: "a.ts", line: 1, title: "t", body: "b" };
-	// Before moq-dev/quest#508: each round kept only its finding count.
-	expect(parseState({ rounds: [{ head: "a", findings: 0 }] }).rounds[0].findings).toEqual([]);
-	expect(() => parseState({ rounds: [{ head: "a", findings: 2 }] })).toThrow(/finding count \(2\).*--new/);
-	// Before moq-dev/quest#514: findings but no merge base or last round.
-	expect(parseState({ rounds: [{ head: "a", findings: [finding] }] }).rounds[0].findings).toEqual([finding]);
-	// The current format.
-	const current = { rounds: [{ head: "a", mergeBase: "m", findings: [finding] }], last: {} };
+	const session = {
+		reviewer: "codex",
+		session: "thread-1",
+		root: "/repo",
+		rounds: [{ head: "a", mergeBase: "m", findings: [finding] }],
+		last: {},
+		given: { instructions: "i", rules: null },
+	};
+	const current = { branch: "feature", sessions: [session] };
 	expect(parseState(current)).toEqual(current);
-	expect(() => parseState(null)).toThrow(/--new/);
-	expect(() => parseState({ rounds: [{ head: "a" }] })).toThrow(/no findings list.*--new/);
+	for (const older of [
+		null,
+		// One reviewer's session, as quest saved it before the second reviewer.
+		{ branch: "feature", ...session },
+		{ sessions: [{ ...session, rounds: [{ head: "a", findings: 1 }] }] },
+		{ sessions: [{ ...session, rounds: [] }] },
+		{ sessions: [{ ...session, last: undefined }] },
+		{ sessions: [{ ...session, given: undefined }] },
+		{ sessions: [{ ...session, session: undefined }] },
+		{ sessions: [{ ...session, root: undefined }] },
+	])
+		expect(() => parseState(older)).toThrow(/--new/);
 });
 
 fakes("a session saved by an older quest is refused before the reviewer runs", async () => {
@@ -1768,11 +1867,84 @@ fakes("a session saved by an older quest is refused before the reviewer runs", a
 	expect((await quest("--root", s.repo, "review")).code).toBe(0);
 	const path = sessionFile(join(s.repo, ".git"), "feature");
 	const saved = JSON.parse(readFileSync(path, "utf8"));
-	writeFileSync(path, JSON.stringify({ ...saved, rounds: [{ head: saved.rounds[0].head, findings: 1 }] }));
+	writeFileSync(path, JSON.stringify({ branch: saved.branch, ...saved.sessions[0] }));
 	const calls = s.calls().length;
 	const refused = await quest("--root", s.repo, "review", "--responses", path);
 	expect(refused.code).not.toBe(0);
 	expect(refused.stderr).toMatch(/--new/);
 	expect(s.calls().length).toBe(calls);
+	writeFileSync(path, "{");
+	const truncated = await quest("--root", s.repo, "review");
+	expect(truncated.code).toBe(2);
+	expect(truncated.stderr).toContain("not JSON; pass --new");
 	expect((await quest("--root", s.repo, "review", "--new")).code).toBe(0);
+});
+
+fakes("a reviewer's failure stops the other and saves neither round", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_OPENCODE_LIMITED", "reset");
+	const result = await quest("--root", s.repo, "review");
+	expect(result.stderr).toBe("error: opencode hit its usage limit; resets 2030-03-17T17:46:40Z\n");
+	expect(result.code).toBe(3);
+	expect(existsSync(sessionFile(join(s.repo, ".git"), "feature"))).toBe(false);
+	vi.stubEnv("FAKE_OPENCODE_LIMITED", undefined);
+	// No round was saved, so the next one needs no responses.
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+});
+
+fakes("--harness reviews alone, keeping the other reviewer's session unless it has findings to settle", async () => {
+	const s = setup();
+	const clean = JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] });
+	vi.stubEnv("FAKE_REPLY", clean);
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	const opencode = s.opencodeCalls().length;
+	write(s.repo, "src/lib.ts", "export const x = 4;\n");
+	git(s.repo, "commit", "-qam", "more");
+	const alone = await quest("--root", s.repo, "review", "--harness", "codex");
+	expect(alone.code, alone.stderr).toBe(0);
+	expect(alone.stdout).not.toContain("reviewer opencode");
+	expect(s.opencodeCalls()).toHaveLength(opencode);
+	// The pair's next run resumes the kept session on the new head.
+	const pair = await quest("--root", s.repo, "review", "--json");
+	expect(pair.code, pair.stderr).toBe(0);
+	expect(JSON.parse(pair.stdout).rounds.map((r: Round) => [r.reviewer, r.round])).toEqual([
+		["codex", 2],
+		["opencode", 2],
+	]);
+
+	// Its open findings keep a head from passing the size's pick alone.
+	const t = setup();
+	vi.stubEnv("FAKE_REPLY", clean);
+	vi.stubEnv("FAKE_OPENCODE_REPLY", JSON.stringify({ score: 8, rationale: "One gap.", findings: [FINDING] }));
+	expect((await quest("--root", t.repo, "review")).code).toBe(0);
+	const calls = t.calls().length;
+	const refused = await quest("--root", t.repo, "review", "--harness", "codex");
+	expect(refused.code).toBe(2);
+	expect(refused.stderr).toContain("opencode still has findings to settle on this branch");
+	expect(t.calls()).toHaveLength(calls);
+});
+
+fakes("a new size pick settles the open findings of the reviewer it replaces", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_OPENCODE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	// Sol wrote the fix, so Opus replaces it as the size's pick.
+	write(s.repo, "src/lib.ts", "export const x = 4;\n");
+	git(s.repo, "commit", "-qam", "fix");
+	const sol = ["--exclude-model", "gpt-6.1-sol"];
+	const unanswered = await quest("--root", s.repo, "review", ...sol);
+	expect(unanswered.code).toBe(2);
+	expect(unanswered.stderr).toContain("the last round reported 1 finding(s)");
+	write(s.repo, ".tmp/responses.md", "1. Fixed at src/lib.ts:1.\n");
+	const responses = join(s.repo, ".tmp", "responses.md");
+	const round = await quest("--root", s.repo, "review", ...sol, "--responses", responses, "--json");
+	expect(round.code, round.stderr).toBe(0);
+	const [opus] = JSON.parse(round.stdout).rounds;
+	expect([opus.reviewer, opus.round, opus.earlier.findings.map((f: { number: number }) => f.number)]).toEqual([
+		"claude",
+		1,
+		[1],
+	]);
+	const review = s.calls().find((call) => call.argv.includes("--session-id"))!;
+	expect(review.stdin).toContain("Fixed at src/lib.ts:1.");
 });

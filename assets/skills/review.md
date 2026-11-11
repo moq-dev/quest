@@ -21,12 +21,12 @@ Never alter the repository's harness to get a pass, such as by disabling a tool,
 If a `## Review` record that `/quest-merge` counts names the committed head, or `quest status <pr>` reports it `diff-identical` while its `head` line is the committed head, or its other review exemptions cover the changes since the head it names, and it leaves no finding unrefuted, run no new round and go on to pushing and marking it ready below.
 If you judge the change too trivial to review, skip the review instead and record the skip and its reason in `## Review`.
 
-Otherwise, review the committed branch with `quest review --base <remote>/<base>`, which picks a reviewer other than the model that changed it last, and its effort, by the PR's size; `quest review --help` explains the round.
+Otherwise, review the committed branch with `quest review --base <remote>/<base>`, which picks a reviewer other than the model that changed it last, and its effort, by the PR's size, and has a second reviewer review the same head beside it; `quest review --help` explains the round.
 It reads the latest implementing model, and on a branch that is not a quest's the size, from the PR body's `## Models` record, so write that record before the first round; a quest branch's size is read from its quest.
 Pass `--exclude-model` or `--size` only for a PR whose body cannot hold the record.
-Where the repository's root instructions name other reviewers, pass them with `--harness`, `--model`, and `--effort`.
+Where the repository's root instructions name other reviewers, pass them with `--harness`, `--model`, and `--effort`, which runs that reviewer alone.
 Run it in the foreground; a round takes minutes.
-Open the draft PR before the first round: each round rewrites the PR body's `## Review` section with its reviewer, session and round, base and head, score, and each finding's disposition, naming the head's full SHA only once a round reports no findings.
+Open the draft PR before the first round: each round rewrites the PR body's `## Review` section with its base and head, then each reviewer's session and round, score, and each finding's disposition, naming the head's full SHA only once no reviewer reports a finding.
 Write a round's record by hand only when it printed `record skipped`, as on another author's fork, and add context only after the record, since the next round rewrites the section.
 
 Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches.
@@ -37,7 +37,7 @@ Repeat until a round of the head reports no finding you have not refuted; never 
 A finding the reviewer keeps against such a refutation is a decision for the user; a background agent lists it under `## Waiting`.
 A round whose findings are all low severity needs no further round: fix or refute each, then add a line after the record naming the new head's full SHA and each finding's disposition.
 
-Checkpoint the design: a round is one `quest review` round, numbered within the branch's review session, and when a round whose number is a multiple of three reports findings, stop before fixing them and reconsider the approach; a clean round needs no checkpoint.
+Checkpoint the design: a round is one `quest review` round, numbered within each reviewer's session on the branch, and when a round whose number is a multiple of three reports findings, stop before fixing them and reconsider the approach; a clean round needs no checkpoint.
 Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.
 Report the alternatives and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide; a background agent leaves this under `## Waiting` rather than deciding it.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.

@@ -25,32 +25,39 @@ function code(text: string): string {
 
 const capitalized = (word: string) => word[0]!.toUpperCase() + word.slice(1);
 
-/** The `## Review` section's text for `round`, without its heading. */
-export function reviewRecord(round: Round): string {
+/** The `## Review` section's text for a run's `rounds` of the same head, without its heading. */
+export function reviewRecord(rounds: Round[]): string {
+	const [shared] = rounds;
+	const clean = rounds.every((round) => round.findings.length === 0);
 	const lines = [
 		MARK,
 		"",
-		`- Reviewer: ${HARNESSES[round.reviewer]}, ${round.model}, ${round.effort} effort`,
-		`- Session: ${code(round.session)}, round ${round.round}`,
 		// `quest status` counts a full SHA here as a review of that head, which an open finding has not passed.
-		`- Head: ${round.findings.length === 0 ? round.head : `${round.head.slice(0, 12)}, named in full once a round reports no findings`}`,
-		`- Base: ${round.base.ref} at ${round.base.sha.slice(0, 12)}`,
-		`- Score: ${round.score}/10, ${code(round.rationale)}`,
+		`- Head: ${clean ? shared!.head : `${shared!.head.slice(0, 12)}, named in full once no reviewer reports a finding`}`,
+		`- Base: ${shared!.base.ref} at ${shared!.base.sha.slice(0, 12)}`,
 	];
-	if (round.findings.length === 0) lines.push("- Findings: none");
-	else lines.push("- Findings, open until the next round settles them:");
-	for (const finding of round.findings)
-		lines.push(`  - ${capitalized(finding.severity)}, ${code(located(finding))}: ${code(finding.title)}`);
-	const settled = round.earlier?.findings ?? [];
-	if (settled.length > 0) lines.push(`- The last round's findings, at ${round.earlier!.head.slice(0, 12)}:`);
-	for (const finding of settled)
+	for (const round of rounds) {
 		lines.push(
-			`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
+			"",
+			`- Reviewer: ${HARNESSES[round.reviewer]}, ${round.model}, ${round.effort} effort`,
+			`- Session: ${code(round.session)}, round ${round.round}`,
+			`- Score: ${round.score}/10, ${code(round.rationale)}`,
 		);
+		if (round.findings.length === 0) lines.push("- Findings: none");
+		else lines.push("- Findings, open until the next round settles them:");
+		for (const finding of round.findings)
+			lines.push(`  - ${capitalized(finding.severity)}, ${code(located(finding))}: ${code(finding.title)}`);
+		const settled = round.earlier?.findings ?? [];
+		if (settled.length > 0) lines.push(`- The last round's findings, at ${round.earlier!.head.slice(0, 12)}:`);
+		for (const finding of settled)
+			lines.push(
+				`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
+			);
+	}
 	return lines.join("\n");
 }
 
-/** What a PR body's `## Review` record says of its latest round, as `reviewRecord` writes it. */
+/** What a PR body's `## Review` record says of one reviewer's latest round, as `reviewRecord` writes it. */
 export interface ReviewSummary {
 	/** The reviewer's harness as the record names it, such as `Codex`. */
 	harness: string;
@@ -70,36 +77,43 @@ export interface ReviewSummary {
 const MARK = "Rewritten by `quest review` after each round.";
 
 /**
- * The latest round `body`'s `## Review` section records, or null when `quest review` wrote none there, as when the
- * section records a skipped review or only the land fixer's fixes.
+ * Each reviewer's latest round `body`'s `## Review` section records, or none when `quest review` wrote none
+ * there, as when the section records a skipped review or only the land fixer's fixes.
  */
-export function parseReview(body: string): ReviewSummary | null {
+export function parseReview(body: string): ReviewSummary[] {
 	const section = reviewSection(body);
-	if (!section) return null;
+	if (!section) return [];
 	const all = body.slice(section.start, section.end);
 	const at = all.indexOf(MARK);
-	if (at < 0) return null;
-	const text = all.slice(at);
-	const match = (pattern: RegExp) => {
-		const found = pattern.exec(text);
-		if (!found) throw new Error(`the ## Review record has no line matching ${pattern.source}`);
-		return found;
-	};
-	const reviewer = match(/^- Reviewer: (.+?), (\S+), (\S+) effort\r?$/m);
-	const session = match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
-	const score = /^- Score: (\d+)\/10,/m.exec(text);
-	const items = (prefix: RegExp) => text.split(/\r?\n/).filter((line) => prefix.test(line)).length;
-	return {
-		harness: reviewer[1]!,
-		model: reviewer[2]!,
-		effort: reviewer[3]!,
-		session: session[2]!,
-		round: Number(session[3]),
-		score: score ? Number(score[1]) : null,
-		findings: items(/^ {2}- (High|Medium|Low), /),
-		fixed: items(/^ {2}- Fixed: /),
-		refuted: items(/^ {2}- Refuted: /),
-	};
+	if (at < 0) return [];
+	// Each reviewer's block starts at its Reviewer line.
+	const blocks = all
+		.slice(at)
+		.split(/^(?=- Reviewer: )/m)
+		.slice(1);
+	if (blocks.length === 0) throw new Error("the ## Review record names no reviewer");
+	return blocks.map((text) => {
+		const match = (pattern: RegExp) => {
+			const found = pattern.exec(text);
+			if (!found) throw new Error(`the ## Review record has no line matching ${pattern.source}`);
+			return found;
+		};
+		const reviewer = match(/^- Reviewer: (.+?), (\S+), (\S+) effort\r?$/m);
+		const session = match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
+		const score = /^- Score: (\d+)\/10,/m.exec(text);
+		const items = (prefix: RegExp) => text.split(/\r?\n/).filter((line) => prefix.test(line)).length;
+		return {
+			harness: reviewer[1]!,
+			model: reviewer[2]!,
+			effort: reviewer[3]!,
+			session: session[2]!,
+			round: Number(session[3]),
+			score: score ? Number(score[1]) : null,
+			findings: items(/^ {2}- (High|Medium|Low), /),
+			fixed: items(/^ {2}- Fixed: /),
+			refuted: items(/^ {2}- Refuted: /),
+		};
+	});
 }
 
 /** `body` with `record` as its `## Review` section, which it gains when it has none; the rest stays as written. */
@@ -159,11 +173,12 @@ export async function pullModels(
 	return recorded(pull.body);
 }
 
-/** Record `round` in the `## Review` section of its branch's open PR. The edit is the token's user's, which `/quest-merge` counts only when that user wrote the PR. */
-export async function recordRound(root: string, round: Round, deps: ClaimDependencies): Promise<Recorded> {
-	const pull = await openPull(root, round.base.ref, round.branch, deps);
+/** Record a run's `rounds` in the `## Review` section of their branch's open PR. The edit is the token's user's, which `/quest-merge` counts only when that user wrote the PR. */
+export async function recordRounds(root: string, rounds: Round[], deps: ClaimDependencies): Promise<Recorded> {
+	const [shared] = rounds;
+	const pull = await openPull(root, shared!.base.ref, shared!.branch, deps);
 	if ("skipped" in pull) return pull;
-	const next = withReview(pull.body, reviewRecord(round));
+	const next = withReview(pull.body, reviewRecord(rounds));
 	if (next !== pull.body) await pull.client.request(pull.path, { method: "PATCH", body: { body: next } });
 	return { url: pull.url };
 }
