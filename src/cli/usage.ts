@@ -61,6 +61,8 @@ export interface PullRow {
 	url: string;
 	title: string;
 	branch: string;
+	/** The head repository, lowercased as `owner/repo`, or null once a fork's is deleted. */
+	repository: string | null;
 	state: "open" | "closed" | "merged";
 	draft: boolean;
 	/** Its body has a `## Waiting` section, so it was handed back to the maintainer. */
@@ -399,6 +401,7 @@ function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 			url: each.url,
 			title: each.title,
 			branch: each.branch,
+			repository: each.repository,
 			state: each.state,
 			draft: each.draft,
 			handedBack: each.draft && handedBack(each.body),
@@ -564,11 +567,13 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 
 function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	const rows = new Map<string, AccuracyRow>();
-	// A branch's saved tallies span every PR from it, so only its newest PR with a tally counts them.
+	// A branch's saved tallies span every PR from it, so only its newest PR that has both a tally and an
+	// implementer to count it for counts them.
+	const branch = (each: PullRow) => JSON.stringify([each.repository, each.branch]);
 	const newest = new Map<string, number>();
 	for (const each of pulls)
-		if (each.review.some((review) => review.tally !== null))
-			newest.set(each.branch, Math.max(newest.get(each.branch) ?? 0, each.number));
+		if (each.implementers.length > 0 && each.review.some((review) => review.tally !== null))
+			newest.set(branch(each), Math.max(newest.get(branch(each)) ?? 0, each.number));
 	for (const each of pulls) {
 		// A session that pushed twice is one implementer of the PR, whether or not each line names its size.
 		const distinct = new Map(
@@ -605,7 +610,7 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
 			const tallied =
-				newest.get(each.branch) === each.number ? each.review.filter((review) => review.tally !== null) : [];
+				newest.get(branch(each)) === each.number ? each.review.filter((review) => review.tally !== null) : [];
 			if (tallied.length > 0) {
 				row.reviewed++;
 				row.tally.rounds += Math.max(...tallied.map((review) => review.tally!.rounds));

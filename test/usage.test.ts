@@ -446,7 +446,8 @@ describe("usage", () => {
 			}),
 			// A fork's PR whose head shares #10's branch name, opened earlier and still open: no session here is
 			// shown to be its.
-			pr(7, "quest/m0/a", "", "2026-11-03T00:00:00Z", {
+			// Its tally is the fork's own, so it counts beside #10's.
+			pr(7, "quest/m0/a", body9, "2026-11-03T00:00:00Z", {
 				state: "open",
 				merged_at: null,
 				closed_at: null,
@@ -454,6 +455,14 @@ describe("usage", () => {
 				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
 			}),
 			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
+			// The fork's newer PR has no implementer to count its tally for, so #7 still counts the fork's.
+			pr(13, "quest/m0/a", body10.slice(body10.indexOf("## Review")), "2026-11-04T00:00:00Z", {
+				state: "open",
+				merged_at: null,
+				closed_at: null,
+				updated_at: "2026-11-06T00:00:00Z",
+				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
+			}),
 		];
 		const requests: string[] = [];
 		const fetch = async (input: string | URL | Request) => {
@@ -543,9 +552,10 @@ describe("usage", () => {
 			["L", "reviewing", "opencode", 4],
 		]);
 		const tally = { rounds: 2, findings: { high: 1, medium: 1, low: 1 }, fixed: 2, refuted: 1, open: 0 };
+		const double = { rounds: 4, findings: { high: 2, medium: 2, low: 2 }, fixed: 4, refuted: 2, open: 0 };
 		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.tally, a.fixes])).toEqual([
 			["S", "gpt-6.1-sol", 1, 1, 17, tally, 1],
-			["L", "claude-opus-5-5", 2, 1, 17, tally, 1],
+			["L", "claude-opus-5-5", 3, 2, 34, double, 1],
 		]);
 		const text = usageLines(report).join("\n");
 		expect(text).toContain(
