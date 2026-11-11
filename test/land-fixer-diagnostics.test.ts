@@ -19,7 +19,7 @@ import type { Plan } from "../src/cli/land";
 
 // Linux only, like the land daemon: the fixture uses mkfifo and POSIX shells.
 test.skipIf(process.platform === "win32")(
-	"retains agent output and actual exit code, with a bounded escaped handback tail",
+	"retains agent output and actual exit code, and hands back the gate's escaped failure",
 	async () => {
 		const dir = mkdtempSync(join(tmpdir(), "quest-fixer-diagnostics-"));
 		const root = join(dir, "repo"),
@@ -83,7 +83,7 @@ test.skipIf(process.platform === "win32")(
 		const ready = join(dir, "ready"),
 			release = join(dir, "release");
 		execFileSync("mkfifo", [release]);
-		writeFileSync(log, "fixture failure\n");
+		writeFileSync(log, "fixture failure: <panic>& in the gate\n");
 		writeFileSync(
 			agent,
 			`#!/bin/sh\ncat >/dev/null\ni=0; while [ $i -lt 150 ]; do printf 'prefix-%s\\n' $i; i=$((i+1)); done\nprintf '<panic>& diagnostic stdout\\n'\nprintf 'diagnostic stderr\\n' >&2\ntouch '${ready}'\nread -r release < '${release}'\nexit 101\n`,
@@ -122,8 +122,9 @@ test.skipIf(process.platform === "win32")(
 			expect(output).toContain("diagnostic stderr");
 			expect(await collectFixers(root, state, deps, async () => "fake")).toEqual(["handback 1"]);
 			expect(comment).toContain("fixer crashed (exit 101)");
-			expect(comment).toContain("&lt;panic>&amp; diagnostic stdout");
-			expect(comment).toContain("diagnostic stderr");
+			// The handback quotes the gate's failure, escaped; the fixer's own output stays in its job log.
+			expect(comment).toContain("fixture failure: &lt;panic>&amp; in the gate");
+			expect(comment).not.toContain("diagnostic");
 			expect(comment).not.toContain("prefix-0\n");
 			expect(comment.length).toBeLessThan(65000);
 			expect(existsSync(path)).toBe(false);
