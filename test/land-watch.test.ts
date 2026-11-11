@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 
 import type { GitHubDependencies } from "../src/cli/github";
 import { readRemote } from "../src/cli/land";
@@ -27,9 +27,6 @@ import {
 } from "../src/cli/land-watch-flaky";
 import { FLAKY_INPUT, type KnownFlaky } from "../src/cli/land-fix";
 import { configure, GIT_SETTINGS, initRepository, tempDir } from "./fixture";
-
-// The fixer tests merge with the quest driver and run fixer wrappers, which take longer than vitest's default.
-vi.setConfig({ testTimeout: 30_000 });
 
 const REPOSITORY = { owner: "upstream", repo: "project" };
 const BASE = "b".repeat(40);
