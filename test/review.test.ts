@@ -2129,6 +2129,7 @@ fakes("--settle records low findings' dispositions without running a reviewer", 
 		const settled = await quest("--root", s.repo, "review", "--settle", "--responses", responses);
 		expect(settled.code, settled.stderr).toBe(0);
 		expect(s.calls()).toHaveLength(calls);
+		expect(settled.stdout).not.toContain("\nusage ");
 		expect(settled.stdout).toContain(`head ${head}\n`);
 		expect(settled.stdout).toContain(
 			`settled the author settled round 1's low findings at ${reviewed}; no reviewer ran\n`,

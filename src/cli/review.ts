@@ -1754,7 +1754,7 @@ export async function settleLow(
 				earlier: { head: reviewed, findings: own },
 				settled: true,
 			};
-			rounds.push({ ...last, head });
+			rounds.push({ ...last, head, usage: [] });
 			return {
 				...session,
 				rounds: [...session.rounds.slice(0, -1), { ...session.rounds.at(-1)!, findings: [] }],
@@ -1762,7 +1762,7 @@ export async function settleLow(
 			};
 		}
 		// A reviewer of the same run found nothing; it stands beside the settled ones in the record.
-		if (session.rounds.at(-1)!.head === reviewed) rounds.push({ ...session.last, head });
+		if (session.rounds.at(-1)!.head === reviewed) rounds.push({ ...session.last, head, usage: [] });
 		return session;
 	});
 	save(statePath, { ...saved!, sessions, tallies } satisfies State);
