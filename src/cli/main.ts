@@ -50,6 +50,7 @@ import {
 	REVIEW_HARNESSES,
 	type ReviewHarness,
 	ReviewInputError,
+	type Reviewed,
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
 	review,
@@ -1215,11 +1216,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
-				"--settle runs no reviewer: it settles the last round's findings, which must all be low severity, from " +
+				"--settle runs no reviewer: against the base the last round used, it settles that round's findings, which must all be low severity, from " +
 				"--responses, one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding by its number, adding " +
 				"them to each reviewer's tally and dropping them from its session, so its next round checks what changed " +
 				"since their head with nothing to settle. It prints and records the last run's rounds at the committed " +
-				"head, naming that head in full and each settled finding's disposition.\n\n" +
+				"head, naming that head in full and each settled finding's disposition, and saves the settlement only once " +
+				"the record is written or skipped, so a failed record can be retried.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
 				"skills catalog, Claude Code with " +
 				"no settings files, only read tools, and the Bash commands it judges read-only, and opencode with no " +
@@ -1316,8 +1318,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 							},
 						);
 				pending = run.then(
-					async ({ rounds, tallies }) => {
-						// The rounds are saved in their sessions either way, so their report prints before a failed record.
+					async (result: Reviewed & { save?: () => void }) => {
+						const { rounds, tallies } = result;
+						// A review's rounds are saved in their sessions either way, so their report prints before a failed
+						// record; a settlement is saved only once recorded, so it can be retried.
 						let record: Recorded | undefined;
 						let failure: unknown;
 						try {
@@ -1333,9 +1337,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 								print("url" in record ? `record ${record.url}` : `record skipped: ${record.skipped}`);
 							print(nextStep(rounds));
 						}
-						if (failure === undefined) return 0;
+						if (failure === undefined) {
+							result.save?.();
+							return 0;
+						}
 						warn(
-							`the round finished, but recording it in the PR body failed: ${failure instanceof Error ? failure.message : String(failure)}`,
+							`${options.settle ? "the settlement is not saved, since" : "the round finished, but"} recording it in the PR body failed: ${failure instanceof Error ? failure.message : String(failure)}`,
 						);
 						return 1;
 					},

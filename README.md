@@ -1415,13 +1415,14 @@ detached `HEAD` requires, such as a checkout of a branch another worktree
 holds, so its rounds continue that branch's session.
 
 A round whose findings are all low severity needs no further round. After
-fixing or refuting them, `--settle` runs no reviewer: it reads `--responses` as
-one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding, by its
-number, adds each disposition to its reviewer's tally, and drops the findings
-from the session, so its next round checks what changed since their head with
-nothing to settle. It prints and records the last run's rounds at the
-committed head, which the record names in full, marking the findings the
-author settled.
+fixing or refuting them, `--settle` runs no reviewer: against the base the last
+round used, it reads `--responses` as one `<n>. fixed: <reason>` or
+`<n>. refuted: <reason>` line per finding, by its number, adds each disposition
+to its reviewer's tally, and drops the findings from the session, so its next
+round checks what changed since their head with nothing to settle. It prints
+and records the last run's rounds at the committed head, which the record names
+in full, marking the findings the author settled. It saves the settlement only
+once the record is written or skipped, so a failed record can be retried.
 
 The reviewer is read-only: Codex in its `read-only` sandbox, ignoring
 execpolicy rules, and Claude Code with only read tools and the Bash commands it

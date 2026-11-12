@@ -2126,13 +2126,37 @@ fakes("--settle records low findings' dispositions without running a reviewer", 
 			expect(refused.code, bad).toBe(2);
 		}
 		write(s.repo, ".tmp/responses.md", "1. Fixed: src/lib.ts:1 guards it.\n");
+		// The base keys the session, so another one is refused.
+		git(s.repo, "branch", "release", "origin/main");
+		git(s.repo, "push", "-q", "origin", "release");
+		const elsewhere = await quest(
+			"--root",
+			s.repo,
+			"review",
+			"--settle",
+			"--base",
+			"origin/release",
+			"--responses",
+			responses,
+		);
+		expect(elsewhere.code).toBe(2);
+		expect(elsewhere.stderr).toContain("pass --base origin/main");
+		// A record GitHub refuses saves nothing, so the settlement can be retried.
+		const fetch = globalThis.fetch;
+		vi.stubGlobal("fetch", async (input: URL, init?: RequestInit) =>
+			init?.method === "PATCH" ? new Response("{}", { status: 503 }) : fetch(input, init),
+		);
+		const refused = await quest("--root", s.repo, "review", "--settle", "--responses", responses);
+		expect(refused.code).toBe(1);
+		expect(refused.stderr).toContain("the settlement is not saved, since recording it in the PR body failed");
+		vi.stubGlobal("fetch", fetch);
 		const settled = await quest("--root", s.repo, "review", "--settle", "--responses", responses);
 		expect(settled.code, settled.stderr).toBe(0);
 		expect(s.calls()).toHaveLength(calls);
 		expect(settled.stdout).not.toContain("\nusage ");
 		expect(settled.stdout).toContain(`head ${head}\n`);
 		expect(settled.stdout).toContain(
-			`settled the author settled round 1's low findings at ${reviewed}; no reviewer ran\n`,
+			`settled round 1's low findings at ${reviewed}, by the author; no reviewer ran\n`,
 		);
 		expect(settled.stdout).toContain(
 			`earlier 1 ${reviewed}\n\n1. fixed low src/lib.ts:2 Off by one\n  src/lib.ts:1 guards it.\n`,

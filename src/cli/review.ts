@@ -1686,6 +1686,11 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	return { rounds: done.map((each) => each.round), tallies };
 }
 
+/** A settlement of low findings, saved only by `save`, once its record is written, so a failed record can be retried. */
+export interface Settlement extends Reviewed {
+	save(): void;
+}
+
 /**
  * Settle the last round's findings, all low severity, from the author's `responses` without running a reviewer:
  * one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding, by its number. Each reviewer's tally
@@ -1694,7 +1699,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
  */
 export async function settleLow(
 	options: Pick<ReviewOptions, "root" | "branch" | "responses"> & BaseOptions,
-): Promise<Reviewed> {
+): Promise<Settlement> {
 	const root = git(options.root, ["rev-parse", "--show-toplevel"]);
 	if (git(root, ["status", "--porcelain"]) !== "")
 		throw new ReviewInputError(
@@ -1716,6 +1721,9 @@ export async function settleLow(
 	const reviewed = open[0]!.session.rounds.at(-1)!.head;
 	if (open.some(({ session }) => session.rounds.at(-1)!.head !== reviewed))
 		throw new Error("the findings to settle are from rounds of different heads");
+	// The base keys the session, so a different one may have found another branch's.
+	const last = open[0]!.session.last.base.ref;
+	if (last !== baseRef) throw new ReviewInputError(`the last round reviewed against ${last}; pass --base ${last}`);
 	if (options.responses === undefined)
 		throw new ResponsesError(
 			"--settle needs --responses, one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding",
@@ -1748,25 +1756,28 @@ export async function settleLow(
 		if (own.length > 0) {
 			const tally = tallies.find((each) => each.reviewer === session.reviewer)!;
 			for (const finding of own) tally[finding.disposition]++;
-			const last: Round = {
+			const settled: Round = {
 				...session.last,
 				findings: [],
 				earlier: { head: reviewed, findings: own },
 				settled: true,
 			};
-			rounds.push({ ...last, head, usage: [] });
+			rounds.push({ ...settled, head, usage: [] });
 			return {
 				...session,
 				rounds: [...session.rounds.slice(0, -1), { ...session.rounds.at(-1)!, findings: [] }],
-				last,
+				last: settled,
 			};
 		}
-		// A reviewer of the same run found nothing; it stands beside the settled ones in the record.
-		if (session.rounds.at(-1)!.head === reviewed) rounds.push({ ...session.last, head, usage: [] });
+		// A reviewer of the same run found nothing; it stands beside the settled ones in the record, without
+		// the findings an earlier settlement of its own showed.
+		if (session.rounds.at(-1)!.head === reviewed) {
+			const { last: clean } = session;
+			rounds.push({ ...clean, head, usage: [], settled: false, earlier: clean.settled ? null : clean.earlier });
+		}
 		return session;
 	});
-	save(statePath, { ...saved!, sessions, tallies } satisfies State);
-	return { rounds, tallies };
+	return { rounds, tallies, save: () => save(statePath, { ...saved!, sessions, tallies } satisfies State) };
 }
 
 /**
@@ -2002,7 +2013,7 @@ export function nextStep(rounds: Round[]): string {
 	const findings = rounds.flatMap((round) => round.findings);
 	if (findings.length === 0) return "next done: no findings remain on this head";
 	if (findings.every((finding) => finding.severity === "low"))
-		return "next finish: fix or refute each finding, commit, rerun the checks, then run quest review --settle --responses with one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding; run no further round";
+		return "next finish: fix or refute each finding, commit, rerun the checks, then run quest review --settle --responses <file>, with one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding; run no further round";
 	if (rounds.some((round) => round.findings.length > 0 && round.round % 3 === 0))
 		return "next checkpoint: before fixing these findings, reconsider the approach and let the user decide, as /quest-review describes";
 	return "next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number";
@@ -2031,7 +2042,7 @@ export function roundLines(rounds: Round[]): string[] {
 				: []),
 			...(round.settled
 				? [
-						`settled the author settled round ${round.round}'s low findings at ${round.earlier!.head}; no reviewer ran`,
+						`settled round ${round.round}'s low findings at ${round.earlier!.head}, by the author; no reviewer ran`,
 					]
 				: []),
 			...round.usage.map((u) => `usage ${u.turn} input ${u.input} cached ${u.cached} output ${u.output}`),
