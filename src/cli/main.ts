@@ -171,6 +171,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"base with <ref>, the working tree must delete or edit it; a PR that finishes the quest deletes it, and " +
 				"one that leaves work rewrites it to what remains. Any other branch adds no finding. Fetch <ref> " +
 				"first: a stale base can predate the quest and skip it.\n\n" +
+				"A repository's own check also compares its skill stubs with the skills this binary carries, and " +
+				"reports a missing, outdated, or retired one. --no-stubs skips that, for a binary built from a base " +
+				"that checks a PR whose stubs follow the PR's own skills.\n\n" +
 				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
 				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
 				"does, such as the quests a merged base finished, and every epic's Required entry naming a quest in " +
@@ -183,11 +186,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
+		.option("--no-stubs", "Skip the comparison of the repository's skill stubs with this binary's skills")
 		.option(
 			"--fix",
 			"First drop list links to quests the history deleted and epics' links to their own quests, and promote misleveled section headings",
 		)
-		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
+		.action((options: { base?: string; branch?: string; fix?: boolean; stubs: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
 			}
@@ -201,7 +205,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
 			// A tree nested in another checkout, such as an example, has no stubs of its own.
-			const stubs = questRoot(resolve(root())) === resolve(root()) ? stubFindings(root()) : [];
+			const stubs = options.stubs && questRoot(resolve(root())) === resolve(root()) ? stubFindings(root()) : [];
 			if (findings.length === 0 && stubs.length === 0) {
 				const count = collect(root()).length;
 				print(theme ? theme.checked(count) : `quest: ${count} documents ok`);

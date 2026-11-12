@@ -280,6 +280,12 @@ detached, so pass the head branch:
 The check is a floor, not a review: any edit to the quest passes, so reviewers
 still judge whether a rewrite matches what remains.
 
+`quest check` also compares the repository's skill stubs with the skills its
+binary carries, and reports a missing, outdated, or retired one. A job that
+checks a PR with a binary built from the base passes `--no-stubs`, since that
+binary's skills would reject a PR that changes a stub; the PR's own binary
+checks them in its own `quest check`. This repository's merge queue does so.
+
 A link into a submodule that is not checked out, as in a fresh worktree or
 `actions/checkout` by default, resolves at the commit its gitlink pins when a
 local git directory holds that commit, such as the main worktree's. Otherwise
