@@ -497,7 +497,7 @@ comes last, and a missing value prints as `-`:
 | `checks` | `failure` if any check fails, else `pending` if any is pending, else `success`, and `passed=`, `failing=`, `pending=` counts, all from each check's latest run; `-` when the head has no checks. |
 | `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
-| `checkpoint` | A bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head, is not an approval, and ends its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed since the PR's latest `Design change:` comment. Only printed when due. |
+| `checkpoint` | A bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head, is not an approval, and ends its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed. Only printed when due. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
 | `thread` | Node ID, `current` or `outdated`, last commenter, latest comment URL, and `path:line` of each unresolved thread. |
 | `hold` | Label, acquisition token, acquisition time, verified GitHub event API URL, and age; `hold -` when no label holds it. Unknown acquisition facts print as `-` and `unknown age`. |

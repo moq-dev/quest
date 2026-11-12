@@ -35,7 +35,7 @@ Refute a finding only with evidence the reviewer cannot rebut: a `path:line`, a 
 A finding the reviewer keeps against such a refutation is a decision for the user.
 Write each round's `--responses` file in the checkout's `.tmp/`.
 
-At a `next checkpoint` line, which a reviewer's every third round prints when it reports findings, or a `checkpoint` line in `quest status <pr>`, which an online reviewer's does, stop before fixing them and reconsider the approach.
+At a `next checkpoint` line, which a reviewer's every third round prints when it reports findings, stop before fixing them and reconsider the approach; `quest status <pr>` prints a `checkpoint` line when an online reviewer's round is due the same way.
 Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.
 Report the alternatives and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.

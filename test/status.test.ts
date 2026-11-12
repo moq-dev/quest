@@ -702,14 +702,7 @@ describe("checkpoint", () => {
 		commit: { oid: commit },
 		reactions: { nodes: [] },
 	});
-	const comment = (body: string, minute: number) => ({
-		__typename: "IssueComment",
-		body,
-		createdAt: `2026-10-07T12:${String(minute).padStart(2, "0")}:30Z`,
-		authorAssociation: "OWNER",
-		author: { __typename: "User", login: "kixelated" },
-	});
-	const line = async (reviews: Node[], comments: Node[] = []) =>
+	const line = async (reviews: Node[]) =>
 		statusLines(
 			await pullRequestStatus(
 				pr,
@@ -718,7 +711,6 @@ describe("checkpoint", () => {
 						checks: null,
 						reviews: page(reviews),
 						threads: page([]),
-						timelineItems: { nodes: comments },
 					}),
 				]).deps,
 			),
@@ -747,17 +739,5 @@ describe("checkpoint", () => {
 			author: { __typename: "User", login: "alice" },
 		}));
 		expect(await line(person)).toBeNull();
-	});
-
-	test("restarts the count after a Design change comment", async () => {
-		const rounds = [
-			bot("pullfrog", "CHANGES_REQUESTED", B, 1),
-			bot("pullfrog", "CHANGES_REQUESTED", C, 2),
-			bot("pullfrog", "CHANGES_REQUESTED", A, 3),
-		];
-		expect(await line(rounds, [comment("Design change: split the parser.", 1)])).toBeNull();
-		expect(await line(rounds, [comment("Not a design change.", 1)])).toBe(
-			`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`,
-		);
 	});
 });

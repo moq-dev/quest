@@ -364,8 +364,6 @@ function summarize(
 		});
 	}
 
-	const comments = array(object(pull.timelineItems).nodes).filter((node) => node.__typename === "IssueComment");
-
 	const threads = threadNodes
 		.filter((row) => row.isResolved !== true)
 		.map((row): Thread => {
@@ -424,7 +422,7 @@ function summarize(
 					},
 		checks,
 		reviews: [...latest.values()],
-		checkpoint: checkpoint(head, submitted, comments),
+		checkpoint: checkpoint(head, submitted),
 		reviewRecord: null,
 		reactions,
 		threads,
@@ -437,17 +435,9 @@ function summarize(
  * The design checkpoint `/quest-review` takes every third round, put on the head by an online reviewer: a bot that
  * approves or requests changes, such as one whose approval the base requires, whose latest review is of the head
  * and leaves findings there, as anything but an approval, in its third, sixth, ... round. A round is one commit it
- * reviewed since the PR's latest `Design change:` comment, which restarts the count as `quest review --new` does.
+ * reviewed; a rethink at a checkpoint leaves the next one three rounds on, so nothing restarts the count.
  */
-function checkpoint(head: string, submitted: ObjectValue[], comments: ObjectValue[]): Status["checkpoint"] {
-	const since = Math.max(
-		0,
-		...comments
-			.filter(
-				(comment) => typeof comment.body === "string" && comment.body.trimStart().startsWith("Design change:"),
-			)
-			.map((comment) => Date.parse(string(comment.createdAt))),
-	);
+function checkpoint(head: string, submitted: ObjectValue[]): Status["checkpoint"] {
 	const rounds = new Map<string, ObjectValue[]>();
 	for (const row of submitted) {
 		if (row.author == null || object(row.author).__typename !== "Bot") continue;
@@ -456,7 +446,7 @@ function checkpoint(head: string, submitted: ObjectValue[], comments: ObjectValu
 	}
 	for (const [reviewer, rows] of rounds) {
 		if (!rows.some((row) => row.state === "APPROVED" || row.state === "CHANGES_REQUESTED")) continue;
-		const counted = rows.filter((row) => row.commit != null && Date.parse(string(row.submittedAt)) > since);
+		const counted = rows.filter((row) => row.commit != null);
 		const last = counted.at(-1);
 		if (last === undefined || string(object(last.commit).oid) !== head || last.state === "APPROVED") continue;
 		const round = new Set(counted.map((row) => string(object(row.commit).oid))).size;
