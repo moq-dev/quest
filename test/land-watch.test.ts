@@ -772,7 +772,7 @@ test("an armed pick GitHub never queued is enqueued once ready, only at the head
 	expect(github.mutations).toHaveLength(2);
 });
 
-test("a queued or armed pick that draws an online finding leaves the queue, once, and is not enqueued again", async () => {
+test("a queued or armed pick that draws an online finding leaves the queue, once, and is not enqueued again, unless retargeted", async () => {
 	const state = tempDir();
 	const page = (nodes: object[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
 	const finding = {
@@ -798,6 +798,8 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 			activity: finding,
 		},
 		{ number: 31, head: HEAD, enqueues: [], removals: [], armed: at(2), mergeState: "BLOCKED", activity: finding },
+		// Retargeted after the list read: another base's watcher owns it now.
+		{ number: 33, head: HEAD, enqueues: [], removals: [], armed: at(2), base: "release", activity: finding },
 		// Nothing holds it.
 		{
 			number: 32,
@@ -824,6 +826,7 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
 	expect(github.mutations).toHaveLength(2);
 	expect(github.comments[31]).toHaveLength(1);
+	expect(github.comments[33]).toBeUndefined();
 });
 
 test("a refused enqueue of an armed pick is reported once and retried, and says nothing when GitHub queued it first", async () => {

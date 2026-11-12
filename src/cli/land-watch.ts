@@ -321,7 +321,12 @@ async function enqueueArmed(
  * ends the pick until a writer fixes or answers it and picks the PR again. A pull is read again just before, so a
  * head pushed since is left for the next pass.
  */
-async function dequeueSignaled(github: GitHub, repository: Repository, pulls: ObjectValue[]): Promise<string[]> {
+async function dequeueSignaled(
+	github: GitHub,
+	repository: Repository,
+	base: string,
+	pulls: ObjectValue[],
+): Promise<string[]> {
 	const picked = pulls.filter((pull) => pull.mergeQueueEntry != null || pull.autoMergeRequest != null);
 	if (picked.length === 0) return [];
 	const output: string[] = [];
@@ -336,7 +341,7 @@ async function dequeueSignaled(github: GitHub, repository: Repository, pulls: Ob
 		const found = read.get(number);
 		if (!found || found.head !== head || found.signals.length === 0) continue;
 		const now = await readPull(github, string(pull.id));
-		if (now.state !== "OPEN" || string(now.headRefOid) !== head) continue;
+		if (now.state !== "OPEN" || string(now.baseRefName) !== base || string(now.headRefOid) !== head) continue;
 		const pick =
 			now.autoMergeRequest != null
 				? string(object(now.autoMergeRequest).enabledAt)
@@ -764,7 +769,7 @@ export async function watchPass(
 			save(path, progress);
 		}
 	}
-	output.push(...(await dequeueSignaled(github, repository, pulls)));
+	output.push(...(await dequeueSignaled(github, repository, ref, pulls)));
 	output.push(...(await enqueueArmed(github, ref, pulls, progress, (text) => output.push(text))));
 	// The next pass reads from SETTLE before this one's start; nothing older can come back.
 	const kept = new Date(Date.parse(started) - SETTLE).toISOString();
