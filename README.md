@@ -1292,7 +1292,7 @@ the same for every repository unless its `AGENTS.md` names others:
 
 | Size | Writer | Fallback |
 |---|---|---|
-| XS | Claude Code `claude-haiku-5-5` xhigh | Codex `gpt-6.1-sol` low |
+| XS | Claude Code `claude-sonnet-5-5` high | Codex `gpt-6.1-sol` low |
 | S | Claude Code `claude-opus-5-5` low | Codex `gpt-6.1-sol` medium |
 | M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
@@ -1314,7 +1314,7 @@ XS, and `quest models` prints the entry to run:
 
 ```console
 $ quest models XS
-claude	claude-haiku-5-5	xhigh
+claude	claude-sonnet-5-5	high
 codex	gpt-6.1-sol	low
 
 $ quest models XS --writer claude-opus-5-5

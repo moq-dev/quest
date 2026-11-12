@@ -136,8 +136,8 @@ messages 2026-10-26 to 11-11, classed by one sub-agent, approximate):
 - A shell pipeline under `pipefail` whose reader exits early, a race: 1
   this week in moq-dev/moq.pro, its third fix there.
 - Named a PR that deferred the work, or kept older behavior, as a
-  culprit: 4 in moq-dev/moq, which
-  [Caused by culprits](/quest/m0/caused-by-culprits.md) takes.
+  culprit: 4 in moq-dev/moq; `quest context` now requires confirming
+  the culprit in the blamed PR's diff.
 - Typed mid-session messages, per 100, before 2026-11-09 (841) then after
   (131): stalls until nudged 6.5 then 4.6; proposals steered simpler 4.8
   then 0; misread intent 1.9 then 3.1; reported instead of fixed 0.7 then

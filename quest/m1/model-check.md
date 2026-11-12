@@ -86,7 +86,7 @@ checkpoints and outages to count by hand:
     cell with again:
     - Haiku 5.5: high 30, $0.0034; xhigh 34.6, $0.0053.
     - Sonnet 5.5: medium 30.7, $0.012; below the frontier at every effort,
-      so rejected for XS though Anthropic's
+      so rejected for XS then, though Anthropic's
       [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/)
       favors it for scoped coding.
     - Opus 5.5: low 34.7, $0.015; medium 48, $0.037; high 51.7, $0.052;
@@ -99,6 +99,18 @@ checkpoints and outages to count by hand:
     - S looks lopsided: Opus low scores well below its Sol medium fallback
       (34.7 against 46.3) for $0.006 less a task. Check its tallies before
       moving it.
+  - Changed again (maintainer, 2026-11-11): XS writes on Sonnet high
+    instead of Haiku xhigh, since two Haiku XS agents in a row on
+    [moq-dev/quest#643](https://github.com/moq-dev/quest/pull/643) died
+    refilling context right after compaction: Haiku 5.5 bills 5x past 100k
+    input, so the maintainer caps its auto-compact window there, barely above an
+    agent's 40-60k fixed load. Sonnet 5.5's price is flat over its 1M
+    window. mypriors has no Sonnet high row, so tally this cell rather than
+    compare it there. Anthropic's
+    [cost guide](https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence)
+    puts Sonnet 5.5 high level with Opus 5.5 low (87.6% against 87.4%) at
+    about the same cost per solved task, and medium about 7 points below
+    high on its SWE-bench Pro subset.
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   model of each tier the tables pin. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
