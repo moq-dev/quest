@@ -54,6 +54,9 @@ Readout, the agent's choices for the implementer to revisit:
   chooses to.
 - Carry the tallies into [the model check](/quest/m1/model-check.md)'s
   baseline.
+- Publish the arms' cost and quality as the charts
+  [cost against quality](/quest/m0/routing-evidence/charts.md) describes,
+  and link them with the recommendations.
 
 Baseline from the 2026-11-11 audit, at API list price:
 
