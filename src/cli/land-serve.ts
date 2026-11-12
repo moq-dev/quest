@@ -313,15 +313,15 @@ async function reportOverlaps(github: GitHub, plan: Plan, state: string, overlap
 }
 
 /**
- * How long after its pick a PR may wait on pending required checks before its author is told which.
- * Twice the default check deadline (`--timeout`), so a slow but running CI rarely trips it.
+ * How long after its pick a PR may wait on pending required checks or an approval before its author is told
+ * what it waits for. Twice the default check deadline (`--timeout`), so a slow but running CI rarely trips it.
  */
 export const STALLED_AFTER = 2 * 60 * 60_000;
 
 /**
- * Comment once per pick on each PR still waiting on required checks `STALLED_AFTER` its pick, naming
- * them: a check that never reports, such as one whose workflow skips the PR, would otherwise hold it
- * in the queue without a word.
+ * Comment once per pick on each PR still waiting `STALLED_AFTER` its pick, naming what it waits for: a check
+ * that never reports, such as one whose workflow skips the PR, or an approval nobody gives would otherwise
+ * hold it in the queue without a word.
  */
 async function reportStalled(github: GitHub, plan: Plan, state: string, now: number): Promise<string[]> {
 	const path = join(state, "stalled.json");
@@ -335,15 +335,20 @@ async function reportStalled(github: GitHub, plan: Plan, state: string, now: num
 	const output: string[] = [];
 	for (const waiting of plan.waiting ?? []) {
 		if (kept[waiting.number] === waiting.enabledAt || now - Date.parse(waiting.enabledAt) < STALLED_AFTER) continue;
-		const list = waiting.pending.map((name) => `- <code>${excerpt(name)}</code>`).join("\n");
+		const list = [
+			...waiting.pending.map((name) => `- the required check <code>${excerpt(name)}</code>`),
+			...(waiting.approval ? [`- an approving review, which ${plan.base.ref} requires`] : []),
+		].join("\n");
 		await github.request(`/repos/${plan.repository}/issues/${waiting.number}/comments`, {
 			body: {
-				body: `quest land: this pull request is queued, but ${waiting.pending.length === 1 ? "a required check is" : "required checks are"} still pending on its head ${STALLED_AFTER / 3_600_000} hours after it was picked:\n\n${list}\n\nIt keeps its place and joins a batch once they pass. A check that never reports, such as one whose workflow does not run on this pull request, holds it here: run that check, or ask a maintainer to change the checks ${plan.base.ref} requires.`,
+				body: `quest land: this pull request is queued, but its head still waits ${STALLED_AFTER / 3_600_000} hours after it was picked for:\n\n${list}\n\nIt keeps its place and joins a batch once nothing is left. A check that never reports, such as one whose workflow does not run on this pull request, or an approval nobody gives holds it here: run that check or get that review, or ask a maintainer to change what ${plan.base.ref} requires.`,
 			},
 		});
 		kept[waiting.number] = waiting.enabledAt;
 		save(path, kept);
-		output.push(`stalled ${waiting.number} ${waiting.pending.join(",")}`);
+		output.push(
+			`stalled ${waiting.number} ${[...waiting.pending, ...(waiting.approval ? ["approval"] : [])].join(",")}`,
+		);
 	}
 	save(path, kept);
 	return output;
