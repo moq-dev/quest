@@ -27,6 +27,7 @@ import {
 	installedStubs,
 	lines,
 	newline,
+	InitRefused,
 	planInit,
 } from "../core";
 import { git } from "./git";
@@ -211,4 +212,34 @@ function removeLine(root: string, path: string, marker: string): boolean {
 		writeFileSync(join(root, path), `${kept}${eol}`);
 	}
 	return true;
+}
+
+/**
+ * What `quest init` would change in `root`'s skill stubs, one line each: a
+ * missing, outdated, or retired stub, or the edited file it refuses to
+ * rewrite. Reusing init's plan keeps this from drifting from what init writes.
+ */
+export function stubFindings(root: string): string[] {
+	let changes: ReturnType<typeof planInit>;
+	try {
+		changes = planInit(checkout(root), SKILLS);
+	} catch (error) {
+		// Refusals elsewhere, such as on `quest/README.md`, are not about stubs.
+		if (error instanceof InitRefused)
+			return SKILL_DIRS.some((dir) => error.path === dir || error.path.startsWith(`${dir}/`))
+				? [error.message]
+				: [];
+		throw error;
+	}
+	return changes
+		.filter(({ path }) => SKILL_DIRS.some((dir) => path.startsWith(`${dir}/`)))
+		.map(({ path, content }) => {
+			const why =
+				content === null
+					? "is a retired skill's stub"
+					: existsSync(join(root, path))
+						? "is outdated"
+						: "is missing";
+			return `${path}: ${why}; run the repository's pinned \`quest init\` and commit the result`;
+		});
 }
