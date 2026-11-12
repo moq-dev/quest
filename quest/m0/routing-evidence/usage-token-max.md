@@ -12,9 +12,13 @@ records and the attribution of sessions to PRs. Fix PRs count toward
 `- [owner/repo#N](url) - why` culprit line, not a context link.
 
 `quest usage --ssh HOST` (repeatable) also attributes the sessions of
-other hosts the user names, through `token-max sessions --ssh`. A session
-found on several hosts, such as a history copied between them, counts once,
-and the report says how many such copies it folded and from which hosts.
+other hosts the user names, through `token-max sessions --ssh`. Every
+session, local or remote, matches its PR through the repositories token-max
+exports for it, read on the host where it ran, never through a checkout on
+the host running the report. A host that fails fails the report, naming it.
+A session found on several hosts, such as a history copied between them,
+counts once, and the report says how many such copies it folded and from
+which hosts.
 
 ## Plan
 
@@ -39,10 +43,20 @@ gateway's request history could replace reading transcripts on each host):
   cover only Claude traffic routed through the gateway).
 - Other hosts? ✅ a `--ssh HOST` flag passed through to token-max, so
   hosts stay the user's to name (rejected: this host only).
-- A session on several hosts? ✅ count it once, keeping the copy with the
-  most requests, and report the fold (rejected: failing on it, which one
-  copied history would turn into a blocked report; counting every copy,
-  which inflates the cost per PR the writer A/B compares).
+- A session on several hosts? ✅ count it once, keeping its costliest
+  copy, and report the fold (rejected: failing on it, which one copied
+  history would turn into a blocked report; counting every copy, which
+  inflates the cost per PR the writer A/B compares). The costliest copy
+  rather than the one with the most requests, since copies continued on
+  both hosts diverge and requests differ in price.
+- An unreachable host fails the report rather than leaving its spend out,
+  since the user named it and a report missing a host would pass for
+  complete; drop the host from `--ssh` to report without it.
+- Matching a remote session to its repository: today's matcher in
+  `src/cli/usage.ts` reads the git remotes of the session's working
+  directory on this host, which for another host's path is missing or a
+  different checkout. token-max exports each session's repositories,
+  resolved on its own host, and quest matches only through them.
 
 The audit found today's failures:
 
@@ -66,6 +80,7 @@ The audit found today's failures:
 
 ## Waiting
 
-- kixel-ai/token-max: `token-max sessions` accepts `--ssh`, as
+- kixel-ai/token-max: `token-max sessions` accepts `--ssh` and exports
+  each session's repositories, as
   [its quest](https://github.com/kixel-ai/token-max/blob/main/quest/m0/sessions-ssh.md)
-  plans; check that `token-max sessions --help` documents `--ssh`
+  plans; check that `token-max sessions --help` documents both
