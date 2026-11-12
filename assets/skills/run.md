@@ -1,5 +1,5 @@
 ---
-description: Run a project's quest work from one session, starting ready quests and taking open PRs to merge in a loop until only the user's decisions remain.
+description: Run a project's quest work from one session, starting ready quests and taking open PRs to merge in a loop until only the user's decisions remain, then planning the follow-ups the run found.
 guide: Creation, Coordination, Summaries, Questions
 skills: grill, merge
 ---
@@ -68,7 +68,7 @@ Never wait on any other PR, and read none between rounds: list each PR left for 
 A usage or rate limit is waited out until its reset; it never ends the run.
 
 Finish once nothing is running, no queued merge would make a quest ready, and every PR left needs the user or a later round.
-Then run `/quest-plan` on the run's follow-ups, each in the repository whose quest tree owns it: problems it surfaced that no quest or open PR owns, such as a blocker agents hit, and the kept follow-ups that PRs picked to merge left for another repository's quest tree.
+Then run `/quest-plan` on the run's follow-ups, each in the repository whose quest tree owns it: problems it surfaced that no quest or open PR owns, such as a blocker agents hit, and the follow-ups kept in this run's own merge picks, landed or queued, for another repository's quest tree.
 Write the final summary so a fresh session can act on it, with each open decision's options beside your recommendation.
 
 Besides the guide's controls, answer "decisions": ask every pending question now, in one batch, such as before the user steps away; the loop continues after.
