@@ -573,8 +573,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		"release. A taken PR carries the quest:active label; iterate prints a hold token, the ID of the timeline " +
 		"event that added it, since sessions often share an account. A command refuses while a quest:active " +
 		"label it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
-		"holds (one whose body has no Waiting heading). A refusal names the holder's label, age, and " +
-		"token; releasing a stale hold with that token is the user's choice. Given a token, a command refuses " +
+		"holds (one whose body has no Waiting heading). A refusal names the holder's label and age, never its " +
+		"token; status shows the token, and releasing a stale hold with it is the user's choice. Given a token, a command refuses " +
 		"unless the token is still the latest add of its label. When two sessions add the label at once, the " +
 		"first added keeps the PR; GitHub records no event when a label already on the PR is added again, so two " +
 		"takes within the same moment are not told apart.\n\n" +
