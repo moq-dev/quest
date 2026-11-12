@@ -407,6 +407,22 @@ function causes(body: string, repository: Repository): number[] {
 const sized = (value: string | null | undefined): Size | null =>
 	(SIZES as readonly string[]).includes(value ?? "") ? (value as Size) : null;
 
+/**
+ * A merged PR's reviews with its last round's open findings settled when all of them are low, since the review
+ * rule fixes or refutes those before merge without another round; nothing records which, so they count as settled.
+ */
+function settledOnMerge(reviews: ReviewSummary[], merged: boolean): ReviewSummary[] {
+	const settles =
+		merged &&
+		reviews.every(
+			({ tally, open }) => tally === null || (open.high === 0 && open.medium === 0 && tally.open === open.low),
+		);
+	if (!settles) return reviews;
+	return reviews.map((review) =>
+		review.tally === null ? review : { ...review, tally: { ...review.tally, settled: review.tally.open, open: 0 } },
+	);
+}
+
 /** Each PR's record, without its sessions yet. */
 function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 	const fixedBy = new Map<number, number[]>();
@@ -429,7 +445,7 @@ function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 				const fields = implementer(item);
 				return fields ? [{ ...fields, size: sized(fields.size) }] : [];
 			}),
-			review: parseReview(each.body),
+			review: settledOnMerge(parseReview(each.body), each.state === "merged"),
 			landFixes: fixes(each.body),
 			fixedBy: (fixedBy.get(each.number) ?? []).sort((a, b) => a - b),
 			online: [],
@@ -618,7 +634,14 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 					reviewed: 0,
 					scored: 0,
 					score: 0,
-					tally: { rounds: 0, findings: { high: 0, medium: 0, low: 0 }, fixed: 0, refuted: 0, open: 0 },
+					tally: {
+						rounds: 0,
+						findings: { high: 0, medium: 0, low: 0 },
+						fixed: 0,
+						refuted: 0,
+						settled: 0,
+						open: 0,
+					},
 					landFixes: 0,
 					fixes: 0,
 				};
@@ -643,6 +666,7 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 				for (const severity of SEVERITIES) row.tally.findings[severity] += tally!.findings[severity];
 				row.tally.fixed += tally!.fixed;
 				row.tally.refuted += tally!.refuted;
+				row.tally.settled += tally!.settled;
 				row.tally.open += tally!.open;
 			}
 		}

@@ -1531,7 +1531,9 @@ it or Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. An opencode session, whose log quest does not read, is
 the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
-findings across every round; the land fixer's fixes; the later PRs that list it under
+findings across every round, where a merged PR whose last round left only low
+findings open counts them settled, since `/quest-review` fixes or refutes those
+before merge without another round; the land fixer's fixes; the later PRs that list it under
 `## Caused by`; and each online reviewer's record, read from GitHub.
 
 An online reviewer is any bot account whose review has a body or opens a

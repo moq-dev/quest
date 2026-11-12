@@ -249,7 +249,15 @@ describe("PR records", () => {
 				session: THREAD,
 				round: 3,
 				score: 7,
-				tally: { rounds: 3, findings: { high: 1, medium: 1, low: 2 }, fixed: 2, refuted: 1, open: 1 },
+				tally: {
+					rounds: 3,
+					findings: { high: 1, medium: 1, low: 2 },
+					fixed: 2,
+					refuted: 1,
+					settled: 0,
+					open: 1,
+				},
+				open: { high: 0, medium: 1, low: 0 },
 			},
 			{
 				harness: "opencode",
@@ -258,7 +266,15 @@ describe("PR records", () => {
 				session: "ses_1",
 				round: 1,
 				score: 10,
-				tally: { rounds: 1, findings: { high: 0, medium: 0, low: 0 }, fixed: 0, refuted: 0, open: 0 },
+				tally: {
+					rounds: 1,
+					findings: { high: 0, medium: 0, low: 0 },
+					fixed: 0,
+					refuted: 0,
+					settled: 0,
+					open: 0,
+				},
+				open: { high: 0, medium: 0, low: 0 },
 			},
 			// A reviewer the run left out, such as the pick a new one replaced, keeps its tally.
 			{
@@ -268,7 +284,15 @@ describe("PR records", () => {
 				session: null,
 				round: null,
 				score: null,
-				tally: { rounds: 2, findings: { high: 2, medium: 0, low: 0 }, fixed: 1, refuted: 0, open: 1 },
+				tally: {
+					rounds: 2,
+					findings: { high: 2, medium: 0, low: 0 },
+					fixed: 1,
+					refuted: 0,
+					settled: 0,
+					open: 1,
+				},
+				open: { high: 0, medium: 0, low: 0 },
 			},
 		]);
 		// An open finding keeps the head short; once no reviewer reports one, it is named in full.
@@ -467,15 +491,23 @@ describe("usage", () => {
 				updated_at: "2026-11-06T00:00:00Z",
 				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
 			}),
-			// Two deleted forks' PRs from a branch of the same name: neither names its repository, so each counts.
-			...[5, 6].map((number) =>
-				pr(number, "quest/m0/a", body9, "2026-11-02T00:00:00Z", {
-					state: "open",
-					merged_at: null,
-					closed_at: null,
-					updated_at: "2026-11-06T00:00:00Z",
-					head: { ref: "quest/m0/a", repo: null },
-				}),
+			// Two deleted forks' merged PRs from a branch of the same name: neither names its repository, so each
+			// counts. Each merged with one finding open: #5's last round's all low, so merging settled it, and
+			// #6's medium, so it stays open.
+			...[
+				[5, "low 1): fixed 1, refuted 0, open 1", "Low"],
+				[6, "medium 1): fixed 1, refuted 0, open 1", "Medium"],
+			].map(([number, counts, severity]) =>
+				pr(
+					number as number,
+					"quest/m0/a",
+					body9.replace(
+						"low 1): fixed 1, refuted 1, open 0\n- Findings: none",
+						`${counts}\n- Findings, open until the next round settles them:\n  - ${severity}, \`a:1\`: \`x\``,
+					),
+					"2026-11-02T00:00:00Z",
+					{ updated_at: "2026-11-06T00:00:00Z", head: { ref: "quest/m0/a", repo: null } },
+				),
 			),
 			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 		];
@@ -632,9 +664,21 @@ describe("usage", () => {
 			["L", "reviewing", "codex", 1],
 			["L", "reviewing", "opencode", 4],
 		]);
-		const tally = { rounds: 2, findings: { high: 1, medium: 1, low: 1 }, fixed: 2, refuted: 1, open: 0 };
+		const tally = {
+			rounds: 2,
+			findings: { high: 1, medium: 1, low: 1 },
+			fixed: 2,
+			refuted: 1,
+			settled: 0,
+			open: 0,
+		};
 		// #10's, #7's, and each deleted fork's.
-		const four = { rounds: 8, findings: { high: 4, medium: 4, low: 4 }, fixed: 8, refuted: 4, open: 0 };
+		const four = { rounds: 8, findings: { high: 4, medium: 5, low: 3 }, fixed: 8, refuted: 2, settled: 1, open: 1 };
+		const codex = (n: number) => report.pulls.find((p) => p.number === n)!.review[0]!.tally;
+		expect([codex(5), codex(6)].map((t) => [t!.settled, t!.open])).toEqual([
+			[1, 0],
+			[0, 1],
+		]);
 		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.tally, a.fixes])).toEqual([
 			["S", "gpt-6.1-sol", 1, 1, 17, tally, 1],
 			["L", "claude-opus-5-5", 5, 4, 68, four, 1],
@@ -650,11 +694,11 @@ describe("usage", () => {
 				unanswered: 0,
 			},
 		]);
-		// #11 and #10 merged; #9 closed and #7 is open, so neither counts.
+		// #11, #10, #5, and #6 merged; #9 closed and #7 is open, so neither counts.
 		expect(report.online).toEqual([
 			{
 				reviewer: "rabbit[bot]",
-				merged: 2,
+				merged: 4,
 				reviewed: 1,
 				finalHead: 1,
 				findings: 1,
@@ -670,11 +714,12 @@ describe("usage", () => {
 		);
 		expect(text).toContain("rounds 2.0, findings 3 (high 1, medium 1, low 1): fixed 2, refuted 1, open 0;");
 		expect(text).toContain("#10 L merged: PR 10 (quest/m0/a)");
+		expect(text).toContain("findings 2 (high 1, low 1): fixed 1, refuted 0, settled 1, open 0\n");
 		expect(text).toContain(
 			"online review: rabbit[bot], at the final head; 1 finding: 1 accepted, 0 declined, 0 unclassified, 0 unanswered",
 		);
 		expect(text).toContain(
-			"rabbit[bot]  reviewed 1/2 (50%), final head 1 (50%), 1.0 findings per PR reviewed, 100% accepted;",
+			"rabbit[bot]  reviewed 1/4 (25%), final head 1 (25%), 1.0 findings per PR reviewed, 100% accepted;",
 		);
 		expect(text).toContain("fixed later by: #11");
 		expect(text).not.toContain("SECRET");

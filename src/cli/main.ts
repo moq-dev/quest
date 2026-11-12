@@ -1106,6 +1106,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
 				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, " +
+				"where a merged PR whose last round left only low findings open counts them settled, since the author fixes or refutes those before merge, " +
 				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
 				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
 				"is a bot whose review has a body or opens a thread, or a review whose body opens with Automated review by <name>; a finding is a " +

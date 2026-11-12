@@ -31,6 +31,8 @@ export interface Counts {
 	findings: Tally["findings"];
 	fixed: number;
 	refuted: number;
+	/** Open findings of a merged PR's last all-low round, which the review rule fixes or refutes before merge. */
+	settled: number;
 	open: number;
 }
 
@@ -40,12 +42,13 @@ export function findingsText(counts: Omit<Counts, "rounds">): string {
 	const severities = SEVERITIES.filter((severity) => counts.findings[severity] > 0)
 		.map((severity) => `${severity} ${counts.findings[severity]}`)
 		.join(", ");
-	return `findings ${total}${severities && ` (${severities})`}: fixed ${counts.fixed}, refuted ${counts.refuted}, open ${counts.open}`;
+	return `findings ${total}${severities && ` (${severities})`}: fixed ${counts.fixed}, refuted ${counts.refuted}${counts.settled > 0 ? `, settled ${counts.settled}` : ""}, open ${counts.open}`;
 }
 
 /** A tally's counts, where a finding neither fixed nor refuted is open. */
 const counted = (tally: Tally): Counts => ({
 	...tally,
+	settled: 0,
 	open: SEVERITIES.reduce((sum, severity) => sum + tally.findings[severity], 0) - tally.fixed - tally.refuted,
 });
 
@@ -106,6 +109,8 @@ export interface ReviewSummary {
 	score: number | null;
 	/** Its findings across every round on the branch, null on a record written before tallies. */
 	tally: Counts | null;
+	/** The severity of each finding its latest round left open. */
+	open: Tally["findings"];
 }
 
 const MARK = "Rewritten by `quest review` after each round.";
@@ -140,6 +145,9 @@ export function parseReview(body: string): ReviewSummary[] {
 				? null
 				: match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
 		const score = /^- Score: (\d+)\/10,/m.exec(text);
+		const open = { high: 0, medium: 0, low: 0 };
+		for (const [, severity] of text.matchAll(/^  - (High|Medium|Low), /gm))
+			open[severity!.toLowerCase() as keyof typeof open]++;
 		return {
 			harness: reviewer[1]!,
 			model: reviewer[2]!,
@@ -148,6 +156,7 @@ export function parseReview(body: string): ReviewSummary[] {
 			round: session && Number(session[3]),
 			score: score ? Number(score[1]) : null,
 			tally,
+			open,
 		};
 	});
 }
@@ -170,6 +179,7 @@ function parseCounts(text: string): Counts | null {
 		findings,
 		fixed: Number(found[4]),
 		refuted: Number(found[5]),
+		settled: 0,
 		open: Number(found[6]),
 	};
 	const total = SEVERITIES.reduce((sum, severity) => sum + findings[severity], 0);
