@@ -7,11 +7,10 @@ readout, publishes charts of cost against quality for every writer and
 reviewer model and effort `quest` runs, and links them in its PR, so a
 routing change is read off the cost/quality frontier rather than tables:
 
-- Writers: cost per merged PR against the quality measures the epic's
+- Writers: cost per merged PR against each quality measure the epic's
   readout compares for the writer arms (first-round findings, review
-  rounds, hand-backs, and later `## Caused by` escapes), from the same
-  `quest usage --json` records the readout reads, one point per size,
-  model, and effort.
+  rounds, hand-backs, and later `## Caused by` escapes), one point per
+  size, model, and effort, with cost and quality as separate axes.
 - Local reviewers: cost per review against findings raised and the share
   fixed.
 - Online reviewers, which run on flat plans and have no cost per review:
@@ -20,11 +19,9 @@ routing change is read off the cost/quality frontier rather than tables:
   on a chart of their own.
 - Published benchmarks: one chart per benchmark suite, score against its
   own cost per task, for the same models and efforts. Benchmark and PR
-  metrics differ, so the comparison is a table beside the charts, per PR
-  size: each model and effort cell's rank on each benchmark by score per
-  dollar, and on our PRs by first-round findings per dollar, for the cells
-  both cover. A cell whose rank on our PRs
-  differs from its benchmark ranks stands out.
+  metrics differ, so compare where each cell sits on each chart's
+  frontier rather than its values; a cell on the frontier for the
+  benchmarks but not for our PRs, or the reverse, stands out.
 
 Non-goal: a live dashboard. No chart code ships in `quest`.
 
@@ -72,6 +69,10 @@ Agent's choices, for the implementer to revisit:
   readout: which `quest usage --json` fields feed each axis, how cells with
   too few PRs are marked rather than dropped, and that each chart names its
   date range and PR counts.
+- `quest usage --json` reports each reviewer's latest round, and
+  [review tallies](/quest/m0/routing-evidence/review-tallies.md) add totals
+  across rounds. If the tally line does not also record the first round's
+  findings, which the readout compares, add them there.
 - Make the first charts from the data on main when this lands, link them in
   this quest's PR, and say which cells are still too thin.
 
