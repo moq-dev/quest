@@ -1012,7 +1012,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		).toBe(false);
 	});
 
-	test("ejects auto-merging PRs that are not queued or not ready, in enqueue order, and waits on running checks", async () => {
+	test("ejects auto-merging PRs that are not queued or not ready, in enqueue order, and waits on running checks and approvals", async () => {
 		const forge = new Forge();
 		forge.pull(
 			"Unpinned",
@@ -1030,17 +1030,24 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.queue.map((entry) => entry.number)).toEqual([6]);
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([
 			[2, "head_moved"],
-			[3, "review_required"],
 			[4, "failed_checks"],
 			[1, "not_pinned"],
 		]);
-		// Its required checks are still running: it stays queued, keeping its auto-merge, and sits out batches.
+		// Its approval or its required checks are still to come: it stays queued, keeping its auto-merge, and sits out batches.
 		expect(plan.waiting).toEqual([
+			{
+				number: 3,
+				url: "https://github.com/upstream/project/pull/3",
+				enabledAt: "2026-10-26T00:00:03Z",
+				pending: [],
+				approval: true,
+			},
 			{
 				number: 5,
 				url: "https://github.com/upstream/project/pull/5",
 				enabledAt: "2026-10-26T00:00:05Z",
 				pending: ["test"],
+				approval: false,
 			},
 		]);
 	});
@@ -1209,9 +1216,8 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([
 			[3, "unresolved_conversations"],
-			[4, "review_required"],
 		]);
-		expect(plan.waiting?.map(({ number }) => number)).toEqual([2]);
+		expect(plan.waiting?.map(({ number }) => number)).toEqual([2, 4]);
 	});
 
 	test("refuses classic protection settings it does not uphold, or cannot read", async () => {
@@ -1620,7 +1626,7 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(await round(picked + STALLED_AFTER - 1)).toEqual([]);
 		expect(forge.comment(1)).toBeUndefined();
 		expect(await round(picked + STALLED_AFTER)).toEqual(["stalled 1 test"]);
-		expect(forge.comment(1)).toContain("<code>test</code>");
+		expect(forge.comment(1)).toContain("the required check <code>test</code>");
 		expect(forge.comment(1)).toContain("2 hours after it was picked");
 		// It stays queued, and is told only once for this pick.
 		expect(await round(picked + 2 * STALLED_AFTER)).toEqual([]);
@@ -1632,6 +1638,21 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(await round(repicked + STALLED_AFTER - 1)).toEqual([]);
 		expect(await round(repicked + STALLED_AFTER)).toEqual(["stalled 1 test"]);
 		expect(silent.comments).toHaveLength(2);
+	});
+
+	test("waits on a required approval like a check, and names it once the wait stalls", async () => {
+		const forge = new Forge();
+		const unapproved = forge.pull("Unapproved", { "1.txt": "1\n" }, { pull: { review: "REVIEW_REQUIRED" } });
+		const options = sandbox();
+		const root = forge.clone();
+		const picked = Date.parse(unapproved.autoMerge!.enabledAt);
+		const deps = { ...(await forge.deps()), now: () => picked + STALLED_AFTER };
+		const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
+		expect(plan.queue).toEqual([]);
+		expect(plan.eject).toEqual([]);
+		expect(await serveBatch(root, plan, options, deps, async () => deps.token)).toEqual(["stalled 1 approval"]);
+		expect(forge.comment(1)).toContain("an approving review, which main requires");
+		expect(unapproved.landing).toBe(true);
 	});
 
 	test("collects finished fixer jobs while a check runs", async () => {

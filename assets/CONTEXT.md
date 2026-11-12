@@ -67,9 +67,9 @@ Merge the base only when the branch conflicts with it or a landing step, such as
 Before each push to a PR's branch, confirm the PR is still open, since a push after it merges restores the deleted branch.
 
 Before a PR is marked ready for review, a model other than its latest writer reviews the committed branch locally, as `/quest-review` describes; a later push needs a new review unless `/quest-merge` exempts its changes.
-Anything AI-attributed, such as an online reviewer's findings, is a suggestion, not a maintainer's decision: address findings already posted on the head, and reply to feedback you disagree with.
-Wait for an online review only when the base branch requires its approval, and request one only when its reviewer never ran on the head.
-Resolve an automated reviewer's thread once you fix or refute its finding, since such a reviewer may approve only after its threads are resolved.
+Anything AI-attributed, such as an online reviewer's findings, is a suggestion, not a maintainer's decision: address findings already posted on the head, reply to feedback you disagree with, and never wait for an online review, since the queue waits for any approval the base requires.
+Request a review only from a reviewer whose approval the base requires and that never ran on the head.
+Once you fix or refute an automated reviewer's finding, say so in its thread and resolve it, since such a reviewer may approve only after its threads are resolved.
 
 The PR body's `## Models` section records its size as `Size: M` (its quest's, or for a skill's own PR, as a quest is sized) and one `Implementer: Codex, gpt-6.1-sol, high effort` line per implementing session, moved last whenever it pushes; write the model's ID, and `unknown` for whatever the harness doesn't report.
 

@@ -744,11 +744,13 @@ up to floor(log2 n) further PRs that merge cleanly in that order, resolving
 quest links with `quest resolve`. A failed batch halves the next batch's size,
 down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
-additions stay queued. A PR whose required checks are still running stays queued
-and sits out batches until they pass; only each check's latest run counts, as in
-`quest status`. If any are still pending two hours after
+additions stay queued. A PR whose required checks are still running, or that
+still needs an approving review the base requires, stays queued and sits out
+batches until they pass and it is approved; only each check's latest run counts,
+as in `quest status`. If it still waits two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
-naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
+naming what it waits for, since a check that never reports or an approval nobody
+gives would hold it silently. The sandbox checks the tip once, without
 bisection: success lands one commit per PR, as `--method` says. A failure, or a base that
 conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
 auto-merge and place, get no comment, and sit out batches while its
@@ -1016,9 +1018,10 @@ watcher is the base's only writer outside an admin's emergency bypass.
 
 Its picks are those `quest land serve` reads: open PRs whose auto-merge
 `quest merge --land` armed, pinned to their head, in the order they were armed,
-with the same ejections for a moved head, a missing pin, a blocking review, or
-a failing required check. A pick still waiting on its required checks keeps its
-place, and one another session holds waits, armed, until its hold clears.
+with the same ejections for a moved head, a missing pin, a requested change, or
+a failing required check. A pick still waiting on its required checks or a
+required approval keeps its place, and one another session holds waits, armed,
+until its hold clears.
 
 For the oldest pick it merges the base into the picked head with the quest
 merge driver, in the daemon's private repository, and pushes that merge to
