@@ -1554,8 +1554,9 @@ unanswered otherwise.
 
 Rollups follow: spend by size, role, harness, model, and effort; accuracy
 by size and implementer, which sums the tallies, so it counts every finding
-caught before merge. Since a branch's tallies span every PR from it, only its
-newest PR in the report counts them, and a record written before tallies
+caught before merge. Since a branch's tallies span every PR from it, only the
+PR whose record holds its latest tally, by the most rounds and then the newest,
+counts them, and a record written before tallies
 counts as unreviewed. An `Implementer:` line's own size, as
 `(iterate, XS)`, counts over the PR's; and, over the merged PRs, each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and

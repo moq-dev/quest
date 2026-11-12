@@ -419,7 +419,9 @@ function settledOnMerge(reviews: ReviewSummary[], merged: boolean): ReviewSummar
 		);
 	if (!settles) return reviews;
 	return reviews.map((review) =>
-		review.tally === null ? review : { ...review, tally: { ...review.tally, settled: review.tally.open, open: 0 } },
+		review.tally === null
+			? review
+			: { ...review, tally: { ...review.tally, settled: review.tally.settled + review.tally.open, open: 0 } },
 	);
 }
 
@@ -603,13 +605,23 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 
 function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	const rows = new Map<string, AccuracyRow>();
-	// A branch's saved tallies span every PR from it, so only its newest PR that has both a tally and an
-	// implementer to count it for counts them. A deleted fork has no repository, so its PR stands alone.
+	// A branch's saved tallies span every PR from it, so only one PR that has both a tally and an implementer
+	// to count it for counts them: the one whose record holds the latest tally, as the most rounds show, since
+	// each round rewrites only its own PR's record; the newest breaks a tie. A deleted fork has no repository,
+	// so its PR stands alone.
 	const branch = (each: PullRow) => JSON.stringify([each.repository ?? each.number, each.branch]);
-	const newest = new Map<string, number>();
-	for (const each of pulls)
-		if (each.implementers.length > 0 && each.review.some((review) => review.tally !== null))
-			newest.set(branch(each), Math.max(newest.get(branch(each)) ?? 0, each.number));
+	const rounds = (each: PullRow) => each.review.reduce((sum, review) => sum + (review.tally?.rounds ?? 0), 0);
+	const latest = new Map<string, PullRow>();
+	for (const each of pulls) {
+		if (each.implementers.length === 0 || each.review.every((review) => review.tally === null)) continue;
+		const other = latest.get(branch(each));
+		if (
+			other === undefined ||
+			rounds(each) > rounds(other) ||
+			(rounds(each) === rounds(other) && each.number > other.number)
+		)
+			latest.set(branch(each), each);
+	}
 	for (const each of pulls) {
 		// A session that pushed twice is one implementer of the PR, whether or not each line names its size.
 		const distinct = new Map(
@@ -653,7 +665,7 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
 			const tallied =
-				newest.get(branch(each)) === each.number ? each.review.filter((review) => review.tally !== null) : [];
+				latest.get(branch(each)) === each ? each.review.filter((review) => review.tally !== null) : [];
 			if (tallied.length > 0) {
 				row.reviewed++;
 				row.tally.rounds += Math.max(...tallied.map((review) => review.tally!.rounds));

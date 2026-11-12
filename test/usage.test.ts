@@ -518,6 +518,19 @@ describe("usage", () => {
 					{ updated_at: "2026-11-06T00:00:00Z", head: { ref: "quest/m0/a", repo: null } },
 				),
 			),
+			// Two open PRs from another branch, whose older record holds the later tally (3 Sol rounds against
+			// 2), as when a round rewrote only its own PR's record: the older counts, not the stale newer one.
+			...[
+				[3, body9.replace("- Rounds: 2;", "- Rounds: 3;")],
+				[4, body9],
+			].map(([number, body]) =>
+				pr(number as number, "quest/m0/b", body as string, "2026-11-02T00:00:00Z", {
+					state: "open",
+					merged_at: null,
+					closed_at: null,
+					updated_at: "2026-11-06T00:00:00Z",
+				}),
+			),
 			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 		];
 		const requests: string[] = [];
@@ -640,7 +653,7 @@ describe("usage", () => {
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {
 		const { root, deps, priced } = setup();
 		const report = await usage(root, { since: "2026-11-05" }, deps(priced));
-		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7, 13, 5, 6]);
+		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7, 13, 5, 6, 3, 4]);
 		const ten = report.pulls.find((p) => p.number === 10)!;
 		expect(ten.sessions.map((s) => [s.harness, s.session, s.role, s.effort])).toEqual([
 			["claude", CLAUDE, "implementing", "high"],
@@ -681,8 +694,15 @@ describe("usage", () => {
 			settled: 0,
 			open: 0,
 		};
-		// #10's, #7's, and each deleted fork's.
-		const four = { rounds: 8, findings: { high: 4, medium: 5, low: 3 }, fixed: 8, refuted: 2, settled: 1, open: 1 };
+		// #10's, #7's, each deleted fork's, and #3's.
+		const five = {
+			rounds: 11,
+			findings: { high: 5, medium: 6, low: 4 },
+			fixed: 10,
+			refuted: 3,
+			settled: 1,
+			open: 1,
+		};
 		const codex = (n: number) => report.pulls.find((p) => p.number === n)!.review[0]!.tally;
 		expect([codex(5), codex(6)].map((t) => [t!.settled, t!.open])).toEqual([
 			[1, 0],
@@ -690,7 +710,7 @@ describe("usage", () => {
 		]);
 		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.tally, a.fixes])).toEqual([
 			["S", "gpt-6.1-sol", 1, 1, 17, tally, 1],
-			["L", "claude-opus-5-5", 5, 4, 68, four, 1],
+			["L", "claude-opus-5-5", 7, 5, 85, five, 1],
 		]);
 		expect(ten.online).toEqual([
 			{
