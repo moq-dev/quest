@@ -117,12 +117,15 @@ export async function readActivity(
 			const names = CONNECTIONS.filter((name) => left[name] !== undefined);
 			const data = await client.graphql(
 				`query($owner: String!, $name: String!, $number: Int!, ${names.map((name) => `$${name}: String!`).join(", ")}) { ` +
-					`repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${names
+					`repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid ${names
 						.map((name) => page(name, `, after: $${name}`))
 						.join(" ")} } } }`,
 				{ owner: repository.owner, name: repository.repo, number, ...left },
 			);
 			const pull = object(object(data.repository).pullRequest);
+			// A later page may hold a review of a head pushed since the first read, which that head would misjudge.
+			if (pull.headRefOid !== nodes.head)
+				throw new Error(`the head of PR #${number} changed while it was read; retry`);
 			const next: Partial<Record<Connection, string>> = {};
 			for (const name of names) {
 				const connection = object(pull[name]);

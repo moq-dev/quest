@@ -14,8 +14,8 @@ export interface Signal {
 	text: string;
 }
 
-/** The marker a comment opens with to record a maintainer decision, after markup such as `**` but not in a quote. */
-export const DECISION = /^[^A-Za-z>]*Maintainer decision\b/i;
+/** The marker a comment opens with to record a maintainer decision, after markup such as `**` but not in a quote or code. */
+export const DECISION = /^[^A-Za-z>`~]*Maintainer decision\b/i;
 
 /** Repository permissions that can push, whose decisions and answers count. */
 const WRITE = ["admin", "maintain", "write"];
@@ -59,6 +59,12 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 		head: review.commit != null && String(object(review.commit).oid) === pull.head,
 	}));
 	const byId = new Map(reviews.map((review) => [review.id, review]));
+	const opened = new Set(
+		pull.reviewThreads.flatMap((thread) => {
+			const review = array(object(thread.comments).nodes)[0]?.pullRequestReview;
+			return review ? [String(object(review).id)] : [];
+		}),
+	);
 	const comments = pull.comments
 		.map((comment) => ({
 			author: comment.author,
@@ -74,11 +80,13 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 		const [first, ...replies] = array(object(thread.comments).nodes);
 		const opener = first?.pullRequestReview ? byId.get(String(object(first.pullRequestReview).id)) : undefined;
 		if (!opener?.reviewer || !opener.head) continue;
-		// A named reviewer posts under a person's account, so only its own reviews tell its replies from an answer.
+		// A named reviewer posts under a person's account, so only its name, on the reply or the review holding it, tells
+		// its replies from an answer.
 		const own = (comment: ObjectValue) =>
 			opener.body.startsWith("Automated review by") &&
-			comment.pullRequestReview != null &&
-			byId.get(String(object(comment.pullRequestReview).id))?.reviewer === opener.reviewer;
+			(reviewerOf(comment) === opener.reviewer ||
+				(comment.pullRequestReview != null &&
+					byId.get(String(object(comment.pullRequestReview).id))?.reviewer === opener.reviewer));
 		if (replies.some((reply) => !own(reply) && writer(reply.author))) continue;
 		found.push({
 			kind: "finding",
@@ -88,10 +96,10 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 		});
 	}
 
-	// Each reviewer's latest pass over the head lists what it still finds there.
+	// Each reviewer's latest pass over the head lists what it still finds there; a pass may only open threads.
 	const latest = new Map<string, (typeof reviews)[number]>();
 	for (const review of reviews)
-		if (review.reviewer !== null && review.head && review.body.trim() !== "") {
+		if (review.reviewer !== null && review.head && (review.body.trim() !== "" || opened.has(review.id))) {
 			const prior = latest.get(review.reviewer);
 			if (!prior || prior.at <= review.at) latest.set(review.reviewer, review);
 		}

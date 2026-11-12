@@ -349,35 +349,9 @@ async function dequeueSignaled(
 					? string(object(now.mergeQueueEntry).enqueuedAt)
 					: null;
 		if (pick === null) continue;
-		// GitHub may disarm auto-merge with the dequeue, so the disarm reads the PR again first. Either one taken
-		// ends the pick and is said; when GitHub moved first and neither was taken, the next pass reads it again.
-		let taken = false;
-		try {
-			if (now.mergeQueueEntry != null) {
-				await github.graphql(
-					"mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }",
-					{ id: pull.id },
-				);
-				taken = true;
-			}
-			const armed = taken ? (await readPull(github, string(pull.id))).autoMergeRequest : now.autoMergeRequest;
-			if (armed != null) {
-				await github.graphql(
-					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
-					{ id: pull.id },
-				);
-				taken = true;
-			}
-		} catch (error) {
-			if (!(error instanceof GitHubGraphQLError)) throw error;
-			const fresh = await readPull(github, string(pull.id));
-			const ended =
-				fresh.state !== "OPEN" ||
-				string(fresh.headRefOid) !== head ||
-				(fresh.mergeQueueEntry == null && fresh.autoMergeRequest == null);
-			if (!ended) throw error;
-			if (!taken) continue;
-		}
+		// The comment goes first: once the PR leaves the queue no pass reads it again, so a comment that failed after
+		// the dequeue would never be retried. It posts once per pick and head, so a pass that fails below retries only
+		// the mutations.
 		await post(
 			github,
 			{ repository: `${repository.owner}/${repository.repo}` },
@@ -387,6 +361,32 @@ async function dequeueSignaled(
 			"quest land watch",
 			"unanswered_signal",
 		);
+		// GitHub may disarm auto-merge with the dequeue, so the disarm reads the PR again first.
+		try {
+			if (now.mergeQueueEntry != null)
+				await github.graphql(
+					"mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }",
+					{ id: pull.id },
+				);
+			const armed =
+				now.mergeQueueEntry != null
+					? (await readPull(github, string(pull.id))).autoMergeRequest
+					: now.autoMergeRequest;
+			if (armed != null)
+				await github.graphql(
+					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+					{ id: pull.id },
+				);
+		} catch (error) {
+			// GitHub moving first, such as dequeuing it itself, leaves nothing to take.
+			if (!(error instanceof GitHubGraphQLError)) throw error;
+			const fresh = await readPull(github, string(pull.id));
+			const ended =
+				fresh.state !== "OPEN" ||
+				string(fresh.headRefOid) !== head ||
+				(fresh.mergeQueueEntry == null && fresh.autoMergeRequest == null);
+			if (!ended) throw error;
+		}
 		output.push(`dequeued ${number} ${head} ${found.signals.length} signals`);
 	}
 	return output;

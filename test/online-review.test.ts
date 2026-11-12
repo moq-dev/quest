@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { type Activity, bodyFindings, classify, onlineReviews } from "../src/cli/online-review";
+import type { GitHub, Repository } from "../src/cli/github";
+import { type Activity, bodyFindings, classify, onlineReviews, readActivity } from "../src/cli/online-review";
 
 const HEAD = "h".repeat(40);
 const bot = (login: string) => ({ __typename: "Bot", login });
@@ -156,4 +157,40 @@ describe("onlineReviews", () => {
 			},
 		]);
 	});
+});
+
+test("a head pushed while later pages are read fails the read", async () => {
+	const page = (nodes: object[], next: boolean) => ({
+		pageInfo: { hasNextPage: next, endCursor: next ? "1" : null },
+		nodes,
+	});
+	const read = (moved: boolean) => {
+		const client = {
+			graphql: async (query: string) => {
+				if (query.includes("$reviews"))
+					return {
+						repository: {
+							pullRequest: {
+								headRefOid: moved ? "m".repeat(40) : HEAD,
+								reviews: page([review("r2", bot("rabbit"), "[P1] New", "2026-11-10T17:06:00Z")], false),
+							},
+						},
+					};
+				return {
+					repository: {
+						p1: {
+							headRefOid: HEAD,
+							commits: { nodes: [{ commit: { oid: HEAD, committedDate: "2026-11-10T17:00:00Z" } }] },
+							reviews: page([review("r1", bot("rabbit"), "Ok.", "2026-11-10T17:05:00Z")], true),
+							reviewThreads: page([], false),
+							comments: page([], false),
+						},
+					},
+				};
+			},
+		} as unknown as GitHub;
+		return readActivity(client, { owner: "acme", repo: "proj" } as Repository, [1]);
+	};
+	expect((await read(false)).get(1)!.reviews).toHaveLength(2);
+	await expect(read(true)).rejects.toThrow("head of PR #1 changed while it was read");
 });

@@ -79,9 +79,17 @@ group("signals", () => {
 				review("r1", person, named, "2026-11-10T17:05:00Z"),
 				review("r2", person, named, "2026-11-10T17:06:00Z"),
 			],
-			reviewThreads: [thread([reply(person, "Bug.", "r1", "1"), reply(person, "Still.", "r2")])],
+			reviewThreads: [
+				thread([reply(person, "Bug.", "r1", "1"), reply(person, "Still.", "r2")]),
+				// A reply posted alone sits in an empty-bodied review, so its own body names the reviewer.
+				thread([
+					reply(person, "Bug.", "r1", "2"),
+					reply(person, "Automated review by review (OpenAI)\n\nStill not fixed.", "r3"),
+				]),
+			],
 		});
-		expect(signals(pull, WRITERS)).toHaveLength(1);
+		pull.reviews.push(review("r3", person, "", "2026-11-10T17:07:00Z"));
+		expect(signals(pull, WRITERS)).toHaveLength(2);
 	});
 
 	test("a body finding on the head holds it until a writer's later comment links that pass", () => {
@@ -140,6 +148,25 @@ group("signals", () => {
 		expect(signals(pull, WRITERS)).toEqual([]);
 	});
 
+	test("a later pass that only opens threads supersedes an earlier body's findings", () => {
+		const pull = activity({
+			reviews: [
+				review("r1", bot("rabbit"), "[P1] Guard null", "2026-11-10T17:05:00Z"),
+				review("r2", bot("rabbit"), "", "2026-11-10T17:10:00Z"),
+				review("r3", bot("rabbit"), "", "2026-11-10T17:11:00Z"),
+			],
+			// r3 only replies, so it is no pass.
+			reviewThreads: [
+				thread([reply(bot("rabbit"), "New.", "r2", "1"), reply(bot("rabbit"), "More.", "r3")], true),
+			],
+		});
+		expect(signals(pull, WRITERS)).toEqual([]);
+		pull.reviewThreads = [
+			thread([reply(bot("rabbit"), "Reply only.", "r1", "1"), reply(bot("rabbit"), "More.", "r3")], true),
+		];
+		expect(signals(pull, WRITERS).map((signal) => signal.text)).toEqual(["guard null"]);
+	});
+
 	test("a writer's marked decision newer than the head's commit holds it until a writer links it", () => {
 		const decision = comment(
 			person,
@@ -156,6 +183,8 @@ group("signals", () => {
 				comment(bot("rabbit"), "Maintainer decision: bot.", "2026-11-10T17:13:00Z", "2"),
 				comment(reader, "Maintainer decision: me.", "2026-11-10T17:13:00Z", "3"),
 				comment(person, "> Maintainer decision: quoted.\n\nApplied.", "2026-11-10T17:13:00Z", "4"),
+				comment(person, "```\nMaintainer decision: fenced.\n```", "2026-11-10T17:13:00Z", "10"),
+				comment(person, "`Maintainer decision` lines hold a head.", "2026-11-10T17:13:00Z", "11"),
 				comment(person, "Per the Maintainer decision, ...", "2026-11-10T17:13:00Z", "5"),
 			],
 		});

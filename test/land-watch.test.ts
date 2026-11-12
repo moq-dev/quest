@@ -829,6 +829,42 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 	expect(github.comments[33]).toBeUndefined();
 });
 
+test("a signaled pick whose comment GitHub refuses stays queued until a pass can say why it leaves", async () => {
+	const state = tempDir();
+	const github = world([
+		{
+			number: 30,
+			head: HEAD,
+			enqueues: [{ createdAt: at(2), actor: "maintainer" }],
+			removals: [],
+			armed: at(2),
+			queued: at(2),
+			activity: {
+				reviews: {
+					pageInfo: { hasNextPage: false, endCursor: null },
+					nodes: [
+						{
+							id: "r1",
+							url: "https://github.com/upstream/project/pull/30#pullrequestreview-1",
+							author: { __typename: "Bot", login: "rabbit" },
+							body: "[P1] Drops the last frame",
+							submittedAt: at(3),
+							commit: { oid: HEAD },
+						},
+					],
+				},
+			},
+		},
+	]);
+	github.now = Date.parse(at(4));
+	github.refuse = ["#30 quest land watch: ended"];
+	await expect(watchPass(REPOSITORY, { state }, deps(github))).rejects.toThrow();
+	expect(github.mutations).toEqual([]);
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([`dequeued 30 ${HEAD} 1 signals`]);
+	expect(github.mutations).toEqual(["dequeuePullRequest 30"]);
+	expect(github.comments[30]).toHaveLength(1);
+});
+
 test("a refused enqueue of an armed pick is reported once and retried, and says nothing when GitHub queued it first", async () => {
 	const state = tempDir();
 	const github = world([

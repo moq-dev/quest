@@ -872,11 +872,11 @@ merge ends the pick. There are two kinds:
 
 - `finding`: an online reviewer's (a bot's, or a review whose body opens
   `Automated review by <name>`) on the head. A review thread it opened holds
-  until it is resolved or a writer replies. A `[P<n>]` line in its latest
-  review body over the head holds until a writer's later comment links that
-  review.
+  until it is resolved or a writer other than the reviewer replies. A `[P<n>]`
+  line in its latest review over the head, counting one that only opens
+  threads, holds until a writer's later comment links that review.
 - `decision`: a writer's comment that opens with `Maintainer decision`, not in
-  a quote, posted after the head's commit, which therefore cannot apply it. A
+  a quote or code, posted after the head's commit, which therefore cannot apply it. A
   newer commit answers it, as does a writer's later comment that links it.
 
 A writer can push to the repository: an owner, or a member or collaborator
