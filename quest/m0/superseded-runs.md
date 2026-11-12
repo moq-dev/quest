@@ -51,9 +51,15 @@ Recommendations:
   land-bump and land-watch request it.
 - Report pending while any workflow run that counts is unfinished, as
   land-bump's `running` does, and when dropping replaced runs leaves no
-  checks (`found.length === 0`). Status has no list of required checks, so a
-  required check that only a replaced run reported would otherwise read as
-  passing while its replacement runs.
+  checks (`found.length === 0`).
+- `quest status` reads the base's required checks, as land and wait already
+  do, and reports one that no counted run reported as pending. Decided
+  2026-11-12 (user, /quest-review design checkpoint, round 3): a cancelled
+  pull_request run can be replaced by a push run that lacks a PR-only
+  required job, and without the list, status would read success while land
+  and wait read pending (rejected: leaving it to the implementer; letting a
+  cancelled run yield only to its own event, which diverges from land-bump
+  and fails the push/pull_request race again).
 - Latest run per event is deliberate, as land-bump decided. A newer run of
   the same workflow and event on the same head runs the same workflow file,
   so it re-reports every job a completed older run did, except a dynamic
