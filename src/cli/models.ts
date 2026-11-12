@@ -24,8 +24,9 @@ const sonnet = (effort: string): Model => ({ harness: "claude", model: "claude-s
  * Each size's writers, ranked: a spawn starts the quest on the first that can
  * run, falling through only while nothing is written, since the model that
  * writes a PR runs all its iterates. XS runs Sonnet rather than the cheaper
- * Haiku, whose surcharge past 100k input tokens forces a compaction window
- * barely above an agent's fixed load of prompt, context, and skill.
+ * Haiku, whose surcharge past 100k input tokens leads users to cap its
+ * compaction window there, barely above an agent's fixed load of prompt,
+ * context, and skill.
  */
 export const WRITERS: Record<Size, readonly Model[]> = {
 	XS: [sonnet("high"), sol("low")],

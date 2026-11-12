@@ -93,19 +93,24 @@ checkpoints and outages to count by hand:
       xhigh 57.3, $0.092; max 58.9, $0.15.
     - gpt-6.1-sol: low 34.8, $0.0094; medium 46.3, $0.021; high 50.3,
       $0.034; xhigh 52.5, $0.045.
-  - Changed again (maintainer, 2026-11-11): XS writes on Sonnet high
-    instead of Haiku xhigh, since two Haiku XS agents in a row on
-    [moq-dev/quest#643](https://github.com/moq-dev/quest/pull/643) died
-    refilling context right after compaction: Haiku 5.5 bills 5x past 100k
-    input, so its auto-compact window is capped there, barely above an
-    agent's 40-60k fixed load. Sonnet 5.5's price is flat over its 1M
-    window. Tally the XS Sonnet high cell fresh.
     - Fable 5.2: medium 56, $3.8; max 64.6, $26.5. Rejected for XL, which
       stays on Opus xhigh, on the frontier; zero-data-retention
       organizations may also be refused Fable.
     - S looks lopsided: Opus low scores well below its Sol medium fallback
       (34.7 against 46.3) for $0.006 less a task. Check its tallies before
       moving it.
+  - Changed again (maintainer, 2026-11-11): XS writes on Sonnet high
+    instead of Haiku xhigh, since two Haiku XS agents in a row on
+    [moq-dev/quest#643](https://github.com/moq-dev/quest/pull/643) died
+    refilling context right after compaction: Haiku 5.5 bills 5x past 100k
+    input, so the maintainer caps its auto-compact window there, barely above an
+    agent's 40-60k fixed load. Sonnet 5.5's price is flat over its 1M
+    window. mypriors has no Sonnet high row, so tally this cell rather than
+    compare it there. Anthropic's
+    [cost guide](https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence)
+    puts Sonnet 5.5 high level with Opus 5.5 low (87.6% against 87.4%) at
+    about the same cost per solved task, and medium about 7 points below
+    high on its SWE-bench Pro subset.
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   model of each tier the tables pin. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model
