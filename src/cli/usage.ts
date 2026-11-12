@@ -12,6 +12,7 @@ import { discoveryEnv, git } from "./git";
 import { fixes } from "./land-fixer";
 import { MERGER } from "./land-watch-fix";
 import { type GitHub, type ObjectValue, type Repository, githubRepository, link, requireRemote } from "./github";
+import { type OnlineReview, readOnlineReviews } from "./online-review";
 import { type ReviewSummary, parseReview } from "./review-record";
 
 /** A session's tokens, and their cost at the model's API list price, which subscriptions do not bill. */
@@ -72,6 +73,8 @@ export interface PullRow {
 	landFixes: string[];
 	/** Later PRs that list it under `## Caused by`. */
 	fixedBy: number[];
+	/** Each online reviewer's passes and findings, as GitHub shows them. */
+	online: OnlineReview[];
 	sessions: SessionRow[];
 }
 
@@ -109,6 +112,21 @@ export interface AccuracyRow {
 	fixes: number;
 }
 
+/** One online reviewer over the merged PRs reported. */
+export interface OnlineRow {
+	reviewer: string;
+	/** Merged PRs reported, whether or not it reviewed them. */
+	merged: number;
+	/** Those it reviewed, and those whose last head it reviewed. */
+	reviewed: number;
+	finalHead: number;
+	findings: number;
+	accepted: number;
+	declined: number;
+	unclassified: number;
+	unanswered: number;
+}
+
 export interface Usage {
 	repository: string;
 	since: string;
@@ -117,6 +135,7 @@ export interface Usage {
 	pulls: PullRow[];
 	spend: SpendRow[];
 	accuracy: AccuracyRow[];
+	online: OnlineRow[];
 	/** The sessions on no PR reported here, from every repository and agent ccusage reads; null when narrowed. */
 	unattributed: ({ sessions: number } & Tokens) | null;
 }
@@ -412,6 +431,7 @@ function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 			review: parseReview(each.body),
 			landFixes: fixes(each.body),
 			fixedBy: (fixedBy.get(each.number) ?? []).sort((a, b) => a - b),
+			online: [],
 			sessions: [],
 		};
 	});
@@ -624,6 +644,37 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	);
 }
 
+function onlineRows(pulls: PullRow[]): OnlineRow[] {
+	const merged = pulls.filter((each) => each.state === "merged");
+	const rows = new Map<string, OnlineRow>();
+	for (const each of merged)
+		for (const review of each.online) {
+			let row = rows.get(review.reviewer);
+			if (!row) {
+				row = {
+					reviewer: review.reviewer,
+					merged: merged.length,
+					reviewed: 0,
+					finalHead: 0,
+					findings: 0,
+					accepted: 0,
+					declined: 0,
+					unclassified: 0,
+					unanswered: 0,
+				};
+				rows.set(review.reviewer, row);
+			}
+			row.reviewed++;
+			if (review.finalHead) row.finalHead++;
+			row.findings += review.findings;
+			row.accepted += review.accepted;
+			row.declined += review.declined;
+			row.unclassified += review.unclassified;
+			row.unanswered += review.unanswered;
+		}
+	return [...rows.values()].sort((a, b) => a.reviewer.localeCompare(b.reviewer));
+}
+
 /** Rollup rows by size, smallest first and unsized last, then by each further field. */
 function order(
 	[size, ...a]: [Size | null, ...(string | number | null)[]],
@@ -672,6 +723,12 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 			for (const session of left) for (const spent of session.models) add(unattributed, spent);
 		}
 	}
+	const online = await readOnlineReviews(
+		client,
+		repository,
+		rows.map((row) => row.number),
+	);
+	for (const row of rows) row.online = online.get(row.number) ?? [];
 	return {
 		repository: key(repository),
 		since: options.since,
@@ -679,6 +736,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		pulls: rows,
 		spend: spendRows(rows),
 		accuracy: accuracyRows(rows),
+		online: onlineRows(rows),
 		unattributed,
 	};
 }
@@ -694,6 +752,9 @@ const compact = (n: number) =>
 const tokens = (t: Tokens) =>
 	`in ${compact(t.input)}, cache ${compact(t.cacheWrite)} written ${compact(t.cacheRead)} read, out ${compact(t.output)}, ~$${t.cost.toFixed(2)}`;
 const mean = (sum: number, count: number) => (count ? (sum / count).toFixed(1) : "-");
+const percent = (part: number, whole: number) => (whole ? `${Math.round((100 * part) / whole)}%` : "-");
+const answers = (r: Omit<OnlineReview, "reviewer" | "finalHead">) =>
+	`${r.findings} finding${r.findings === 1 ? "" : "s"}: ${r.accepted} accepted, ${r.declined} declined, ${r.unclassified} unclassified, ${r.unanswered} unanswered`;
 
 /** Rows of cells, each column padded to its widest cell. */
 function table(rows: string[][]): string[] {
@@ -720,6 +781,8 @@ export function usageLines(report: Usage): string[] {
 			lines.push(
 				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; round ${r.round}, score ${r.score ?? "-"}/10, ${r.findings} open, last round ${r.fixed} fixed and ${r.refuted} refuted`,
 			);
+		for (const o of row.online)
+			lines.push(`  online review: ${o.reviewer}, ${o.finalHead ? "" : "not "}at the final head; ${answers(o)}`);
 		if (row.landFixes.length) lines.push(`  land fixes: ${row.landFixes.join("; ")}`);
 		if (row.fixedBy.length) lines.push(`  fixed later by: ${row.fixedBy.map((n) => `#${n}`).join(", ")}`);
 		const sessions = row.sessions.flatMap((s) =>
@@ -756,6 +819,18 @@ export function usageLines(report: Usage): string[] {
 					a.model,
 					a.effort,
 					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: score ${mean(a.score, a.scored)}, rounds ${mean(a.rounds, a.reviewed)}, ${a.findings} open, ${a.fixed} fixed, ${a.refuted} refuted; ${a.landFixes} land fixes, ${a.fixes} later fixes`,
+				]),
+			),
+		);
+	if (report.online.length)
+		lines.push(
+			"",
+			"Online reviewers over merged PRs:",
+			...table(
+				report.online.map((o) => [
+					" ",
+					o.reviewer,
+					`reviewed ${o.reviewed}/${o.merged} (${percent(o.reviewed, o.merged)}), final head ${o.finalHead} (${percent(o.finalHead, o.merged)}), ${mean(o.findings, o.reviewed)} findings per PR reviewed, ${percent(o.accepted, o.findings)} accepted; ${answers(o)}`,
 				]),
 			),
 		);

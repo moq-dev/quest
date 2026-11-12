@@ -1501,6 +1501,7 @@ moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) esti
 #569 S merged: quest: finish model routing (quest/m0/model-routing/README)
   implementer: Claude Code, claude-opus-5-5, unknown effort
   review: Codex, gpt-6.1-sol, medium effort; round 1, score 10/10, 0 open, last round 0 fixed and 0 refuted
+  online review: review (OpenAI), not at the final head; 0 findings: 0 accepted, 0 declined, 0 unclassified, 0 unanswered
   land fixes: codex, gpt-6.1-sol, medium effort
   sessions:
      implementing  claude  claude-opus-5-5  low     in 50, cache 36.2k written 1.1M read, out 6.1k, ~$0.63
@@ -1521,12 +1522,30 @@ it or Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. An opencode session, whose log quest does not read, is
 the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers; each reviewer's latest `quest review` round's
 reviewer, round, score, open findings, and the last round's findings fixed or
-refuted; the land fixer's fixes; and the later PRs that list it under
-`## Caused by`.
+refuted; the land fixer's fixes; the later PRs that list it under
+`## Caused by`; and each online reviewer's record, read from GitHub.
 
-Rollups follow: spend by size, role, harness, model, and effort, and accuracy
+An online reviewer is any bot account whose review has a body or opens a
+thread, as a reply-only review does not, or a review whose body opens with
+`Automated review by <name>`, as a reviewer posting under a person's account
+does. It reviewed the final head when one of its reviews with
+a body or a new thread is at the PR's last head. Its findings are the review
+threads it opens and the `[P<n>]` (or `P<n> —`) lines in its review bodies,
+one finding per title across its reviews (a repeated title in one review is
+another finding). A finding is accepted, declined, or
+unclassified by the first word of its first answer: a reply in its thread, or
+for a body finding, a PR comment that links its review or opens with an
+accepting word (`Fixed`, `Agreed`, `Applied`, `Right`, `Confirmed`,
+`Covered`, `Taken`) or a declining one (`Declined`, `Declining`, `Refuted`,
+`Not`). One with no answer counts as accepted when the reviewer settled it, by
+a bot resolving its own thread or a later review leaving it out, and as
+unanswered otherwise.
+
+Rollups follow: spend by size, role, harness, model, and effort; accuracy
 by size and implementer, where an `Implementer:` line's own size, as
-`(iterate, XS)`, counts over the PR's. Sessions on no PR here, from any
+`(iterate, XS)`, counts over the PR's; and, over the merged PRs, each online
+reviewer's coverage, final heads reviewed, findings per PR reviewed, and
+answers. Sessions on no PR here, from any
 repository or agent ccusage reads, total on an `Unattributed` line. `--pr` and
 `--quest` narrow the report to one PR or one quest's branch, and `--json`
 prints it as one object. Without `ccusage` on `PATH`, it says how to install it
