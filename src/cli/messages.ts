@@ -134,7 +134,7 @@ function answer(
 }
 
 /** How Claude Code opens the turn loading a skill, whether typed as a slash command or called as a tool. */
-const CLAUDE_SKILL = /^\s*Base directory for this skill: \S*?([^/\s]+)\/?\s/;
+const CLAUDE_SKILL = /^\s*Base directory for this skill: (?:.*\/)?([^/\n]+?)\/?[ \t]*$/m;
 
 /** The skill a Claude Code record loads, if any; built-in commands such as `/compact` load none. */
 function claudeSkill(record: Record<string, unknown>): string | null {

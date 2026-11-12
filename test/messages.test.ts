@@ -217,7 +217,7 @@ describe("readClaudeMessages", () => {
 			lines(
 				claudeAnswer("2026-10-30T10:00:00Z", { "Which color?": "Blue" }),
 				turn("2026-11-06T09:00:00Z", "<command-name>/quest-plan</command-name><command-args>x</command-args>"),
-				skillTurn("2026-11-06T09:00:01Z", "/repo/.claude/skills/quest-plan"),
+				skillTurn("2026-11-06T09:00:01Z", "/my repo/.claude/skills/quest-plan"),
 				claudeAnswer("2026-11-06T09:01:00Z", {
 					"Which color?": "Red (Recommended)",
 					"Which sizes?": ["S", "M"],
