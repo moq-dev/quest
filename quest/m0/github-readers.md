@@ -17,9 +17,10 @@ Agent's choices, for the implementer to revisit:
 
 - Split the GitHub client in `src/cli/github.ts`: requests, GraphQL, paging, retries, and the deadline move to `src/github/`, which already holds code shared with a Worker (`checks.ts`), and the CLI keeps reading remotes and resolving its token. `GitHubDependencies` (`fetch`, `now`, `sleep`, `token`, `warn`) already fits a Worker.
 - Move `pullRequestStatus` there with what it calls: the summary, `classifyCheck`, the ejection reader and `EJECTED`, `pinned`, the review record's comparison, `enabledHead` and `headBefore`, and the read half of `readHoldStatus`.
+- Add a `handedBack` field to `Status`, read from the PR body it already fetches with `handedBack` from `./core`, since today a caller cannot tell a handed-back draft from another draft.
 - Claims: `held` already takes branch tips as a parameter; the library form takes the repository and head fork as `owner/repo` and reads tips through GitHub's matching-refs API when not given, so only finding the upstream through `git` remotes stays in the CLI.
 - Export the module as `./github`, type-checked with `types: []` like `src/core`, so a stray `node:` import fails `just check`.
 - The package stays private: a consumer depends on a pinned commit (`github:moq-dev/quest#<sha>`), so no release is needed.
 - A webhook-driven caller re-reads a PR's status on each event about it; nothing here parses webhook payloads.
 
-Tests: the moved code keeps its tests, and `quest status` prints the same lines for the same GitHub responses.
+Tests: the moved code keeps its tests, and `quest status` prints the same lines for the same GitHub responses; a test reads `handedBack` from `pullRequestStatus` directly.
