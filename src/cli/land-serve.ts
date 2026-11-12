@@ -601,6 +601,7 @@ export async function serveBatch(
 			link.entry,
 			expectedParent,
 			link.tree,
+			deps,
 			token,
 			read,
 		);

@@ -6,7 +6,7 @@ import { describe, expect, test } from "vitest";
 
 import { implementer } from "../src/github/models";
 import { fixes } from "../src/cli/land-fixer";
-import type { Round } from "../src/cli/review";
+import type { Round, Tally } from "../src/cli/review";
 import { parseReview, reviewRecord } from "../src/cli/review-record";
 import { type Priced, parseCcusage, readClaudeLog, readCodexLog, usage, usageLines } from "../src/cli/usage";
 import { tempDir } from "./fixture";
@@ -217,8 +217,30 @@ describe("PR records", () => {
 		earlier: null,
 	};
 
-	test("reads back each reviewer's round quest review records, after the land fixer's lines", () => {
-		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord([round, second])}\n\n## Models\n\n- Size: L\n`;
+	const tally = (
+		reviewer: Tally["reviewer"],
+		rounds: number,
+		findings: Tally["findings"],
+		fixed: number,
+		refuted: number,
+	): Tally => ({
+		reviewer,
+		model: "m",
+		effort: "high",
+		rounds,
+		findings,
+		fixed,
+		refuted,
+	});
+	const tallies = [
+		tally("codex", 3, { high: 1, medium: 1, low: 2 }, 2, 1),
+		tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0),
+		tally("claude", 2, { high: 2, medium: 0, low: 0 }, 1, 0),
+	];
+
+	test("reads back each reviewer's round and tally quest review records, after the land fixer's lines", () => {
+		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord([round, second], tallies)}\n\n## Models\n\n- Size: L\n`;
+		expect(body).toContain("\n- Rounds: 3; findings 4 (high 1, medium 1, low 2): fixed 2, refuted 1, open 1\n");
 		expect(parseReview(body)).toEqual([
 			{
 				harness: "Codex",
@@ -227,9 +249,15 @@ describe("PR records", () => {
 				session: THREAD,
 				round: 3,
 				score: 7,
-				findings: 1,
-				fixed: 2,
-				refuted: 1,
+				tally: {
+					rounds: 3,
+					findings: { high: 1, medium: 1, low: 2 },
+					fixed: 2,
+					refuted: 1,
+					settled: 0,
+					open: 1,
+				},
+				open: { high: 0, medium: 1, low: 0 },
 			},
 			{
 				harness: "opencode",
@@ -238,16 +266,64 @@ describe("PR records", () => {
 				session: "ses_1",
 				round: 1,
 				score: 10,
-				findings: 0,
-				fixed: 0,
-				refuted: 0,
+				tally: {
+					rounds: 1,
+					findings: { high: 0, medium: 0, low: 0 },
+					fixed: 0,
+					refuted: 0,
+					settled: 0,
+					open: 0,
+				},
+				open: { high: 0, medium: 0, low: 0 },
+			},
+			// A reviewer the run left out, such as the pick a new one replaced, keeps its tally.
+			{
+				harness: "Claude Code",
+				model: "m",
+				effort: "high",
+				session: null,
+				round: null,
+				score: null,
+				tally: {
+					rounds: 2,
+					findings: { high: 2, medium: 0, low: 0 },
+					fixed: 1,
+					refuted: 0,
+					settled: 0,
+					open: 1,
+				},
+				open: { high: 0, medium: 0, low: 0 },
 			},
 		]);
 		// An open finding keeps the head short; once no reviewer reports one, it is named in full.
 		expect(body).not.toContain("b".repeat(40));
-		const clean = reviewRecord([{ ...round, findings: [] }, second]);
-		expect(clean).toContain(`- Head: ${"b".repeat(40)}\n`);
+		// Claude's left-out tally still holds an open finding, which keeps it short too.
+		const clean = [{ ...round, findings: [] }, second];
+		expect(reviewRecord(clean, tallies)).not.toContain("b".repeat(40));
+		const settledAll = [tally("codex", 3, { high: 1, medium: 1, low: 2 }, 3, 1), tallies[1]!];
+		expect(reviewRecord(clean, settledAll)).toContain(`- Head: ${"b".repeat(40)}\n`);
 		expect(fixes(body)).toEqual(["codex, gpt-6.1-sol, medium effort"]);
+	});
+
+	test("a record written before tallies has none, and a Rounds line that does not add up fails", () => {
+		const record = reviewRecord([second], [tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0)]);
+		const older = `## Review\n\n${record.replace(/^- Rounds: .*\n/m, "")}\n`;
+		expect(parseReview(older)[0]!.tally).toBeNull();
+		// The settled count `quest usage` prints reads back.
+		const settled = "1; findings 2 (low 2): fixed 1, refuted 0, settled 1, open 0";
+		expect(
+			parseReview(`## Review\n\n${record.replace(/^- Rounds: .*$/m, `- Rounds: ${settled}`)}\n`)[0]!.tally,
+		).toEqual({ rounds: 1, findings: { high: 0, medium: 0, low: 2 }, fixed: 1, refuted: 0, settled: 1, open: 0 });
+		for (const line of [
+			"1; findings 1 (high 1): fixed 0, refuted 0, open 0",
+			"1; findings 2 (high 1): fixed 1, refuted 0, open 1",
+			"1; findings 2 (low 2): fixed 1, refuted 0, settled 1, open 1",
+			"1; findings 1 (severe 1): fixed 1, refuted 0, open 0",
+			"one",
+		])
+			expect(() =>
+				parseReview(`## Review\n\n${record.replace(/^- Rounds: .*$/m, `- Rounds: ${line}`)}\n`),
+			).toThrow(/Rounds line/);
 	});
 
 	test("a skipped review or a fixer-only section has no round", () => {
@@ -375,15 +451,26 @@ describe("usage", () => {
 			"- Reviewer: Codex, gpt-6.1-sol, high effort",
 			`- Session: \`${THREAD}\`, round 2`,
 			"- Score: 9/10, `Fine.`",
+			"- Rounds: 2; findings 2 (high 1, low 1): fixed 1, refuted 1, open 0",
 			"- Findings: none",
 			"",
 			"- Reviewer: opencode, opencode-go/deepseek-v4.1-flash, high effort",
 			"- Session: `ses_1`, round 1",
 			"- Score: 8/10, `Fine.`",
+			"- Rounds: 1; findings 0: fixed 0, refuted 0, open 0",
 			"- Findings: none",
+			"",
+			// A reviewer the latest run left out, such as one a new size pick replaced, has only its tally.
+			"- Reviewer: Claude Code, claude-opus-5-5, high effort",
+			"- Rounds: 1; findings 1 (medium 1): fixed 1, refuted 0, open 0",
 		].join("\n");
 		// #9's claim of the same branch named ses_1 before #10 resumed it, so #10, the newer, takes it.
-		const body9 = body10.slice(body10.indexOf("## Review"));
+		// Its record and #10's tally the same branch, so the rollup counts the tally once, from #10.
+		const body9 = `${body10.slice(body10.indexOf("## Review"))}\n\n## Models\n\n- Size: L\n- Implementer: Claude Code, claude-opus-5-5, high effort\n`;
+		const fork13 = body10
+			.slice(body10.indexOf("## Review"))
+			.replaceAll(THREAD, "thread-fork")
+			.replaceAll("ses_1", "ses_fork");
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
 		const pulls = [
@@ -397,13 +484,54 @@ describe("usage", () => {
 			}),
 			// A fork's PR whose head shares #10's branch name, opened earlier and still open: no session here is
 			// shown to be its.
-			pr(7, "quest/m0/a", "", "2026-11-03T00:00:00Z", {
+			// Its tally is the fork's own, so it counts beside #10's.
+			pr(7, "quest/m0/a", body9, "2026-11-03T00:00:00Z", {
 				state: "open",
 				merged_at: null,
 				closed_at: null,
 				updated_at: "2026-11-06T00:00:00Z",
 				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
 			}),
+			// The fork's newer PR has no implementer to count its tally for, so #7 still counts the fork's.
+			// Its own sessions, so it takes none of #10's.
+			pr(13, "quest/m0/a", fork13, "2026-11-04T00:00:00Z", {
+				state: "open",
+				merged_at: null,
+				closed_at: null,
+				updated_at: "2026-11-06T00:00:00Z",
+				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
+			}),
+			// Two deleted forks' merged PRs from a branch of the same name: neither names its repository, so each
+			// counts. Each merged with one finding open: #5's last round's all low, so merging settled it, and
+			// #6's medium, so it stays open.
+			...[
+				[5, "low 1): fixed 1, refuted 0, open 1", "Low"],
+				[6, "medium 1): fixed 1, refuted 0, open 1", "Medium"],
+			].map(([number, counts, severity]) =>
+				pr(
+					number as number,
+					"quest/m0/a",
+					body9.replace(
+						"low 1): fixed 1, refuted 1, open 0\n- Findings: none",
+						`${counts}\n- Findings, open until the next round settles them:\n  - ${severity}, \`a:1\`: \`x\``,
+					),
+					"2026-11-02T00:00:00Z",
+					{ updated_at: "2026-11-06T00:00:00Z", head: { ref: "quest/m0/a", repo: null } },
+				),
+			),
+			// Two open PRs from another branch, whose older record holds the later tally (3 Sol rounds against
+			// 2), as when a round rewrote only its own PR's record: the older counts, not the stale newer one.
+			...[
+				[3, body9.replace("- Rounds: 2;", "- Rounds: 3;")],
+				[4, body9],
+			].map(([number, body]) =>
+				pr(number as number, "quest/m0/b", body as string, "2026-11-02T00:00:00Z", {
+					state: "open",
+					merged_at: null,
+					closed_at: null,
+					updated_at: "2026-11-06T00:00:00Z",
+				}),
+			),
 			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 		];
 		const requests: string[] = [];
@@ -527,7 +655,7 @@ describe("usage", () => {
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {
 		const { root, deps, priced } = setup();
 		const report = await usage(root, { since: "2026-11-05" }, deps(priced));
-		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7]);
+		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7, 13, 5, 6, 3, 4]);
 		const ten = report.pulls.find((p) => p.number === 10)!;
 		expect(ten.sessions.map((s) => [s.harness, s.session, s.role, s.effort])).toEqual([
 			["claude", CLAUDE, "implementing", "high"],
@@ -562,9 +690,31 @@ describe("usage", () => {
 			["L", "reviewing", "codex", 1],
 			["L", "reviewing", "opencode", 4],
 		]);
-		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.rounds, a.fixes])).toEqual([
-			["S", "gpt-6.1-sol", 1, 1, 17, 2, 1],
-			["L", "claude-opus-5-5", 1, 1, 17, 2, 1],
+		const tally = {
+			rounds: 2,
+			findings: { high: 1, medium: 1, low: 1 },
+			fixed: 2,
+			refuted: 1,
+			settled: 0,
+			open: 0,
+		};
+		// #10's, #7's, each deleted fork's, and #3's.
+		const five = {
+			rounds: 11,
+			findings: { high: 5, medium: 6, low: 4 },
+			fixed: 10,
+			refuted: 3,
+			settled: 1,
+			open: 1,
+		};
+		const codex = (n: number) => report.pulls.find((p) => p.number === n)!.review[0]!.tally;
+		expect([codex(5), codex(6)].map((t) => [t!.settled, t!.open])).toEqual([
+			[1, 0],
+			[0, 1],
+		]);
+		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.tally, a.fixes])).toEqual([
+			["S", "gpt-6.1-sol", 1, 1, 17, tally, 1],
+			["L", "claude-opus-5-5", 7, 5, 85, five, 1],
 		]);
 		expect(ten.online).toEqual([
 			{
@@ -577,11 +727,11 @@ describe("usage", () => {
 				unanswered: 0,
 			},
 		]);
-		// #11 and #10 merged; #9 closed and #7 is open, so neither counts.
+		// #11, #10, #5, and #6 merged; #9 closed and #7 is open, so neither counts.
 		expect(report.online).toEqual([
 			{
 				reviewer: "rabbit[bot]",
-				merged: 2,
+				merged: 4,
 				reviewed: 1,
 				finalHead: 1,
 				findings: 1,
@@ -592,12 +742,17 @@ describe("usage", () => {
 			},
 		]);
 		const text = usageLines(report).join("\n");
+		expect(text).toContain(
+			"  review: Claude Code, claude-opus-5-5, high effort; not in the latest run; rounds 1, findings 1 (medium 1): fixed 1, refuted 0, open 0\n",
+		);
+		expect(text).toContain("rounds 2.0, findings 3 (high 1, medium 1, low 1): fixed 2, refuted 1, open 0;");
 		expect(text).toContain("#10 L merged: PR 10 (quest/m0/a)");
+		expect(text).toContain("findings 2 (high 1, low 1): fixed 1, refuted 0, settled 1, open 0\n");
 		expect(text).toContain(
 			"online review: rabbit[bot], at the final head; 1 finding: 1 accepted, 0 declined, 0 unclassified, 0 unanswered",
 		);
 		expect(text).toContain(
-			"rabbit[bot]  reviewed 1/2 (50%), final head 1 (50%), 1.0 findings per PR reviewed, 100% accepted;",
+			"rabbit[bot]  reviewed 1/4 (25%), final head 1 (25%), 1.0 findings per PR reviewed, 100% accepted;",
 		);
 		expect(text).toContain("fixed later by: #11");
 		expect(text).not.toContain("SECRET");
@@ -619,7 +774,10 @@ describe("usage", () => {
 			[10, 0],
 			[9, 0],
 			[7, 0],
+			[13, 0],
+			[5, 0],
+			[6, 0],
 		]);
-		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8]);
+		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8, null]);
 	});
 });

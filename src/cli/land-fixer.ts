@@ -546,12 +546,12 @@ async function proposeFix(
 	const branch = `quest-land/fix-${base.sha.slice(0, 12)}`;
 	const remote = `https://github.com/${repository}.git`;
 	const ref = `refs/heads/${branch}`;
+	const github = new GitHub(deps);
 	// A retry after a restart finds its own push already there.
 	if ((await remoteHead(root, remote, ref, read)) !== result.head) {
-		const pushed = await push(root, remote, base.sha, result.head, ref, token, "");
+		const pushed = await push(github, root, { remote, from: base.sha, to: result.head, ref, lease: "", token });
 		if (pushed.status !== 0) throw new FixerRefusal(`fix push refused: ${pushed.stderr.trim()}`);
 	}
-	const github = new GitHub(deps);
 	const head = `${repository.split("/")[0]}:${branch}`;
 	const [open] = await github.all(`/repos/${repository}/pulls?head=${encodeURIComponent(head)}&state=open`);
 	if (open) return { number: Number(open.number), branch };
@@ -848,15 +848,14 @@ export async function publishHead(
 ): Promise<void> {
 	const pullPath = `/repos/${plan.repository}/pulls/${entry.number}`;
 	if (current !== head) {
-		const pushed = await push(
-			root,
-			`https://github.com/${entry.repository}.git`,
-			entry.head,
-			head,
-			`refs/heads/${entry.branch}`,
+		const pushed = await push(github, root, {
+			remote: `https://github.com/${entry.repository}.git`,
+			from: entry.head,
+			to: head,
+			ref: `refs/heads/${entry.branch}`,
+			lease: standing,
 			token,
-			standing,
-		);
+		});
 		if (pushed.status !== 0) {
 			// GitHub refuses an App's push of a workflow change it lacks the permission for, and a fork's
 			// branch rules may refuse any. The maintainer's own push may still pass.

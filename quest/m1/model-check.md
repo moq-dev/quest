@@ -30,8 +30,8 @@ with `quest usage --since <the last run's date>`, whose accuracy rollup reads ea
 `## Models` size and implementers and its `## Review` reviewer. It tallies each implementer by the size
 on its own `Implementer:` line where it carries one, such as `(iterate, XS)`,
 not the PR's `## Models` size, so a small iterate on a large PR counts as the
-work it was routed for. It counts fixed and refuted findings only from the
-round before each PR's latest, the one its record keeps, and leaves design
+work it was routed for. It counts each reviewer's findings, fixed, refuted, settled (a merged PR's last all-low round), and open,
+across every round on the branch, from the tally its record keeps, and leaves design
 checkpoints and outages to count by hand:
 
 - Tally by size and by implementing harness, model, and effort: review

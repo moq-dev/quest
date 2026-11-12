@@ -171,6 +171,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"base with <ref>, the working tree must delete or edit it; a PR that finishes the quest deletes it, and " +
 				"one that leaves work rewrites it to what remains. Any other branch adds no finding. Fetch <ref> " +
 				"first: a stale base can predate the quest and skip it.\n\n" +
+				"A repository's own check also compares its skill stubs with the skills this binary carries, and " +
+				"reports a missing, outdated, or retired one. --no-stubs skips that, for a binary built from a base " +
+				"that checks a PR whose stubs follow the PR's own skills.\n\n" +
 				"With --fix, first drop every Required, Related, or Closes entry that links to a quest deleted in " +
 				"the history of HEAD, and of MERGE_HEAD during a merge, that the working tree lacks, as quest rm " +
 				"does, such as the quests a merged base finished, and every epic's Required entry naming a quest in " +
@@ -183,11 +186,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--base <ref>", "Also check the quest branch's diff from its merge base with this ref")
 		.option("--branch <name>", "The PR's head branch, when it differs from the current branch (needs --base)")
+		.option("--no-stubs", "Skip the comparison of the repository's skill stubs with this binary's skills")
 		.option(
 			"--fix",
 			"First drop list links to quests the history deleted and epics' links to their own quests, and promote misleveled section headings",
 		)
-		.action((options: { base?: string; branch?: string; fix?: boolean }) => {
+		.action((options: { base?: string; branch?: string; fix?: boolean; stubs: boolean }) => {
 			if (options.branch !== undefined && options.base === undefined) {
 				throw new UsageError("--branch requires --base");
 			}
@@ -201,7 +205,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
 			// A tree nested in another checkout, such as an example, has no stubs of its own.
-			const stubs = questRoot(resolve(root())) === resolve(root()) ? stubFindings(root()) : [];
+			const stubs = options.stubs && questRoot(resolve(root())) === resolve(root()) ? stubFindings(root()) : [];
 			if (findings.length === 0 && stubs.length === 0) {
 				const count = collect(root()).length;
 				print(theme ? theme.checked(count) : `quest: ${count} documents ok`);
@@ -1110,13 +1114,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"before the PR opened, and iterating otherwise. An opencode session, whose log quest does not read, belongs to the newest PR whose " +
 				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, and as unread each Implementer line it cannot read, " +
-				"each reviewer's latest ## Review round, with its round, score, and findings, " +
+				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, " +
+				"where a merged PR whose last round left only low findings open counts them settled, since the author fixes or refutes those before merge, " +
 				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
 				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
 				"is a bot whose review has a body or opens a thread, or a review whose body opens with Automated review by <name>; a finding is a " +
 				"review thread it opens or a [P<n>] line in its review body, and its first answer's first word takes or " +
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
-				"effort, accuracy by size and implementer, where an Implementer line's own size, as (iterate, XS), wins " +
+				"effort, accuracy by size and implementer, summing each branch's tallies once, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's, and each online reviewer's coverage and findings over the merged PRs. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
@@ -1219,7 +1224,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
 				"repeats that round, marked unchanged, so on the same head only a reviewer with findings to settle runs. " +
-				"--new starts new sessions. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
+				"--new starts new sessions, continuing each reviewer's tally of its findings on the branch, less those it drops unsettled, unless the saved state is one this quest cannot read. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
 				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
@@ -1244,11 +1249,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"`next checkpoint` when a reviewer's every third round reports other findings, to reconsider the approach " +
 				"before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
-				"one object: `rounds`, one per reviewer, `record`, and `next`.\n\n" +
+				"one object: `rounds`, one per reviewer, `tallies`, every reviewer's findings across the branch's rounds, `record`, and `next`.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
 				"user the GitHub token names, keeping the rest of the body, and prints `record <url>`: the reviewed " +
 				"head, named in full only once no reviewer reports a finding, the base, and each reviewer, its " +
-				"session and round, score, and each finding with its disposition. With no " +
+				"session and round, score, its tally of findings across the branch's rounds, and each finding with its disposition. With no " +
 				"such PR, or a remote off GitHub, it prints `record skipped: <why>` and changes nothing.\n\n" +
 				"Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when a reviewer's " +
@@ -1311,17 +1316,17 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					},
 				);
 				pending = run.then(
-					async (rounds) => {
+					async ({ rounds, tallies }) => {
 						// The rounds are saved in their sessions either way, so their report prints before a failed record.
 						let record: Recorded | undefined;
 						let failure: unknown;
 						try {
-							record = await recordRounds(root(), rounds, github);
+							record = await recordRounds(root(), rounds, tallies, github);
 						} catch (error) {
 							failure = error;
 						}
 						if (options.json)
-							print(JSON.stringify({ rounds, record: record ?? null, next: nextStep(rounds) }));
+							print(JSON.stringify({ rounds, tallies, record: record ?? null, next: nextStep(rounds) }));
 						else {
 							for (const line of roundLines(rounds)) print(line);
 							if (record !== undefined)

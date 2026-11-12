@@ -48,6 +48,7 @@ export type ObjectValue = Record<string, unknown>;
 
 /** Retries of a 5xx or a dropped connection, waiting 1, 2, 4, then 8 seconds unless GitHub says how long. */
 const TRANSIENT_RETRIES = 4;
+const backoff = (failures: number) => 1000 * 2 ** failures;
 /** How far GitHub's clock may run behind ours when looking for what a lost request created. */
 const CLOCK_SKEW = 60_000;
 /** Statuses whose response has no body. */
@@ -314,7 +315,7 @@ export class GitHub {
 				}
 			}
 			if (repeat === false || failures >= TRANSIENT_RETRIES) throw failure;
-			const delay = retry ?? 1000 * 2 ** failures;
+			const delay = retry ?? backoff(failures);
 			failures++;
 			this.deps.warn(`${message(failure)}; retrying in ${Math.ceil(delay / 1000)} seconds`);
 			await this.pause(delay);
@@ -322,6 +323,21 @@ export class GitHub {
 				const landed = await repeat(started);
 				if (landed) return landed;
 			}
+		}
+	}
+
+	/**
+	 * Run `attempt` again while `transient` names its result a passing GitHub failure, with the bounded
+	 * backoff of a failed request, and return its last result.
+	 */
+	async retry<T>(attempt: () => Promise<T>, transient: (result: T) => string | undefined): Promise<T> {
+		for (let failures = 0; ; failures++) {
+			const result = await attempt();
+			const reason = transient(result);
+			if (reason === undefined || failures >= TRANSIENT_RETRIES) return result;
+			const delay = backoff(failures);
+			this.deps.warn(`${reason}; retrying in ${delay / 1000} seconds`);
+			await this.pause(delay);
 		}
 	}
 

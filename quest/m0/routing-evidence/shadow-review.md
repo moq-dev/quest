@@ -33,8 +33,3 @@ Agent's choices, for the implementer to revisit:
   that matches a routed finding on the same file, within a few lines, counts
   as found by both. The implementer checks a sample of matches by hand
   before trusting the rule.
-
-## Required
-
-- [Review tallies](/quest/m0/routing-evidence/review-tallies.md) - counts the
-  shadow's findings across rounds
