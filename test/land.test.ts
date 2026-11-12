@@ -872,7 +872,16 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		const root = forge.clone();
 		const options = sandbox();
 		const link = (await build(root, plan)).links[0];
-		await prepareHead(root, options.state, plan, plan.queue[0], plan.base.sha, link.tree, async () => deps.token);
+		await prepareHead(
+			root,
+			options.state,
+			plan,
+			plan.queue[0],
+			plan.base.sha,
+			link.tree,
+			deps,
+			async () => deps.token,
+		);
 		pull.reviews = [
 			{ state: "COMMENTED", author: "rabbit[bot]", body: "[P1] Drops a frame", commit: plan.queue[0].head },
 		];
