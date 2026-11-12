@@ -47,6 +47,6 @@ The audit found today's failures:
 
 ## Waiting
 
-- kixelated/token-max: ships the priced-session export that
-  [its quest](https://github.com/kixelated/token-max/tree/main/quest/m0)
+- kixel-ai/token-max: ships the priced-session export that
+  [its quest](https://github.com/kixel-ai/token-max/tree/main/quest/m0)
   plans; check that its `--help` documents the export
