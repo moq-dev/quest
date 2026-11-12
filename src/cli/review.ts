@@ -106,8 +106,6 @@ export interface Round {
 	earlier: { head: string; findings: Settled[] } | null;
 	/** No reviewer ran: the head is the last round's, which found nothing, so this repeats that round. */
 	unchanged: boolean;
-	/** No reviewer ran: the author settled the last round's low findings, `earlier`, at `head`, with `--settle`. */
-	settled: boolean;
 }
 
 /** A reply's verdict on the reviewed head; `earlier` settles the last round's findings by their number. */
@@ -1686,117 +1684,6 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	return { rounds: done.map((each) => each.round), tallies };
 }
 
-/** A settlement of low findings, saved only by `save`, once its record is written, so a failed record can be retried. */
-export interface Settlement extends Reviewed {
-	save(): void;
-}
-
-/**
- * Settle the last round's findings, all low severity, from the author's `responses` without running a reviewer:
- * one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding, by its number. Each reviewer's tally
- * counts them, and its session forgets them, so its next round checks what changed since their head with nothing
- * to settle. Gives the last run's rounds at the checked-out head, those the author settled marked `settled`.
- */
-export async function settleLow(
-	options: Pick<ReviewOptions, "root" | "branch" | "responses"> & BaseOptions,
-): Promise<Settlement> {
-	const root = git(options.root, ["rev-parse", "--show-toplevel"]);
-	if (git(root, ["status", "--porcelain"]) !== "")
-		throw new ReviewInputError(
-			"the checkout has uncommitted changes; commit them, since the record names the committed head",
-		);
-	const baseRef = options.fetched ? options.base : await fetchBase(root, options.base);
-	const branch = sessionBranch(root, options.branch, parseBase(root, baseRef).branch);
-	const statePath = sessionFile(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
-	const saved = savedState(statePath, false);
-	// Numbered as the last run printed them, across the sessions in order.
-	const open = (saved?.sessions ?? []).flatMap((session) =>
-		session.rounds.at(-1)!.findings.map((finding) => ({ session, finding })),
-	);
-	if (open.length === 0)
-		throw new ReviewInputError(
-			`the last round on ${branch} left no findings to settle; pass the --base and --branch that round used`,
-		);
-	if (open.some(({ finding }) => finding.severity !== "low"))
-		throw new ReviewInputError(
-			"--settle settles only findings that are all low severity; run the next round with --responses",
-		);
-	const reviewed = open[0]!.session.rounds.at(-1)!.head;
-	if (open.some(({ session }) => session.rounds.at(-1)!.head !== reviewed))
-		throw new Error("the findings to settle are from rounds of different heads");
-	// The base keys the session, so a different one may have found another branch's.
-	const last = open[0]!.session.last.base.ref;
-	if (last !== baseRef) throw new ReviewInputError(`the last round reviewed against ${last}; pass --base ${last}`);
-	const head = git(root, ["rev-parse", "HEAD"]);
-	try {
-		git(root, ["merge-base", "--is-ancestor", reviewed, head]);
-	} catch {
-		throw new ReviewInputError(`HEAD does not contain ${reviewed}, which the last round on ${branch} reviewed`);
-	}
-	if (options.responses === undefined)
-		throw new ResponsesError(
-			"--settle needs --responses, one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding",
-		);
-	const answers = new Map<number, { disposition: "fixed" | "refuted"; reason: string }>();
-	for (const line of options.responses.split("\n").map((each) => each.trim())) {
-		if (line === "") continue;
-		const match = /^(\d+)\. (fixed|refuted): (.+)$/i.exec(line);
-		if (!match)
-			throw new ResponsesError(
-				`a --settle response is not \`<n>. fixed: <reason>\` or \`<n>. refuted: <reason>\`: ${line}`,
-			);
-		const number = Number(match[1]);
-		if (number < 1 || number > open.length || answers.has(number))
-			throw new ResponsesError(
-				`--settle settles each of the last round's ${open.length} finding(s) once: ${line}`,
-			);
-		answers.set(number, { disposition: match[2]!.toLowerCase() as "fixed" | "refuted", reason: match[3]! });
-	}
-	if (answers.size !== open.length)
-		throw new ResponsesError(`--settle settles each of the last round's ${open.length} finding(s) once`);
-
-	const tallies = saved!.tallies.map((tally) => ({ ...tally, findings: { ...tally.findings } }));
-	const rounds: Round[] = [];
-	const sessions = saved!.sessions.map((session): Session => {
-		const own = open.flatMap(({ session: raiser, finding }, i) =>
-			raiser === session ? [{ ...finding, number: i + 1, ...answers.get(i + 1)! }] : [],
-		);
-		if (own.length > 0) {
-			const tally = tallies.find((each) => each.reviewer === session.reviewer)!;
-			for (const finding of own) tally[finding.disposition]++;
-			// Saved at the settlement head, so a later round on a head without it reviews the whole change again.
-			const settled: Round = {
-				...session.last,
-				head,
-				findings: [],
-				earlier: { head: reviewed, findings: own },
-				settled: true,
-			};
-			rounds.push({ ...settled, usage: [] });
-			return {
-				...session,
-				rounds: [...session.rounds.slice(0, -1), { ...session.rounds.at(-1)!, findings: [] }],
-				last: settled,
-			};
-		}
-		// A reviewer of the same run found nothing; it stands beside the settled ones in the record, at the head
-		// it reviewed, without the findings an earlier settlement of its own showed.
-		if (session.rounds.at(-1)!.head === reviewed) {
-			const { last: clean } = session;
-			rounds.push({
-				...clean,
-				head: reviewed,
-				usage: [],
-				unchanged: false,
-				settled: false,
-				earlier: clean.settled ? null : clean.earlier,
-			});
-		}
-		return session;
-	});
-	return { rounds, tallies, save: () => save(statePath, { ...saved!, sessions, tallies } satisfies State) };
-}
-
 /**
  * A branch's saved state, or undefined when it has none. `--new` drops the sessions but continues their tallies,
  * less the findings it drops unsettled, so it reads them too, starting them over only when the state is one this quest cannot read, which is what
@@ -1923,9 +1810,7 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 		last.effort === picked.effort &&
 		last.base.ref === shared.base.ref &&
 		(!reviewer.bound || stored!.root === root) &&
-		covers(root, previous.mergeBase, change.mergeBase) &&
-		// A settlement cleared the findings the last round raised, which only a head containing its fix answers.
-		(!last.settled || covers(root, last.head, change.head));
+		covers(root, previous.mergeBase, change.mergeBase);
 
 	// The last round already passed this head, and has nothing left to settle; it repeats against the run's base
 	// and size.
@@ -2017,7 +1902,6 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 							})),
 					},
 		unchanged: false,
-		settled: false,
 	};
 	return { round, session: { reviewer: harness, session, root, rounds, last: round, given } };
 }
@@ -2032,7 +1916,7 @@ export function nextStep(rounds: Round[]): string {
 	const findings = rounds.flatMap((round) => round.findings);
 	if (findings.length === 0) return "next done: no findings remain on this head";
 	if (findings.every((finding) => finding.severity === "low"))
-		return "next finish: fix or refute each finding, commit, rerun the checks, then run quest review --base <remote>/<base> --settle --responses <file>, with one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding; run no further round";
+		return "next finish: fix or refute each finding, commit, rerun the checks, then add a line after the PR body's review record naming the new head's full SHA and each finding's disposition; run no further round";
 	if (rounds.some((round) => round.findings.length > 0 && round.round % 3 === 0))
 		return "next checkpoint: before fixing these findings, reconsider the approach and let the user decide, as /quest-review describes";
 	return "next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number";
@@ -2043,8 +1927,7 @@ export function nextStep(rounds: Round[]): string {
  * line, and its findings, numbered across the reviewers in order, each with its body indented.
  */
 export function roundLines(rounds: Round[]): string[] {
-	// A settlement's head is the settled rounds', beside clean rounds of the head they reviewed.
-	const shared = rounds.find((round) => round.settled) ?? rounds[0];
+	const [shared] = rounds;
 	const lines = [
 		`size ${shared!.size} ${shared!.sizeFrom}`,
 		`base ${shared!.base.sha} ${shared!.base.ref}`,
@@ -2059,11 +1942,6 @@ export function roundLines(rounds: Round[]): string[] {
 			`round ${round.round}`,
 			...(round.unchanged
 				? [`unchanged round ${round.round} reviewed this head and found nothing; no reviewer ran`]
-				: []),
-			...(round.settled
-				? [
-						`settled round ${round.round}'s low findings at ${round.earlier!.head}, by the author; no reviewer ran`,
-					]
 				: []),
 			...round.usage.map((u) => `usage ${u.turn} input ${u.input} cached ${u.cached} output ${u.output}`),
 			`score ${round.score} ${round.rationale.replace(/\s+/g, " ").trim()}`,

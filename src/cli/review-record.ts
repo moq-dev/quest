@@ -50,20 +50,17 @@ const counted = (tally: Tally): Counts => ({
 });
 
 /**
- * The `## Review` section's text for a run's `rounds` of the same head (or a settlement's), without its heading, with every tally
+ * The `## Review` section's text for a run's `rounds` of the same head, without its heading, with every tally
  * on the branch: each round's reviewer's beside its round, and a reviewer the run left out on its own.
  */
 export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
-	// A settlement's head is the settled rounds', beside clean rounds of the head they reviewed.
-	const settled = rounds.find((round) => round.settled);
-	const shared = settled ?? rounds[0];
+	const [shared] = rounds;
 	const clean = rounds.every((round) => round.findings.length === 0);
-	const author = settled?.earlier;
 	const lines = [
 		MARK,
 		"",
 		// `quest status` counts a full SHA here as a review of that head, which an open finding has not passed.
-		`- Head: ${clean ? shared!.head : `${shared!.head.slice(0, 12)}, named in full once no reviewer reports a finding`}${author ? `, where the author settled the low findings reviewed at ${author.head.slice(0, 12)} with no further round` : ""}`,
+		`- Head: ${clean ? shared!.head : `${shared!.head.slice(0, 12)}, named in full once no reviewer reports a finding`}`,
 		`- Base: ${shared!.base.ref} at ${shared!.base.sha.slice(0, 12)}`,
 	];
 	for (const round of rounds) {
@@ -81,10 +78,7 @@ export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 		for (const finding of round.findings)
 			lines.push(`  - ${capitalized(finding.severity)}, ${code(located(finding))}: ${code(finding.title)}`);
 		const settled = round.earlier?.findings ?? [];
-		if (settled.length > 0)
-			lines.push(
-				`- The last round's findings, at ${round.earlier!.head.slice(0, 12)}${round.settled ? ", settled by the author" : ""}:`,
-			);
+		if (settled.length > 0) lines.push(`- The last round's findings, at ${round.earlier!.head.slice(0, 12)}:`);
 		for (const finding of settled)
 			lines.push(
 				`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
