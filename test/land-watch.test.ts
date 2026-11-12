@@ -1338,6 +1338,48 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(history(state, 5)!.rounds[1].rule).toBe("repeated");
 	});
 
+	test("a fix whose dropped head drew a finding while the fixer ran is handed back, not re-enqueued", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const head = repo.pull(5, { "feature.txt": "new\n" });
+		const pull: Pull = {
+			number: 5,
+			head,
+			enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+			removals: [
+				{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue", before: head },
+			],
+		};
+		const github = { ...world([pull], [failedRun(5, at(3), base)]), origin: repo.origin };
+		github.now = Date.parse(at(6));
+		fix.round(5, fixScript("fixed.txt"));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			"removed 5 failed_checks fix",
+			"fixing 5",
+		]);
+		await exited(state);
+		// The fixer's commit read none of it, so it answers nothing on the head it replaces.
+		pull.activity = {
+			reviews: {
+				pageInfo: { hasNextPage: false, endCursor: null },
+				nodes: [
+					{
+						id: "r1",
+						url: "https://github.com/upstream/project/pull/5#pullrequestreview-1",
+						author: { __typename: "Bot", login: "rabbit" },
+						body: "[P1] Drops the last frame",
+						submittedAt: at(7),
+						commit: { oid: head },
+					},
+				],
+			},
+		};
+		github.now = Date.parse(at(10));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["handback 5"]);
+		expect(github.mutations).toEqual([]);
+		expect(github.comments[5].at(-1)!.body).toContain("finding by rabbit[bot]: drops the last frame");
+	});
+
 	test("a fix that edits a protected path is handed back unpushed, as a ready commit", async () => {
 		const { repo, state, fix, context } = setup();
 		const base = repo.main();

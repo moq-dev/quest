@@ -47,6 +47,7 @@ import { isPrepared, push, remoteHead } from "./land-head";
 import { BASE_JOB, type Halt, haltNotice, readHalt, saveHalt } from "./land-halt";
 import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
+import { describe, readSignals } from "./signals";
 
 /**
  * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused, or a fix
@@ -1119,6 +1120,22 @@ async function collectJob(
 						attribution: author(result),
 					});
 
+				// The fix read no finding or decision on the pick it replaces, so those still hold it; the queue
+				// reads only the new head's.
+				if (head !== entry.head) {
+					const [owner, repo] = job.plan.repository.split("/");
+					const held = (
+						await readSignals(
+							github,
+							{ owner: owner!, repo: repo! },
+							[number],
+							new Map([[number, { head: entry.head, picked: entry.enabledAt }]]),
+						)
+					).get(number)!;
+					if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
+					if (held.signals.length > 0)
+						throw new FixerRefusal(`its head is held by ${describe(held.signals)}`);
+				}
 				// A parked PR requeued unchanged is still queued as it was; anything else is pinned anew.
 				if (queuedAs !== entry.enabledAt || head !== entry.head) {
 					// Save intent before enabling, so a lost response can be reconciled after restart.

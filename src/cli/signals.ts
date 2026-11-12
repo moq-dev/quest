@@ -14,6 +14,12 @@ export interface Signal {
 	text: string;
 }
 
+/** A picked head whose signals a later commit carries, and when it was picked. */
+export interface Carried {
+	head: string;
+	picked: string;
+}
+
 /**
  * The marker a comment's first line opens with to record a maintainer decision, after markup such as `**` but not in
  * a quote or code, which four leading spaces or a tab also start.
@@ -48,10 +54,13 @@ const links = (body: string, url: string) =>
  * or a `[P<n>]` line of that pass's body that no writer's later comment links. A
  * decision is a writer's comment opening with {@link DECISION}, posted after the head was committed, that no writer's
  * later comment links: a head committed before a decision cannot have applied it. A bot is never a writer.
+ * `carried` is a head a writer picked that a commit since carries forward unread, such as the land fixer's: findings on
+ * it hold too, and so does a decision posted after its pick.
  */
-export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] {
+export function signals(pull: Activity, writers: ReadonlySet<string>, carried?: Carried): Signal[] {
 	const writer = (actor: unknown) => !isBot(actor) && writers.has(login(actor) ?? "");
 	const found: Signal[] = [];
+	const heads = new Set([pull.head, ...(carried ? [carried.head] : [])]);
 	const reviews = pull.reviews.map((review) => ({
 		id: String(review.id),
 		url: String(review.url),
@@ -59,7 +68,7 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 		reviewer: isBot(review.author) || writer(review.author) ? reviewerOf(review) : null,
 		body: typeof review.body === "string" ? review.body : "",
 		at: Date.parse(String(review.submittedAt)),
-		head: review.commit != null && String(object(review.commit).oid) === pull.head,
+		head: review.commit != null && heads.has(String(object(review.commit).oid)),
 	}));
 	const byId = new Map(reviews.map((review) => [review.id, review]));
 	const opened = new Set(
@@ -120,7 +129,7 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 			for (const title of pass.titles)
 				found.push({ kind: "finding", url: pass.url, author: pass.reviewer!, text: title });
 
-	const committed = Date.parse(pull.committed);
+	const committed = Math.min(Date.parse(pull.committed), carried ? Date.parse(carried.picked) : Infinity);
 	for (const decision of comments) {
 		if (!decision.writer || !DECISION.test(decision.body) || decision.at <= committed) continue;
 		if (comments.some((reply) => reply.writer && reply.at > decision.at && links(reply.body, decision.url)))
@@ -163,11 +172,12 @@ async function writersOf(
 	return writers;
 }
 
-/** The signals on each PR's current head, by number, with the head they were read for. */
+/** The signals on each PR's current head, by number, with the head they were read for, and those `carried` carries. */
 export async function readSignals(
 	client: GitHub,
 	repository: Repository,
 	numbers: number[],
+	carried?: ReadonlyMap<number, Carried>,
 ): Promise<Map<number, { head: string; signals: Signal[] }>> {
 	const pulls = await readActivity(client, repository, numbers);
 	for (const [number, pull] of pulls)
@@ -183,7 +193,12 @@ export async function readSignals(
 		),
 	]);
 	const writers = await writersOf(client, repository, actors);
-	return new Map([...pulls].map(([number, pull]) => [number, { head: pull.head, signals: signals(pull, writers) }]));
+	return new Map(
+		[...pulls].map(([number, pull]) => [
+			number,
+			{ head: pull.head, signals: signals(pull, writers, carried?.get(number)) },
+		]),
+	);
 }
 
 /** Signals as one line each, for a refusal or a comment. */

@@ -2987,6 +2987,22 @@ fi`);
 			{ outcome: "handback", rule: "repeated", before: fixed },
 		]);
 	});
+	test("hands back a fix whose dropped head drew a finding while the fixer ran", async () => {
+		const fixture = await fixerFixture(fixedScript(), { conflict: true });
+		await fixture.finished;
+		// The fixer's commit read none of it, so it answers nothing on the head it replaces.
+		fixture.pull.reviews = [
+			{
+				state: "COMMENTED",
+				author: "rabbit[bot]",
+				body: "[P1] Drops a frame",
+				commit: fixture.plan.queue[0].head,
+			},
+		];
+		expect(await fixture.collect()).toEqual(["handback 1"]);
+		expect(fixture.pull.landing).toBe(false);
+		expect(fixture.forge.comment(1)).toContain("finding by rabbit[bot]: drops a frame");
+	});
 	test("accepts a fix whose base gained protected changes before collection", async () => {
 		const fixture = await fixerFixture(fixedScript(), { conflict: true, protectedBase: true });
 		await fixture.finished;

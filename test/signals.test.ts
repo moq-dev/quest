@@ -217,6 +217,23 @@ group("signals", () => {
 		expect(signals(pull, WRITERS).map((signal) => signal.text)).toEqual(["guard null"]);
 	});
 
+	test("a head that carries a pick forward keeps the pick's findings and the decisions since it", () => {
+		const pull = activity({
+			committed: "2026-11-10T18:00:00Z",
+			reviews: [review("r1", bot("rabbit"), "[P1] Guard null", "2026-11-10T17:30:00Z", OLD)],
+			comments: [
+				comment(person, "Maintainer decision: before the pick.", "2026-11-10T16:30:00Z", "1"),
+				comment(person, "Maintainer decision: while it ran.", "2026-11-10T17:40:00Z", "2"),
+			],
+		});
+		expect(signals(pull, WRITERS)).toEqual([]);
+		const carried = { head: OLD, picked: "2026-11-10T17:00:00Z" };
+		expect(signals(pull, WRITERS, carried).map((signal) => [signal.kind, signal.text])).toEqual([
+			["finding", "guard null"],
+			["decision", "Maintainer decision: while it ran."],
+		]);
+	});
+
 	test("an answer links a whole anchor, not the start of a longer one", () => {
 		const pull = activity({
 			reviews: [review("1", bot("rabbit"), "[P1] Guard null", "2026-11-10T17:05:00Z")],

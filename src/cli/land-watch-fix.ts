@@ -6,7 +6,7 @@ import { isHoldLabel } from "../core";
 import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
 import { type Queued, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
-import { describe, readSignals } from "./signals";
+import { type Carried, describe, readSignals } from "./signals";
 import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";
@@ -660,7 +660,10 @@ async function collect(
 				job.requeuing = head;
 				save(path, job);
 			}
-			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped, queue);
+			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped, queue, {
+				head: entry.head,
+				picked: entry.enabledAt,
+			});
 			save(path, job);
 		} catch (failure) {
 			if (failure instanceof Held) return [...said, ...(await leave())];
@@ -707,7 +710,8 @@ async function collect(
  * Put `head` back in `base`'s queue, at the back: GitHub's merge queue, or the watcher's own, by arming
  * auto-merge pinned to it. A PR queued or armed at it since the queue dropped it, at `dropped`, needs
  * nothing more: a restart finds its own request, and a workflow may pick the fixer's push first. A
- * refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves it to the session that holds it.
+ * refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves it to the session that holds it, and a
+ * signal on `head` or on the `carried` pick it replaces hands it back too.
  */
 async function requeue(
 	github: GitHub,
@@ -716,6 +720,7 @@ async function requeue(
 	base: string,
 	dropped: string,
 	queue: QueueMode,
+	carried?: Carried,
 ): Promise<Queued> {
 	const how = (pull: ObjectValue): Queued => (pull.mergeQueueEntry != null ? "enqueued" : "armed");
 	let pull = await readPull(github, id);
@@ -723,11 +728,13 @@ async function requeue(
 	if (string(pull.headRefOid) !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 	if (!queued(pull, dropped)) {
 		if (isHeld(pull)) throw new Held();
-		// A finding or decision that arrived while the fixer ran holds the head as it would a writer's pick.
+		// A finding or decision that arrived while the fixer ran holds the head as it would a writer's pick. The
+		// fixer's own commit, which read neither, answers none on the pick it replaces.
 		const [owner, repo] = string(object(pull.repository).nameWithOwner).split("/");
-		const held = (await readSignals(github, { owner: owner!, repo: repo! }, [Number(pull.number)])).get(
-			Number(pull.number),
-		)!;
+		const number = Number(pull.number);
+		const held = (
+			await readSignals(github, { owner: owner!, repo: repo! }, [number], carried && new Map([[number, carried]]))
+		).get(number)!;
 		if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 		if (held.signals.length > 0) throw new FixerRefusal(`its head is held by ${describe(held.signals)}`);
 		try {
