@@ -1884,10 +1884,11 @@ hold an agent. Claude Code lists a command only while it runs, so the
 refusal ends with the gate. Codex runs no such hook.
 
 `quest` must be on the `PATH` the agent starts with, as for the worktree `--body`, a `body=` field,
-`git commit -m`, or `--body-file -` with a here-document. A body file, or one
-piped into `gh`, passes unread, since the file may hold something else by the
-time the command runs; `quest context` keeps the footer and em-dash rules in
-prose for that case. `quest context` still prints these rules,
+`git commit -m`, `--body-file -` with a here-document, or a body file. A file
+is read while nothing earlier on the command line could have rewritten it, and
+from the line itself where `cat > file <<'EOF'` wrote it; any other file, or a
+body piped into `gh`, passes unread, since it may hold something else by the
+time the command runs. `quest context` still prints these rules,
 under a last `Checked` section that the hook leaves out, for agents without
 it.
 

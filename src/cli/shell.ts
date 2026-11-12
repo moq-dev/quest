@@ -7,6 +7,8 @@
 export interface Redirect {
 	op: string;
 	target: string;
+	/** Whether `target` holds an expansion, whose text only the shell knows. */
+	expanded?: true;
 }
 
 /** One simple command: its words, redirections, and the text a here-document or here-string feeds its stdin. */
@@ -50,7 +52,7 @@ export function parse(line: string): Simple[] {
 		else if (redirect === "<<<") {
 			command.stdin = `${word}\n`;
 			if (expands) command.stdinExpanded = true;
-		} else command.redirects.push({ op: redirect, target: word });
+		} else command.redirects.push({ op: redirect, target: word, ...(expands && { expanded: true as const }) });
 		word = null;
 		redirect = null;
 		expands = false;

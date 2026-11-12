@@ -1,6 +1,6 @@
 // The rules `quest hook` checks on a tool call, and the shell parsing they rest on.
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, expect, test } from "vitest";
@@ -186,12 +186,6 @@ test("a new GitHub post needs the footer and no em dashes; edits and bodies off 
 	expect(bash(`gh pr create --title "a ${DASH} b" --body-file - <<'EOF'\nBody\n\n${FOOTER}\nEOF`)).toEqual([
 		RULES.emDash,
 	]);
-	// A body file is never read: it may hold something else by the time the line posts it.
-	writeFileSync(join(cwd, "stale.md"), `Body ${DASH}\n`);
-	expect(bash("gh pr comment 5 --body-file stale.md")).toEqual([]);
-	expect(bash("gh pr comment 5 --body-file - < stale.md")).toEqual([]);
-	expect(bash("git commit -F stale.md")).toEqual([]);
-	expect(bash("gh api repos/o/r/issues/5/comments -F body=@stale.md")).toEqual([]);
 	expect(bash("gh api repos/o/r/issues/5/comments -f body=Done")).toEqual([RULES.footer]);
 	expect(bash("gh pr edit 5 --body Done")).toEqual([]);
 	expect(bash("gh api -X PATCH repos/o/r/pulls/5 -f body=Done")).toEqual([]);
@@ -205,4 +199,43 @@ test("a new GitHub post needs the footer and no em dashes; edits and bodies off 
 	expect(bash("gh pr comment 5 --body-file - <<EOF\n$(cat .tmp/body.md)\nEOF")).toEqual([]);
 	expect(bash("gh pr comment 5 --body-file - <<'EOF'\nRun `$(y)`.\nEOF")).toEqual([RULES.footer]);
 	expect(bash("gh pr comment 5 --body 'Run `$(y)`.'")).toEqual([RULES.footer]);
+});
+
+test("a body file is read while nothing earlier on the line could have rewritten it", () => {
+	writeFileSync(join(cwd, "bare.md"), "Body\n");
+	writeFileSync(join(cwd, "dash.md"), `Body ${DASH}\n\n${FOOTER}\n`);
+	writeFileSync(join(cwd, "good.md"), `Body\n\n${FOOTER}\n`);
+	mkdirSync(join(cwd, "sub"));
+	writeFileSync(join(cwd, "sub", "bare.md"), "Body\n");
+	expect(bash("gh pr comment 5 --body-file good.md")).toEqual([]);
+	expect(bash("gh pr comment 5 --body-file bare.md")).toEqual([RULES.footer]);
+	expect(bash("gh pr comment 5 -Fbare.md")).toEqual([RULES.footer]);
+	expect(bash("gh pr comment 5 --body-file - < bare.md")).toEqual([RULES.footer]);
+	expect(bash("gh api repos/o/r/issues/5/comments -F body=@bare.md")).toEqual([RULES.footer]);
+	expect(bash("gh pr comment 5 --body-file dash.md")).toEqual([RULES.emDash]);
+	expect(bash("git commit -F dash.md")).toEqual([RULES.emDash]);
+	expect(bash("gh pr edit 5 --body-file bare.md")).toEqual([]);
+	expect(bash("gh pr comment 5 --body-file missing.md")).toEqual([]);
+
+	// Relative to a `cd` the line spells out, and unknown past one it does not.
+	expect(bash("cd sub && gh pr comment 5 --body-file bare.md")).toEqual([RULES.footer]);
+	expect(bash("cd sub && gh pr comment 5 --body-file ../good.md")).toEqual([]);
+	expect(bash("mkdir -p sub && cd sub && gh pr comment 5 --body-file - < bare.md")).toEqual([RULES.footer]);
+	expect(bash('cd "$dir" && gh pr comment 5 --body-file bare.md')).toEqual([]);
+	expect(bash("cd - && gh pr comment 5 --body-file bare.md")).toEqual([]);
+	expect(bash("(cd sub && true); gh pr comment 5 --body-file bare.md")).toEqual([]);
+
+	// What the line writes is judged by the line, never by the copy on disk.
+	expect(bash(`cat > bare.md <<'EOF'\nBody\n\n${FOOTER}\nEOF\ngh pr comment 5 --body-file bare.md`)).toEqual([]);
+	expect(bash("cat > good.md <<'EOF'\nBody\nEOF\ngh pr comment 5 --body-file good.md")).toEqual([RULES.footer]);
+	expect(bash("cd sub && cat > new.md <<'EOF'\nBody\nEOF\ncd .. && gh pr comment 5 -F sub/new.md")).toEqual([
+		RULES.footer,
+	]);
+	expect(bash("cat > bare.md <<EOF\n$body\nEOF\ngh pr comment 5 --body-file bare.md")).toEqual([]);
+	expect(bash("cat >> bare.md <<'EOF'\nMore\nEOF\ngh pr comment 5 --body-file bare.md")).toEqual([]);
+	expect(bash("printf 'Body' > bare.md; gh pr comment 5 --body-file bare.md")).toEqual([]);
+	expect(bash('echo x > "$out"; gh pr comment 5 --body-file bare.md')).toEqual([]);
+	expect(bash("./body.sh && gh pr comment 5 --body-file bare.md")).toEqual([]);
+	expect(bash("bash -c './body.sh'; gh pr comment 5 --body-file bare.md")).toEqual([]);
+	expect(bash("bash -c 'gh pr comment 5 --body-file bare.md'")).toEqual([RULES.footer]);
 });

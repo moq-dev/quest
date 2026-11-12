@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import { REFERENCE_MARKER, lines } from "../core";
-import { parse } from "./shell";
+import { type Simple, parse } from "./shell";
 
 const EM_DASH = String.fromCharCode(0x2014);
 
@@ -164,6 +164,7 @@ type Rule = keyof typeof RULES;
 /** One call's check: the rules found broken so far. */
 interface Check {
 	found: Set<Rule>;
+	cwd: string;
 	/**
 	 * Whether `path` is scratch under `/tmp` outside the checkout holding `cwd`.
 	 * A `$TMPDIR` path is unknown, since `TMPDIR` may name the checkout itself.
@@ -175,6 +176,7 @@ function check(cwd: string): Check {
 	const root = checkoutRoot(cwd);
 	return {
 		found: new Set(),
+		cwd,
 		scratch: (path) => /^\/tmp(\/|$)/.test(path) && !`${path}/`.startsWith(`${root}/`),
 	};
 }
@@ -239,30 +241,61 @@ function dropOptions(args: string[]): string[] {
 	return args.slice(i);
 }
 
+/** What a command line has done by the command being checked, as far as its text shows. */
+interface Line {
+	/** Where relative paths resolve, or `undefined` once the line moves in a way its text does not show. */
+	cwd: string | undefined;
+	/** The files the line wrote, by absolute path, with the text where a literal here-document gave it. */
+	written: Map<string, string | undefined>;
+	/** Whether a command ran that may have written a file its words do not name. */
+	opaque: boolean;
+}
+
+const WRITES = [">", ">>", ">|", "&>", "&>>"];
+
+/** Commands that write no file but the ones their redirections name. */
+const INERT = new Set(["cd", "mkdir", "cat", "echo", "printf", "true", ":"]);
+
 /**
  * Check each simple command in a shell command line, following `sh -c` into
- * its script, which inherits the assignments in `inherited`. Bodies are read
- * only from the line itself, never from disk: a file may hold something else
- * by the time the line runs it.
+ * its script, which inherits the assignments in `inherited`. A body file is
+ * read from disk only while nothing earlier on the line could have rewritten
+ * it, and from the line itself where a literal here-document wrote it: any
+ * other file may hold something else by the time the line posts it.
  */
-function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set()) {
+function shell(
+	line: string,
+	check: Check,
+	inherited: ReadonlySet<string> = new Set(),
+	state: Line = { cwd: check.cwd, written: new Map(), opaque: false },
+) {
 	const { found, scratch } = check;
+	// A subshell's `cd` ends with it, and the parse does not say where it ends.
+	const grouped = /[()]/.test(line);
 	for (const simple of parse(line)) {
 		const env = new Set(inherited);
 		const argv = unwrap(simple.argv, env);
-		for (const { op, target } of simple.redirects)
-			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
-		if (argv === null) continue;
-		const [name, ...args] = argv;
+		for (const { op, target } of simple.redirects) if (WRITES.includes(op) && scratch(target)) found.add("tmp");
+		const [name, ...args] = argv ?? [];
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
-			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env);
+			if (flag !== -1 && args[flag + 1] !== undefined)
+				shell(args[flag + 1]!, check, env, { ...state, written: new Map(state.written) });
+			state.opaque = true;
 			continue;
 		}
 		const asked = env.has(USER_ASKED);
-		// A here-document or here-string the shell expands is unknown here, as is any other stdin or file.
-		const stdin = simple.stdinExpanded ? undefined : simple.stdin;
-		const input = (file: string) => (file === "-" ? stdin : undefined);
+		/** A file's text as the command will read it, or `undefined` when the line's text does not settle it. */
+		const from = (path: string, expanded = false) => {
+			if (expanded || state.cwd === undefined || path.startsWith("~")) return undefined;
+			const file = resolve(state.cwd, path);
+			if (state.written.has(file)) return state.written.get(file);
+			return state.opaque ? undefined : read(state.cwd, path);
+		};
+		// A here-document or here-string the shell expands is unknown here, as is a pipe.
+		const fed = simple.redirects.filter(({ op }) => op === "<").at(-1);
+		const stdin = simple.stdinExpanded ? undefined : (simple.stdin ?? (fed && from(fed.target, fed.expanded)));
+		const input = (file: string) => (file === "-" ? stdin : from(file));
 		const literal = (value: string) => (simple.expanded?.some((word) => word.endsWith(value)) ? undefined : value);
 		if (name === "tee") {
 			if (args.some((arg) => !arg.startsWith("-") && scratch(arg))) found.add("tmp");
@@ -271,7 +304,28 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		} else if (name === "mktemp") mktemp(args, env, check);
 		else if (name === "git") git(args, asked, input, check);
 		else if (name === "gh") gh(args, input, literal, check);
+		advance(state, simple, name, args, grouped);
 	}
+}
+
+/** Record what `simple` does to the files and directory the rest of its line sees. */
+function advance(state: Line, simple: Simple, name: string | undefined, args: string[], grouped: boolean) {
+	const writes = simple.redirects.filter(({ op }) => WRITES.includes(op));
+	// `cat > file <<'EOF'` is the one write whose text the line gives.
+	const here =
+		name === "cat" && args.length === 0 && !simple.stdinExpanded && writes.length === 1 && writes[0]!.op !== ">>"
+			? simple.stdin
+			: undefined;
+	for (const { target, expanded } of writes) {
+		if (expanded || state.cwd === undefined || target.startsWith("~")) state.opaque = true;
+		else state.written.set(resolve(state.cwd, target), here);
+	}
+	if (name === "cd") {
+		const [to, ...more] = args.filter((arg) => arg !== "-L" && arg !== "-P" && arg !== "--");
+		const known = to !== undefined && more.length === 0 && !grouped && to !== "-" && !to.startsWith("~");
+		state.cwd =
+			known && state.cwd !== undefined && !simple.expanded?.includes(to) ? resolve(state.cwd, to) : undefined;
+	} else if (name !== undefined && !INERT.has(name)) state.opaque = true;
 }
 
 /**
@@ -422,9 +476,9 @@ const POSTS: Record<string, Record<string, boolean>> = {
 };
 
 /**
- * Check a `gh` command that posts text. `input` gives a body file's text
- * (only `-`, stdin from the line, is known), and `literal` gives a word's
- * text, or `undefined` when the shell expands it; an unknown body passes.
+ * Check a `gh` command that posts text. `input` gives a body file's text,
+ * `-` being stdin, and `literal` gives a word's text; each is `undefined`
+ * when the line does not settle it, and an unknown body passes.
  */
 function gh(
 	args: string[],
@@ -463,7 +517,7 @@ function gh(
 		titles = values(rest, ["-t", "--title"], { attached: ["-t"] }).map(literal);
 	}
 	if (body.length === 0) return;
-	// A body not on the line, such as a file, one piped in, or one the shell expands, is left to the prose.
+	// An unknown body, such as one piped in, one the shell expands, or a file the line may have rewritten, passes.
 	if (body.some((text) => text === undefined)) return;
 	const text = body.join("\n");
 	if (authored && adds("", [...titles.filter((title) => title !== undefined), text].join("\n")))
