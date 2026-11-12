@@ -7,14 +7,20 @@ readout, publishes charts of cost against quality for every writer and
 reviewer model and effort `quest` runs, and links them in its PR, so a
 routing change is read off the cost/quality frontier rather than tables:
 
-- Writers: cost per merged PR against first-round findings, review rounds,
+- Writers: cost per merged PR against the findings raised across its review
+  rounds (the review tallies' per-reviewer totals), review rounds,
   hand-backs, and later `## Caused by` escapes, one point per size, model,
   and effort.
-- Reviewers: cost per review against findings raised and the share fixed or
-  accepted, for the local reviewers and the online ones, which `quest usage`
-  reports since [moq-dev/quest#642](https://github.com/moq-dev/quest/pull/642).
-- Beside our points, the published benchmark points for the same models and
-  efforts, so a cell where our work departs from the benchmarks stands out.
+- Local reviewers: cost per review against findings raised and the share
+  fixed.
+- Online reviewers, which run on flat plans and have no cost per review:
+  coverage against findings per PR and acceptance, which `quest usage`
+  reports since [moq-dev/quest#642](https://github.com/moq-dev/quest/pull/642),
+  on a chart of their own.
+- Published benchmarks: one chart per benchmark suite, score against its
+  own cost per task, for the same models and efforts. Benchmark and PR
+  metrics differ, so compare the rank order of cells across the charts,
+  not their values; a cell whose rank differs stands out.
 
 Non-goal: a live dashboard. No chart code ships in `quest`.
 
@@ -30,13 +36,18 @@ Decided 2026-11-11 (user, /quest-plan in a /quest-run session, when picking
 - Where do they live? ✅ An artifact per run: the agent running the check or
   the readout renders a private claude.ai page from `quest usage --json` and
   the benchmark table, and links it in its PR, so the core stays
-  independent of a harness (rejected: a `quest usage --html` report, which
+  independent of a harness. The page is for the maintainer, who picks
+  routing; the PR body also carries the plotted numbers as tables, so a
+  reviewer who cannot open the page can check them (rejected: a `quest usage --html` report, which
   adds chart code and tests to the CLI; token-max, which knows no PR
   quality signals)
 - Milestone? ✅ m0, in this epic (rejected: m1)
 
-The benchmarks behind the XS writer change, for the first table
-([writer A/B](/quest/m0/routing-evidence/writer-ab.md) records the decision):
+The benchmarks behind the XS writer change to Sonnet 5.5 high
+([moq-dev/quest#646](https://github.com/moq-dev/quest/pull/646)) and the XS
+arm of the [writer A/B](/quest/m0/routing-evidence/writer-ab.md)
+([moq-dev/quest#644](https://github.com/moq-dev/quest/pull/644)), both
+decided on 2026-11-11, for the first table:
 
 - Anthropic's
   [cost guide](https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence),
