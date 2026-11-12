@@ -21,6 +21,7 @@ const thread = (comments: object[], resolvedBy: object | null = null) => ({
 });
 const activity = (pull: Partial<Activity>): Activity => ({
 	head: HEAD,
+	committed: "2026-11-06T00:00:00Z",
 	reviews: [],
 	reviewThreads: [],
 	comments: [],

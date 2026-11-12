@@ -1,7 +1,6 @@
-// What holds a PR's head from landing besides its checks: an online reviewer's finding on the head that nobody has
+// What holds a PR's head from landing besides its checks: an online reviewer's finding on the head that no writer has
 // answered, and a maintainer decision recorded in a comment after the head was committed that nothing has answered.
-import type { GitHub, ObjectValue, Repository } from "./github";
-import { array, object } from "./github";
+import { type GitHub, type ObjectValue, type Repository, array, object, string } from "./github";
 import { type Activity, bodyFindings, classify, isBot, login, readActivity, reviewerOf } from "./online-review";
 
 /** One signal on a PR's head that holds it from landing until it is fixed or answered. */
@@ -15,44 +14,48 @@ export interface Signal {
 	text: string;
 }
 
-/** The marker a comment opens with to record a maintainer decision, after any markup such as `**`. */
-export const DECISION = /^[^A-Za-z]*Maintainer decision\b/i;
+/** The marker a comment opens with to record a maintainer decision, after markup such as `**` but not in a quote. */
+export const DECISION = /^[^A-Za-z>]*Maintainer decision\b/i;
 
-/** Comment author associations of accounts with write access, whose decisions and answers count. */
-const WRITERS = ["OWNER", "MEMBER", "COLLABORATOR"];
+/** Repository permissions that can push, whose decisions and answers count. */
+const WRITE = ["admin", "maintain", "write"];
 
-/** A body's first line of prose, past markup such as a bot's HTML comments, cut short. */
+/** A body's first line of prose, past markup such as a bot's HTML comments and images, cut short. */
 const firstLine = (body: string) =>
 	body
 		.replace(/<!--[\s\S]*?-->|<[^>\n]*>/g, "")
 		.split("\n")
-		.map((line) => line.replace(/\*\*\s*\*\*/g, "").trim())
+		.map((line) => line.replace(/\*\*|__/g, "").trim())
 		.find((line) => /[A-Za-z]/.test(line))
 		?.slice(0, 120) ?? "";
 
+/** The `#...` anchor of a GitHub URL. */
+const anchorOf = (url: string) => url.slice(url.lastIndexOf("#"));
+
 /**
- * The signals holding `pull`'s head. A finding is an online reviewer's, from its latest pass over the head: a review
- * thread it opened that is unresolved with no reply from anyone else, or a `[P<n>]` line of that pass's body that no
- * later comment answers, by linking the pass or taking a side in its first word as `online-review` reads answers. A
- * decision is a comment by a writer opening with {@link DECISION}, posted after the head was committed, that no
- * writer's later comment links: a head committed before a decision cannot have applied it.
+ * The signals holding `pull`'s head, given which accounts can push to its repository. A finding is an online
+ * reviewer's, from its latest pass over the head: a review thread it opened that is unresolved with no writer's reply,
+ * or a `[P<n>]` line of that pass's body that no writer's later comment answers. A comment answers each pass it links,
+ * else, when its first word takes a side as `online-review` reads answers, the latest pass before it with findings. A
+ * decision is a writer's comment opening with {@link DECISION}, posted after the head was committed, that no writer's
+ * later comment links: a head committed before a decision cannot have applied it. A bot is never a writer.
  */
-export function signals(pull: Activity): Signal[] {
+export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] {
+	const writer = (actor: unknown) => !isBot(actor) && writers.has(login(actor) ?? "");
 	const found: Signal[] = [];
 	const reviews = pull.reviews.map((review) => ({
 		id: String(review.id),
 		url: String(review.url),
 		reviewer: reviewerOf(review),
-		author: login(review.author) ?? "-",
 		body: typeof review.body === "string" ? review.body : "",
 		at: Date.parse(String(review.submittedAt)),
 		head: review.commit != null && String(object(review.commit).oid) === pull.head,
 	}));
 	const byId = new Map(reviews.map((review) => [review.id, review]));
-	const comments = [...pull.comments]
+	const comments = pull.comments
 		.map((comment) => ({
 			author: comment.author,
-			writer: WRITERS.includes(String(comment.authorAssociation)) && !isBot(comment.author),
+			writer: writer(comment.author),
 			body: String(comment.body ?? ""),
 			url: String(comment.url ?? ""),
 			at: Date.parse(String(comment.createdAt)),
@@ -66,11 +69,10 @@ export function signals(pull: Activity): Signal[] {
 		if (!opener?.reviewer || !opener.head) continue;
 		// A named reviewer posts under a person's account, so only its own reviews tell its replies from an answer.
 		const own = (comment: ObjectValue) =>
-			opener.body.startsWith("Automated review by")
-				? comment.pullRequestReview != null &&
-					byId.get(String(object(comment.pullRequestReview).id))?.reviewer === opener.reviewer
-				: login(comment.author) === opener.reviewer;
-		if (replies.some((reply) => !own(reply))) continue;
+			opener.body.startsWith("Automated review by") &&
+			comment.pullRequestReview != null &&
+			byId.get(String(object(comment.pullRequestReview).id))?.reviewer === opener.reviewer;
+		if (replies.some((reply) => !own(reply) && writer(reply.author))) continue;
 		found.push({
 			kind: "finding",
 			url: String(first!.url ?? opener.url),
@@ -86,28 +88,30 @@ export function signals(pull: Activity): Signal[] {
 			const prior = latest.get(review.reviewer);
 			if (!prior || prior.at <= review.at) latest.set(review.reviewer, review);
 		}
-	const reviewers = new Set(reviews.flatMap((review) => (review.reviewer === null ? [] : [review.reviewer])));
-	for (const pass of latest.values()) {
-		const titles = bodyFindings(pass.body);
-		if (!titles.length) continue;
-		const anchor = pass.url.slice(pass.url.lastIndexOf("#"));
-		const answered = comments.some(
-			(comment) =>
-				comment.at >= pass.at &&
-				!isBot(comment.author) &&
-				!reviewers.has(login(comment.author) ?? "") &&
-				(comment.body.includes(anchor) || classify(comment.body) !== "unclassified"),
-		);
-		if (answered) continue;
-		for (const title of titles) found.push({ kind: "finding", url: pass.url, author: pass.reviewer!, text: title });
+	const passes = [...latest.values()]
+		.map((pass) => ({ ...pass, titles: bodyFindings(pass.body), answered: false }))
+		.filter((pass) => pass.titles.length > 0)
+		.sort((a, b) => a.at - b.at);
+	for (const comment of comments) {
+		if (!comment.writer) continue;
+		const linked = passes.filter((pass) => comment.at >= pass.at && comment.body.includes(anchorOf(pass.url)));
+		const targets =
+			linked.length > 0
+				? linked
+				: classify(comment.body) === "unclassified"
+					? []
+					: passes.filter((pass) => pass.at <= comment.at).slice(-1);
+		for (const pass of targets) pass.answered = true;
 	}
+	for (const pass of passes)
+		if (!pass.answered)
+			for (const title of pass.titles)
+				found.push({ kind: "finding", url: pass.url, author: pass.reviewer!, text: title });
 
-	const committed = pull.committed === undefined ? Number.NaN : Date.parse(pull.committed);
+	const committed = Date.parse(pull.committed);
 	for (const decision of comments) {
-		if (!decision.writer || !DECISION.test(decision.body)) continue;
-		// An unknown commit time cannot show the head applied it.
-		if (decision.at <= committed) continue;
-		const anchor = decision.url.slice(decision.url.lastIndexOf("#"));
+		if (!decision.writer || !DECISION.test(decision.body) || decision.at <= committed) continue;
+		const anchor = anchorOf(decision.url);
 		if (comments.some((reply) => reply.writer && reply.at > decision.at && reply.body.includes(anchor))) continue;
 		found.push({
 			kind: "decision",
@@ -119,6 +123,34 @@ export function signals(pull: Activity): Signal[] {
 	return found;
 }
 
+/**
+ * Which of `logins` can push to `repository`. An author association of OWNER can; MEMBER and COLLABORATOR may only
+ * read, so their permission is read; any other association cannot.
+ */
+async function writersOf(
+	client: GitHub,
+	repository: Repository,
+	actors: { actor: unknown; association: unknown }[],
+): Promise<Set<string>> {
+	const writers = new Set<string>();
+	const asked = new Set<string>();
+	for (const { actor, association } of actors) {
+		const name = login(actor);
+		if (name === null || isBot(actor)) continue;
+		if (association === "OWNER") writers.add(name);
+		else if ((association === "MEMBER" || association === "COLLABORATOR") && !asked.has(name)) {
+			asked.add(name);
+			const response = await client.request(
+				`/repos/${repository.owner}/${repository.repo}/collaborators/${encodeURIComponent(name)}/permission`,
+				{ allow: [404] },
+			);
+			if (response.status !== 404 && WRITE.includes(string(object(await response.json()).permission)))
+				writers.add(name);
+		}
+	}
+	return writers;
+}
+
 /** The signals on each PR's current head, by number, with the head they were read for. */
 export async function readSignals(
 	client: GitHub,
@@ -126,7 +158,17 @@ export async function readSignals(
 	numbers: number[],
 ): Promise<Map<number, { head: string; signals: Signal[] }>> {
 	const pulls = await readActivity(client, repository, numbers);
-	return new Map([...pulls].map(([number, pull]) => [number, { head: pull.head, signals: signals(pull) }]));
+	const actors = [...pulls.values()].flatMap((pull) => [
+		...pull.comments.map((comment) => ({ actor: comment.author, association: comment.authorAssociation })),
+		...pull.reviewThreads.flatMap((thread) =>
+			array(object(thread.comments).nodes).map((comment) => ({
+				actor: comment.author,
+				association: comment.authorAssociation,
+			})),
+		),
+	]);
+	const writers = await writersOf(client, repository, actors);
+	return new Map([...pulls].map(([number, pull]) => [number, { head: pull.head, signals: signals(pull, writers) }]));
 }
 
 /** Signals as one line each, for a refusal or a comment. */

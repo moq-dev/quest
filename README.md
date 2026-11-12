@@ -865,20 +865,21 @@ A signal holds a PR's head from landing until it is fixed or answered, since
 the review its pick relied on predates it. `quest merge --land` refuses while
 one holds, `quest status` lists each as a `signal` line, and a queue takes a
 PR that draws one out, ejecting it as `unanswered_signal`, even while it waits
-to merge. Nothing waits for a reviewer: a signal that arrives before the merge
-ends the pick. There are two kinds:
+to merge. Nothing waits for a reviewer: a signal the queue reads before the
+merge ends the pick. There are two kinds:
 
 - `finding`: an online reviewer's (a bot's, or a review whose body opens
   `Automated review by <name>`) on the head. A review thread it opened holds
-  until it is resolved or someone else replies; a `[P<n>]` line in its latest
-  review body over the head holds until a later comment links that review or
-  opens with an answering word such as `Fixed` or `Declined`.
-- `decision`: a comment by an account with write access that opens with
-  `Maintainer decision`, posted after the head's commit, which therefore cannot
-  apply it. A newer commit answers it, as does a later comment by a writer
-  that links it.
+  until it is resolved or a writer replies. A `[P<n>]` line in its latest
+  review body over the head holds until a writer's later comment links that
+  review, or, linking none, opens with an answering word such as `Fixed` or
+  `Declined`, which answers the latest such review before it.
+- `decision`: a writer's comment that opens with `Maintainer decision`, not in
+  a quote, posted after the head's commit, which therefore cannot apply it. A
+  newer commit answers it, as does a writer's later comment that links it.
 
-A bot's comments answer nothing.
+A writer can push to the repository: an owner, or a member or collaborator
+whose permission GitHub reports as write or higher. A bot is never one.
 
 ## Watch the merge queue with quest land watch
 

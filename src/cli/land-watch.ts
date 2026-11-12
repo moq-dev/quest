@@ -344,20 +344,34 @@ async function dequeueSignaled(github: GitHub, repository: Repository, pulls: Ob
 					? string(object(now.mergeQueueEntry).enqueuedAt)
 					: null;
 		if (pick === null) continue;
-		if (now.mergeQueueEntry != null)
-			await github.graphql("mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }", {
-				id: pull.id,
-			});
-		if (now.autoMergeRequest != null)
-			await github.graphql(
-				"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
-				{ id: pull.id },
-			);
+		try {
+			if (now.mergeQueueEntry != null)
+				await github.graphql(
+					"mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }",
+					{ id: pull.id },
+				);
+			if (now.autoMergeRequest != null)
+				await github.graphql(
+					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+					{ id: pull.id },
+				);
+		} catch (error) {
+			if (!(error instanceof GitHubGraphQLError)) throw error;
+			// GitHub moved first: it merged, closed, or left the queue, or its head moved. The next pass reads it again.
+			const fresh = await readPull(github, string(pull.id));
+			if (
+				fresh.state !== "OPEN" ||
+				string(fresh.headRefOid) !== head ||
+				(fresh.mergeQueueEntry == null && fresh.autoMergeRequest == null)
+			)
+				continue;
+			throw error;
+		}
 		await post(
 			github,
 			{ repository: `${repository.owner}/${repository.repo}` },
 			{ number, enabledAt: pick },
-			`quest land watch: took this pull request out of the queue at ${head}, which is held by ${describe(found.signals)}. Push a fix, or answer each, then land it again.`,
+			`quest land watch: ended this pull request's pick, taking it out of the queue and disarming its auto-merge, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each, then land it again.`,
 			`signaled ${head}`,
 			"quest land watch",
 			"unanswered_signal",

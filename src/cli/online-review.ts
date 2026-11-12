@@ -54,7 +54,7 @@ export function bodyFindings(body: string): string[] {
 	});
 }
 
-const THREAD_COMMENT = "author { __typename login } body url pullRequestReview { id }";
+const THREAD_COMMENT = "author { __typename login } authorAssociation body url pullRequestReview { id }";
 const FIELDS = {
 	reviews: "id url author { __typename login } body submittedAt commit { oid }",
 	reviewThreads:
@@ -71,7 +71,7 @@ const page = (name: Connection, after: string) =>
 const BATCH = 10;
 
 /** A PR's last head and its committer date, and its reviews, review threads, and comments as GitHub's GraphQL API gives them. */
-export type Activity = Record<Connection, ObjectValue[]> & { head: string; committed?: string };
+export type Activity = Record<Connection, ObjectValue[]> & { head: string; committed: string };
 
 /** Each PR's reviews, review threads, and comments, and its head, read in batches and then in pages. */
 export async function readActivity(
@@ -97,8 +97,9 @@ export async function readActivity(
 				throw new Error(`GitHub has no PR #${number} in ${repository.owner}/${repository.repo} for this token`);
 			const pull = object(value);
 			const commit = object(object(array(object(pull.commits).nodes)[0] ?? {}).commit ?? {});
-			const nodes = { head: String(pull.headRefOid) } as Activity;
-			if (commit.oid === pull.headRefOid) nodes.committed = String(commit.committedDate);
+			if (commit.oid !== pull.headRefOid)
+				throw new Error(`the head of PR #${number} changed while it was read; retry`);
+			const nodes = { head: String(pull.headRefOid), committed: String(commit.committedDate) } as Activity;
 			const cursors: Partial<Record<Connection, string>> = {};
 			for (const name of CONNECTIONS) {
 				const connection = object(pull[name]);

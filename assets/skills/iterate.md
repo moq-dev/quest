@@ -21,6 +21,7 @@ Record the settled decisions in this PR description's `## Decisions` section as 
 Leave the open decisions of its follow-ups to the round that picks it to merge, and record answers your brief or the user gives as the guide's Creation section describes.
 
 Fix merge conflicts, failing CI checks, and the review findings already posted on the head.
+Answer each `signal` line of `quest status <pr>` that your push leaves: reply in the finding's thread, link its review in a comment, or link the decision in a comment saying how the head applies it.
 
 If `quest status <pr>` shows auto-merge enabled, disable it with `gh pr merge <pr> --disable-auto` before any push: GitHub keeps it across a writer's push and would land the new head unreviewed.
 Once nothing is unfinished and no decisions beyond its follow-ups' need the user, run `/quest-review` with your token, which reviews the branch, pushes, and marks the PR ready.

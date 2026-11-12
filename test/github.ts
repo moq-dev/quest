@@ -573,6 +573,8 @@ export function fakeGitHub(world: World) {
 								return json({
 									data: {
 										node: {
+											number: pull.number,
+											repository: { nameWithOwner: `${repo.owner}/${repo.name}` },
 											state: pull.merged ? "MERGED" : pull.closed ? "CLOSED" : "OPEN",
 											baseRefName: pull.base ?? defaultOf(repo),
 											headRefOid: headOf(repo, pull),

@@ -271,6 +271,8 @@ function deps(world: World): GitHubDependencies {
 					return Response.json({
 						data: {
 							node: {
+								number: pull.number,
+								repository: { nameWithOwner: "upstream/project" },
 								state: pull.state ?? "OPEN",
 								baseRefName: pull.base ?? "main",
 								headRefOid: headOf(world, pull),
@@ -817,7 +819,7 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 	]);
 	expect(github.comments[30]).toHaveLength(1);
 	expect(github.comments[30][0].body).toContain(
-		`took this pull request out of the queue at ${HEAD}, which is held by finding by rabbit[bot]: drops the last frame`,
+		`taking it out of the queue and disarming its auto-merge, since its head ${HEAD} is held by finding by rabbit[bot]: drops the last frame`,
 	);
 	expect(github.comments[30][0].body).toContain("<!-- quest land: unanswered_signal -->");
 	// Out of the queue and disarmed: the next pass leaves both alone.

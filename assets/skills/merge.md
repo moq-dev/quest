@@ -16,7 +16,7 @@ If a `hold` record shows another session holds the PR, stop and report it; takin
 The head is landable when:
 
 - a `## Review` record that counts names it, or the exemptions below cover the changes since the one it names;
-- every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, and no decision is open;
+- every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, no decision is open, and `quest status` prints no `signal` line;
 - its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base.
 
 A head on which any check failed, required or not, needs `/quest-iterate` to fix it or rerun the check, flaky ones included; `quest merge` refuses it, naming each failing check.

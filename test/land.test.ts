@@ -4678,6 +4678,37 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(await pass(0, fix)).toEqual(["landed 2"]);
 		expect(await pass(0, fix)).toEqual(["building 1"]);
 	});
+
+	test("the land fixer's requeue hands back a head a finding drew while it ran", async () => {
+		const { forge, queue, pass } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		const tools = tempDir();
+		const wrapper = join(tools, "wrapper");
+		writeFileSync(
+			wrapper,
+			`#!/bin/sh\nset -eu\nprintf '[{"number":%s,"action":"requeue","reason":"healthy","failure":"just test: render","cause":"flaky"}]' "$2" > quest-land-result.json\n`,
+			{ mode: 0o755 },
+		);
+		const fix: FixContext = {
+			root: queue.root,
+			fixer: wrapper,
+			jobs: 1,
+			effort: "medium",
+			tags: [],
+			timeout: 60,
+			token: queue.token,
+			read: readRemote,
+		};
+		await pass(0, fix);
+		report(forge, 1, "FAILURE", "flaked\n");
+		const finished = eventFile(queue.state, (name) => name.endsWith(".exit"));
+		expect(await pass(0, fix)).toEqual(["removed 1", "fixing 1"]);
+		await finished;
+		one.reviews = [{ state: "COMMENTED", author: "rabbit[bot]", body: "[P1] Drops a frame" }];
+		expect(await pass(0, fix)).toEqual(["handback 1"]);
+		expect(one.landing).toBeFalsy();
+		expect(one.comments?.at(-1)?.body).toContain("finding by rabbit[bot]: drops a frame");
+	});
 });
 
 test("the watcher picks its queue from the base's rules each pass", async () => {

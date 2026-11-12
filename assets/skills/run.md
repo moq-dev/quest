@@ -57,7 +57,7 @@ A `/quest-merge` pick covers the PR until it lands or needs the user: when `/que
 Order merges that would otherwise conflict.
 A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`.
 Where the queue runs a fixer, such as `quest land`, it hands back only a decision: ask the user, with its handback comment's diagnosis and recommendation.
-Without one, after `merge_conflict` or `failed_checks` the pick holds, even from an earlier session: dispatch `/quest-iterate`. After `checks_pending`, run `/quest-merge` again once they pass.
+Without one, after `merge_conflict`, `failed_checks`, or `unanswered_signal` the pick holds, even from an earlier session: dispatch `/quest-iterate`. After `checks_pending`, run `/quest-merge` again once they pass.
 Any other reason, such as a person removing it, is the user's call.
 
 ## Loop

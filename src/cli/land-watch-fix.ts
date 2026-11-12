@@ -6,6 +6,7 @@ import { isHoldLabel } from "../core";
 import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
 import { type Queued, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
+import { describe, readSignals } from "./signals";
 import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";
@@ -121,7 +122,7 @@ const JUDGED: Record<Cause, string> = {
 };
 
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
-	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
+	number repository { nameWithOwner } state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 	labels(first: 100) { nodes { name } }
 	headRepository { nameWithOwner }
 } } }`;
@@ -722,6 +723,13 @@ async function requeue(
 	if (string(pull.headRefOid) !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 	if (!queued(pull, dropped)) {
 		if (isHeld(pull)) throw new Held();
+		// A finding or decision that arrived while the fixer ran holds the head as it would a writer's pick.
+		const [owner, repo] = string(object(pull.repository).nameWithOwner).split("/");
+		const held = (await readSignals(github, { owner: owner!, repo: repo! }, [Number(pull.number)])).get(
+			Number(pull.number),
+		)!;
+		if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
+		if (held.signals.length > 0) throw new FixerRefusal(`its head is held by ${describe(held.signals)}`);
 		try {
 			if (queue.kind === "own") await enqueue(github, id, head, queue.method);
 			else
