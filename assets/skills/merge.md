@@ -32,7 +32,7 @@ Otherwise, changes since that head need no new review only when they are conflic
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so review their head locally and rewrite the record before landing it.
 
-Before queueing, fetch the PR's base branch and its exact head, check out the head outside your checkout, such as a detached worktree in `.tmp/`, and run `quest --root <head-checkout> check --base <remote>/<base> --branch <head-branch>` with a `quest` the PR cannot modify, from a directory outside the head checkout: the head's files are untrusted, and a stale local base can skip the check.
+Before queueing, fetch the PR's base branch and its exact head, check out the head outside your checkout, such as a detached worktree in `.tmp/`, and run `quest --root <head-checkout> check --no-stubs --base <remote>/<base> --branch <head-branch>` with a `quest` the PR cannot modify, from a directory outside the head checkout: the head's files are untrusted, and a stale local base can skip the check. `--no-stubs` is there because the PR's own checks verify its stubs.
 A finding means the PR leaves its quest inaccurate: run `/quest-iterate`.
 
 Queue the head with `quest merge <pr> --land <full 40-character head SHA>`.

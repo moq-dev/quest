@@ -284,7 +284,8 @@ still judge whether a rewrite matches what remains.
 binary carries, and reports a missing, outdated, or retired one. A job that
 checks a PR with a binary built from the base passes `--no-stubs`, since that
 binary's skills would reject a PR that changes a stub; the PR's own binary
-checks them in its own `quest check`. This repository's merge queue does so.
+checks them in its own `quest check`. This repository's merge queue and the
+`quest-merge` skill's preflight do so.
 
 A link into a submodule that is not checked out, as in a fresh worktree or
 `actions/checkout` by default, resolves at the commit its gitlink pins when a
