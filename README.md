@@ -872,8 +872,7 @@ merge ends the pick. There are two kinds:
   `Automated review by <name>`) on the head. A review thread it opened holds
   until it is resolved or a writer replies. A `[P<n>]` line in its latest
   review body over the head holds until a writer's later comment links that
-  review, or, linking none, opens with an answering word such as `Fixed` or
-  `Declined`, which answers the latest such review before it.
+  review.
 - `decision`: a writer's comment that opens with `Maintainer decision`, not in
   a quote, posted after the head's commit, which therefore cannot apply it. A
   newer commit answers it, as does a writer's later comment that links it.

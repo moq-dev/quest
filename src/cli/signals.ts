@@ -1,7 +1,7 @@
 // What holds a PR's head from landing besides its checks: an online reviewer's finding on the head that no writer has
 // answered, and a maintainer decision recorded in a comment after the head was committed that nothing has answered.
 import { type GitHub, type ObjectValue, type Repository, array, object, string } from "./github";
-import { type Activity, bodyFindings, classify, isBot, login, readActivity, reviewerOf } from "./online-review";
+import { type Activity, bodyFindings, isBot, login, readActivity, reviewerOf } from "./online-review";
 
 /** One signal on a PR's head that holds it from landing until it is fixed or answered. */
 export interface Signal {
@@ -35,8 +35,7 @@ const anchorOf = (url: string) => url.slice(url.lastIndexOf("#"));
 /**
  * The signals holding `pull`'s head, given which accounts can push to its repository. A finding is an online
  * reviewer's, from its latest pass over the head: a review thread it opened that is unresolved with no writer's reply,
- * or a `[P<n>]` line of that pass's body that no writer's later comment answers. A comment answers each pass it links,
- * else, when its first word takes a side as `online-review` reads answers, the latest pass before it with findings. A
+ * or a `[P<n>]` line of that pass's body that no writer's later comment links. A
  * decision is a writer's comment opening with {@link DECISION}, posted after the head was committed, that no writer's
  * later comment links: a head committed before a decision cannot have applied it. A bot is never a writer.
  */
@@ -92,17 +91,11 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 		.map((pass) => ({ ...pass, titles: bodyFindings(pass.body), answered: false }))
 		.filter((pass) => pass.titles.length > 0)
 		.sort((a, b) => a.at - b.at);
-	for (const comment of comments) {
-		if (!comment.writer) continue;
-		const linked = passes.filter((pass) => comment.at >= pass.at && comment.body.includes(anchorOf(pass.url)));
-		const targets =
-			linked.length > 0
-				? linked
-				: classify(comment.body) === "unclassified"
-					? []
-					: passes.filter((pass) => pass.at <= comment.at).slice(-1);
-		for (const pass of targets) pass.answered = true;
-	}
+	// A writer answers a pass by linking it; an answer word alone cannot tell which finding it meant.
+	for (const pass of passes)
+		pass.answered = comments.some(
+			(comment) => comment.writer && comment.at >= pass.at && comment.body.includes(anchorOf(pass.url)),
+		);
 	for (const pass of passes)
 		if (!pass.answered)
 			for (const title of pass.titles)

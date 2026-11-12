@@ -344,28 +344,34 @@ async function dequeueSignaled(github: GitHub, repository: Repository, pulls: Ob
 					? string(object(now.mergeQueueEntry).enqueuedAt)
 					: null;
 		if (pick === null) continue;
+		// GitHub may disarm auto-merge with the dequeue, so the disarm reads the PR again first. Either one taken
+		// ends the pick and is said; when GitHub moved first and neither was taken, the next pass reads it again.
+		let taken = false;
 		try {
-			if (now.mergeQueueEntry != null)
+			if (now.mergeQueueEntry != null) {
 				await github.graphql(
 					"mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }",
 					{ id: pull.id },
 				);
-			if (now.autoMergeRequest != null)
+				taken = true;
+			}
+			const armed = taken ? (await readPull(github, string(pull.id))).autoMergeRequest : now.autoMergeRequest;
+			if (armed != null) {
 				await github.graphql(
 					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 					{ id: pull.id },
 				);
+				taken = true;
+			}
 		} catch (error) {
 			if (!(error instanceof GitHubGraphQLError)) throw error;
-			// GitHub moved first: it merged, closed, or left the queue, or its head moved. The next pass reads it again.
 			const fresh = await readPull(github, string(pull.id));
-			if (
+			const ended =
 				fresh.state !== "OPEN" ||
 				string(fresh.headRefOid) !== head ||
-				(fresh.mergeQueueEntry == null && fresh.autoMergeRequest == null)
-			)
-				continue;
-			throw error;
+				(fresh.mergeQueueEntry == null && fresh.autoMergeRequest == null);
+			if (!ended) throw error;
+			if (!taken) continue;
 		}
 		await post(
 			github,

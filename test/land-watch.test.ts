@@ -242,8 +242,9 @@ function deps(world: World): GitHubDependencies {
 				if (mutation === "dequeuePullRequest" || mutation === "disablePullRequestAutoMerge") {
 					const pull = pullOf();
 					world.mutations.push(`${mutation} ${pull.number}`);
+					// Like GitHub, leaving the queue also disarms auto-merge.
 					if (mutation === "dequeuePullRequest") pull.queued = undefined;
-					else pull.armed = undefined;
+					pull.armed = undefined;
 					return Response.json({ data: { [mutation]: { clientMutationId: null } } });
 				}
 				if (mutation === "enqueuePullRequest" || mutation === "enablePullRequestAutoMerge") {
@@ -812,11 +813,8 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 		`dequeued 30 ${HEAD} 1 signals`,
 		`dequeued 31 ${HEAD} 1 signals`,
 	]);
-	expect(github.mutations).toEqual([
-		"dequeuePullRequest 30",
-		"disablePullRequestAutoMerge 30",
-		"disablePullRequestAutoMerge 31",
-	]);
+	// The dequeue disarmed #30 already, which still gets its comment.
+	expect(github.mutations).toEqual(["dequeuePullRequest 30", "disablePullRequestAutoMerge 31"]);
 	expect(github.comments[30]).toHaveLength(1);
 	expect(github.comments[30][0].body).toContain(
 		`taking it out of the queue and disarming its auto-merge, since its head ${HEAD} is held by finding by rabbit[bot]: drops the last frame`,
@@ -824,7 +822,7 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 	expect(github.comments[30][0].body).toContain("<!-- quest land: unanswered_signal -->");
 	// Out of the queue and disarmed: the next pass leaves both alone.
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
-	expect(github.mutations).toHaveLength(3);
+	expect(github.mutations).toHaveLength(2);
 	expect(github.comments[31]).toHaveLength(1);
 });
 

@@ -84,7 +84,7 @@ group("signals", () => {
 		expect(signals(pull, WRITERS)).toHaveLength(1);
 	});
 
-	test("a body finding on the head holds it until a writer's later comment answers that pass", () => {
+	test("a body finding on the head holds it until a writer's later comment links that pass", () => {
 		const body = [
 			"Automated review by review (OpenAI)",
 			"",
@@ -96,7 +96,7 @@ group("signals", () => {
 			["review (OpenAI)", "share handover credit across predecessors"],
 			["review (OpenAI)", "name the timeout"],
 		]);
-		// Before the pass, by a bot or a reader, or taking no side and linking nothing: no answer.
+		// Before the pass, by a bot or a reader, or linking nothing: no answer.
 		pull.comments = [
 			comment(person, "Fixed in abc.", "2026-11-10T17:01:00Z", "1"),
 			comment(bot("watcher"), `Declined, see ${URL_}#pullrequestreview-r1`, "2026-11-10T17:06:00Z", "2"),
@@ -108,12 +108,13 @@ group("signals", () => {
 			comment(person, `See ${URL_}#pullrequestreview-r1: both refuted.`, "2026-11-10T17:08:00Z", "5"),
 		);
 		expect(signals(pull, WRITERS)).toEqual([]);
+		// An answer word alone cannot tell which finding it meant.
 		pull.comments.pop();
 		pull.comments.push(comment(person, "Declined: the caller already checks.", "2026-11-10T17:08:00Z", "5"));
-		expect(signals(pull, WRITERS)).toEqual([]);
+		expect(signals(pull, WRITERS)).toHaveLength(2);
 	});
 
-	test("an answer clears only the passes it links, else the latest before it", () => {
+	test("an answer clears only the passes it links, even once a linked pass is superseded", () => {
 		const pull = activity({
 			reviews: [
 				review("a", bot("rabbit"), "[P1] Guard null", "2026-11-10T17:05:00Z"),
@@ -124,8 +125,8 @@ group("signals", () => {
 			],
 		});
 		expect(signals(pull, WRITERS).map((signal) => signal.text)).toEqual(["name it"]);
-		pull.comments = [comment(person, "Declined: checked above.", "2026-11-10T17:07:00Z", "1")];
-		expect(signals(pull, WRITERS).map((signal) => signal.text)).toEqual(["guard null"]);
+		pull.reviews.push(review("c", bot("rabbit"), "No findings.", "2026-11-10T17:08:00Z"));
+		expect(signals(pull, WRITERS).map((signal) => signal.text)).toEqual(["name it"]);
 	});
 
 	test("a reviewer's latest pass over the head is the one that holds it", () => {
