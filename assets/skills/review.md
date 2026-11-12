@@ -34,12 +34,12 @@ Never defer a relevant fix to a follow-up just to narrow the PR; add only out-of
 Refute a finding only with evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding by its number, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted; never block on the score.
-A finding the reviewer keeps against such a refutation is a decision for the user; a background agent lists it under `## Waiting`.
+A finding the reviewer keeps against such a refutation is a decision for the user.
 A round whose findings are all low severity needs no further round: fix or refute each, then add a line after the record naming the new head's full SHA and each finding's disposition.
 
 Checkpoint the design: a round is one `quest review` round, numbered within each reviewer's session on the branch, and when a round whose number is a multiple of three reports findings, stop before fixing them and reconsider the approach; a clean round needs no checkpoint.
 Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.
-Report the alternatives and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide; a background agent leaves this under `## Waiting` rather than deciding it.
+Report the alternatives and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
 A reviewer that is out of quota or logged out is an outage, not a skip: stop reviewing, keep the PR a draft, hand it back, and report the outage.
@@ -48,7 +48,6 @@ Once the reset passes or the login is restored, the item has cleared: whoever fi
 
 Push, then flip the PR to "Ready for Review" with `quest ready <pr> <token>`, which also drops its `## Waiting` section.
 For your own draft, mark it ready for review yourself.
-Do not wait for online reviewers.
 
 Summarize the review, with its last round's score and rationale, and summarize CI from `quest status <pr>`.
 Name any decisions the review raised without answering them, then interactively prompt the user with your recommended action:
@@ -58,8 +57,6 @@ Name any decisions the review raised without answering them, then interactively 
 - `/quest-delete`: If the quest should be deleted.
 
 While its required checks are still running, report that instead of asking about it; `/quest-run` asks once they finish.
-
-A background agent that cannot prompt lists these in its report instead.
 
 Hand the PR back with `quest release <pr> <token>` before you ask, report, or go on to `/quest-merge`.
 To go straight on to `/quest-iterate` in this session, pass the token to its `quest iterate` instead, which keeps the hold.

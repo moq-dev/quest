@@ -1,6 +1,5 @@
 Keep the core independent of a particular repository, agent, or issue tracker.
 
-- Read `CONTRIBUTING.md` before making changes or preparing a PR.
 - Keep the rules every task loads in `assets/CONTEXT.md`, within the 10,000 characters Claude Code shows of a hook's context; the workflow sections skills share in the guide, `assets/AGENTS.md`; and skills in `assets/skills/`, each explaining only its own workflow and naming the guide sections and skills it builds on.
 - Installing or running a skill never authorizes remote writes or merges beyond the user's request.
 - Plan work on the maintainer's own machines and hosts, such as host services, runners, and deploys, in kixelated/nixos's quest tree, not here. Quests here name a host only by its role, such as "the maintainer's host", and point to that repository for its work.
@@ -14,10 +13,9 @@ Do not edit `CONTRIBUTING.md`, `assets/CONTEXT.md`, `assets/AGENTS.md`, or
 - Keep README examples consistent with the CLI's actual `--help` output.
   In this checkout, `quest` means `bun run --silent quest`; the dev shell's
   `quest` is a pinned build for the merge driver, not this checkout.
-- Use an isolated worktree under `.worktrees/`. Preserve existing changes.
-- Run `just install` in a fresh checkout to install the locked dependencies.
-- Run `just check` and `just test` before handing off changes; `just fix` applies
-  formatting. Missing tools are failures, not checks to silently skip.
+- Worktrees live under `.worktrees/`.
+- Run `just check` and `just test` before handing off changes. A missing tool is
+  a failure, not a check to skip.
 - Nothing is in production yet, so skip backwards compatibility: change
   formats, schemas, flags, and on-disk state directly, with no migrations,
   shims, or cleanup of what earlier versions wrote.

@@ -4,8 +4,8 @@
 // only what the call or stop itself shows, and lets through what it cannot
 // tell apart.
 
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { REFERENCE_MARKER, lines } from "../core";
 import { parse } from "./shell";
@@ -164,6 +164,7 @@ type Rule = keyof typeof RULES;
 /** One call's check: the rules found broken so far. */
 interface Check {
 	found: Set<Rule>;
+	cwd: string;
 	/**
 	 * Whether `path` is scratch under `/tmp` outside the checkout holding `cwd`.
 	 * A `$TMPDIR` path is unknown, since `TMPDIR` may name the checkout itself.
@@ -175,6 +176,7 @@ function check(cwd: string): Check {
 	const root = checkoutRoot(cwd);
 	return {
 		found: new Set(),
+		cwd,
 		scratch: (path) => /^\/tmp(\/|$)/.test(path) && !`${path}/`.startsWith(`${root}/`),
 	};
 }
@@ -194,6 +196,27 @@ function read(cwd: string, path: string): string | undefined {
 		return undefined;
 	}
 }
+
+/** The most a body file may hold to be read: far more than GitHub takes in a post. */
+const BODY_LIMIT = 1 << 20;
+
+/**
+ * A body file's text, or `undefined` for one that is missing, too large, or
+ * not a regular file: a device or pipe may never end, and reading one takes
+ * what the command would have read.
+ */
+function body(cwd: string, path: string): string | undefined {
+	try {
+		const file = resolve(cwd, path);
+		const stat = statSync(file);
+		return stat.isFile() && stat.size <= BODY_LIMIT ? readFileSync(file, "utf8") : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The paths that name a command's own stdin. */
+const STDIN = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
 
 /** Codex's `apply_patch` envelope: its file headers and its `+`/`-` lines. */
 function applyPatch(patch: string, check: Check) {
@@ -232,37 +255,51 @@ function unwrap(argv: string[], env: Set<string>): string[] | null {
 	}
 }
 
-/** `args` past its leading options, where `-n`, `-s`, `-k`, and `-u` take a value. */
+/** `args` past its leading options, where `-n`, `-s`, `-k`, `-u`, and `-C` take a value. */
 function dropOptions(args: string[]): string[] {
 	let i = 0;
-	while (i < args.length && args[i]!.startsWith("-")) i += /^-[nsku]$/.test(args[i]!) ? 2 : 1;
+	while (i < args.length && args[i]!.startsWith("-")) i += /^-[nskuC]$/.test(args[i]!) ? 2 : 1;
 	return args.slice(i);
 }
 
 /**
  * Check each simple command in a shell command line, following `sh -c` into
- * its script, which inherits the assignments in `inherited`. Bodies are read
- * only from the line itself, never from disk: a file may hold something else
- * by the time the line runs it.
+ * its script, which inherits the assignments in `inherited`. A body file is
+ * read from disk only for a command that is `alone` on its line: after
+ * another command, it may hold something else by the time the line posts it.
  */
-function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set()) {
+function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set(), alone = true) {
 	const { found, scratch } = check;
-	for (const simple of parse(line)) {
+	const commands = parse(line);
+	alone &&= commands.length === 1 && !commands[0]!.runs;
+	for (const simple of commands) {
 		const env = new Set(inherited);
+		const words = [...simple.argv];
 		const argv = unwrap(simple.argv, env);
 		for (const { op, target } of simple.redirects)
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
 		if (argv === null) continue;
 		const [name, ...args] = argv;
+		// A wrapper such as `env --chdir` moves where the command reads a relative path from.
+		const moved = words.slice(0, words.length - argv.length).some((word) => /^(-C|--chdir)/.test(word));
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
-			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env);
+			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env, alone && !moved);
 			continue;
 		}
 		const asked = env.has(USER_ASKED);
-		// A here-document or here-string the shell expands is unknown here, as is any other stdin or file.
-		const stdin = simple.stdinExpanded ? undefined : simple.stdin;
-		const input = (file: string) => (file === "-" ? stdin : undefined);
+		const from = (path: string, expanded = false) =>
+			alone && !expanded && !path.startsWith("~") && (isAbsolute(path) || !moved)
+				? body(check.cwd, path)
+				: undefined;
+		// Unknown: a here-document or here-string the shell expands, one beside a `<`, since the later wins, and a pipe.
+		const fed = simple.redirects.filter(({ op, fd }) => op === "<" && !fd).at(-1);
+		const here = simple.stdinExpanded ? undefined : simple.stdin;
+		// Read only once a checked command asks, so no other command's input is opened.
+		const stdin = () =>
+			fed === undefined ? here : simple.stdin === undefined ? from(fed.target, fed.expanded) : undefined;
+		const input = (file: string) =>
+			STDIN.has(file) ? stdin() : /^\/(dev|proc)\//.test(file) ? undefined : from(file);
 		const literal = (value: string) => (simple.expanded?.some((word) => word.endsWith(value)) ? undefined : value);
 		if (name === "tee") {
 			if (args.some((arg) => !arg.startsWith("-") && scratch(arg))) found.add("tmp");
@@ -306,6 +343,8 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 	let i = 0;
 	while (i < argv.length && argv[i]!.startsWith("-")) i += GIT_VALUE_OPTIONS.has(argv[i]!) ? 2 : 1;
 	const [sub, ...args] = argv.slice(i);
+	// `-C` moves where git reads a relative message file from.
+	const moved = argv.slice(0, i).some((arg) => arg.startsWith("-C"));
 	// A help flag anywhere passes, even as an option's value: a missed nudge is cheaper than per-subcommand grammars.
 	if (argv.some((arg) => arg === "--help" || arg === "-h")) return;
 	if (sub === "push") push(args, asked, check);
@@ -317,7 +356,9 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 		if (rebase && !asked) check.found.add("rewrite");
 	} else if (sub === "commit") {
 		const message = values(args, ["-m", "--message"], { attached: ["-m"] }).join("\n");
-		const files = values(args, ["-F", "--file"], { attached: ["-F"] }).map(input);
+		const files = values(args, ["-F", "--file"], { attached: ["-F"] }).map((file) =>
+			moved && file !== "-" && !isAbsolute(file) ? undefined : input(file),
+		);
 		if (adds("", [message, ...files].join("\n"))) check.found.add("emDash");
 	} else if (sub === "clone") {
 		// `git clone [options] <repository> [<directory>]` writes only the directory and a separate git directory.
@@ -422,9 +463,9 @@ const POSTS: Record<string, Record<string, boolean>> = {
 };
 
 /**
- * Check a `gh` command that posts text. `input` gives a body file's text
- * (only `-`, stdin from the line, is known), and `literal` gives a word's
- * text, or `undefined` when the shell expands it; an unknown body passes.
+ * Check a `gh` command that posts text. `input` gives a body file's text,
+ * `-` being stdin, and `literal` gives a word's text; each is `undefined`
+ * when the line does not settle it, and an unknown body passes.
  */
 function gh(
 	args: string[],
@@ -463,7 +504,7 @@ function gh(
 		titles = values(rest, ["-t", "--title"], { attached: ["-t"] }).map(literal);
 	}
 	if (body.length === 0) return;
-	// A body not on the line, such as a file, one piped in, or one the shell expands, is left to the prose.
+	// An unknown body, such as one piped in, one the shell expands, or a file read after another command, passes.
 	if (body.some((text) => text === undefined)) return;
 	const text = body.join("\n");
 	if (authored && adds("", [...titles.filter((title) => title !== undefined), text].join("\n")))

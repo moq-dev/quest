@@ -9,7 +9,7 @@ Search by the code and behavior the work touches, not only its keywords: a quest
 Show any overlap in the first round.
 
 Interview the user with the grill skill.
-Run it in the foreground; a background agent that cannot prompt adds its follow-ups to its own PR instead, as the guide's Creation section describes.
+Run it in the foreground.
 
 Search other quests and epics to keep the larger plan consistent.
 Docs a change makes stale stay in that change.
