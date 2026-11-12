@@ -2021,7 +2021,7 @@ export function nextStep(rounds: Round[]): string {
 	const findings = rounds.flatMap((round) => round.findings);
 	if (findings.length === 0) return "next done: no findings remain on this head";
 	if (findings.every((finding) => finding.severity === "low"))
-		return "next finish: fix or refute each finding, commit, rerun the checks, then run quest review --settle --responses <file>, with one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding; run no further round";
+		return "next finish: fix or refute each finding, commit, rerun the checks, then run quest review --base <remote>/<base> --settle --responses <file>, with one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding; run no further round";
 	if (rounds.some((round) => round.findings.length > 0 && round.round % 3 === 0))
 		return "next checkpoint: before fixing these findings, reconsider the approach and let the user decide, as /quest-review describes";
 	return "next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number";

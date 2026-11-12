@@ -35,7 +35,7 @@ Refute a finding only with evidence the reviewer cannot rebut: a `path:line`, a 
 Commit the fixes, rerun the checks, and run the next round with `--responses`, one response per finding by its number, written in the checkout's `.tmp/`.
 Repeat until a round of the head reports no finding you have not refuted; never block on the score.
 A finding the reviewer keeps against such a refutation is a decision for the user; a background agent lists it under `## Waiting`.
-A round whose findings are all low severity needs no further round: fix or refute each, commit, rerun the checks, then record their dispositions with `quest review --settle --responses <file>`, one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding.
+A round whose findings are all low severity needs no further round: fix or refute each, commit, rerun the checks, then record their dispositions with `quest review --base <remote>/<base> --settle --responses <file>`, one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding.
 
 Checkpoint the design: a round is one `quest review` round, numbered within each reviewer's session on the branch, and when a round whose number is a multiple of three reports findings, stop before fixing them and reconsider the approach; a clean round needs no checkpoint.
 Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.
