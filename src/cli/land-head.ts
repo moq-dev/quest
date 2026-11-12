@@ -105,6 +105,15 @@ export async function push(
 		env: gitAuthentication(credential),
 	});
 }
+/**
+ * Throw a push to the queue's own repository that GitHub turned away with its intermittent "Repository
+ * not found", so the daemon loop retries the pass, which resumes from the recorded head. Any other
+ * refusal is the caller's to report. A fork's may be lasting, since the App's token may not reach it.
+ */
+function transient(stderr: string, failed: string): void {
+	if (/^remote: Repository not found\.\s*$/m.test(stderr)) throw new Error(`${failed}: ${stderr.trim()}`);
+}
+
 export async function remoteHead(root: string, remote: string, ref: string, read: RemoteRead): Promise<string | null> {
 	return (
 		(await read(root, ["ls-remote", remote, ref]))
@@ -162,6 +171,7 @@ export async function prepareHead(
 	});
 	const result = await push(root, remote, entry.head, prepared.head, ref, token);
 	if (result.status === 0) return { head: prepared.head };
+	if (entry.repository === plan.repository) transient(result.stderr, `PR #${entry.number} merge push failed`);
 	if ((await remoteHead(root, remote, ref, read)) !== entry.head)
 		return { reason: "head_moved", detail: `PR #${entry.number}'s head moved while preparing its merge` };
 	if (entry.repository !== plan.repository) return { fallback: true };
@@ -213,6 +223,7 @@ export async function finishFallback(
 		if (fresh.base.sha !== parent) throw new Error("fallback base is not yet reflected in the queue; retrying");
 		const result = await push(root, remote, parent, commit, `refs/heads/${plan.base.ref}`, token);
 		if (result.status !== 0) {
+			transient(result.stderr, `PR #${entry.number} fallback push failed`);
 			await read(root, ["fetch", "--quiet", remote, plan.base.ref]);
 			if (!contains(root, commit, "FETCH_HEAD")) {
 				unlinkSync(path);

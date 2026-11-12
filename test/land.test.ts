@@ -679,6 +679,25 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(existsSync(join(options.state, "fallback.json"))).toBe(false);
 	});
 
+	test("fallback base push retries GitHub's transient Repository not found", async () => {
+		const forge = new Forge();
+		const pull = forge.pull("Fork", { "fork.txt": "yes" }, { contributor: "friend", edits: false });
+		forge.advance({ "base.txt": "new" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
+		const options = sandbox();
+		const root = forge.clone();
+		const hook = join(forge.origin, "hooks/pre-receive");
+		writeFileSync(hook, "#!/bin/sh\necho 'Repository not found.' >&2\nexit 1\n", { mode: 0o755 });
+		await expect(serveBatch(root, plan, options, deps, async () => deps.token)).rejects.toThrow(
+			/PR #1 fallback push failed: remote: Repository not found\./,
+		);
+		expect(pull.closed).not.toBe(true);
+		rmSync(hook);
+		expect(await finishFallback(root, options.state, deps, async () => deps.token)).toMatch(/^landed 1 /);
+		expect(pull.closed).toBe(true);
+	});
+
 	test("a preparation merge refusal returns merge_conflict", async () => {
 		const forge = new Forge();
 		const pull = forge.pull("Conflict", { "code.txt": "PR\n" });
@@ -686,6 +705,18 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		const root = forge.clone();
 		git(root, "fetch", "origin", pull.head!);
 		expect(mergeBase(root, pull.head!, forge.main())).toMatchObject({ reason: "merge_conflict" });
+	});
+
+	test("GitHub's transient Repository not found on a same-repository push retries instead of ejecting", async () => {
+		const forge = new Forge();
+		forge.pull("Local", { "local.txt": "yes" });
+		forge.advance({ "base.txt": "new" });
+		const hook = join(forge.origin, "hooks/pre-receive");
+		writeFileSync(hook, "#!/bin/sh\necho 'Repository not found.' >&2\nexit 1\n", { mode: 0o755 });
+		await expect(forge.round()).rejects.toThrow(/PR #1 merge push failed: remote: Repository not found\./);
+		expect(forge.comment(1)).toBeUndefined();
+		rmSync(hook);
+		expect((await forge.round()).landing).toEqual([expect.stringMatching(/^landed 1 /)]);
 	});
 
 	test("same-repository branch refusal ejects instead of closing", async () => {
