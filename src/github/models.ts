@@ -1,5 +1,6 @@
 // A pull request body's `## Models` record, which names the PR's size and each session that implemented it.
 
+import { SIZES } from "../core";
 import { REVIEWERS, SECOND_REVIEWER, WRITERS } from "../cli/models";
 
 const SECTION = /^## Models[ \t]*\r?$/m;
@@ -45,10 +46,12 @@ export function recorded(body: string): {
 	};
 }
 
-// Display names and IDs compare alike: `Opus 5.5`, `Claude Opus 5.5`, and `claude-opus-5-5` share a key.
+// Display names and IDs compare alike: `Opus 5.5`, `Claude Opus 5.5`, and `claude-opus-5-5` share a key, as do
+// `DeepSeek V4.1 Flash` and `opencode-go/deepseek-v4.1-flash`.
 const key = (name: string) =>
 	name
 		.toLowerCase()
+		.replace(/^.*\//, "")
 		.replace(/[\s.]+/g, "-")
 		.replace(/^claude-/, "");
 const KNOWN = new Map(
@@ -57,35 +60,40 @@ const KNOWN = new Map(
 		.map(({ model }) => [key(model), model]),
 );
 
-/** The model ID `name` means: a listed model by its ID or display name, else `name` itself when it reads as an ID. */
-function modelId(name: string): string | null {
-	return KNOWN.get(key(name)) ?? (/^(unknown|[a-z][\w./-]*\d[\w./-]*)$/.test(name) ? name : null);
+/**
+ * The model ID `name` means: a listed model by its ID or display name, a Claude harness's `<Family> <version>` as
+ * its `claude-` ID, else `name` itself when it reads as an ID.
+ */
+function modelId(name: string, harness: string): string | null {
+	const listed = KNOWN.get(key(name));
+	if (listed) return listed;
+	if (/^claude\b/i.test(harness) && /^(claude )?[a-z]+ \d+(\.\d+)*$/i.test(name)) return `claude-${key(name)}`;
+	return /^(unknown|[a-z][\w./-]*\d[\w./-]*)$/.test(name) ? name : null;
 }
 
 /**
  * The fields of an `Implementer: <harness>, <model>, <effort> effort` item, as agents write it: the model by ID or
- * display name, the harness or effort left out or `effort not reported`, and a size its line ends with, as
- * `(iterate, XS)`, beside any note in its parentheses. Null when it names no model or has fields past the effort.
+ * display name, the harness or effort left out, the effort bare or `effort not reported`, and a size among the
+ * notes of a parenthetical it ends with, as `(iterate, XS)`. Null when it names no model or has more fields.
  */
 export function implementer(item: string): Implementer | null {
 	let rest = item.trim().replace(/^Implementer:\s*/, "");
-	const sized = /\s*\(([^()]*)\)$/.exec(rest);
-	if (sized) rest = rest.slice(0, sized.index);
+	const notes = /\s*\(([^()]*)\)$/.exec(rest);
+	if (notes) rest = rest.slice(0, notes.index);
 	const parts = rest.split(/,\s*/).map((part) => part.trim());
-	const at = parts.findIndex((part) => modelId(part) !== null);
-	if (at < 0) return null;
-	const after = parts.slice(at + 1);
-	if (after.length > 1) return null;
+	if (parts.length < 2 || parts.length > 3) return null;
+	// The model is the last field, or the one before the effort.
+	const effortless = parts.length === 2 && modelId(parts[1]!, parts[0]!) !== null;
+	const at = effortless ? 1 : parts.length - 2;
+	const harness = at > 0 ? parts.slice(0, at).join(", ") : "unknown";
+	const model = modelId(parts[at]!, harness);
+	if (model === null) return null;
 	let effort = "unknown";
-	if (after.length === 1 && !/^(effort not reported|unknown effort)$/i.test(after[0]!)) {
-		const named = /^(\S+)(?: effort)?$/.exec(after[0]!);
+	if (!effortless && !/^(effort not reported|unknown effort)$/i.test(parts.at(-1)!)) {
+		const named = /^(\S+)(?: effort)?$/.exec(parts.at(-1)!);
 		if (!named) return null;
 		effort = named[1]!;
 	}
-	return {
-		harness: parts.slice(0, at).join(", ") || "unknown",
-		model: modelId(parts[at]!)!,
-		effort,
-		size: sized?.[1]!.split(", ").at(-1)!.match(/^\w+$/)?.[0] ?? null,
-	};
+	const size = notes?.[1]!.split(/,\s*/).find((note) => (SIZES as readonly string[]).includes(note)) ?? null;
+	return { harness, model, effort, size };
 }

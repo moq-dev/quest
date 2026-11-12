@@ -1104,7 +1104,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
 				"before the PR opened, and iterating otherwise. An opencode session, whose log quest does not read, belongs to the newest PR whose " +
 				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
-				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
+				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, and as unread each Implementer line it cannot read, " +
 				"each reviewer's latest ## Review round, with its round, score, and findings, " +
 				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
 				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
@@ -1244,7 +1244,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when a reviewer's " +
 				"account hit its usage limit, and 1 for other failures, including a PR GitHub will not show or a record it " +
 				"refuses. A malformed `## Models` field the round reads, such as a Size line naming no size or an " +
-				"Implementer line naming no model, is a usage error, unless --size or --exclude-model replaces it. A usage limit prints one line, " +
+				"Implementer line naming no model it can read, is a usage error, unless --size or --exclude-model replaces it. A usage limit prints one line, " +
 				"`error: <harness> hit its usage limit; resets <time>`, where <time> is the reset as an ISO 8601 UTC " +
 				"timestamp, or `unknown` when the CLI named none.",
 		)

@@ -118,8 +118,8 @@ messages 2026-10-26 to 11-11, classed by one sub-agent, approximate):
 
 - PRs: moq-dev/moq 194 (158 merged), moq-dev/moq.pro 150 (99), and
   moq-dev/quest 69 (59). Hand-backs: 4, 20, and 0. 57 of the 316 merged
-  PRs record implementers that `quest usage` drops, which
-  its implementer-lines quest since fixed.
+  PRs record implementers that `quest usage` drops, a
+  later fix to its Implementer parsing reads.
 - Escapes: 7 real of 20 culprit pairs. Catchable 2, maybe 2, runtime 3;
   races 2 (one maybe, one runtime). All 7 culprits passed a local Sol
   review. The routing audit's sample of 30 earlier escapes split 6, 17,

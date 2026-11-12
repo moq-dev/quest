@@ -1717,6 +1717,12 @@ test("an Implementer line reads as agents write it", () => {
 		size: "XS",
 	});
 	expect(read("Claude Code, Opus 5.5, low effort (iterate, flow fix)")).toEqual(opus("low"));
+	expect(read("Claude Code, Opus 5.5, high effort (iterate, XS, arm B)")).toEqual({ ...opus("high"), size: "XS" });
+	expect(read("unknown, Opus 5.5, high effort")).toEqual(opus("high", "unknown"));
+	expect(read("Claude Code, Fable 5.2, medium effort")?.model).toBe("claude-fable-5-2");
+	expect(read("opencode, DeepSeek V4.1 Flash, high effort")?.model).toBe("opencode-go/deepseek-v4.1-flash");
+	expect(read("Codex, gpt-6.1-sol, high")?.effort).toBe("high");
+	expect(read("unknown")).toBeNull();
 	// An ID no list names still reads, so a new model is counted before the lists add it.
 	expect(read("Codex, gpt-7, high effort")?.model).toBe("gpt-7");
 	expect(read("Codex, Some Model, high effort")).toBeNull();
