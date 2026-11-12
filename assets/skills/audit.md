@@ -5,7 +5,7 @@ skills: plan
 ---
 
 The goal is a quest tree that agrees with itself and the code, with each quest in the milestone its priority calls for.
-The scope is every outstanding quest; the argument (if provided) filters it to specific quests or epics.
+The scope is every outstanding quest, or the quests and epics the argument names.
 
 Look for:
 - Disagreements: quests whose goals or plans contradict each other, the code, or the repository's docs.
@@ -18,4 +18,4 @@ Split the reading across parallel sub-agents, each given a slice of the scope an
 
 Apply factual corrections and changes the user has already decided. Moving a quest between milestones is always the user's decision, never a factual correction. Use `/quest-plan` only for unresolved scope, priority, API, or other consequential choices; recommendations are not decisions. Once those choices are settled, apply them without another approval round.
 
-Move and delete quests with `quest mv` and `quest rm`, which update the links to them; edit any mentions they report, run `quest check`, and follow the repository's PR workflow within the user's authorized scope. Report the changes with their evidence and any decisions still open. An explicit read-only audit request leaves the tree unchanged.
+Move and delete quests with `quest mv` and `quest rm`, which update the links to them; edit any mentions they report and run `quest check`. Open the PR as the plan skill does, on a `quest-audit/<slug>` branch. Report the changes with their evidence and any decisions still open. An explicit read-only audit request leaves the tree unchanged.
