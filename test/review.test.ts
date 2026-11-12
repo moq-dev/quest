@@ -2016,6 +2016,7 @@ test("a tally counts each finding once, by who raised it, through every round", 
 		rationale: "r",
 		earlier: null,
 		unchanged: false,
+		settled: false,
 	} satisfies Omit<Round, "reviewer" | "round" | "findings">;
 	const [a, b, c] = [finding("high", "a"), finding("medium", "b"), finding("low", "c")];
 	const first = tallied([], [{ round: { ...base, reviewer: "codex", round: 1, findings: [a, b, c] } }]);
@@ -2081,4 +2082,97 @@ test("a tally counts each finding once, by who raised it, through every round", 
 			],
 		),
 	).toThrow(/no tally/);
+});
+
+fakes("--settle records low findings' dispositions without running a reviewer", async () => {
+	const t = setup();
+	expect((await quest("--root", t.repo, "review")).code).toBe(0);
+	write(t.repo, ".tmp/responses.md", "1. fixed: src/lib.ts:1.\n2. fixed: src/lib.ts:1.\n");
+	const high = await quest(
+		"--root",
+		t.repo,
+		"review",
+		"--settle",
+		"--responses",
+		join(t.repo, ".tmp", "responses.md"),
+	);
+	expect(high.code).toBe(2);
+	expect(high.stderr).toContain("all low severity");
+
+	const s = setup();
+	const pull = {
+		number: 7,
+		body: "Fixes averaging.\n\n## Models\n\n- Size: S\n- Implementer: Claude Code, claude-opus-5-5, high effort",
+	};
+	const writes = onGitHub(s.repo, [pull]);
+	try {
+		vi.stubEnv(
+			"FAKE_REPLY",
+			JSON.stringify({ score: 9, rationale: "Nits.", findings: [{ ...FINDING, severity: "low" }] }),
+		);
+		vi.stubEnv("FAKE_OPENCODE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+		const first = await quest("--root", s.repo, "review");
+		expect(first.code, first.stderr).toBe(0);
+		expect(first.stdout).toMatch(/\nnext finish: .*--settle/);
+		const reviewed = git(s.repo, "rev-parse", "HEAD");
+		write(s.repo, "src/lib.ts", "export const x = 4;\n");
+		git(s.repo, "commit", "-qam", "fix");
+		const head = git(s.repo, "rev-parse", "HEAD");
+		const calls = s.calls().length;
+		const responses = join(s.repo, ".tmp", "responses.md");
+		for (const bad of ["1 fixed src/lib.ts:1\n", "", "1. fixed: a\n1. refuted: b\n", "2. fixed: a\n"]) {
+			write(s.repo, ".tmp/responses.md", bad);
+			const refused = await quest("--root", s.repo, "review", "--settle", "--responses", responses);
+			expect(refused.code, bad).toBe(2);
+		}
+		write(s.repo, ".tmp/responses.md", "1. Fixed: src/lib.ts:1 guards it.\n");
+		const settled = await quest("--root", s.repo, "review", "--settle", "--responses", responses);
+		expect(settled.code, settled.stderr).toBe(0);
+		expect(s.calls()).toHaveLength(calls);
+		expect(settled.stdout).toContain(`head ${head}\n`);
+		expect(settled.stdout).toContain(
+			`settled the author settled round 1's low findings at ${reviewed}; no reviewer ran\n`,
+		);
+		expect(settled.stdout).toContain(
+			`earlier 1 ${reviewed}\n\n1. fixed low src/lib.ts:2 Off by one\n  src/lib.ts:1 guards it.\n`,
+		);
+		expect(settled.stdout).toMatch(/\nnext done: no findings remain on this head\n$/);
+		const record = pull.body.split("## Review\n\n")[1]!;
+		expect(record).toContain(
+			`- Head: ${head}, where the author settled the low findings reviewed at ${reviewed.slice(0, 12)} with no further round\n`,
+		);
+		expect(record).toContain(
+			"- Rounds: 1; findings 1 (low 1): fixed 1, refuted 0, open 0\n- Findings: none\n" +
+				`- The last round's findings, at ${reviewed.slice(0, 12)}, settled by the author:\n` +
+				"  - Fixed: low, `src/lib.ts:2`: `Off by one`; `src/lib.ts:1 guards it.`\n",
+		);
+		// The clean reviewer stands beside it, its tally unchanged.
+		expect(record).toContain(
+			"- Session: `ses_1`, round 1\n- Score: 10/10, `Lands as is.`\n- Rounds: 1; findings 0: fixed 0, refuted 0, open 0\n",
+		);
+		expect(writes).toHaveLength(2);
+
+		// Nothing is left to settle, and the next round checks the fix with no responses, counting the finding once.
+		expect((await quest("--root", s.repo, "review", "--settle", "--responses", responses)).code).toBe(2);
+		vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+		const next = await quest("--root", s.repo, "review", "--json");
+		expect(next.code, next.stderr).toBe(0);
+		const resumed = s.calls().at(-1)!;
+		expect(resumed.argv.slice(0, 2)).toEqual(["exec", "resume"]);
+		expect(resumed.stdin).toContain(`git diff ${reviewed} ${head}`);
+		expect(
+			JSON.parse(next.stdout).tallies.map((t: Tally) => [
+				t.reviewer,
+				t.rounds,
+				t.findings.low,
+				t.fixed,
+				t.refuted,
+			]),
+		).toEqual([
+			["codex", 2, 1, 1, 0],
+			["opencode", 2, 0, 0, 0],
+		]);
+	} finally {
+		vi.unstubAllGlobals();
+	}
 });

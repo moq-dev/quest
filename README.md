@@ -1365,6 +1365,7 @@ and counts as logged out when `opencode models` does not list the model.
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
+quest review --settle --responses .tmp/responses.md  # settle a round's low findings without a reviewer
 quest review --base origin/release --new      # a new session against another base
 quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, with no record in its body
 quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
@@ -1412,6 +1413,15 @@ on the branch, less those it drops unsettled, unless the saved state is one
 this quest cannot read. `--branch` names the branch instead of the checked-out one, which a
 detached `HEAD` requires, such as a checkout of a branch another worktree
 holds, so its rounds continue that branch's session.
+
+A round whose findings are all low severity needs no further round. After
+fixing or refuting them, `--settle` runs no reviewer: it reads `--responses` as
+one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding, by its
+number, adds each disposition to its reviewer's tally, and drops the findings
+from the session, so its next round checks what changed since their head with
+nothing to settle. It prints and records the last run's rounds at the
+committed head, which the record names in full, marking the findings the
+author settled.
 
 The reviewer is read-only: Codex in its `read-only` sandbox, ignoring
 execpolicy rules, and Claude Code with only read tools and the Bash commands it

@@ -204,6 +204,7 @@ describe("PR records", () => {
 			],
 		},
 		unchanged: false,
+		settled: false,
 	};
 
 	const second: Round = {

@@ -53,6 +53,7 @@ import {
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
 	review,
+	settleLow,
 	nextStep,
 	roundLines,
 } from "./review";
@@ -1214,6 +1215,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
+				"--settle runs no reviewer: it settles the last round's findings, which must all be low severity, from " +
+				"--responses, one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding by its number, adding " +
+				"them to each reviewer's tally and dropping them from its session, so its next round checks what changed " +
+				"since their head with nothing to settle. It prints and records the last run's rounds at the committed " +
+				"head, naming that head in full and each settled finding's disposition.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
 				"skills catalog, Claude Code with " +
 				"no settings files, only read tools, and the Bash commands it judges read-only, and opencode with no " +
@@ -1230,7 +1236,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
 				"its one-sentence rationale, the finding count, each finding by its number, then the last round's findings with " +
 				"their numbers and dispositions; then the `record` line below and a last `next` line naming the author's next step: " +
-				"`next finish` when every finding is low severity, to fix or refute them without another round, " +
+				"`next finish` when every finding is low severity, to fix or refute them and settle them with --settle, " +
 				"`next checkpoint` when a reviewer's every third round reports other findings, to reconsider the approach " +
 				"before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
@@ -1270,6 +1276,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option("--responses <file>", "The author's responses to the last round's findings; - reads stdin")
 		.option("--new", "Start a new review session instead of resuming the branch's")
+		.addOption(
+			new Option(
+				"--settle",
+				"Settle the last round's low findings from --responses without running a reviewer",
+			).conflicts(["harness", "model", "effort", "excludeModel", "size", "new"]),
+		)
 		.option(
 			"--branch <name>",
 			"Branch whose review session to continue, instead of the checked-out one or its upstream",
@@ -1286,6 +1298,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				size?: Size;
 				responses?: string;
 				new?: boolean;
+				settle?: boolean;
 				json?: boolean;
 			}) => {
 				const responses =
@@ -1293,13 +1306,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						? undefined
 						: readFileSync(options.responses === "-" ? 0 : options.responses, "utf8");
 				const github = { github: () => gitHubDependencies(warn), warn };
-				const run = review(
-					{ ...options, root: root(), exclude: options.excludeModel, responses, fresh: options.new },
-					{
-						...reviewDependencies(),
-						models: (dir, base, branch) => pullModels(dir, base, branch, github),
-					},
-				);
+				const run = options.settle
+					? settleLow({ ...options, root: root(), responses })
+					: review(
+							{ ...options, root: root(), exclude: options.excludeModel, responses, fresh: options.new },
+							{
+								...reviewDependencies(),
+								models: (dir, base, branch) => pullModels(dir, base, branch, github),
+							},
+						);
 				pending = run.then(
 					async ({ rounds, tallies }) => {
 						// The rounds are saved in their sessions either way, so their report prints before a failed record.

@@ -56,11 +56,12 @@ const counted = (tally: Tally): Counts => ({
 export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 	const [shared] = rounds;
 	const clean = rounds.every((round) => round.findings.length === 0);
+	const author = rounds.find((round) => round.settled)?.earlier;
 	const lines = [
 		MARK,
 		"",
 		// `quest status` counts a full SHA here as a review of that head, which an open finding has not passed.
-		`- Head: ${clean ? shared!.head : `${shared!.head.slice(0, 12)}, named in full once no reviewer reports a finding`}`,
+		`- Head: ${clean ? shared!.head : `${shared!.head.slice(0, 12)}, named in full once no reviewer reports a finding`}${author ? `, where the author settled the low findings reviewed at ${author.head.slice(0, 12)} with no further round` : ""}`,
 		`- Base: ${shared!.base.ref} at ${shared!.base.sha.slice(0, 12)}`,
 	];
 	for (const round of rounds) {
@@ -78,7 +79,10 @@ export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 		for (const finding of round.findings)
 			lines.push(`  - ${capitalized(finding.severity)}, ${code(located(finding))}: ${code(finding.title)}`);
 		const settled = round.earlier?.findings ?? [];
-		if (settled.length > 0) lines.push(`- The last round's findings, at ${round.earlier!.head.slice(0, 12)}:`);
+		if (settled.length > 0)
+			lines.push(
+				`- The last round's findings, at ${round.earlier!.head.slice(0, 12)}${round.settled ? ", settled by the author" : ""}:`,
+			);
 		for (const finding of settled)
 			lines.push(
 				`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
