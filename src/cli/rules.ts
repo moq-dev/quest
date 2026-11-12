@@ -4,7 +4,7 @@
 // only what the call or stop itself shows, and lets through what it cannot
 // tell apart.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { REFERENCE_MARKER, lines } from "../core";
@@ -197,6 +197,27 @@ function read(cwd: string, path: string): string | undefined {
 	}
 }
 
+/** The most a body file may hold to be read: far more than GitHub takes in a post. */
+const BODY_LIMIT = 1 << 20;
+
+/**
+ * A body file's text, or `undefined` for one that is missing, too large, or
+ * not a regular file: a device or pipe may never end, and reading one takes
+ * what the command would have read.
+ */
+function body(cwd: string, path: string): string | undefined {
+	try {
+		const file = resolve(cwd, path);
+		const stat = statSync(file);
+		return stat.isFile() && stat.size <= BODY_LIMIT ? readFileSync(file, "utf8") : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The paths that name a command's own stdin. */
+const STDIN = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
+
 /** Codex's `apply_patch` envelope: its file headers and its `+`/`-` lines. */
 function applyPatch(patch: string, check: Check) {
 	let added = "";
@@ -234,10 +255,10 @@ function unwrap(argv: string[], env: Set<string>): string[] | null {
 	}
 }
 
-/** `args` past its leading options, where `-n`, `-s`, `-k`, and `-u` take a value. */
+/** `args` past its leading options, where `-n`, `-s`, `-k`, `-u`, and `-C` take a value. */
 function dropOptions(args: string[]): string[] {
 	let i = 0;
-	while (i < args.length && args[i]!.startsWith("-")) i += /^-[nsku]$/.test(args[i]!) ? 2 : 1;
+	while (i < args.length && args[i]!.startsWith("-")) i += /^-[nskuC]$/.test(args[i]!) ? 2 : 1;
 	return args.slice(i);
 }
 
@@ -250,29 +271,35 @@ function dropOptions(args: string[]): string[] {
 function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set(), alone = true) {
 	const { found, scratch } = check;
 	const commands = parse(line);
-	// A command or process substitution runs first, so it is another command.
-	alone &&= commands.length === 1 && !/\$\(|`|[<>]\(/.test(line);
+	alone &&= commands.length === 1 && !commands[0]!.runs;
 	for (const simple of commands) {
 		const env = new Set(inherited);
+		const words = [...simple.argv];
 		const argv = unwrap(simple.argv, env);
 		for (const { op, target } of simple.redirects)
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
 		if (argv === null) continue;
 		const [name, ...args] = argv;
+		// A wrapper such as `env --chdir` moves where the command reads a relative path from.
+		const moved = words.slice(0, words.length - argv.length).some((word) => /^(-C|--chdir)/.test(word));
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
-			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env, alone);
+			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env, alone && !moved);
 			continue;
 		}
 		const asked = env.has(USER_ASKED);
 		const from = (path: string, expanded = false) =>
-			alone && !expanded && !path.startsWith("~") ? read(check.cwd, path) : undefined;
+			alone && !expanded && !path.startsWith("~") && (isAbsolute(path) || !moved)
+				? body(check.cwd, path)
+				: undefined;
 		// Unknown: a here-document or here-string the shell expands, one beside a `<`, since the later wins, and a pipe.
-		const fed = simple.redirects.filter(({ op }) => op === "<").at(-1);
+		const fed = simple.redirects.filter(({ op, fd }) => op === "<" && !fd).at(-1);
 		const here = simple.stdinExpanded ? undefined : simple.stdin;
-		const stdin =
+		// Read only once a checked command asks, so no other command's input is opened.
+		const stdin = () =>
 			fed === undefined ? here : simple.stdin === undefined ? from(fed.target, fed.expanded) : undefined;
-		const input = (file: string) => (file === "-" ? stdin : from(file));
+		const input = (file: string) =>
+			STDIN.has(file) ? stdin() : /^\/(dev|proc)\//.test(file) ? undefined : from(file);
 		const literal = (value: string) => (simple.expanded?.some((word) => word.endsWith(value)) ? undefined : value);
 		if (name === "tee") {
 			if (args.some((arg) => !arg.startsWith("-") && scratch(arg))) found.add("tmp");
