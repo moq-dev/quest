@@ -70,8 +70,11 @@ const page = (name: Connection, after: string) =>
 /** PRs read per query; each brings at most 100 reviews, 50 threads of 100 comments, and 100 comments. */
 const BATCH = 10;
 
-/** A PR's last head and its committer date, and its reviews, review threads, and comments as GitHub's GraphQL API gives them. */
-export type Activity = Record<Connection, ObjectValue[]> & { head: string; committed: string };
+/**
+ * A PR's last head and its committer date, and its reviews, review threads, and comments as GitHub's GraphQL API gives
+ * them; `moved` when a later page found a newer head, so the pages may mix two heads' activity.
+ */
+export type Activity = Record<Connection, ObjectValue[]> & { head: string; committed: string; moved?: boolean };
 
 /** Each PR's reviews, review threads, and comments, and its head, read in batches and then in pages. */
 export async function readActivity(
@@ -124,8 +127,7 @@ export async function readActivity(
 			);
 			const pull = object(object(data.repository).pullRequest);
 			// A later page may hold a review of a head pushed since the first read, which that head would misjudge.
-			if (pull.headRefOid !== nodes.head)
-				throw new Error(`the head of PR #${number} changed while it was read; retry`);
+			if (pull.headRefOid !== nodes.head) nodes.moved = true;
 			const next: Partial<Record<Connection, string>> = {};
 			for (const name of names) {
 				const connection = object(pull[name]);

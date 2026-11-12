@@ -170,7 +170,7 @@ group("signals", () => {
 	test("a writer's marked decision newer than the head's commit holds it until a writer links it", () => {
 		const decision = comment(
 			person,
-			"**Maintainer decision** (2026-11-10): raise the timeout.\n\nDetails.",
+			"  **Maintainer decision** (2026-11-10): raise the timeout.\n\nDetails.",
 			"2026-11-10T17:12:00Z",
 			"9",
 		);
@@ -185,6 +185,8 @@ group("signals", () => {
 				comment(person, "> Maintainer decision: quoted.\n\nApplied.", "2026-11-10T17:13:00Z", "4"),
 				comment(person, "```\nMaintainer decision: fenced.\n```", "2026-11-10T17:13:00Z", "10"),
 				comment(person, "`Maintainer decision` lines hold a head.", "2026-11-10T17:13:00Z", "11"),
+				comment(person, "    Maintainer decision: indented code.", "2026-11-10T17:13:00Z", "12"),
+				comment(person, "\tMaintainer decision: tabbed code.", "2026-11-10T17:13:00Z", "13"),
 				comment(person, "Per the Maintainer decision, ...", "2026-11-10T17:13:00Z", "5"),
 			],
 		});

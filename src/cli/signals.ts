@@ -14,8 +14,11 @@ export interface Signal {
 	text: string;
 }
 
-/** The marker a comment opens with to record a maintainer decision, after markup such as `**` but not in a quote or code. */
-export const DECISION = /^[^A-Za-z>`~]*Maintainer decision\b/i;
+/**
+ * The marker a comment's first line opens with to record a maintainer decision, after markup such as `**` but not in
+ * a quote or code, which four leading spaces or a tab also start.
+ */
+export const DECISION = /^ {0,3}(?![ \t])[^A-Za-z>`~\n]*Maintainer decision\b/i;
 
 /** Repository permissions that can push, whose decisions and answers count. */
 const WRITE = ["admin", "maintain", "write"];
@@ -167,6 +170,8 @@ export async function readSignals(
 	numbers: number[],
 ): Promise<Map<number, { head: string; signals: Signal[] }>> {
 	const pulls = await readActivity(client, repository, numbers);
+	for (const [number, pull] of pulls)
+		if (pull.moved) throw new Error(`the head of PR #${number} changed while it was read; retry`);
 	const actors = [...pulls.values()].flatMap((pull) => [
 		...pull.reviews.map((review) => ({ actor: review.author, association: review.authorAssociation })),
 		...pull.comments.map((comment) => ({ actor: comment.author, association: comment.authorAssociation })),

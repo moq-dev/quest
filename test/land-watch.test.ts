@@ -829,7 +829,7 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 	expect(github.comments[33]).toBeUndefined();
 });
 
-test("a signaled pick whose comment GitHub refuses stays queued until a pass can say why it leaves", async () => {
+test("a signaled pick leaves the queue even when GitHub refuses its comment, which a later pass posts", async () => {
 	const state = tempDir();
 	const github = world([
 		{
@@ -858,11 +858,19 @@ test("a signaled pick whose comment GitHub refuses stays queued until a pass can
 	]);
 	github.now = Date.parse(at(4));
 	github.refuse = ["#30 quest land watch: ended"];
-	await expect(watchPass(REPOSITORY, { state }, deps(github))).rejects.toThrow();
-	expect(github.mutations).toEqual([]);
-	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([`dequeued 30 ${HEAD} 1 signals`]);
+	const first = await watchPass(REPOSITORY, { state }, deps(github));
+	expect(first[0]).toBe(`dequeued 30 ${HEAD} 1 signals`);
+	expect(first[1]).toMatch(new RegExp(`^unsaid 30 ${HEAD}: `));
+	expect(first).toHaveLength(2);
 	expect(github.mutations).toEqual(["dequeuePullRequest 30"]);
+	expect(github.comments[30] ?? []).toHaveLength(0);
+	// Out of the queue now; the kept comment still goes, once.
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
 	expect(github.comments[30]).toHaveLength(1);
+	expect(github.comments[30][0].body).toContain("<!-- quest land: unanswered_signal -->");
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.comments[30]).toHaveLength(1);
+	expect(github.mutations).toEqual(["dequeuePullRequest 30"]);
 });
 
 test("a refused enqueue of an armed pick is reported once and retried, and says nothing when GitHub queued it first", async () => {

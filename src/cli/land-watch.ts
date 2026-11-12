@@ -137,6 +137,8 @@ interface Progress {
 	handled: Record<number, Record<string, string>>;
 	/** Per open PR, the armed pick GitHub refused to enqueue on the last pass, so each refusal is reported once. */
 	refused?: Record<number, string>;
+	/** Per PR the watcher took out of the queue for a signal, the comment saying why that GitHub has not taken yet. */
+	unsaid?: Record<number, { pick: string; head: string; text: string }>;
 }
 
 /** How far back of the last pass each pass reads again, for an event GitHub shows late. */
@@ -326,9 +328,10 @@ async function dequeueSignaled(
 	repository: Repository,
 	base: string,
 	pulls: ObjectValue[],
+	progress: Progress,
+	saveProgress: () => void,
 ): Promise<string[]> {
 	const picked = pulls.filter((pull) => pull.mergeQueueEntry != null || pull.autoMergeRequest != null);
-	if (picked.length === 0) return [];
 	const output: string[] = [];
 	const read = await readSignals(
 		github,
@@ -349,36 +352,26 @@ async function dequeueSignaled(
 					? string(object(now.mergeQueueEntry).enqueuedAt)
 					: null;
 		if (pick === null) continue;
-		// The comment goes first: once the PR leaves the queue no pass reads it again, so a comment that failed after
-		// the dequeue would never be retried. It posts once per pick and head, so a pass that fails below retries only
-		// the mutations.
-		await post(
-			github,
-			{ repository: `${repository.owner}/${repository.repo}` },
-			{ number, enabledAt: pick },
-			`quest land watch: ended this pull request's pick, taking it out of the queue and disarming its auto-merge, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
-			`signaled ${head}`,
-			"quest land watch",
-			"unanswered_signal",
-		);
-		// GitHub may disarm auto-merge with the dequeue, so the disarm reads the PR again first.
+		// GitHub may disarm auto-merge with the dequeue, so the disarm reads the PR again first. Either one taken
+		// ends the pick and is said; when GitHub or a person moved first and neither was taken, nothing is said.
+		let taken = false;
 		try {
-			if (now.mergeQueueEntry != null)
+			if (now.mergeQueueEntry != null) {
 				await github.graphql(
 					"mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }",
 					{ id: pull.id },
 				);
-			const armed =
-				now.mergeQueueEntry != null
-					? (await readPull(github, string(pull.id))).autoMergeRequest
-					: now.autoMergeRequest;
-			if (armed != null)
+				taken = true;
+			}
+			const armed = taken ? (await readPull(github, string(pull.id))).autoMergeRequest : now.autoMergeRequest;
+			if (armed != null) {
 				await github.graphql(
 					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 					{ id: pull.id },
 				);
+				taken = true;
+			}
 		} catch (error) {
-			// GitHub moving first, such as dequeuing it itself, leaves nothing to take.
 			if (!(error instanceof GitHubGraphQLError)) throw error;
 			const fresh = await readPull(github, string(pull.id));
 			const ended =
@@ -386,8 +379,46 @@ async function dequeueSignaled(
 				string(fresh.headRefOid) !== head ||
 				(fresh.mergeQueueEntry == null && fresh.autoMergeRequest == null);
 			if (!ended) throw error;
+			if (!taken) continue;
 		}
 		output.push(`dequeued ${number} ${head} ${found.signals.length} signals`);
+		// Out of the queue, no later pass reads the PR, so its comment is kept until GitHub takes it.
+		(progress.unsaid ??= {})[number] = {
+			pick,
+			head,
+			text: `quest land watch: ended this pull request's pick, taking it out of the queue and disarming its auto-merge, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
+		};
+		saveProgress();
+	}
+	output.push(...(await sayUnsaid(github, repository, progress, saveProgress)));
+	return output;
+}
+
+/** Post each signal comment a pass could not, leaving those GitHub refuses again for the next pass. */
+async function sayUnsaid(
+	github: GitHub,
+	repository: Repository,
+	progress: Progress,
+	saveProgress: () => void,
+): Promise<string[]> {
+	const output: string[] = [];
+	for (const [number, { pick, head, text }] of Object.entries(progress.unsaid ?? {})) {
+		try {
+			await post(
+				github,
+				{ repository: `${repository.owner}/${repository.repo}` },
+				{ number: Number(number), enabledAt: pick },
+				text,
+				`signaled ${head}`,
+				"quest land watch",
+				"unanswered_signal",
+			);
+		} catch (error) {
+			output.push(`unsaid ${number} ${head}: ${error instanceof Error ? error.message : String(error)}`);
+			continue;
+		}
+		delete progress.unsaid![Number(number)];
+		saveProgress();
 	}
 	return output;
 }
@@ -769,7 +800,7 @@ export async function watchPass(
 			save(path, progress);
 		}
 	}
-	output.push(...(await dequeueSignaled(github, repository, ref, pulls)));
+	output.push(...(await dequeueSignaled(github, repository, ref, pulls, progress, () => save(path, progress))));
 	output.push(...(await enqueueArmed(github, ref, pulls, progress, (text) => output.push(text))));
 	// The next pass reads from SETTLE before this one's start; nothing older can come back.
 	const kept = new Date(Date.parse(started) - SETTLE).toISOString();

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import type { GitHub, Repository } from "../src/cli/github";
 import { type Activity, bodyFindings, classify, onlineReviews, readActivity } from "../src/cli/online-review";
+import { readSignals } from "../src/cli/signals";
 
 const HEAD = "h".repeat(40);
 const bot = (login: string) => ({ __typename: "Bot", login });
@@ -159,13 +160,13 @@ describe("onlineReviews", () => {
 	});
 });
 
-test("a head pushed while later pages are read fails the read", async () => {
+test("a head pushed while later pages are read marks the read moved, which fails a signal read", async () => {
 	const page = (nodes: object[], next: boolean) => ({
 		pageInfo: { hasNextPage: next, endCursor: next ? "1" : null },
 		nodes,
 	});
-	const read = (moved: boolean) => {
-		const client = {
+	const client = (moved: boolean) =>
+		({
 			graphql: async (query: string) => {
 				if (query.includes("$reviews"))
 					return {
@@ -188,9 +189,14 @@ test("a head pushed while later pages are read fails the read", async () => {
 					},
 				};
 			},
-		} as unknown as GitHub;
-		return readActivity(client, { owner: "acme", repo: "proj" } as Repository, [1]);
-	};
-	expect((await read(false)).get(1)!.reviews).toHaveLength(2);
-	await expect(read(true)).rejects.toThrow("head of PR #1 changed while it was read");
+		}) as unknown as GitHub;
+	const repository = { owner: "acme", repo: "proj" } as Repository;
+	const still = (await readActivity(client(false), repository, [1])).get(1)!;
+	expect([still.reviews.length, still.moved]).toEqual([2, undefined]);
+	// Usage tallies take the mixed read; a signal read, which judges findings by the head, refuses it.
+	expect((await readActivity(client(true), repository, [1])).get(1)!.moved).toBe(true);
+	await expect(readSignals(client(true), repository, [1])).rejects.toThrow("head of PR #1 changed while it was read");
+	expect((await readSignals(client(false), repository, [1])).get(1)!.signals.map((signal) => signal.text)).toEqual([
+		"new",
+	]);
 });
