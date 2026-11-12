@@ -307,8 +307,9 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 /**
  * Read the queue: open PRs to `base` with auto-merge enabled, in the order it
  * was enabled. A PR is queued while its auto-merge commit body pins its current
- * head; one whose required checks are still running waits, and the rest of the
- * auto-merging PRs are ejected with a reason.
+ * head; one whose required checks are still running, or that still needs a
+ * required approval, waits, and the rest of the auto-merging PRs are ejected
+ * with a reason.
  */
 export async function resolveQueue(
 	repository: Repository,
