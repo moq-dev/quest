@@ -148,7 +148,7 @@ It exits 3 when the quest is blocked or someone else holds it; pick other work.
 `quest start --release <quest>` gives back a claim before any work is pushed.
 If a claim looks stale, such as a draft without `## Waiting` or a
 branch with no open PR quiet a long time, offer the user to take
-it over, saying when it was last active.
+it over, saying how long ago it was last active.
 
 A quest's branch is its path without `.md`.
 For example, `quest/m1/foo/bar.md` is branch `quest/m1/foo/bar`.
@@ -203,7 +203,7 @@ Answer these requests at any point, without stopping running agents:
 
 - "finish up": start nothing new, let running agents report, then clean up and write the final summary.
 - "pause": start nothing new until the user says to resume; reports are handled as usual.
-- "status": a compact list of each agent with its quest or PR, state, and age or last report.
+- "status": a compact list of each agent with its quest or PR, state, and how long ago it started or last reported.
 
 Once every sub-agent has finished, remove each agent checkout `quest worktree status` lists with `quest worktree remove`, since Claude never removes a subagent's checkout; it refuses one with unpreserved work.
 Remove other local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
