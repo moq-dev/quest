@@ -62,13 +62,14 @@ const KNOWN = new Map(
 
 /**
  * The model ID `name` means: a listed model by its ID or display name, a Claude harness's `<Family> <version>` as
- * its `claude-` ID, else `name` itself when it reads as an ID.
+ * its `claude-` ID, else `name` itself when it reads as an ID: one with a version digit, or, where the line's three
+ * fields place the model (`loose`), any lowercase token, such as `opencode-go/kimi`.
  */
-function modelId(name: string, harness: string): string | null {
+function modelId(name: string, harness: string, loose = false): string | null {
 	const listed = KNOWN.get(key(name));
 	if (listed) return listed;
 	if (/^claude\b/i.test(harness) && /^(claude )?[a-z]+ \d+(\.\d+)*$/i.test(name)) return `claude-${key(name)}`;
-	return /^(unknown|[a-z][\w./-]*\d[\w./-]*)$/.test(name) ? name : null;
+	return (loose ? /^(unknown|[a-z][\w./-]*)$/ : /^(unknown|[a-z][\w./-]*\d[\w./-]*)$/).test(name) ? name : null;
 }
 
 /**
@@ -89,14 +90,18 @@ export function implementer(item: string): Implementer | null {
 		const id = modelId(parts[0]!, "");
 		return id !== null && id !== "unknown" ? { harness: "unknown", model: id, effort: "unknown", size } : null;
 	}
-	// The model is the last field, or the one before the effort.
-	const effortless = parts.length === 2 && modelId(parts[1]!, parts[0]!) !== null;
+	// The model is the last field, or the one before the effort; a second field `unknown` is the effort, since a
+	// two-field line names its model.
+	const second = parts.length === 2 ? modelId(parts[1]!, parts[0]!) : null;
+	const effortless = second !== null && second !== "unknown";
 	const at = effortless ? 1 : parts.length - 2;
-	const harness = parts.slice(0, at).join(", ") || "unknown";
-	const model = modelId(parts[at]!, harness);
+	// Claude Code's harness is written `Claude` too; one name keeps its usage rows together.
+	const written = parts.slice(0, at).join(", ") || "unknown";
+	const harness = /^claude( code)?$/i.test(written) ? "Claude Code" : written;
+	const model = modelId(parts[at]!, harness, parts.length === 3);
 	if (model === null) return null;
 	let effort = "unknown";
-	if (!effortless && !/^(effort not reported|unknown effort)$/i.test(parts.at(-1)!)) {
+	if (!effortless && !/^(|effort not reported|unknown effort)$/i.test(parts.at(-1)!)) {
 		const named = /^(\S+)(?: effort)?$/.exec(parts.at(-1)!);
 		if (!named) return null;
 		effort = named[1]!;
