@@ -434,10 +434,12 @@ function summarize(
 /**
  * The design checkpoint `/quest-review` takes every third round, put on the head by an online reviewer: a bot that
  * approves or requests changes, such as one whose approval the base requires, whose latest review is of the head
- * and leaves findings there, as neither an approval nor a dismissed review, in its third, sixth, ... round. A round
- * is one commit it reviewed; a rethink at a checkpoint leaves the next one three rounds on, so nothing restarts the
- * count.
+ * and that has not approved the head, in its third, sixth, ... round. A dismissed review was an approval or a change
+ * request, so it shows the bot gates too, as when a push dismisses its approval. A round is one commit it reviewed;
+ * a rethink at a checkpoint leaves the next one three rounds on, so nothing restarts the count.
  */
+const GATING = ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"];
+
 function checkpoints(head: string, submitted: ObjectValue[]): Status["checkpoints"] {
 	const due: Status["checkpoints"] = [];
 	const rounds = new Map<string, ObjectValue[]>();
@@ -447,11 +449,12 @@ function checkpoints(head: string, submitted: ObjectValue[]): Status["checkpoint
 		rounds.set(reviewer, [...(rounds.get(reviewer) ?? []), row]);
 	}
 	for (const [reviewer, rows] of rounds) {
-		if (!rows.some((row) => row.state === "APPROVED" || row.state === "CHANGES_REQUESTED")) continue;
+		if (!rows.some((row) => GATING.includes(string(row.state)))) continue;
 		const counted = rows.filter((row) => row.commit != null);
 		const last = counted.at(-1);
 		if (last === undefined || string(object(last.commit).oid) !== head) continue;
-		if (last.state === "APPROVED" || last.state === "DISMISSED") continue;
+		const onHead = counted.filter((row) => string(object(row.commit).oid) === head);
+		if (onHead.some((row) => row.state === "APPROVED" || row.state === "DISMISSED")) continue;
 		const round = new Set(counted.map((row) => string(object(row.commit).oid))).size;
 		if (round % 3 === 0) due.push({ reviewer, round, url: string(last.url) });
 	}

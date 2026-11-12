@@ -730,6 +730,16 @@ describe("checkpoint", () => {
 		expect(await line([...rounds, bot("pullfrog", "COMMENTED", A, 4)])).toEqual([
 			`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-4`,
 		]);
+		// A reviewer whose only approval a push dismissed still gates, and a comment after approving the head is none.
+		const dismissed = [
+			bot("pullfrog", "DISMISSED", B, 1),
+			bot("pullfrog", "COMMENTED", C, 2),
+			bot("pullfrog", "COMMENTED", A, 3),
+		];
+		expect(await line(dismissed)).toEqual([`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`]);
+		expect(
+			await line([...rounds.slice(0, 2), bot("pullfrog", "APPROVED", A, 3), bot("pullfrog", "COMMENTED", A, 4)]),
+		).toEqual([]);
 		// Every reviewer due on the head is named.
 		const other = [B, C, A].map((commit, index) => bot("other", "CHANGES_REQUESTED", commit, index + 5));
 		expect(await line([...rounds, ...other])).toEqual([
