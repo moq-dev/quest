@@ -1885,10 +1885,9 @@ refusal ends with the gate. Codex runs no such hook.
 
 `quest` must be on the `PATH` the agent starts with, as for the worktree `--body`, a `body=` field,
 `git commit -m`, `--body-file -` with a here-document, or a body file. A file
-is read while nothing earlier on the command line could have rewritten it, and
-from the line itself where `cat > file <<'EOF'` wrote it; any other file, or a
-body piped into `gh`, passes unread, since it may hold something else by the
-time the command runs. `quest context` still prints these rules,
+is read only when its command is the only one on the command line; after
+another command, or piped into `gh`, a body passes unread, since it may hold
+something else by the time the command runs. `quest context` still prints these rules,
 under a last `Checked` section that the hook leaves out, for agents without
 it.
 

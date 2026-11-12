@@ -4,11 +4,11 @@
 // only what the call or stop itself shows, and lets through what it cannot
 // tell apart.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { REFERENCE_MARKER, lines } from "../core";
-import { type Simple, parse } from "./shell";
+import { parse } from "./shell";
 
 const EM_DASH = String.fromCharCode(0x2014);
 
@@ -241,81 +241,32 @@ function dropOptions(args: string[]): string[] {
 	return args.slice(i);
 }
 
-/** What a command line has done by the command being checked, as far as its text shows. */
-interface Line {
-	/** Where relative paths resolve, or `undefined` once the line moves in a way its text does not show. */
-	cwd: string | undefined;
-	/** The files the line wrote, by absolute path, with the text where a literal here-document gave it. */
-	written: Map<string, string | undefined>;
-	/** Whether a command ran that may have written a file its words do not name. */
-	opaque: boolean;
-	/** Whether only `&&` has joined the commands since the last `;` or newline, so reaching one means those before it succeeded. */
-	chained: boolean;
-	/** Whether a `&&` or `||` precedes the command since then, so it may not run. */
-	conditional: boolean;
-	/** What holds only while `chained`: each file a command that may not run wrote, or `undefined` for its `cd`. */
-	pending: ({ file: string; absent: boolean } | undefined)[];
-}
-
-const WRITES = [">", ">>", ">|", "&>", "&>>"];
-
-/** Commands that write no file but the ones their redirections name. */
-const INERT = new Set("cd mkdir cat echo printf true : test [ ls pwd sleep wc head tail grep rg jq export".split(" "));
-/** `git` and `gh` subcommands that leave the working files alone. */
-const GIT_INERT = new Set(["add", "commit", "push", "fetch", "status", "rev-parse"]);
-const GH_INERT = new Set("create comment review edit view list status ready checks close reopen".split(" "));
-
-/** Whether `name` with `args` writes no file but the ones its redirections name. */
-function inert(name: string, args: string[]): boolean {
-	if (name === "git") return GIT_INERT.has(positionals(args, GIT_VALUE_OPTIONS)[0] ?? "");
-	if (name === "gh") return args[0] === "api" || (["pr", "issue"].includes(args[0]!) && GH_INERT.has(args[1] ?? ""));
-	return INERT.has(name);
-}
-
 /**
  * Check each simple command in a shell command line, following `sh -c` into
  * its script, which inherits the assignments in `inherited`. A body file is
- * read from disk only while nothing earlier on the line could have rewritten
- * it, and from the line itself where a literal here-document wrote it: any
- * other file may hold something else by the time the line posts it.
+ * read from disk only for a command that is `alone` on its line: after
+ * another command, it may hold something else by the time the line posts it.
  */
-function shell(
-	line: string,
-	check: Check,
-	inherited: ReadonlySet<string> = new Set(),
-	state: Line = { cwd: check.cwd, written: new Map(), opaque: false, chained: true, conditional: false, pending: [] },
-) {
+function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set(), alone = true) {
 	const { found, scratch } = check;
-	// A subshell's `cd` ends with it, and the parse does not say where it ends.
-	const grouped = /[()]/.test(line);
-	for (const simple of parse(line)) {
-		enter(state, simple);
+	const commands = parse(line);
+	// A command or process substitution runs first, so it is another command.
+	alone &&= commands.length === 1 && !/\$\(|`|[<>]\(/.test(line);
+	for (const simple of commands) {
 		const env = new Set(inherited);
 		const argv = unwrap(simple.argv, env);
-		for (const { op, target } of simple.redirects) if (WRITES.includes(op) && scratch(target)) found.add("tmp");
-		const [name, ...args] = argv ?? [];
+		for (const { op, target } of simple.redirects)
+			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
+		if (argv === null) continue;
+		const [name, ...args] = argv;
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
-			if (flag !== -1 && args[flag + 1] !== undefined)
-				// Inside the script, what its line did before it holds: the script was reached.
-				shell(args[flag + 1]!, check, env, {
-					...state,
-					written: new Map(state.written),
-					chained: true,
-					conditional: false,
-					pending: [],
-				});
-			forget(state);
+			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env, alone);
 			continue;
 		}
 		const asked = env.has(USER_ASKED);
-		/** A file's text as the command will read it, or `undefined` when the line's text does not settle it. */
-		const from = (path: string, expanded = false) => {
-			if (expanded || state.cwd === undefined || path.startsWith("~")) return undefined;
-			const file = resolve(state.cwd, path);
-			if (state.written.has(file)) return state.written.get(file);
-			return state.opaque ? undefined : read(state.cwd, path);
-		};
+		const from = (path: string, expanded = false) =>
+			alone && !expanded && !path.startsWith("~") ? read(check.cwd, path) : undefined;
 		// Unknown: a here-document or here-string the shell expands, one beside a `<`, since the later wins, and a pipe.
 		const fed = simple.redirects.filter(({ op }) => op === "<").at(-1);
 		const here = simple.stdinExpanded ? undefined : simple.stdin;
@@ -330,77 +281,7 @@ function shell(
 		} else if (name === "mktemp") mktemp(args, env, check);
 		else if (name === "git") git(args, asked, input, check);
 		else if (name === "gh") gh(args, input, literal, check);
-		advance(state, simple, name, args, grouped);
 	}
-}
-
-/** Start `simple`: what earlier commands did only if they ran stops holding once it can be reached without them. */
-function enter(state: Line, simple: Simple) {
-	if (simple.joined === "|") return;
-	if (simple.joined === "&&") {
-		state.conditional = true;
-		return;
-	}
-	for (const effect of state.pending.splice(0)) {
-		if (effect === undefined) state.cwd = undefined;
-		else if (state.written.has(effect.file) && !effect.absent) state.written.set(effect.file, undefined);
-	}
-	state.chained = simple.joined === undefined;
-	state.conditional = simple.joined !== undefined;
-}
-
-/** A command ran that may have written any file. */
-function forget(state: Line) {
-	state.opaque = true;
-	state.written.clear();
-}
-
-/** Record what `simple` does to the files and directory the rest of its line sees. */
-function advance(state: Line, simple: Simple, name: string | undefined, args: string[], grouped: boolean) {
-	// Its effect lasts when it certainly runs, and until the `&&` chain ends when reaching the next command means it ran.
-	const lasts = !state.conditional && !simple.background;
-	const holds = state.chained && !simple.background;
-	const writes = simple.redirects.filter(({ op }) => WRITES.includes(op));
-	// `cat > file <<'EOF'` is the one write whose text the line gives.
-	const here =
-		name === "cat" &&
-		args.length === 0 &&
-		!simple.stdinExpanded &&
-		writes.length === 1 &&
-		[">", ">|"].includes(writes[0]!.op) &&
-		!simple.redirects.some(({ op }) => op === "<")
-			? simple.stdin
-			: undefined;
-	for (const { target, expanded } of writes) {
-		if (expanded || state.cwd === undefined || target.startsWith("~")) {
-			forget(state);
-			continue;
-		}
-		const file = resolve(state.cwd, target);
-		// Where no file is there yet, a write that did not run leaves nothing to post.
-		const absent = !state.written.has(file) && !state.opaque && !existsSync(file);
-		if (here === undefined || lasts) state.written.set(file, here);
-		else if (holds) {
-			state.pending.push({ file, absent });
-			state.written.set(file, here);
-		} else state.written.set(file, absent && !simple.background ? here : undefined);
-	}
-	if (name === "cd") {
-		const [to, ...more] = args.filter((arg) => arg !== "-L" && arg !== "-P" && arg !== "--");
-		const known =
-			to !== undefined &&
-			more.length === 0 &&
-			!grouped &&
-			to !== "-" &&
-			!to.startsWith("~") &&
-			!simple.expanded?.includes(to) &&
-			state.cwd !== undefined;
-		const next = known ? resolve(state.cwd!, to) : undefined;
-		// A `cd` that fails leaves the directory as it was, so only one into a directory that is there lasts.
-		const there = next !== undefined && !state.opaque && statSync(next, { throwIfNoEntry: false })?.isDirectory();
-		if (next !== undefined && !(lasts && there) && holds) state.pending.push(undefined);
-		state.cwd = (lasts && there) || holds ? next : undefined;
-	} else if (name !== undefined && !inert(name, args)) forget(state);
 }
 
 /**
@@ -436,7 +317,7 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 	while (i < argv.length && argv[i]!.startsWith("-")) i += GIT_VALUE_OPTIONS.has(argv[i]!) ? 2 : 1;
 	const [sub, ...args] = argv.slice(i);
 	// `-C` moves where git reads a relative message file from.
-	const moved = argv.slice(0, i).includes("-C");
+	const moved = argv.slice(0, i).some((arg) => arg.startsWith("-C"));
 	// A help flag anywhere passes, even as an option's value: a missed nudge is cheaper than per-subcommand grammars.
 	if (argv.some((arg) => arg === "--help" || arg === "-h")) return;
 	if (sub === "push") push(args, asked, check);
@@ -448,7 +329,9 @@ function git(argv: string[], asked: boolean, input: (file: string) => string | u
 		if (rebase && !asked) check.found.add("rewrite");
 	} else if (sub === "commit") {
 		const message = values(args, ["-m", "--message"], { attached: ["-m"] }).join("\n");
-		const files = moved ? [] : values(args, ["-F", "--file"], { attached: ["-F"] }).map(input);
+		const files = values(args, ["-F", "--file"], { attached: ["-F"] }).map((file) =>
+			moved && file !== "-" && !isAbsolute(file) ? undefined : input(file),
+		);
 		if (adds("", [message, ...files].join("\n"))) check.found.add("emDash");
 	} else if (sub === "clone") {
 		// `git clone [options] <repository> [<directory>]` writes only the directory and a separate git directory.
@@ -594,7 +477,7 @@ function gh(
 		titles = values(rest, ["-t", "--title"], { attached: ["-t"] }).map(literal);
 	}
 	if (body.length === 0) return;
-	// An unknown body, such as one piped in, one the shell expands, or a file the line may have rewritten, passes.
+	// An unknown body, such as one piped in, one the shell expands, or a file read after another command, passes.
 	if (body.some((text) => text === undefined)) return;
 	const text = body.join("\n");
 	if (authored && adds("", [...titles.filter((title) => title !== undefined), text].join("\n")))
