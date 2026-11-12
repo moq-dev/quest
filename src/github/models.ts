@@ -74,18 +74,26 @@ function modelId(name: string, harness: string): string | null {
 /**
  * The fields of an `Implementer: <harness>, <model>, <effort> effort` item, as agents write it: the model by ID or
  * display name, the harness or effort left out, the effort bare or `effort not reported`, and a size among the
- * notes of a parenthetical it ends with, as `(iterate, XS)`. Null when it names no model or has more fields.
+ * notes of a parenthetical it ends with, as `(iterate, XS)`. Null when it names no model or has more fields; a lone
+ * field reads only as an ID.
  */
 export function implementer(item: string): Implementer | null {
 	let rest = item.trim().replace(/^Implementer:\s*/, "");
 	const notes = /\s*\(([^()]*)\)$/.exec(rest);
 	if (notes) rest = rest.slice(0, notes.index);
 	const parts = rest.split(/,\s*/).map((part) => part.trim());
-	if (parts.length < 2 || parts.length > 3) return null;
+	if (parts.length > 3) return null;
+	// A lone field is a model only as an ID, since `unknown` or a display name alone may be a harness.
+	if (parts.length === 1) {
+		const id = modelId(parts[0]!, "");
+		return id !== null && id !== "unknown" && !/\s/.test(parts[0]!)
+			? { harness: "unknown", model: id, effort: "unknown", size: null }
+			: null;
+	}
 	// The model is the last field, or the one before the effort.
 	const effortless = parts.length === 2 && modelId(parts[1]!, parts[0]!) !== null;
 	const at = effortless ? 1 : parts.length - 2;
-	const harness = at > 0 ? parts.slice(0, at).join(", ") : "unknown";
+	const harness = parts.slice(0, at).join(", ") || "unknown";
 	const model = modelId(parts[at]!, harness);
 	if (model === null) return null;
 	let effort = "unknown";

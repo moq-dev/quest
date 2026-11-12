@@ -1620,9 +1620,9 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 			"reviewer claude claude-opus-5-5 medium\n",
 		);
 		// A display name is avoided as its ID is.
-		pull.body = body("- Size: L", "- Implementer: Claude Code, Opus 5.5, high effort");
+		pull.body = body("- Size: S", "- Implementer: Codex, GPT-6.1 Sol, high effort");
 		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
-			"reviewer codex gpt-6.1-sol xhigh\n",
+			"reviewer claude claude-opus-5-5 low\n",
 		);
 		// A latest implementer whose model is unknown may be the running harness's, which the review then skips.
 		pull.body = body("- Implementer: Codex, gpt-6.1-sol, high", "- Implementer: Codex, unknown, unknown effort");
@@ -1723,6 +1723,9 @@ test("an Implementer line reads as agents write it", () => {
 	expect(read("opencode, DeepSeek V4.1 Flash, high effort")?.model).toBe("opencode-go/deepseek-v4.1-flash");
 	expect(read("Codex, gpt-6.1-sol, high")?.effort).toBe("high");
 	expect(read("unknown")).toBeNull();
+	expect(read("Opus 5.5")).toBeNull();
+	expect(read("claude-opus-5-5")).toEqual(opus("unknown", "unknown"));
+	expect(read(", claude-opus-5-5, high effort")).toEqual(opus("high", "unknown"));
 	// An ID no list names still reads, so a new model is counted before the lists add it.
 	expect(read("Codex, gpt-7, high effort")?.model).toBe("gpt-7");
 	expect(read("Codex, Some Model, high effort")).toBeNull();
