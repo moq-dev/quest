@@ -115,6 +115,7 @@ interface Shown {
 	id: number;
 	status: View["status"];
 	title: string;
+	summary: string;
 	url?: string;
 }
 
@@ -166,6 +167,7 @@ class Queue {
 			shown?.head === head &&
 			shown.status === view.status &&
 			shown.title === view.title &&
+			shown.summary === view.summary &&
 			shown.url === view.url
 		)
 			return;
@@ -200,6 +202,7 @@ class Queue {
 			id,
 			status: view.status,
 			title: view.title,
+			summary: view.summary,
 			...(view.url ? { url: view.url } : {}),
 		};
 		save(shownPath(this.queue.state), this.shown);

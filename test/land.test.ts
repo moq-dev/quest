@@ -4620,6 +4620,19 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(await pass()).toEqual(["building 1"]);
 	});
 
+	test("a waiting pick's check follows what it still waits for", async () => {
+		const { forge, pass } = setup();
+		const pick = forge.pull("Both", { "one.txt": "1\n" }, { pull: { review: "REVIEW_REQUIRED", runs: [] } });
+		const summary = () =>
+			String(forge.repo.checkRuns!.filter((item) => item.name === QUEUE_CHECK).at(-1)!.output.summary);
+		await pass();
+		expect(summary()).toContain("the required check `test` to pass, an approving review, which main requires");
+		pick.review = "APPROVED";
+		await pass();
+		expect(summary()).toContain("the required check `test` to pass.");
+		expect(summary()).not.toContain("approving review");
+	});
+
 	test("a held pick keeps its place unbuilt, and stale queue branches and their runs are cleared on the first pass", async () => {
 		const { forge, pass } = setup();
 		const one = forge.pull("One", { "one.txt": "1\n" });
