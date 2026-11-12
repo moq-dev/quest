@@ -1380,6 +1380,49 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(github.comments[5].at(-1)!.body).toContain("finding by rabbit[bot]: drops the last frame");
 	});
 
+	test("a fix queued without its finding still carries the dropped head's, and leaves the queue once one arrives", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const head = repo.pull(5, { "feature.txt": "new\n" });
+		const pull: Pull = {
+			number: 5,
+			head,
+			enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+			removals: [
+				{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue", before: head },
+			],
+		};
+		const github = { ...world([pull], [failedRun(5, at(3), base)]), origin: repo.origin };
+		github.now = Date.parse(at(6));
+		fix.round(5, fixScript("fixed.txt"));
+		await watchPass(REPOSITORY, { state }, deps(github), context);
+		await exited(state);
+		github.now = Date.parse(at(10));
+		const fixed = () => git(repo.origin, "rev-parse", "refs/heads/branch-5");
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([`requeued 5 ${fixed()}`]);
+		// Queued at the fix, however it got there, a finding on the head it replaced still holds it.
+		pull.activity = {
+			reviews: {
+				pageInfo: { hasNextPage: false, endCursor: null },
+				nodes: [
+					{
+						id: "r1",
+						url: "https://github.com/upstream/project/pull/5#pullrequestreview-1",
+						author: { __typename: "Bot", login: "rabbit" },
+						body: "[P1] Drops the last frame",
+						submittedAt: at(11),
+						commit: { oid: head },
+					},
+				],
+			},
+		};
+		github.now = Date.parse(at(12));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
+			`dequeued 5 ${fixed()} 1 signals`,
+		]);
+		expect(github.mutations.at(-1)).toBe("dequeuePullRequest 5");
+	});
+
 	test("a fix that edits a protected path is handed back unpushed, as a ready commit", async () => {
 		const { repo, state, fix, context } = setup();
 		const base = repo.main();

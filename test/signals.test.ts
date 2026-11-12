@@ -227,7 +227,7 @@ group("signals", () => {
 			],
 		});
 		expect(signals(pull, WRITERS)).toEqual([]);
-		const carried = { head: OLD, picked: "2026-11-10T17:00:00Z" };
+		const carried = { heads: [OLD], picked: "2026-11-10T17:00:00Z" };
 		expect(signals(pull, WRITERS, carried).map((signal) => [signal.kind, signal.text])).toEqual([
 			["finding", "guard null"],
 			["decision", "Maintainer decision: while it ran."],

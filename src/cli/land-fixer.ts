@@ -17,7 +17,7 @@ import {
 import { constants as osConstants } from "node:os";
 import { basename, join } from "node:path";
 import { reviewSection } from "../core";
-import { GitHub, type GitHubDependencies, object, string } from "./github";
+import { GitHub, type GitHubDependencies, type ObjectValue, object, string } from "./github";
 import {
 	baseRemote,
 	commandEnvironment,
@@ -47,7 +47,7 @@ import { isPrepared, push, remoteHead } from "./land-head";
 import { BASE_JOB, type Halt, haltNotice, readHalt, saveHalt } from "./land-halt";
 import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
-import { describe, readSignals } from "./signals";
+import { type Carried, describe, readSignals } from "./signals";
 
 /**
  * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused, or a fix
@@ -207,6 +207,30 @@ export function history(state: string, number: number): History | undefined {
 	const record = JSON.parse(readFileSync(path, "utf8")) as Omit<History, "rounds"> & { rounds?: Round[] };
 	return { ...record, rounds: record.rounds ?? [] };
 }
+/**
+ * What the fixer's `head` of PR `number` carries from the pick it replaces: the heads its rounds replaced up to the
+ * round that put `head` back in the queue, and when the pick was made. A head no round put back, or a pick a handback
+ * ended, carries nothing, so only the fixer's own commits inherit, however their head is queued.
+ */
+export function carriedBy(state: string, number: number, head: string): Carried | undefined {
+	const record = history(state, number);
+	if (!record || record.rounds.at(-1)?.outcome === "handback" || !Number.isFinite(Date.parse(record.pick)))
+		return undefined;
+	let end = record.rounds.length;
+	while (end > 0 && record.rounds[end - 1]!.after !== head) end--;
+	if (end === 0) return undefined;
+	return { heads: record.rounds.slice(0, end).map((round) => round.before), picked: record.pick };
+}
+/** What each of `pulls`' heads carries from a pick the land fixer replaced, by number. */
+export function carriedOf(state: string, pulls: ObjectValue[]): Map<number, Carried> {
+	return new Map(
+		pulls.flatMap((pull) => {
+			const carried = carriedBy(state, Number(pull.number), string(pull.headRefOid));
+			return carried ? [[Number(pull.number), carried] as const] : [];
+		}),
+	);
+}
+
 /** Record `round` in `record`, replacing the same job's earlier one, and save it as PR `number`'s history. */
 export function saveRound(state: string, number: number, record: History, round: Round): History {
 	const next = { ...record, rounds: [...record.rounds.filter((item) => item.job !== round.job), round] };
@@ -1120,16 +1144,16 @@ async function collectJob(
 						attribution: author(result),
 					});
 
-				// The fix read no finding or decision on the pick it replaces, so those still hold it; the queue
-				// reads only the new head's.
+				// The fix read no finding or decision on the pick it replaces, so those still hold it.
 				if (head !== entry.head) {
 					const [owner, repo] = job.plan.repository.split("/");
+					const carried = carriedBy(state, number, head);
 					const held = (
 						await readSignals(
 							github,
 							{ owner: owner!, repo: repo! },
 							[number],
-							new Map([[number, { head: entry.head, picked: entry.enabledAt }]]),
+							carried && new Map([[number, carried]]),
 						)
 					).get(number)!;
 					if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");

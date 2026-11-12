@@ -879,10 +879,12 @@ merge ends the pick. There are two kinds:
   a quote or code block, posted after the head's commit, which therefore cannot apply it. A
   newer commit answers it, as does a writer's later comment that links it.
 
-The land fixer's commit reads neither kind, so it answers none: before
-re-enqueueing a fixed head, the fixer counts the findings on the head it
-replaced and the decisions posted since that head's pick, and hands the PR back
-while any holds.
+The land fixer's commit reads neither kind, so it answers none: a head the
+fixer put back in the queue still counts the findings on every head its pick's
+rounds replaced, and the decisions posted since that pick, wherever the queue
+judges it (the fixer's re-enqueue, `quest land watch`'s dequeue, and `quest land
+serve`'s queue), however the head got queued. A writer's push or a handback ends
+the carry.
 
 A writer can push to the repository: an owner, or a member or collaborator
 whose permission GitHub reports as write or higher. A bot is never one.

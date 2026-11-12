@@ -14,9 +14,9 @@ export interface Signal {
 	text: string;
 }
 
-/** A picked head whose signals a later commit carries, and when it was picked. */
+/** The picked heads whose signals a later commit carries unread, and when the pick was made. */
 export interface Carried {
-	head: string;
+	heads: string[];
 	picked: string;
 }
 
@@ -54,13 +54,13 @@ const links = (body: string, url: string) =>
  * or a `[P<n>]` line of that pass's body that no writer's later comment links. A
  * decision is a writer's comment opening with {@link DECISION}, posted after the head was committed, that no writer's
  * later comment links: a head committed before a decision cannot have applied it. A bot is never a writer.
- * `carried` is a head a writer picked that a commit since carries forward unread, such as the land fixer's: findings on
- * it hold too, and so does a decision posted after its pick.
+ * `carried` names heads a writer picked that a commit since carries forward unread, such as the land fixer's: findings on
+ * them hold too, and so does a decision posted after its pick.
  */
 export function signals(pull: Activity, writers: ReadonlySet<string>, carried?: Carried): Signal[] {
 	const writer = (actor: unknown) => !isBot(actor) && writers.has(login(actor) ?? "");
 	const found: Signal[] = [];
-	const heads = new Set([pull.head, ...(carried ? [carried.head] : [])]);
+	const heads = new Set([pull.head, ...(carried?.heads ?? [])]);
 	const reviews = pull.reviews.map((review) => ({
 		id: String(review.id),
 		url: String(review.url),

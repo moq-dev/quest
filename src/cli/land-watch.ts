@@ -17,7 +17,7 @@ import {
 import type { Entry, LandMethod, Plan } from "./land";
 import { authenticatedRead } from "./land-git";
 import { jobLog } from "./land-checks";
-import { COLLECTION_ATTEMPTS, fixerText, post } from "./land-fixer";
+import { COLLECTION_ATTEMPTS, carriedOf, fixerText, post } from "./land-fixer";
 import {
 	apiDependencies,
 	daemonLoop,
@@ -330,6 +330,7 @@ async function dequeueSignaled(
 	pulls: ObjectValue[],
 	progress: Progress,
 	saveProgress: () => void,
+	state: string,
 ): Promise<string[]> {
 	const picked = pulls.filter((pull) => pull.mergeQueueEntry != null || pull.autoMergeRequest != null);
 	const output: string[] = [];
@@ -337,6 +338,7 @@ async function dequeueSignaled(
 		github,
 		repository,
 		picked.map((pull) => Number(pull.number)),
+		carriedOf(state, picked),
 	);
 	for (const pull of picked) {
 		const number = Number(pull.number);
@@ -837,7 +839,9 @@ export async function watchPass(
 			save(path, progress);
 		}
 	}
-	output.push(...(await dequeueSignaled(github, repository, ref, pulls, progress, () => save(path, progress))));
+	output.push(
+		...(await dequeueSignaled(github, repository, ref, pulls, progress, () => save(path, progress), options.state)),
+	);
 	output.push(...(await enqueueArmed(github, ref, pulls, progress, (text) => output.push(text))));
 	// The next pass reads from SETTLE before this one's start; nothing older can come back.
 	const kept = new Date(Date.parse(started) - SETTLE).toISOString();

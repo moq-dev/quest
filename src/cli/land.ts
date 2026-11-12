@@ -18,7 +18,7 @@ import {
 } from "./github";
 import { appOf, latestContexts } from "../github/checks";
 import { classifyCheck } from "./status";
-import { describe, readSignals } from "./signals";
+import { type Carried, describe, readSignals } from "./signals";
 import type { Method } from "./hold";
 import { committedSources, snapshot } from "./tree";
 
@@ -302,6 +302,14 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 	}
 }
 
+/** How `resolveQueue` reads its picks beyond what GitHub says. */
+export interface QueueOptions {
+	/** Whether a head that moved since its pick is still the pick's, as the gate's own base merge is. */
+	acceptHead?: (entry: Entry) => boolean;
+	/** What each landing PR's head carries from a pick the land fixer replaced, by number. */
+	carried?: (pulls: ObjectValue[]) => ReadonlyMap<number, Carried>;
+}
+
 /**
  * Read the queue: open PRs to `base` with auto-merge enabled, in the order it
  * was enabled. A PR is queued while its auto-merge commit body pins its current
@@ -312,8 +320,9 @@ export async function resolveQueue(
 	repository: Repository,
 	target: Target,
 	deps: GitHubDependencies,
-	acceptHead?: (entry: Entry) => boolean,
+	options: QueueOptions = {},
 ): Promise<Plan> {
+	const { acceptHead, carried } = options;
 	const github = new GitHub(deps);
 	const name = `${repository.owner}/${repository.repo}`;
 	const settings = object(await (await github.request(repositoryPath(repository))).json());
@@ -394,6 +403,7 @@ export async function resolveQueue(
 		github,
 		repository,
 		landing.map((node) => Number(node.number)),
+		carried?.(landing),
 	);
 	for (const node of landing) {
 		const request = object(node.autoMergeRequest);

@@ -27,12 +27,14 @@ import {
 	ADMITTED,
 	author,
 	COLLECTION_ATTEMPTS,
+	carriedBy,
 	collectFixers,
 	validateFix,
 	fixerMarkdown,
 	fixerText,
 	REQUEUE_LIMIT,
 	history,
+	historyPath,
 	redactTokens,
 	type Round,
 	stopReason,
@@ -4368,6 +4370,30 @@ describe("land fixer stop rules", () => {
 		expect(stopReason("requeued", round("environment"))).toContain("the runner's environment fails it");
 		expect(stopReason("requeued", round("flaky"))).toContain("last judged flaky");
 	});
+});
+
+test("a fixed head carries the heads its pick's rounds replaced, until a handback ends the pick", () => {
+	const state = tempDir();
+	const save = (record: object) => writeFileSync(historyPath(state, 5), JSON.stringify(record));
+	const round = (before: string, after?: string): Round => ({
+		job: before,
+		outcome: after ? "fixed" : "handback",
+		before,
+		failure: "f",
+		...(after ? { after } : {}),
+	});
+	const pick = "2026-11-10T17:00:00Z";
+	expect(carriedBy(state, 5, "b")).toBeUndefined();
+	save({ pick, rounds: [round("a", "b"), round("b", "c")] });
+	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["a", "b"], picked: pick });
+	expect(carriedBy(state, 5, "b")).toEqual({ heads: ["a"], picked: pick });
+	// A head no round put back, such as a writer's push, carries nothing.
+	expect(carriedBy(state, 5, "d")).toBeUndefined();
+	save({ pick, rounds: [round("a", "b"), round("b")] });
+	expect(carriedBy(state, 5, "b")).toBeUndefined();
+	// A pick that is not a time cannot bound decisions.
+	save({ pick: "f".repeat(40), rounds: [round("a", "b")] });
+	expect(carriedBy(state, 5, "b")).toBeUndefined();
 });
 
 /** The test commit the own queue pushed for PR `number`, if its branch exists. */

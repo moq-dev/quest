@@ -22,6 +22,7 @@ import {
 	fixerText,
 	history,
 	type History,
+	carriedBy,
 	historyPath,
 	identity,
 	importFix,
@@ -660,10 +661,15 @@ async function collect(
 				job.requeuing = head;
 				save(path, job);
 			}
-			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped, queue, {
-				head: entry.head,
-				picked: entry.enabledAt,
-			});
+			job.requeued = await requeue(
+				github,
+				entry.id,
+				head,
+				job.base.ref,
+				job.dropped,
+				queue,
+				carriedBy(state, number, head),
+			);
 			save(path, job);
 		} catch (failure) {
 			if (failure instanceof Held) return [...said, ...(await leave())];
