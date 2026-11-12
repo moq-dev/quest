@@ -439,6 +439,7 @@ describe("usage", () => {
 			"- Implementer: Claude Code, claude-opus-5-5, high effort",
 			"- Implementer: Claude Code, claude-opus-5-5, high effort (iterate, L)",
 			"- Implementer: Codex, gpt-6.1-sol, medium effort (iterate, S)",
+			"- Implementer: Claude Code, Some Model",
 			"",
 			"## Review",
 			"",
@@ -669,6 +670,8 @@ describe("usage", () => {
 			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: "L" },
 			{ harness: "Codex", model: "gpt-6.1-sol", effort: "medium", size: "S" },
 		]);
+		expect(ten.unread).toEqual(["Implementer: Claude Code, Some Model"]);
+		expect(usageLines(report)).toContain("  unread: Implementer: Claude Code, Some Model");
 		expect(report.pulls.find((p) => p.number === 9)!.sessions).toEqual([]);
 		expect(report.pulls.find((p) => p.number === 7)!.sessions).toEqual([]);
 		expect(report.unattributed).toEqual({

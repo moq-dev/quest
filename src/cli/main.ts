@@ -67,9 +67,9 @@ import {
 	setup,
 	targets,
 } from "./hooks";
-import { CHECKED_CONTEXT, USER_ASKED } from "./rules";
+import { CHECKED_CONTEXT, USER_ASKED, questRoot } from "./rules";
 import { messageLines, messages } from "./messages";
-import { heal, init, uninstall } from "./setup";
+import { heal, init, stubFindings, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
@@ -200,12 +200,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const tree = checkout(root(), warn);
 			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
-			if (findings.length === 0) {
+			// A tree nested in another checkout, such as an example, has no stubs of its own.
+			const stubs = questRoot(resolve(root())) === resolve(root()) ? stubFindings(root()) : [];
+			if (findings.length === 0 && stubs.length === 0) {
 				const count = collect(root()).length;
 				print(theme ? theme.checked(count) : `quest: ${count} documents ok`);
 				return;
 			}
 			for (const finding of findings) warn(formatFinding(finding));
+			for (const stub of stubs) warn(stub);
 			code = 1;
 		});
 
@@ -570,8 +573,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		"release. A taken PR carries the quest:active label; iterate prints a hold token, the ID of the timeline " +
 		"event that added it, since sessions often share an account. A command refuses while a quest:active " +
 		"label it holds no token for is on the PR, and while the PR is merged, closed, or a draft its starter still " +
-		"holds (one whose body has no Waiting heading). A refusal names the holder's label, age, and " +
-		"token; releasing a stale hold with that token is the user's choice. Given a token, a command refuses " +
+		"holds (one whose body has no Waiting heading). A refusal names the holder's label and age, never its " +
+		"token; status shows the token, and releasing a stale hold with it is the user's choice. Given a token, a command refuses " +
 		"unless the token is still the latest add of its label. When two sessions add the label at once, the " +
 		"first added keeps the PR; GitHub records no event when a label already on the PR is added again, so two " +
 		"takes within the same moment are not told apart.\n\n" +
@@ -1104,7 +1107,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
 				"before the PR opened, and iterating otherwise. An opencode session, whose log quest does not read, belongs to the newest PR whose " +
 				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
-				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, " +
+				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, and as unread each Implementer line it cannot read, " +
 				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, " +
 				"where a merged PR whose last round left only low findings open counts them settled, since the author fixes or refutes those before merge, " +
 				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
@@ -1137,17 +1140,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("messages")
-		.summary("Print the messages a person typed to agents on this host")
+		.summary("Print the messages a person typed to agents on this host, and their answers to agents' questions")
 		.description(
 			"Print each message a person typed to a Claude Code or Codex session on this host since --since, oldest " +
-				"first, with its time, harness, repository, and session, and nothing else: no agent reply, tool call or " +
-				"output, harness reminder, or prompt an agent or scheduler wrote. Sessions T3 Code drives are read from " +
+				"first, with its time, harness, repository, and session, and no agent reply, tool call or output, " +
+				"harness reminder, or prompt an agent or scheduler wrote, except the questions answers reply to. Sessions T3 Code drives are read from " +
 				"its state ($T3CODE_HOME, or ~/.t3), which records whether a person or an agent sent each message. " +
 				"Other Claude Code sessions, from $CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude), count a turn " +
 				"Claude Code marks as a human's; other Codex sessions, from $CODEX_HOME (or ~/.codex), count the " +
 				"content Codex marks as the user's, outside headless and sub-agent sessions. The repository is the " +
 				"checkout's GitHub origin, else the directory. Output goes to stdout only; nothing is stored or " +
-				"posted. --json prints a JSON array of {time, harness, repository, session, text}.\n\n" +
+				"posted. Each answer a person gave an agent's blocking question (Claude Code's AskUserQuestion, " +
+				"Codex's request_user_input) prints too, from the harness's own log in every session, T3 Code's " +
+				"included, with the skill the session last ran, the question, the options the agent marked " +
+				"(Recommended), and the ones picked or the words typed instead. --json prints a JSON array of " +
+				'{kind: "message", time, harness, repository, session, text} and {kind: "answer", time, harness, ' +
+				"repository, session, skill, header, question, options, recommended, picked}.\n\n" +
 				"Exits 0 when done, 2 for invalid arguments, and 1 for other failures, such as a log or T3 Code " +
 				"record in a shape quest does not know.",
 		)
@@ -1245,7 +1253,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or a checkout or CLI that cannot be reviewed, including a login the API rejects, 3 when a reviewer's " +
 				"account hit its usage limit, and 1 for other failures, including a PR GitHub will not show or a record it " +
 				"refuses. A malformed `## Models` field the round reads, such as a Size line naming no size or an " +
-				"Implementer line naming no model, is a usage error, unless --size or --exclude-model replaces it. A usage limit prints one line, " +
+				"Implementer line naming no model it can read, is a usage error, unless --size or --exclude-model replaces it. A usage limit prints one line, " +
 				"`error: <harness> hit its usage limit; resets <time>`, where <time> is the reset as an ISO 8601 UTC " +
 				"timestamp, or `unknown` when the CLI named none.",
 		)

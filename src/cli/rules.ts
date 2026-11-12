@@ -41,9 +41,14 @@ export const CHECKED_CONTEXT = `## Checked\n\n${Object.values(RULES)
  * reference marker. Found without running git, since every session waits on it.
  */
 export function usesQuest(cwd: string): boolean {
+	return questRoot(cwd) !== null;
+}
+
+/** The root of the checkout holding `cwd` when it uses Quest, as `usesQuest` decides, or null. */
+export function questRoot(cwd: string): string | null {
 	for (let dir = cwd; ; dir = dirname(dir)) {
 		if (existsSync(join(dir, ".git"))) {
-			return ["AGENTS.md", "CLAUDE.md"].some((name) => {
+			const uses = ["AGENTS.md", "CLAUDE.md"].some((name) => {
 				try {
 					return lines(readFileSync(join(dir, name), "utf8")).some((line) =>
 						line.startsWith(REFERENCE_MARKER),
@@ -52,8 +57,9 @@ export function usesQuest(cwd: string): boolean {
 					return false;
 				}
 			});
+			return uses ? dir : null;
 		}
-		if (dirname(dir) === dir) return false;
+		if (dirname(dir) === dir) return null;
 	}
 }
 
