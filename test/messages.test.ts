@@ -5,7 +5,14 @@ import { DatabaseSync } from "node:sqlite";
 
 import { describe, expect, test } from "vitest";
 
-import { claudeText, messageLines, messages, readCodexMessages, readT3Messages } from "../src/cli/messages";
+import {
+	claudeText,
+	messageLines,
+	messages,
+	readClaudeMessages,
+	readCodexMessages,
+	readT3Messages,
+} from "../src/cli/messages";
 import { tempDir } from "./fixture";
 
 const SESSION = "0d8d9084-40a0-48e2-921b-8ba0d67baa2f";
@@ -116,6 +123,7 @@ describe("readCodexMessages", () => {
 		);
 		expect(readCodexMessages(path, SINCE, plain)).toEqual([
 			{
+				kind: "message",
 				time: "2026-11-06T10:01:00.000Z",
 				harness: "codex",
 				repository: "acme/proj",
@@ -139,7 +147,7 @@ describe("readCodexMessages", () => {
 			path,
 			`${JSON.stringify(codexMeta({}))}\n${JSON.stringify(codexTurn("2026-11-06T10:01:00Z", [["hi", "user"]]), null, 1).replaceAll("\n", "")}\n`,
 		);
-		expect(readCodexMessages(path, SINCE, plain).map((m) => m.text)).toEqual(["hi"]);
+		expect(readCodexMessages(path, SINCE, plain).map((m) => m.kind === "message" && m.text)).toEqual(["hi"]);
 	});
 
 	test("fails on a user turn whose provenance does not cover each part, which cannot be told apart", () => {
@@ -167,6 +175,219 @@ describe("readCodexMessages", () => {
 			writeFileSync(path, lines(codexMeta({}), turn(meta)));
 			expect(() => readCodexMessages(path, SINCE, plain)).toThrow(/provenance/);
 		}
+	});
+});
+
+/** A Claude Code answer to `AskUserQuestion`, as the tool result's record holds it. */
+const claudeAnswer = (timestamp: string, answers: object, extra: object = {}) => ({
+	type: "user",
+	timestamp,
+	cwd: "/work/proj",
+	entrypoint: "t3-code",
+	message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "answered" }] },
+	toolUseResult: {
+		questions: [
+			{
+				question: "Which color?",
+				header: "Color",
+				multiSelect: false,
+				options: [{ label: "Red (Recommended)" }, { label: "Blue" }],
+			},
+			{ question: "Which sizes?", header: "Sizes", multiSelect: true, options: [{ label: "S" }, { label: "M" }] },
+		],
+		answers,
+	},
+	...extra,
+});
+
+describe("readClaudeMessages", () => {
+	test("reads answers with the recommended options and the skill the session last ran, in every session", () => {
+		const path = join(tempDir(), `${SESSION}.jsonl`);
+		writeFileSync(
+			path,
+			lines(
+				claudeAnswer("2026-10-30T10:00:00Z", { "Which color?": "Blue" }),
+				turn("2026-11-06T09:00:00Z", "<command-name>/quest-plan</command-name><command-args>x</command-args>"),
+				claudeAnswer("2026-11-06T09:01:00Z", {
+					"Which color?": "Red (Recommended)",
+					"Which sizes?": ["S", "M"],
+				}),
+				{
+					type: "assistant",
+					timestamp: "2026-11-06T09:02:00Z",
+					message: { content: [{ type: "tool_use", name: "Skill", input: { skill: "quest-merge" } }] },
+				},
+				claudeAnswer("2026-11-06T09:03:00Z", { "Which color?": "green, please" }),
+				claudeAnswer("2026-11-06T09:04:00Z", { "Which color?": "Blue" }, { isSidechain: true }),
+			),
+		);
+		const base = {
+			kind: "answer",
+			harness: "claude",
+			repository: "/work/proj",
+			session: SESSION,
+			options: ["Red (Recommended)", "Blue"],
+			recommended: ["Red (Recommended)"],
+		};
+		expect(readClaudeMessages(path, SESSION, SINCE, plain)).toEqual([
+			{
+				kind: "message",
+				time: "2026-11-06T09:00:00.000Z",
+				harness: "claude",
+				repository: "/work/proj",
+				session: SESSION,
+				text: "/quest-plan x",
+			},
+			{
+				...base,
+				time: "2026-11-06T09:01:00.000Z",
+				skill: "quest-plan",
+				header: "Color",
+				question: "Which color?",
+				picked: ["Red (Recommended)"],
+			},
+			{
+				...base,
+				time: "2026-11-06T09:01:00.000Z",
+				skill: "quest-plan",
+				header: "Sizes",
+				question: "Which sizes?",
+				options: ["S", "M"],
+				recommended: [],
+				picked: ["S", "M"],
+			},
+			{
+				...base,
+				time: "2026-11-06T09:03:00.000Z",
+				skill: "quest-merge",
+				header: "Color",
+				question: "Which color?",
+				picked: ["green, please"],
+			},
+		]);
+	});
+
+	test("fails on answers in a shape it does not know", () => {
+		for (const answers of [{ "Which color?": 3 }, null]) {
+			const path = join(tempDir(), "s.jsonl");
+			writeFileSync(path, lines(claudeAnswer("2026-11-06T09:01:00Z", answers as object)));
+			expect(() => readClaudeMessages(path, SESSION, SINCE, plain)).toThrow(/shape/);
+		}
+	});
+});
+
+describe("readCodexMessages answers", () => {
+	const call = (name: string, id: string, questions: object[]) => ({
+		type: "response_item",
+		timestamp: "2026-11-06T10:01:00Z",
+		payload: { type: "function_call", name, call_id: id, arguments: JSON.stringify({ questions }) },
+	});
+	const reply = (answers: object[]) =>
+		`<send_user_message_question_reply>\n${JSON.stringify(answers)}\n</send_user_message_question_reply>`;
+
+	test("pairs each answer with the question its call asked, in T3 Code's sessions too", () => {
+		for (const originator of ["Codex Desktop", "T3 Code"]) {
+			const path = join(tempDir(), "rollout.jsonl");
+			writeFileSync(
+				path,
+				lines(
+					codexMeta({ originator }),
+					codexTurn("2026-11-06T10:00:00Z", [
+						["<skill>\n<name>quest-start</name>\n<path>/s</path>", "skills"],
+					]),
+					call("request_user_input_async", "call_a", [
+						{ title: "Ship it?", options: ["Yes (Recommended)", "No"] },
+					]),
+					{
+						type: "response_item",
+						timestamp: "2026-11-06T10:01:01Z",
+						payload: { type: "function_call_output", call_id: "call_a", output: '{"accepted":true}' },
+					},
+					call("request_user_input", "call_b", [
+						{
+							id: "q1",
+							header: "Mode",
+							question: "Which mode?",
+							options: [{ label: "Fast" }, { label: "Safe (Recommended)" }],
+						},
+					]),
+					{
+						type: "response_item",
+						timestamp: "2026-11-06T10:02:00Z",
+						payload: {
+							type: "function_call_output",
+							call_id: "call_b",
+							output: '{"answers":{"q1":{"answers":["Fast"]}}}',
+						},
+					},
+					codexTurn("2026-11-06T10:03:00Z", [
+						[
+							reply([
+								{
+									questionItemId: '["request_user_input_async","call_a",0]',
+									question: "Ship it?",
+									answer: "No",
+								},
+							]),
+							"user",
+						],
+						["also rename it", "user"],
+					]),
+				),
+			);
+			const base = {
+				kind: "answer",
+				harness: "codex",
+				repository: "/work/proj",
+				session: THREAD,
+				skill: "quest-start",
+			};
+			const answers = [
+				{
+					...base,
+					time: "2026-11-06T10:02:00.000Z",
+					header: "Mode",
+					question: "Which mode?",
+					options: ["Fast", "Safe (Recommended)"],
+					recommended: ["Safe (Recommended)"],
+					picked: ["Fast"],
+				},
+				{
+					...base,
+					time: "2026-11-06T10:03:00.000Z",
+					header: null,
+					question: "Ship it?",
+					options: ["Yes (Recommended)", "No"],
+					recommended: ["Yes (Recommended)"],
+					picked: ["No"],
+				},
+			];
+			const typed = {
+				kind: "message",
+				time: "2026-11-06T10:03:00.000Z",
+				harness: "codex",
+				repository: "/work/proj",
+				session: THREAD,
+				text: "also rename it",
+			};
+			expect(readCodexMessages(path, SINCE, plain)).toEqual(
+				originator === "T3 Code" ? answers : [...answers, typed],
+			);
+		}
+	});
+
+	test("fails on an answer to a question its log does not hold", () => {
+		const path = join(tempDir(), "rollout.jsonl");
+		writeFileSync(
+			path,
+			lines(
+				codexMeta({}),
+				codexTurn("2026-11-06T10:03:00Z", [
+					[reply([{ questionItemId: '["request_user_input_async","call_x",0]', answer: "No" }]), "user"],
+				]),
+			),
+		);
+		expect(() => readCodexMessages(path, SINCE, plain)).toThrow(/does not hold/);
 	});
 });
 
@@ -207,6 +428,7 @@ describe("readT3Messages", () => {
 		]);
 		expect(readT3Messages(path, SINCE, plain)).toEqual([
 			{
+				kind: "message",
 				time: "2026-11-06T10:00:00.000Z",
 				harness: "claude",
 				repository: "/work/proj",
@@ -214,6 +436,7 @@ describe("readT3Messages", () => {
 				text: "go",
 			},
 			{
+				kind: "message",
 				time: "2026-11-06T10:01:00.000Z",
 				harness: "claude",
 				repository: "/work/proj",
@@ -271,6 +494,7 @@ describe("messages", () => {
 		const found = messages("2026-11-01", { env: {}, home });
 		expect(found).toEqual([
 			{
+				kind: "message",
 				time: "2026-11-06T09:00:00.000Z",
 				harness: "claude",
 				repository: "acme/proj",
@@ -278,6 +502,7 @@ describe("messages", () => {
 				text: "plan it",
 			},
 			{
+				kind: "message",
 				time: "2026-11-06T10:00:00.000Z",
 				harness: "claude",
 				repository: "acme/proj",
@@ -285,6 +510,7 @@ describe("messages", () => {
 				text: "go",
 			},
 			{
+				kind: "message",
 				time: "2026-11-06T11:00:00.000Z",
 				harness: "codex",
 				repository: "/gone",
@@ -293,6 +519,31 @@ describe("messages", () => {
 			},
 		]);
 		expect(messageLines(found.slice(2))).toEqual([`2026-11-06T11:00:00.000Z codex /gone ${THREAD}`, "  and test"]);
+	});
+
+	test("prints an answer with its skill, question, recommendation, and pick", () => {
+		expect(
+			messageLines([
+				{
+					kind: "answer",
+					time: "2026-11-06T09:01:00.000Z",
+					harness: "claude",
+					repository: "acme/proj",
+					session: SESSION,
+					skill: "quest-plan",
+					header: "Color",
+					question: "Which color?",
+					options: ["Red (Recommended)", "Blue"],
+					recommended: ["Red (Recommended)"],
+					picked: ["Blue"],
+				},
+			]),
+		).toEqual([
+			`2026-11-06T09:01:00.000Z claude acme/proj ${SESSION} answer quest-plan`,
+			"  [Color] Which color?",
+			"  recommended: Red (Recommended)",
+			"  picked: Blue",
+		]);
 	});
 
 	test("fails when T3 Code is installed but its state is elsewhere", () => {
