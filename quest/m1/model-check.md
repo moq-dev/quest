@@ -86,13 +86,20 @@ checkpoints and outages to count by hand:
     cell with again:
     - Haiku 5.5: high 30, $0.0034; xhigh 34.6, $0.0053.
     - Sonnet 5.5: medium 30.7, $0.012; below the frontier at every effort,
-      so rejected for XS though Anthropic's
+      so rejected for XS then, though Anthropic's
       [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/)
       favors it for scoped coding.
     - Opus 5.5: low 34.7, $0.015; medium 48, $0.037; high 51.7, $0.052;
       xhigh 57.3, $0.092; max 58.9, $0.15.
     - gpt-6.1-sol: low 34.8, $0.0094; medium 46.3, $0.021; high 50.3,
       $0.034; xhigh 52.5, $0.045.
+  - Changed again (maintainer, 2026-11-11): XS writes on Sonnet high
+    instead of Haiku xhigh, since two Haiku XS agents in a row on
+    [moq-dev/quest#643](https://github.com/moq-dev/quest/pull/643) died
+    refilling context right after compaction: Haiku 5.5 bills 5x past 100k
+    input, so its auto-compact window is capped there, barely above an
+    agent's 40-60k fixed load. Sonnet 5.5's price is flat over its 1M
+    window. Tally the XS Sonnet high cell fresh.
     - Fable 5.2: medium 56, $3.8; max 64.6, $26.5. Rejected for XL, which
       stays on Opus xhigh, on the frontier; zero-data-retention
       organizations may also be refused Fable.
