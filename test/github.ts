@@ -335,6 +335,7 @@ function activityOf(repo: Repo, number: number) {
 				id: `R_${number}_${index}`,
 				url: `${url}#pullrequestreview-${index}`,
 				author: actorOf(review.author),
+				authorAssociation: review.author === repo.owner ? "OWNER" : "COLLABORATOR",
 				body: review.body ?? "",
 				submittedAt: updatedAt,
 				commit: { oid: review.commit ?? head },
@@ -358,7 +359,7 @@ function activityOf(repo: Repo, number: number) {
 		comments: page(
 			(pull.comments ?? []).map((comment, index) => ({
 				author: actorOf(comment.author),
-				authorAssociation: "COLLABORATOR",
+				authorAssociation: comment.author === repo.owner ? "OWNER" : "COLLABORATOR",
 				body: comment.body,
 				createdAt: comment.at,
 				url: `${url}#issuecomment-${index}`,

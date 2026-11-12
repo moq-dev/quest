@@ -175,4 +175,29 @@ group("signals", () => {
 		pull.comments.push(comment(person, `Covered by the head: ${URL_}#issuecomment-9`, "2026-11-10T17:15:00Z", "8"));
 		expect(signals(pull, WRITERS)).toEqual([]);
 	});
+
+	test("a named review counts only under a bot's or a writer's account", () => {
+		const pull = activity({
+			reviews: [
+				review("r1", person, "Automated review by review (OpenAI)\n\n[P1] Guard null", "2026-11-10T17:05:00Z"),
+				review("r2", reader, "Automated review by review (OpenAI)\n\nNo findings.", "2026-11-10T17:06:00Z"),
+			],
+		});
+		expect(signals(pull, WRITERS).map((signal) => signal.text)).toEqual(["guard null"]);
+	});
+
+	test("an answer links a whole anchor, not the start of a longer one", () => {
+		const pull = activity({
+			reviews: [review("1", bot("rabbit"), "[P1] Guard null", "2026-11-10T17:05:00Z")],
+			comments: [
+				comment(person, "Maintainer decision: add it.", "2026-11-10T17:06:00Z", "9"),
+				comment(person, `See ${URL_}#pullrequestreview-12 and #issuecomment-90.`, "2026-11-10T17:07:00Z", "2"),
+			],
+		});
+		expect(signals(pull, WRITERS)).toHaveLength(2);
+		pull.comments.push(
+			comment(person, `See #pullrequestreview-1, and #issuecomment-9.`, "2026-11-10T17:08:00Z", "3"),
+		);
+		expect(signals(pull, WRITERS)).toEqual([]);
+	});
 });

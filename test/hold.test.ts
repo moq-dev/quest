@@ -35,6 +35,8 @@ class FakePull {
 	/** Runs after each pull request read, to change it between reads. */
 	afterRead?: () => void;
 	comparison = "ahead";
+	/** Runs on each base comparison, the last request before landing. */
+	afterCompare?: () => void;
 	base = BASE;
 	readonly comparisons: string[] = [];
 	/** Check names the base branch's rulesets require. */
@@ -111,6 +113,7 @@ class FakePull {
 		if (url.pathname === "/repos/example/project/branches/main") return json(200, { protection: {} });
 		if (url.pathname === `/repos/example/project/compare/main...${this.head}`) {
 			this.comparisons.push(`${url.pathname}${url.search}`);
+			this.afterCompare?.();
 			return json(200, { status: this.comparison, base_commit: { sha: this.base } });
 		}
 		if (url.pathname === "/repos/example/project/rules/branches/main") {
@@ -377,6 +380,30 @@ describe("merge --land", () => {
 		pull.committed = "2026-10-21T11:45:00Z";
 		await land(PR, HEAD, "merge", pull.deps());
 		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("rechecks signals right before a direct merge", async () => {
+		const pull = new FakePull();
+		pull.allowAutoMerge = false;
+		const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+		pull.afterCompare = () => {
+			pull.activity = {
+				comments: {
+					...empty,
+					nodes: [
+						{
+							author: { __typename: "User", login: "maintainer" },
+							authorAssociation: "OWNER",
+							body: "Maintainer decision: late.",
+							createdAt: "2026-10-21T11:30:00Z",
+							url: `${URL_}#issuecomment-9`,
+						},
+					],
+				},
+			};
+		};
+		expect(await refused(land(PR, HEAD, "merge", pull.deps(), true))).toContain("Maintainer decision: late.");
+		expect(pull.writes).toEqual([]);
 	});
 
 	test("refuses when the token cannot see the auto-merge setting", async () => {

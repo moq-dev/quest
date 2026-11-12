@@ -32,6 +32,13 @@ const firstLine = (body: string) =>
 /** The `#...` anchor of a GitHub URL. */
 const anchorOf = (url: string) => url.slice(url.lastIndexOf("#"));
 
+/** Whether `body` links `url`'s anchor whole, not as the start of a longer ID such as `#issuecomment-90` for `-9`. */
+const links = (body: string, url: string) =>
+	body
+		.split(anchorOf(url))
+		.slice(1)
+		.some((rest) => !/^[\w-]/.test(rest));
+
 /**
  * The signals holding `pull`'s head, given which accounts can push to its repository. A finding is an online
  * reviewer's, from its latest pass over the head: a review thread it opened that is unresolved with no writer's reply,
@@ -45,7 +52,8 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 	const reviews = pull.reviews.map((review) => ({
 		id: String(review.id),
 		url: String(review.url),
-		reviewer: reviewerOf(review),
+		// A review names its reviewer in its body only under a bot's or a writer's account, so a forged one replaces nothing.
+		reviewer: isBot(review.author) || writer(review.author) ? reviewerOf(review) : null,
 		body: typeof review.body === "string" ? review.body : "",
 		at: Date.parse(String(review.submittedAt)),
 		head: review.commit != null && String(object(review.commit).oid) === pull.head,
@@ -94,7 +102,7 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 	// A writer answers a pass by linking it; an answer word alone cannot tell which finding it meant.
 	for (const pass of passes)
 		pass.answered = comments.some(
-			(comment) => comment.writer && comment.at >= pass.at && comment.body.includes(anchorOf(pass.url)),
+			(comment) => comment.writer && comment.at >= pass.at && links(comment.body, pass.url),
 		);
 	for (const pass of passes)
 		if (!pass.answered)
@@ -104,8 +112,8 @@ export function signals(pull: Activity, writers: ReadonlySet<string>): Signal[] 
 	const committed = Date.parse(pull.committed);
 	for (const decision of comments) {
 		if (!decision.writer || !DECISION.test(decision.body) || decision.at <= committed) continue;
-		const anchor = anchorOf(decision.url);
-		if (comments.some((reply) => reply.writer && reply.at > decision.at && reply.body.includes(anchor))) continue;
+		if (comments.some((reply) => reply.writer && reply.at > decision.at && links(reply.body, decision.url)))
+			continue;
 		found.push({
 			kind: "decision",
 			url: decision.url,
@@ -152,6 +160,7 @@ export async function readSignals(
 ): Promise<Map<number, { head: string; signals: Signal[] }>> {
 	const pulls = await readActivity(client, repository, numbers);
 	const actors = [...pulls.values()].flatMap((pull) => [
+		...pull.reviews.map((review) => ({ actor: review.author, association: review.authorAssociation })),
 		...pull.comments.map((comment) => ({ actor: comment.author, association: comment.authorAssociation })),
 		...pull.reviewThreads.flatMap((thread) =>
 			array(object(thread.comments).nodes).map((comment) => ({

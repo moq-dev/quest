@@ -56,7 +56,7 @@ export function bodyFindings(body: string): string[] {
 
 const THREAD_COMMENT = "author { __typename login } authorAssociation body url pullRequestReview { id }";
 const FIELDS = {
-	reviews: "id url author { __typename login } body submittedAt commit { oid }",
+	reviews: "id url author { __typename login } authorAssociation body submittedAt commit { oid }",
 	reviewThreads:
 		"id isResolved resolvedBy { __typename login } " +
 		`comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT} } }`,

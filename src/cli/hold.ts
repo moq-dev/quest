@@ -290,6 +290,8 @@ export async function land(
 		);
 	}
 	await unchanged();
+	// A decision posted since the check above leaves the head as it was, so `expectedHeadOid` would not refuse it.
+	await unsignaled(labels.github, pr, snapshot.url, sha);
 	const submit = (mutation: "mergePullRequest" | "enablePullRequestAutoMerge") =>
 		labels.github.graphql(
 			`mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!) {
@@ -318,6 +320,7 @@ export async function land(
 			(await requirements(labels.github, pr, fresh.base)).checks.some((check) => check.name === LAND_CHECK)
 		)
 			throw error;
+		await unsignaled(labels.github, pr, snapshot.url, sha);
 		await submit("mergePullRequest");
 	}
 }
