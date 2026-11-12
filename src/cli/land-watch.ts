@@ -17,7 +17,7 @@ import {
 import type { Entry, LandMethod, Plan } from "./land";
 import { authenticatedRead } from "./land-git";
 import { jobLog } from "./land-checks";
-import { fixerText, post } from "./land-fixer";
+import { COLLECTION_ATTEMPTS, fixerText, post } from "./land-fixer";
 import {
 	apiDependencies,
 	daemonLoop,
@@ -138,7 +138,7 @@ interface Progress {
 	/** Per open PR, the armed pick GitHub refused to enqueue on the last pass, so each refusal is reported once. */
 	refused?: Record<number, string>;
 	/** Per PR the watcher took out of the queue for a signal, the comment saying why that GitHub has not taken yet. */
-	unsaid?: Record<number, { pick: string; head: string; text: string }>;
+	unsaid?: Record<number, { id: string; pick: string; head: string; text: string; failures: number }>;
 }
 
 /** How far back of the last pass each pass reads again, for an event GitHub shows late. */
@@ -352,6 +352,16 @@ async function dequeueSignaled(
 					? string(object(now.mergeQueueEntry).enqueuedAt)
 					: null;
 		if (pick === null) continue;
+		// Out of the queue, no later pass reads the PR, so its comment is kept from before the mutations, which a lost
+		// response or a crash may apply unseen, until GitHub takes it or it no longer holds.
+		(progress.unsaid ??= {})[number] = {
+			id: string(pull.id),
+			pick,
+			head,
+			text: `quest land watch: ended this pull request's pick, taking it out of the queue and disarming its auto-merge, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
+			failures: 0,
+		};
+		saveProgress();
 		// GitHub may disarm auto-merge with the dequeue, so the disarm reads the PR again first. Either one taken
 		// ends the pick and is said; when GitHub or a person moved first and neither was taken, nothing is said.
 		let taken = false;
@@ -379,22 +389,24 @@ async function dequeueSignaled(
 				string(fresh.headRefOid) !== head ||
 				(fresh.mergeQueueEntry == null && fresh.autoMergeRequest == null);
 			if (!ended) throw error;
-			if (!taken) continue;
+			// GitHub refused each mutation it was sent, so whoever ended the pick, it was not the watcher.
+			if (!taken) {
+				delete progress.unsaid[number];
+				saveProgress();
+				continue;
+			}
 		}
 		output.push(`dequeued ${number} ${head} ${found.signals.length} signals`);
-		// Out of the queue, no later pass reads the PR, so its comment is kept until GitHub takes it.
-		(progress.unsaid ??= {})[number] = {
-			pick,
-			head,
-			text: `quest land watch: ended this pull request's pick, taking it out of the queue and disarming its auto-merge, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
-		};
-		saveProgress();
 	}
 	output.push(...(await sayUnsaid(github, repository, progress, saveProgress)));
 	return output;
 }
 
-/** Post each signal comment a pass could not, leaving those GitHub refuses again for the next pass. */
+/**
+ * Post each kept signal comment whose pick has ended with its PR open on the same head. One still in the queue on
+ * that pick waits for its dequeue; a closed, merged, pushed, or picked-again PR, or one GitHub refused the comment
+ * {@link COLLECTION_ATTEMPTS} times, drops it.
+ */
 async function sayUnsaid(
 	github: GitHub,
 	repository: Repository,
@@ -402,23 +414,48 @@ async function sayUnsaid(
 	saveProgress: () => void,
 ): Promise<string[]> {
 	const output: string[] = [];
-	for (const [number, { pick, head, text }] of Object.entries(progress.unsaid ?? {})) {
+	for (const [key, entry] of Object.entries(progress.unsaid ?? {})) {
+		const number = Number(key);
+		const drop = () => {
+			delete progress.unsaid![number];
+			saveProgress();
+		};
+		const now = await readPull(github, entry.id);
+		const pick =
+			now.autoMergeRequest != null
+				? string(object(now.autoMergeRequest).enabledAt)
+				: now.mergeQueueEntry != null
+					? string(object(now.mergeQueueEntry).enqueuedAt)
+					: null;
+		if (now.state !== "OPEN" || string(now.headRefOid) !== entry.head || (pick !== null && pick !== entry.pick)) {
+			drop();
+			continue;
+		}
+		if (pick !== null) continue;
 		try {
 			await post(
 				github,
 				{ repository: `${repository.owner}/${repository.repo}` },
-				{ number: Number(number), enabledAt: pick },
-				text,
-				`signaled ${head}`,
+				{ number, enabledAt: entry.pick },
+				entry.text,
+				`signaled ${entry.head}`,
 				"quest land watch",
 				"unanswered_signal",
 			);
 		} catch (error) {
-			output.push(`unsaid ${number} ${head}: ${error instanceof Error ? error.message : String(error)}`);
+			const reason = error instanceof Error ? error.message : String(error);
+			if (++entry.failures >= COLLECTION_ATTEMPTS) {
+				output.push(
+					`set aside the signal comment on ${number} after ${COLLECTION_ATTEMPTS} refusals: ${reason}`,
+				);
+				drop();
+			} else {
+				output.push(`unsaid ${number} ${entry.head}: ${reason}`);
+				saveProgress();
+			}
 			continue;
 		}
-		delete progress.unsaid![Number(number)];
-		saveProgress();
+		drop();
 	}
 	return output;
 }

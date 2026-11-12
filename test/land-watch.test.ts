@@ -830,32 +830,34 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 });
 
 test("a signaled pick leaves the queue even when GitHub refuses its comment, which a later pass posts", async () => {
-	const state = tempDir();
-	const github = world([
-		{
-			number: 30,
-			head: HEAD,
-			enqueues: [{ createdAt: at(2), actor: "maintainer" }],
-			removals: [],
-			armed: at(2),
-			queued: at(2),
-			activity: {
-				reviews: {
-					pageInfo: { hasNextPage: false, endCursor: null },
-					nodes: [
-						{
-							id: "r1",
-							url: "https://github.com/upstream/project/pull/30#pullrequestreview-1",
-							author: { __typename: "Bot", login: "rabbit" },
-							body: "[P1] Drops the last frame",
-							submittedAt: at(3),
-							commit: { oid: HEAD },
-						},
-					],
+	const signaled = () =>
+		world([
+			{
+				number: 30,
+				head: HEAD,
+				enqueues: [{ createdAt: at(2), actor: "maintainer" }],
+				removals: [],
+				armed: at(2),
+				queued: at(2),
+				activity: {
+					reviews: {
+						pageInfo: { hasNextPage: false, endCursor: null },
+						nodes: [
+							{
+								id: "r1",
+								url: "https://github.com/upstream/project/pull/30#pullrequestreview-1",
+								author: { __typename: "Bot", login: "rabbit" },
+								body: "[P1] Drops the last frame",
+								submittedAt: at(3),
+								commit: { oid: HEAD },
+							},
+						],
+					},
 				},
 			},
-		},
-	]);
+		]);
+	let state = tempDir();
+	let github = signaled();
 	github.now = Date.parse(at(4));
 	github.refuse = ["#30 quest land watch: ended"];
 	const first = await watchPass(REPOSITORY, { state }, deps(github));
@@ -871,6 +873,31 @@ test("a signaled pick leaves the queue even when GitHub refuses its comment, whi
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
 	expect(github.comments[30]).toHaveLength(1);
 	expect(github.mutations).toEqual(["dequeuePullRequest 30"]);
+
+	// A comment GitHub keeps refusing is set aside after three passes.
+	state = tempDir();
+	github = signaled();
+	github.now = Date.parse(at(4));
+	github.refuse = Array(4).fill("#30 quest land watch: ended");
+	expect((await watchPass(REPOSITORY, { state }, deps(github)))[1]).toMatch(/^unsaid 30 /);
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([expect.stringMatching(/^unsaid 30 /)]);
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
+		expect.stringMatching(/^set aside the signal comment on 30 after 3 refusals: /),
+	]);
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.comments[30] ?? []).toHaveLength(0);
+
+	// A kept comment whose PR closed is dropped unsaid.
+	state = tempDir();
+	github = signaled();
+	github.now = Date.parse(at(4));
+	github.refuse = ["#30 quest land watch: ended"];
+	await watchPass(REPOSITORY, { state }, deps(github));
+	github.pulls[0].state = "CLOSED";
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	github.pulls[0].state = undefined;
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.comments[30] ?? []).toHaveLength(0);
 });
 
 test("a refused enqueue of an armed pick is reported once and retried, and says nothing when GitHub queued it first", async () => {

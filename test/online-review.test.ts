@@ -200,3 +200,45 @@ test("a head pushed while later pages are read marks the read moved, which fails
 		"new",
 	]);
 });
+
+test("a head pushed while a long thread's later comments are read marks the read moved", async () => {
+	const read = async (moved: boolean) => {
+		const client = {
+			graphql: async (query: string) =>
+				query.includes("PullRequestReviewThread")
+					? {
+							node: {
+								pullRequest: { headRefOid: moved ? "m".repeat(40) : HEAD },
+								comments: { pageInfo: { hasNextPage: false }, nodes: [{ body: "Later." }] },
+							},
+						}
+					: {
+							repository: {
+								p1: {
+									headRefOid: HEAD,
+									commits: {
+										nodes: [{ commit: { oid: HEAD, committedDate: "2026-11-10T17:00:00Z" } }],
+									},
+									reviews: { pageInfo: { hasNextPage: false }, nodes: [] },
+									reviewThreads: {
+										pageInfo: { hasNextPage: false },
+										nodes: [
+											{
+												id: "t1",
+												comments: {
+													pageInfo: { hasNextPage: true, endCursor: "1" },
+													nodes: [{ body: "First." }],
+												},
+											},
+										],
+									},
+									comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+								},
+							},
+						},
+		} as unknown as GitHub;
+		return (await readActivity(client, { owner: "acme", repo: "proj" } as Repository, [1])).get(1)!.moved;
+	};
+	expect(await read(false)).toBeUndefined();
+	expect(await read(true)).toBe(true);
+});

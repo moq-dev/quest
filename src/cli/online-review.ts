@@ -146,9 +146,11 @@ export async function readActivity(
 			for (let info = object(comments.pageInfo); info.hasNextPage === true;) {
 				const data = await client.graphql(
 					"query($id: ID!, $after: String!) { node(id: $id) { ... on PullRequestReviewThread { " +
+						"pullRequest { headRefOid } " +
 						`comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT} } } } } }`,
 					{ id: String(thread.id), after: String(info.endCursor) },
 				);
+				if (object(object(data.node).pullRequest ?? {}).headRefOid !== nodes.head) nodes.moved = true;
 				const page = object(object(data.node).comments);
 				all.push(...array(page.nodes));
 				info = object(page.pageInfo);
