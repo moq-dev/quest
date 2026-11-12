@@ -472,11 +472,15 @@ function unknown(snapshot: Snapshot, token: string): string {
 	return `${token} is not an event that added a label to ${snapshot.url} among its last 100`;
 }
 
-/** Who holds `label`, for a person deciding whether to wait or take over a stale hold. */
+/**
+ * Who holds `label`, for a person deciding whether to wait or take over a stale hold.
+ * It never prints the holder's token: a refused session that has it in hand reads
+ * it as permission to continue. `quest status` shows it to whoever takes over.
+ */
 function holder(snapshot: Snapshot, label: string, now: number): string {
 	const added = latestHold(snapshot.events, label);
-	const since = added ? `, added ${ago(now, added.time)} as token ${added.id}` : "";
-	return `${snapshot.url} is held by ${label}${since}; if it looks stale, ask the user before releasing it`;
+	const since = added ? `, added ${ago(now, added.time)}` : "";
+	return `${snapshot.url} is held by ${label}${since}, so stop and report it; if it looks stale, ask the user before releasing it with the token quest status shows`;
 }
 
 /** One PR's labels on GitHub. */
