@@ -234,6 +234,18 @@ group("signals", () => {
 		]);
 	});
 
+	test("a late pass over a carried head leaves the current head's findings, and a dismissed review holds nothing", () => {
+		const pull = activity({
+			reviews: [
+				review("r1", bot("rabbit"), "[P1] Guard null\n[P2] Guard null", "2026-11-10T17:30:00Z"),
+				review("r2", bot("rabbit"), "No findings.", "2026-11-10T17:40:00Z", OLD),
+				{ ...review("r3", bot("frog"), "[P1] Leaks", "2026-11-10T17:35:00Z"), state: "DISMISSED" },
+			],
+		});
+		const carried = { heads: [OLD], picked: "2026-11-10T17:00:00Z" };
+		expect(signals(pull, WRITERS, carried).map((signal) => signal.text)).toEqual(["guard null", "guard null"]);
+	});
+
 	test("an answer links a whole anchor, not the start of a longer one", () => {
 		const pull = activity({
 			reviews: [review("1", bot("rabbit"), "[P1] Guard null", "2026-11-10T17:05:00Z")],

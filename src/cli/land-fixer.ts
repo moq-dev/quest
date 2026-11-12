@@ -176,6 +176,8 @@ export interface Round {
 	outcome: Outcome;
 	/** The head that failed. */
 	before: string;
+	/** The pin `before` stood on, when it was the gate's base merge on that pin rather than the pin itself. */
+	pin?: string;
 	/** The head the PR went back to the queue at, which a fix or merge moves; a handback has none. */
 	after?: string;
 	/** The failure's signature: what failed, so a recurrence after a fix can be told from a new failure. */
@@ -209,17 +211,20 @@ export function history(state: string, number: number): History | undefined {
 }
 /**
  * What the fixer's `head` of PR `number` carries from the pick it replaces: the heads its rounds replaced up to the
- * round that put `head` back in the queue, and when the pick was made. A head no round put back, or a pick a handback
- * ended, carries nothing, so only the fixer's own commits inherit, however their head is queued.
+ * round that put `head` back in the queue, with the pins the gate's base merges stood on, and when the pick was made.
+ * A handback leaves the carry, since the person who picks the head again has answered nothing; a head no round put
+ * back, such as a writer's push, carries nothing.
  */
 export function carriedBy(state: string, number: number, head: string): Carried | undefined {
 	const record = history(state, number);
-	if (!record || record.rounds.at(-1)?.outcome === "handback" || !Number.isFinite(Date.parse(record.pick)))
-		return undefined;
+	if (!record || !Number.isFinite(Date.parse(record.pick))) return undefined;
 	let end = record.rounds.length;
 	while (end > 0 && record.rounds[end - 1]!.after !== head) end--;
 	if (end === 0) return undefined;
-	return { heads: record.rounds.slice(0, end).map((round) => round.before), picked: record.pick };
+	return {
+		heads: record.rounds.slice(0, end).flatMap((round) => (round.pin ? [round.before, round.pin] : [round.before])),
+		picked: record.pick,
+	};
 }
 /** What each of `pulls`' heads carries from a pick the land fixer replaced, by number. */
 export function carriedOf(state: string, pulls: ObjectValue[]): Map<number, Carried> {
@@ -1108,9 +1113,17 @@ async function collectJob(
 				{ outcome, failure },
 			);
 			if (rule) error = stopReason(rule, { outcome, failure });
+			const pin = standing !== entry.head ? { pin: entry.head } : {};
 			round = rule
-				? { job: name, outcome: "handback", before: standing, failure, rule }
-				: { job: name, outcome, before: standing, failure, ...(outcome === "handback" ? {} : { after: head }) };
+				? { job: name, outcome: "handback", before: standing, ...pin, failure, rule }
+				: {
+						job: name,
+						outcome,
+						before: standing,
+						...pin,
+						failure,
+						...(outcome === "handback" ? {} : { after: head }),
+					};
 			previous = saveRound(state, number, previous, round);
 		}
 		if (requeued) {

@@ -404,7 +404,9 @@ async function dequeueSignaled(
 				continue;
 			}
 		}
-		output.push(`dequeued ${number} ${head} ${found.signals.length} signals`);
+		output.push(
+			`${now.mergeQueueEntry != null ? "dequeued" : "disarmed"} ${number} ${head} ${found.signals.length} signals`,
+		);
 	}
 	output.push(...(await sayUnsaid(github, repository, progress, saveProgress)));
 	return output;

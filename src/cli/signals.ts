@@ -68,7 +68,9 @@ export function signals(pull: Activity, writers: ReadonlySet<string>, carried?: 
 		reviewer: isBot(review.author) || writer(review.author) ? reviewerOf(review) : null,
 		body: typeof review.body === "string" ? review.body : "",
 		at: Date.parse(String(review.submittedAt)),
-		head: review.commit != null && heads.has(String(object(review.commit).oid)),
+		commit: review.commit != null ? String(object(review.commit).oid) : "",
+		// A dismissed review is withdrawn: it holds nothing.
+		head: review.state !== "DISMISSED" && review.commit != null && heads.has(String(object(review.commit).oid)),
 	}));
 	const byId = new Map(reviews.map((review) => [review.id, review]));
 	const opened = new Set(
@@ -108,12 +110,14 @@ export function signals(pull: Activity, writers: ReadonlySet<string>, carried?: 
 		});
 	}
 
-	// Each reviewer's latest pass over the head lists what it still finds there; a pass may only open threads.
+	// Each reviewer's latest pass over each head lists what it still finds there; a pass may only open threads. A late
+	// pass over a carried head says nothing of another.
 	const latest = new Map<string, (typeof reviews)[number]>();
 	for (const review of reviews)
 		if (review.reviewer !== null && review.head && (review.body.trim() !== "" || opened.has(review.id))) {
-			const prior = latest.get(review.reviewer);
-			if (!prior || prior.at <= review.at) latest.set(review.reviewer, review);
+			const key = `${review.reviewer}\n${review.commit}`;
+			const prior = latest.get(key);
+			if (!prior || prior.at <= review.at) latest.set(key, review);
 		}
 	const passes = [...latest.values()]
 		.map((pass) => ({ ...pass, titles: bodyFindings(pass.body), answered: false }))
@@ -127,7 +131,13 @@ export function signals(pull: Activity, writers: ReadonlySet<string>, carried?: 
 	for (const pass of passes)
 		if (!pass.answered)
 			for (const title of pass.titles)
-				found.push({ kind: "finding", url: pass.url, author: pass.reviewer!, text: title });
+				// `bodyFindings` keys a repeated title with ` #<n>`, which is not part of the finding.
+				found.push({
+					kind: "finding",
+					url: pass.url,
+					author: pass.reviewer!,
+					text: title.replace(/ #\d+$/, ""),
+				});
 
 	const committed = Math.min(Date.parse(pull.committed), carried ? Date.parse(carried.picked) : Infinity);
 	for (const decision of comments) {

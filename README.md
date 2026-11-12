@@ -890,8 +890,8 @@ The land fixer's commit reads neither kind, so it answers none: a head the
 fixer put back in the queue still counts the findings on every head its pick's
 rounds replaced, and the decisions posted since that pick, wherever the queue
 judges it (the fixer's re-enqueue, `quest land watch`'s dequeue, and `quest land
-serve`'s queue), however the head got queued. A writer's push or a handback ends
-the carry.
+serve`'s queue), however the head got queued and even after a handback. Only a writer's
+push ends the carry.
 
 A writer can push to the repository: an owner, or a member or collaborator
 whose permission GitHub reports as write or higher. A bot is never one.

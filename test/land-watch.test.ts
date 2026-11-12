@@ -813,7 +813,7 @@ test("a queued or armed pick that draws an online finding leaves the queue, once
 	github.now = Date.parse(at(4));
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
 		`dequeued 30 ${HEAD} 1 signals`,
-		`dequeued 31 ${HEAD} 1 signals`,
+		`disarmed 31 ${HEAD} 1 signals`,
 	]);
 	// The dequeue disarmed #30 already, which still gets its comment.
 	expect(github.mutations).toEqual(["dequeuePullRequest 30", "disablePullRequestAutoMerge 31"]);

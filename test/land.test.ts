@@ -4459,7 +4459,7 @@ describe("land fixer stop rules", () => {
 	});
 });
 
-test("a fixed head carries the heads its pick's rounds replaced, until a handback ends the pick", () => {
+test("a fixed head carries the heads its pick's rounds replaced", () => {
 	const state = tempDir();
 	const save = (record: object) => writeFileSync(historyPath(state, 5), JSON.stringify(record));
 	const round = (before: string, after?: string): Round => ({
@@ -4476,8 +4476,9 @@ test("a fixed head carries the heads its pick's rounds replaced, until a handbac
 	expect(carriedBy(state, 5, "b")).toEqual({ heads: ["a"], picked: pick });
 	// A head no round put back, such as a writer's push, carries nothing.
 	expect(carriedBy(state, 5, "d")).toBeUndefined();
-	save({ pick, rounds: [round("a", "b"), round("b")] });
-	expect(carriedBy(state, 5, "b")).toBeUndefined();
+	// A handback leaves it, and a gate merge's pin is carried with it.
+	save({ pick, rounds: [{ ...round("m", "b"), pin: "a" }, round("b")] });
+	expect(carriedBy(state, 5, "b")).toEqual({ heads: ["m", "a"], picked: pick });
 	// A pick that is not a time cannot bound decisions.
 	save({ pick: "f".repeat(40), rounds: [round("a", "b")] });
 	expect(carriedBy(state, 5, "b")).toBeUndefined();

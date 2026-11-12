@@ -732,17 +732,28 @@ async function requeue(
 	let pull = await readPull(github, id);
 	if (string(pull.baseRefName) !== base) throw new FixerRefusal(`retargeted from ${base} before it was re-enqueued`);
 	if (string(pull.headRefOid) !== head) throw new FixerRefusal("head moved before it was re-enqueued");
+	if (!queued(pull, dropped) && isHeld(pull)) throw new Held();
+	// A finding or decision that arrived while the fixer ran holds the head as it would a writer's pick, even one a
+	// workflow already queued. The fixer's own commit, which read neither, answers none on the pick it replaces.
+	const [owner, repo] = string(object(pull.repository).nameWithOwner).split("/");
+	const number = Number(pull.number);
+	const held = (
+		await readSignals(github, { owner: owner!, repo: repo! }, [number], carried && new Map([[number, carried]]))
+	).get(number)!;
+	if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
+	if (held.signals.length > 0) {
+		if (pull.mergeQueueEntry != null)
+			await github.graphql("mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }", {
+				id,
+			});
+		if (queued(pull, dropped) && pull.autoMergeRequest != null)
+			await github.graphql(
+				"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+				{ id },
+			);
+		throw new FixerRefusal(`its head is held by ${describe(held.signals)}`);
+	}
 	if (!queued(pull, dropped)) {
-		if (isHeld(pull)) throw new Held();
-		// A finding or decision that arrived while the fixer ran holds the head as it would a writer's pick. The
-		// fixer's own commit, which read neither, answers none on the pick it replaces.
-		const [owner, repo] = string(object(pull.repository).nameWithOwner).split("/");
-		const number = Number(pull.number);
-		const held = (
-			await readSignals(github, { owner: owner!, repo: repo! }, [number], carried && new Map([[number, carried]]))
-		).get(number)!;
-		if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
-		if (held.signals.length > 0) throw new FixerRefusal(`its head is held by ${describe(held.signals)}`);
 		try {
 			if (queue.kind === "own") await enqueue(github, id, head, queue.method);
 			else
