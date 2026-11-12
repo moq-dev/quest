@@ -468,6 +468,16 @@ describe("usage", () => {
 				updated_at: "2026-11-06T00:00:00Z",
 				head: { ref: "quest/m0/a", repo: { full_name: "fork/proj" } },
 			}),
+			// Two deleted forks' PRs from a branch of the same name: neither names its repository, so each counts.
+			...[5, 6].map((number) =>
+				pr(number, "quest/m0/a", body9, "2026-11-02T00:00:00Z", {
+					state: "open",
+					merged_at: null,
+					closed_at: null,
+					updated_at: "2026-11-06T00:00:00Z",
+					head: { ref: "quest/m0/a", repo: null },
+				}),
+			),
 			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 		];
 		const requests: string[] = [];
@@ -590,7 +600,7 @@ describe("usage", () => {
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {
 		const { root, deps, priced } = setup();
 		const report = await usage(root, { since: "2026-11-05" }, deps(priced));
-		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7, 13]);
+		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7, 13, 5, 6]);
 		const ten = report.pulls.find((p) => p.number === 10)!;
 		expect(ten.sessions.map((s) => [s.harness, s.session, s.role, s.effort])).toEqual([
 			["claude", CLAUDE, "implementing", "high"],
@@ -624,10 +634,11 @@ describe("usage", () => {
 			["L", "reviewing", "opencode", 4],
 		]);
 		const tally = { rounds: 2, findings: { high: 1, medium: 1, low: 1 }, fixed: 2, refuted: 1, open: 0 };
-		const double = { rounds: 4, findings: { high: 2, medium: 2, low: 2 }, fixed: 4, refuted: 2, open: 0 };
+		// #10's, #7's, and each deleted fork's.
+		const four = { rounds: 8, findings: { high: 4, medium: 4, low: 4 }, fixed: 8, refuted: 4, open: 0 };
 		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.tally, a.fixes])).toEqual([
 			["S", "gpt-6.1-sol", 1, 1, 17, tally, 1],
-			["L", "claude-opus-5-5", 3, 2, 34, double, 1],
+			["L", "claude-opus-5-5", 5, 4, 68, four, 1],
 		]);
 		expect(ten.online).toEqual([
 			{
@@ -687,6 +698,8 @@ describe("usage", () => {
 			[9, 0],
 			[7, 0],
 			[13, 0],
+			[5, 0],
+			[6, 0],
 		]);
 		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8, null]);
 	});

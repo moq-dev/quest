@@ -1781,7 +1781,15 @@ export async function settleLow(
 		// the findings an earlier settlement of its own showed.
 		if (session.rounds.at(-1)!.head === reviewed) {
 			const { last: clean } = session;
-			rounds.push({ ...clean, head, usage: [], settled: false, earlier: clean.settled ? null : clean.earlier });
+			rounds.push({
+				...clean,
+				head,
+				usage: [],
+				// It reviewed the settled head, not this one.
+				unchanged: false,
+				settled: false,
+				earlier: clean.settled ? null : clean.earlier,
+			});
 		}
 		return session;
 	});
@@ -1917,8 +1925,14 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 		covers(root, previous.mergeBase, change.mergeBase);
 
 	// The last round already passed this head, and has nothing left to settle; it repeats against the run's base
-	// and size.
-	if (resume && previous!.head === change.head && previous!.mergeBase === change.mergeBase && earlier.length === 0) {
+	// and size. A settled round cleared findings it raised at that head, so a head back at it is reviewed again.
+	if (
+		resume &&
+		!last!.settled &&
+		previous!.head === change.head &&
+		previous!.mergeBase === change.mergeBase &&
+		earlier.length === 0
+	) {
 		const { size, from: sizeFrom } = shared.sized;
 		return { round: { ...last!, base: shared.base, size, sizeFrom, usage: [], unchanged: true }, session: stored! };
 	}

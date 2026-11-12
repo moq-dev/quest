@@ -588,8 +588,8 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	const rows = new Map<string, AccuracyRow>();
 	// A branch's saved tallies span every PR from it, so only its newest PR that has both a tally and an
-	// implementer to count it for counts them.
-	const branch = (each: PullRow) => JSON.stringify([each.repository, each.branch]);
+	// implementer to count it for counts them. A deleted fork has no repository, so its PR stands alone.
+	const branch = (each: PullRow) => JSON.stringify([each.repository ?? each.number, each.branch]);
 	const newest = new Map<string, number>();
 	for (const each of pulls)
 		if (each.implementers.length > 0 && each.review.some((review) => review.tally !== null))

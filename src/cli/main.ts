@@ -1343,7 +1343,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 								return 0;
 							} catch (error) {
 								warn(
-									`the settlement is recorded in the PR body, but saving it failed: ${error instanceof Error ? error.message : String(error)}`,
+									`the settlement is ${record !== undefined && "url" in record ? "recorded in the PR body" : "printed"}, but saving it failed: ${error instanceof Error ? error.message : String(error)}`,
 								);
 								return 1;
 							}
