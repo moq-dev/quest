@@ -58,7 +58,5 @@ Agent's choices, for the implementer to revisit:
 
 ## Required
 
-- [Review tallies](/quest/m0/routing-evidence/review-tallies.md) - counts the
-  findings the arms are compared on
 - [usage through token-max](/quest/m0/routing-evidence/usage-token-max.md) -
   counts sub-agent writers' cost, without which an arm's cost is undercounted

@@ -317,15 +317,14 @@ class Queue {
 		const lease = (await remoteHead(root, this.remote, ref, read)) ?? "";
 		const workflows =
 			git(root, ["diff", "--name-only", plan.base.sha, merged.head, "--", ".github/workflows"]) !== "";
-		const pushed = await push(
-			root,
-			this.remote,
-			entry.approved,
-			merged.head,
+		const pushed = await push(this.github, root, {
+			remote: this.remote,
+			from: entry.approved,
+			to: merged.head,
 			ref,
-			(more) => token(more || workflows),
 			lease,
-		);
+			token: (more) => token(more || workflows),
+		});
 		if (pushed.status !== 0) throw new Error(`pushing ${build.branch} failed: ${pushed.stderr.trim()}`);
 		build.test = { commit: merged.head, tree: merged.tree };
 		save(buildPath(this.queue.state), build);
@@ -429,7 +428,7 @@ class Queue {
 		this.ended.add(number);
 		this.landing = true;
 		const test = build.test!;
-		const prepared = await prepareHead(root, state, plan, entry, build.base, test.tree, token, read);
+		const prepared = await prepareHead(root, state, plan, entry, build.base, test.tree, this.deps, token, read);
 		if ("fallback" in prepared) {
 			// The tested tree, landed onto the tested base as GitHub's merge API would.
 			const parents = method === "merge" ? [build.base, entry.approved] : [build.base];

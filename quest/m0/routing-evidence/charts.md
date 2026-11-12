@@ -69,16 +69,13 @@ Agent's choices, for the implementer to revisit:
   readout: which `quest usage --json` fields feed each axis, how cells with
   too few PRs are marked rather than dropped, and that each chart names its
   date range and PR counts.
-- `quest usage --json` reports each reviewer's latest round, and
-  [review tallies](/quest/m0/routing-evidence/review-tallies.md) add totals
-  across rounds. If the tally line does not also record the first round's
-  findings, which the readout compares, add them there.
+- `quest usage --json` reports each reviewer's latest round and its tally,
+  which sums findings across rounds. If the readout compares first-round
+  findings on their own, record them beside the tally.
 - Make the first charts from the data on main when this lands, link them in
   this quest's PR, and say which cells are still too thin.
 
 ## Required
 
-- [Review tallies](/quest/m0/routing-evidence/review-tallies.md) - the
-  findings each reviewer raised across rounds
 - [usage through token-max](/quest/m0/routing-evidence/usage-token-max.md) -
   the cost axis, which today misses sub-agent transcripts, 72% of host spend

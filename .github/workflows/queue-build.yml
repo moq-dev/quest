@@ -48,7 +48,9 @@ jobs:
           # Build concurrency and group size are both one in main's ruleset.
           [[ "$QUEUE_REF" =~ ^refs/heads/gh-readonly-queue/main/pr-([0-9]+)- ]] || { echo "::error::unexpected merge group ref" >&2; exit 1; }
           head_ref=$(gh api "repos/$REPO/pulls/${BASH_REMATCH[1]}" --jq .head.ref)
-          ./quest-base/bin/quest --root "$GITHUB_WORKSPACE" check --base "$BASE" --branch "$head_ref"
+          # The base's skills would reject a PR that adds, removes, or changes a skill's stub. The PR's
+          # own binary checks the stubs against the PR's skills in `just check` below, in this same job.
+          ./quest-base/bin/quest --root "$GITHUB_WORKSPACE" check --no-stubs --base "$BASE" --branch "$head_ref"
       - name: Install dependencies
         run: nix develop --command just install
       - name: Check
