@@ -147,9 +147,8 @@ In a fork's clone, it pushes to the fork and opens the PR upstream; a fork
 whose parent keeps no quests is its own upstream.
 It exits 3 when the quest is blocked or someone else holds it; pick other work.
 `quest start --release <quest>` gives back a claim before any work is pushed.
-Claim before any other work, even work a fork reviews first, since the draft
-PR is what shows others the quest is taken.
-Push the work to the quest's branch: a PR from any other branch claims nothing.
+Claim before any other work, even work a fork reviews first, and push the work
+to the quest's branch: a PR from any other branch claims nothing.
 If a claim looks stale, such as a draft without `## Waiting` or a
 branch with no open PR that has been quiet a long time, offer the user to take
 it over, saying how long ago it was last active.
