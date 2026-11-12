@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 // `quest init` and `quest uninstall` in temporary repositories.
 
 import {
@@ -10,7 +11,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { expect, test } from "vitest";
 
@@ -474,7 +475,7 @@ test("stub check flags missing, outdated, and edited stubs, and the session hook
 	// An older version's stub.
 	write(dir, ".claude/skills/quest-audit/SKILL.md", OLD_AUDIT_STUB);
 	expect(stubFindings(dir)).toEqual([
-		".claude/skills/quest-audit/SKILL.md: is outdated; run `quest init` and commit the result",
+		".claude/skills/quest-audit/SKILL.md: is outdated; run the repository's pinned `quest init` and commit the result",
 	]);
 	expect(context().every(flagged)).toBe(true);
 
@@ -491,4 +492,20 @@ test("stub check adds nothing in a repository that does not use Quest", () => {
 	const dir = tempDir();
 	mkdirSync(join(dir, ".git"));
 	expect(hook({ hook_event_name: "SessionStart", cwd: dir })).toBe("");
+});
+
+test("quest check reports stubs from a relative root", () => {
+	const dir = tempDir();
+	mkdirSync(join(dir, ".git"));
+	write(dir, "AGENTS.md", `${REFERENCE_LINE}\n`);
+	write(dir, "quest/README.md", "# Quests\n\n## Goal\n\nx\n");
+	const run = (cwd: string) =>
+		spawnSync("bun", ["run", "--silent", "quest", "--root", relative(process.cwd(), cwd), "check"], {
+			encoding: "utf8",
+		});
+	const missing = run(dir);
+	expect(missing.status).toBe(1);
+	expect(missing.stderr).toContain("is missing");
+	init(dir);
+	expect(run(dir).status).toBe(0);
 });

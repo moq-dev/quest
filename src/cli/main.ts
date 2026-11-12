@@ -201,7 +201,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
 			// A tree nested in another checkout, such as an example, has no stubs of its own.
-			const stubs = questRoot(root()) === resolve(root()) ? stubFindings(root()) : [];
+			const stubs = questRoot(resolve(root())) === resolve(root()) ? stubFindings(root()) : [];
 			if (findings.length === 0 && stubs.length === 0) {
 				const count = collect(root()).length;
 				print(theme ? theme.checked(count) : `quest: ${count} documents ok`);

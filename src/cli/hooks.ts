@@ -302,7 +302,7 @@ export function hook(input: unknown): string {
 			const context =
 				stubs === 0
 					? CONTEXT
-					: `${CONTEXT}\n${stubs} Quest skill stubs here are missing, outdated, or edited for quest ${version} (\`quest check\` lists them): in a PR, run \`quest init\` with the repository's pinned quest, bumping the pin first if it is older.\n`;
+					: `${CONTEXT}\nQuest skill stubs here differ from what quest ${version} installs (\`quest check\` lists ${stubs}): in a PR, run \`quest init\` with the repository's pinned quest, bumping the pin first if it is older.\n`;
 			return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } });
 		}
 		case "PreToolUse": {

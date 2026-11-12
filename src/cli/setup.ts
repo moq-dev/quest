@@ -224,7 +224,9 @@ export function stubFindings(root: string): string[] {
 	try {
 		changes = planInit(checkout(root), SKILLS);
 	} catch (error) {
-		if (error instanceof InitRefused) return [error.message];
+		// Refusals elsewhere, such as on `quest/README.md`, are not about stubs.
+		if (error instanceof InitRefused)
+			return SKILL_DIRS.some((dir) => error.path.startsWith(`${dir}/`)) ? [error.message] : [];
 		throw error;
 	}
 	return changes
@@ -236,6 +238,6 @@ export function stubFindings(root: string): string[] {
 					: existsSync(join(root, path))
 						? "is outdated"
 						: "is missing";
-			return `${path}: ${why}; run \`quest init\` and commit the result`;
+			return `${path}: ${why}; run the repository's pinned \`quest init\` and commit the result`;
 		});
 }
