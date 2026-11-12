@@ -109,7 +109,7 @@ Work found along the way that is worth a quest is a follow-up: add it to the PR 
 Drop one you would call optional or worth doing only if it matters.
 Answer each of its decisions you can with your recommendation in its Plan, and list each you cannot as a `Maintainer:` decision item under its `Waiting`.
 The PR body's `## Follow-ups` section links each one with its open decisions, which neither keep the PR a draft nor stop its pick.
-A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks which follow-ups to keep and each open decision, in the Questions form.
+A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks about each follow-up in questions of its own, apart from the pick and other follow-ups, in the Questions form: whether to keep it, and one question per open decision.
 Before it lands, record each answer in its quest's Plan, removing that `Waiting` item, and remove each dropped follow-up, with `quest rm` for a new quest.
 A follow-up for work another repository's quest tree owns stays in `## Follow-ups` for `/quest-plan` there.
 
@@ -226,7 +226,7 @@ Stop one with `quest agent stop <worktree>`, and each you started that still run
 Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
 Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed the work.
 Then give your recommendation and ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
-Recommend in every prompt, a multiple-choice list included: mark each option you recommend, such as which follow-ups to keep, and give a one-line reason for each you would leave out.
+Recommend in every prompt, a multiple-choice list included: mark each option you recommend and give a one-line reason for each you would leave out.
 An answer such as "whatever you recommend" picks your recommendations; act on them without asking again.
 Do not use asynchronous question tools.
 

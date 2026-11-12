@@ -4,7 +4,7 @@
 
 `quest unblocked --json` routes each S quest to Opus low or medium, and
 each M quest to Opus medium or high, 50/50. The split is stable per quest,
-and the review table stays fixed while it runs. Each `Implementer:` line
+and the review efforts in `src/cli/models.ts` stay fixed while it runs. Each `Implementer:` line
 records its arm, iterates stay on the PR's arm, and
 `quest usage` reports cost, rounds, findings, hand-backs, and later
 culprits per arm.
@@ -19,7 +19,7 @@ Decided 2026-11-11 (user, /quest-plan,
   - Rejected: XS Haiku xhigh against Opus low, since XS PRs rarely draw
     findings and the signal would be weak
 - Escapes are too rare to separate the arms, about 2% of PRs. Compare
-  first-round findings from the fixed review table, rounds, hand-backs,
+  first-round findings under the fixed review efforts, rounds, hand-backs,
   and cost, and report escapes alongside.
 
 Agent's choices, for the implementer to revisit:
@@ -39,7 +39,5 @@ Agent's choices, for the implementer to revisit:
 
 ## Required
 
-- [Review table](/quest/m0/routing-evidence/review-table.md) - the review
-  efforts held fixed while the arms run
 - [usage through token-max](/quest/m0/routing-evidence/usage-token-max.md) -
   counts sub-agent writers' cost, without which an arm's cost is undercounted

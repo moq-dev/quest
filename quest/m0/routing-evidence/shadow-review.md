@@ -14,9 +14,9 @@ Decided 2026-11-11 (user, /quest-plan,
 [routing evidence](/quest/m0/routing-evidence/README.md)):
 
 - Which effort does the shadow run?
-  - ✅ One step below the new baseline from
-    [the review table](/quest/m0/routing-evidence/review-table.md): Sol low,
-    low, medium, high, high for XS to XL
+  - ✅ One step below the routed efforts in `src/cli/models.ts` (Sol medium,
+    medium, high, xhigh, and xhigh for XS to XL): Sol low, low, medium, high,
+    high for XS to XL
   - Rejected: a random step down or up; always one step up; always the
     efforts before 2026-11-11
 - How often, and what happens to its findings?
@@ -33,8 +33,3 @@ Agent's choices, for the implementer to revisit:
   that matches a routed finding on the same file, within a few lines, counts
   as found by both. The implementer checks a sample of matches by hand
   before trusting the rule.
-
-## Required
-
-- [Review table](/quest/m0/routing-evidence/review-table.md) - the baseline
-  the shadow steps down from
