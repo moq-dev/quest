@@ -100,7 +100,9 @@ export interface Push {
 /**
  * Fresh tokens go only to git over HTTPS, with no inherited credential helper or global config. GitHub
  * intermittently answers a push to a repository the token reaches with "Repository not found", so that
- * is retried as `github` retries a failed request; any other refusal returns at once.
+ * is retried as `github` retries a failed request; any other refusal returns at once. A fork the App's
+ * token cannot reach answers the same lasting 404, and so reaches its caller's fallback only after the
+ * retries, about 15 seconds later.
  */
 export async function push(github: GitHub, root: string, { remote, from, to, ref, lease = from, token }: Push) {
 	// A push that replaces another head than the one it builds on can change workflows relative to either.
