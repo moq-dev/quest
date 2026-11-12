@@ -3,20 +3,23 @@
 ## Goal
 
 When `QUEST_GATE_RECORD` names a file, every outermost `quest gate` run
-appends one JSON line to it with the command, its directory, how long it
-waited for admission, its CPU time, wall time, peak memory, and exit
-code, on Linux, macOS, and Windows. When it is unset, the gate writes
-nothing.
+on Linux or macOS appends one JSON line to it, however the run ends,
+with the command, its directory, how long it waited for admission, its
+CPU time, wall time, peak memory, and exit status. When it is unset, the
+gate writes nothing.
 
 A process that starts an agent, such as a job runner or a CPU audit,
-sets the variable in the agent's environment and reads back what that
-agent's gated commands waited for and cost. Today that takes matching
-agent transcripts against systemd journal lines, which hold no wait time
-and exist only on Linux.
+sets the variable in that agent's environment and reads back what the
+agent's gated commands waited for and cost, including those its parallel
+shells and subagents ran. Today that takes matching agent transcripts
+against systemd journal lines, which hold no wait time and exist only on
+Linux.
 
 Non-goals: how the gate admits commands, which
 [moq-dev/quest#667](https://github.com/moq-dev/quest/pull/667) plans
-through mbx's pool, and any view of the record in Quest itself.
+through mbx's pool; Windows, which
+[its own quest](/quest/m1/gate-record-windows.md) covers; and any view of
+the record in Quest itself.
 
 ## Plan
 
@@ -25,10 +28,21 @@ Decided 2026-11-12 (maintainer, `/quest-plan`):
 - ✅ An environment variable names the file, and the reader owns it
   (rejected: every gate always appending to a per-host log under
   Quest's cache directory, tagged with an ID the reader filters by,
-  which needs rotation and retention for history nothing reads).
-- ✅ Every platform the gate runs on (rejected: Linux only, where
-  systemd scopes make CPU and memory cheap to read, since agents also
-  run on macOS hosts).
+  which needs rotation and retention for history nothing reads). A
+  reader that wants each agent apart gives each agent its own file.
+- ✅ Linux and macOS here, Windows in m1 (rejected: Windows here too,
+  since m0 leaves native Windows and its suite to m1; recording only
+  wait, wall time, and exit status on Windows with no plan for the
+  rest). The first answer was every platform; review found Windows
+  conflicts with m0's scope and needs a new channel out of the job stub,
+  so the maintainer split it.
+- ✅ Where the gate owns the command only as a process group (macOS, and
+  Linux without a systemd user manager), record a labeled lower bound:
+  the CPU of the processes the gate reaped, and the largest single
+  process's peak memory (rejected: sampling the group every few seconds,
+  which costs more code and still misses short-lived processes). The
+  README says these exclude processes the gate kills at the end, such as
+  a leftover background server.
 - ✅ Only outermost runs are recorded. A gate inside an admitted command
   (`QUEST_GATE_ADMITTED`) runs at once and is measured as part of it,
   so recording it too would count its CPU twice.
@@ -36,27 +50,51 @@ Decided 2026-11-12 (maintainer, `/quest-plan`):
 
 Agent's choices, for the implementer to revisit:
 
-- One line per run, written once after the command ends: `command`
-  (argv), `directory` (absolute), `started`, `admitted`, and `ended` as
-  ISO timestamps, `cpuMs`, `peakMemory` in bytes, and `exit` (the exit
-  code, or the signal or cancellation that ended it). Wait and wall time
-  follow from the timestamps. Nothing is in production, so the format
-  carries no version.
-- Measure where the gate already owns the command: on Linux, the scope's
-  cgroup (`cpu.stat` `usage_usec`, `memory.peak`); on Windows, the Job
-  Object's accounting and peak job memory; on macOS and Linux without a
-  systemd user manager, the process group's rusage. Check first whether
-  a process group's reaped children cover every descendant, and say in
-  the README what each platform counts.
-- Append each line in one write to a file opened for append, since
-  several agents' gates can share one file. A test runs gates at once
-  against one file and reads back whole lines.
-- A record that cannot be written fails the gate after its command ends,
-  as a failed measurement already does, rather than losing it quietly.
-- Document the variable and the line format in the README's gate
-  section.
+- One line per run: `command` (argv), `directory` (absolute), `started`,
+  `admitted` (null when the run never was), and `ended` as ISO
+  timestamps, `cpuMs`, `peakMemory` in bytes (null when the host cannot
+  say), `measured` (`cgroup` or `children`, naming the source above),
+  `exit` (the status the gate returns, 128 plus the signal's number for
+  a signalled command, as the owners already map it), `cancelled`, and
+  `error` (the gate's own failure, such as a command that cannot start
+  or a scope it cannot confirm stopped). Wait and wall time follow from
+  the timestamps. Nothing is in production, so the format carries no
+  version.
+- `ended` is when the command's own process exits, before the gate stops
+  descendants it left behind, so cleanup does not count as wall time.
+- On Linux with a systemd scope, the owner reads the scope's `cpu.stat`
+  `usage_usec` and `memory.peak` once the cgroup has emptied and before
+  it is released (between `vacated` and `emptied` in
+  `src/cli/supervise.ts`), and returns them with the exit status: the
+  5-second CPU samples miss a short command and the last interval, and
+  the cgroup is gone once the owner resolves. `memory.peak` needs Linux
+  5.19, so on 5.14 to 5.18 `peakMemory` is null.
+- On a process group, `cpuMs` and `peakMemory` come from the command's
+  rusage at exit, which `wait4` reports for it and the descendants it
+  waited for. Node's `child_process` exposes none; Bun's
+  `Subprocess.resourceUsage()` does, so the group owner may need to
+  start its command through `Bun.spawn`.
+- Append each line in one write to a file opened for append, since an
+  agent's parallel shells and subagents share it.
+- A cancelled run, including one cancelled while waiting for admission,
+  still writes its line. A line that cannot be written fails the gate:
+  it names the file on stderr and exits nonzero, keeping a cancellation's
+  status when the run was cancelled.
+- The record holds what the agent's own processes wrote. The agent's
+  shell already has the variable and can write the file directly, so
+  removing it from gated commands' environment would protect nothing;
+  the README says a record is as trustworthy as the agent.
+- Document the variable, the line format, and what each platform counts
+  in the README's gate section.
 
 Tests: an outermost run under the variable appends one line whose wait,
-CPU, wall time, and exit code match a stub command's; a nested gate adds
-none; an unset variable writes nothing; a cancelled run is recorded as
-cancelled; and concurrent gates leave only whole lines.
+CPU, wall time, and exit match a stub command's, including one that ends
+before the first CPU sample; a nested gate adds none; an unset variable
+writes nothing; a run cancelled while queued for admission is recorded
+with no admission; an unwritable file fails the gate; a process group's
+line is labeled `children`; and concurrent gates leave only whole lines.
+
+## Hosts
+
+- linux - the systemd scope's cgroup accounting
+- macos - the process group's rusage
