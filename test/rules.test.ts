@@ -25,13 +25,14 @@ test("parse splits commands and attaches redirections and here-documents", () =>
 		),
 	).toEqual([
 		{ argv: ["A=1", "git", "push", "a b", 'c"d'], redirects: [] },
-		{ argv: ["echo", "x"], redirects: [] },
+		{ argv: ["echo", "x"], redirects: [], joined: "&&" },
 		{
 			argv: ["tee", "out.log"],
 			redirects: [
 				{ op: ">", target: "/dev/null" },
 				{ op: ">&", target: "1" },
 			],
+			joined: "|",
 		},
 		{ argv: ["cat"], redirects: [{ op: ">", target: ".tmp/body.md" }], stdin: "line $x\n" },
 		{ argv: ["gh", "x"], redirects: [] },
@@ -42,6 +43,13 @@ test("parse splits commands and attaches redirections and here-documents", () =>
 	expect(parse("cat <<EOF\n$x\nEOF")).toEqual([{ argv: ["cat"], redirects: [], stdin: "$x\n", stdinExpanded: true }]);
 	expect(parse("echo '$x' \"a $y\"")).toEqual([{ argv: ["echo", "$x", "a $y"], redirects: [], expanded: ["a $y"] }]);
 	expect(parse("cat <<-END\n\tbody\n\tEND")).toEqual([{ argv: ["cat"], redirects: [], stdin: "body\n" }]);
+	expect(parse('a > "$f" &&\n(b || c) & d; e')).toEqual([
+		{ argv: ["a"], redirects: [{ op: ">", target: "$f", expanded: true }] },
+		{ argv: ["b"], redirects: [], joined: "&&" },
+		{ argv: ["c"], redirects: [], joined: "||", background: true },
+		{ argv: ["d"], redirects: [] },
+		{ argv: ["e"], redirects: [] },
+	]);
 });
 
 test.each([
@@ -238,4 +246,47 @@ test("a body file is read while nothing earlier on the line could have rewritten
 	expect(bash("./body.sh && gh pr comment 5 --body-file bare.md")).toEqual([]);
 	expect(bash("bash -c './body.sh'; gh pr comment 5 --body-file bare.md")).toEqual([]);
 	expect(bash("bash -c 'gh pr comment 5 --body-file bare.md'")).toEqual([RULES.footer]);
+	expect(bash("cd sub && bash -c 'gh pr comment 5 --body-file ../good.md'")).toEqual([]);
+	expect(bash("git -C sub commit -F dash.md")).toEqual([]);
+	expect(bash(`gh pr comment 5 --body-file - <<'EOF' < bare.md\n${FOOTER}\nEOF`)).toEqual([]);
+
+	// Commands that cannot rewrite the file leave it readable; anything else, even after a known write, does not.
+	expect(bash("git add -A && git commit -m x && gh pr create --title x --body-file bare.md")).toEqual([RULES.footer]);
+	expect(bash("ls sub; gh pr view 5 | head; gh pr comment 5 --body-file bare.md")).toEqual([RULES.footer]);
+	expect(bash("gh pr checkout 5 && gh pr comment 5 --body-file bare.md")).toEqual([]);
+	const good = `cat > new.md <<'EOF'\nBody\n\n${FOOTER}\nEOF\n`;
+	const bare = "cat > new.md <<'EOF'\nBody\nEOF\n";
+	expect(bash(`${bare}./sign.sh new.md; gh pr comment 5 --body-file new.md`)).toEqual([]);
+	expect(bash(`${good}cp bare.md new.md; gh pr comment 5 --body-file new.md`)).toEqual([]);
+	expect(bash(`${good}echo more >> new.md; gh pr comment 5 --body-file new.md`)).toEqual([]);
+	expect(bash(`./gen.sh; ${bare}gh pr comment 5 --body-file new.md`)).toEqual([RULES.footer]);
+});
+
+test("a write or cd that may not have run settles nothing past its chain", () => {
+	writeFileSync(join(cwd, "good.md"), `Body\n\n${FOOTER}\n`);
+	writeFileSync(join(cwd, "bare.md"), "Body\n");
+	mkdirSync(join(cwd, "sub"));
+	writeFileSync(join(cwd, "sub", "bare.md"), "Body\n");
+	const write = (file: string) => `cat > ${file} <<'EOF'\nBody\nEOF\n`;
+	const post = (file: string) => `gh pr comment 5 --body-file ${file}`;
+	// The file on disk is posted when the write is skipped, so only a file that was not there is settled.
+	expect(bash(`test -f good.md || ${write("good.md")}${post("good.md")}`)).toEqual([]);
+	expect(bash(`mkdir -p sub && ${write("good.md")}${post("good.md")}`)).toEqual([]);
+	expect(bash(`test -f new.md || ${write("new.md")}${post("new.md")}`)).toEqual([RULES.footer]);
+	expect(bash(`mkdir -p .tmp && ${write(".tmp/new.md")}${post(".tmp/new.md")}`)).toEqual([RULES.footer]);
+	// Reaching a command through `&&` means the ones before it ran.
+	expect(bash(`mkdir -p sub && cat > good.md <<'EOF' && ${post("good.md")}\nBody\nEOF`)).toEqual([RULES.footer]);
+	expect(bash(`true || cat > good.md <<'EOF' && ${post("good.md")}\nBody\nEOF`)).toEqual([]);
+	expect(bash(`cat > good.md <<'EOF' &\nBody\nEOF\n${post("good.md")}`)).toEqual([]);
+	// A `cd` that fails leaves the directory as it was.
+	expect(bash(`cd sub; ${post("bare.md")}`)).toEqual([RULES.footer]);
+	expect(bash(`cd sub || true; ${post("../good.md")}`)).toEqual([]);
+	expect(bash(`cd missing; ${post("bare.md")}`)).toEqual([]);
+	expect(bash(`cd missing && ${post("bare.md")}`)).toEqual([]);
+	expect(bash(`test -d sub && cd sub; ${post("bare.md")}`)).toEqual([]);
+	expect(bash(`mkdir -p made && cd made && ${write("new.md")}${post("new.md")}`)).toEqual([]);
+	expect(bash(`mkdir -p made && cd made && cat > new.md <<'EOF' && ${post("new.md")}\nBody\nEOF`)).toEqual([
+		RULES.footer,
+	]);
+	expect(bash(`./mk.sh; cd sub; ${post("bare.md")}`)).toEqual([]);
 });

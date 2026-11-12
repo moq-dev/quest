@@ -20,6 +20,10 @@ export interface Simple {
 	expanded?: string[];
 	/** Whether `stdin` holds an expansion, from a here-string or a here-document with an unquoted delimiter. */
 	stdinExpanded?: boolean;
+	/** The operator joining it to the command before, where that decides whether it runs or feeds it. */
+	joined?: "&&" | "||" | "|";
+	/** Whether a single `&` ends it, so the rest of the line does not wait for it. */
+	background?: true;
 }
 
 /** An expansion the shell performs in a word or an unquoted here-document. */
@@ -37,6 +41,8 @@ export function parse(line: string): Simple[] {
 	let command: Simple = { argv: [], redirects: [] };
 	let word: string | null = null;
 	let redirect: string | null = null;
+	// The `&&`, `||`, or `|` the next command follows.
+	let joined: Simple["joined"];
 	// Whether the current word holds an expansion, and whether any of it was quoted.
 	let expands = false;
 	let quoted = false;
@@ -60,8 +66,11 @@ export function parse(line: string): Simple[] {
 	};
 	const endCommand = () => {
 		endWord();
-		if (command.argv.length > 0 || command.redirects.length > 0 || heredocs.some((h) => h.command === command))
+		if (command.argv.length > 0 || command.redirects.length > 0 || heredocs.some((h) => h.command === command)) {
+			if (joined !== undefined) command.joined = joined;
+			joined = undefined;
 			commands.push(command);
+		}
 		command = { argv: [], redirects: [] };
 	};
 	const append = (text: string) => {
@@ -141,7 +150,12 @@ export function parse(line: string): Simple[] {
 			redirect = op;
 		} else if (SEPARATORS.has(c)) {
 			endCommand();
-			i += c !== "\n" && line[i + 1] === c ? 2 : 1;
+			const op = c !== "\n" && line[i + 1] === c ? c + c : c;
+			i += op.length;
+			// A newline or `(` after `&&`, `||`, or `|` continues it.
+			if (op === "&&" || op === "||" || op === "|") joined = op;
+			else if (op !== "\n" && op !== "(") joined = undefined;
+			if (op === "&" && commands.length > 0) commands.at(-1)!.background = true;
 			if (c === "\n") i = readHeredocs(i);
 		} else {
 			append(c);
