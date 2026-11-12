@@ -1723,8 +1723,12 @@ test("an Implementer line reads as agents write it", () => {
 	expect(read("opencode, DeepSeek V4.1 Flash, high effort")?.model).toBe("opencode-go/deepseek-v4.1-flash");
 	expect(read("Codex, gpt-6.1-sol, high")?.effort).toBe("high");
 	expect(read("unknown")).toBeNull();
-	expect(read("Opus 5.5")).toBeNull();
+	// A lone field reads as a listed display name or an ID, keeping the size its notes give.
+	expect(read("Opus 5.5")).toEqual(opus("unknown", "unknown"));
+	expect(read("Claude Opus 5.5 (iterate, S)")).toEqual({ ...opus("unknown", "unknown"), size: "S" });
 	expect(read("claude-opus-5-5")).toEqual(opus("unknown", "unknown"));
+	expect(read("claude-opus-5-5 (iterate, XS)")).toEqual({ ...opus("unknown", "unknown"), size: "XS" });
+	expect(read("Claude Code")).toBeNull();
 	expect(read(", claude-opus-5-5, high effort")).toEqual(opus("high", "unknown"));
 	// An ID no list names still reads, so a new model is counted before the lists add it.
 	expect(read("Codex, gpt-7, high effort")?.model).toBe("gpt-7");

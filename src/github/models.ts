@@ -75,7 +75,7 @@ function modelId(name: string, harness: string): string | null {
  * The fields of an `Implementer: <harness>, <model>, <effort> effort` item, as agents write it: the model by ID or
  * display name, the harness or effort left out, the effort bare or `effort not reported`, and a size among the
  * notes of a parenthetical it ends with, as `(iterate, XS)`. Null when it names no model or has more fields; a lone
- * field reads only as an ID.
+ * field reads only as a listed model's ID or display name, or as an ID.
  */
 export function implementer(item: string): Implementer | null {
 	let rest = item.trim().replace(/^Implementer:\s*/, "");
@@ -83,12 +83,11 @@ export function implementer(item: string): Implementer | null {
 	if (notes) rest = rest.slice(0, notes.index);
 	const parts = rest.split(/,\s*/).map((part) => part.trim());
 	if (parts.length > 3) return null;
-	// A lone field is a model only as an ID, since `unknown` or a display name alone may be a harness.
+	const size = notes?.[1]!.split(/,\s*/).find((note) => (SIZES as readonly string[]).includes(note)) ?? null;
+	// A lone field is a model only as a listed name or an ID, since `unknown` or another name alone may be a harness.
 	if (parts.length === 1) {
 		const id = modelId(parts[0]!, "");
-		return id !== null && id !== "unknown" && !/\s/.test(parts[0]!)
-			? { harness: "unknown", model: id, effort: "unknown", size: null }
-			: null;
+		return id !== null && id !== "unknown" ? { harness: "unknown", model: id, effort: "unknown", size } : null;
 	}
 	// The model is the last field, or the one before the effort.
 	const effortless = parts.length === 2 && modelId(parts[1]!, parts[0]!) !== null;
@@ -102,6 +101,5 @@ export function implementer(item: string): Implementer | null {
 		if (!named) return null;
 		effort = named[1]!;
 	}
-	const size = notes?.[1]!.split(/,\s*/).find((note) => (SIZES as readonly string[]).includes(note)) ?? null;
 	return { harness, model, effort, size };
 }
