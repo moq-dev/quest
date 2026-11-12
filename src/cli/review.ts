@@ -1501,10 +1501,11 @@ function recordedSize(record: ModelsRecord, options: ReviewOptions): Size | null
 /** The latest writer the PR's record names, checked only when no `--exclude-model` replaces it. */
 function recordedLatest(record: ModelsRecord, options: ReviewOptions): string | undefined {
 	if (record == null || (options.exclude ?? []).length > 0) return undefined;
-	for (const { item, model } of record.implementers) {
-		if (model === null) throw new ReviewInputError(`the PR's ## Models record names no model in: ${item}`);
+	for (const { item, fields } of record.implementers) {
+		if (fields === null)
+			throw new ReviewInputError(`the PR's ## Models record names no model it can read in: ${item}`);
 	}
-	return record.implementers.at(-1)?.model ?? undefined;
+	return record.implementers.at(-1)?.fields?.model;
 }
 
 /** The sandbox opencode's commands run in, reading the checkout at `root` and its Git directories. */
