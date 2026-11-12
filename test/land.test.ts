@@ -1214,6 +1214,21 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.waiting?.map(({ number }) => number)).toEqual([2]);
 	});
 
+	test("ejects a pick whose head draws an unanswered online finding", async () => {
+		const forge = new Forge();
+		const runs = [{ name: "test", conclusion: "SUCCESS", url: "u" }];
+		forge.pull("Ready", { "1.txt": "1\n" }, { pull: { runs } });
+		forge.pull(
+			"Found",
+			{ "2.txt": "2\n" },
+			{ pull: { runs, reviews: [{ state: "COMMENTED", author: "rabbit[bot]", body: "[P1] Drops a frame" }] } },
+		);
+		const plan = await resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
+		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
+		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[2, "unanswered_signal"]]);
+		expect(plan.eject[0]!.detail).toContain("finding by rabbit[bot]: drops a frame");
+	});
+
 	test("refuses classic protection settings it does not uphold, or cannot read", async () => {
 		const forge = new Forge();
 		forge.pull("Ready", { "1.txt": "1\n" });

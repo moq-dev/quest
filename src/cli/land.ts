@@ -18,6 +18,7 @@ import {
 } from "./github";
 import { appOf, latestContexts } from "../github/checks";
 import { classifyCheck } from "./status";
+import { describe, readSignals } from "./signals";
 import type { Method } from "./hold";
 import { committedSources, snapshot } from "./tree";
 
@@ -108,7 +109,8 @@ export type Reason =
 	| "not_pinned"
 	| "tree_mismatch"
 	| "merge_refused"
-	| "fork_head";
+	| "fork_head"
+	| "unanswered_signal";
 
 /** The hidden line an ejection comment carries, which `quest status` reads. */
 export const EJECTED = /^<!-- quest land: ([a-z_]+) -->$/m;
@@ -388,6 +390,11 @@ export async function resolveQueue(
 	const landing = nodes.filter((node) => node.autoMergeRequest !== null && node.isDraft !== true);
 	const order = (node: ObjectValue) => string(object(node.autoMergeRequest).enabledAt);
 	landing.sort((a, b) => order(a).localeCompare(order(b)) || Number(a.number) - Number(b.number));
+	const held = await readSignals(
+		github,
+		repository,
+		landing.map((node) => Number(node.number)),
+	);
 	for (const node of landing) {
 		const request = object(node.autoMergeRequest);
 		const head = string(node.headRefOid);
@@ -423,6 +430,11 @@ export async function resolveQueue(
 			eject("changes_requested", "a reviewer requested changes");
 		} else if (resolution && (await unresolved(github, entry.id)) > 0) {
 			eject("unresolved_conversations", "it has unresolved review threads; resolve them and land it again");
+		} else if (held.get(entry.number)?.head === head && held.get(entry.number)!.signals.length > 0) {
+			eject(
+				"unanswered_signal",
+				`its head is held by ${describe(held.get(entry.number)!.signals)}; push a fix, or answer each, then land it again`,
+			);
 		} else {
 			// The queue's first page holds the head's checks, unless the head moved from the pin since.
 			const commit = object(object(array(object(node.commits).nodes)[0]).commit);

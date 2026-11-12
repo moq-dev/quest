@@ -44,6 +44,7 @@ import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
 import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools } from "./land-bump";
 import { pruneLogs } from "./land-prune";
 import { enabledHead, headBefore } from "./status";
+import { describe, readSignals } from "./signals";
 
 export { readRemoval } from "./land-watch-fix";
 
@@ -310,6 +311,59 @@ async function enqueueArmed(
 		}
 	}
 	progress.refused = refused;
+	return output;
+}
+
+/**
+ * Take each queued or armed PR whose head draws a signal, an online reviewer's unanswered finding or a newer
+ * maintainer decision, out of the merge queue and disarm its auto-merge, so neither it nor {@link enqueueArmed} lands
+ * it, and say why on it once per pick and head. Nothing waits for a reviewer: a signal that arrives before the merge
+ * ends the pick until a writer fixes or answers it and picks the PR again. A pull is read again just before, so a
+ * head pushed since is left for the next pass.
+ */
+async function dequeueSignaled(github: GitHub, repository: Repository, pulls: ObjectValue[]): Promise<string[]> {
+	const picked = pulls.filter((pull) => pull.mergeQueueEntry != null || pull.autoMergeRequest != null);
+	if (picked.length === 0) return [];
+	const output: string[] = [];
+	const read = await readSignals(
+		github,
+		repository,
+		picked.map((pull) => Number(pull.number)),
+	);
+	for (const pull of picked) {
+		const number = Number(pull.number);
+		const head = string(pull.headRefOid);
+		const found = read.get(number);
+		if (!found || found.head !== head || found.signals.length === 0) continue;
+		const now = await readPull(github, string(pull.id));
+		if (now.state !== "OPEN" || string(now.headRefOid) !== head) continue;
+		const pick =
+			now.autoMergeRequest != null
+				? string(object(now.autoMergeRequest).enabledAt)
+				: now.mergeQueueEntry != null
+					? string(object(now.mergeQueueEntry).enqueuedAt)
+					: null;
+		if (pick === null) continue;
+		if (now.mergeQueueEntry != null)
+			await github.graphql("mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }", {
+				id: pull.id,
+			});
+		if (now.autoMergeRequest != null)
+			await github.graphql(
+				"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+				{ id: pull.id },
+			);
+		await post(
+			github,
+			{ repository: `${repository.owner}/${repository.repo}` },
+			{ number, enabledAt: pick },
+			`quest land watch: took this pull request out of the queue at ${head}, which is held by ${describe(found.signals)}. Push a fix, or answer each, then land it again.`,
+			`signaled ${head}`,
+			"quest land watch",
+			"unanswered_signal",
+		);
+		output.push(`dequeued ${number} ${head} ${found.signals.length} signals`);
+	}
 	return output;
 }
 
@@ -690,6 +744,7 @@ export async function watchPass(
 			save(path, progress);
 		}
 	}
+	output.push(...(await dequeueSignaled(github, repository, pulls)));
 	output.push(...(await enqueueArmed(github, ref, pulls, progress, (text) => output.push(text))));
 	// The next pass reads from SETTLE before this one's start; nothing older can come back.
 	const kept = new Date(Date.parse(started) - SETTLE).toISOString();

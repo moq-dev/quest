@@ -20,6 +20,7 @@ import { latestContexts } from "../github/checks";
 import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
 import { QUEUE_CHECK } from "./land-queue";
 import { classifyCheck } from "./status";
+import { describe, readSignals } from "./signals";
 import { Refusal, ago } from "./start";
 
 export type Method = "merge" | "squash" | "rebase";
@@ -241,6 +242,7 @@ export async function land(
 		}
 	};
 	await passing(labels.github, pr, snapshot.url, sha);
+	await unsignaled(labels.github, pr, snapshot.url, sha);
 	const needs = await requirements(labels.github, pr, snapshot.base);
 	if (needs.checks.some((check) => check.name === LAND_CHECK)) {
 		if (named !== undefined)
@@ -334,6 +336,20 @@ async function passing(github: GitHub, pr: PullRequest, url: string, sha: string
 	if (failing.length > 0)
 		throw new Refusal(
 			`${url} head ${sha} failed ${failing.length === 1 ? "a check" : "checks"}: ${failing.sort().join(", ")}; fix the PR or rerun the check, then land it again`,
+		);
+}
+
+/**
+ * Refuse a head that an online reviewer's unanswered finding or a newer maintainer decision holds, naming each:
+ * the review a pick relied on predates them, so landing would skip them.
+ */
+async function unsignaled(github: GitHub, pr: PullRequest, url: string, sha: string): Promise<void> {
+	const read = (await readSignals(github, pr, [pr.number])).get(pr.number)!;
+	if (read.head.toLowerCase() !== sha.toLowerCase())
+		throw new Refusal(`${url} head moved to ${read.head}; check the new head before landing it`);
+	if (read.signals.length > 0)
+		throw new Refusal(
+			`${url} head ${sha} is held by ${describe(read.signals)}; push a fix, or reply to each finding and link each decision in a comment that answers it, then land it again`,
 		);
 }
 

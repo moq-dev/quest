@@ -305,8 +305,66 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 			},
 		};
 	}
+	// A batch of PRs' reviews, threads, and comments, as the online-review reader asks with one alias per PR.
+	const aliases = [...query.matchAll(/\bp(\d+): pullRequest\(number: \d+\)/g)].map((match) => Number(match[1]));
+	if (aliases.length)
+		return { data: { repository: Object.fromEntries(aliases.map((n) => [`p${n}`, activityOf(repo, n)])) } };
 	// Anything else reads as a repository with none of the fields asked for.
 	return { data: { repository: {} } };
+}
+
+/** An account as GraphQL names it: a bot without its `[bot]` suffix. */
+const actorOf = (login: string | null) =>
+	login === null
+		? null
+		: login.endsWith("[bot]")
+			? { __typename: "Bot", login: login.slice(0, -5) }
+			: { __typename: "User", login };
+
+/** A PR's head, reviews, threads, and comments, as the online-review reader asks for them. */
+function activityOf(repo: Repo, number: number) {
+	const pull = repo.pulls.find((p) => p.number === number);
+	if (!pull) return null;
+	const head = headOf(repo, pull);
+	const url = `https://github.com/${repo.owner}/${repo.name}/pull/${number}`;
+	return {
+		headRefOid: head,
+		commits: page([{ commit: { oid: head, committedDate: updatedAt } }]),
+		reviews: page(
+			(pull.reviews ?? []).map((review, index) => ({
+				id: `R_${number}_${index}`,
+				url: `${url}#pullrequestreview-${index}`,
+				author: actorOf(review.author),
+				body: review.body ?? "",
+				submittedAt: updatedAt,
+				commit: { oid: review.commit ?? head },
+			})),
+		),
+		reviewThreads: page(
+			(pull.threads ?? []).map((thread, index) => ({
+				id: `T_${number}_${index}`,
+				isResolved: thread.resolved === true,
+				resolvedBy: null,
+				comments: page(
+					thread.comments.map((comment, at) => ({
+						author: actorOf(comment.author),
+						body: comment.body,
+						url: `${url}#discussion_r${index}${at}`,
+						pullRequestReview: null,
+					})),
+				),
+			})),
+		),
+		comments: page(
+			(pull.comments ?? []).map((comment, index) => ({
+				author: actorOf(comment.author),
+				authorAssociation: "COLLABORATOR",
+				body: comment.body,
+				createdAt: comment.at,
+				url: `${url}#issuecomment-${index}`,
+			})),
+		),
+	};
 }
 
 function tree(repo: Repo) {

@@ -193,6 +193,7 @@ A long-running coordinator lets compaction bound its context: it keeps what must
 Start each sub-agent in the background with its own isolated worktree, since agents cannot write to a worktree their parent created.
 It reports only when done or blocked, and never waits on GitHub CI, reviews, or merges; stay silent on its interim notifications.
 As each reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
+Before dispatching a session to apply the user's answers to a PR's decisions, post them on the PR in a comment that opens with `Maintainer decision`: `quest merge` refuses the PR's current head until a newer commit, or a later comment linking the decision, answers it.
 Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in the brief of each agent started after, and report it once.
 
 A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result.

@@ -499,6 +499,7 @@ comes last, and a missing value prints as `-`:
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
 | `thread` | Node ID, `current` or `outdated`, last commenter, latest comment URL, and `path:line` of each unresolved thread. |
+| `signal` | `finding` or `decision`, its URL, who posted it, and its text, for each [signal](#signals-that-hold-a-head) holding the head. |
 | `hold` | Label, acquisition token, acquisition time, verified GitHub event API URL, and age; `hold -` when no label holds it. Unknown acquisition facts print as `-` and `unknown age`. |
 | `starter-hold` | A draft its starter owns: last activity time, PR URL, and `last active` age. Last activity is not when ownership began. |
 
@@ -512,7 +513,7 @@ is one branch protection or a ruleset requires for this PR. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
 `landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `reactions`,
-`threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
+`threads`, `signals` (`kind`, `url`, `author`, `text`), `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
 failures exit 1.
 
@@ -553,6 +554,8 @@ it creates is the queue signal, so a queued PR shows no hold. It refuses while
 any session holds the PR, so release your own hold first. `--land` needs the full 40-character
 head SHA and refuses once the head moves, or while the latest run of any
 check on it failed, required or not, naming each; pending checks do not block.
+It also refuses while a [signal](#signals-that-hold-a-head) holds the head,
+naming each.
 It enables auto-merge bound to that SHA, or merges at once when nothing is
 left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
 the repository disallows; otherwise it uses the only method the repository
@@ -856,6 +859,27 @@ backoff. Grant the App the base ruleset's bypass and the read permissions needed
 to inspect branch protection. The bypass actor's API merge of a pinned PR with
 the unreported required `quest land` check must be verified on the live host.
 
+### Signals that hold a head
+
+A signal holds a PR's head from landing until it is fixed or answered, since
+the review its pick relied on predates it. `quest merge --land` refuses while
+one holds, `quest status` lists each as a `signal` line, and a queue takes a
+PR that draws one out, ejecting it as `unanswered_signal`, even while it waits
+to merge. Nothing waits for a reviewer: a signal that arrives before the merge
+ends the pick. There are two kinds:
+
+- `finding`: an online reviewer's (a bot's, or a review whose body opens
+  `Automated review by <name>`) on the head. A review thread it opened holds
+  until it is resolved or someone else replies; a `[P<n>]` line in its latest
+  review body over the head holds until a later comment links that review or
+  opens with an answering word such as `Fixed` or `Declined`.
+- `decision`: a comment by an account with write access that opens with
+  `Maintainer decision`, posted after the head's commit, which therefore cannot
+  apply it. A newer commit answers it, as does a later comment by a writer
+  that links it.
+
+A bot's comments answer nothing.
+
 ## Watch the merge queue with quest land watch
 
 `quest land watch` runs on a maintainer's host, one process per base branch of a repository,
@@ -867,7 +891,9 @@ which offers no merge queue. Each pass reads the base's rules
 GitHub's queue on a repository switches its watcher with no host change; a
 pass that cannot read them does nothing. It reads them with a `contents: read`
 token, so an installation granted only one mode's permissions runs it. On GitHub's queue it tells each PR the queue
-drops unmerged why. With `--fixer`, it also runs the land fixer on each PR the
+drops unmerged why, and takes a queued or armed PR whose head draws a
+[signal](#signals-that-hold-a-head) out of the queue, disarming its auto-merge
+and saying why. With `--fixer`, it also runs the land fixer on each PR the
 queue dropped for a failure or a conflict, and puts it back at the back of the
 queue. It polls; the host needs no public endpoint. Its base is resolved once at
 startup, from `--base` or the default branch, so a renamed default branch needs a

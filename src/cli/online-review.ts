@@ -30,16 +30,21 @@ export function classify(body: string): Answer {
 }
 
 /**
- * The finding lines of a review body, `[P1] ...` or `P1 — ...` with a dash after the bare marker, each keyed by its
+ * The finding lines of a review body, `[P1] ...` or `P1 — ...` with a dash after the bare marker, in a list item or
+ * bold or not, each keyed by its
  * title and how many earlier lines of the body share that title.
  */
 export function bodyFindings(body: string): string[] {
 	const seen = new Map<string, number>();
-	return [...body.matchAll(/^[ \t]*(?:[-*][ \t]+)?(?:\[P\d\]|P\d[ \t]+[—–-])[ \t:—–-]*(\S.*)$/gm)].map((match) => {
+	return [
+		...body.matchAll(
+			/^[ \t]*(?:(?:[-*]|\d+[.)])[ \t]+)?(?:\*\*|__)?(?:\[P\d\]|P\d[ \t]+[—–-])(?:\*\*|__)?[ \t:—–-]*(\S.*)$/gm,
+		),
+	].map((match) => {
 		// A later round that relists a finding repeats its title, or its location when it leads; the rest may change.
 		const title = match[1]!
 			.split(/ [—–] | \(|: |\. /)[0]!
-			.replaceAll("`", "")
+			.replace(/[`*]|__/g, "")
 			.replace(/\s+/g, " ")
 			.trim()
 			.toLowerCase();
@@ -49,13 +54,13 @@ export function bodyFindings(body: string): string[] {
 	});
 }
 
-const THREAD_COMMENT = "author { __typename login } body pullRequestReview { id }";
+const THREAD_COMMENT = "author { __typename login } body url pullRequestReview { id }";
 const FIELDS = {
 	reviews: "id url author { __typename login } body submittedAt commit { oid }",
 	reviewThreads:
 		"id isResolved resolvedBy { __typename login } " +
 		`comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT} } }`,
-	comments: "author { __typename login } body createdAt",
+	comments: "author { __typename login } authorAssociation body createdAt url",
 } as const;
 type Connection = keyof typeof FIELDS;
 const CONNECTIONS = Object.keys(FIELDS) as Connection[];
@@ -65,16 +70,20 @@ const page = (name: Connection, after: string) =>
 /** PRs read per query; each brings at most 100 reviews, 50 threads of 100 comments, and 100 comments. */
 const BATCH = 10;
 
-/** A PR's last head, and its reviews, review threads, and comments as GitHub's GraphQL API gives them. */
-export type Activity = Record<Connection, ObjectValue[]> & { head: string };
+/** A PR's last head and its committer date, and its reviews, review threads, and comments as GitHub's GraphQL API gives them. */
+export type Activity = Record<Connection, ObjectValue[]> & { head: string; committed?: string };
 
 /** Each PR's reviews, review threads, and comments, and its head, read in batches and then in pages. */
-async function read(client: GitHub, repository: Repository, numbers: number[]): Promise<Map<number, Activity>> {
+export async function readActivity(
+	client: GitHub,
+	repository: Repository,
+	numbers: number[],
+): Promise<Map<number, Activity>> {
 	const pulls = new Map<number, Activity>();
 	const more: { number: number; cursors: Partial<Record<Connection, string>> }[] = [];
 	for (let start = 0; start < numbers.length; start += BATCH) {
 		const batch = numbers.slice(start, start + BATCH);
-		const fields = `headRefOid ${CONNECTIONS.map((name) => page(name, "")).join(" ")}`;
+		const fields = `headRefOid commits(last: 1) { nodes { commit { oid committedDate } } } ${CONNECTIONS.map((name) => page(name, "")).join(" ")}`;
 		const data = await client.graphql(
 			`query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${batch
 				.map((number) => `p${number}: pullRequest(number: ${number}) { ${fields} }`)
@@ -87,7 +96,9 @@ async function read(client: GitHub, repository: Repository, numbers: number[]): 
 			if (value === null || value === undefined)
 				throw new Error(`GitHub has no PR #${number} in ${repository.owner}/${repository.repo} for this token`);
 			const pull = object(value);
+			const commit = object(object(array(object(pull.commits).nodes)[0] ?? {}).commit ?? {});
 			const nodes = { head: String(pull.headRefOid) } as Activity;
+			if (commit.oid === pull.headRefOid) nodes.committed = String(commit.committedDate);
 			const cursors: Partial<Record<Connection, string>> = {};
 			for (const name of CONNECTIONS) {
 				const connection = object(pull[name]);
@@ -142,7 +153,7 @@ async function read(client: GitHub, repository: Repository, numbers: number[]): 
 }
 
 /** An account's login, a bot's as `name[bot]`, which GraphQL gives a bot author without the suffix. */
-function login(actor: unknown): string | null {
+export function login(actor: unknown): string | null {
 	if (actor === null || actor === undefined) return null;
 	const { __typename, login } = object(actor);
 	if (typeof login !== "string") return null;
@@ -150,11 +161,14 @@ function login(actor: unknown): string | null {
 }
 
 /** Whose review this is: the name its body opens with, else its bot author, else nobody's. */
-function reviewerOf(review: ObjectValue): string | null {
+export function reviewerOf(review: ObjectValue): string | null {
 	const named = /^Automated review by (.+)/.exec(typeof review.body === "string" ? review.body : "");
 	if (named) return named[1]!.trim();
 	return object(review.author ?? {}).__typename === "Bot" ? login(review.author) : null;
 }
+
+/** Whether an author is a bot account, such as a reviewer or the land watcher, whose comments answer nothing. */
+export const isBot = (actor: unknown) => actor != null && object(actor).__typename === "Bot";
 
 /** The anchor GitHub links a review by. */
 const ANCHOR = /#pullrequestreview-\w+/g;
@@ -242,6 +256,7 @@ export function onlineReviews(pull: Activity): OnlineReview[] {
 	)) {
 		const author = login(comment.author);
 		if (author !== null && reviewers.has(author)) continue;
+		if (isBot(comment.author)) continue;
 		const body = String(comment.body ?? "");
 		const at = Date.parse(String(comment.createdAt));
 		const links = new Set([...body.matchAll(ANCHOR)].map((match) => match[0]));
@@ -272,6 +287,6 @@ export async function readOnlineReviews(
 	repository: Repository,
 	numbers: number[],
 ): Promise<Map<number, OnlineReview[]>> {
-	const pulls = await read(client, repository, numbers);
+	const pulls = await readActivity(client, repository, numbers);
 	return new Map([...pulls].map(([number, pull]) => [number, onlineReviews(pull)]));
 }

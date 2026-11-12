@@ -43,6 +43,9 @@ class FakePull {
 	rules: ObjectValue[] = [];
 	/** The head's check runs, as its `statusCheckRollup` lists them. */
 	checks: ObjectValue[] = [];
+	/** The PR's reviews, threads, and comments as the signal reader reads them, and its head's commit time. */
+	activity: ObjectValue = {};
+	committed = "2026-10-21T11:00:00Z";
 	autoMerge: ObjectValue | null = null;
 	queueEntry: ObjectValue | null = null;
 	labels: string[] = [];
@@ -150,6 +153,23 @@ class FakePull {
 				this.queueEntry = { state: "QUEUED" };
 			}
 			return { data: { [name]: { clientMutationId: null } } };
+		}
+		if (query.includes("p7: pullRequest(number: 7)")) {
+			const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+			return {
+				data: {
+					repository: {
+						p7: {
+							headRefOid: this.head,
+							commits: { nodes: [{ commit: { oid: this.head, committedDate: this.committed } }] },
+							reviews: empty,
+							reviewThreads: empty,
+							comments: empty,
+							...this.activity,
+						},
+					},
+				},
+			};
 		}
 		if (query.includes("node(id: $id)")) return { data: { node: { autoMergeRequest: this.autoMerge } } };
 		if (query.includes("statusCheckRollup"))
@@ -327,6 +347,34 @@ describe("merge --land", () => {
 		expect(pull.writes).toEqual([]);
 		// A rerun that passed supersedes the failure; a pending check does not block.
 		pull.checks.push(run(3, "Check", "COMPLETED", "SUCCESS"));
+		await land(PR, HEAD, "merge", pull.deps());
+		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("refuses a head an unanswered online finding or a newer maintainer decision holds", async () => {
+		const pull = new FakePull();
+		const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+		const decision = `${URL_}#issuecomment-9`;
+		pull.activity = {
+			comments: {
+				...empty,
+				nodes: [
+					{
+						author: { __typename: "User", login: "maintainer" },
+						authorAssociation: "OWNER",
+						body: "Maintainer decision: add the timeout.",
+						createdAt: "2026-10-21T11:30:00Z",
+						url: decision,
+					},
+				],
+			},
+		};
+		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
+			`head ${HEAD} is held by decision by maintainer: Maintainer decision: add the timeout. (${decision})`,
+		);
+		expect(pull.writes).toEqual([]);
+		// A head committed after it may apply it.
+		pull.committed = "2026-10-21T11:45:00Z";
 		await land(PR, HEAD, "merge", pull.deps());
 		expect(pull.writes).not.toEqual([]);
 	});

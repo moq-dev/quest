@@ -72,6 +72,8 @@ interface Pull {
 	/** Its head branch's pushes, oldest first, in place of those its removals imply. */
 	pushes?: { sha: string; at: string }[];
 	labels?: string[];
+	/** Its reviews, threads, and comments as the signal reader reads them; none by default. */
+	activity?: Record<string, unknown>;
 }
 interface Job {
 	id: number;
@@ -198,6 +200,25 @@ function deps(world: World): GitHubDependencies {
 				if (query.includes("defaultBranchRef"))
 					return Response.json({ data: { repository: { defaultBranchRef: { name: "main" } } } });
 				const pullOf = () => world.pulls.find((item) => `PR_${item.number}` === variables.id)!;
+				const aliases = [...query.matchAll(/\bp(\d+): pullRequest\(number: \d+\)/g)].map((m) => Number(m[1]));
+				if (aliases.length) {
+					const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+					const activity = (pull: Pull) => ({
+						headRefOid: headOf(world, pull),
+						commits: { nodes: [{ commit: { oid: headOf(world, pull), committedDate: at(-100) } }] },
+						reviews: empty,
+						reviewThreads: empty,
+						comments: empty,
+						...pull.activity,
+					});
+					return Response.json({
+						data: {
+							repository: Object.fromEntries(
+								aliases.map((n) => [`p${n}`, activity(world.pulls.find((pull) => pull.number === n)!)]),
+							),
+						},
+					});
+				}
 				if (query.includes("statusCheckRollup")) {
 					expect(variables.id).toMatch(/^PR_\d+$/);
 					const contexts = world.checks?.[variables.sha];
@@ -218,6 +239,13 @@ function deps(world: World): GitHubDependencies {
 					return Response.json({ data: { repository: { object: { statusCheckRollup: rollup } } } });
 				}
 				const mutation = /^\s*mutation[^{]*\{\s*(\w+)/.exec(query)?.[1];
+				if (mutation === "dequeuePullRequest" || mutation === "disablePullRequestAutoMerge") {
+					const pull = pullOf();
+					world.mutations.push(`${mutation} ${pull.number}`);
+					if (mutation === "dequeuePullRequest") pull.queued = undefined;
+					else pull.armed = undefined;
+					return Response.json({ data: { [mutation]: { clientMutationId: null } } });
+				}
 				if (mutation === "enqueuePullRequest" || mutation === "enablePullRequestAutoMerge") {
 					const pull = pullOf();
 					world.mutations.push(`${mutation} ${pull.number} ${variables.sha}`);
@@ -739,6 +767,63 @@ test("an armed pick GitHub never queued is enqueued once ready, only at the head
 	// Queued now: nothing more to do.
 	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
 	expect(github.mutations).toHaveLength(2);
+});
+
+test("a queued or armed pick that draws an online finding leaves the queue, once, and is not enqueued again", async () => {
+	const state = tempDir();
+	const page = (nodes: object[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
+	const finding = {
+		reviews: page([
+			{
+				id: "r1",
+				url: "https://github.com/upstream/project/pull/30#pullrequestreview-1",
+				author: { __typename: "Bot", login: "rabbit" },
+				body: "[P1] Drops the last frame",
+				submittedAt: at(3),
+				commit: { oid: HEAD },
+			},
+		]),
+	};
+	const github = world([
+		{
+			number: 30,
+			head: HEAD,
+			enqueues: [{ createdAt: at(2), actor: "maintainer" }],
+			removals: [],
+			armed: at(2),
+			queued: at(2),
+			activity: finding,
+		},
+		{ number: 31, head: HEAD, enqueues: [], removals: [], armed: at(2), mergeState: "BLOCKED", activity: finding },
+		// Nothing holds it.
+		{
+			number: 32,
+			head: HEAD,
+			enqueues: [{ createdAt: at(2), actor: "maintainer" }],
+			removals: [],
+			armed: at(2),
+			queued: at(2),
+		},
+	]);
+	github.now = Date.parse(at(4));
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([
+		`dequeued 30 ${HEAD} 1 signals`,
+		`dequeued 31 ${HEAD} 1 signals`,
+	]);
+	expect(github.mutations).toEqual([
+		"dequeuePullRequest 30",
+		"disablePullRequestAutoMerge 30",
+		"disablePullRequestAutoMerge 31",
+	]);
+	expect(github.comments[30]).toHaveLength(1);
+	expect(github.comments[30][0].body).toContain(
+		`took this pull request out of the queue at ${HEAD}, which is held by finding by rabbit[bot]: drops the last frame`,
+	);
+	expect(github.comments[30][0].body).toContain("<!-- quest land: unanswered_signal -->");
+	// Out of the queue and disarmed: the next pass leaves both alone.
+	expect(await watchPass(REPOSITORY, { state }, deps(github))).toEqual([]);
+	expect(github.mutations).toHaveLength(3);
+	expect(github.comments[31]).toHaveLength(1);
 });
 
 test("a refused enqueue of an armed pick is reported once and retried, and says nothing when GitHub queued it first", async () => {
