@@ -52,10 +52,10 @@ Agent's choices, for the implementer to revisit. Each run:
   [the token-max attribution](/quest/m0/routing-evidence/usage-token-max.md)
   lands; the rest named a PR that left the work to a planned follow-up
   or kept older behavior.
-- `quest messages` returns every human turn, so set aside machine-written
+- `quest messages` returns every human turn as a `kind: "message"` entry,
+  beside the `kind: "answer"` entries tallied below, so set aside machine-written
   ones yourself: bare skill invocations, pasted relays and logs, accepted
-  suggested prompts, `/compact`, `/clear`, and `/goal` commands, and
-  Codex's question replies (about 175 of 1,452 on 2026-11-11).
+  suggested prompts, and `/compact`, `/clear`, and `/goal` commands.
 - Group them into classes by the agent behavior behind them. A class is
   the same behavior in two or more PRs or messages; one failure is not a
   class.
@@ -80,10 +80,8 @@ Agent's choices, for the implementer to revisit. Each run:
   edits no `AGENTS.md`, `CONTRIBUTING.md`, or skill.
 - Tally the decision prompts per skill: how often the answer was the
   agent's own recommendation. Propose a change only where that is nearly
-  always. `quest messages` drops Claude Code's and T3 Code's structured
-  answers and returns Codex's as text without the recommended option, so
-  this waits on [question answers](/quest/m0/question-answers.md); until
-  then, count only typed answers that just pick the recommendation.
+  always. `quest messages --json` prints each answer as a `kind: "answer"`
+  entry with the skill, the `recommended` options, and the `picked` ones.
 - moq-dev/quest is public, and typed messages can name customers and
   private repositories. The PR and its quests give counts and classes in
   the agent's words, never a message's text, and name no moq-dev/moq.pro

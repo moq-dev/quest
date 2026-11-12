@@ -1565,10 +1565,17 @@ $ quest messages --since 2026-11-10
 ```
 
 Each message shows its time, harness, repository (the checkout's GitHub
-`origin`, else its directory), and session, then its text; `--json` prints an
-array of `{time, harness, repository, session, text}`. It prints no agent
-reply, tool call or output, harness reminder, or prompt an agent or scheduler
-wrote, and tells them apart by the sender each source records, not by
+`origin`, else its directory), and session, then its text. It also prints each
+answer a person gave an agent's blocking question, such as Claude Code's
+`AskUserQuestion` or Codex's `request_user_input`, marked `answer` with the
+skill the session last ran, then the question, the options the agent marked
+`(Recommended)`, and what was picked or typed instead. These come from each
+harness's own log, T3 Code's sessions included, since only it keeps the
+options. `--json` prints an array of `{kind: "message", time, harness,
+repository, session, text}` and `{kind: "answer", time, harness, repository,
+session, skill, header, question, options, recommended, picked}`. Besides the
+questions answers reply to, it prints no agent reply, tool call or output,
+harness reminder, or prompt an agent or scheduler wrote, and tells them apart by the sender each source records, not by
 wording. T3 Code records whether a person or an agent created each message, so
 the sessions it drives are read from its state (`$T3CODE_HOME`, or `~/.t3`)
 and nowhere else. Other Claude Code sessions count the turns Claude Code marks

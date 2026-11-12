@@ -1139,17 +1139,22 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 
 	program
 		.command("messages")
-		.summary("Print the messages a person typed to agents on this host")
+		.summary("Print the messages a person typed to agents on this host, and their answers to agents' questions")
 		.description(
 			"Print each message a person typed to a Claude Code or Codex session on this host since --since, oldest " +
-				"first, with its time, harness, repository, and session, and nothing else: no agent reply, tool call or " +
-				"output, harness reminder, or prompt an agent or scheduler wrote. Sessions T3 Code drives are read from " +
+				"first, with its time, harness, repository, and session, and no agent reply, tool call or output, " +
+				"harness reminder, or prompt an agent or scheduler wrote, except the questions answers reply to. Sessions T3 Code drives are read from " +
 				"its state ($T3CODE_HOME, or ~/.t3), which records whether a person or an agent sent each message. " +
 				"Other Claude Code sessions, from $CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude), count a turn " +
 				"Claude Code marks as a human's; other Codex sessions, from $CODEX_HOME (or ~/.codex), count the " +
 				"content Codex marks as the user's, outside headless and sub-agent sessions. The repository is the " +
 				"checkout's GitHub origin, else the directory. Output goes to stdout only; nothing is stored or " +
-				"posted. --json prints a JSON array of {time, harness, repository, session, text}.\n\n" +
+				"posted. Each answer a person gave an agent's blocking question (Claude Code's AskUserQuestion, " +
+				"Codex's request_user_input) prints too, from the harness's own log in every session, T3 Code's " +
+				"included, with the skill the session last ran, the question, the options the agent marked " +
+				"(Recommended), and the ones picked or the words typed instead. --json prints a JSON array of " +
+				'{kind: "message", time, harness, repository, session, text} and {kind: "answer", time, harness, ' +
+				"repository, session, skill, header, question, options, recommended, picked}.\n\n" +
 				"Exits 0 when done, 2 for invalid arguments, and 1 for other failures, such as a log or T3 Code " +
 				"record in a shape quest does not know.",
 		)
