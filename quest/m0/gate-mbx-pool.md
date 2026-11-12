@@ -66,15 +66,29 @@ phases, the waste the load gate has today.
 
 Agent's choices, for the implementer to revisit:
 
+- Sidecars must never starve the compiles of the commands they sit
+  beside: a sidecar held for a command's lifetime keeps its permits through
+  the command's later cargo phase, and with the pool full of sidecars those
+  compiles would wait forever. The gate counts the cores its live sidecars
+  hold across the host and keeps their sum at or below half of mbx's pool,
+  so mbx's compiles and tests always have permits. A command whose
+  sidecar does not fit waits in the gate's queue, as today.
 - The gate keeps no per-command history today: it measures a command only
   after admission and drops the entry a minute after it exits. Add a
   learned peak per command, keyed by its repository and argv, recording
-  its total CPU peak and the part its mbx compiles and tests took, which
-  are the processes running under mbx's compiler and test shims. With no
-  history yet, reserve one core and record the run.
-- Cap N at mbx's pool, `scheduler.cpus` minus `scheduler.reserve_cpus`,
-  so a large non-mbx command never takes the cores mbx withholds for other
-  work.
+  its total CPU peak and its mbx share. The gate reads only the scope's
+  total today, so attribute the share by sampling the scope's processes
+  and counting those whose ancestry includes mbx's compiler or test shims
+  (under mbx's `shims/` directory), or from mbx's own per-build
+  accounting if it exposes one. With no history yet, reserve one core and
+  record the run.
+- N is the learned non-mbx share. When it is zero, as for a plain
+  `quest gate cargo build`, the command runs with no sidecar, since
+  `mbx reserve` refuses a request for no resources. Cap N at mbx's pool,
+  `scheduler.cpus` minus `scheduler.reserve_cpus`, so a large non-mbx
+  command never takes the cores mbx withholds for other work.
+- Ordinary sidecars pass `--priority low`, since `mbx reserve` defaults to
+  normal and ignores `scheduler.priority`.
 - Detect mbx from the command's working directory, so a workspace
   `.mbx.toml` that disables the scheduler counts. If mbx offers no way to
   read the effective workspace setting, ask jdx/mr-boxington for one, and
@@ -94,9 +108,11 @@ Agent's choices, for the implementer to revisit:
 - Measure it on cargo-heavy work, since quest's own `just check` runs no
   cargo: several moq-dev/moq `just check` or `just test` runs from
   separate worktrees at once, with and without mbx detected. Report wall
-  time, load, and CPU pressure (`/proc/pressure/cpu`). Done when the mbx
-  path keeps the host near its core count while finishing no slower than
-  the load gate.
+  time, load, and CPU pressure (`/proc/pressure/cpu`). Done when, on the
+  mbx path, gated work stays near mbx's pool (`scheduler.cpus` minus
+  `scheduler.reserve_cpus`, 18 of 24 cores on the maintainer's host), CPU
+  pressure falls below the load gate's, and the runs finish no slower and
+  never deadlock.
 - Update `quest gate --help`, the README, and the shared rule above.
 
 Installing mbx on the maintainer's host is outside this repository: the
