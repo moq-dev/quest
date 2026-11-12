@@ -2,10 +2,11 @@
 
 ## Goal
 
-On a host with mbx installed, `quest gate` admits each command through
-mbx's host-wide scheduler pool instead of its own load-average check, so
-compiles, tests, and other heavy work across every worktree share one CPU
-budget. Without mbx, the gate keeps today's load check. Work that barely
+On a Linux host with mbx installed, where the gate owns each command in a
+systemd scope, `quest gate` admits each command through mbx's host-wide
+scheduler pool instead of its own load-average check, so compiles, tests,
+and other heavy work across every worktree share one CPU budget. Other
+hosts, and hosts without mbx, keep today's load check. Work that barely
 uses CPU, such as `quest review`'s model calls, and long-running servers
 stay out of the gate.
 
@@ -83,13 +84,15 @@ Agent's choices, for the implementer to revisit:
   learned N per command, keyed by its repository and argv, from the scope
   measurement the gate already takes. With no history, start at half of
   mbx's pool. After each run, set N to the measured peak, or double it, up
-  to the pool, when the scope was throttled (`cpu.stat`'s
+  to that ceiling, when the scope was throttled (`cpu.stat`'s
   `nr_throttled`), since a capped command cannot show a peak above its cap.
   Half the pool also fits beside the quarter mbx keeps free for
   normal-priority work, so a first run never blocks a waiting land check.
-- N is at least one core and at most mbx's pool, `scheduler.cpus` minus
-  `scheduler.reserve_cpus`, so a command never takes the cores mbx
-  withholds for other work.
+- N is at least one core and at most three quarters of mbx's pool
+  (`scheduler.cpus` minus `scheduler.reserve_cpus`), so an ordinary
+  low-priority reservation always fits beside the quarter mbx keeps for
+  normal-priority work and never blocks a waiting land check, and a command
+  never takes the cores mbx withholds for other work.
 - Ordinary reservations pass `--priority low`, since `mbx reserve`
   defaults to normal and ignores `scheduler.priority`.
 - Detect mbx from the command's working directory, so a workspace
