@@ -11,6 +11,11 @@ records and the attribution of sessions to PRs. Fix PRs count toward
 `fixedBy` only once merged, and only through a bulleted
 `- [owner/repo#N](url) - why` culprit line, not a context link.
 
+`quest usage --ssh HOST` (repeatable) also attributes the sessions of
+other hosts the user names, through `token-max sessions --ssh`. A session
+found on several hosts, such as a history copied between them, counts once,
+and the report says how many such copies it folded and from which hosts.
+
 ## Plan
 
 Decided 2026-11-11 (user, /quest-plan,
@@ -24,6 +29,20 @@ Decided 2026-11-11 (user, /quest-plan,
     ccusage
 - Pin token-max as a flake input, the way the other consumers pin quest,
   until its npm release.
+
+Decided 2026-11-12 (user, /quest-plan, asked whether the CLIProxyAPI
+gateway's request history could replace reading transcripts on each host):
+
+- Source? ✅ transcripts, read on each host by token-max (rejected: the
+  gateway's usage records, which v8 drops once read or after at most an
+  hour, which carry no session, branch or working directory, and which
+  cover only Claude traffic routed through the gateway).
+- Other hosts? ✅ a `--ssh HOST` flag passed through to token-max, so
+  hosts stay the user's to name (rejected: this host only).
+- A session on several hosts? ✅ count it once, keeping the copy with the
+  most requests, and report the fold (rejected: failing on it, which one
+  copied history would turn into a blocked report; counting every copy,
+  which inflates the cost per PR the writer A/B compares).
 
 The audit found today's failures:
 
@@ -47,6 +66,6 @@ The audit found today's failures:
 
 ## Waiting
 
-- kixelated/token-max: ships the priced-session export that
-  [its quest](https://github.com/kixelated/token-max/tree/main/quest/m0)
-  plans; check that its `--help` documents the export
+- kixel-ai/token-max: `token-max sessions` accepts `--ssh`, as
+  [its quest](https://github.com/kixel-ai/token-max/blob/main/quest/m0/sessions-ssh.md)
+  plans; check that `token-max sessions --help` documents `--ssh`
