@@ -3,8 +3,8 @@
 ## Goal
 
 `quest status`, `quest merge`, `quest wait` and `quest land`, including its
-daemons, stop failing a head on a check that a cancelled GitHub Actions run
-left behind once a newer run of the same workflow exists on that head. This
+daemons, stop failing a head on a check that reported `cancelled` once a
+newer GitHub Actions run of the same workflow exists on that head. This
 includes a matrix job the cancelled run left under an unexpanded name, such
 as `Tests (${{ matrix.os }})`. A completed check keeps today's rule, where
 each check's latest report counts. A cancelled run that nothing replaced
@@ -21,7 +21,9 @@ repository's workflow, since every repository would need it and token-max's
 
 Decided 2026-11-12 (user, /quest-review design checkpoint): ✅ `quest status`
 judges the base's required checks as `quest wait` does, with the same
-exceptions, such as the gate's own `quest land` check. A cancelled
+exceptions, such as the gate's own `quest land` check. It reports each
+missing required check or required workflow as a pending line, the
+workflow named by its path. A cancelled
 pull_request run can be replaced by a push run that lacks a PR-only required
 job, and status would otherwise read success while land and wait read
 pending (rejected: leaving it to the implementer; letting a cancelled run
@@ -41,7 +43,8 @@ was rerun.
 
 Recommendations:
 
-- Drop only cancelled checks, not whole runs. Dropping a run because a newer
+- Drop only checks that reported `cancelled`, not whole runs: a check the
+  cancelled run completed before it stopped keeps counting. Dropping a run because a newer
   run of its event exists would also drop passed checks that the newer run
   gated off, such as jobs an `edited` run skips by `github.event.action`.
 - land-bump (`latestRuns` in `src/cli/land-bump.ts`) already treats a run
