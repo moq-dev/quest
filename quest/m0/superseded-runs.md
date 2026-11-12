@@ -40,17 +40,24 @@ Recommendations:
   status, `quest merge`'s refusal of a failed check (`passing` in
   `src/cli/hold.ts`), wait, land and land-bump all judge the same checks.
   Keep land-bump's tests passing.
-- Read the runs through the existing check queries, as
-  `checkSuite { databaseId status conclusion workflowRun { databaseId event workflow { databaseId } } }`,
-  rather than land-bump's extra REST calls, unless GraphQL lacks a field
-  the rule needs.
+- Read the runs from the head commit's `checkSuites` (each with its
+  `workflowRun { databaseId event workflow { databaseId } }`, status and
+  conclusion), not from the rollup's contexts. That way a newer run that has
+  no check runs yet, queued or cancelled early, still replaces an older one,
+  as land-bump's REST read of the head's runs does.
 - Workflow-run fields need Actions read. `quest land serve` mints its API
   token with only `checks` and `statuses` read (`src/cli/land-serve.ts`).
   Add `actions: "read"`, which the GitHub App already grants, since
   land-bump and land-watch request it.
-- Where dropping replaced runs leaves no checks, report pending, as
-  land-bump does (`found.length === 0`). `checksState` returns success for an
-  empty list, and status has no list of required checks to fall back on.
+- Report pending while any workflow run that counts is unfinished, as
+  land-bump's `running` does, and when dropping replaced runs leaves no
+  checks (`found.length === 0`). Status has no list of required checks, so a
+  required check that only a replaced run reported would otherwise read as
+  passing while its replacement runs.
+- Latest run per event is deliberate, as land-bump decided. A newer run of
+  the same workflow and event on the same head runs the same workflow file,
+  so it re-reports every job a completed older run did, except a dynamic
+  matrix, where the newer run is the current answer.
 - Order runs so that a rerun of a replaced run counts as newest, for
   example by the latest attempt's start, rather than by run id. Otherwise
   rerunning the cancelled run, the only workaround today, is ignored.
