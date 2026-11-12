@@ -374,10 +374,10 @@ test("each size's reviewer is the first whose model is not the latest writer's",
 		const { harness, model, effort } = pickReviewer(size, {}, wrote);
 		return `${harness} ${model} ${effort}`;
 	};
-	expect(at("XS", claude)).toBe("codex gpt-6.1-sol low");
+	expect(at("XS", claude)).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", claude)).toBe("codex gpt-6.1-sol medium");
-	expect(at("M", claude)).toBe("codex gpt-6.1-sol medium");
-	expect(at("L", claude)).toBe("codex gpt-6.1-sol high");
+	expect(at("M", claude)).toBe("codex gpt-6.1-sol high");
+	expect(at("L", claude)).toBe("codex gpt-6.1-sol xhigh");
 	expect(at("XL", claude)).toBe("codex gpt-6.1-sol xhigh");
 	// Claude reviews what Sol wrote.
 	expect(at("XS", codex)).toBe("claude claude-opus-5-5 low");
@@ -397,7 +397,7 @@ test("each size's reviewer is the first whose model is not the latest writer's",
 	expect(at("S", authored({ exclude: ["claude-opus-5-5"] }, { CLAUDECODE: "1" }))).toBe("codex gpt-6.1-sol medium");
 	expect(at("S", authored({ exclude: ["gpt-6.1-sol"] }, { CLAUDECODE: "1" }))).toBe("claude claude-opus-5-5 low");
 	// No harness need be detected once the implementers are named.
-	expect(at("M", authored({ exclude: ["other-model"] }, {}))).toBe("codex gpt-6.1-sol medium");
+	expect(at("M", authored({ exclude: ["other-model"] }, {}))).toBe("codex gpt-6.1-sol high");
 	const both = authored({ exclude: ["gpt-6.1-sol", "claude-opus-5-5"] }, {});
 	expect(() => pickReviewer("M", {}, both)).toThrow("is avoided; pass --harness and --model");
 
@@ -436,7 +436,7 @@ fakes("a quest branch is reviewed at its quest's size on the base, which its own
 	const result = await quest("--root", s.repo, "review");
 	expect(result.stderr).toBe("");
 	expect(result.stdout).toMatch(/^size L quest\/m0\/big.md\n/);
-	expect(result.stdout).toContain("\nreviewer codex gpt-6.1-sol high\n");
+	expect(result.stdout).toContain("\nreviewer codex gpt-6.1-sol xhigh\n");
 	// The second reviewer runs at its own effort, whatever the size.
 	expect(result.stdout).toContain("\nreviewer opencode opencode-go/deepseek-v4.1-flash high\n");
 
@@ -450,7 +450,7 @@ fakes("a quest branch is reviewed at its quest's size on the base, which its own
 		{ root: s.repo, base: "origin/main", sizeBranch: "quest/m0/big" },
 		{ env: { ...process.env, CLAUDECODE: "1" } },
 	);
-	expect([runner!.size, runner!.sizeFrom, runner!.effort]).toEqual(["L", "quest/m0/big.md", "high"]);
+	expect([runner!.size, runner!.sizeFrom, runner!.effort]).toEqual(["L", "quest/m0/big.md", "xhigh"]);
 	git(s.repo, "checkout", "-q", "quest/m0/big");
 	const invalid = await quest("--root", s.repo, "review", "--size", "XXL", "--new");
 	expect(invalid.code).not.toBe(0);
@@ -996,7 +996,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 			`base ${base} origin/main`,
 			`head ${head}`,
 			"",
-			"reviewer codex gpt-6.1-sol medium",
+			"reviewer codex gpt-6.1-sol high",
 			"session thread-1",
 			"round 1",
 			"usage findings input 100 cached 80 output 7",
@@ -1040,7 +1040,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 		expect(call.argv).toContain("--ignore-user-config");
 		expect(call.argv).toContain("skills.include_instructions=false");
 		expect(call.argv[call.argv.indexOf("-m") + 1]).toBe("gpt-6.1-sol");
-		expect(call.argv).toContain('model_reasoning_effort="medium"');
+		expect(call.argv).toContain('model_reasoning_effort="high"');
 		expect(call.argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
 		// The session's own variables never reach the reviewer.
 		expect(call.env.CLAUDECODE).toBeUndefined();
@@ -1549,10 +1549,10 @@ fakes("a review from a subdirectory of a fork records on the upstream PR", async
 fakes("a round on the head the last round passed runs no reviewer and repeats that round", async () => {
 	const s = setup();
 	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
-	const first = await quest("--root", s.repo, "review", "--json");
+	const first = await quest("--root", s.repo, "review", "--json", "--size", "S");
 	expect(first.code, first.stderr).toBe(0);
 	const calls = s.calls().length;
-	const again = await quest("--root", s.repo, "review", "--json");
+	const again = await quest("--root", s.repo, "review", "--json", "--size", "S");
 	expect(again.code, again.stderr).toBe(0);
 	expect(s.calls()).toHaveLength(calls);
 	expect(s.opencodeCalls()).toHaveLength(3);
@@ -1560,11 +1560,11 @@ fakes("a round on the head the last round passed runs no reviewer and repeats th
 	expect(JSON.parse(again.stdout).rounds).toMatchObject(
 		rounds.map((round: object) => ({ ...round, usage: [], unchanged: true })),
 	);
-	// S picks the same reviewers as the default M, so its rounds repeat and report the size given.
-	const resized = await quest("--root", s.repo, "review", "--json", "--size", "S");
+	// XS picks the same reviewers as S, so its rounds repeat and report the size given.
+	const resized = await quest("--root", s.repo, "review", "--json", "--size", "XS");
 	expect(s.calls()).toHaveLength(calls);
-	expect(JSON.parse(resized.stdout).rounds).toMatchObject(rounds.map(() => ({ size: "S", sizeFrom: "--size" })));
-	const repeated = (await quest("--root", s.repo, "review")).stdout;
+	expect(JSON.parse(resized.stdout).rounds).toMatchObject(rounds.map(() => ({ size: "XS", sizeFrom: "--size" })));
+	const repeated = (await quest("--root", s.repo, "review", "--size", "XS")).stdout;
 	expect(repeated.split("unchanged round 1 reviewed this head and found nothing; no reviewer ran\n")).toHaveLength(3);
 
 	// A round with findings to settle runs on the same head, since a refutation needs no new commit, while a
@@ -1612,7 +1612,7 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 
 		// Flags override the record.
 		const flagged = await quest("--root", s.repo, "review", "--new", "--size", "XS", "--exclude-model", "x");
-		expect(flagged.stdout).toMatch(/^size XS --size\n[\s\S]*\nreviewer codex gpt-6.1-sol low\n/);
+		expect(flagged.stdout).toMatch(/^size XS --size\n[\s\S]*\nreviewer codex gpt-6.1-sol medium\n/);
 
 		// Only the latest implementer is avoided, whoever wrote earlier.
 		pull.body = body("- Implementer: Codex, unknown, unknown effort", "- Implementer: Codex, gpt-6.1-sol, high");
@@ -1622,7 +1622,7 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 		// A latest implementer whose model is unknown may be the running harness's, which the review then skips.
 		pull.body = body("- Implementer: Codex, gpt-6.1-sol, high", "- Implementer: Codex, unknown, unknown effort");
 		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
-			"reviewer codex gpt-6.1-sol medium\n",
+			"reviewer codex gpt-6.1-sol high\n",
 		);
 
 		// A malformed field fails the round, unless the flag that replaces it is given.

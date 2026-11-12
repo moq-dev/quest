@@ -31,7 +31,7 @@ Decided 2026-11-11 (user, /quest-plan, from an audit of PRs merged
   only; none).
 - Records?
   - ✅ [Cumulative review tallies](/quest/m0/routing-evidence/review-tallies.md)
-    and [online reviewers in usage](/quest/m0/routing-evidence/online-reviewers.md)
+    and online reviewers in usage
   - ✅ [Attribution through token-max](/quest/m0/routing-evidence/usage-token-max.md),
     kept after the maintainer first left it out, because the writer A/B
     compares cost and `quest usage` crashes on this host
@@ -44,8 +44,8 @@ Readout, the agent's choices for the implementer to revisit:
   compute each arm's variance and the number of PRs each arm needs to
   detect a difference worth acting on. If the arms have not reached it,
   rewrite the `Waiting` item below for the date they will, and stop.
-- For each writer arm, compare first-round findings from the fixed review
-  table, review rounds, hand-backs, later `## Caused by` culprits, and cost
+- For each writer arm, compare first-round findings from the fixed efforts in
+  `src/cli/models.ts`, review rounds, hand-backs, later `## Caused by` culprits, and cost
   per merged PR. For each shadow pair, compare findings the routed reviewer
   raised that the shadow missed, and the reverse, along with fixed and
   refuted findings and cost per PR. Recommend each table change to the
@@ -54,6 +54,9 @@ Readout, the agent's choices for the implementer to revisit:
   chooses to.
 - Carry the tallies into [the model check](/quest/m1/model-check.md)'s
   baseline.
+- Publish the arms' cost and quality as
+  [the cost-against-quality charts](/quest/m0/routing-evidence/charts.md) quest describes,
+  and link them with the recommendations.
 
 Baseline from the 2026-11-11 audit, at API list price:
 

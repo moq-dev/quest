@@ -41,8 +41,8 @@ checkpoints and outages to count by hand:
   outages that skipped quests by harness.
 - Move a size to a stronger model or effort where its PRs needed clearly
   more rounds or fixes than the size above, and to a cheaper one where its
-  reviews come back clean. Do the same for the review table from what later
-  reviews and follow-ups found that a review missed. Record the tallies in
+  reviews come back clean. Do the same for the review efforts in `src/cli/models.ts`
+  from what later reviews and follow-ups found that a review missed. Record the tallies in
   the next run's Plan as its baseline.
 - Recommend each change to a list's order, harness, or effort to the
   maintainer with its tally, as a decision in the PR, rather than changing
@@ -119,12 +119,12 @@ checkpoints and outages to count by hand:
   - The review efforts follow the PR's size since
     [moq-dev/quest#493](https://github.com/moq-dev/quest/pull/493) (user,
     2026-11-04): Sol medium, medium, high, xhigh, and xhigh for XS to XL
-    once [the review table](/quest/m0/routing-evidence/review-table.md)
-    lands (user, 2026-11-11). It restores the efforts the
+    (user, 2026-11-11). It restores the efforts the
     [token waste](/quest/m0/token-waste/README.md) audit lowered to low,
-    medium, medium, high, and xhigh on 2026-11-05, and raises XS. Opus low, low,
-    medium, high, and xhigh when Sol wrote the code (agent's choice). They replaced Codex `xhigh` and Claude `high` (maintainer,
-    2026-11-03), for which Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
+    medium, medium, high, and xhigh on 2026-11-05, raising XS, M, and L. Opus
+    low, low, medium, high, and xhigh when Sol wrote the code (agent's choice).
+    They replaced Codex `xhigh` and Claude `high` (maintainer, 2026-11-03), for
+    which Claude Code 2.1.316 ran `claude-opus-5-5` with `--effort high` and
     `/code-review high`, and codex-cli 0.166.0 ran `gpt-6.1-sol` with
     `model_reasoning_effort="xhigh"`, both with `quest review`'s flags.
   - m0 found, with Claude Code 2.1.316 and codex-cli 0.166.0:

@@ -1,7 +1,7 @@
 # Contributing
 
-Use an isolated worktree under `.worktrees/` when practical. Keep each change
-focused on an independently reviewable outcome. Plan durable work in `quest/`.
+Keep each change focused on an independently reviewable outcome. Plan durable
+work in `quest/`.
 
 Use the pinned Nix development shell, shared with CI:
 
@@ -22,31 +22,19 @@ dependencies. `packageManager` in `package.json` names the same Bun for CI
 runners without Nix, and `nix flake check` fails when the two disagree. Without
 Nix, install the tools listed in `flake.nix` and run the same just recipes.
 
-`just test` runs vitest, the shell hook suites, and the built CLI's lifecycle
-check. `just check` includes TypeScript, formatting, workflow,
-shell, and Nix checks in addition to quest validation.
-
 `nix build` builds the package; `nix run -- --help` runs it. `nix flake check`
 builds the Nix package and validates the repository's quest tree.
 
 Use conventional commit subjects. Keep PR descriptions concise: explain the
-problem, resulting behavior, validation, and any limitations. Start PRs as drafts
-and mark them ready after checks pass. Merge only within the user's authorized
-scope and after required repository checks and reviews pass. Never block on a
-CodeRabbit review; it is optional.
-Quest execution stops at PR creation; it merges only on a /quest-merge pick.
-`/quest-run` picks a maintainer's PR that changes no user-facing behavior
-and adds or expands no quests without asking.
+problem, resulting behavior, validation, and any limitations.
 
 On a PR whose author has write access, the PR body's `## Review` record of a
 local `quest review` round satisfies the required review `/quest-merge` describes when it names
 the exact head being landed, with no finding left unfixed or unrefuted; so does
 a recorded skip of a trivial change.
-A hand-resolved conflict outside the exemptions below needs a local review of the new head, but does not
-require a maintainer review specifically. `/quest-merge`'s exemptions for a
-conflict-free base merge, a reviewer's suggested patch applied unchanged, or a land
-fixer's recorded mechanical fix that changes no behavior still apply. Online reviewers' findings already posted are addressed at merge,
-never waited for. Dependabot PRs that only bump patch versions or a lockfile
+`/quest-merge`'s exemptions still apply; a hand-resolved conflict outside them
+needs a local review of the new head, but not a maintainer review specifically.
+Dependabot PRs that only bump patch versions or a lockfile
 need no review.
 
 PRs land on `main` through GitHub's merge queue, one PR at a time, as squash commits.
@@ -57,10 +45,6 @@ The host runs one `quest land watch` daemon per base, here `main`'s; it runs the
 The fixer resolves mechanical causes itself and pushes the fix onto the PR's branch: conflicts that keep both sides' intent, formatting and lint, generated files, lockfiles rebuilt from the base's copy, and build or test failures with an obvious fix, built and tested with registry access.
 It hands back, with a diagnosis on the PR, anything that needs a behavior or design decision; a fix that edits protected paths (`flake.nix`, `.github/`, ...) or that GitHub refuses to push comes back as a ready commit for `quest land apply <pr>`.
 The admin bypass of `main`'s ruleset is for emergencies.
-
-Every AI-authored GitHub post must end with `(written by <model> with <effort>)`,
-naming the running model and its reasoning effort; omit `with <effort>` when the
-harness doesn't report it. This is separate from commit co-author trailers.
 
 The package stays `private`; GitHub releases will ship the `quest` binary.
 

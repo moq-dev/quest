@@ -42,10 +42,10 @@ export const WRITERS: Record<Size, readonly Model[]> = {
  * `SECOND_REVIEWER` reviews the same head beside it.
  */
 export const REVIEWERS: Record<Size, readonly Model[]> = {
-	XS: [sol("low"), opus("low")],
+	XS: [sol("medium"), opus("low")],
 	S: [sol("medium"), opus("low")],
-	M: [sol("medium"), opus("medium")],
-	L: [sol("high"), opus("high")],
+	M: [sol("high"), opus("medium")],
+	L: [sol("xhigh"), opus("high")],
 	XL: [sol("xhigh"), opus("xhigh")],
 };
 
