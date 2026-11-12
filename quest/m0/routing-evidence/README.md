@@ -44,8 +44,8 @@ Readout, the agent's choices for the implementer to revisit:
   compute each arm's variance and the number of PRs each arm needs to
   detect a difference worth acting on. If the arms have not reached it,
   rewrite the `Waiting` item below for the date they will, and stop.
-- For each writer arm, compare first-round findings from the fixed review
-  table, review rounds, hand-backs, later `## Caused by` culprits, and cost
+- For each writer arm, compare first-round findings from the fixed efforts in
+  `src/cli/models.ts`, review rounds, hand-backs, later `## Caused by` culprits, and cost
   per merged PR. For each shadow pair, compare findings the routed reviewer
   raised that the shadow missed, and the reverse, along with fixed and
   refuted findings and cost per PR. Recommend each table change to the
