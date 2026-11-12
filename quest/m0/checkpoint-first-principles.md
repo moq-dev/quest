@@ -9,9 +9,10 @@ just-one-more-change patches. Agents that loop on review findings often
 change course once someone asks whether there is a better alternative; the
 checkpoint should ask that question for them.
 
-When the checkpoint fires stays as `nextStep` in `src/cli/review.ts`
-decides it today, and the agent still hands the choice to the user. Loops outside `quest review`, such as `/quest-iterate` fixing CI
-failures or online reviewers' comments, are out of scope.
+The checkpoint's trigger stays as `nextStep` in `src/cli/review.ts`
+decides it today, and the agent still hands the choice to the user. Loops
+outside `quest review`, such as `/quest-iterate` fixing CI failures or
+online reviewers' comments, are out of scope.
 
 ## Plan
 
