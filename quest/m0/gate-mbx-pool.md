@@ -47,62 +47,58 @@ Decided 2026-11-12 (maintainer, /quest-plan):
   gated. The shared rule in `assets/CONTEXT.md`, which today names
   builds, test suites, model checkers, and browsers as CPU-heavy, gains new
   text saying model calls and long-running servers stay out of the gate.
-- How much does a gated command hold in mbx's pool? ✅ Its learned CPU
-  peak minus what mbx's own compiles and tests inside it take (rejected: a
-  `--cpus N` flag agents guess; a fixed one core, which lets non-cargo work
-  escape the pool again).
+- How much does a gated command hold in mbx's pool? ✅ Its full learned
+  CPU peak, held by running the command inside `mbx reserve`, capped at
+  mbx's pool (rejected: a `--cpus N` flag agents guess; a fixed one core,
+  which lets non-cargo work escape the pool; no reservations, leaving
+  non-cargo work outside the pool; asking jdx/mr-boxington for a lease its
+  own nested compiles can draw from, which waits on upstream). The
+  maintainer first picked the learned peak minus mbx's own share, and
+  changed it at the review checkpoint: mbx switches its scheduling off
+  inside `mbx reserve`, so that share had to be held by a sidecar beside the
+  command, and three review rounds showed a sidecar can deadlock against
+  its own command's later compiles or tests, which may each ask for the
+  whole pool.
 
 How the reservation works, checked against mbx 1.30.0's source: a command
 run inside `mbx reserve` has mbx scheduling switched off for everything it
 starts (`crates/mbx/src/cli/reserve.rs` sets `MBX_SCHED_DISABLE=1`), so
-nested compiles take no permits and the reservation alone covers them.
-Running the command inside `mbx reserve` with only its non-mbx share would
-oversubscribe the pool by the compiles it then runs unscheduled. So the gate
-runs the command outside `mbx reserve`, where mbx keeps scheduling its
-compiles and tests one by one, and holds a sidecar `mbx reserve --cpus <N>`
-on a placeholder that lasts as long as the command, with N its non-mbx
-share. This also avoids holding a whole build's cores through its idle
-phases, the waste the load gate has today.
+nested compiles take no permits and the reservation alone covers them,
+which is how mbx avoids deadlocking a lease against its own work. The cost
+is that a command holds its peak through its idle phases, much as the gate
+already counts a running command at its measured peak
+([moq-dev/quest#607](https://github.com/moq-dev/quest/pull/607)).
 
 Agent's choices, for the implementer to revisit:
 
-- Sidecars must never starve the compiles of the commands they sit
-  beside: a sidecar held for a command's lifetime keeps its permits through
-  the command's later cargo phase, and with the pool full of sidecars those
-  compiles would wait forever. The gate counts the cores its live sidecars
-  hold across the host and keeps their sum at or below half of mbx's pool,
-  so mbx's compiles and tests always have permits. A command whose
-  sidecar does not fit waits in the gate's queue, as today.
 - The gate keeps no per-command history today: it measures a command only
   after admission and drops the entry a minute after it exits. Add a
-  learned peak per command, keyed by its repository and argv, recording
-  its total CPU peak and its mbx share. The gate reads only the scope's
-  total today, so attribute the share by sampling the scope's processes
-  and counting those whose ancestry includes mbx's compiler or test shims
-  (under mbx's `shims/` directory), or from mbx's own per-build
-  accounting if it exposes one. With no history yet, reserve one core and
-  record the run.
-- N is the learned non-mbx share. When it is zero, as for a plain
-  `quest gate cargo build`, the command runs with no sidecar, since
-  `mbx reserve` refuses a request for no resources. Cap N at mbx's pool,
-  `scheduler.cpus` minus `scheduler.reserve_cpus`, so a large non-mbx
-  command never takes the cores mbx withholds for other work.
-- Ordinary sidecars pass `--priority low`, since `mbx reserve` defaults to
-  normal and ignores `scheduler.priority`.
+  learned CPU peak per command, keyed by its repository and argv, from the
+  scope measurement the gate already takes. With no history yet, reserve
+  the whole pool, since a first cargo build inside the lease runs
+  unscheduled and could otherwise fill the host.
+- N is the learned peak, at least one core and at most mbx's pool,
+  `scheduler.cpus` minus `scheduler.reserve_cpus`, so a command never takes
+  the cores mbx withholds for other work. Since nothing inside the lease is
+  scheduled, also bound the command's own parallelism to N, for example
+  `CARGO_BUILD_JOBS` and nextest's thread count, so it cannot outgrow it.
+- Ordinary reservations pass `--priority low`, since `mbx reserve`
+  defaults to normal and ignores `scheduler.priority`.
 - Detect mbx from the command's working directory, so a workspace
   `.mbx.toml` that disables the scheduler counts. If mbx offers no way to
   read the effective workspace setting, ask jdx/mr-boxington for one, and
   until then treat a workspace that sets `scheduler.enabled = false` as
   having no mbx. Decide this once at the gate's start, never by retrying
   after `mbx reserve` fails.
-- `QUEST_GATE_PRIORITY=1` keeps starting at once, as today. It takes no
-  sidecar, and its compiles run at mbx's normal priority, for example
-  through `MBX_SCHEDULER_PRIORITY`, so they jump ahead of agents'
-  low-priority builds.
-- `--quick` keeps its 60-second bound: if the sidecar is not granted by
-  then, the command starts without one.
+- `QUEST_GATE_PRIORITY=1` keeps starting at once, as today. It runs
+  outside `mbx reserve`, so mbx schedules its compiles one by one, at mbx's
+  normal priority, for example through `MBX_SCHEDULER_PRIORITY`, so they
+  jump ahead of agents' low-priority builds.
+- `--quick` keeps its 60-second bound: if the reservation is not granted
+  by then, the command starts outside it, where mbx still schedules its
+  compiles.
 - The gate's memory budget stays as it is. mbx reserves only the
-  resources it is asked for, and the sidecar asks for CPU only.
+  resources it is asked for, and the gate asks for CPU only.
 - Keep the gate's scope ownership, cancellation, and descendant cleanup;
   only admission changes.
 - Measure it on cargo-heavy work, since quest's own `just check` runs no
