@@ -100,16 +100,16 @@ End every quest skill with a final summary in sections, such as the PRs and thei
 ## Creation
 
 Quests are created in PRs and reviewed.
-Search the tree and git history first before making a new quest.
+Search the tree and git history before making a new quest.
 
 Split independently completable work into separate quests.
 Group related quests in an epic; its README holds the work no child owns.
 
-Work found along the way that is worth a quest is a follow-up: add it to the PR that found it, as a new quest placed and sized by the rules here and the repository's, or as an edit to the quest that already owns the work; never as an agent-session task or a GitHub issue.
+Work found along the way that is worth a quest is a follow-up: add it to the PR that found it, as a new quest placed and sized by these rules and the repository's, or an edit to the quest that owns the work; never as an agent-session task or a GitHub issue.
 Drop one you would call optional or worth doing only if it matters.
 Answer each of its decisions you can with your recommendation in its Plan, and list each you cannot as a `Maintainer:` decision item under its `Waiting`.
 The PR body's `## Follow-ups` section links each one with its open decisions, which neither keep the PR a draft nor stop its pick.
-A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks about each follow-up in questions of its own, apart from the pick and other follow-ups, in the Questions form: whether to keep it, and one question per open decision.
+A PR that adds follow-ups lands only on the user's pick: the round that picks it to merge, in any client, also asks about each follow-up in questions of its own, apart from the pick and each other, in the Questions form: whether to keep it, and one per open decision.
 Before it lands, record each answer in its quest's Plan, removing that `Waiting` item, and remove each dropped follow-up, with `quest rm` for a new quest.
 A follow-up for work another repository's quest tree owns stays in `## Follow-ups` for `/quest-plan` there.
 
@@ -119,36 +119,35 @@ So is anything waiting on an outside party or a human action (an upstream fix, a
 Its `Waiting` section names who acts, the condition, and how to check or advance it; it is deleted once the condition clears.
 Automate a step rather than leave it to a person whenever an agent can take it.
 A `Maintainer:` item says why an agent cannot take the step and what automation was considered.
-Record a wait there, not in a draft PR that only holds evidence or steps for a person.
-Unlike a blocked quest it stays ready, so it resurfaces every time ready work is triaged instead of stalling in the backlog.
-`quest waiting` lists every waiting item, the maintainer's first, ranked by what each unblocks, and `/quest-unblock` walks the maintainer through them.
+Record a wait there, not in a draft PR holding only evidence or steps for a person.
+Unlike a blocked quest it stays ready, so it resurfaces whenever ready work is triaged instead of stalling in the backlog.
+`quest waiting` lists every waiting item, the maintainer's first, ranked by what each unblocks, and `/quest-complete` walks the maintainer through them.
 
 ## Execution
 
 Start only ready quests.
-First question whether the quest is still needed: its problem may no longer be real, or a later change may have made its plan the wrong solution.
+First question whether the quest is still needed: its problem may no longer be real, or a later change may have made its plan wrong.
 If so, stop and propose rewriting or deleting it.
-Before claiming, also check that no open PR already does its work: search open PRs whose title, body, or changed files name the quest's path or the files its Plan names, or read the matches a coordinator's brief lists.
+Before claiming, check that no open PR already does its work: search open PRs whose title, body, or changed files name the quest's path or its Plan's files, or read the matches a coordinator's brief lists.
 Stop and report a PR that makes the same change; one that only touches the same files is no overlap.
 `quest unblocked` ranks the ready quests, and `quest unblocked <path>` prints what blocks one.
 With `--unclaimed`, it skips quests someone holds and lists them on stderr.
 
-Work is taken when it has an open change on the forge. Check open changes
-before starting. These states stay out of the quest file.
+Work is taken when it has an open change on the forge, so check before starting;
+these states stay out of the quest file.
 
 On GitHub, a quest is claimed by an open PR whose head branch is the quest's
 branch, from the upstream repository or a fork, or by that branch upstream
 while its PR is being opened.
 The earliest open PR holds the claim.
 Claim a quest with `quest start <quest>`: it checks both, pushes an empty
-claim commit to the quest's branch, and opens a draft PR from it right away.
-That PR becomes the quest's PR.
+claim commit to the quest's branch, and opens a draft PR from it right away, which becomes the quest's PR.
 In a fork's clone, it pushes to the fork and opens the PR upstream; a fork
 whose parent keeps no quests is its own upstream.
 It exits 3 when the quest is blocked or someone else holds it; pick other work.
 `quest start --release <quest>` gives back a claim before any work is pushed.
 If a claim looks stale, such as a draft without `## Waiting` or a
-branch with no open PR that has been quiet a long time, offer the user to take
+branch with no open PR quiet a long time, offer the user to take
 it over, saying how long ago it was last active.
 
 A quest's branch is its path without `.md`.
@@ -160,14 +159,14 @@ Never rename an open PR's head branch either: GitHub closes the PR.
 Its warning that the quest's local branch already exists is not that refusal: the claim succeeded, and the branch holds an earlier attempt.
 Switch to it, merge the claim commit the warning names, and resume that attempt; stop and report only if another worktree has the branch checked out.
 
-Push the quest branch as `quest context` describes for pull requests. The claim push from `quest start`, made before its draft PR exists, is exempt from confirming the PR is open.
+Push the quest branch as `quest context` describes for pull requests. The claim push from `quest start`, made before its PR exists, is exempt from confirming it is open.
 
-Prefer the exhaustive solution: a quest's PR handles every case of its problem, including those its reviews find, rather than landing part of it and splitting the rest into new quests.
+Prefer the exhaustive solution: a quest's PR handles every case of its problem, including those its reviews find, instead of splitting the rest into new quests.
 Leave work for later only when it waits on an outside condition or a maintainer decision, or lies outside the quest's Goal.
 
 A quest's PR leaves its quest accurate when it merges.
 The PR that finishes a quest deletes its file and every link to it.
-A PR that leaves work rewrites the quest to what remains, rather than noting it only in the PR body.
+A PR that leaves work rewrites the quest to what remains, not just the PR body.
 `quest check --base <ref>` flags a quest branch whose diff does neither.
 
 When a quest is complete, review it locally and mark its PR ready for review with `/quest-review`, even if you made choices without asking; list those choices in the PR body for review.
@@ -188,16 +187,16 @@ Remove the `quest` label from issues no other quest tracks.
 ## Coordination
 
 Relay no interim report: resume a sub-agent that ended its turn on one, telling it to block until its work finishes.
-A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
+A long-running coordinator lets compaction bound its context: what must outlast it lives in the forge and the quest tree, and a PR's state is read afresh before acting, not trusted from earlier turns.
 
 Start each sub-agent in the background with its own isolated worktree, since agents cannot write to a worktree their parent created.
 It reports only when done or blocked, and never waits on GitHub CI, reviews, or merges; stay silent on its interim notifications.
 As each reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
-Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in the brief of each agent started after, and report it once.
+Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in each later agent's brief, and report it once.
 
-A report that is an API error, such as a rate limit or an overload, or a cancellation the user did not ask for, is not a result.
+A report that is an API error such as a rate limit or overload, or a cancellation the user did not ask for, is not a result.
 Resume that agent by messaging it, or with `quest agent resume` for a headless one, so it keeps its context and checkout.
-If it cannot be resumed, start a new one with the same brief plus its PR, its checkout, and the token of any hold it took, which `quest status <pr>` shows, so it continues that work and keeps the hold.
+If it cannot be resumed, start a new one with the same brief plus its PR, checkout, and the token of any hold it took (shown by `quest status <pr>`), so it continues and keeps the hold.
 While the error persists, such as a rate limit before its reset, resume and start nothing until it clears, and report it once.
 
 Answer these requests at any point, without stopping running agents:
@@ -206,7 +205,7 @@ Answer these requests at any point, without stopping running agents:
 - "pause": start nothing new until the user says to resume; reports are handled as usual.
 - "status": a compact list of each agent with its quest or PR, state, and how long ago it started or last reported.
 
-Once every sub-agent has finished, remove each agent checkout `quest worktree status` lists with `quest worktree remove`, since Claude never removes a subagent's checkout; it refuses one holding unpreserved work.
+Once every sub-agent has finished, remove each agent checkout `quest worktree status` lists with `quest worktree remove`, since Claude never removes a subagent's checkout; it refuses one with unpreserved work.
 Remove other local worktrees and branches whose tip is the head of a merged PR; squash merges leave that tip off the base branch.
 Leave the worktree you are running in and any holding uncommitted work or refused removal; list those in your summary.
 
@@ -214,24 +213,24 @@ Run each agent at an entry of `quest`'s ranked lists unless the repository's `AG
 Size each `/quest-iterate` you dispatch as a quest, by the work left on its PR, and name that size in its brief.
 Start it on the PR's writer, the model of its first `Implementer:` line, at the entry `quest models <size> --writer <model>` prints, waiting out its usage limit so the other model can review; a PR whose writer no list names, such as `unknown` or a retired model, takes its size's first entry that can run.
 
-`quest agent start --harness <claude|codex> --model <model> --effort <level> --permission-mode <mode> <worktree> <prompt>` runs a headless agent on that CLI's own login; start it as a background command in its own isolated worktree, so the harness reports its exit as it would a sub-agent's.
+`quest agent start --harness <claude|codex> --model <model> --effort <level> --permission-mode <mode> <worktree> <prompt>` runs a headless agent on that CLI's own login; start it as a background command in its own isolated worktree, so the harness reports its exit like a sub-agent's.
 `--permission-mode` is Claude Code's permission mode, or Codex's sandbox mode.
 It prints the session id, then the outcome and the agent's final reply, and exits 3 at the account's usage limit, or 4 when the CLI is logged out, printing the login command.
-Tell the agent that it cannot prompt, so it ends with its decisions and recommendations in its final reply, and that ending its turn kills its background commands, so it waits in the foreground.
-Answer it in the background with `quest agent resume`, passing the same options, the worktree, the session id, and the answer.
+Tell the agent it cannot prompt, so it ends with its decisions and recommendations in its final reply, and that ending its turn kills its background commands, so it waits in the foreground.
+Answer it in the background with `quest agent resume`, passing the same options, worktree, session id, and the answer.
 Stop one with `quest agent stop <worktree>`, and each you started that still runs before you finish; `--all` would stop other sessions' agents too.
 
 ## Questions
 
 Open each prompt with the context to answer it without opening the quest or PR: what the work is, the problem it hit, and what each option would change.
-Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed the work.
+Name and explain anything the agent or its PR introduced, such as a new term, file, check, or credential, since the user may not have followed it.
 Then give your recommendation and ask synchronously with a blocking interactive question tool when available and allowed in the current mode.
 Recommend in every prompt, a multiple-choice list included: mark each option you recommend and give a one-line reason for each you would leave out.
 An answer such as "whatever you recommend" picks your recommendations; act on them without asking again.
 Do not use asynchronous question tools.
 
 If no blocking tool is available, or it returns without an answer, put the question and numbered choices in your final reply and end the turn.
-Resume when the user answers; do not bury the question in a progress update or replace the wait with sleeps or timed polls.
+Resume when the user answers; do not bury the question in a progress update or wait with sleeps or timed polls.
 Silence, elapsed time, and a preselected recommendation are not answers or approval.
 Do not advance the interview or act on an unanswered choice.
 Already authorized background work may continue while the foreground waits.

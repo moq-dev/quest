@@ -17,7 +17,7 @@ A brief gives the task, its reason and context, such as the quest or PR and the 
 Starting quests asks the user nothing: each agent works headless, and its decisions surface in its PR.
 
 `quest unblocked --unclaimed --json` ranks the unclaimed ready quests, reading the upstream tree afresh; start them in that order, as many at once as the harness allows.
-It lists each skipped claim on stderr with how long ago it was last active; name any that look stale in the summary, for the user to take over.
+It lists each skipped claim on stderr, with how long ago it was last active when it has an open PR; name any that look stale in the summary, for the user to take over.
 
 Start every quest you would recommend: well planned, with no blockers, and no conflict with work already started. For one waiting on an outside condition, first check whether it has cleared.
 Skip the rest, such as one you doubt is worth doing at all or now, and list each in the summary with why and your recommendation between `/quest-plan`, which redesigns it or moves it down, and `/quest-delete`.
@@ -34,7 +34,7 @@ Skip a quest whose list runs out, and report each harness's outage once.
 ## Pull requests
 
 Read each open PR, drafts included, with `quest status`, and skip one another session holds by its `hold` or `starter-hold` record, offering to take over only one that looks stale.
-List a draft whose `## Waiting` holds no decision for the user, only outside conditions or actions, once in the summary, pointing to `/quest-unblock`.
+List a draft whose `## Waiting` holds no decision for the user, only outside conditions or actions, once in the summary, pointing to `/quest-complete`.
 Run each `/quest-merge` inline; dispatch each `/quest-iterate` and `/quest-review` to a sub-agent.
 
 Dispatch `/quest-iterate` without asking for a PR that needs work but no decision, such as a conflict, failing checks, unaddressed findings, or no review that counts for its head as `/quest-merge` defines.
