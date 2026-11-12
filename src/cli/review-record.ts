@@ -50,13 +50,15 @@ const counted = (tally: Tally): Counts => ({
 });
 
 /**
- * The `## Review` section's text for a run's `rounds` of the same head, without its heading, with every tally
+ * The `## Review` section's text for a run's `rounds` of the same head (or a settlement's), without its heading, with every tally
  * on the branch: each round's reviewer's beside its round, and a reviewer the run left out on its own.
  */
 export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
-	const [shared] = rounds;
+	// A settlement's head is the settled rounds', beside clean rounds of the head they reviewed.
+	const settled = rounds.find((round) => round.settled);
+	const shared = settled ?? rounds[0];
 	const clean = rounds.every((round) => round.findings.length === 0);
-	const author = rounds.find((round) => round.settled)?.earlier;
+	const author = settled?.earlier;
 	const lines = [
 		MARK,
 		"",

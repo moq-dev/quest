@@ -1764,28 +1764,29 @@ export async function settleLow(
 		if (own.length > 0) {
 			const tally = tallies.find((each) => each.reviewer === session.reviewer)!;
 			for (const finding of own) tally[finding.disposition]++;
+			// Saved at the settlement head, so a later round on a head without it reviews the whole change again.
 			const settled: Round = {
 				...session.last,
+				head,
 				findings: [],
 				earlier: { head: reviewed, findings: own },
 				settled: true,
 			};
-			rounds.push({ ...settled, head, usage: [] });
+			rounds.push({ ...settled, usage: [] });
 			return {
 				...session,
 				rounds: [...session.rounds.slice(0, -1), { ...session.rounds.at(-1)!, findings: [] }],
 				last: settled,
 			};
 		}
-		// A reviewer of the same run found nothing; it stands beside the settled ones in the record, without
-		// the findings an earlier settlement of its own showed.
+		// A reviewer of the same run found nothing; it stands beside the settled ones in the record, at the head
+		// it reviewed, without the findings an earlier settlement of its own showed.
 		if (session.rounds.at(-1)!.head === reviewed) {
 			const { last: clean } = session;
 			rounds.push({
 				...clean,
-				head,
+				head: reviewed,
 				usage: [],
-				// It reviewed the settled head, not this one.
 				unchanged: false,
 				settled: false,
 				earlier: clean.settled ? null : clean.earlier,
@@ -1922,17 +1923,13 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 		last.effort === picked.effort &&
 		last.base.ref === shared.base.ref &&
 		(!reviewer.bound || stored!.root === root) &&
-		covers(root, previous.mergeBase, change.mergeBase);
+		covers(root, previous.mergeBase, change.mergeBase) &&
+		// A settlement cleared the findings the last round raised, which only a head containing its fix answers.
+		(!last.settled || covers(root, last.head, change.head));
 
 	// The last round already passed this head, and has nothing left to settle; it repeats against the run's base
-	// and size. A settled round cleared findings it raised at that head, so a head back at it is reviewed again.
-	if (
-		resume &&
-		!last!.settled &&
-		previous!.head === change.head &&
-		previous!.mergeBase === change.mergeBase &&
-		earlier.length === 0
-	) {
+	// and size.
+	if (resume && previous!.head === change.head && previous!.mergeBase === change.mergeBase && earlier.length === 0) {
 		const { size, from: sizeFrom } = shared.sized;
 		return { round: { ...last!, base: shared.base, size, sizeFrom, usage: [], unchanged: true }, session: stored! };
 	}
@@ -2046,7 +2043,8 @@ export function nextStep(rounds: Round[]): string {
  * line, and its findings, numbered across the reviewers in order, each with its body indented.
  */
 export function roundLines(rounds: Round[]): string[] {
-	const [shared] = rounds;
+	// A settlement's head is the settled rounds', beside clean rounds of the head they reviewed.
+	const shared = rounds.find((round) => round.settled) ?? rounds[0];
 	const lines = [
 		`size ${shared!.size} ${shared!.sizeFrom}`,
 		`base ${shared!.base.sha} ${shared!.base.ref}`,

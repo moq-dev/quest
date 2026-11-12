@@ -2195,10 +2195,13 @@ fakes("--settle records low findings' dispositions without running a reviewer", 
 		// Nothing is left to settle, and the next round checks the fix with no responses, counting the finding once.
 		expect((await quest("--root", s.repo, "review", "--settle", "--responses", responses)).code).toBe(2);
 		vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
-		// A head back at the reviewed one is reviewed again, since the settlement cleared the findings raised there.
+		// A head without the settled one starts a new session that reviews the whole change, since the settlement
+		// cleared the findings raised there; the clean reviewer's round of that head stands.
 		git(s.repo, "checkout", "-q", "--detach", reviewed);
+		const before = s.calls().length;
 		const back = await quest("--root", s.repo, "review", "--branch", "feature", "--json");
 		expect(back.code, back.stderr).toBe(0);
+		expect(s.calls()[before]!.argv.slice(0, 2)).not.toEqual(["exec", "resume"]);
 		expect(JSON.parse(back.stdout).rounds.map((r: { unchanged: boolean }) => r.unchanged)).toEqual([false, true]);
 		git(s.repo, "checkout", "-q", "-");
 		const next = await quest("--root", s.repo, "review", "--json");
