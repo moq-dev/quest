@@ -1416,7 +1416,9 @@ reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. Each reviewer's session is kept per branch in the clone's
 common Git directory, so any worktree of the clone resumes it, except opencode's,
 which stays in the checkout it started in, so another worktree starts a new one;
-`--new` starts over. `--branch` names the branch instead of the checked-out one, which a
+`--new` starts new sessions, but continues each reviewer's tally of its findings
+on the branch, less those it drops unsettled, unless the saved state is one
+this quest cannot read. `--branch` names the branch instead of the checked-out one, which a
 detached `HEAD` requires, such as a checkout of a branch another worktree
 holds, so its rounds continue that branch's session.
 
@@ -1463,15 +1465,22 @@ finding count, then each finding as its number, severity, `path:line`, and title
 indented body, then `earlier` with the last round's head and its findings, each
 as its number, disposition, severity, `path:line`, and title over its reason; last
 come a `record` line and a `next` line. `--json` prints one object with
-`rounds`, one per reviewer, `record`, and `next`.
+`rounds`, one per reviewer, `tallies`, every reviewer's findings across the
+branch's rounds, `record`, and `next`.
 
 After each round, `quest review` rewrites the `## Review` section of the open PR
 from the branch into the base, found among the upstream's PRs from the
 repository the base's remote pushes to, and prints `record <url>`. The record
 names the reviewed head and the base's short SHA, then for each reviewer its
-harness, model, and effort, the session and round, the score and rationale,
-each finding with its location, and the last round's findings with their
-dispositions. `quest status` takes the last full SHA the section names as the
+harness, model, and effort, the session and round, the score and rationale, its tally, each finding with
+its location, and the last round's findings with their dispositions. The
+tally, as `- Rounds: 3; findings 4 (high 1, medium 3): fixed 3, refuted 1, open 0`,
+counts the reviewer's rounds on the branch and each finding it raised once,
+by its latest severity, however many rounds keep it open. A finding counts
+for the reviewer that raised it when a new size pick's reviewer fixes or
+refutes it, but one that reviewer keeps open becomes its own, since its round
+reports it again. `--new` drops the findings it leaves unsettled from the
+tallies. A reviewer the run left out keeps a block with only its tally. `quest status` takes the last full SHA the section names as the
 reviewed head, so the head appears in full only once no reviewer reports a
 finding, and model text
 appears as inline code, which mentions or links nothing and never holds a full
@@ -1509,7 +1518,7 @@ moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) esti
 
 #569 S merged: quest: finish model routing (quest/m0/model-routing/README)
   implementer: Claude Code, claude-opus-5-5, unknown effort
-  review: Codex, gpt-6.1-sol, medium effort; round 1, score 10/10, 0 open, last round 0 fixed and 0 refuted
+  review: Codex, gpt-6.1-sol, medium effort; round 1, score 10/10; rounds 1, findings 0: fixed 0, refuted 0, open 0
   online review: review (OpenAI), not at the final head; 0 findings: 0 accepted, 0 declined, 0 unclassified, 0 unanswered
   land fixes: codex, gpt-6.1-sol, medium effort
   sessions:
@@ -1529,9 +1538,11 @@ remotes, or, once the checkout is deleted, a Codex log for that exact directory
 names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
 it or Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. An opencode session, whose log quest does not read, is
-the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer's latest `quest review` round's
-reviewer, round, score, open findings, and the last round's findings fixed or
-refuted; the land fixer's fixes; the later PRs that list it under
+the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
+`quest review` record names, with its latest round and score and its tally of
+findings across every round, where a merged PR whose last round left only low
+findings open counts them settled, since `/quest-review` fixes or refutes those
+before merge without another round; the land fixer's fixes; the later PRs that list it under
 `## Caused by`; and each online reviewer's record, read from GitHub.
 
 An online reviewer is any bot account whose review has a body or opens a
@@ -1551,7 +1562,11 @@ a bot resolving its own thread or a later review leaving it out, and as
 unanswered otherwise.
 
 Rollups follow: spend by size, role, harness, model, and effort; accuracy
-by size and implementer, where an `Implementer:` line's own size, as
+by size and implementer, which sums the tallies, so it counts every finding
+caught before merge. Since a branch's tallies span every PR from it, only the
+PR whose record holds its latest tally, by the most rounds and then the newest,
+counts them, and a record written before tallies
+counts as unreviewed. An `Implementer:` line's own size, as
 `(iterate, XS)`, counts over the PR's; and, over the merged PRs, each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. Sessions on no PR here, from any

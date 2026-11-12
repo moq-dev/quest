@@ -30,8 +30,7 @@ Decided 2026-11-11 (user, /quest-plan, from an audit of PRs merged
 - Experiments? ✅ Shadow reviews and a writer A/B (rejected: shadow reviews
   only; none).
 - Records?
-  - ✅ [Cumulative review tallies](/quest/m0/routing-evidence/review-tallies.md)
-    and online reviewers in usage
+  - ✅ Cumulative review tallies and online reviewers in usage
   - ✅ [Attribution through token-max](/quest/m0/routing-evidence/usage-token-max.md),
     kept after the maintainer first left it out, because the writer A/B
     compares cost and `quest usage` crashes on this host

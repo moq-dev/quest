@@ -13,7 +13,8 @@ import { fixes } from "./land-fixer";
 import { MERGER } from "./land-watch-fix";
 import { type GitHub, type ObjectValue, type Repository, githubRepository, link, requireRemote } from "./github";
 import { type OnlineReview, readOnlineReviews } from "./online-review";
-import { type ReviewSummary, parseReview } from "./review-record";
+import { type Counts, type ReviewSummary, findingsText, parseReview } from "./review-record";
+import { SEVERITIES } from "./review";
 
 /** A session's tokens, and their cost at the model's API list price, which subscriptions do not bill. */
 export interface Tokens {
@@ -61,6 +62,8 @@ export interface PullRow {
 	url: string;
 	title: string;
 	branch: string;
+	/** The head repository, lowercased as `owner/repo`, or null once a fork's is deleted. */
+	repository: string | null;
 	state: "open" | "closed" | "merged";
 	draft: boolean;
 	/** Its body has a `## Waiting` section, so it was handed back to the maintainer. */
@@ -69,7 +72,7 @@ export interface PullRow {
 	implementers: { harness: string; model: string; effort: string; size: Size | null }[];
 	/** The `Implementer:` items it cannot read, which count toward no implementer. */
 	unread: string[];
-	/** Each reviewer's latest round, as the PR's `## Review` record names them. */
+	/** Each reviewer the PR's `## Review` record names, with its latest round and its tally. */
 	review: ReviewSummary[];
 	/** Who made each mechanical fix the land fixer recorded, or `quest land watch` for a base merge it made alone. */
 	landFixes: string[];
@@ -98,16 +101,13 @@ export interface AccuracyRow {
 	pulls: number;
 	merged: number;
 	handedBack: number;
+	/** PRs whose record tallies their reviews; a record written before tallies counts for none of what follows. */
 	reviewed: number;
-	/** The reviewers' latest rounds on these PRs that have a score, and the scores' sum. */
+	/** The reviewers' latest rounds on the reviewed PRs that have a score, and the scores' sum. */
 	scored: number;
 	score: number;
-	/** The sum of each reviewed PR's longest session's rounds. */
-	rounds: number;
-	/** Sums over every reviewer's latest round. */
-	findings: number;
-	fixed: number;
-	refuted: number;
+	/** Every reviewer's findings across every round on the reviewed PRs, and as `rounds`, each PR's most rounds. */
+	tally: Counts;
 	/** The land fixer's model-run fixes, leaving out the watcher's own base merges. */
 	landFixes: number;
 	/** Later PRs naming these PRs under `## Caused by`. */
@@ -409,6 +409,24 @@ function causes(body: string, repository: Repository): number[] {
 const sized = (value: string | null | undefined): Size | null =>
 	(SIZES as readonly string[]).includes(value ?? "") ? (value as Size) : null;
 
+/**
+ * A merged PR's reviews with its last round's open findings settled when all of them are low, since the review
+ * rule fixes or refutes those before merge without another round; nothing records which, so they count as settled.
+ */
+function settledOnMerge(reviews: ReviewSummary[], merged: boolean): ReviewSummary[] {
+	const settles =
+		merged &&
+		reviews.every(
+			({ tally, open }) => open.high === 0 && open.medium === 0 && (tally === null || tally.open === open.low),
+		);
+	if (!settles) return reviews;
+	return reviews.map((review) =>
+		review.tally === null
+			? review
+			: { ...review, tally: { ...review.tally, settled: review.tally.settled + review.tally.open, open: 0 } },
+	);
+}
+
 /** Each PR's record, without its sessions yet. */
 function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 	const fixedBy = new Map<number, number[]>();
@@ -422,6 +440,7 @@ function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 			url: each.url,
 			title: each.title,
 			branch: each.branch,
+			repository: each.repository,
 			state: each.state,
 			draft: each.draft,
 			handedBack: each.draft && handedBack(each.body),
@@ -430,7 +449,7 @@ function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 				fields ? [{ ...fields, size: sized(fields.size) }] : [],
 			),
 			unread: own.implementers.filter(({ fields }) => fields === null).map(({ item }) => item),
-			review: parseReview(each.body),
+			review: settledOnMerge(parseReview(each.body), each.state === "merged"),
 			landFixes: fixes(each.body),
 			fixedBy: (fixedBy.get(each.number) ?? []).sort((a, b) => a - b),
 			online: [],
@@ -588,6 +607,23 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 
 function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	const rows = new Map<string, AccuracyRow>();
+	// A branch's saved tallies span every PR from it, so only one PR that has both a tally and an implementer
+	// to count it for counts them: the one whose record holds the latest tally, as the most rounds show, since
+	// each round rewrites only its own PR's record; the newest breaks a tie. A deleted fork has no repository,
+	// so its PR stands alone.
+	const branch = (each: PullRow) => JSON.stringify([each.repository ?? each.number, each.branch]);
+	const rounds = (each: PullRow) => each.review.reduce((sum, review) => sum + (review.tally?.rounds ?? 0), 0);
+	const latest = new Map<string, PullRow>();
+	for (const each of pulls) {
+		if (each.implementers.length === 0 || each.review.every((review) => review.tally === null)) continue;
+		const other = latest.get(branch(each));
+		if (
+			other === undefined ||
+			rounds(each) > rounds(other) ||
+			(rounds(each) === rounds(other) && each.number > other.number)
+		)
+			latest.set(branch(each), each);
+	}
 	for (const each of pulls) {
 		// A session that pushed twice is one implementer of the PR, whether or not each line names its size.
 		const distinct = new Map(
@@ -612,10 +648,14 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 					reviewed: 0,
 					scored: 0,
 					score: 0,
-					rounds: 0,
-					findings: 0,
-					fixed: 0,
-					refuted: 0,
+					tally: {
+						rounds: 0,
+						findings: { high: 0, medium: 0, low: 0 },
+						fixed: 0,
+						refuted: 0,
+						settled: 0,
+						open: 0,
+					},
 					landFixes: 0,
 					fixes: 0,
 				};
@@ -626,18 +666,22 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			if (each.handedBack) row.handedBack++;
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
-			if (each.review.length > 0) {
+			const tallied =
+				latest.get(branch(each)) === each ? each.review.filter((review) => review.tally !== null) : [];
+			if (tallied.length > 0) {
 				row.reviewed++;
-				row.rounds += Math.max(...each.review.map((review) => review.round));
+				row.tally.rounds += Math.max(...tallied.map((review) => review.tally!.rounds));
 			}
-			for (const review of each.review) {
-				if (review.score !== null) {
+			for (const { score, tally } of tallied) {
+				if (score !== null) {
 					row.scored++;
-					row.score += review.score;
+					row.score += score;
 				}
-				row.findings += review.findings;
-				row.fixed += review.fixed;
-				row.refuted += review.refuted;
+				for (const severity of SEVERITIES) row.tally.findings[severity] += tally!.findings[severity];
+				row.tally.fixed += tally!.fixed;
+				row.tally.refuted += tally!.refuted;
+				row.tally.settled += tally!.settled;
+				row.tally.open += tally!.open;
 			}
 		}
 	}
@@ -718,7 +762,8 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		const reviewers = new Map<string, { number: number; effort: string }>();
 		for (const row of [...allRows].sort((a, b) => a.number - b.number))
 			for (const review of row.review)
-				reviewers.set(review.session, { number: row.number, effort: review.effort });
+				if (review.session !== null)
+					reviewers.set(review.session, { number: row.number, effort: review.effort });
 		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };
@@ -782,7 +827,7 @@ export function usageLines(report: Usage): string[] {
 		for (const item of row.unread) lines.push(`  unread: ${item}`);
 		for (const r of row.review)
 			lines.push(
-				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; round ${r.round}, score ${r.score ?? "-"}/10, ${r.findings} open, last round ${r.fixed} fixed and ${r.refuted} refuted`,
+				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; ${r.round === null ? "not in the latest run" : `round ${r.round}, score ${r.score ?? "-"}/10`}; ${r.tally === null ? "no tally" : `rounds ${r.tally.rounds}, ${findingsText(r.tally)}`}`,
 			);
 		for (const o of row.online)
 			lines.push(`  online review: ${o.reviewer}, ${o.finalHead ? "" : "not "}at the final head; ${answers(o)}`);
@@ -821,7 +866,7 @@ export function usageLines(report: Usage): string[] {
 					a.harness,
 					a.model,
 					a.effort,
-					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: score ${mean(a.score, a.scored)}, rounds ${mean(a.rounds, a.reviewed)}, ${a.findings} open, ${a.fixed} fixed, ${a.refuted} refuted; ${a.landFixes} land fixes, ${a.fixes} later fixes`,
+					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: score ${mean(a.score, a.scored)}, rounds ${mean(a.tally.rounds, a.reviewed)}, ${findingsText(a.tally)}; ${a.landFixes} land fixes, ${a.fixes} later fixes`,
 				]),
 			),
 		);
