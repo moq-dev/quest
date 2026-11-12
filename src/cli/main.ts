@@ -1216,7 +1216,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
-				"--settle runs no reviewer: against the base the last round used, it settles that round's findings, which must all be low severity, from " +
+				"--settle runs no reviewer: against the base the last round used and on a head that contains the one it reviewed, it settles that round's findings, which must all be low severity, from " +
 				"--responses, one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding by its number, adding " +
 				"them to each reviewer's tally and dropping them from its session, so its next round checks what changed " +
 				"since their head with nothing to settle. It prints and records the last run's rounds at the committed " +
@@ -1338,8 +1338,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 							print(nextStep(rounds));
 						}
 						if (failure === undefined) {
-							result.save?.();
-							return 0;
+							try {
+								result.save?.();
+								return 0;
+							} catch (error) {
+								warn(
+									`the settlement is recorded in the PR body, but saving it failed: ${error instanceof Error ? error.message : String(error)}`,
+								);
+								return 1;
+							}
 						}
 						warn(
 							`${options.settle ? "the settlement is not saved, since" : "the round finished, but"} recording it in the PR body failed: ${failure instanceof Error ? failure.message : String(failure)}`,

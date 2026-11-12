@@ -2141,6 +2141,21 @@ fakes("--settle records low findings' dispositions without running a reviewer", 
 		);
 		expect(elsewhere.code).toBe(2);
 		expect(elsewhere.stderr).toContain("pass --base origin/main");
+		// Nor is a session whose reviewed head this checkout does not contain, as another branch's under the same key.
+		git(s.repo, "checkout", "-q", "-b", "other", "origin/main");
+		const other = await quest(
+			"--root",
+			s.repo,
+			"review",
+			"--settle",
+			"--branch",
+			"feature",
+			"--responses",
+			responses,
+		);
+		expect(other.code).toBe(2);
+		expect(other.stderr).toContain(`HEAD does not contain ${reviewed}`);
+		git(s.repo, "checkout", "-q", "-");
 		// A record GitHub refuses saves nothing, so the settlement can be retried.
 		const fetch = globalThis.fetch;
 		vi.stubGlobal("fetch", async (input: URL, init?: RequestInit) =>

@@ -1713,7 +1713,10 @@ export async function settleLow(
 	const open = (saved?.sessions ?? []).flatMap((session) =>
 		session.rounds.at(-1)!.findings.map((finding) => ({ session, finding })),
 	);
-	if (open.length === 0) throw new ReviewInputError("the branch's last round left no findings to settle");
+	if (open.length === 0)
+		throw new ReviewInputError(
+			`the last round on ${branch} left no findings to settle; pass the --base and --branch that round used`,
+		);
 	if (open.some(({ finding }) => finding.severity !== "low"))
 		throw new ReviewInputError(
 			"--settle settles only findings that are all low severity; run the next round with --responses",
@@ -1724,6 +1727,12 @@ export async function settleLow(
 	// The base keys the session, so a different one may have found another branch's.
 	const last = open[0]!.session.last.base.ref;
 	if (last !== baseRef) throw new ReviewInputError(`the last round reviewed against ${last}; pass --base ${last}`);
+	const head = git(root, ["rev-parse", "HEAD"]);
+	try {
+		git(root, ["merge-base", "--is-ancestor", reviewed, head]);
+	} catch {
+		throw new ReviewInputError(`HEAD does not contain ${reviewed}, which the last round on ${branch} reviewed`);
+	}
 	if (options.responses === undefined)
 		throw new ResponsesError(
 			"--settle needs --responses, one `<n>. fixed: <reason>` or `<n>. refuted: <reason>` line per finding",
@@ -1746,7 +1755,6 @@ export async function settleLow(
 	if (answers.size !== open.length)
 		throw new ResponsesError(`--settle settles each of the last round's ${open.length} finding(s) once`);
 
-	const head = git(root, ["rev-parse", "HEAD"]);
 	const tallies = saved!.tallies.map((tally) => ({ ...tally, findings: { ...tally.findings } }));
 	const rounds: Round[] = [];
 	const sessions = saved!.sessions.map((session): Session => {

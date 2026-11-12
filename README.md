@@ -1416,7 +1416,7 @@ holds, so its rounds continue that branch's session.
 
 A round whose findings are all low severity needs no further round. After
 fixing or refuting them, `--settle` runs no reviewer: against the base the last
-round used, it reads `--responses` as one `<n>. fixed: <reason>` or
+round used, on a head that contains the one it reviewed, it reads `--responses` as one `<n>. fixed: <reason>` or
 `<n>. refuted: <reason>` line per finding, by its number, adds each disposition
 to its reviewer's tally, and drops the findings from the session, so its next
 round checks what changed since their head with nothing to settle. It prints
