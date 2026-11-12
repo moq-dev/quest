@@ -26,7 +26,6 @@ import review from "../../assets/skills/review.md";
 import run from "../../assets/skills/run.md";
 import spawn from "../../assets/skills/spawn.md";
 import start from "../../assets/skills/start.md";
-import unblock from "../../assets/skills/unblock.md";
 
 /** The quest contract: the format, workflow, and rules every skill builds on. */
 export const GUIDE: string = guide;
@@ -185,7 +184,6 @@ export const SKILLS: readonly Skill[] = Object.entries({
 	run,
 	spawn,
 	start,
-	unblock,
 }).map(([name, text]) => new Skill(name, text));
 
 /** The skill called `name`, if this version ships one. */

@@ -121,7 +121,7 @@ Automate a step rather than leave it to a person whenever an agent can take it.
 A `Maintainer:` item says why an agent cannot take the step and what automation was considered.
 Record a wait there, not in a draft PR that only holds evidence or steps for a person.
 Unlike a blocked quest it stays ready, so it resurfaces every time ready work is triaged instead of stalling in the backlog.
-`quest waiting` lists every waiting item, the maintainer's first, ranked by what each unblocks, and `/quest-unblock` walks the maintainer through them.
+`quest waiting` lists every waiting item, the maintainer's first, ranked by what each unblocks, and `/quest-complete` walks the maintainer through them.
 
 ## Execution
 
