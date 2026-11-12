@@ -336,7 +336,14 @@ async function bump(
 					`bump PR ${Number(open.number)} closed while the bump was prepared; the next pass starts over`,
 				);
 		}
-		const pushed = await push(checkout, remote, baseSha, commit, ref, connection.token, lease);
+		const pushed = await push(github, checkout, {
+			remote,
+			from: baseSha,
+			to: commit,
+			ref,
+			lease,
+			token: connection.token,
+		});
 		if (pushed.status !== 0) throw new Error(`push failed: ${pushed.stderr.trim()}`);
 
 		const body = bumpBody({

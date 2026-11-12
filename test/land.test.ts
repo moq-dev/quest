@@ -685,16 +685,12 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		forge.advance({ "base.txt": "new" });
 		const deps = await forge.deps();
 		const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
-		const options = sandbox();
 		const root = forge.clone();
 		const hook = join(forge.origin, "hooks/pre-receive");
-		writeFileSync(hook, "#!/bin/sh\necho 'Repository not found.' >&2\nexit 1\n", { mode: 0o755 });
-		await expect(serveBatch(root, plan, options, deps, async () => deps.token)).rejects.toThrow(
-			/PR #1 fallback push failed: remote: Repository not found\./,
-		);
-		expect(pull.closed).not.toBe(true);
-		rmSync(hook);
-		expect(await finishFallback(root, options.state, deps, async () => deps.token)).toMatch(/^landed 1 /);
+		writeFileSync(hook, `#!/bin/sh\nrm '${hook}'\necho 'Repository not found.' >&2\nexit 1\n`, { mode: 0o755 });
+		const landing = await serveBatch(root, plan, sandbox(), deps, async () => deps.token);
+		expect(landing).toEqual([expect.stringMatching(/^landed 1 /)]);
+		expect(existsSync(hook)).toBe(false);
 		expect(pull.closed).toBe(true);
 	});
 
@@ -707,17 +703,38 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(mergeBase(root, pull.head!, forge.main())).toMatchObject({ reason: "merge_conflict" });
 	});
 
-	test("GitHub's transient Repository not found on a same-repository push retries instead of ejecting", async () => {
-		const forge = new Forge();
-		forge.pull("Local", { "local.txt": "yes" });
-		forge.advance({ "base.txt": "new" });
-		const hook = join(forge.origin, "hooks/pre-receive");
-		writeFileSync(hook, "#!/bin/sh\necho 'Repository not found.' >&2\nexit 1\n", { mode: 0o755 });
-		await expect(forge.round()).rejects.toThrow(/PR #1 merge push failed: remote: Repository not found\./);
-		expect(forge.comment(1)).toBeUndefined();
-		rmSync(hook);
-		expect((await forge.round()).landing).toEqual([expect.stringMatching(/^landed 1 /)]);
-	});
+	test.each([1, 5])(
+		"a same-repository push GitHub answers Repository not found %i times retries with bounded backoff",
+		async (failures) => {
+			const forge = new Forge();
+			const pull = forge.pull("Local", { "local.txt": "yes" });
+			forge.advance({ "base.txt": "new" });
+			const count = join(tempDir(), "failures");
+			writeFileSync(count, "");
+			writeFileSync(
+				join(forge.origin, "hooks/pre-receive"),
+				`#!/bin/sh\n[ "$(wc -c < '${count}')" -ge ${failures} ] && exit 0\nprintf x >> '${count}'\necho 'Repository not found.' >&2\nexit 1\n`,
+				{ mode: 0o755 },
+			);
+			const deps = await forge.deps();
+			const slept: number[] = [];
+			deps.sleep = async (delay) => void slept.push(delay);
+			const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
+			const root = forge.clone();
+			await build(root, plan);
+			const landing = await serveBatch(root, plan, sandbox(), deps, async () => deps.token);
+			if (failures === 1) {
+				expect(landing).toEqual([expect.stringMatching(/^landed 1 /)]);
+				expect(slept).toEqual([1000]);
+			} else {
+				// Four retries, then the failure is the refusal it was before.
+				expect(landing).toEqual(["ejected 1 merge_refused"]);
+				expect(slept).toEqual([1000, 2000, 4000, 8000]);
+				expect(forge.comment(1)).toContain("Repository not found");
+				expect(pull.closed).not.toBe(true);
+			}
+		},
+	);
 
 	test("same-repository branch refusal ejects instead of closing", async () => {
 		const forge = new Forge();
@@ -834,6 +851,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			plan.queue[0],
 			plan.base.sha,
 			link.tree,
+			deps,
 			async () => deps.token,
 		);
 		expect(prepared).toHaveProperty("head");
@@ -859,6 +877,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			plan.queue[0],
 			plan.base.sha,
 			link.tree,
+			deps,
 			async () => deps.token,
 		);
 		const reused = await prepareHead(
@@ -868,6 +887,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			plan.queue[0],
 			plan.base.sha,
 			link.tree,
+			deps,
 			async () => {
 				throw new Error("must not push again");
 			},
@@ -1000,7 +1020,16 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		const root = forge.clone();
 		const options = sandbox();
 		const link = (await build(root, plan)).links[0];
-		await prepareHead(root, options.state, plan, plan.queue[0], plan.base.sha, link.tree, async () => deps.token);
+		await prepareHead(
+			root,
+			options.state,
+			plan,
+			plan.queue[0],
+			plan.base.sha,
+			link.tree,
+			deps,
+			async () => deps.token,
+		);
 		git(forge.origin, "update-ref", "refs/heads/topic-1", plan.base.sha);
 		expect((await resolvePreparedQueue(root, options.state, REPOSITORY, SQUASH, deps)).eject[0].reason).toBe(
 			"head_moved",
@@ -3048,6 +3077,7 @@ fi`);
 			plan.queue[0],
 			plan.base.sha,
 			link.tree,
+			deps,
 			async () => deps.token,
 		);
 		if (!("head" in prepared)) throw new Error(`no gate merge: ${JSON.stringify(prepared)}`);

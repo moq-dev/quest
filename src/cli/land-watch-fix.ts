@@ -811,7 +811,14 @@ async function openDisable(
 		const remote = `https://github.com/${repository}.git`;
 		// A retry after a restart finds its own push already there.
 		if ((await remoteHead(context.root, remote, ref, context.read)) !== disable.head) {
-			const pushed = await push(context.root, remote, disable.base.sha, disable.head, ref, context.token, "");
+			const pushed = await push(github, context.root, {
+				remote,
+				from: disable.base.sha,
+				to: disable.head,
+				ref,
+				lease: "",
+				token: context.token,
+			});
 			// Retried on the next pass: a push fails as often for an outage as for a rule.
 			if (pushed.status !== 0) throw new Error(`push failed: ${pushed.stderr.trim()}`);
 		}
