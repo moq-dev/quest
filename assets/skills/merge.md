@@ -21,7 +21,7 @@ The head is landable when:
 While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
 Any other head needs `/quest-iterate`: run it, saying what the head needs, such as a review, fixes, a failed check fixed or rerun, flaky ones included, or decisions, then run this skill again once it finishes; if it stops for the user instead, report that.
 Run it in this session, where its interview can ask the user; under a coordinator such as `/quest-run`, return the PR to the loop, which dispatches it in a sub-agent.
-A PR that adds follow-ups also needs the pick round's answers recorded before queueing, as the guide's Creation section describes: unless the head already records them, ask about each follow-up in a question of its own, then run `/quest-iterate` with the answers.
+A PR that adds follow-ups also needs the pick round's answers recorded before queueing, as the guide's Creation section describes: ask about each follow-up that round has not asked, in a question of its own, then run `/quest-iterate` with the answers unless the head already records them.
 
 A review counts for the head its `## Review` record names: a local `quest review` round, or a recorded skip.
 Read `quest status <pr>`'s `review-record` line rather than comparing diffs yourself: `current` or `diff-identical` (the head's diff from the base is unchanged since the reviewed head) counts.

@@ -11,6 +11,6 @@ Run a full `/quest-plan` interview for the repository's open GitHub issues witho
 Add the `quest` label to these issues once the PR is open, so another planner skips them.
 The planning PR mentions issues without closing keywords; the PR that completes each quest closes them.
 
-Comment once on each issue with the decision.
-For one a quest now tracks, wait until the planning PR's merge starts (it enters the merge queue, or merges where there is none), link the quest, and invite anyone who wants to donate tokens to run `/quest-start <branch>` with the quest's branch (its path without `.md`).
-Close each issue deemed won't fix with its comment.
+Each issue gets one comment, with the decision.
+For an issue a quest now tracks, post it once the planning PR's merge starts (it enters the merge queue, or merges where there is none): link the quest and the PR, and invite anyone who wants to donate tokens to run `/quest-start <branch>` with the quest's branch (its path without `.md`).
+For one deemed won't fix, post it when you close the issue.

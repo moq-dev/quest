@@ -10,7 +10,7 @@ The skill argument, if any, filters the quests and PRs in scope and sets their o
 Never let a question hold up work that needs none.
 Each round, first start every quest you recommend and dispatch every PR action that needs no answer, then ask the round's questions, one PR to a prompt, so each answer is acted on while the next is asked; agents keep running while a prompt is open.
 Run a round at the start and whenever an agent reports or a merge lands.
-A brief gives the task, its context, such as the quest or PR and the user's picks and answers, and the result expected, and restates no rule the agent's skill or the repository gives it.
+A brief gives the task, its reason and context, such as the quest or PR and the user's picks and answers, and the result expected: it sets settled decisions apart from recommendations, prescribes no steps, and restates no rule the agent's skill or the repository gives it.
 
 ## Quests
 
@@ -27,7 +27,7 @@ Skip a quest a match already implements; one that only touches the same files is
 Each agent runs `/quest-start`; its `quest start` refusing a quest claimed since is a skip, not a failure.
 
 Start each on the first entry of its `models` that can run.
-Fall to the next when one cannot start, or stops on an error or usage limit with nothing written beyond the claim commit, continuing in that checkout and claim PR.
+Fall to the next when `quest agent` reports its CLI missing or logged out, or the agent stops on a usage limit with nothing written beyond the claim commit, continuing in that checkout and claim PR.
 Once a model has written anything, the PR is its: keep its worktree and session id to resume after the reset.
 Skip a quest whose list runs out, and report each harness's outage once.
 
@@ -57,7 +57,7 @@ A `/quest-merge` pick covers the PR until it lands or needs the user: when `/que
 Order merges that would otherwise conflict.
 A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`.
 Where the queue runs a fixer, such as `quest land`, it hands back only a decision: ask the user, with its handback comment's diagnosis and recommendation.
-Without one, after `merge_conflict` or `failed_checks` the pick holds, even from an earlier session: dispatch `/quest-iterate`. After `checks_timed_out`, run `/quest-merge` again.
+Without one, after `merge_conflict` or `failed_checks` the pick holds, even from an earlier session: dispatch `/quest-iterate`. After `checks_timed_out`, run `/quest-merge` again once; a second timeout of the same head is the user's call.
 Any other reason, such as a person removing it, is the user's call.
 
 ## Loop

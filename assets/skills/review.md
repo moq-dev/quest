@@ -55,5 +55,5 @@ Name any decisions the review raised without answering them, then ask the user w
 
 While its required checks are still running, report that instead of asking; `/quest-run` asks once they finish.
 
-Hand the PR back with `quest release <pr> <token>` before you ask, report, or go on to `/quest-merge`.
+If you took a hold, hand the PR back with `quest release <pr> <token>` before you ask, report, or go on to `/quest-merge`.
 To go straight on to `/quest-iterate` in this session, pass the token to its `quest iterate` instead, which keeps the hold.
