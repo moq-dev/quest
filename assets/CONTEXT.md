@@ -73,7 +73,7 @@ The PR body's `## Models` section records its size as `Size: M` (its quest's, or
 
 Keep pull request CI read-only (a read-only `GITHUB_TOKEN`, write credentials only in environments limited to protected branches): quest branches are pushed to the repository, so their workflows get its secrets. Flag a workflow that breaks this.
 
-A PR that fixes a bug, or redoes work an earlier PR did badly, lists that PR under `## Caused by` as `- [owner/repo#N](url) - what it got wrong`, found by `git blame` on the lines the fix changes, or says in one line that no single PR caused it, such as an upstream change or a bug as old as the code.
+A PR that fixes a bug, or redoes work an earlier PR did badly, lists that PR under `## Caused by` as `- [owner/repo#N](url) - what it got wrong`, found by `git blame` on the lines the fix changes and confirmed in that PR's diff to introduce the defect, not merely touch the lines, defer the work, or keep older behavior, or says in one line that no single PR caused it, such as an upstream change or a bug as old as the code.
 Review findings fixed in the same PR are not culprits.
 
 ## Quests
