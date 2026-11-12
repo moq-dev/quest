@@ -433,7 +433,7 @@ export async function resolveQueue(
 		} else if (held.get(entry.number)?.head === head && held.get(entry.number)!.signals.length > 0) {
 			eject(
 				"unanswered_signal",
-				`its head is held by ${describe(held.get(entry.number)!.signals)}; push a fix, or answer each, then land it again`,
+				`its head is held by ${describe(held.get(entry.number)!.signals)}; push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again`,
 			);
 		} else {
 			// The queue's first page holds the head's checks, unless the head moved from the pin since.

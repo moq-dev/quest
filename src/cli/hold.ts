@@ -349,7 +349,7 @@ async function unsignaled(github: GitHub, pr: PullRequest, url: string, sha: str
 		throw new Refusal(`${url} head moved to ${read.head}; check the new head before landing it`);
 	if (read.signals.length > 0)
 		throw new Refusal(
-			`${url} head ${sha} is held by ${describe(read.signals)}; push a fix, or reply to each finding and link each decision in a comment that answers it, then land it again`,
+			`${url} head ${sha} is held by ${describe(read.signals)}; push a fix, or answer each: reply in a finding's thread, or link its review or the decision in a comment that answers it; then land it again`,
 		);
 }
 
