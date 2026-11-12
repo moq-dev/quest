@@ -27,11 +27,18 @@ must refuse:
   the same head was enqueued 10 minutes later, fixed by
   [moq-dev/moq#8466](https://github.com/moq-dev/moq/pull/8466).
 
+Decided 2026-11-11: ✅ only comments that open with a fixed marker, such
+as "Maintainer decision", hold a head, and the skills that record a
+decision on a PR start writing it (rejected: any comment by a
+write-access account after the head's commit; only review findings).
+It would have caught moq-dev/moq#8431, whose comment opened that way,
+without letting casual comments hold PRs.
+
 Agent's choices, for the implementer to revisit:
 
 - `quest merge` reads the reviews posted after the head's commit, and
-  the comments the decision under `## Waiting` picks, and refuses while
-  one holds a finding or decision the head has not answered.
+  the marked decision comments, and refuses while one holds a finding
+  or decision the head has not answered.
   `quest status` prints them, so `/quest-merge` sees them before it
   picks.
 - The land watcher re-reads queued PRs and dequeues one that draws a
@@ -43,18 +50,6 @@ Agent's choices, for the implementer to revisit:
   a red `platform.yml` dispatch run on an earlier head, which no check on
   its final head showed. Leave it to moq-dev/moq, since one case is not a
   class.
-
-## Waiting
-
-- Maintainer: which comments hold a head? Options: (a) any comment by a
-  write-access account after the head's commit, until a push or a reply
-  answers it; (b) only comments that open with a fixed marker, such as
-  "Maintainer decision", which the skills that record a decision on a PR
-  start writing; (c) only review findings, leaving decision comments to
-  `/quest-merge`'s prose. Recommend (b): it would have caught
-  moq-dev/moq#8431, whose comment opened that way, without holding every
-  chat comment, and a check cannot tell a decision from discussion
-  otherwise. Check the answer in this Plan.
 
 ## Related
 
