@@ -1,4 +1,4 @@
-# [M] Chart cost against quality for every model and effort
+# [M] Chart routing's cost and quality for every model and effort
 
 ## Goal
 
@@ -7,10 +7,10 @@ readout, publishes charts of cost against quality for every writer and
 reviewer model and effort `quest` runs, and links them in its PR, so a
 routing change is read off the cost/quality frontier rather than tables:
 
-- Writers: cost per merged PR against the findings raised across its review
-  rounds (the review tallies' per-reviewer totals), review rounds,
-  hand-backs, and later `## Caused by` escapes, one point per size, model,
-  and effort.
+- Writers: cost per merged PR against the quality measures the epic's
+  readout compares for the writer arms (findings, review rounds,
+  hand-backs, and later `## Caused by` escapes), read from the review
+  tallies, one point per size, model, and effort.
 - Local reviewers: cost per review against findings raised and the share
   fixed.
 - Online reviewers, which run on flat plans and have no cost per review:
@@ -19,8 +19,10 @@ routing change is read off the cost/quality frontier rather than tables:
   on a chart of their own.
 - Published benchmarks: one chart per benchmark suite, score against its
   own cost per task, for the same models and efforts. Benchmark and PR
-  metrics differ, so compare the rank order of cells across the charts,
-  not their values; a cell whose rank differs stands out.
+  metrics differ, so the comparison is a table beside the charts: each
+  model and effort cell's rank by quality per dollar on each benchmark and
+  on our PRs, for the cells both cover. A cell whose rank on our PRs
+  differs from its benchmark ranks stands out.
 
 Non-goal: a live dashboard. No chart code ships in `quest`.
 
