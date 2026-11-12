@@ -9,9 +9,8 @@ just-one-more-change patches. Agents that loop on review findings often
 change course once someone asks whether there is a better alternative; the
 checkpoint should ask that question for them.
 
-The trigger stays as it is (a reviewer's every third round that reports
-findings above low severity), and the agent still hands the choice to the
-user. Loops outside `quest review`, such as `/quest-iterate` fixing CI
+When the checkpoint fires stays as `nextStep` in `src/cli/review.ts`
+decides it today, and the agent still hands the choice to the user. Loops outside `quest review`, such as `/quest-iterate` fixing CI
 failures or online reviewers' comments, are out of scope.
 
 ## Plan
@@ -37,7 +36,9 @@ Recommended: reword the skill paragraph so the agent first states the
 problem the PR solves without reference to the current code, designs what
 it would build if starting today, then compares that with the current
 approach and the remaining findings. Keep its existing outcomes (continue,
-rethink, merge as is, drop) and the `Design change:` comment. Update the
-`quest review --help` text in `src/cli/main.ts` that describes the
-checkpoint, and the `nextStep` tests in `test/review.test.ts` if the
-wording they match changes.
+rethink, merge as is, drop), the `Design change:` comment, and restarting
+the count with `quest review --new`. Update the `quest review --help` text
+in `src/cli/main.ts` that describes the checkpoint. The `nextStep` tests in
+`test/review.test.ts` match only the `next checkpoint: ` prefix, so make
+them assert that the line carries the step back, or the rewording could
+regress unnoticed.
