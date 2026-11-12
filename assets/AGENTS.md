@@ -156,6 +156,7 @@ For example, `quest/m1/foo/bar.md` is branch `quest/m1/foo/bar`.
 Only claims use that namespace: no other branch is named `quest` or starts with `quest/`, since git cannot hold a branch named after another's directory.
 Branches for `/quest-plan`, `/quest-audit`, and other skill PRs use a prefix of their own, such as `quest-plan/<slug>`.
 If `quest start` names a branch in the way, stop and report it; never delete or rename it yourself.
+Never rename an open PR's head branch either: GitHub closes the PR.
 Its warning that the quest's local branch already exists is not that refusal: the claim succeeded, and the branch holds an earlier attempt.
 Switch to it, merge the claim commit the warning names, and resume that attempt; stop and report only if another worktree has the branch checked out.
 
@@ -186,7 +187,6 @@ Remove the `quest` label from issues no other quest tracks.
 
 ## Coordination
 
-Run no more sub-agents at once than the harness allows; queue the rest and start one as each reports.
 Relay no interim report: resume a sub-agent that ended its turn on one, telling it to block until its work finishes.
 A long-running coordinator lets compaction bound its context: it keeps what must outlast compaction in the forge and the quest tree, and reads a PR's state afresh before acting on it rather than trusting earlier turns.
 
@@ -240,13 +240,14 @@ Honor explicit instructions to proceed unattended within their scope; do not ask
 
 ## Prompting
 
-Follow this when writing instructions for other agents: `AGENTS.md`, `CONTRIBUTING.md`, skills, memory, plans, reviews, and delegation briefs.
-Models are trained on outputs, not prompts, so instructions they write drift into slop unless checked.
+Follow this when writing instructions for other agents: `AGENTS.md`, `CONTRIBUTING.md`, skills, plans, reviews, and delegation briefs.
+Models are trained on outputs, not prompts, so instructions they write drift into slop: understate, and expect to cut half of a draft.
 
-- Keep always-loaded files light. Put area-specific context in nested `AGENTS.md` files or skills, and say each rule once.
+- Keep always-loaded files light. Put area-specific context in nested `AGENTS.md` files, path-scoped rules, or skills, and say each rule once.
 - Steer away from mistakes agents actually make. Don't document the repository; its code and docs already do.
-- State the goal, constraints, and observable outcome. Don't over-prescribe steps or code, since the facts evolve; recommendations are welcome.
+- State the goal, its reason, constraints, and observable outcome. Don't over-prescribe steps or code, since the facts evolve; recommendations are welcome.
 - Separate settled decisions from recommendations and open questions.
 - A delegation brief gives the task and its context, such as the quest or PR and the user's picks, the permitted scope, and the expected result; it leaves repository rules to that repository's own instructions instead of restating them.
-- Don't turn one failure into a universal rule.
-- Before changing agent instructions, check the official guidance: [Claude memory](https://code.claude.com/docs/en/memory), [Claude best practices](https://code.claude.com/docs/en/best-practices), [Claude skills](https://code.claude.com/docs/en/skills), [Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md), and [agents.md](https://agents.md).
+- Scope each rule to the case that prompted it; one failure rarely justifies a universal one. Write it plainly, without capitals or emphasis, and as "ask before X" rather than "never X" when X has exceptions: current models take "never" as absolute. A rule with no exceptions belongs in a hook or check.
+- Before adding a rule, try to delete or consolidate one instead. Delete lines whose reason is gone: fixed in code, enforced by a hook or check, or written for older models, such as telling agents to keep going, think harder, or read every doc first.
+- Before changing agent instructions, check the official guidance: [Claude memory](https://code.claude.com/docs/en/memory), [Claude best practices](https://code.claude.com/docs/en/best-practices), [Claude skills](https://code.claude.com/docs/en/skills), [Claude prompting](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices), [Codex AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md), and [agents.md](https://agents.md).

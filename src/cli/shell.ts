@@ -7,6 +7,10 @@
 export interface Redirect {
 	op: string;
 	target: string;
+	/** The descriptor written before the operator, as in `2>`. */
+	fd?: number;
+	/** Whether `target` holds an expansion, whose text only the shell knows. */
+	expanded?: true;
 }
 
 /** One simple command: its words, redirections, and the text a here-document or here-string feeds its stdin. */
@@ -18,6 +22,8 @@ export interface Simple {
 	expanded?: string[];
 	/** Whether `stdin` holds an expansion, from a here-string or a here-document with an unquoted delimiter. */
 	stdinExpanded?: boolean;
+	/** Whether starting the command runs another: a command substitution in a word, a redirection, or a here-document. */
+	runs?: true;
 }
 
 /** An expansion the shell performs in a word or an unquoted here-document. */
@@ -31,10 +37,11 @@ const SEPARATORS = new Set([";", "&", "|", "(", ")", "\n"]);
  */
 export function parse(line: string): Simple[] {
 	const commands: Simple[] = [];
-	const heredocs: { command: Simple; delimiter: string; tabs: boolean; literal: boolean }[] = [];
+	const heredocs: { command: Simple; delimiter: string; tabs: boolean; literal: boolean; stdin: boolean }[] = [];
 	let command: Simple = { argv: [], redirects: [] };
 	let word: string | null = null;
 	let redirect: string | null = null;
+	let fd: number | undefined;
 	// Whether the current word holds an expansion, and whether any of it was quoted.
 	let expands = false;
 	let quoted = false;
@@ -46,11 +53,21 @@ export function parse(line: string): Simple[] {
 			command.argv.push(word);
 			if (expands) (command.expanded ??= []).push(word);
 		} else if (redirect === "<<" || redirect === "<<-")
-			heredocs.push({ command, delimiter: word, tabs: redirect === "<<-", literal: quoted });
+			heredocs.push({ command, delimiter: word, tabs: redirect === "<<-", literal: quoted, stdin: !fd });
 		else if (redirect === "<<<") {
-			command.stdin = `${word}\n`;
-			if (expands) command.stdinExpanded = true;
-		} else command.redirects.push({ op: redirect, target: word });
+			// One on another descriptor, as in `3<<<`, is not the command's stdin.
+			if (!fd) {
+				command.stdin = `${word}\n`;
+				if (expands) command.stdinExpanded = true;
+			}
+		} else
+			command.redirects.push({
+				op: redirect,
+				target: word,
+				...(fd !== undefined && { fd }),
+				...(expands && { expanded: true as const }),
+			});
+		fd = undefined;
 		word = null;
 		redirect = null;
 		expands = false;
@@ -84,6 +101,7 @@ export function parse(line: string): Simple[] {
 		const c = line[i]!;
 		if (c === "'" || c === '"' || c === "\\") quoted = true;
 		if ((c === "$" && line[i + 1] !== "'" && EXPANSION.test(line.slice(i, i + 2))) || c === "`") expands = true;
+		if (c === "`" || (c === "$" && line[i + 1] === "(")) command.runs = true;
 		if (c === "\\") {
 			if (line[i + 1] === "\n") i += 2;
 			else {
@@ -103,11 +121,13 @@ export function parse(line: string): Simple[] {
 					i += 2;
 				} else if (line[i] === "$" && line[i + 1] === "(") {
 					expands = true;
+					command.runs = true;
 					const end = closing(i + 2);
 					text += line.slice(i, end);
 					i = end;
 				} else {
 					if (EXPANSION.test(line.slice(i, i + 2))) expands = true;
+					if (line[i] === "`") command.runs = true;
 					text += line[i++];
 				}
 			}
@@ -132,7 +152,10 @@ export function parse(line: string): Simple[] {
 			i++;
 		} else if (c === ">" || c === "<" || (c === "&" && line[i + 1] === ">")) {
 			// A word of digits right before the operator names the descriptor.
-			if (word !== null && /^\d+$/.test(word) && redirect === null) word = null;
+			if (word !== null && /^\d+$/.test(word) && redirect === null) {
+				fd = Number(word);
+				word = null;
+			}
 			endWord();
 			const op = /^(&>>|&>|>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)/.exec(line.slice(i))![1]!;
 			i += op.length;
@@ -152,7 +175,7 @@ export function parse(line: string): Simple[] {
 	/** Read the bodies of the here-documents opened on the line just ended, returning the index after them. */
 	function readHeredocs(from: number): number {
 		let at = from;
-		for (const { command: owner, delimiter, tabs, literal } of heredocs.splice(0)) {
+		for (const { command: owner, delimiter, tabs, literal, stdin } of heredocs.splice(0)) {
 			const body: string[] = [];
 			while (at < line.length) {
 				const end = line.indexOf("\n", at);
@@ -162,6 +185,8 @@ export function parse(line: string): Simple[] {
 				if (text === delimiter) break;
 				body.push(text);
 			}
+			if (!literal && /\$\(|`/.test(body.join("\n"))) owner.runs = true;
+			if (!stdin) continue;
 			owner.stdin = body.length > 0 ? `${body.join("\n")}\n` : "";
 			if (!literal && EXPANSION.test(owner.stdin)) owner.stdinExpanded = true;
 		}
