@@ -60,6 +60,12 @@ Decided 2026-11-12 (maintainer, /quest-plan):
   command, and three review rounds showed a sidecar can deadlock against
   its own command's later compiles or tests, which may each ask for the
   whole pool.
+- What is N's ceiling? ✅ mbx's whole pool, accepting that an ordinary
+  low-priority reservation above three quarters of the pool cannot fit
+  beside the quarter mbx keeps for normal-priority work, so it can delay a
+  waiting land check until it finishes (rejected: three quarters of the
+  pool, which never blocks a land check but caps the heaviest commands).
+  Decided at the round-6 review checkpoint.
 
 How the reservation works, checked against mbx 1.30.0's source: a command
 run inside `mbx reserve` has mbx scheduling switched off for everything it
@@ -84,15 +90,13 @@ Agent's choices, for the implementer to revisit:
   learned N per command, keyed by its repository and argv, from the scope
   measurement the gate already takes. With no history, start at half of
   mbx's pool. After each run, set N to the measured peak, or double it, up
-  to that ceiling, when the scope was throttled (`cpu.stat`'s
+  to the pool, when the scope was throttled (`cpu.stat`'s
   `nr_throttled`), since a capped command cannot show a peak above its cap.
   Half the pool also fits beside the quarter mbx keeps free for
   normal-priority work, so a first run never blocks a waiting land check.
-- N is at least one core and at most three quarters of mbx's pool
-  (`scheduler.cpus` minus `scheduler.reserve_cpus`), so an ordinary
-  low-priority reservation always fits beside the quarter mbx keeps for
-  normal-priority work and never blocks a waiting land check, and a command
-  never takes the cores mbx withholds for other work.
+- N is at least one core and at most mbx's pool, `scheduler.cpus` minus
+  `scheduler.reserve_cpus`, so a command never takes the cores mbx
+  withholds for other work.
 - Ordinary reservations pass `--priority low`, since `mbx reserve`
   defaults to normal and ignores `scheduler.priority`.
 - Detect mbx from the command's working directory, so a workspace
