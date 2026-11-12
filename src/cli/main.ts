@@ -547,7 +547,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"a check line per failing or pending check, marked required or optional, counting only each check's latest run; a review line per " +
 				"reviewer's latest review, marked current or stale against the head; a checkpoint line per bot " +
 				"reviewer that approves or requests changes, its round, and its review, when that review is of the " +
-				"head, while it has not approved the head, and ends its third, sixth, ... round (one commit it reviewed), as " +
+				"head, while its latest verdict on the head is no approval, and ends its third, sixth, ... round (one commit it reviewed), as " +
 				"/quest-review's design checkpoint; a reacted:<content> line per " +
 				"reaction on the PR or a review; and a thread line per unresolved review thread, led by its node ID. " +
 				"A missing value prints as -. --json prints the same facts as one deterministic object.\n\n" +

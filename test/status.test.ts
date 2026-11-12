@@ -740,6 +740,14 @@ describe("checkpoint", () => {
 		expect(
 			await line([...rounds.slice(0, 2), bot("pullfrog", "APPROVED", A, 3), bot("pullfrog", "COMMENTED", A, 4)]),
 		).toEqual([]);
+		// The latest verdict on the head wins: a change request after an approval of it is due.
+		expect(
+			await line([
+				...rounds.slice(0, 2),
+				bot("pullfrog", "APPROVED", A, 3),
+				bot("pullfrog", "CHANGES_REQUESTED", A, 4),
+			]),
+		).toEqual([`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-4`]);
 		// Every reviewer due on the head is named.
 		const other = [B, C, A].map((commit, index) => bot("other", "CHANGES_REQUESTED", commit, index + 5));
 		expect(await line([...rounds, ...other])).toEqual([

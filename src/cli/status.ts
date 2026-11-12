@@ -434,7 +434,8 @@ function summarize(
 /**
  * The design checkpoint `/quest-review` takes every third round, put on the head by an online reviewer: a bot that
  * approves or requests changes, such as one whose approval the base requires, whose latest review is of the head
- * and that has not approved the head, in its third, sixth, ... round. A dismissed review was an approval or a change
+ * and whose latest verdict on the head, ignoring plain comments, is not an approval or a dismissal, in its third,
+ * sixth, ... round. A dismissed review was an approval or a change
  * request, so it shows the bot gates too, as when a push dismisses its approval. A round is one commit it reviewed;
  * a rethink at a checkpoint leaves the next one three rounds on, so nothing restarts the count.
  */
@@ -453,8 +454,10 @@ function checkpoints(head: string, submitted: ObjectValue[]): Status["checkpoint
 		const counted = rows.filter((row) => row.commit != null);
 		const last = counted.at(-1);
 		if (last === undefined || string(object(last.commit).oid) !== head) continue;
-		const onHead = counted.filter((row) => string(object(row.commit).oid) === head);
-		if (onHead.some((row) => row.state === "APPROVED" || row.state === "DISMISSED")) continue;
+		const verdict = counted
+			.filter((row) => string(object(row.commit).oid) === head && GATING.includes(string(row.state)))
+			.at(-1);
+		if (verdict?.state === "APPROVED" || verdict?.state === "DISMISSED") continue;
 		const round = new Set(counted.map((row) => string(object(row.commit).oid))).size;
 		if (round % 3 === 0) due.push({ reviewer, round, url: string(last.url) });
 	}
