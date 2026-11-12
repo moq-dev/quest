@@ -506,6 +506,13 @@ test("quest check reports stubs from a relative root", () => {
 	const missing = run(dir);
 	expect(missing.status).toBe(1);
 	expect(missing.stderr).toContain("is missing");
+	const skipped = spawnSync(
+		"bun",
+		["run", "--silent", "quest", "--root", relative(process.cwd(), dir), "check", "--no-stubs"],
+		{ encoding: "utf8" },
+	);
+	expect(skipped.status).toBe(0);
+	expect(skipped.stderr).toBe("");
 	init(dir);
 	expect(run(dir).status).toBe(0);
 });
