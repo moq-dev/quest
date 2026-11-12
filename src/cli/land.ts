@@ -302,12 +302,25 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 	}
 }
 
+/**
+ * What a landing PR's head carries unread: a head the gate merged the base into after its pin carries the pin's
+ * signals since the pick, and whatever the land fixer's history carries for the pin or the head.
+ */
+function carriedFrom(node: ObjectValue, carried: QueueOptions["carried"]): Carried | undefined {
+	const request = object(node.autoMergeRequest);
+	const head = string(node.headRefOid);
+	const approved = pinned(typeof request.commitBody === "string" ? request.commitBody : "");
+	const fixed = carried?.(Number(node.number), approved ?? head);
+	if (approved === null || approved === head) return fixed;
+	return { heads: [approved, ...(fixed?.heads ?? [])], picked: fixed?.picked ?? string(request.enabledAt) };
+}
+
 /** How `resolveQueue` reads its picks beyond what GitHub says. */
 export interface QueueOptions {
 	/** Whether a head that moved since its pick is still the pick's, as the gate's own base merge is. */
 	acceptHead?: (entry: Entry) => boolean;
-	/** What each landing PR's head carries from a pick the land fixer replaced, by number. */
-	carried?: (pulls: ObjectValue[]) => ReadonlyMap<number, Carried>;
+	/** What PR `number`'s `head` carries from a pick the land fixer replaced. */
+	carried?: (number: number, head: string) => Carried | undefined;
 }
 
 /**
@@ -403,7 +416,12 @@ export async function resolveQueue(
 		github,
 		repository,
 		landing.map((node) => Number(node.number)),
-		carried?.(landing),
+		new Map(
+			landing.flatMap((node) => {
+				const carry = carriedFrom(node, carried);
+				return carry ? [[Number(node.number), carry] as const] : [];
+			}),
+		),
 	);
 	for (const node of landing) {
 		const request = object(node.autoMergeRequest);

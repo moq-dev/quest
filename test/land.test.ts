@@ -814,6 +814,23 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect((await serveBatch(root, resumed, options, deps, async () => deps.token))[0]).toMatch(/^landed 1 /);
 	});
 
+	test("a prepared head still carries a finding on the pin it merged the base into", async () => {
+		const forge = new Forge();
+		const pull = forge.pull("Old", { "old.txt": "yes" });
+		forge.advance({ "new.txt": "yes" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
+		const root = forge.clone();
+		const options = sandbox();
+		const link = (await build(root, plan)).links[0];
+		await prepareHead(root, options.state, plan, plan.queue[0], plan.base.sha, link.tree, async () => deps.token);
+		pull.reviews = [
+			{ state: "COMMENTED", author: "rabbit[bot]", body: "[P1] Drops a frame", commit: plan.queue[0].head },
+		];
+		const resumed = await resolvePreparedQueue(root, options.state, REPOSITORY, SQUASH, deps);
+		expect(resumed.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[1, "unanswered_signal"]]);
+	});
+
 	test("a stale queue head reuses the daemon's recorded pushed merge", async () => {
 		const forge = new Forge();
 		forge.pull("Old", { "old.txt": "yes" });

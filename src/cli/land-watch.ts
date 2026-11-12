@@ -360,7 +360,7 @@ async function dequeueSignaled(
 			id: string(pull.id),
 			pick,
 			head,
-			text: `quest land watch: ended this pull request's pick, taking it out of the queue and disarming its auto-merge, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
+			text: `quest land watch: ended this pull request's pick, ${now.mergeQueueEntry != null ? "taking it out of the queue and disarming its auto-merge" : "disarming its auto-merge"}, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
 			failures: 0,
 		};
 		saveProgress();
@@ -375,8 +375,14 @@ async function dequeueSignaled(
 				);
 				taken = true;
 			}
-			const armed = taken ? (await readPull(github, string(pull.id))).autoMergeRequest : now.autoMergeRequest;
-			if (armed != null) {
+			// Only the request this pass read is disarmed: a writer's push or new arming since is a newer pick.
+			const was = now.autoMergeRequest == null ? null : string(object(now.autoMergeRequest).enabledAt);
+			const after = taken ? await readPull(github, string(pull.id)) : now;
+			const armed =
+				string(after.headRefOid) === head && after.autoMergeRequest != null
+					? string(object(after.autoMergeRequest).enabledAt)
+					: null;
+			if (armed !== null && armed === was) {
 				await github.graphql(
 					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 					{ id: pull.id },
