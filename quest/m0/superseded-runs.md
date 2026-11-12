@@ -3,21 +3,30 @@
 ## Goal
 
 `quest status`, `quest merge`, `quest wait` and `quest land`, including its
-daemons, ignore the checks of a GitHub Actions workflow run that a newer
-run replaced, as land-bump already does. A run that a newer run cancelled
-then fails nothing, including a matrix job it left under an unexpanded name
-such as `Tests (${{ matrix.os }})`. A cancelled run that nothing replaced,
-and a failed run that is still its workflow's latest for its event, fail as
-before.
+daemons, stop failing a head on a check that a cancelled GitHub Actions run
+left behind once a newer run of the same workflow exists on that head. This
+includes a matrix job the cancelled run left under an unexpanded name, such
+as `Tests (${{ matrix.os }})`. A completed check keeps today's rule, where
+each check's latest report counts. A cancelled run that nothing replaced
+still fails. All of these readers agree on the head's state.
 
 ## Plan
 
 Decided 2026-11-12 (user, /quest-plan of the follow-ups from a
-/quest-complete run on kixelated/token-max): ✅ drop the checks of replaced
-workflow runs before picking each check's latest report (rejected: treating
-a cancelled run as passing, since a genuinely cancelled required run would
-then pass; fixing each repository's workflow, since every repository would
-need it and token-max's `edited` trigger is deliberate).
+/quest-complete run on kixelated/token-max): ✅ drop the cancelled checks of
+replaced workflow runs (rejected: treating every cancelled check as passing,
+since a genuinely cancelled required run would then pass; fixing each
+repository's workflow, since every repository would need it and token-max's
+`edited` trigger is deliberate).
+
+Decided 2026-11-12 (user, /quest-review design checkpoint): ✅ `quest status`
+judges the base's required checks as `quest wait` does, with the same
+exceptions, such as the gate's own `quest land` check. A cancelled
+pull_request run can be replaced by a push run that lacks a PR-only required
+job, and status would otherwise read success while land and wait read
+pending (rejected: leaving it to the implementer; letting a cancelled run
+yield only to a run of its own event, which fails the push/pull_request
+race again).
 
 What happened: in kixelated/token-max, editing a PR body right after a push
 starts an `edited` run, which cancels the push's `synchronize` run through
@@ -32,38 +41,16 @@ was rerun.
 
 Recommendations:
 
-- Share land-bump's rule rather than writing a new one. `latestRuns`
-  (`src/cli/land-bump.ts`) keeps each workflow's latest run per event, and
-  drops a cancelled run that a newer run of any event replaced, as when push
-  and pull_request share a `cancel-in-progress` group. Its caller then drops
-  the replaced runs' check suites. Move both into `src/github/checks.ts`, so
-  status, `quest merge`'s refusal of a failed check (`passing` in
-  `src/cli/hold.ts`), wait, land and land-bump all judge the same checks.
-  Keep land-bump's tests passing.
-- Read the runs from the head commit's `checkSuites` (each with its
-  `workflowRun { databaseId event workflow { databaseId } }`, status and
-  conclusion), not from the rollup's contexts. That way a newer run that has
-  no check runs yet, queued or cancelled early, still replaces an older one,
-  as land-bump's REST read of the head's runs does.
-- Workflow-run fields need Actions read. `quest land serve` mints its API
+- Drop only cancelled checks, not whole runs. Dropping a run because a newer
+  run of its event exists would also drop passed checks that the newer run
+  gated off, such as jobs an `edited` run skips by `github.event.action`.
+- land-bump (`latestRuns` in `src/cli/land-bump.ts`) already treats a run
+  that a newer run cancelled as replaced, and reads the head's runs over
+  REST, which also sees a newer run that has no check runs yet. Share one
+  rule with it where that stays simple.
+- Workflow-run data needs Actions read. `quest land serve` mints its API
   token with only `checks` and `statuses` read (`src/cli/land-serve.ts`).
   Add `actions: "read"`, which the GitHub App already grants, since
   land-bump and land-watch request it.
-- Report pending while any workflow run that counts is unfinished, as
-  land-bump's `running` does, and when dropping replaced runs leaves no
-  checks (`found.length === 0`).
-- `quest status` reads the base's required checks, as land and wait already
-  do, and reports one that no counted run reported as pending. Decided
-  2026-11-12 (user, /quest-review design checkpoint, round 3): a cancelled
-  pull_request run can be replaced by a push run that lacks a PR-only
-  required job, and without the list, status would read success while land
-  and wait read pending (rejected: leaving it to the implementer; letting a
-  cancelled run yield only to its own event, which diverges from land-bump
-  and fails the push/pull_request race again).
-- Latest run per event is deliberate, as land-bump decided. A newer run of
-  the same workflow and event on the same head runs the same workflow file,
-  so it re-reports every job a completed older run did, except a dynamic
-  matrix, where the newer run is the current answer.
-- Order runs so that a rerun of a replaced run counts as newest, for
-  example by the latest attempt's start, rather than by run id. Otherwise
-  rerunning the cancelled run, the only workaround today, is ignored.
+- Count a rerun of the cancelled run as current, since rerunning it is the
+  workaround today.
