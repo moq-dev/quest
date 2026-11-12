@@ -51,7 +51,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 			} } } }
 			reviews(first: 100, after: $reviews) @include(if: $moreReviews) {
 				pageInfo { hasNextPage endCursor }
-				nodes { author { login } state submittedAt url commit { oid } reactions(last: 100) { nodes { ...reaction } } }
+				nodes { author { __typename login } state submittedAt url commit { oid } reactions(last: 100) { nodes { ...reaction } } }
 			}
 			reviewThreads(first: 100, after: $threads) @include(if: $moreThreads) {
 				pageInfo { hasNextPage endCursor }
@@ -133,6 +133,8 @@ export interface Status {
 	checks: { state: string | null; passed: number; failing: Check[]; pending: Check[] };
 	/** Each reviewer's latest submitted review, oldest first. */
 	reviews: Review[];
+	/** An online reviewer's design checkpoint on the head, as {@link checkpoint} finds it. */
+	checkpoint: { reviewer: string; round: number; url: string } | null;
 	/** Null when the `## Review` section names no full SHA. */
 	reviewRecord: ReviewRecord | null;
 	reactions: Reaction[];
@@ -362,6 +364,8 @@ function summarize(
 		});
 	}
 
+	const comments = array(object(pull.timelineItems).nodes).filter((node) => node.__typename === "IssueComment");
+
 	const threads = threadNodes
 		.filter((row) => row.isResolved !== true)
 		.map((row): Thread => {
@@ -420,12 +424,45 @@ function summarize(
 					},
 		checks,
 		reviews: [...latest.values()],
+		checkpoint: checkpoint(head, submitted, comments),
 		reviewRecord: null,
 		reactions,
 		threads,
 		holds: [],
 		starterHold: null,
 	};
+}
+
+/**
+ * The design checkpoint `/quest-review` takes every third round, put on the head by an online reviewer: a bot that
+ * approves or requests changes, such as one whose approval the base requires, whose latest review is of the head
+ * and leaves findings there, as anything but an approval, in its third, sixth, ... round. A round is one commit it
+ * reviewed since the PR's latest `Design change:` comment, which restarts the count as `quest review --new` does.
+ */
+function checkpoint(head: string, submitted: ObjectValue[], comments: ObjectValue[]): Status["checkpoint"] {
+	const since = Math.max(
+		0,
+		...comments
+			.filter(
+				(comment) => typeof comment.body === "string" && comment.body.trimStart().startsWith("Design change:"),
+			)
+			.map((comment) => Date.parse(string(comment.createdAt))),
+	);
+	const rounds = new Map<string, ObjectValue[]>();
+	for (const row of submitted) {
+		if (row.author == null || object(row.author).__typename !== "Bot") continue;
+		const reviewer = actor(row.author);
+		rounds.set(reviewer, [...(rounds.get(reviewer) ?? []), row]);
+	}
+	for (const [reviewer, rows] of rounds) {
+		if (!rows.some((row) => row.state === "APPROVED" || row.state === "CHANGES_REQUESTED")) continue;
+		const counted = rows.filter((row) => row.commit != null && Date.parse(string(row.submittedAt)) > since);
+		const last = counted.at(-1);
+		if (last === undefined || string(object(last.commit).oid) !== head || last.state === "APPROVED") continue;
+		const round = new Set(counted.map((row) => string(object(row.commit).oid))).size;
+		if (round % 3 === 0) return { reviewer, round, url: string(last.url) };
+	}
+	return null;
 }
 
 /**
@@ -489,6 +526,9 @@ export function statusLines(status: Status): string[] {
 		...status.reviews.map(
 			(r) => `review ${r.current ? "current" : "stale"} ${r.state} ${r.reviewer} ${r.submittedAt} ${r.url}`,
 		),
+		...(status.checkpoint
+			? [`checkpoint ${status.checkpoint.reviewer} round ${status.checkpoint.round} ${status.checkpoint.url}`]
+			: []),
 		...status.reactions.map((r) => `reacted:${r.content} ${r.actor} ${r.createdAt} ${r.url}`),
 		...status.threads.map(
 			(t) =>

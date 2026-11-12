@@ -691,3 +691,73 @@ describe("the review record", () => {
 		expect(await line(`Fixes ${A}.\n\n## Review\n\nSkipped.\n\n## Models\n\n${C}`)).toBe("review-record -");
 	});
 });
+
+describe("checkpoint", () => {
+	const C = "c".repeat(40);
+	const bot = (login: string, state: string, commit: string, minute: number) => ({
+		author: { __typename: "Bot", login },
+		state,
+		submittedAt: `2026-10-07T12:${String(minute).padStart(2, "0")}:00Z`,
+		url: `${URL_}#pullrequestreview-${minute}`,
+		commit: { oid: commit },
+		reactions: { nodes: [] },
+	});
+	const comment = (body: string, minute: number) => ({
+		__typename: "IssueComment",
+		body,
+		createdAt: `2026-10-07T12:${String(minute).padStart(2, "0")}:30Z`,
+		authorAssociation: "OWNER",
+		author: { __typename: "User", login: "kixelated" },
+	});
+	const line = async (reviews: Node[], comments: Node[] = []) =>
+		statusLines(
+			await pullRequestStatus(
+				pr,
+				setup([
+					pull({
+						checks: null,
+						reviews: page(reviews),
+						threads: page([]),
+						timelineItems: { nodes: comments },
+					}),
+				]).deps,
+			),
+		).find((entry) => entry.startsWith("checkpoint ")) ?? null;
+
+	test("falls due when an approving reviewer's third round leaves findings on the head", async () => {
+		const rounds = [
+			bot("pullfrog", "CHANGES_REQUESTED", B, 1),
+			bot("pullfrog", "CHANGES_REQUESTED", C, 2),
+			bot("pullfrog", "CHANGES_REQUESTED", A, 3),
+		];
+		expect(await line(rounds)).toBe(`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`);
+		// An approval of the head, a second review of the same commit, or a head it has not reviewed is no checkpoint.
+		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "APPROVED", A, 3)])).toBeNull();
+		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "CHANGES_REQUESTED", C, 3)])).toBeNull();
+		expect(await line([...rounds, bot("pullfrog", "COMMENTED", A, 4)])).toBe(
+			`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-4`,
+		);
+	});
+
+	test("ignores reviewers that only comment, and people", async () => {
+		const commented = [B, C, A].map((commit, index) => bot("coderabbitai", "COMMENTED", commit, index + 1));
+		expect(await line(commented)).toBeNull();
+		const person = [B, C, A].map((commit, index) => ({
+			...bot("alice", "CHANGES_REQUESTED", commit, index + 1),
+			author: { __typename: "User", login: "alice" },
+		}));
+		expect(await line(person)).toBeNull();
+	});
+
+	test("restarts the count after a Design change comment", async () => {
+		const rounds = [
+			bot("pullfrog", "CHANGES_REQUESTED", B, 1),
+			bot("pullfrog", "CHANGES_REQUESTED", C, 2),
+			bot("pullfrog", "CHANGES_REQUESTED", A, 3),
+		];
+		expect(await line(rounds, [comment("Design change: split the parser.", 1)])).toBeNull();
+		expect(await line(rounds, [comment("Not a design change.", 1)])).toBe(
+			`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`,
+		);
+	});
+});

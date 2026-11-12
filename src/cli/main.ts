@@ -545,7 +545,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"quest land's queue, with the reason (such as merge_conflict, failed_checks, manual, or manually_disabled), " +
 				"actor, and time, until the PR enters the merge queue or auto-merge again. Then " +
 				"a check line per failing or pending check, marked required or optional, counting only each check's latest run; a review line per " +
-				"reviewer's latest review, marked current or stale against the head; a reacted:<content> line per " +
+				"reviewer's latest review, marked current or stale against the head; a checkpoint line naming a bot " +
+				"reviewer that approves PRs, its round, and its review, when that review is of the head, approves " +
+				"nothing, and ends its third, sixth, ... round (one reviewed commit since the latest `Design change:` " +
+				"comment), as /quest-review's design checkpoint; a reacted:<content> line per " +
 				"reaction on the PR or a review; and a thread line per unresolved review thread, led by its node ID. " +
 				"A missing value prints as -. --json prints the same facts as one deterministic object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 for any PR state, 2 for invalid arguments, " +
