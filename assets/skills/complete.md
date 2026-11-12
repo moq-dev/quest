@@ -4,14 +4,14 @@ guide: Summaries
 skills: run
 ---
 
-Run only the Pull requests part of `/quest-run` below, with its loop's rounds, plus the waits: refresh both as sub-agents report, and stop once every sub-agent has reported and every PR and wait in scope is decided, skipped, or left to an outside party.
+Run only `/quest-run`'s Pull requests part below with its loop's rounds, plus the waits: refresh both as sub-agents report, and stop once all have reported and every PR and wait in scope is decided, skipped, or left to an outside party.
 Start no quests, and wait on no PR.
 
 ## Waits
 
 Take the quests' and drafts' `## Waiting` items from `quest waiting --json`, which ranks them; rerun it with GitHub access if it warns that drafts were skipped.
-Check every item's condition yourself, several at once in sub-agents.
-An outside party's item that holds stays, asked about only when the user can advance it, such as by asking upstream for a release.
+Check each condition yourself, in parallel sub-agents.
+An outside party's item that holds stays, asked about only when the user can advance it, such as by requesting an upstream release.
 Ask each maintainer item left among the round's questions, in that order, saying what it unblocks.
 For an action only the user can take, give the exact steps and the check you will run once they report it done; take any secret through the host's secret prompt.
 
