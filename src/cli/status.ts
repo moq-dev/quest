@@ -133,8 +133,8 @@ export interface Status {
 	checks: { state: string | null; passed: number; failing: Check[]; pending: Check[] };
 	/** Each reviewer's latest submitted review, oldest first. */
 	reviews: Review[];
-	/** An online reviewer's design checkpoint on the head, as {@link checkpoint} finds it. */
-	checkpoint: { reviewer: string; round: number; url: string } | null;
+	/** The design checkpoints online reviewers put on the head, as {@link checkpoints} finds them. */
+	checkpoints: { reviewer: string; round: number; url: string }[];
 	/** Null when the `## Review` section names no full SHA. */
 	reviewRecord: ReviewRecord | null;
 	reactions: Reaction[];
@@ -422,7 +422,7 @@ function summarize(
 					},
 		checks,
 		reviews: [...latest.values()],
-		checkpoint: checkpoint(head, submitted),
+		checkpoints: checkpoints(head, submitted),
 		reviewRecord: null,
 		reactions,
 		threads,
@@ -434,10 +434,12 @@ function summarize(
 /**
  * The design checkpoint `/quest-review` takes every third round, put on the head by an online reviewer: a bot that
  * approves or requests changes, such as one whose approval the base requires, whose latest review is of the head
- * and leaves findings there, as anything but an approval, in its third, sixth, ... round. A round is one commit it
- * reviewed; a rethink at a checkpoint leaves the next one three rounds on, so nothing restarts the count.
+ * and leaves findings there, as neither an approval nor a dismissed review, in its third, sixth, ... round. A round
+ * is one commit it reviewed; a rethink at a checkpoint leaves the next one three rounds on, so nothing restarts the
+ * count.
  */
-function checkpoint(head: string, submitted: ObjectValue[]): Status["checkpoint"] {
+function checkpoints(head: string, submitted: ObjectValue[]): Status["checkpoints"] {
+	const due: Status["checkpoints"] = [];
 	const rounds = new Map<string, ObjectValue[]>();
 	for (const row of submitted) {
 		if (row.author == null || object(row.author).__typename !== "Bot") continue;
@@ -448,11 +450,12 @@ function checkpoint(head: string, submitted: ObjectValue[]): Status["checkpoint"
 		if (!rows.some((row) => row.state === "APPROVED" || row.state === "CHANGES_REQUESTED")) continue;
 		const counted = rows.filter((row) => row.commit != null);
 		const last = counted.at(-1);
-		if (last === undefined || string(object(last.commit).oid) !== head || last.state === "APPROVED") continue;
+		if (last === undefined || string(object(last.commit).oid) !== head) continue;
+		if (last.state === "APPROVED" || last.state === "DISMISSED") continue;
 		const round = new Set(counted.map((row) => string(object(row.commit).oid))).size;
-		if (round % 3 === 0) return { reviewer, round, url: string(last.url) };
+		if (round % 3 === 0) due.push({ reviewer, round, url: string(last.url) });
 	}
-	return null;
+	return due;
 }
 
 /**
@@ -516,9 +519,7 @@ export function statusLines(status: Status): string[] {
 		...status.reviews.map(
 			(r) => `review ${r.current ? "current" : "stale"} ${r.state} ${r.reviewer} ${r.submittedAt} ${r.url}`,
 		),
-		...(status.checkpoint
-			? [`checkpoint ${status.checkpoint.reviewer} round ${status.checkpoint.round} ${status.checkpoint.url}`]
-			: []),
+		...status.checkpoints.map((c) => `checkpoint ${c.reviewer} round ${c.round} ${c.url}`),
 		...status.reactions.map((r) => `reacted:${r.content} ${r.actor} ${r.createdAt} ${r.url}`),
 		...status.threads.map(
 			(t) =>

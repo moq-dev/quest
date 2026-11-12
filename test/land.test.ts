@@ -1021,9 +1021,9 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		);
 		const moved = forge.pull("Moved", { "2.txt": "2\n" });
 		moved.autoMerge = { ...moved.autoMerge!, commitBody: pin("f".repeat(40)) };
-		forge.pull("Unreviewed", { "3.txt": "3\n" }, { pull: { review: "REVIEW_REQUIRED" } });
+		const unreviewed = forge.pull("Unreviewed", { "3.txt": "3\n" }, { pull: { review: "REVIEW_REQUIRED" } });
 		forge.pull("Red", { "4.txt": "4\n" }, { pull: { runs: [{ name: "test", conclusion: "FAILURE", url: "u" }] } });
-		forge.pull("Running", { "5.txt": "5\n" }, { pull: { runs: [] } });
+		const running = forge.pull("Running", { "5.txt": "5\n" }, { pull: { runs: [] } });
 		forge.pull("Ready", { "6.txt": "6\n" });
 		forge.pull("Not landing", { "7.txt": "7\n" }, { pull: { landing: false } });
 		const plan = await resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
@@ -1039,6 +1039,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 				number: 3,
 				url: "https://github.com/upstream/project/pull/3",
 				enabledAt: "2026-10-26T00:00:03Z",
+				head: unreviewed.head,
 				pending: [],
 				approval: true,
 			},
@@ -1046,6 +1047,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 				number: 5,
 				url: "https://github.com/upstream/project/pull/5",
 				enabledAt: "2026-10-26T00:00:05Z",
+				head: running.head,
 				pending: ["test"],
 				approval: false,
 			},
@@ -4605,6 +4607,17 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(readRemoval(queue.state, 1)!.reason).toBe("merge_conflict");
 		expect(forge.comment(1)).toContain(`because it conflicts with`);
 		expect(queued(forge, 1)).toBeNull();
+	});
+
+	test("a pick waiting on a required approval shows it, and builds once approved", async () => {
+		const { forge, pass } = setup();
+		const pick = forge.pull("Unapproved", { "one.txt": "1\n" }, { pull: { review: "REVIEW_REQUIRED" } });
+		expect(await pass()).toEqual([]);
+		expect(shown(forge)).toEqual({ 1: "queued Waiting" });
+		const run = forge.repo.checkRuns!.filter((item) => item.name === QUEUE_CHECK).at(-1)!;
+		expect(String(run.output.summary)).toContain("an approving review, which main requires");
+		pick.review = "APPROVED";
+		expect(await pass()).toEqual(["building 1"]);
 	});
 
 	test("a held pick keeps its place unbuilt, and stale queue branches and their runs are cleared on the first pass", async () => {

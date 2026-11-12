@@ -497,7 +497,7 @@ comes last, and a missing value prints as `-`:
 | `checks` | `failure` if any check fails, else `pending` if any is pending, else `success`, and `passed=`, `failing=`, `pending=` counts, all from each check's latest run; `-` when the head has no checks. |
 | `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
-| `checkpoint` | A bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head, is not an approval, and ends its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed. Only printed when due. |
+| `checkpoint` | Each bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head, is neither an approval nor dismissed, and ends its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed. Only printed when due. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
 | `thread` | Node ID, `current` or `outdated`, last commenter, latest comment URL, and `path:line` of each unresolved thread. |
 | `hold` | Label, acquisition token, acquisition time, verified GitHub event API URL, and age; `hold -` when no label holds it. Unknown acquisition facts print as `-` and `unknown age`. |
@@ -512,7 +512,7 @@ own rollup state counts the superseded runs too. A required check
 is one branch protection or a ruleset requires for this PR. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
-`landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `checkpoint` (`reviewer`, `round`, `url`, or null), `reactions`,
+`landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `checkpoints` (`reviewer`, `round`, `url`), `reactions`,
 `threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
 failures exit 1.

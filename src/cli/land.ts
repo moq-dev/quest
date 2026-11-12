@@ -162,6 +162,8 @@ export interface Waiting {
 	url: string;
 	/** Its pick, from which the wait is measured. */
 	enabledAt: string;
+	/** The pinned head it waits on. */
+	head: string;
 	/** The required checks still pending on its head. */
 	pending: string[];
 	/** It still needs an approving review its base requires, which an automated reviewer may give. */
@@ -441,6 +443,7 @@ export async function resolveQueue(
 					number: entry.number,
 					url: entry.url,
 					enabledAt: entry.enabledAt,
+					head: entry.head,
 					pending: unmet.pending,
 					approval,
 				});

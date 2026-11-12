@@ -314,7 +314,7 @@ async function reportOverlaps(github: GitHub, plan: Plan, state: string, overlap
 
 /**
  * How long after its pick a PR may wait on pending required checks or an approval before its author is told
- * which. Twice the default check deadline (`--timeout`), so a slow but running CI rarely trips it.
+ * what it waits for. Twice the default check deadline (`--timeout`), so a slow but running CI rarely trips it.
  */
 export const STALLED_AFTER = 2 * 60 * 60_000;
 

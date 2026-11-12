@@ -714,7 +714,7 @@ describe("checkpoint", () => {
 					}),
 				]).deps,
 			),
-		).find((entry) => entry.startsWith("checkpoint ")) ?? null;
+		).filter((entry) => entry.startsWith("checkpoint "));
 
 	test("falls due when an approving reviewer's third round leaves findings on the head", async () => {
 		const rounds = [
@@ -722,22 +722,29 @@ describe("checkpoint", () => {
 			bot("pullfrog", "CHANGES_REQUESTED", C, 2),
 			bot("pullfrog", "CHANGES_REQUESTED", A, 3),
 		];
-		expect(await line(rounds)).toBe(`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`);
-		// An approval of the head, a second review of the same commit, or a head it has not reviewed is no checkpoint.
-		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "APPROVED", A, 3)])).toBeNull();
-		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "CHANGES_REQUESTED", C, 3)])).toBeNull();
-		expect(await line([...rounds, bot("pullfrog", "COMMENTED", A, 4)])).toBe(
+		expect(await line(rounds)).toEqual([`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`]);
+		// An approval or a dismissed review of the head, a second review of one commit, or an unreviewed head is none.
+		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "APPROVED", A, 3)])).toEqual([]);
+		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "DISMISSED", A, 3)])).toEqual([]);
+		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "CHANGES_REQUESTED", C, 3)])).toEqual([]);
+		expect(await line([...rounds, bot("pullfrog", "COMMENTED", A, 4)])).toEqual([
 			`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-4`,
-		);
+		]);
+		// Every reviewer due on the head is named.
+		const other = [B, C, A].map((commit, index) => bot("other", "CHANGES_REQUESTED", commit, index + 5));
+		expect(await line([...rounds, ...other])).toEqual([
+			`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`,
+			`checkpoint other round 3 ${URL_}#pullrequestreview-7`,
+		]);
 	});
 
 	test("ignores reviewers that only comment, and people", async () => {
 		const commented = [B, C, A].map((commit, index) => bot("coderabbitai", "COMMENTED", commit, index + 1));
-		expect(await line(commented)).toBeNull();
+		expect(await line(commented)).toEqual([]);
 		const person = [B, C, A].map((commit, index) => ({
 			...bot("alice", "CHANGES_REQUESTED", commit, index + 1),
 			author: { __typename: "User", login: "alice" },
 		}));
-		expect(await line(person)).toBeNull();
+		expect(await line(person)).toEqual([]);
 	});
 });
