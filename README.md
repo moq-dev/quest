@@ -543,9 +543,9 @@ ID of the timeline event that added the label. Every command refuses while a
 `quest:active` label it holds no token for is on the PR; a draft its starter still holds, one without a
 `## Waiting` section; and a merged or closed PR, since a push after
 the merge brings the branch back. The refusal names the holder's label and
-age, never its token, so a refused session cannot pass itself off as the
-holder; `quest status` shows the token to whoever the user lets release a
-stale hold. When two
+age, never its token, so a refused session is not handed the means to carry
+on. That is a prompt to stop, not a lock: `quest status` still shows the token,
+for whoever the user asks to release a stale hold. When two
 sessions add the label at once, the first added keeps the PR; GitHub records no
 event for adding a label already on the PR, so two takes in the same moment
 are not told apart.

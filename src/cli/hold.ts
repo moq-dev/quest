@@ -480,7 +480,7 @@ function unknown(snapshot: Snapshot, token: string): string {
 function holder(snapshot: Snapshot, label: string, now: number): string {
 	const added = latestHold(snapshot.events, label);
 	const since = added ? `, added ${ago(now, added.time)}` : "";
-	return `${snapshot.url} is held by ${label}${since}, so stop and report it; if it looks stale, ask the user before releasing it with the token quest status shows`;
+	return `${snapshot.url} is held by ${label}${since}, so stop and report it; taking over a stale hold is the user's choice`;
 }
 
 /** One PR's labels on GitHub. */
