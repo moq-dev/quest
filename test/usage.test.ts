@@ -297,8 +297,11 @@ describe("PR records", () => {
 		]);
 		// An open finding keeps the head short; once no reviewer reports one, it is named in full.
 		expect(body).not.toContain("b".repeat(40));
-		const clean = reviewRecord([{ ...round, findings: [] }, second], tallies);
-		expect(clean).toContain(`- Head: ${"b".repeat(40)}\n`);
+		// Claude's left-out tally still holds an open finding, which keeps it short too.
+		const clean = [{ ...round, findings: [] }, second];
+		expect(reviewRecord(clean, tallies)).not.toContain("b".repeat(40));
+		const settledAll = [tally("codex", 3, { high: 1, medium: 1, low: 2 }, 3, 1), tallies[1]!];
+		expect(reviewRecord(clean, settledAll)).toContain(`- Head: ${"b".repeat(40)}\n`);
 		expect(fixes(body)).toEqual(["codex, gpt-6.1-sol, medium effort"]);
 	});
 
@@ -306,9 +309,15 @@ describe("PR records", () => {
 		const record = reviewRecord([second], [tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0)]);
 		const older = `## Review\n\n${record.replace(/^- Rounds: .*\n/m, "")}\n`;
 		expect(parseReview(older)[0]!.tally).toBeNull();
+		// The settled count `quest usage` prints reads back.
+		const settled = "1; findings 2 (low 2): fixed 1, refuted 0, settled 1, open 0";
+		expect(
+			parseReview(`## Review\n\n${record.replace(/^- Rounds: .*$/m, `- Rounds: ${settled}`)}\n`)[0]!.tally,
+		).toEqual({ rounds: 1, findings: { high: 0, medium: 0, low: 2 }, fixed: 1, refuted: 0, settled: 1, open: 0 });
 		for (const line of [
 			"1; findings 1 (high 1): fixed 0, refuted 0, open 0",
 			"1; findings 2 (high 1): fixed 1, refuted 0, open 1",
+			"1; findings 2 (low 2): fixed 1, refuted 0, settled 1, open 1",
 			"1; findings 1 (severe 1): fixed 1, refuted 0, open 0",
 			"one",
 		])

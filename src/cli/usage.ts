@@ -101,10 +101,10 @@ export interface AccuracyRow {
 	handedBack: number;
 	/** PRs whose record tallies their reviews; a record written before tallies counts for none of what follows. */
 	reviewed: number;
-	/** The reviewers' latest rounds on these PRs that have a score, and the scores' sum. */
+	/** The reviewers' latest rounds on the reviewed PRs that have a score, and the scores' sum. */
 	scored: number;
 	score: number;
-	/** Every reviewer's findings across every round on these PRs, and as `rounds`, each PR's most rounds. */
+	/** Every reviewer's findings across every round on the reviewed PRs, and as `rounds`, each PR's most rounds. */
 	tally: Counts;
 	/** The land fixer's model-run fixes, leaving out the watcher's own base merges. */
 	landFixes: number;
@@ -415,7 +415,7 @@ function settledOnMerge(reviews: ReviewSummary[], merged: boolean): ReviewSummar
 	const settles =
 		merged &&
 		reviews.every(
-			({ tally, open }) => tally === null || (open.high === 0 && open.medium === 0 && tally.open === open.low),
+			({ tally, open }) => open.high === 0 && open.medium === 0 && (tally === null || tally.open === open.low),
 		);
 	if (!settles) return reviews;
 	return reviews.map((review) =>

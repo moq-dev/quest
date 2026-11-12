@@ -69,9 +69,9 @@ Agent's choices, for the implementer to revisit:
   readout: which `quest usage --json` fields feed each axis, how cells with
   too few PRs are marked rather than dropped, and that each chart names its
   date range and PR counts.
-- `quest usage --json` reports each reviewer's latest round and its tally
-  across rounds. The tally does not record the first round's findings, which
-  the readout compares; add them to it.
+- `quest usage --json` reports each reviewer's latest round and its tally,
+  which sums findings across rounds. If the readout compares first-round
+  findings on their own, record them beside the tally.
 - Make the first charts from the data on main when this lands, link them in
   this quest's PR, and say which cells are still too thin.
 

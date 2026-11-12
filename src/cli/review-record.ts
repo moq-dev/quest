@@ -58,7 +58,9 @@ const counted = (tally: Tally): Counts => ({
  */
 export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 	const [shared] = rounds;
-	const clean = rounds.every((round) => round.findings.length === 0);
+	// A reviewer the run left out may still hold open findings, which keep the head from passing too.
+	const clean =
+		rounds.every((round) => round.findings.length === 0) && tallies.every((tally) => counted(tally).open === 0);
 	const lines = [
 		MARK,
 		"",
@@ -165,7 +167,10 @@ export function parseReview(body: string): ReviewSummary[] {
 function parseCounts(text: string): Counts | null {
 	const line = /^- Rounds: (.*?)\r?$/m.exec(text);
 	if (!line) return null;
-	const found = /^(\d+); findings (\d+)(?: \(([^)]*)\))?: fixed (\d+), refuted (\d+), open (\d+)$/.exec(line[1]!);
+	const found =
+		/^(\d+); findings (\d+)(?: \(([^)]*)\))?: fixed (\d+), refuted (\d+)(?:, settled (\d+))?, open (\d+)$/.exec(
+			line[1]!,
+		);
 	if (!found) throw new Error(`the ## Review record's Rounds line is malformed: ${line[1]}`);
 	const findings = { high: 0, medium: 0, low: 0 };
 	for (const part of found[3]?.split(", ") ?? []) {
@@ -179,11 +184,11 @@ function parseCounts(text: string): Counts | null {
 		findings,
 		fixed: Number(found[4]),
 		refuted: Number(found[5]),
-		settled: 0,
-		open: Number(found[6]),
+		settled: Number(found[6] ?? 0),
+		open: Number(found[7]),
 	};
 	const total = SEVERITIES.reduce((sum, severity) => sum + findings[severity], 0);
-	if (total !== Number(found[2]) || counts.fixed + counts.refuted + counts.open !== total)
+	if (total !== Number(found[2]) || counts.fixed + counts.refuted + counts.settled + counts.open !== total)
 		throw new Error(`the ## Review record's Rounds line does not add up: ${line[1]}`);
 	return counts;
 }
