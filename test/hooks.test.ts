@@ -21,6 +21,7 @@ import {
 	setup,
 	targets,
 } from "../src/cli/hooks";
+import { init } from "../src/cli/setup";
 import { CONTEXT } from "../src/cli/skills";
 import { tempDir } from "./fixture";
 
@@ -199,7 +200,10 @@ function checkout(instructions: string | null): string {
 	const dir = tempDir();
 	mkdirSync(join(dir, ".git"));
 	mkdirSync(join(dir, "src", "deep"), { recursive: true });
-	if (instructions !== null) writeFileSync(join(dir, "AGENTS.md"), instructions);
+	if (instructions !== null) {
+		writeFileSync(join(dir, "AGENTS.md"), instructions);
+		if (instructions.includes(REFERENCE_LINE)) init(dir);
+	}
 	return join(dir, "src", "deep");
 }
 

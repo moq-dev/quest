@@ -67,9 +67,9 @@ import {
 	setup,
 	targets,
 } from "./hooks";
-import { CHECKED_CONTEXT, USER_ASKED } from "./rules";
+import { CHECKED_CONTEXT, USER_ASKED, questRoot } from "./rules";
 import { messageLines, messages } from "./messages";
-import { heal, init, uninstall } from "./setup";
+import { heal, init, stubFindings, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
@@ -200,12 +200,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const tree = checkout(root(), warn);
 			const findings = check(tree.docs, tree.exists);
 			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
-			if (findings.length === 0) {
+			// A tree nested in another checkout, such as an example, has no stubs of its own.
+			const stubs = questRoot(root()) === resolve(root()) ? stubFindings(root()) : [];
+			if (findings.length === 0 && stubs.length === 0) {
 				const count = collect(root()).length;
 				print(theme ? theme.checked(count) : `quest: ${count} documents ok`);
 				return;
 			}
 			for (const finding of findings) warn(formatFinding(finding));
+			for (const stub of stubs) warn(stub);
 			code = 1;
 		});
 

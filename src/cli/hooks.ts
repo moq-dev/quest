@@ -9,7 +9,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { type StopInput, broken, runningGates, usesQuest } from "./rules";
+import { version } from "../../package.json";
+import { type StopInput, broken, questRoot, runningGates, usesQuest } from "./rules";
+import { stubFindings } from "./setup";
 import { CONTEXT } from "./skills";
 import { HOOK_EVENTS } from "./worktree-hook";
 
@@ -293,9 +295,16 @@ export function hook(input: unknown): string {
 	const event = value.hook_event_name;
 	switch (event) {
 		case "SessionStart":
-		case "SubagentStart":
-			if (!usesQuest(value.cwd)) return "";
-			return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: CONTEXT } });
+		case "SubagentStart": {
+			const root = questRoot(value.cwd);
+			if (root === null) return "";
+			const stubs = stubFindings(root).length;
+			const context =
+				stubs === 0
+					? CONTEXT
+					: `${CONTEXT}\n${stubs} Quest skill stubs here are missing, outdated, or edited for quest ${version} (\`quest check\` lists them): in a PR, run \`quest init\` with the repository's pinned quest, bumping the pin first if it is older.\n`;
+			return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } });
+		}
 		case "PreToolUse": {
 			if (
 				typeof value.tool_name !== "string" ||
