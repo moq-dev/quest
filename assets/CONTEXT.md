@@ -22,7 +22,8 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Prefer the net simpler result: reuse what exists, inline simple helpers, or narrow the scope, when that makes the result simpler overall. Say what was dropped.
 - Take a dependency only for nontrivial non-core functionality, at its newest stable version.
 - Do not bump package versions unless asked.
-- Comments explain the non-obvious why, never the history, and every export gets one plain line, the way you'd say it out loud. Fix outdated docs and comments in the same PR.
+- Comments explain the non-obvious why, never the history, and every export gets one plain line, the way you'd say it out loud.
+- Audit the code you read as you go, even outside your task's scope: bugs, security, these rules, dead code, and what could be simpler. Fix easy findings in the same PR, outdated docs and comments included, and make the rest a follow-up.
 - Say it once, in the fewest words that hold up.
 
 ## Public API
