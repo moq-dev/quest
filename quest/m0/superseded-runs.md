@@ -2,19 +2,20 @@
 
 ## Goal
 
-`quest status`, `quest merge`, `quest wait`, `quest hold` and `quest land`,
-including its daemons, judge a head's GitHub Actions checks only by the newest run of
-each workflow on that head. A run that a newer run cancelled then fails
-nothing, including a matrix job it left under an unexpanded name such as
-`Tests (${{ matrix.os }})`. A cancelled run that is still its workflow's
-newest run fails as before.
+`quest status`, `quest merge`, `quest wait` and `quest land`, including its
+daemons, ignore the checks of a GitHub Actions workflow run that a newer
+run replaced, as land-bump already does. A run that a newer run cancelled
+then fails nothing, including a matrix job it left under an unexpanded name
+such as `Tests (${{ matrix.os }})`. A cancelled run that nothing replaced,
+and a failed run that is still its workflow's latest for its event, fail as
+before.
 
 ## Plan
 
 Decided 2026-11-12 (user, /quest-plan of the follow-ups from a
-/quest-complete run on kixelated/token-max): ✅ drop superseded runs where
-`latestContexts` picks each check's latest report (rejected: treating a
-cancelled run as passing, since a genuinely cancelled required run would
+/quest-complete run on kixelated/token-max): ✅ drop the checks of replaced
+workflow runs before picking each check's latest report (rejected: treating
+a cancelled run as passing, since a genuinely cancelled required run would
 then pass; fixing each repository's workflow, since every repository would
 need it and token-max's `edited` trigger is deliberate).
 
@@ -31,17 +32,25 @@ was rerun.
 
 Recommendations:
 
-- Before picking each check's latest report, drop the check runs of any
-  workflow run that a newer run of the same workflow file and event
-  superseded on the head. Newer means a higher run `databaseId`, and a rerun
-  attempt counts as the same run. Keying by event keeps a `push` run and a
-  `pull_request` run on the same head apart, since each tests something
-  different.
-- Every query that feeds `latestContexts` or `checksState` asks for
-  `checkSuite { workflowRun { databaseId event file { path } } }`: status,
-  land, land-bump, hold and wait. `quest wait` decides whether a run is
-  still in progress in its own code, which must agree. `checks.ts` still
-  says the Worker shares it, which has been stale since kix was deleted.
-- A required check that only a superseded run reported, such as a renamed
-  job, then counts as missing, which the base's required-check list already
-  treats as pending.
+- Share land-bump's rule rather than writing a new one. `latestRuns`
+  (`src/cli/land-bump.ts`) keeps each workflow's latest run per event, and
+  drops a cancelled run that a newer run of any event replaced, as when push
+  and pull_request share a `cancel-in-progress` group. Its caller then drops
+  the replaced runs' check suites. Move both into `src/github/checks.ts`, so
+  status, `quest merge`'s refusal of a failed check (`passing` in
+  `src/cli/hold.ts`), wait, land and land-bump all judge the same checks.
+  Keep land-bump's tests passing.
+- Read the runs through the existing check queries, as
+  `checkSuite { databaseId status conclusion workflowRun { databaseId event workflow { databaseId } } }`,
+  rather than land-bump's extra REST calls, unless GraphQL lacks a field
+  the rule needs.
+- Workflow-run fields need Actions read. `quest land serve` mints its API
+  token with only `checks` and `statuses` read (`src/cli/land-serve.ts`).
+  Add `actions: "read"`, which the GitHub App already grants, since
+  land-bump and land-watch request it.
+- Where dropping replaced runs leaves no checks, report pending, as
+  land-bump does (`found.length === 0`). `checksState` returns success for an
+  empty list, and status has no list of required checks to fall back on.
+- Order runs so that a rerun of a replaced run counts as newest, for
+  example by the latest attempt's start, rather than by run id. Otherwise
+  rerunning the cancelled run, the only workaround today, is ignored.
