@@ -1266,7 +1266,7 @@ the same for every repository unless its `AGENTS.md` names others:
 
 | Size | Writer | Fallback |
 |---|---|---|
-| XS | Claude Code `claude-haiku-5-5` xhigh | Codex `gpt-6.1-sol` low |
+| XS | Claude Code `claude-sonnet-5-5` high | Codex `gpt-6.1-sol` low |
 | S | Claude Code `claude-opus-5-5` low | Codex `gpt-6.1-sol` medium |
 | M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
@@ -1288,7 +1288,7 @@ XS, and `quest models` prints the entry to run:
 
 ```console
 $ quest models XS
-claude	claude-haiku-5-5	xhigh
+claude	claude-sonnet-5-5	high
 codex	gpt-6.1-sol	low
 
 $ quest models XS --writer claude-opus-5-5
@@ -1902,10 +1902,10 @@ hold an agent. Claude Code lists a command only while it runs, so the
 refusal ends with the gate. Codex runs no such hook.
 
 `quest` must be on the `PATH` the agent starts with, as for the worktree `--body`, a `body=` field,
-`git commit -m`, or `--body-file -` with a here-document. A body file, or one
-piped into `gh`, passes unread, since the file may hold something else by the
-time the command runs; `quest context` keeps the footer and em-dash rules in
-prose for that case. `quest context` still prints these rules,
+`git commit -m`, `--body-file -` with a here-document, or a body file. A file
+is read only when its command is the only one on the command line; after
+another command, or piped into `gh`, a body passes unread, since it may hold
+something else by the time the command runs. `quest context` still prints these rules,
 under a last `Checked` section that the hook leaves out, for agents without
 it.
 
