@@ -133,21 +133,18 @@ function answer(
 	};
 }
 
-/** The skill a slash command or `Skill` call in a Claude Code record runs, if any. */
-function claudeSkill(record: Record<string, unknown>, human: boolean): string | null {
+/** How Claude Code opens the turn loading a skill, whether typed as a slash command or called as a tool. */
+const CLAUDE_SKILL = /^\s*Base directory for this skill: \S*?([^/\s]+)\/?\s/;
+
+/** The skill a Claude Code record loads, if any; built-in commands such as `/compact` load none. */
+function claudeSkill(record: Record<string, unknown>): string | null {
 	const content = (record.message as { content?: unknown } | undefined)?.content;
-	if (record.type === "user") {
-		if (!human) return null;
-		const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
-		const command = /<command-name>\/?([^<]+?)\s*<\/command-name>/.exec(text);
-		return command ? command[1]! : null;
+	if (record.type !== "user" || record.isMeta !== true || !Array.isArray(content)) return null;
+	for (const block of content) {
+		const name = typeof block?.text === "string" ? CLAUDE_SKILL.exec(block.text)?.[1] : undefined;
+		if (name) return name;
 	}
-	if (!Array.isArray(content)) return null;
-	let skill: string | null = null;
-	for (const block of content)
-		if (block?.type === "tool_use" && block.name === "Skill" && typeof block.input?.skill === "string")
-			skill = block.input.skill;
-	return skill;
+	return null;
 }
 
 /**
@@ -164,12 +161,13 @@ export function readClaudeMessages(
 	let skill: string | null = null;
 	eachLine(path, (line, complete) => {
 		// Only these lines can hold a typed turn, a skill, or an answer, so the far larger rest are never parsed.
-		if (!line.includes('"human"') && !line.includes('"Skill"') && !line.includes('"answers"')) return;
+		if (!line.includes('"human"') && !line.includes("Base directory for this skill") && !line.includes('"answers"'))
+			return;
 		const record = parseLine(path, line, complete);
 		if (!record || record.isSidechain === true) return;
 		const result = record.toolUseResult as Record<string, unknown> | undefined;
 		const human = (record.origin as { kind?: unknown } | undefined)?.kind === "human";
-		skill = claudeSkill(record, human) ?? skill;
+		skill = claudeSkill(record) ?? skill;
 		const asked = record.type === "user" && Array.isArray(result?.questions) && result.answers !== undefined;
 		if (!asked && (record.type !== "user" || !human)) return;
 		const at = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
@@ -262,7 +260,7 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 	let typed = false;
 	let where = "";
 	let skill: string | null = null;
-	const asked = new Map<string, CodexQuestion[]>();
+	const asked = new Map<string, CodexQuestion[] | null>();
 	// `request_user_input` calls whose output holds the answers.
 	const pending = new Set<string>();
 	eachLine(path, (line, complete) => {
@@ -288,7 +286,16 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 		const item = record?.payload as Record<string, unknown> | undefined;
 		if (record?.type !== "response_item" || !item) return;
 		if (item.type === "function_call" && CODEX_ASK.has(item.name as string)) {
-			asked.set(item.call_id as string, codexQuestions(path, item.arguments));
+			const at = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
+			// A question before the window is read only for an answer inside it, so a shape quest no longer
+			// knows there leaves that answer unread rather than failing the window.
+			let questions: CodexQuestion[] | null = null;
+			try {
+				questions = codexQuestions(path, item.arguments);
+			} catch (error) {
+				if (!(at < since)) throw error;
+			}
+			asked.set(item.call_id as string, questions);
 			if (item.name === "request_user_input") pending.add(item.call_id as string);
 			return;
 		}
@@ -297,13 +304,44 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 		const at = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
 		if (Number.isNaN(at)) throw new Error(`${path} has a user turn without a timestamp`);
 		const base = { time: new Date(at).toISOString(), harness: "codex", repository: where, session: session! };
-		if (result) {
-			const questions = asked.get(item.call_id as string)!;
-			if (at < since) return;
-			let given: Record<string, { answers?: unknown }> | undefined;
+		/** Records the answers a turn part carries, if it is a question reply. */
+		const replies = (text: string): boolean => {
+			const reply = CODEX_REPLY.exec(text);
+			if (!reply) return false;
+			let each: Record<string, unknown>[];
 			try {
-				given = (JSON.parse(item.output as string) as { answers?: typeof given }).answers;
-			} catch {}
+				each = JSON.parse(reply[1]!);
+				if (!Array.isArray(each)) throw new Error();
+			} catch {
+				throw new Error(`${path} has a question reply in a shape quest does not know`);
+			}
+			for (const one of each) {
+				let ref: unknown;
+				try {
+					ref = JSON.parse(one?.questionItemId as string);
+				} catch {}
+				if (!Array.isArray(ref) || typeof one.answer !== "string")
+					throw new Error(`${path} has a question reply in a shape quest does not know`);
+				const questions = asked.get(ref[1] as string);
+				// A question before the window in a shape quest no longer knows was left unread above.
+				if (questions === null) continue;
+				const q = questions?.[ref[2] as number];
+				if (!q) throw new Error(`${path} has an answer to a question its log does not hold`);
+				entries.push(answer({ ...base, skill }, q.question, q.header, q.options, [one.answer]));
+			}
+			return true;
+		};
+		if (result) {
+			const questions = asked.get(item.call_id as string);
+			if (at < since || !questions) return;
+			let output: unknown;
+			try {
+				output = JSON.parse(item.output as string);
+			} catch {
+				// A cancelled or failed call returns an error message, not answers: the person gave none.
+				return;
+			}
+			const given = (output as { answers?: unknown } | null)?.answers as Record<string, { answers?: unknown }>;
 			if (typeof given !== "object" || given === null)
 				throw new Error(`${path} has a Codex question's answers in a shape quest does not know`);
 			for (const q of questions) {
@@ -316,6 +354,20 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 			return;
 		}
 		const content = Array.isArray(item.content) ? item.content : [];
+		// Turns before the window, and in sessions whose typed turns T3 Code records, are read only for the skill
+		// they load, so their provenance need not be one quest knows.
+		if (at < since || !typed) {
+			const sources = (
+				(item.internal_chat_message_metadata_passthrough as Record<string, unknown> | undefined)
+					?.content_item_metadata as unknown[] | undefined
+			)?.map((each) => (each as { provenance?: { type?: unknown } } | null)?.provenance?.type);
+			content.forEach((part, i) => {
+				if (typeof part?.text !== "string") return;
+				if (sources?.[i] === "skills") skill = codexSkill(part.text) ?? skill;
+				else if (at >= since) replies(part.text);
+			});
+			return;
+		}
 		const meta = item.internal_chat_message_metadata_passthrough as Record<string, unknown> | undefined;
 		const provenance = meta?.content_item_metadata;
 		if (!Array.isArray(provenance)) {
@@ -335,24 +387,18 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 		const texts: string[] = [];
 		content.forEach((part, i) => {
 			if (typeof part?.text !== "string") return;
-			if (sources[i] === "skills") skill = /<name>\s*([^<]+?)\s*<\/name>/.exec(part.text)?.[1] ?? skill;
-			if (sources[i] !== "user") return;
-			const reply = CODEX_REPLY.exec(part.text);
-			if (!reply) return texts.push(part.text);
-			if (at < since) return;
-			for (const each of JSON.parse(reply[1]!) as Record<string, unknown>[]) {
-				const ref =
-					typeof each?.questionItemId === "string" ? (JSON.parse(each.questionItemId) as unknown[]) : null;
-				const q = Array.isArray(ref) ? asked.get(ref[1] as string)?.[ref[2] as number] : undefined;
-				if (!q || typeof each.answer !== "string")
-					throw new Error(`${path} has an answer to a question its log does not hold`);
-				entries.push(answer({ ...base, skill }, q.question, q.header, q.options, [each.answer]));
-			}
+			if (sources[i] === "skills") skill = codexSkill(part.text) ?? skill;
+			if (sources[i] === "user" && !replies(part.text)) texts.push(part.text);
 		});
 		const text = texts.join("\n").trim();
 		if (typed && at >= since && text !== "") entries.push({ kind: "message", ...base, text });
 	});
 	return entries;
+}
+
+/** The skill a Codex `skills` turn part loads. */
+function codexSkill(text: string): string | null {
+	return /<name>\s*([^<]+?)\s*<\/name>/.exec(text)?.[1] ?? null;
 }
 
 /** Who Codex says wrote a part of a user turn: the person, or the instructions, harness, or skill it added. */

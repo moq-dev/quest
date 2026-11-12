@@ -52,7 +52,8 @@ Agent's choices, for the implementer to revisit. Each run:
   [the token-max attribution](/quest/m0/routing-evidence/usage-token-max.md)
   lands; the rest named a PR that left the work to a planned follow-up
   or kept older behavior.
-- `quest messages` returns every human turn, so set aside machine-written
+- `quest messages` returns every human turn as a `kind: "message"` entry,
+  beside the `kind: "answer"` entries tallied below, so set aside machine-written
   ones yourself: bare skill invocations, pasted relays and logs, accepted
   suggested prompts, and `/compact`, `/clear`, and `/goal` commands.
 - Group them into classes by the agent behavior behind them. A class is

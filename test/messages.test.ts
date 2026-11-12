@@ -200,6 +200,15 @@ const claudeAnswer = (timestamp: string, answers: object, extra: object = {}) =>
 	...extra,
 });
 
+/** The meta turn Claude Code writes when a skill loads, typed or called. */
+const skillTurn = (timestamp: string, dir: string) => ({
+	type: "user",
+	isMeta: true,
+	timestamp,
+	cwd: "/work/proj",
+	message: { role: "user", content: [{ type: "text", text: `Base directory for this skill: ${dir}\n\n# Body` }] },
+});
+
 describe("readClaudeMessages", () => {
 	test("reads answers with the recommended options and the skill the session last ran, in every session", () => {
 		const path = join(tempDir(), `${SESSION}.jsonl`);
@@ -208,15 +217,13 @@ describe("readClaudeMessages", () => {
 			lines(
 				claudeAnswer("2026-10-30T10:00:00Z", { "Which color?": "Blue" }),
 				turn("2026-11-06T09:00:00Z", "<command-name>/quest-plan</command-name><command-args>x</command-args>"),
+				skillTurn("2026-11-06T09:00:01Z", "/repo/.claude/skills/quest-plan"),
 				claudeAnswer("2026-11-06T09:01:00Z", {
 					"Which color?": "Red (Recommended)",
 					"Which sizes?": ["S", "M"],
 				}),
-				{
-					type: "assistant",
-					timestamp: "2026-11-06T09:02:00Z",
-					message: { content: [{ type: "tool_use", name: "Skill", input: { skill: "quest-merge" } }] },
-				},
+				skillTurn("2026-11-06T09:02:00Z", "/plugins/p/skills/quest-merge/"),
+				turn("2026-11-06T09:02:30Z", "<command-name>/compact</command-name>", { entrypoint: "t3-code" }),
 				claudeAnswer("2026-11-06T09:03:00Z", { "Which color?": "green, please" }),
 				claudeAnswer("2026-11-06T09:04:00Z", { "Which color?": "Blue" }, { isSidechain: true }),
 			),
@@ -374,6 +381,35 @@ describe("readCodexMessages answers", () => {
 				originator === "T3 Code" ? answers : [...answers, typed],
 			);
 		}
+	});
+
+	test("skips a cancelled question and reads turns before the window only for their skill", () => {
+		const path = join(tempDir(), "rollout.jsonl");
+		writeFileSync(
+			path,
+			lines(
+				codexMeta({}),
+				{
+					type: "response_item",
+					timestamp: "2026-10-30T10:00:00Z",
+					payload: { role: "user", content: [{ text: "old" }] },
+				},
+				{ ...call("request_user_input", "call_old", [{ bogus: 1 }]), timestamp: "2026-10-30T10:00:00Z" },
+				call("request_user_input", "call_b", [
+					{ id: "q1", question: "Which mode?", options: [{ label: "Fast" }] },
+				]),
+				{
+					type: "response_item",
+					timestamp: "2026-11-06T10:02:00Z",
+					payload: {
+						type: "function_call_output",
+						call_id: "call_b",
+						output: "request_user_input was cancelled",
+					},
+				},
+			),
+		);
+		expect(readCodexMessages(path, SINCE, plain)).toEqual([]);
 	});
 
 	test("fails on an answer to a question its log does not hold", () => {

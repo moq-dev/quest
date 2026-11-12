@@ -1139,8 +1139,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Print the messages a person typed to agents on this host, and their answers to agents' questions")
 		.description(
 			"Print each message a person typed to a Claude Code or Codex session on this host since --since, oldest " +
-				"first, with its time, harness, repository, and session, and nothing else: no agent reply, tool call or " +
-				"output, harness reminder, or prompt an agent or scheduler wrote. Sessions T3 Code drives are read from " +
+				"first, with its time, harness, repository, and session, and no agent reply, tool call or output, " +
+				"harness reminder, or prompt an agent or scheduler wrote, except the questions answers reply to. Sessions T3 Code drives are read from " +
 				"its state ($T3CODE_HOME, or ~/.t3), which records whether a person or an agent sent each message. " +
 				"Other Claude Code sessions, from $CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude), count a turn " +
 				"Claude Code marks as a human's; other Codex sessions, from $CODEX_HOME (or ~/.codex), count the " +
