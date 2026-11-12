@@ -10,8 +10,9 @@ uses CPU, such as `quest review`'s model calls, and long-running servers
 stay out of the gate.
 
 Non-goals: making mbx a dependency of quest, and a mbx-specific command
-such as `quest mbx`. The core stays independent of any one tool, as
-AGENTS.md requires; mbx is an optional backend the gate detects.
+such as `quest mbx`. mbx stays an optional backend the gate detects, in
+the spirit of AGENTS.md's rule that the core not depend on a particular
+repository, agent, or issue tracker.
 
 ## Plan
 
@@ -43,36 +44,62 @@ Decided 2026-11-12 (maintainer, /quest-plan):
 - Should the gate also stop holding work that barely uses CPU? ✅ Yes, in
   this quest, since it is the same admission logic (rejected: a separate
   quest; leaving it to agents' judgment). `quest review` stops being
-  gated, and the guide says long-running servers stay out of the gate.
+  gated. The shared rule in `assets/CONTEXT.md`, which today names
+  builds, test suites, model checkers, and browsers as CPU-heavy, gains new
+  text saying model calls and long-running servers stay out of the gate.
 - How much does a gated command hold in mbx's pool? ✅ Its learned CPU
-  peak, which the gate already measures, minus what mbx's own compiles and
-  tests inside it take (rejected: a `--cpus N` flag agents guess; a fixed
-  one core, which lets non-cargo work escape the pool again).
+  peak minus what mbx's own compiles and tests inside it take (rejected: a
+  `--cpus N` flag agents guess; a fixed one core, which lets non-cargo work
+  escape the pool again).
+
+How the reservation works, checked against mbx 1.30.0's source: a command
+run inside `mbx reserve` has mbx scheduling switched off for everything it
+starts (`crates/mbx/src/cli/reserve.rs` sets `MBX_SCHED_DISABLE=1`), so
+nested compiles take no permits and the reservation alone covers them.
+Running the command inside `mbx reserve` with only its non-mbx share would
+oversubscribe the pool by the compiles it then runs unscheduled. So the gate
+runs the command outside `mbx reserve`, where mbx keeps scheduling its
+compiles and tests one by one, and holds a sidecar `mbx reserve --cpus <N>`
+on a placeholder that lasts as long as the command, with N its non-mbx
+share. This also avoids holding a whole build's cores through its idle
+phases, the waste the load gate has today.
 
 Agent's choices, for the implementer to revisit:
 
-- Detect mbx at the gate's start: an `mbx` on PATH whose
-  `scheduler.enabled` is true. Admit through `mbx reserve --cpus <N>`,
-  with N the learned peak net of mbx-charged work and at least one core.
-  Keep `QUEST_GATE_PRIORITY=1`'s meaning by passing `--priority normal`
-  for it and `low` otherwise, matching how mbx yields a quarter of its pool
-  to normal-priority builds.
-- First establish how mbx charges a compile started inside an
-  `mbx reserve`: against the reservation, or again on top of it. mbx's
-  docs describe `reserve` only for work outside mbx. If nested compiles
-  are charged twice, a large reservation for `just check` double-counts
-  them; then ask jdx/mr-boxington for nested reservations (the binary
-  already carries an `MBX_RESERVE_WORKER` variable), and until it lands,
-  reserve one core for commands whose learned peak is mostly mbx work.
-- Keep the gate's own scope ownership, cancellation, and descendant
-  cleanup as they are; only admission changes.
-- Measure it: run several `just check`s from separate worktrees at once,
-  with and without mbx detected, and report wall time, load, and CPU
-  pressure (`/proc/pressure/cpu`). Done when the mbx path keeps the host
-  near its core count while finishing no slower than the load gate.
-- Update `quest gate --help`, the README, and the shared rule that tells
-  agents what to gate, which names model calls and servers as not
-  CPU-heavy.
+- The gate keeps no per-command history today: it measures a command only
+  after admission and drops the entry a minute after it exits. Add a
+  learned peak per command, keyed by its repository and argv, recording
+  its total CPU peak and the part its mbx compiles and tests took, which
+  are the processes running under mbx's compiler and test shims. With no
+  history yet, reserve one core and record the run.
+- Cap N at mbx's pool, `scheduler.cpus` minus `scheduler.reserve_cpus`,
+  so a large non-mbx command never takes the cores mbx withholds for other
+  work.
+- Detect mbx from the command's working directory, so a workspace
+  `.mbx.toml` that disables the scheduler counts. If mbx offers no way to
+  read the effective workspace setting, ask jdx/mr-boxington for one, and
+  until then treat a workspace that sets `scheduler.enabled = false` as
+  having no mbx. Decide this once at the gate's start, never by retrying
+  after `mbx reserve` fails.
+- `QUEST_GATE_PRIORITY=1` keeps starting at once, as today. It takes no
+  sidecar, and its compiles run at mbx's normal priority, for example
+  through `MBX_SCHEDULER_PRIORITY`, so they jump ahead of agents'
+  low-priority builds.
+- `--quick` keeps its 60-second bound: if the sidecar is not granted by
+  then, the command starts without one.
+- The gate's memory budget stays as it is. mbx reserves only the
+  resources it is asked for, and the sidecar asks for CPU only.
+- Keep the gate's scope ownership, cancellation, and descendant cleanup;
+  only admission changes.
+- Measure it on cargo-heavy work, since quest's own `just check` runs no
+  cargo: several moq-dev/moq `just check` or `just test` runs from
+  separate worktrees at once, with and without mbx detected. Report wall
+  time, load, and CPU pressure (`/proc/pressure/cpu`). Done when the mbx
+  path keeps the host near its core count while finishing no slower than
+  the load gate.
+- Update `quest gate --help`, the README, and the shared rule above.
 
-Host setup, such as installing mbx and its config, is planned in the
-maintainer's dotfiles, not here.
+Installing mbx on the maintainer's host is outside this repository: the
+maintainer directed it to kixelated/dotfiles on 2026-11-12, which already
+links mbx's config. Until it lands, the measurement can use any mbx 1.30.0
+or later on PATH.
