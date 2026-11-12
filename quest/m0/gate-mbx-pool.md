@@ -71,17 +71,25 @@ already counts a running command at its measured peak
 
 Agent's choices, for the implementer to revisit:
 
+- The mbx path needs the gate's systemd scope, which owns each command on
+  Linux with a systemd 254+ user manager: the scope is where the gate
+  measures a command and where it can cap one. Hosts without such a scope,
+  macOS among them, keep today's load gate even with mbx installed.
+- A reservation only holds permits; it does not stop a command from using
+  more. So the gate also caps the command's scope at N cores
+  (`CPUQuota=N×100%`), which bounds every tool inside it, cargo or not.
 - The gate keeps no per-command history today: it measures a command only
   after admission and drops the entry a minute after it exits. Add a
-  learned CPU peak per command, keyed by its repository and argv, from the
-  scope measurement the gate already takes. With no history yet, reserve
-  the whole pool, since a first cargo build inside the lease runs
-  unscheduled and could otherwise fill the host.
-- N is the learned peak, at least one core and at most mbx's pool,
-  `scheduler.cpus` minus `scheduler.reserve_cpus`, so a command never takes
-  the cores mbx withholds for other work. Since nothing inside the lease is
-  scheduled, also bound the command's own parallelism to N, for example
-  `CARGO_BUILD_JOBS` and nextest's thread count, so it cannot outgrow it.
+  learned N per command, keyed by its repository and argv, from the scope
+  measurement the gate already takes. With no history, start at half of
+  mbx's pool. After each run, set N to the measured peak, or double it, up
+  to the pool, when the scope was throttled (`cpu.stat`'s
+  `nr_throttled`), since a capped command cannot show a peak above its cap.
+  Half the pool also fits beside the quarter mbx keeps free for
+  normal-priority work, so a first run never blocks a waiting land check.
+- N is at least one core and at most mbx's pool, `scheduler.cpus` minus
+  `scheduler.reserve_cpus`, so a command never takes the cores mbx
+  withholds for other work.
 - Ordinary reservations pass `--priority low`, since `mbx reserve`
   defaults to normal and ignores `scheduler.priority`.
 - Detect mbx from the command's working directory, so a workspace
@@ -95,8 +103,9 @@ Agent's choices, for the implementer to revisit:
   normal priority, for example through `MBX_SCHEDULER_PRIORITY`, so they
   jump ahead of agents' low-priority builds.
 - `--quick` keeps its 60-second bound: if the reservation is not granted
-  by then, the command starts outside it, where mbx still schedules its
-  compiles.
+  by then, the gate stops the pending `mbx reserve`, whose command has not
+  started, and only then starts the command outside it, where mbx still
+  schedules its compiles. A late grant can never run the command twice.
 - The gate's memory budget stays as it is. mbx reserves only the
   resources it is asked for, and the gate asks for CPU only.
 - Keep the gate's scope ownership, cancellation, and descendant cleanup;
