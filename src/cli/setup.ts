@@ -226,7 +226,9 @@ export function stubFindings(root: string): string[] {
 	} catch (error) {
 		// Refusals elsewhere, such as on `quest/README.md`, are not about stubs.
 		if (error instanceof InitRefused)
-			return SKILL_DIRS.some((dir) => error.path.startsWith(`${dir}/`)) ? [error.message] : [];
+			return SKILL_DIRS.some((dir) => error.path === dir || error.path.startsWith(`${dir}/`))
+				? [error.message]
+				: [];
 		throw error;
 	}
 	return changes
