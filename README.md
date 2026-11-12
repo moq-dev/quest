@@ -543,8 +543,10 @@ Sessions often share a GitHub account, so taking it prints a hold token: the
 ID of the timeline event that added the label. Every command refuses while a
 `quest:active` label it holds no token for is on the PR; a draft its starter still holds, one without a
 `## Waiting` section; and a merged or closed PR, since a push after
-the merge brings the branch back. The refusal names the holder's label, age,
-and token, so you can decide whether to release a stale hold. When two
+the merge brings the branch back. The refusal names the holder's label and
+age, never its token, so a refused session is not handed the means to carry
+on. That is a prompt to stop, not a lock: `quest status` still shows the token,
+for whoever the user asks to release a stale hold. When two
 sessions add the label at once, the first added keeps the PR; GitHub records no
 event for adding a label already on the PR, so two takes in the same moment
 are not told apart.
@@ -1546,7 +1548,7 @@ remotes, or, once the checkout is deleted, a Codex log for that exact directory
 names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
 it or Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. An opencode session, whose log quest does not read, is
-the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers; each reviewer's latest `quest review` round's
+the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer's latest `quest review` round's
 reviewer, round, score, open findings, and the last round's findings fixed or
 refuted; the land fixer's fixes; the later PRs that list it under
 `## Caused by`; and each online reviewer's record, read from GitHub.
@@ -1591,10 +1593,17 @@ $ quest messages --since 2026-11-10
 ```
 
 Each message shows its time, harness, repository (the checkout's GitHub
-`origin`, else its directory), and session, then its text; `--json` prints an
-array of `{time, harness, repository, session, text}`. It prints no agent
-reply, tool call or output, harness reminder, or prompt an agent or scheduler
-wrote, and tells them apart by the sender each source records, not by
+`origin`, else its directory), and session, then its text. It also prints each
+answer a person gave an agent's blocking question, such as Claude Code's
+`AskUserQuestion` or Codex's `request_user_input`, marked `answer` with the
+skill the session last ran, then the question, the options the agent marked
+`(Recommended)`, and what was picked or typed instead. These come from each
+harness's own log, T3 Code's sessions included, since only it keeps the
+options. `--json` prints an array of `{kind: "message", time, harness,
+repository, session, text}` and `{kind: "answer", time, harness, repository,
+session, skill, header, question, options, recommended, picked}`. Besides the
+questions answers reply to, it prints no agent reply, tool call or output,
+harness reminder, or prompt an agent or scheduler wrote, and tells them apart by the sender each source records, not by
 wording. T3 Code records whether a person or an agent created each message, so
 the sessions it drives are read from its state (`$T3CODE_HOME`, or `~/.t3`)
 and nowhere else. Other Claude Code sessions count the turns Claude Code marks

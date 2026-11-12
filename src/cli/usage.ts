@@ -6,7 +6,7 @@ import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type Size, SIZES, handedBack, questBranch } from "../core";
-import { implementer, recorded } from "../github/models";
+import { recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { discoveryEnv, git } from "./git";
 import { fixes } from "./land-fixer";
@@ -67,6 +67,8 @@ export interface PullRow {
 	handedBack: boolean;
 	size: Size | null;
 	implementers: { harness: string; model: string; effort: string; size: Size | null }[];
+	/** The `Implementer:` items it cannot read, which count toward no implementer. */
+	unread: string[];
 	/** Each reviewer's latest round, as the PR's `## Review` record names them. */
 	review: ReviewSummary[];
 	/** Who made each mechanical fix the land fixer recorded, or `quest land watch` for a base merge it made alone. */
@@ -424,10 +426,10 @@ function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 			draft: each.draft,
 			handedBack: each.draft && handedBack(each.body),
 			size: own.sizes.map(sized).find((s) => s !== null) ?? null,
-			implementers: own.implementers.flatMap(({ item }) => {
-				const fields = implementer(item);
-				return fields ? [{ ...fields, size: sized(fields.size) }] : [];
-			}),
+			implementers: own.implementers.flatMap(({ fields }) =>
+				fields ? [{ ...fields, size: sized(fields.size) }] : [],
+			),
+			unread: own.implementers.filter(({ fields }) => fields === null).map(({ item }) => item),
 			review: parseReview(each.body),
 			landFixes: fixes(each.body),
 			fixedBy: (fixedBy.get(each.number) ?? []).sort((a, b) => a - b),
@@ -777,6 +779,7 @@ export function usageLines(report: Usage): string[] {
 		lines.push("", `#${row.number} ${row.size ?? "-"} ${state}: ${row.title} (${row.branch})`);
 		for (const i of row.implementers)
 			lines.push(`  implementer: ${i.harness}, ${i.model}, ${i.effort} effort${i.size ? ` (${i.size})` : ""}`);
+		for (const item of row.unread) lines.push(`  unread: ${item}`);
 		for (const r of row.review)
 			lines.push(
 				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; round ${r.round}, score ${r.score ?? "-"}/10, ${r.findings} open, last round ${r.fixed} fixed and ${r.refuted} refuted`,

@@ -5,10 +5,11 @@ skills: grill
 ---
 
 You own this PR until it is landable.
-Parse the arguments to determine the PR number. Any other text is the user's feedback on the PR; interpret it against the diff.
-Take it with `quest iterate <pr>` before acting, passing a token you already hold for it to keep that hold, and keep the hold token it prints; `quest iterate --help` explains holds.
-If it refuses because another session holds the PR, stop and report what it printed; taking over a stale hold is the user's choice.
+The argument is the PR; any other text is the user's feedback on it, read against the diff.
+Take it with `quest iterate <pr> [token]` before acting, passing a hold token your brief gives or you already have, and keep the token it prints.
+If it refuses, stop and report what it printed; taking over a hold is the user's choice.
 If you cannot push to the PR's branch, stop and report.
+When another worktree holds the PR's branch, work in a detached checkout of its head.
 Your `Implementer:` line ends with the size your brief gives the work, as `Implementer: Claude Code, claude-opus-5-5, low effort (iterate, XS)`.
 
 Read the PR, its linked issues and quest, the reviews and comments posted on it, and the surrounding code.
@@ -22,10 +23,9 @@ Leave the open decisions of its follow-ups to the round that picks it to merge, 
 
 Fix merge conflicts, failing CI checks, and the review findings already posted on the head.
 Answer each `signal` line of `quest status <pr>` that your push leaves: reply in the finding's thread, link its review in a comment, or link the decision in a comment saying how the head applies it.
-
 If `quest status <pr>` shows auto-merge enabled, disable it with `gh pr merge <pr> --disable-auto` before any push: GitHub keeps it across a writer's push and would land the new head unreviewed.
-Once nothing is unfinished and no decisions beyond its follow-ups' need the user, run `/quest-review` with your token, which reviews the branch, pushes, and marks the PR ready.
-Otherwise, before pushing to a PR that is ready for review, review the new head locally with `quest review --base <remote>/<base>`, following each round's `next` line; when another worktree holds the PR branch, work in a detached checkout of its head and pass `--branch <head-branch>`; then push and update the PR's summary.
-Summarize the changes made.
-Hand it back with `quest release <pr> <token>`, using the latest token printed, whenever you stop, including to ask.
+
+Once nothing is unfinished and no decision beyond its follow-ups' needs the user, finish with `/quest-review`, passing your token, whether the PR is a draft or already ready for review: it reviews the branch, pushes, and marks it ready.
+If you stop before that on a PR that is ready for review, its new head still needs a review before the push: run `quest review --base <remote>/<base>`, with `--branch <head-branch>` whenever your checked-out branch is not the PR's head branch, and follow each round's `next` line; then push and update the PR's summary.
+Hand the PR back with `quest release <pr> <token>`, using the latest token printed, whenever you stop, including to ask.
 Never merge; that is `/quest-merge`, once the PR is picked.

@@ -3,20 +3,13 @@ description: Start work on a quest.
 guide: Model, Format, Creation, Execution, Summaries, Questions
 ---
 
-Your goal is to implement the quest, or as much of it as possible, and open a PR.
-The argument is the quest to work on.
+Implement the quest the argument names, or as much of it as possible, in its PR.
 
-Confirm you can write in your worktree; if you cannot, stop and report without claiming.
-Update your checkout and check the forge for an open PR already doing the quest's work, then claim the quest with `quest start <quest>`.
-If it refuses, the quest is blocked or someone else holds it: report what it printed and stop.
-If it warns that the quest's local branch already exists, the claim succeeded: resume that earlier attempt as the guide describes.
-If you cannot pursue a claim before pushing work, release it with `quest start --release <quest>` and remove your isolated worktree; once work is pushed, hand it back as the guide describes.
+Claim it with `quest start <quest>`; if it refuses, report what it printed and stop.
+If you cannot go on before pushing any work, release the claim with `quest start --release <quest>`.
 
-Implement the quest until it is complete, or some blocker is hit, then push to its PR and update the description.
+Implement the quest until it is complete or blocked, then push to its PR and update the description.
 
-When done, explain the result in a few lines and summarize any issues encountered.
-List choices you made without asking in the PR body rather than waiting on them.
-
-If the quest is complete and you see no decision left for the maintainer beyond its follow-ups', run `/quest-review` on it right away.
-Otherwise, prompt the user interactively for each open decision, including your recommendation, and record the outcome in the PR body's `## Decisions` section.
-Once the quest is complete and the PR reflects the user's answers, run `/quest-review` on it.
+If the quest is complete and no decision is left for the maintainer beyond its follow-ups', run `/quest-review` on it right away.
+Otherwise ask the user each open decision with your recommendation, record the answers in the PR body's `## Decisions` section, and run `/quest-review` once the quest is complete and the PR reflects them.
+When you cannot prompt, leave the PR a draft instead, with each decision and your recommendation under `## Waiting`.

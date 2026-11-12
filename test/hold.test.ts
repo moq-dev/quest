@@ -259,11 +259,12 @@ describe("taking a PR", () => {
 		}
 	});
 
-	test("refuses a second session, naming the holder's token", async () => {
+	test("refuses a second session without handing it the holder's token", async () => {
 		const pull = new FakePull();
 		const first = await take(PR, undefined, pull.deps());
 		const message = await refused(take(PR, undefined, pull.deps()));
-		expect(message).toContain(`held by quest:active, added just now as token ${first.token}`);
+		expect(message).toContain("held by quest:active, added just now, so stop and report it");
+		expect(message).not.toContain(first.token);
 		expect(pull.labels).toEqual(["quest:active"]);
 	});
 
@@ -417,9 +418,9 @@ describe("merge --land", () => {
 	test("takes no label, and refuses while a session holds the PR", async () => {
 		const pull = new FakePull();
 		const { token } = await take(PR, undefined, pull.deps());
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
-			`held by quest:active, added just now as token ${token}`,
-		);
+		const message = await refused(land(PR, HEAD, "merge", pull.deps()));
+		expect(message).toContain("held by quest:active, added just now");
+		expect(message).not.toContain(token);
 		await release(PR, token, pull.deps());
 		pull.label("quest:active");
 		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:active");

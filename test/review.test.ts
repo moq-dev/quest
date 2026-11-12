@@ -18,7 +18,7 @@ import {
 	verdict,
 } from "../src/cli/review";
 import { withReview } from "../src/cli/review-record";
-import { recorded, withModels } from "../src/github/models";
+import { implementer, recorded } from "../src/github/models";
 import { tempDir } from "./fixture";
 
 afterEach(() => {
@@ -1619,6 +1619,11 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
 			"reviewer claude claude-opus-5-5 medium\n",
 		);
+		// A display name is avoided as its ID is.
+		pull.body = body("- Size: S", "- Implementer: Codex, GPT-6.1 Sol, high effort");
+		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
+			"reviewer claude claude-opus-5-5 low\n",
+		);
 		// A latest implementer whose model is unknown may be the running harness's, which the review then skips.
 		pull.body = body("- Implementer: Codex, gpt-6.1-sol, high", "- Implementer: Codex, unknown, unknown effort");
 		expect((await quest("--root", s.repo, "review", "--new")).stdout).toContain(
@@ -1632,7 +1637,7 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 		expect(invalid.stderr).toContain("the PR's ## Models record names size XXL, not one of XS, S, M, L, XL");
 		const nameless = await quest("--root", s.repo, "review", "--new", "--size", "S");
 		expect(nameless.code).toBe(2);
-		expect(nameless.stderr).toContain("names no model in: Implementer: Codex");
+		expect(nameless.stderr).toContain("names no model it can read in: Implementer: Codex");
 		const both = await quest("--root", s.repo, "review", "--new", "--size", "S", "--exclude-model", "gpt-6.1-sol");
 		expect(both.stdout).toMatch(/^size S --size\n[\s\S]*\nreviewer claude claude-opus-5-5 low\n/);
 		pull.body = body("- Size: S", "- Size: M");
@@ -1658,32 +1663,82 @@ fakes("the PR's Models record sizes the review and names its latest writer", asy
 	}
 });
 
-test("a session that pushes again moves its Models line last", () => {
-	const one = "Implementer: Claude Code, claude-opus-5-5, high effort";
-	const two = "Implementer: Codex, gpt-6.1-sol, high effort";
-	const body = (...lines: string[]) =>
-		`Body.\n\n## Models\n\n${lines.map((l) => `- ${l}\n`).join("")}\n## Review\n\nNone\n`;
-	expect(withModels("Body.", one)).toBe(`Body.\n\n## Models\n\n- ${one}\n`);
-	expect(withModels(body("Size: S", one), two)).toBe(body("Size: S", one, two));
-	expect(withModels(body("Size: S", one, two), one)).toBe(body("Size: S", two, one));
-	expect(withModels(body(one, two), two)).toBe(body(one, two));
-});
-
 test("a Models record reads its size and every implementing model", () => {
 	const body =
 		"x\n\n## Models\n\nSize: S\n- Implementer: Claude Code, claude-opus-5-5, high effort\n* Implementer: Codex, unknown, unknown effort\n\n## Review\n\n- Size: XL\n";
 	expect(recorded(body)).toEqual({
 		sizes: ["S"],
 		implementers: [
-			{ item: "Implementer: Claude Code, claude-opus-5-5, high effort", model: "claude-opus-5-5" },
-			{ item: "Implementer: Codex, unknown, unknown effort", model: "unknown" },
+			{
+				item: "Implementer: Claude Code, claude-opus-5-5, high effort",
+				fields: { harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null },
+			},
+			{
+				item: "Implementer: Codex, unknown, unknown effort",
+				fields: { harness: "Codex", model: "unknown", effort: "unknown", size: null },
+			},
 		],
 	});
 	expect(recorded("No record.")).toEqual({ sizes: [], implementers: [] });
 	expect(recorded("## Models\n\n- Size:\n- Size: L extra\n- Size:  M \n").sizes).toEqual(["", "L extra", "M"]);
 	expect(recorded("## Models\n\n- Implementer: Codex\n").implementers).toEqual([
-		{ item: "Implementer: Codex", model: null },
+		{ item: "Implementer: Codex", fields: null },
 	]);
+});
+
+test("an Implementer line reads as agents write it", () => {
+	const read = (rest: string) => implementer(`Implementer: ${rest}`);
+	const opus = (effort: string, harness = "Claude Code") => ({
+		harness,
+		model: "claude-opus-5-5",
+		effort,
+		size: null,
+	});
+	expect(read("Claude Code, Opus 5.5, high effort")).toEqual(opus("high"));
+	expect(read("Claude Code, Claude Opus 5.5, xhigh effort")).toEqual(opus("xhigh"));
+	expect(read("Claude Code, Opus 5.5")).toEqual(opus("unknown"));
+	expect(read("Claude Code, Opus 5.5, effort not reported")).toEqual(opus("unknown"));
+	expect(read("Claude, Haiku 5.5, low effort")).toEqual({
+		harness: "Claude Code",
+		model: "claude-haiku-5-5",
+		effort: "low",
+		size: null,
+	});
+	expect(read("claude-haiku-5-5, effort not reported")).toEqual({
+		harness: "unknown",
+		model: "claude-haiku-5-5",
+		effort: "unknown",
+		size: null,
+	});
+	expect(read("Codex, GPT-6.1 Sol, medium effort (iterate, XS)")).toEqual({
+		harness: "Codex",
+		model: "gpt-6.1-sol",
+		effort: "medium",
+		size: "XS",
+	});
+	expect(read("Claude Code, Opus 5.5, low effort (iterate, flow fix)")).toEqual(opus("low"));
+	expect(read("Claude Code, Opus 5.5, high effort (iterate, XS, arm B)")).toEqual({ ...opus("high"), size: "XS" });
+	expect(read("unknown, Opus 5.5, high effort")).toEqual(opus("high", "unknown"));
+	expect(read("Claude Code, Fable 5.2, medium effort")?.model).toBe("claude-fable-5-2");
+	expect(read("opencode, DeepSeek V4.1 Flash, high effort")?.model).toBe("opencode-go/deepseek-v4.1-flash");
+	expect(read("Codex, gpt-6.1-sol, high")?.effort).toBe("high");
+	expect(read("unknown")).toBeNull();
+	// A lone field reads as a listed display name or an ID, keeping the size its notes give.
+	expect(read("Opus 5.5")).toEqual(opus("unknown", "unknown"));
+	expect(read("Claude Opus 5.5 (iterate, S)")).toEqual({ ...opus("unknown", "unknown"), size: "S" });
+	expect(read("claude-opus-5-5")).toEqual(opus("unknown", "unknown"));
+	expect(read("claude-opus-5-5 (iterate, XS)")).toEqual({ ...opus("unknown", "unknown"), size: "XS" });
+	expect(read("Claude Code")).toBeNull();
+	expect(read("claude-opus-5-5, unknown")).toEqual(opus("unknown", "unknown"));
+	expect(read("Claude Code, Opus 5.5,")).toEqual(opus("unknown"));
+	expect(read("opencode, opencode-go/kimi, high effort")?.model).toBe("opencode-go/kimi");
+	expect(read("opencode-go/kimi")).toBeNull();
+	expect(read(", claude-opus-5-5, high effort")).toEqual(opus("high", "unknown"));
+	// An ID no list names still reads, so a new model is counted before the lists add it.
+	expect(read("Codex, gpt-7, high effort")?.model).toBe("gpt-7");
+	expect(read("Codex, Some Model, high effort")).toBeNull();
+	expect(read("Claude Code, Opus 5.5, high effort, extra")).toBeNull();
+	expect(read("Claude Code, Opus 5.5, very high effort")).toBeNull();
 });
 
 test("the record replaces only a top-level Review section, never an example of one", () => {
