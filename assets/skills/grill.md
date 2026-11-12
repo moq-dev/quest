@@ -5,7 +5,6 @@ guide: Questions
 
 Interview the user until you reach a shared understanding.
 Map the decisions as a design tree: every material decision branches into the decisions that hang off it.
-A background agent that cannot prompt never picks an answer: it puts each open decision in its report with its context, the options, and a recommendation, so its caller can ask the user.
 
 Work the tree in **rounds**.
 The **frontier** is every decision whose prerequisites are already settled.
