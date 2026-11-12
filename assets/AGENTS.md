@@ -197,7 +197,7 @@ Once two agents report the same blocker, such as a check failure that reproduces
 A report that is an API error such as a rate limit or overload, or a cancellation the user did not ask for, is not a result.
 Resume that agent by messaging it, or with `quest agent resume` for a headless one, so it keeps its context and checkout.
 If it cannot be resumed, start a new one with the same brief plus its PR, checkout, and the token of any hold it took (shown by `quest status <pr>`), so it continues and keeps the hold.
-While the error persists, such as a rate limit before its reset, resume and start nothing, and report it once.
+While the error persists, such as a rate limit before its reset, resume and start nothing until it clears, and report it once.
 
 Answer these requests at any point, without stopping running agents:
 
