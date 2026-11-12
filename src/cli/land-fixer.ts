@@ -178,7 +178,7 @@ export interface Round {
 	before: string;
 	/** The pin `before` stood on, when it was the gate's base merge on that pin rather than the pin itself. */
 	pin?: string;
-	/** The head the PR went back to the queue at, which a fix or merge moves; a handback has none. */
+	/** The head the round put back in the queue or published, which a fix or merge moves; a handback may keep it. */
 	after?: string;
 	/** The failure's signature: what failed, so a recurrence after a fix can be told from a new failure. */
 	failure: string;
@@ -1113,7 +1113,9 @@ async function collectJob(
 				{ outcome, failure },
 			);
 			if (rule) error = stopReason(rule, { outcome, failure });
-			const pin = standing !== entry.head ? { pin: entry.head } : {};
+			// The gate's merge stood on the pin: either the plan's head is that merge, or the merge is newer than it.
+			const pinned = [entry.approved, entry.head].find((pin) => pin !== standing);
+			const pin = pinned ? { pin: pinned } : {};
 			round = rule
 				? { job: name, outcome: "handback", before: standing, ...pin, failure, rule }
 				: {
@@ -1204,8 +1206,8 @@ async function collectJob(
 		const handback = error !== undefined || result?.action === "handback";
 		// A refused fix or requeue ends the round in a handback after all.
 		if (handback && round && round.outcome !== "handback") {
-			const { after: _, ...rest } = round;
-			saveRound(state, number, history(state, number)!, { ...rest, outcome: "handback" });
+			// It keeps `after`: a head it published carries this pick's signals when picked again.
+			saveRound(state, number, history(state, number)!, { ...round, outcome: "handback" });
 		}
 		if (error) {
 			// Before leaving the queue, so a restart keeps this reason rather than finding it left.

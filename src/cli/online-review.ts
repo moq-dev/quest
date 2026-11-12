@@ -31,10 +31,9 @@ export function classify(body: string): Answer {
 
 /**
  * The finding lines of a review body, `[P1] ...` or `P1 — ...` with a dash after the bare marker, in a list item or
- * bold or not, each keyed by its
- * title and how many earlier lines of the body share that title.
+ * bold or not, each with its title and a key of that title and how many earlier lines of the body share it.
  */
-export function bodyFindings(body: string): string[] {
+export function bodyFindings(body: string): { title: string; key: string }[] {
 	const seen = new Map<string, number>();
 	return [
 		...body.matchAll(
@@ -50,7 +49,7 @@ export function bodyFindings(body: string): string[] {
 			.toLowerCase();
 		const count = seen.get(title) ?? 0;
 		seen.set(title, count + 1);
-		return count ? `${title} #${count + 1}` : title;
+		return { title, key: count ? `${title} #${count + 1}` : title };
 	});
 }
 
@@ -249,7 +248,7 @@ export function onlineReviews(pull: Activity): OnlineReview[] {
 	// A body finding is one title across a reviewer's passes; a pass after its last listing no longer finds it.
 	const listed = new Map<string, { reviewer: string; last: number; answer: Answer | null }>();
 	const lists = passes.map((pass, index) => {
-		const titles = bodyFindings(pass.body);
+		const titles = bodyFindings(pass.body).map((finding) => finding.key);
 		for (const title of titles) {
 			const id = JSON.stringify([pass.reviewer, title]);
 			listed.set(id, { reviewer: pass.reviewer!, last: index, answer: listed.get(id)?.answer ?? null });

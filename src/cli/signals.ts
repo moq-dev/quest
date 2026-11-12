@@ -120,7 +120,7 @@ export function signals(pull: Activity, writers: ReadonlySet<string>, carried?: 
 			if (!prior || prior.at <= review.at) latest.set(key, review);
 		}
 	const passes = [...latest.values()]
-		.map((pass) => ({ ...pass, titles: bodyFindings(pass.body), answered: false }))
+		.map((pass) => ({ ...pass, titles: bodyFindings(pass.body).map((finding) => finding.title), answered: false }))
 		.filter((pass) => pass.titles.length > 0)
 		.sort((a, b) => a.at - b.at);
 	// A writer answers a pass by linking it; an answer word alone cannot tell which finding it meant.
@@ -131,13 +131,7 @@ export function signals(pull: Activity, writers: ReadonlySet<string>, carried?: 
 	for (const pass of passes)
 		if (!pass.answered)
 			for (const title of pass.titles)
-				// `bodyFindings` keys a repeated title with ` #<n>`, which is not part of the finding.
-				found.push({
-					kind: "finding",
-					url: pass.url,
-					author: pass.reviewer!,
-					text: title.replace(/ #\d+$/, ""),
-				});
+				found.push({ kind: "finding", url: pass.url, author: pass.reviewer!, text: title });
 
 	const committed = Math.min(Date.parse(pull.committed), carried ? Date.parse(carried.picked) : Infinity);
 	for (const decision of comments) {

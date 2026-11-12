@@ -685,8 +685,11 @@ async function collect(
 	// Every handback ends the pick with a round of its own, a crash's or a timeout's too, so the App's
 	// next enqueue of a head this pick put back starts a new pick.
 	if (round?.outcome !== "handback") {
-		const { after: _, ...rest } = round ?? { job: name, before: entry.head, failure };
-		saveRound(state, number, history(state, number)!, { ...rest, outcome: "handback" });
+		// It keeps `after`: a head it published carries this pick's signals when picked again.
+		saveRound(state, number, history(state, number)!, {
+			...(round ?? { job: name, before: entry.head, failure }),
+			outcome: "handback",
+		});
 	}
 	if (handback) {
 		job.handback = handback;
@@ -715,9 +718,9 @@ async function collect(
 /**
  * Put `head` back in `base`'s queue, at the back: GitHub's merge queue, or the watcher's own, by arming
  * auto-merge pinned to it. A PR queued or armed at it since the queue dropped it, at `dropped`, needs
- * nothing more: a restart finds its own request, and a workflow may pick the fixer's push first. A
- * refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves it to the session that holds it, and a
- * signal on `head` or on the `carried` pick it replaces hands it back too.
+ * no enqueue: a restart finds its own request, and a workflow may pick the fixer's push first. A
+ * refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves it to the session that holds it. A signal
+ * on `head` or on the `carried` pick it replaces, queued or not, takes it out of the queue and hands it back.
  */
 async function requeue(
 	github: GitHub,

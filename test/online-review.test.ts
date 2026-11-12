@@ -43,7 +43,10 @@ describe("classify", () => {
 
 describe("bodyFindings", () => {
 	test("two findings that share a title in one body stay two", () => {
-		expect(bodyFindings("[P1] Guard null (GET)\n[P2] Guard null (POST)")).toEqual(["guard null", "guard null #2"]);
+		expect(bodyFindings("[P1] Guard null (GET)\n[P2] Guard null (POST)").map((finding) => finding.key)).toEqual([
+			"guard null",
+			"guard null #2",
+		]);
 	});
 
 	test("reads bracketed and dashed markers, keyed by title", () => {
@@ -56,7 +59,7 @@ describe("bodyFindings", () => {
 			"The previous P2 is fixed.",
 			"P2 is a prose word here.",
 		].join("\n");
-		expect(bodyFindings(body)).toEqual([
+		expect(bodyFindings(body).map((finding) => finding.key)).toEqual([
 			"keep sampling when unavailable",
 			"src/b.ts:10–12",
 			"restore the hierarchy",

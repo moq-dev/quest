@@ -12,7 +12,7 @@ import type { GitHubDependencies } from "../src/cli/github";
 import { readRemote } from "../src/cli/land";
 import { parseResolution } from "../src/cli/land-apply";
 import { CHECK_LOG } from "../src/cli/land-checks";
-import { COLLECTION_ATTEMPTS, REQUEUE_LIMIT, history } from "../src/cli/land-fixer";
+import { COLLECTION_ATTEMPTS, REQUEUE_LIMIT, carriedBy, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
 import { type FixContext, HELD } from "../src/cli/land-watch-fix";
@@ -1378,6 +1378,10 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["handback 5"]);
 		expect(github.mutations).toEqual([]);
 		expect(github.comments[5].at(-1)!.body).toContain("finding by rabbit[bot]: drops the last frame");
+		// The handed-back fix still carries the dropped head, should anyone pick it again unanswered.
+		const pushed = git(repo.origin, "rev-parse", "refs/heads/branch-5");
+		expect(pushed).not.toBe(head);
+		expect(carriedBy(state, 5, pushed)?.heads).toEqual([head]);
 	});
 
 	test("a fix queued without its finding still carries the dropped head's, and leaves the queue once one arrives", async () => {
