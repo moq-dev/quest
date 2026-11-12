@@ -16,7 +16,7 @@ Run a round at the start and whenever an agent reports or a merge lands.
 Starting quests asks the user nothing: each agent works headless, and its decisions surface in its PR.
 
 `quest unblocked --unclaimed --json` ranks the unclaimed ready quests, reading the upstream tree afresh; start them in that order, within the harness's agent limit.
-It lists each skipped claim on stderr with its last activity; name stale-looking ones in the summary for the user to take over.
+It lists each skipped claim on stderr, with its last activity when it has an open PR; name stale-looking ones in the summary for the user to take over.
 
 Start every quest you would recommend: well planned, unblocked, and not in conflict with work already started. For one waiting on an outside condition, first check whether it has cleared.
 Skip the rest, such as one you doubt is worth doing at all or now, and list each in the summary with why and your pick of `/quest-plan` (redesign it or move it down) or `/quest-delete`.

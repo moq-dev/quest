@@ -16,6 +16,6 @@ Ask each maintainer item left among the round's questions, in that order, saying
 For an action only the user can take, give the exact steps and the check you will run once they report it done; take any secret through the host's secret prompt.
 
 Settle a draft's items with its PR, naming cleared ones in its `/quest-iterate` brief.
-Remove a quest's cleared item, or its answered one after recording the answer and reason in its Plan as `Decided <date> (maintainer, /quest-complete): ...`; `quest rm` a quest that only waited on it, with why and any answer in the PR body's `## Decisions`, and drop the `quest` label from issues no other quest tracks.
-Make these edits in one draft PR on a `quest-complete/<slug>` branch, after `quest check`, and run `/quest-review` on it; it is then in scope like any PR.
+Remove a quest's cleared item, or its answered one after recording the answer and reason in its Plan as `Decided <date> (maintainer, /quest-complete): ...`; `quest rm` a quest that only waited on it, editing the mentions it reports and recording why and any answer in the PR body's `## Decisions`, and drop the `quest` label from issues no other quest tracks.
+Make these edits in one draft PR on a `quest-complete/<slug>` branch, run `quest check` on the edited tree, then `/quest-review`; it is then in scope like any PR.
 The final summary lists each wait still held, with who acts and its check's result.
