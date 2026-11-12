@@ -68,7 +68,7 @@ Never wait on any other PR, and read none between rounds: list each PR left for 
 A usage or rate limit is waited out until its reset; it never ends the run.
 
 Finish once nothing is running, no queued merge would make a quest ready, and every PR left needs the user or a later round.
-Then run `/quest-plan` on the run's follow-ups, each in the repository whose quest tree owns it: problems it surfaced that no quest or open PR owns, such as a blocker agents hit, and the follow-ups kept in this run's own merge picks, landed or queued, for another repository's quest tree.
+Then run `/quest-plan` on the run's follow-ups, each in the repository whose quest tree owns it: problems it surfaced that no quest or open PR owns, such as a blocker agents hit, and the follow-ups kept in each of this run's own merge picks for another repository's quest tree, whatever the PR's state.
 Write the final summary so a fresh session can act on it, with each open decision's options beside your recommendation.
 
 Besides the guide's controls, answer "decisions": ask every pending question now, in one batch, such as before the user steps away; the loop continues after.
