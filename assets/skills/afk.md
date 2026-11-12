@@ -25,4 +25,4 @@ Carry on each pick the user already made until it lands or needs them again.
 When the work finishes, end with a final summary holding only the blockers, each linked, with its options and your recommendation, so a fresh session can act on it; the choices you took live in the PRs' bodies.
 
 A message that adds to these instructions, such as a newly granted merge or more work, amends them, and afk continues.
-Any other message is the user's return: afk ends. Answer it, settle the waits among the blockers as `/quest-complete` does, then resume the session's skill, which asks the questions it deferred.
+Any other message is the user's return: afk ends. Answer it, run `/quest-complete` on the quests and drafts among the blockers, then resume the session's skill, which asks the questions it deferred.

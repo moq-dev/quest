@@ -33,7 +33,7 @@ Skip a quest whose list runs out, and report each harness's outage once.
 ## Pull requests
 
 Read each open PR, drafts included, with `quest status`, and skip one another session holds by its `hold` or `starter-hold` record, offering to take over only one that looks stale.
-List a draft whose `## Waiting` holds no decision for the user, only outside conditions or actions, once in the summary; `/quest-complete` checks its conditions.
+List a draft waiting only on outside conditions or actions once in the summary, for `/quest-complete`.
 Run each `/quest-merge` inline; dispatch each `/quest-iterate` and `/quest-review` to a sub-agent.
 
 Dispatch `/quest-iterate` without asking for a PR that needs work but no decision, such as a conflict, failing checks, unaddressed findings, or no counted review of the head; a `review-record` line of `current` or `diff-identical` in `quest status <pr>` is a counted review.
