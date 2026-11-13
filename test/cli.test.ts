@@ -179,7 +179,7 @@ test("unblocked routes a quest with a decision open one size up, and XL stays XL
 	tree.append("quest/m0/epic/one.md", "- Maintainer: pick a name.\n");
 	expect(models(tree)).toEqual(["medium high"]);
 	tree.write("quest/m0/epic/one.md", "# [XL] One\n\n## Goal\n\nWork.\n\n## Waiting\n\n- Maintainer: pick.\n");
-	expect(models(tree)).toEqual(["medium xhigh"]);
+	expect(models(tree)).toEqual(["xhigh"]);
 });
 
 test("models ranks a size's writers, or the one entry that runs a PR's writer", () => {
@@ -190,7 +190,6 @@ test("models ranks a size's writers, or the one entry that runs a PR's writer", 
 		stderr: "",
 	});
 	expect(JSON.parse(tree.run("models", "XL", "--json").stdout)).toEqual([
-		{ harness: "claude", model: "claude-fable-5-2", effort: "medium" },
 		{ harness: "claude", model: "claude-opus-5-5", effort: "xhigh" },
 	]);
 	const writer = (size: string, model: string) => tree.run("models", size, "--writer", model).stdout;

@@ -4,7 +4,7 @@
 
 `quest unblocked --json` routes each XS and S quest to Sonnet 5.5 high or
 Opus 5.5 medium, each M quest to Opus medium or high, and each XL quest to
-Fable 5.2 medium or Opus xhigh, 50/50. The split is stable per quest,
+Opus xhigh or Fable 5.2 medium, 50/50. The split is stable per quest,
 and the review efforts in `src/cli/models.ts` stay fixed while it runs. Each `Implementer:` line
 records its arm, iterates stay on the PR's arm, and
 `quest usage` reports cost, rounds, findings, hand-backs, and later
@@ -51,11 +51,12 @@ Decided 2026-11-11 (user, /quest-plan,
     more).
   - M Opus medium against high, as before: Theo finds medium ends its turn
     too early and calls high the best effort.
-  - XL Fable medium against Opus xhigh: the guide moves up to Fable rather
+  - XL Opus xhigh against Fable medium: the guide moves up to Fable rather
     than past high, while Theo finds Opus checks verifiable work more
-    carefully and a subscription gives about a quarter as much Fable. XL
-    quests are rare, so report how many each arm got rather than wait for
-    a detectable difference.
+    carefully and a subscription gives about a quarter as much Fable. XL's
+    table entry stays Opus xhigh for that subscription cap (rejected:
+    Fable medium; dropping the Fable arm). XL quests are rare, so report
+    how many each arm got rather than wait for a detectable difference.
 - Escapes are too rare to separate the arms, about 2% of PRs. Compare
   first-round findings under the fixed review efforts, rounds, hand-backs,
   and cost, and report escapes alongside.

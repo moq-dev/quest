@@ -19,7 +19,6 @@ export const DEFAULT_SIZE: Size = "M";
 const sol = (effort: string): Model => ({ harness: "codex", model: "gpt-6.1-sol", effort });
 const opus = (effort: string): Model => ({ harness: "claude", model: "claude-opus-5-5", effort });
 const sonnet = (effort: string): Model => ({ harness: "claude", model: "claude-sonnet-5-5", effort });
-const fable = (effort: string): Model => ({ harness: "claude", model: "claude-fable-5-2", effort });
 
 /**
  * Each size's writers, ranked: a spawn starts the quest on the first that can
@@ -27,16 +26,16 @@ const fable = (effort: string): Model => ({ harness: "claude", model: "claude-fa
  * writes a PR runs all its iterates. XS runs Sonnet rather than the cheaper
  * Haiku, whose surcharge past 100k input tokens leads users to cap its
  * compaction window there, barely above an agent's fixed load of prompt,
- * context, and skill. No size runs Opus at low, which misses too much, and XL
- * moves up to Fable rather than push Opus past high, as Anthropic's model
- * guide advises.
+ * context, and skill. No size runs Opus at low, which misses too much. XL
+ * stays on Opus rather than Fable, which a subscription caps at half its
+ * weekly limit and which uses that limit faster.
  */
 export const WRITERS: Record<Size, readonly Model[]> = {
 	XS: [sonnet("high"), sol("low")],
 	S: [opus("medium"), sol("medium")],
 	M: [opus("medium"), sol("high")],
 	L: [opus("high"), sol("xhigh")],
-	XL: [fable("medium"), opus("xhigh")],
+	XL: [opus("xhigh")],
 };
 
 /**

@@ -1344,7 +1344,7 @@ the same for every repository unless its `AGENTS.md` names others:
 | S | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` medium |
 | M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
-| XL | Claude Code `claude-fable-5-2` medium | Claude Code `claude-opus-5-5` xhigh |
+| XL | Claude Code `claude-opus-5-5` xhigh | none |
 
 `quest unblocked --json` lists each ready quest's ranked `models`: its size's
 list, or the next size's while a `Maintainer:` item under its `## Waiting`
