@@ -30,7 +30,7 @@ Where the repository's root instructions name other reviewers, pass them with `-
 Each round rewrites the PR body's `## Review` section, so add context only after it, and write a round's record by hand only when it printed `record skipped`.
 
 Each round ends with a `next` line: follow it until a round of the head reports no finding you have not refuted; never block on the score.
-Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches; only out-of-scope discoveries become follow-ups.
+Fix in the PR every review finding relevant to it that you do not refute and every gap the change exposes; in other code you read, fix easy findings and suggest the rest as follow-ups.
 Refute a finding only with evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
 A finding the reviewer keeps against such a refutation is a decision for the user.
 Write each round's `--responses` file in the checkout's `.tmp/`.
