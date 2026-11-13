@@ -627,6 +627,8 @@ describe("discoverTargets", () => {
 						}),
 					});
 				const lock = /^\/repos\/([^/]+\/[^/]+)\/contents\/flake.lock$/.exec(url.pathname);
+				if (lock && repositories[lock[1]] === "forbidden")
+					return Response.json({ message: "Forbidden" }, { status: 403 });
 				if (lock && repositories[lock[1]] !== undefined)
 					return Response.json({ content: Buffer.from(repositories[lock[1]]!).toString("base64") });
 				if (lock) return Response.json({ message: "Not Found" }, { status: 404 });
@@ -655,6 +657,7 @@ describe("discoverTargets", () => {
 				installation({ "kixelated/twice": twice, "kixelated/gadget": lockFile(OLD, true) }, requests),
 			],
 			output,
+			[],
 		);
 		expect(targets).toEqual([
 			{ owner: "moq-dev", repo: "widget" },
@@ -665,6 +668,26 @@ describe("discoverTargets", () => {
 			"bump skips kixelated/twice: flake.lock locks github:moq-dev/quest through 2 root inputs",
 		]);
 		expect(requests).not.toContain("/repos/moq-dev/quest/contents/flake.lock");
+	});
+
+	test("an unreadable repository or a failing installation does not stop the others", async () => {
+		const failing: GitHubDependencies = {
+			...installation({}, []),
+			fetch: (async () => Response.json({ message: "Forbidden" }, { status: 403 })) as typeof fetch,
+		};
+		const output: string[] = [];
+		const failures: string[] = [];
+		const targets = await discoverTargets(
+			SOURCE,
+			[failing, installation({ "moq-dev/locked": "forbidden", "moq-dev/widget": lockFile(OLD, false) }, [])],
+			output,
+			failures,
+		);
+		expect(targets).toEqual([{ owner: "moq-dev", repo: "widget" }]);
+		expect(output).toHaveLength(1);
+		expect(output[0]).toMatch(/^bump skips moq-dev\/locked: its flake.lock cannot be read:/);
+		expect(failures).toHaveLength(1);
+		expect(failures[0]).toMatch(/^discovery in installation 1:/);
 	});
 });
 
