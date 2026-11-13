@@ -45,6 +45,7 @@ import { forwards, foregroundStat, statProcess } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
 import { alive as ownerAlive, questScope } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
+import * as supervise from "../src/cli/supervise";
 
 // Linux reports a /proc read that races a process's exit as ESRCH rather than ENOENT, so fail
 // one process's stat read with either code, without timing.
@@ -70,6 +71,33 @@ const GiB = 2 ** 30;
 const me = { pid: process.pid, start: processStart(process.pid) };
 
 afterEach(() => vi.unstubAllEnvs());
+
+// A test that fails or times out never ends its run, nor does one whose run is signalled, and the
+// scope it started outlives the process. Record every scope this file starts until its run ends.
+const live = new Set<string>();
+const { systemdScopes } = supervise;
+const startScope = systemdScopes.run;
+systemdScopes.run = (unit, ...rest) => {
+	live.add(unit);
+	return startScope(unit, ...rest).finally(() => live.delete(unit));
+};
+
+// Stops the scopes a test left running, and the gates bound to them.
+afterEach(async () => {
+	for (const unit of live) await systemdScopes.stop(unit);
+	live.clear();
+});
+
+// A run signalled mid-test ends without reaching afterEach: stop the scopes, then die of the signal.
+if (process.platform === "linux")
+	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as const)
+		process.once(signal, () => {
+			for (const unit of live) {
+				const group = supervise.scopeGroup(unit);
+				if (group) supervise.kill(group);
+			}
+			process.kill(process.pid, signal);
+		});
 
 test("limits derive from the host's CPUs and memory", () => {
 	// The host-wide load average is compared with every host CPU, not the
