@@ -11,9 +11,8 @@ Show any overlap in the first round.
 Interview the user with the grill skill.
 The goal is the root of its tree, so the first round asks only it: restate the observable outcome, why it matters, and its boundaries and non-goals in one sentence, and get that confirmed before any other question.
 
-Choose the structure yourself rather than asking: one quest per independently completable outcome, an epic for related ones, and an edit to an existing quest that already owns the work.
-Show that structure, with each quest's size, as a recommendation; of the structure, ask the user only which milestone each new quest joins.
-When the user has stated a milestone rule earlier in this session, such as "CI and flakes join m0", apply it to each quest it covers without asking, and still show the milestone it picked and the rule behind it.
+Choose the structure yourself rather than asking: one quest per independently completable outcome, an epic for related ones, an edit to an existing quest that already owns the work, and the milestone each new quest joins, by its urgency and by any milestone rule the user has stated, such as "CI and flakes join m0".
+Show that structure in the summary, with each quest's size and milestone and the reason for the milestone, so the user can correct it in the PR's review.
 
 Once the interview is done, create, update, or delete the relevant quests and epics.
 Record each settled decision and its reason in the quest's Plan, so later sessions don't ask it again, and the decision prompts in the PR.
