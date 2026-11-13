@@ -1867,8 +1867,8 @@ arrives with the guide sections and other skills it builds on, in one call:
 | `quest-iterate` | Iterate on an open PR to settle its open decisions, fix CI and review findings, and push. |
 | `quest-review` | Review a PR's branch locally with a model other than its latest writer, then mark it ready for review. |
 | `quest-merge` | Queue a PR to land, running `quest-iterate` first when it needs work. |
-| `quest-complete` | Run only `quest-run`'s PR decisions and settle what quests and draft PRs wait on you: decide which open PRs to merge, clear resolved waits, then queue the merges. |
-| `quest-run` | Orchestrate a project from one session: start ready quests and take PRs to merge in a loop, until only your decisions remain. |
+| `quest-complete` | Run only `quest-run`'s PR decisions and settle what quests and draft PRs wait on you: decide which open PRs to merge, clear resolved waits, queue the merges, then plan the follow-ups no quest owns yet. |
+| `quest-run` | Orchestrate a project from one session: start ready quests and take PRs to merge in a loop, until only your decisions remain, then plan the follow-ups no quest owns yet. |
 | `quest-afk` | Keep a session such as `quest-run` going while you are away: it acts on its recommendations, defers merges, and walks you through the rest when you return. |
 | `quest-delete` | Abandon a quest, deleting it in its own PR. |
 

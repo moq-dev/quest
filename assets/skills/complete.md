@@ -1,10 +1,10 @@
 ---
-description: Decide which open PRs to merge and settle what quests and drafts wait on, then queue the merges.
+description: Decide which open PRs to merge and settle what quests and drafts wait on, queue the merges, then plan the follow-ups no quest owns yet.
 guide: Format, Deletion, Summaries
 skills: run
 ---
 
-Run only `/quest-run`'s Pull requests part below with its loop's rounds, plus the waits: refresh both as sub-agents report, and stop once all have reported and every PR and wait in scope is decided, skipped, or left to an outside party.
+Run only `/quest-run`'s Pull requests part below with its loop's rounds, plus the waits: refresh both as sub-agents report, and stop once all have reported and every PR and wait in scope is decided, skipped, or left to an outside party, then plan its follow-ups and write the summary as the loop's finish describes.
 Start no quests, and wait on no PR.
 The skill argument, if any, filters the PRs and waits in scope.
 
