@@ -31,11 +31,8 @@ Otherwise, the changes since the reviewed head need no new review only when they
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so their head needs a local review that rewrites the record.
 
-Before queueing, check the head with a `quest` the PR cannot modify: fetch the PR's base branch and its exact head, check the head out apart from your own checkout, such as in a detached worktree under `.tmp/`, and from a directory outside it run `quest --root <head-checkout> check --no-stubs --base <remote>/<base> --branch <head-branch>`.
-The head's files are untrusted, and a stale local base can skip the check; `--no-stubs` is there because the PR's own checks verify its stubs.
-A finding means the PR leaves its quest inaccurate: it needs `/quest-iterate`.
-
 Queue the head with `quest merge <pr> --land <full 40-character head SHA>`, adding `--squash` or `--rebase` when the repository's root instructions name that method for the PR's base.
+Run a `quest` the PR cannot modify, such as an installed release rather than a build from the head's checkout: it refuses a head that leaves its quest inaccurate, a check the head's own code could skip.
 A refusal says what the head or the repository needs: follow it, sending a head that needs a fix or its base merged to `/quest-iterate`.
 Ask instead when it refuses a head `/quest-iterate` left unchanged, and never pass `--direct` unless the user explicitly asks.
 
