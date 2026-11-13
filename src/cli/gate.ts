@@ -799,7 +799,12 @@ export const group: Owner = (command, env, cancel) =>
 				return reject(error);
 			}
 			const cpuMs = Math.round(Number(usage.cpuTime.total) / 1000);
-			resolve({ status, ended, usage: { cpuMs, peakMemory: usage.maxRSS, measured: "children" } });
+			// A cancellation that arrived while the holders drained still decides the status.
+			resolve({
+				status: cancel.signal.aborted ? cancelled(cancel.signal) : status,
+				ended,
+				usage: { cpuMs, peakMemory: usage.maxRSS, measured: "children" },
+			});
 		});
 	});
 

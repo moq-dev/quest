@@ -521,8 +521,12 @@ function contain(
 		});
 		child.once("exit", async (code, signal) => {
 			const exit: Exit = {
-				status: interrupted || (code ?? 128 + constants.signals[signal!]),
+				status: code ?? 128 + constants.signals[signal!],
 				ended: Date.now(),
+			};
+			// A cancellation that arrives during the cleanup below still decides the status.
+			const settle = () => {
+				if (interrupted) exit.status = interrupted;
 			};
 			try {
 				// An exit can arrive before the report it follows, such as `started` from a short command.
@@ -574,8 +578,10 @@ function contain(
 				// The shell's own failure; one killed before it ran the command reports that signal instead.
 				if (admitted && !started && !interrupted && code === 125)
 					throw new Error(`${describe.unsupported}: the command never entered its cgroup`);
+				settle();
 				resolve(exit);
 			} catch (error) {
+				settle();
 				reject(error);
 			} finally {
 				cleanup();

@@ -994,6 +994,21 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 	});
 });
 
+test.skipIf(process.platform !== "linux")(
+	"a cancellation during the scope's cleanup still decides the status",
+	async () => {
+		const { stop, cancel } = cancellation();
+		const exit = await systemdScopes.run(`quest-gate-${randomUUID()}.scope`, tempDir(), ["true"], {
+			cancel,
+			within: null,
+			// Listeners run before the owner's exit handler resumes, so this aborts after the command's
+			// own status is known and before its scope is cleaned up.
+			spawned: (child) => child.once("exit", () => queueMicrotask(() => stop.abort("SIGINT"))),
+		});
+		expect(exit.status).toBe(128 + constants.signals.SIGINT);
+	},
+);
+
 /**
  * Just, as a recipe like `[script("quest", "gate", "--", "bash")]` has it, runs an outermost gate
  * that owns `command` through a process group, as on macOS or Linux without a systemd user
