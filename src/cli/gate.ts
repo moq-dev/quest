@@ -427,6 +427,44 @@ export function fileHost(directory: string, now = Date.now): Host {
 }
 
 /**
+ * The load and memory a caller is admitted against while the `running` admissions hold the host:
+ * the load counts as at least the CPUs they kept busy, and without one the raw load counts as
+ * having room (see `admit`). A priority caller counts no load.
+ */
+function standing(limits: Limits, host: Host, running: Admission[], priority = false) {
+	const used = priority ? 0 : running.reduce((sum, admission) => sum + (admission.cores ?? 0), 0);
+	const load = priority ? 0 : running.length > 0 ? Math.max(host.load(), used) : Math.min(host.load(), limits.load);
+	return { used, load, memory: host.memory() };
+}
+
+/**
+ * Why a command arriving now would wait, or null when the gate would admit it at once even with
+ * `reserved` more recent admissions counted against the headroom: work admitted elsewhere that has
+ * not reached the gate yet, such as an agent still reading (see admission.ts). It counts every
+ * queued caller as ahead, and never the spaced admissions `admit` grants on raw room, which would
+ * pass the reserved work one by one. Like the gate, it admits a lone arrival whatever the load:
+ * with nothing gated running, recent, queued, or reserved, the load is work no gate can wait out.
+ */
+export function room(limits: Limits, host: Host, reserved: number): Waiting | null {
+	const ledger = host.ledger();
+	const now = host.now();
+	const live = ledger.admissions.filter((admission) => host.running(admission));
+	const queued = live.filter(
+		(admission) => admission.queued && (admission.start !== undefined || admission.at > now - RECENT_MS),
+	).length;
+	const admissions = ledger.admissions.filter((admission) => !admission.queued);
+	const running = admissions.filter((admission) => live.includes(admission));
+	const recent = admissions.filter((admission) => admission.at > now - RECENT_MS).length;
+	const { used, load, memory } = standing(limits, host, running);
+	if (load > limits.load || used >= limits.load) return "load";
+	if (memory < limits.memory) return "memory";
+	const taken = recent + queued + reserved;
+	if (running.length === 0 && taken === 0) return null;
+	if (load + taken >= limits.load) return queued > 0 ? "queue" : "load";
+	return memory - taken * limits.memory >= limits.memory ? null : queued > 0 ? "queue" : "memory";
+}
+
+/**
  * Wait until the host has room for a command, then record its admission. The
  * load average and available memory lag new work, so each admission from the
  * last minute counts as one more unit of load and as one command's memory
@@ -523,13 +561,7 @@ export async function admit(
 		// Recorded like any admission, so it still counts against the others' headroom.
 		if (now >= deadline) return admitted(now);
 		// Priority ignores load, whether or not a gated command runs; memory still applies.
-		const used = precedence.priority ? 0 : [...running].reduce((sum, admission) => sum + (admission.cores ?? 0), 0);
-		const load = precedence.priority
-			? 0
-			: running.size > 0
-				? Math.max(host.load(), used)
-				: Math.min(host.load(), limits.load);
-		const memory = host.memory();
+		const { used, load, memory } = standing(limits, host, [...running], precedence.priority);
 		let wait = SETTLE_MS;
 		if (load > limits.load || used >= limits.load) waiting?.("load");
 		else if (memory < limits.memory) waiting?.("memory");

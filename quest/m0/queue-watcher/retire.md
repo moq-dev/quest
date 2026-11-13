@@ -31,7 +31,3 @@ moved out of serve's files into `src/cli/land-head.ts`, so this deletion
 leaves them.
 Its `main` ruleset keeps requiring the unreported `quest land` check, which
 the own queue relies on so GitHub never merges a pick itself.
-
-## Required
-
-- [moq.pro lands main through the own queue](/quest/m0/queue-watcher/pro-cutover.md) - the last repository leaves the gate

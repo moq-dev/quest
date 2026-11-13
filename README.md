@@ -1698,6 +1698,7 @@ quest agent start --harness claude --model claude-opus-5-5 --effort high --permi
 quest agent resume --harness claude --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo <session> "Take the recommendation."
 quest agent stop .worktrees/foo
 quest agent stop --all
+quest agent admit
 ```
 
 Codex starts and resumes only in a checkout registered by `quest worktree create`,
@@ -1710,6 +1711,20 @@ for resume, including after a decision pause or failed turn. Reinstall or rebuil
 pruned dependencies when the next turn needs them. Claude continues to run
 directly in the supplied checkout. Codex desktop threads use the desktop app's
 native archival instead.
+
+Start and resume first wait until the host can carry one more agent, before
+claiming the worktree, and a coordinator runs `quest agent admit` before it
+starts or resumes a sub-agent of its own. The host has room while `quest gate`
+would admit a command at once, counting every command queued for it and, as one
+recent admission each, every agent admitted in the last 5 minutes: an agent adds
+no gated load until its first build, and three quarters of those that build at
+all reach it by then. An agent `start` or `resume` runs stops counting when it
+exits. As in the gate, a host loaded only by work no gate holds still starts one
+agent at a time.
+
+Admission only delays the next agent: none already running is paused or
+stopped, and `quest agent stop` does not see a launch still waiting, which ends
+when its command is cancelled.
 
 Options go before the worktree, and the prompt or message follows it, so text
 starting with `-` is never read as an option. The agent runs in the worktree

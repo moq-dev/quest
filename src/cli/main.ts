@@ -23,8 +23,18 @@ import {
 	onMaintainer,
 	waiting,
 } from "../core";
-import { AgentInputError, HARNESSES, type Launch, processDependencies, runAgent, stopAgent, stopAll } from "./agent";
+import {
+	AgentInputError,
+	HARNESSES,
+	type Launch,
+	admitAgent,
+	processDependencies,
+	runAgent,
+	stopAgent,
+	stopAll,
+} from "./agent";
 import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
+import { PENDING_MS } from "./admission";
 import { gate, QUICK_MS } from "./gate";
 import {
 	gitHubDependencies,
@@ -1026,6 +1036,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
 				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_GATE_ADMITTED, QUEST_GATE_PRIORITY, " +
 				"QUEST_LAND_BASE, and MBX_SCHEDULER_PRIORITY when QUEST_GATE_PRIORITY=1, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"Start and resume first wait until the host can carry the agent, as agent admit describes, " +
+				"before claiming the worktree.\n\n" +
 				"Prints `session <id>` as soon as the id is known, then `outcome finished|failed|limited|logged-out|stopped`, " +
 				"a blank line, and the agent's final reply. Exits 0 when the agent finished, 3 when its account hit a " +
 				"usage limit or ran out of credit, 4 when the CLI is logged out (after printing its login command), 2 for " +
@@ -1074,6 +1086,21 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	).action((worktree: string, session: string, message: string, options: LaunchOptions) =>
 		launch(worktree, message, session, options),
 	);
+	agent
+		.command("admit")
+		.summary("Wait until the host can carry one more agent")
+		.description(
+			"Wait until this host can carry one more agent, for a coordinator to run before it starts or resumes " +
+				"an agent of its own, such as a sub-agent; start and resume do the same themselves. The host has room " +
+				"while quest gate would admit a command at once, counting every queued command and, as one recent " +
+				`admission each, every agent admitted in the last ${PENDING_MS / 60_000} minutes, since an agent adds ` +
+				"no gated load until its first build; an agent start or resume runs counts only until it exits. Agents " +
+				"already running are never paused.\n\n" +
+				"Exits 0 once admitted, 128 plus the signal number when interrupted, and 1 otherwise.",
+		)
+		.action(() => {
+			pending = admitAgent(agentDependencies()).then((status) => status ?? 0, agentFailure);
+		});
 	agent
 		.command("stop")
 		.summary("Stop the agent in a worktree, or end the spawn with --all")

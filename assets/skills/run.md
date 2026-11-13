@@ -16,7 +16,7 @@ A brief gives the task, its reason and context, such as the quest or PR and the 
 
 Starting quests asks the user nothing: each agent works headless, and its decisions surface in its PR.
 
-`quest unblocked --unclaimed --json` ranks the unclaimed ready quests, reading the upstream tree afresh; start them in that order, as many at once as the harness allows.
+`quest unblocked --unclaimed --json` ranks the unclaimed ready quests, reading the upstream tree afresh; start them in that order, each once `quest agent admit` admits it, as the guide's Coordination section describes.
 It lists each skipped claim on stderr, with how long ago it was last active when it has an open PR; name any that look stale in the summary, for the user to take over.
 
 Start every quest you would recommend: well planned, with no blockers, and no conflict with work already started. For one waiting on an outside condition, first check whether it has cleared.
