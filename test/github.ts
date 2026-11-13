@@ -37,6 +37,8 @@ export type Pull = Issue & {
 		suite?: number;
 		/** The path of the workflow file in this repository whose run reported it. */
 		workflow?: string;
+		/** Whether that run is still going, so it may create more jobs. */
+		running?: boolean;
 	}[];
 	review: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
 	/** Oldest first; `commit` is the one a review was submitted on, the head by default. */
@@ -160,6 +162,9 @@ export type Repo = {
 		name: string;
 		head_branch: string;
 		head_sha: string;
+		/** The workflow file it runs, and the repository that holds it. */
+		path?: string;
+		repository?: { full_name: string };
 		status: string;
 		conclusion: string | null;
 		html_url: string;
@@ -275,6 +280,7 @@ function contextPage(repo: Repo, pull: Pick<Pull, "runs">, after: unknown) {
 					detailsUrl: run.url,
 					checkSuite: {
 						databaseId: run.suite ?? null,
+						status: run.running ? "IN_PROGRESS" : "COMPLETED",
 						app: { databaseId: run.app ?? ACTIONS_APP },
 						workflowRun: run.workflow
 							? { file: { path: run.workflow, repositoryName: `${repo.owner}/${repo.name}` } }

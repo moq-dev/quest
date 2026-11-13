@@ -16,7 +16,9 @@ import {
 	currentChecks,
 	requirements,
 	string,
+	workflowKey,
 } from "./github";
+import type { WorkflowRun } from "../github/checks";
 import { appOf } from "../github/checks";
 import { classifyCheck, reported, type Needs } from "./status";
 import type { Method } from "./hold";
@@ -175,7 +177,7 @@ export interface Waiting {
 const CONTEXTS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		__typename
-		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { databaseId app { databaseId } workflowRun { file { path repositoryName } } } }
+		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { databaseId status app { databaseId } workflowRun { file { path repositoryName } } } }
 		... on StatusContext { context state createdAt targetUrl }
 	}`;
 
@@ -438,7 +440,8 @@ export async function resolveQueue(
 			const commit = object(object(array(object(node.commits).nodes)[0]).commit);
 			const rollup = commit.oid === approved ? commit.statusCheckRollup : undefined;
 			const found = await contexts(github, repository, approved, rollup);
-			const unmet = checks((await currentChecks(github, repository, approved, found)).checks, required);
+			const current = await currentChecks(github, repository, approved, found);
+			const unmet = checks(current.checks, required, current.runs);
 			// An approval can still arrive on the pinned head, such as an automated reviewer's, so it waits like a check.
 			const approval = node.reviewDecision === "REVIEW_REQUIRED";
 			if (unmet.failing.length > 0) {
@@ -518,15 +521,32 @@ export async function requiredChecks(
  * for GitHub's mergeability, so a rerun supersedes a cancelled or failed run, without a cancelled run a newer
  * one replaced.
  */
-function checks(latest: ObjectValue[], required: Needs): { failing: string[]; pending: string[] } {
+function checks(
+	latest: ObjectValue[],
+	required: Needs,
+	runs: WorkflowRun[] = [],
+): { failing: string[]; pending: string[] } {
 	const failing: string[] = [];
 	const pending: string[] = [];
 	for (const key of required.workflows) {
-		const outcomes = latest
-			.filter((context) => reported(context).workflow === key)
-			.map((context) => classifyCheck(context).outcome);
-		if (outcomes.includes("failing")) failing.push(key);
-		else if (outcomes.length === 0 || outcomes.includes("pending")) pending.push(key);
+		const jobs = latest.filter((context) => reported(context).workflow === key);
+		const failed = jobs.filter((context) => classifyCheck(context).outcome === "failing");
+		// A finished job does not finish its run, which may still create jobs, and a run replacing a cancelled one may have none yet.
+		const going =
+			jobs.length === 0 ||
+			jobs.some(
+				(context) =>
+					classifyCheck(context).outcome === "pending" ||
+					(context.checkSuite != null && object(context.checkSuite).status !== "COMPLETED"),
+			) ||
+			runs.some(
+				(run) =>
+					run.status !== "completed" &&
+					workflowKey(string(object(run.repository).full_name), string(run.path)) === key,
+			);
+		if (failed.length > 0)
+			failing.push(`${key} (${failed.map((context) => classifyCheck(context).check.name).join(", ")})`);
+		else if (going) pending.push(key);
 	}
 	for (const need of required.checks) {
 		let result: "passed" | "failing" | "pending" = "pending";

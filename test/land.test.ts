@@ -1203,7 +1203,9 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		forge.repo.rules = [
 			{ type: "workflows", ruleset_id: 4, parameters: { workflows: [{ path: CI, repository_id: 10 }] } },
 		];
-		const runs = (...jobs: { name: string; conclusion: string; workflow?: string }[]) => ({
+		const runs = (
+			...jobs: { name: string; conclusion: string; workflow?: string; running?: boolean; suite?: number }[]
+		) => ({
 			pull: {
 				runs: [{ name: "test", conclusion: "SUCCESS", url: "u" }, ...jobs.map((job) => ({ url: "u", ...job }))],
 			},
@@ -1223,13 +1225,51 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 				{ name: "lint", conclusion: "FAILURE", workflow: CI },
 			),
 		);
+		// A passed job whose run is still going may yet be followed by a failing one.
+		forge.pull(
+			"Going",
+			{ "5.txt": "5\n" },
+			runs({ name: "build", conclusion: "SUCCESS", workflow: CI, running: true }),
+		);
+		// A newer run cancelled this one and has yet to report a job; the cancelled job drops, the passed one stays.
+		const replaced = forge.pull(
+			"Replaced",
+			{ "6.txt": "6\n" },
+			runs(
+				{ name: "build", conclusion: "SUCCESS", workflow: CI },
+				{ name: "lint", conclusion: "CANCELLED", workflow: CI, suite: 10 },
+			),
+		);
+		for (const [id, status, started] of [
+			[1, "completed", "2026-11-12T10:00:00Z"],
+			[2, "queued", "2026-11-12T11:00:00Z"],
+		] as const)
+			(forge.repo.actionRuns ??= []).push({
+				id,
+				workflow_id: 7,
+				check_suite_id: id * 10,
+				run_started_at: started,
+				name: "CI",
+				head_branch: replaced.branch ?? "",
+				head_sha: replaced.head!,
+				path: CI,
+				repository: { full_name: "upstream/project" },
+				status,
+				conclusion: status === "queued" ? null : "cancelled",
+				html_url: "u",
+				jobs: [],
+			});
 		const plan = await resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
 		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
 		expect(plan.waiting?.map(({ number, pending }) => [number, pending])).toEqual([
 			[2, [`upstream/project:${CI}`]],
 			[3, [`upstream/project:${CI}`]],
+			[5, [`upstream/project:${CI}`]],
+			[6, [`upstream/project:${CI}`]],
 		]);
-		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[4, "failed_checks"]]);
+		expect(plan.eject.map((ejected) => [ejected.number, ejected.detail])).toEqual([
+			[4, `required checks failed on its head: upstream/project:${CI} (lint)`],
+		]);
 	});
 
 	test("counts a required check only from the app its rule names", async () => {
