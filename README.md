@@ -1215,7 +1215,7 @@ less to run than to hold back. A check that lands PRs goes first: with
 for memory but never for load or the queue, whether or not other gated commands
 run, and its command gets `MBX_SCHEDULER_PRIORITY=normal` unless it sets its
 own, so [mbx](https://github.com/jdx/mr-boxington), where installed, schedules
-its compiles ahead of lower-priority builds. Both
+its compiles ahead of lower-priority builds. Both kinds of command
 record their admissions, so the other callers count them against the host's
 headroom. Set the variable where the check starts, such as a merge queue
 build's workflow or the land daemon's sandbox, rather than relying on a slot in

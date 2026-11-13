@@ -135,7 +135,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"systemd scope owns each running command, the load counts as at least the sum of their peak CPU " +
 				"use in the last minute, and nothing starts while those fill every CPU, so a lull between a " +
 				"command's phases does not free its CPUs. Leave model calls, such as quest review, and long-running " +
-				"servers out of the gate. Nested " +
+				"servers out of the gate. Nested gate " +
 				"calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +
 				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
@@ -1019,7 +1019,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
 				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_GATE_ADMITTED, QUEST_GATE_PRIORITY, " +
-				"and QUEST_LAND_BASE variable, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"and QUEST_LAND_BASE variable, and of MBX_SCHEDULER_PRIORITY when QUEST_GATE_PRIORITY=1, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
 				"Prints `session <id>` as soon as the id is known, then `outcome finished|failed|limited|logged-out|stopped`, " +
 				"a blank line, and the agent's final reply. Exits 0 when the agent finished, 3 when its account hit a " +
 				"usage limit or ran out of credit, 4 when the CLI is logged out (after printing its login command), 2 for " +

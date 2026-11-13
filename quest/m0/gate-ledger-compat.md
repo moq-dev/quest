@@ -1,30 +1,35 @@
-# [S] An older quest build never drops a running admission from the gate ledger
+# [S] A gate never loses a running command's admission from the ledger
 
 ## Goal
 
-Gates from different quest builds share one host's admission ledger
-(`~/.cache/quest/admissions/<host>`) without losing each other's
-admissions. Today an older build, such as the dev shell's pinned
-`quest-0.1.0`, rebuilds the ledger from only the last minute's admissions,
-dropping a running one, so the newer gate holding it fails with
-`gate lost its admission` once its command runs past a minute.
+Every gate on a host, whatever quest build runs it, keeps a running
+command's admission in the shared ledger
+(`~/.cache/quest/admissions/<host>`) until the command ends, so other
+gates keep counting its cores.
 
 ## Plan
 
-Found while measuring [moq-dev/quest#673](https://github.com/moq-dev/quest/pull/673):
-one gated moq check failed this way while another session ran the pinned
-build's gate on the same host. Any gated command longer than a minute is
-exposed while such a build runs.
+Found while measuring [moq-dev/quest#673](https://github.com/moq-dev/quest/pull/673)
+on the maintainer's host: one gated moq check, longer than a minute, failed
+with `gate lost its admission ... from the ledger` while another session ran
+a `quest-0.1.0` gate. That label does not identify the build: the dev
+shell's `quest-pinned` reports 0.1.0 at every revision, and every pin since
+e3b292b7 (2026-11-03) already keeps running admissions
+(`running.has(admission)` in `src/cli/gate.ts`). So the cause is not yet
+known; first reproduce it, such as with two current gates, or a current
+gate beside the pinned one, each running a command over a minute.
 
-Open decisions:
+The loss is also silent when the dropped command's measured cores stay
+constant: `measure` only rereads the ledger when they change, so the
+command finishes and the other gates undercount it the whole time.
 
-- How to stop the loss? Options: version the ledger's path or format so
-  builds that disagree never share a ledger (recommended: simplest, and
-  nothing is in production, though builds that disagree then stop seeing
-  each other's load); make every build keep admissions it cannot read or
-  that are still running; or only bump the dev shell's `quest-pinned` input
-  more often, which narrows the window but leaves any other old install
-  exposed.
-- Should a newer gate whose admission vanished re-record it and keep its
-  command running rather than fail? Recommended: yes, with a warning, since
-  the command is already running and failing it wastes its work.
+Open decisions, once the cause is known:
+
+- If an older build drops entries it cannot recognize as running: version
+  the ledger's path or format so such builds never share it (recommended if
+  the cause is a format disagreement), or only bump `quest-pinned`, which
+  leaves any other old install exposed.
+- Should a gate whose admission vanished re-record it and keep its command
+  running, rather than fail or keep going unnoticed? Recommended: re-record
+  it with a warning, and check for it on every sample, not only when the
+  cores change.
