@@ -65,6 +65,8 @@ export interface FixContext {
 	timeout: number;
 	/** Patterns of tags, such as `deploy-*`, fetched from GitHub into each fixer checkout so its checks can read them. */
 	tags: string[];
+	/** Patterns of branches fetched from GitHub into each fixer checkout as `origin/<branch>`, for checks that diff against them. */
+	branches: string[];
 	token: (workflows: boolean) => Promise<string>;
 	read: RemoteRead;
 }
@@ -418,6 +420,16 @@ async function take(
 	);
 	log = input;
 
+	const branches = await fixerBranches(context, repository, base.ref);
+	if (branches.length)
+		await context.read(context.root, [
+			"fetch",
+			"--quiet",
+			"--no-tags",
+			baseRemote({ repository }),
+			...branches.map((branch) => branch.sha),
+		]);
+
 	const checkout = mkdtempSync(join(state, "fix-"));
 	try {
 		const packs = prepare(
@@ -425,12 +437,12 @@ async function take(
 			checkout,
 			[
 				`${removal.head}:refs/heads/batch`,
-				`${base.sha}:refs/heads/base`,
 				`${removal.head}:refs/heads/pr-${number}`,
 				...tags,
+				...branches.map((branch) => `${branch.sha}:refs/remotes/origin/${branch.name}`),
 			],
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
-			base.sha,
+			base,
 		);
 		if (!conflict) writeKnownFlaky(state, checkout);
 		const job: WatchJob = {
@@ -457,6 +469,30 @@ async function take(
 		rmSync(checkout, { recursive: true, force: true });
 		throw error;
 	}
+}
+
+/**
+ * GitHub's branches that a `--fixer-branch` pattern matches, other than the base, which the round pins itself.
+ * Matched here rather than by a fetch refspec, so a pattern naming a branch GitHub no longer has matches nothing.
+ */
+async function fixerBranches(
+	context: FixContext,
+	repository: string,
+	base: string,
+): Promise<{ name: string; sha: string }[]> {
+	if (!context.branches.length) return [];
+	const glob = (pattern: string) =>
+		pattern
+			.split("*")
+			.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+			.join(".*");
+	const match = new RegExp(`^(?:${context.branches.map(glob).join("|")})$`);
+	const listed = await context.read(context.root, ["ls-remote", "--heads", baseRemote({ repository })]);
+	return listed
+		.split("\n")
+		.map((line) => /^([0-9a-f]{40}|[0-9a-f]{64})\trefs\/heads\/(.+)$/.exec(line))
+		.filter((found) => found !== null && found[2] !== base && match.test(found[2]))
+		.map((found) => ({ name: found![2], sha: found![1] }));
 }
 
 /** End a job: its checkout and its records go, and its output log stays for diagnosis on the host. */
