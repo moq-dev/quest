@@ -1,0 +1,47 @@
+// Stops the systemd scopes a test starts and leaves running. A scope outlives the process that
+// started it, so a test that fails or times out, or a run signalled mid-test (a cancelled
+// `quest gate` delivers its signal to every process in the test run), would leave it running.
+
+import { afterEach, beforeAll } from "vitest";
+
+type Supervise = typeof import("../src/cli/supervise");
+
+/** The scopes this file started whose run has not ended. A run that rejects may still hold processes, so it stays. */
+const live = new Set<string>();
+let supervise: Supervise | undefined;
+
+// Loaded once the test file has registered its mocks, so they apply to the module the tests share.
+beforeAll(async () => {
+	const loaded = await import("../src/cli/supervise");
+	const start = loaded.systemdScopes.run;
+	loaded.systemdScopes.run = async (unit, ...rest) => {
+		live.add(unit);
+		const result = await start(unit, ...rest);
+		live.delete(unit);
+		return result;
+	};
+	supervise = loaded;
+});
+
+// Stops what a failed or timed-out test left, and the gates bound to it; one failure never hides the rest.
+afterEach(async () => {
+	const units = [...live];
+	live.clear();
+	const stops = await Promise.allSettled(units.map((unit) => supervise!.systemdScopes.stop(unit)));
+	const failed = stops.flatMap((stop) => (stop.status === "rejected" ? [stop.reason] : []));
+	if (failed.length) throw new AggregateError(failed, `cannot stop ${failed.length} of ${units.length} test scopes`);
+});
+
+// A signalled run never reaches afterEach: kill the scopes, then die of the signal.
+if (process.platform === "linux")
+	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as const)
+		process.once(signal, () => {
+			try {
+				for (const unit of live) {
+					const group = supervise!.scopeGroup(unit);
+					if (group) supervise!.kill(group);
+				}
+			} finally {
+				process.kill(process.pid, signal);
+			}
+		});
