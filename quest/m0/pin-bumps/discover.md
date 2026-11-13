@@ -22,6 +22,9 @@ the bump needs (`questInput` in `src/cli/land-bump.ts`). Skip the watched reposi
 every repository each pass costs API quota: keep it to what a pass needs, such
 as only when the base moved.
 
+Update README.md's "Pin bumps" section and its examples to the switch,
+matching `quest land watch --help`.
+
 Tests against a fake GitHub: a repository that locks quest is bumped, one
 that doesn't is never cloned, and one dropped from the installation is not
 bumped again.

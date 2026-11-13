@@ -14,15 +14,16 @@ quest's `main`).
 
 Keep the pin lock-only: `flake.nix` names no revision or tag, and
 `flake.lock` locks the release's commit, so a bump stays a lock-only diff.
-Today the pass strips only a revision from the input's URL (`questInput` and
-`unpin` in `src/cli/land-bump.ts`); strip a tag too, or a later
-`nix flake update` resolves the tag again and moves the pin back. A repository
+Today the pass detects and strips only a revision: `questInput` in
+`src/cli/land-bump.ts` reads `original.rev`, while a tag pin is recorded as
+`original.ref`. Detect and strip a tag too, or a later `nix flake update`
+resolves the tag again and moves the pin back. A repository
 that wants a slower cadence leaves moq-bot off and pins by hand.
 
 Key a target's recorded bump on the release it moved to, not the base head the
 watcher passes in: otherwise a pass that runs before the Release workflow tags
 the base records the target done, and the release that follows is skipped
-until `main` moves again.
+until `main` moves again. Update README.md's "Pin bumps" section to match.
 
 ## Required
 

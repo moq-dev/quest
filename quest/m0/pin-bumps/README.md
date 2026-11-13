@@ -3,8 +3,8 @@
 ## Goal
 
 A merge to quest's `main` that changes what ships becomes a release, and within the hour
-every repository whose flake locks quest and has moq-bot installed gets a bump
-PR to that release, which lands on its own. No person or agent hand-bumps a
+every other repository with moq-bot installed whose flake locks quest through
+exactly one root input gets a bump PR to that release, which lands on its own. No person or agent hand-bumps a
 flake pin. Pins through mise or the installer stay out of scope: no moq-dev,
 kixel-ai, or kixelated repository uses them.
 
@@ -34,8 +34,10 @@ draft [kixelated/nixos#36](https://github.com/kixelated/nixos/pull/36).
 - Do bumps wait for a merge click? ✅ No, they land once checks pass, as the
   bump pass does today (rejected: a click, which Kixel Code requires of
   dependency bumps; a quest bump is the exception).
-- Which repositories? ✅ Every repository moq-bot is installed on whose
-  `flake.lock` locks quest (rejected: a `--bump` list in the host's
+- Which repositories? ✅ Every other repository moq-bot is installed on whose
+  `flake.lock` locks quest through exactly one root input. quest's own
+  `quest-pinned` input is the merge driver's, which `quest check` keeps
+  current; bumping it would cut a release that triggers another bump (rejected: a `--bump` list in the host's
   configuration, since #36's list went stale within five days).
 
 Turning it on is the host's work, planned in kixelated/nixos's tree.

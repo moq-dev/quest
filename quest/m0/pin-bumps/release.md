@@ -28,31 +28,36 @@ before the checks this needs to pass first). So:
 
 - Every run, on each push to `main` and on a daily schedule, compares `main`
   with the latest published release and cuts one when that range touches
-  what ships: `src/`, `assets/`, the package manifests, or the flake. A
+  what ships: the paths Release's pull request filter already lists as
+  building the binaries, plus every file it publishes, such as
+  `scripts/installer.sh`. One predicate serves both, so they cannot drift. A
   cancelled or failed run then needs no recovery: the next run sees the same
   unreleased range. Runs on `main` queue rather than cancel each other.
 - A run builds every binary and passes the lifecycle and archive install
-  checks on those local artifacts before it tags. Tagging and publishing come
-  last, so no tag exists without its release. The next version is greater
-  than every existing tag, so the dead v0.2.0 and v0.2.1 tags are skipped:
-  minor when the range holds a `!` subject, patch otherwise.
+  checks on those local artifacts before it tags. It then uploads every
+  asset to a draft release and publishes the draft, which creates the tag, so
+  no tag exists without its complete release; a run that fails before that
+  leaves only a draft, which the next run replaces. The next version is
+  greater than every existing tag, so the dead v0.2.0 tag is skipped (v0.2.1
+  was never tagged): minor when the range holds a `!` subject, patch
+  otherwise.
 - The checks that need a published release, mise and the installer's URL,
   run after it and fail loudly; their fix ships as the next release. They
   block no consumer, since the bump pass moves flake pins, which build from
   source at the release's commit.
 - The version comes from the tag: `package.json` stops carrying one, so no
   release needs a PR. Everything that reads it moves to the build's input:
-  `--version` in `src/cli/main.ts`, the stale-stub notice in
-  `src/cli/hooks.ts`, `nix/package.nix`, and Release's version checks. A
+  find them by searching for it, since they span the CLI (`src/cli/main.ts`,
+  `src/cli/hooks.ts`), `nix/package.nix`, `scripts/lifecycle-check.mjs`, the
+  tests, and the workflows' version checks and Windows fallback tag. A
   release binary embeds its tag; a flake build, which cannot see tags, embeds
   its commit.
 - Update CONTRIBUTING.md's Releases section and SETUP.md's pinning advice.
 - The first automated release exists only after the implementing PR merges.
   That PR rewrites this quest to its checks, with a `## Waiting` item on the
   release, rather than deleting it: the Windows ZIPs SETUP.md expects, every
-  Install check job, and `quest worktree hook --help` from a release binary,
-  which [the v0.2.1 cut](https://github.com/moq-dev/quest/blob/2a80c902/quest/m1/release.md)
-  waited to check. Then drop SETUP.md's v0.1.0 caveat and the "next release"
+  Install check job, and that a release binary has `quest worktree hook`, the
+  Goal of [the v0.2.1 cut](https://github.com/moq-dev/quest/blob/2a80c902/quest/m1/release.md). Then drop SETUP.md's v0.1.0 caveat and the "next release"
   notes in README.md and docs/windows.md, and delete this quest.
 - Milestone: ✅ m0 (rejected: m1), so those first-release checks, which the
   deleted m1 quests held, move to m0 with it.
