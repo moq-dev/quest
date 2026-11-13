@@ -787,7 +787,12 @@ describe("usage", () => {
 		);
 		expect(sessions[2]!.models[0]!.complete).toBe(false);
 		const report = await usage(root, { since: "2026-11-05", pr: 10 }, deps(sessions));
-		expect(report.folded).toEqual({ copies: 1, hosts: ["box"] });
+		// The folded copy's session is unattributed, so a report narrowed to #10 leaves it out.
+		expect(report.folded).toEqual({ copies: 0, hosts: [] });
+		expect((await usage(root, { since: "2026-11-05" }, deps(sessions))).folded).toEqual({
+			copies: 1,
+			hosts: ["box"],
+		});
 		expect(report.pulls[0]!.sessions.map((s) => [s.host, s.session, s.role])).toEqual([
 			["box", OWNED, "iterating"],
 		]);

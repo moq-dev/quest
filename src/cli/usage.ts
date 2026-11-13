@@ -677,6 +677,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	const { kept, dropped } = fold(exported ?? []);
 	let unattributed: Usage["unattributed"] = null;
 	let incomplete: Session[] = [];
+	let folded: Session[] = dropped;
 	if (exported !== null) {
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
 		const reviewers = new Set(allRows.flatMap((row) => row.review.flatMap((review) => review.session ?? [])));
@@ -687,6 +688,9 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 			for (const session of left) for (const spent of session.models) add(unattributed, spent);
 		}
 		incomplete = reported.filter((session) => !session.complete);
+		// A narrowed report counts only the folded copies of the sessions it reports.
+		const ids = new Set(reported.map((session) => `${session.harness}\0${session.id}`));
+		folded = dropped.filter((session) => ids.has(`${session.harness}\0${session.id}`));
 	}
 	const online = await readOnlineReviews(
 		client,
@@ -703,7 +707,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		accuracy: accuracyRows(rows),
 		online: onlineRows(rows),
 		unattributed,
-		folded: { copies: dropped.length, hosts: [...new Set(dropped.map((session) => session.host))] },
+		folded: { copies: folded.length, hosts: [...new Set(folded.map((session) => session.host))] },
 		incomplete: incomplete.map((session) => ({
 			host: session.host,
 			harness: session.harness,
