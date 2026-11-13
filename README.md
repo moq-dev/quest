@@ -1958,7 +1958,9 @@ hook on shell commands and file edits denies, with the rule as the reason:
   or `comment`, or `gh api` with a `body` field) without a `(Written by ...)`
   line;
 - a scratch file written under `/tmp`, outside the checkout, by a redirection,
-  `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit.
+  `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit;
+- a timed `read` fed `/dev/zero`, such as `read -t 1 < /dev/zero`, which
+  spins a CPU core instead of waiting.
 
 For Claude Code, `Stop` and `SubagentStop` hooks refuse to end an agent's turn
 while a `quest gate` command it started still runs in the background, naming

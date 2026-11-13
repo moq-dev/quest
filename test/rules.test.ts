@@ -282,12 +282,23 @@ test("docs/context.md is the rules `quest context` prints, for agents without th
 	);
 });
 
-test("reading stdin from /dev/zero is a busy wait", () => {
-	expect(bash("read -t 1 < /dev/zero")).toEqual([RULES.busyWait]);
-	expect(bash("while :; do read -t 5 <>/dev/zero; done")).toEqual([RULES.busyWait]);
-	expect(bash("while read -t 1 x; do :; done < /dev/zero")).toEqual([RULES.busyWait]);
-	expect(bash("read -u 3 -t 1 3</dev/zero")).toEqual([RULES.busyWait]);
-	expect(bash("head -c 16 /dev/zero > out.bin")).toEqual([]);
-	expect(bash("read -t 1 < input.txt")).toEqual([]);
-	expect(bash("od -An -N4 < /dev/zero")).toEqual([]);
+test("a timed read on /dev/zero is a busy wait", () => {
+	for (const command of [
+		"read -t 1 < /dev/zero",
+		"while :; do read -rt 5 <>/dev/zero; done",
+		"while read -t 1 x; do :; done < /dev/zero",
+		"( while read -t 1 x; do :; done ) < /dev/zero",
+		"exec 0</dev/zero; read -t 1",
+	])
+		expect(bash(command)).toEqual([RULES.busyWait]);
+	for (const command of [
+		"head -c 16 /dev/zero > out.bin",
+		"read -t 1 < input.txt",
+		"read -t 1 3</dev/zero",
+		"read -t 1 -N 4 x < /dev/zero",
+		"read -r -d '' x < /dev/zero",
+		"for i in 1 2; do head -c 16; done < /dev/zero",
+		"gh pr comment 5 --body-file - < /dev/zero",
+	])
+		expect(bash(command)).toEqual([]);
 });

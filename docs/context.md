@@ -88,7 +88,7 @@ When the repository has a `quest/` directory, it plans work as quests: Markdown 
 
 ## Checked
 
-- Never wait by reading `/dev/zero`, as in `read -t 1 < /dev/zero`: it never blocks, so it spins a CPU core for the whole timeout. Block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.
+- Never wait with a timed `read` on `/dev/zero`, as in `read -t 1 < /dev/zero`: it never blocks, so it spins a CPU core for the whole timeout. Block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.
 - No em dashes in what you write: use a comma, colon, parentheses, or separate sentences. Text quoted from someone else keeps its em dashes on a `>` quote line.
 - End every GitHub post you author with a `(Written by <model> with <effort>)` line, naming the running model and its reasoning effort, or `(Written by <model>)` when the harness doesn't report the effort; never guess it.
 - Push with an explicit refspec, `git push <remote> refs/heads/<branch>:refs/heads/<branch>`: a bare branch name can push to the base instead, as under `push.default=upstream` when the branch tracks it.

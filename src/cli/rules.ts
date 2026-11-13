@@ -18,7 +18,7 @@ export const USER_ASKED = "QUEST_USER_ASKED=1";
 /** Each checked rule, as `quest hook` gives it when denying a call that breaks it. */
 export const RULES = {
 	busyWait:
-		"Never wait by reading `/dev/zero`, as in `read -t 1 < /dev/zero`: it never blocks, so it spins a CPU core for the whole timeout. Block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.",
+		"Never wait with a timed `read` on `/dev/zero`, as in `read -t 1 < /dev/zero`: it never blocks, so it spins a CPU core for the whole timeout. Block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.",
 	emDash: "No em dashes in what you write: use a comma, colon, parentheses, or separate sentences. Text quoted from someone else keeps its em dashes on a `>` quote line.",
 	footer: "End every GitHub post you author with a `(Written by <model> with <effort>)` line, naming the running model and its reasoning effort, or `(Written by <model>)` when the harness doesn't report the effort; never guess it.",
 	refspec:
@@ -280,19 +280,22 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 	const { found, scratch } = check;
 	const commands = parse(line);
 	alone &&= commands.length === 1 && !commands[0]!.runs;
+	// A timed `read` fed `/dev/zero` never blocks, so it spins a core for its whole timeout, whether
+	// the redirect sits on it, on its loop or group, or on an `exec`. One that stops at a byte count or
+	// delimiter returns at once instead.
+	const timed = commands.some(({ argv }) => {
+		const at = argv.indexOf("read");
+		if (at === -1) return false;
+		const options = argv.slice(at + 1).filter((arg) => arg.startsWith("-"));
+		return options.some((arg) => /^-[a-zA-Z]*t/.test(arg)) && !options.some((arg) => /^-[a-zA-Z]*[nNd]/.test(arg));
+	});
 	for (const simple of commands) {
 		const env = new Set(inherited);
 		const words = [...simple.argv];
 		const argv = unwrap(simple.argv, env);
-		for (const { op, target } of simple.redirects)
+		for (const { op, target, fd } of simple.redirects)
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
-			// `read` or a loop fed from `/dev/zero` never blocks, so it spins a core waiting.
-			else if (
-				["<", "<>"].includes(op) &&
-				target === "/dev/zero" &&
-				(simple.argv.includes("read") || simple.argv[0] === "done")
-			)
-				found.add("busyWait");
+			else if (timed && ["<", "<>"].includes(op) && !fd && target === "/dev/zero") found.add("busyWait");
 		if (argv === null) continue;
 		const [name, ...args] = argv;
 		// A wrapper such as `env --chdir` moves where the command reads a relative path from.

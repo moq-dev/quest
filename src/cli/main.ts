@@ -1528,7 +1528,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"uses Quest, and again after compaction, so agents never run it themselves. PreToolUse blocks tool " +
 				"calls there that break a rule a program can check: em dashes an agent writes, a push without an " +
 				"explicit refspec, a force-push or rebase, a GitHub post without its `(Written by ...)` footer, and " +
-				"scratch files in /tmp. Stop and SubagentStop refuse to end an agent's turn while a `quest gate` " +
+				"scratch files in /tmp, and a timed `read` on /dev/zero, which spins a core. Stop and SubagentStop refuse to end an agent's turn while a `quest gate` " +
 				"command it started runs in the background. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
 				"with, and Codex asks to trust its hooks once through /hooks.\n\n" +
 				"With --worktrees, also installs Claude Code's " +
@@ -1563,7 +1563,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"additional context. PreToolUse denies a call that breaks a checked rule, naming the rule: an edit " +
 				"or a commit message or new GitHub post that adds an em dash outside a `>` quote line, a `git push` " +
 				"whose refspecs lack a `:`, a force-push, a `git rebase` or `git pull --rebase`, a new GitHub post " +
-				"whose body lacks a `(Written by ...)` line, or a file written under /tmp. A force-push or rebase the " +
+				"whose body lacks a `(Written by ...)` line, a file written under /tmp, or a timed `read` fed /dev/zero. A force-push or rebase the " +
 				`user asked for passes with the \`${USER_ASKED}\` prefix. Stop and SubagentStop refuse to end the ` +
 				"turn, naming each command, while a `quest gate` command the ending agent started runs in Claude " +
 				"Code's background: one whose background ID its transcript holds. Exits 1 on malformed input or an event it " +
