@@ -260,7 +260,6 @@ test("the agent environment holds no session credentials or harness state", () =
 		QUEST_GATE_ADMITTED: "1",
 		QUEST_GATE_PRIORITY: "1",
 		MBX_SCHEDULER_PRIORITY: "normal",
-		QUEST_LAND_BASE: "0123456789abcdef0123456789abcdef01234567",
 		OP_SERVICE_ACCOUNT_TOKEN: "t",
 		OP_SESSION_me: "s",
 		OPENAI_API_KEY: "o",
@@ -787,8 +786,4 @@ posix("a Codex release failure is reported instead of a finished outcome", async
 	expect(result.stdout).not.toContain("outcome finished");
 	expect(existsSync(join(s.worktree, "cache", "tracked"))).toBe(true);
 	expect(s.worktrees.status().records[0]).toMatchObject({ phase: "active", runs: [] });
-});
-
-test("a land check's base never reaches a launched agent", () => {
-	expect(strippedEnvironment({ PATH: "/bin", QUEST_LAND_BASE: "0".repeat(40) })).toEqual({ PATH: "/bin" });
 });

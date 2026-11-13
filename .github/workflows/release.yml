@@ -1,33 +1,86 @@
 name: Release
 
-# A pushed version tag compiles, publishes, and then install-checks the release.
-# Pull requests that could change the compiled binaries, and manual runs (even
-# from a tag), only build and check them. Check runs the installer's own tests.
+# Every run on `main` (each push, a daily schedule, or a manual run) compares
+# `main` with the latest published release, and cuts the next one when that
+# range changes what ships. It builds and checks every binary first, then
+# uploads them to a draft release and publishes it, which creates the tag, so
+# no tag exists without its complete release. A failed or cancelled run needs
+# no recovery: the next run sees the same unreleased range and replaces any
+# draft it left. Pull requests that change what ships, and manual runs on other
+# branches, only build and check. scripts/release-plan.sh holds both decisions.
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+    branches: [main]
   pull_request:
-    paths:
-      - .github/workflows/release.yml
-      - package.json
-      - bun.lock
-      - bunfig.toml
-      - src/**
-      - scripts/**
-      - flake.lock
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Runs on `main` queue rather than cancel each other; a pending run that a newer
+# one replaces loses nothing, since the newer one sees its range too.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      release: ${{ steps.plan.outputs.release }}
+      released: ${{ steps.plan.outputs.released }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Plan the release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # The latest published release; drafts and prereleases don't count.
+          if ! released=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>"$RUNNER_TEMP/latest"); then
+            grep -q 'HTTP 404' "$RUNNER_TEMP/latest" || { cat "$RUNNER_TEMP/latest" >&2; exit 1; }
+            released=
+          fi
+          plan=$(bash scripts/release-plan.sh next "$released" "$GITHUB_SHA")
+          echo "$plan"
+          version=$(sed -n 's/^version=//p' <<<"$plan")
+          ships=$(sed -n 's/^release=//p' <<<"$plan")
+          release=false
+          if [[ $EVENT == pull_request ]]; then
+            build=false
+            if git diff --name-only --no-renames "$BASE...$HEAD" | bash scripts/release-plan.sh ships; then build=true; fi
+          elif [[ $GITHUB_REF == refs/heads/main ]]; then
+            release=$ships
+            build=$ships
+            if [[ $EVENT == workflow_dispatch ]]; then build=true; fi
+          else
+            build=true
+          fi
+          {
+            echo "build=$build"
+            echo "release=$release"
+            echo "released=$released"
+            echo "version=$version"
+          } >>"$GITHUB_OUTPUT"
+          echo "build=$build release=$release version=$version released=${released:-none}"
+
   # Bun cross-compiles every target from one Linux runner, since the pinned
   # nixpkgs no longer evaluates on Intel macOS.
   build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -44,7 +97,10 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+      # Each binary embeds the version it releases as, which `quest --version` prints.
       - name: Compile
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           declare -A bun_targets=(
             [aarch64-apple-darwin]=bun-darwin-arm64
@@ -54,12 +110,12 @@ jobs:
           )
           mkdir release
           for target in "${!bun_targets[@]}"; do
-            bun run compile --target="${bun_targets[$target]}"
+            bun run compile --target="${bun_targets[$target]}" --define "QUEST_VERSION=\"$VERSION\""
             tar -czf "release/quest-$target.tar.gz" -C dist quest
           done
           for pair in x86_64-pc-windows-msvc:bun-windows-x64 aarch64-pc-windows-msvc:bun-windows-arm64; do
             target=${pair%%:*}
-            bun run compile --target="${pair#*:}"
+            bun run compile --target="${pair#*:}" --define "QUEST_VERSION=\"$VERSION\""
             zip -j "release/quest-$target.zip" dist/quest.exe
           done
           cd release
@@ -72,7 +128,7 @@ jobs:
 
   check:
     name: check (${{ matrix.target }})
-    needs: build
+    needs: [plan, build]
     strategy:
       fail-fast: false
       matrix:
@@ -104,25 +160,11 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: bash scripts/arch-check.sh "$RUNNER_TEMP/quest" "$TARGET"
-      - name: Check the version
+      - name: Check the binary's version and lifecycle
         shell: bash
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          actual=$("$RUNNER_TEMP/quest" --version)
-          expected="quest $(jq -r .version package.json)"
-          if [[ $actual != "$expected" ]]; then
-            echo "::error::the binary reports $actual, not $expected"
-            exit 1
-          fi
-          if [[ $REF_TYPE == tag && $actual != "quest ${TAG#v}" ]]; then
-            echo "::error::$TAG builds $actual; bump package.json first"
-            exit 1
-          fi
-      - name: Check the binary's lifecycle
-        shell: bash
-        run: bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest"
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest" "$VERSION"
       # The binary gates real commands. Work outside the job holds a fresh macOS
       # runner's load above its CPUs, which must not keep a lone command waiting.
       # Ubuntu 22.04's systemd 249 is too old for Quest's scopes, so it checks the
@@ -132,12 +174,12 @@ jobs:
         run: bash scripts/gate-check.sh "$RUNNER_TEMP/quest"
 
   # Hosted macOS runners can queue past the timeout, which then reports a job
-  # that never ran as failed. Pull requests skip these; tags, which publish the
-  # artifacts, and manual runs still check them. Check covers macOS on main.
+  # that never ran as failed. Pull requests skip these; releases, which publish
+  # the artifacts, and manual runs still check them. Check covers macOS on main.
   macos:
     name: check (${{ matrix.target }})
     if: github.event_name != 'pull_request'
-    needs: build
+    needs: [plan, build]
     strategy:
       fail-fast: false
       matrix:
@@ -151,14 +193,15 @@ jobs:
     steps: *check-steps
 
   # Check's suite runs on Linux and Windows only, so the gate's macOS owner is
-  # tested natively before a tag publishes.
+  # tested natively before a release publishes.
   gate-macos:
-    if: github.event_name != 'pull_request'
+    needs: plan
+    if: github.event_name != 'pull_request' && needs.plan.outputs.build == 'true'
     uses: ./.github/workflows/gate-macos.yml
 
   windows:
     name: check (${{ matrix.target }})
-    needs: build
+    needs: [plan, build]
     strategy:
       fail-fast: false
       matrix:
@@ -185,15 +228,12 @@ jobs:
         shell: pwsh
         env:
           TARGET: ${{ matrix.target }}
-          REF_TYPE: ${{ github.ref_type }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          $tag = if ($env:REF_TYPE -eq 'tag') { $env:TAG } else { 'v' + (Get-Content package.json | ConvertFrom-Json).version }
-          ./scripts/install-check.ps1 -Method archive -Target $env:TARGET -Tag $tag -ReleaseDirectory (Resolve-Path release).Path
+          TAG: v${{ needs.plan.outputs.version }}
+        run: ./scripts/install-check.ps1 -Method archive -Target $env:TARGET -Tag $env:TAG -ReleaseDirectory (Resolve-Path release).Path
 
   publish:
-    needs: [check, macos, gate-macos, windows]
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [plan, check, macos, gate-macos, windows]
+    if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -210,18 +250,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: v${{ needs.plan.outputs.version }}
+          RELEASED: ${{ needs.plan.outputs.released }}
         run: |
+          # A run that failed after uploading leaves a draft, which this replaces.
+          gh api --paginate "repos/$GH_REPO/releases" --jq '.[] | select(.draft) | "\(.id) \(.tag_name)"' |
+            while read -r id tag; do
+              if [[ $tag == v[0-9]* ]]; then gh api -X DELETE "repos/$GH_REPO/releases/$id"; fi
+            done
           sed "s/@TAG@/$TAG/" scripts/installer.sh > release/quest-installer.sh
           cd release
           sha256sum quest-*.tar.gz quest-*.zip quest-installer.sh > SHA256SUMS
-          prerelease=()
-          if [[ $TAG == *-* ]]; then prerelease=(--prerelease); fi
-          gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes "${prerelease[@]}" \
+          notes=(--generate-notes)
+          if [[ -n $RELEASED ]]; then notes+=(--notes-start-tag "$RELEASED"); fi
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "$TAG" "${notes[@]}" \
             quest-*.tar.gz quest-*.zip quest-installer.sh SHA256SUMS
+          # Publishing the draft creates its tag at this run's commit, with every asset already attached.
+          id=$(gh api --paginate "repos/$GH_REPO/releases" --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id")
+          gh api -X PATCH "repos/$GH_REPO/releases/$id" -F draft=false -f make_latest=true --jq .html_url
 
+  # Mise and the installer need the published release, so they check it last and
+  # fail loudly; their fix ships as the next release.
   install-check:
-    needs: publish
+    needs: [plan, publish]
     uses: ./.github/workflows/install-check.yml
     with:
-      tag: ${{ github.ref_name }}
+      tag: v${{ needs.plan.outputs.version }}

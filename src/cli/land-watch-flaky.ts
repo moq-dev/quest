@@ -6,7 +6,7 @@ import { git, tryGit } from "./land";
 import { FLAKY_INPUT, type FixResult, type KnownFlaky, signature } from "./land-fix";
 import { validateFix } from "./land-fixer";
 import { importFixer } from "./land-fixer-repository";
-import { save } from "./land-serve";
+import { save } from "./land-daemon";
 
 /** One round's flaky verdict on a test. */
 export interface FlakyVerdict {

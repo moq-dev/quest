@@ -49,7 +49,7 @@ import {
 	stopRule,
 } from "./land-fixer";
 import { push, remoteHead } from "./land-head";
-import { save } from "./land-serve";
+import { save } from "./land-daemon";
 import type { Removal } from "./land-watch";
 import {
 	type Disable,

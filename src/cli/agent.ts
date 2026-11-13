@@ -229,7 +229,7 @@ export class AgentInputError extends Error {}
  * runs on its CLI's own login rather than as the session's sub-session.
  * A launch from inside a `quest gate` command does not admit the agent's own
  * expensive commands or give them a land check's priority, so the gate's marks
- * are dropped too, with the mbx priority a priority gate sets, as is the base a land check runs against. Each CLI keeps the
+ * are dropped too, with the mbx priority a priority gate sets. Each CLI keeps the
  * user's configuration directory.
  */
 const STRIPPED = [
@@ -239,7 +239,6 @@ const STRIPPED = [
 	/^OPENAI_API_KEY$/,
 	/^OP_/,
 	/^QUEST_GATE_(ADMITTED|PRIORITY)$/,
-	/^QUEST_LAND_BASE$/,
 ];
 
 /**

@@ -51,8 +51,15 @@
             inherit system;
             overlays = [ (_: _: { inherit (nixpkgs-bun.legacyPackages.${system}) bun; }) ];
           };
-          quest = pkgs.callPackage ./nix/package.nix { };
-          questPinned = pkgs.callPackage "${quest-pinned}/nix/package.nix" { };
+          # A flake build cannot see tags, so it reports its commit.
+          quest = pkgs.callPackage ./nix/package.nix { rev = self.shortRev or self.dirtyShortRev or null; };
+          # A pin from before builds took `rev` reads its version from package.json instead.
+          pinnedPackage = "${quest-pinned}/nix/package.nix";
+          questPinned = pkgs.callPackage pinnedPackage (
+            pkgs.lib.optionalAttrs (pkgs.lib.functionArgs (import pinnedPackage) ? rev) {
+              rev = quest-pinned.shortRev;
+            }
+          );
           manifest = pkgs.lib.importJSON ./package.json;
           # package.json's packageManager pins Bun for CI runners without Nix.
           bunVersion = pkgs.lib.removePrefix "bun@" manifest.packageManager;
