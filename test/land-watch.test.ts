@@ -1012,6 +1012,7 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 			jobs,
 			effort: "high",
 			tags: ["deploy-*"],
+			branches: ["release*"],
 			timeout: 60,
 			token: async () => "token",
 			read: readRemote,
@@ -1088,7 +1089,13 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		git(repo.origin, "tag", "deploy-1", base);
 		git(repo.origin, "tag", "other-1", base);
 		git(context.root, "fetch", "--quiet", repo.origin, `${base}:refs/tags/deploy-0`);
-		fix.round(5, `git tag -l > '${fix.tools}/tags'\n${fixScript("fixed.txt")}`);
+		// So do its matching branches, as origin/<branch> like a CI checkout's.
+		git(repo.origin, "update-ref", "refs/heads/release", head);
+		git(context.root, "fetch", "--quiet", repo.origin, `${base}:refs/remotes/origin/release-0`);
+		fix.round(
+			5,
+			`git tag -l > '${fix.tools}/tags'\ngit for-each-ref --format='%(refname) %(objectname)' refs/remotes > '${fix.tools}/branches'\n${fixScript("fixed.txt")}`,
+		);
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual([
 			"removed 5 failed_checks fix",
 			"fixing 5",
@@ -1096,6 +1103,7 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(github.comments[5][0].body).toContain("The land fixer works on it in the background");
 		await exited(state);
 		expect(readFileSync(join(fix.tools, "tags"), "utf8")).toBe("deploy-1\n");
+		expect(readFileSync(join(fix.tools, "branches"), "utf8")).toBe(`refs/remotes/origin/release ${head}\n`);
 		// The wrapper got the removal's full log followed by the PR's own checks, the PR, and the effort.
 		const [call] = fix.calls();
 		const [effort, input, number] = call.split(" ");

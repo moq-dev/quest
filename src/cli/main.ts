@@ -808,6 +808,16 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			[] as string[],
 		)
 		.option(
+			"--fixer-branch <pattern>",
+			"Fetch the branches matching this pattern (repeatable), such as `release`, from GitHub into each fixer checkout as origin/<branch>, so checks that read them, such as a comparison with the release branch, run there as in the queue's build",
+			(value: string, previous: string[]) => {
+				if (!/^[\w.*/-]+$/.test(value) || value.startsWith("-") || value.includes(".."))
+					throw new InvalidArgumentError("expected a branch name pattern, such as release");
+				return [...previous, value];
+			},
+			[] as string[],
+		)
+		.option(
 			"--refuse-forks",
 			"On the own queue, eject each pick whose head is in a fork, or in a deleted repository, before pushing its build, so a fork's code never reaches a private queue runner",
 		)

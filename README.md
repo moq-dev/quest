@@ -960,7 +960,9 @@ its PR still waits as the queue dropped it:
   which `quest land fix --effort` reads by default. Each `--fixer-tag`
   pattern, such as `deploy-*`, fetches the matching tags from GitHub into
   the checkout, pruning those GitHub deleted, so a check that reads them
-  runs there as in the queue's build.
+  runs there as in the queue's build. Each `--fixer-branch` pattern, such as
+  `release`, does the same for branches, as `origin/<branch>` like a CI
+  checkout's.
 
 Each finished round is recorded in its pick's history, as the host gate
 records its rounds: `fixed` for a fixer commit, `merged` for a clean merge,
