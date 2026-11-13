@@ -8,7 +8,7 @@ killed as a whole group, instead of the kernel's OOM killer picking a
 victim elsewhere on the host. Other gated commands, agent sessions, and
 host services keep running.
 
-Non-goals: host-wide swap or oomd settings, which kixelated/nixos's
+Non-goals: host-wide swap or oomd settings, which kixel-ai/nixos's
 quest tree plans for the maintainer's host.
 
 ## Plan

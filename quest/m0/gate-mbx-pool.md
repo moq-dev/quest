@@ -128,6 +128,6 @@ Agent's choices, for the implementer to revisit:
 - Update `quest gate --help`, the README, and the shared rule above.
 
 Installing mbx on the maintainer's host is outside this repository: the
-maintainer directed it to kixelated/dotfiles on 2026-11-12, which already
+maintainer directed it to kixel-ai/dotfiles on 2026-11-12, which already
 links mbx's config. Until it lands, the measurement can use any mbx 1.30.0
 or later on PATH.
