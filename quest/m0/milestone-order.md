@@ -28,7 +28,13 @@ Decided 2026-11-13 (user, /quest-plan):
     m1, m2)
 - What about the links already on main in moq, moq.pro, and rind?
   - ✅ Fix them now, in one PR per repository, before this rule ships
-    (rejected: list them here and leave them to each repository's pin bump)
+    (rejected: list them here and leave them to each repository's pin bump):
+    [moq-dev/moq#8645](https://github.com/moq-dev/moq/pull/8645) and
+    [moq-dev/moq.pro#3992](https://github.com/moq-dev/moq.pro/pull/3992).
+    rind's one link goes when
+    [kixel-ai/rind#606](https://github.com/kixel-ai/rind/pull/606) merges
+    and deletes the quest it points to. Before this rule ships, re-scan
+    each repository's main for links added since.
 
 Implementation guidance:
 
