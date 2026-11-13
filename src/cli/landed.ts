@@ -103,9 +103,12 @@ export function landingCheck(root: string): LandingCheck {
 			const count = Number(process.env.GIT_CONFIG_COUNT ?? 0) || 0;
 			const basic = Buffer.from(`x-access-token:${head.token}`).toString("base64");
 			run(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", head.remote, base, tip], {
-				GIT_CONFIG_COUNT: String(count + 1),
+				GIT_CONFIG_COUNT: String(count + 2),
+				// An empty value drops any header the checkout already sends, such as actions/checkout's, which GitHub would reject as a duplicate.
 				[`GIT_CONFIG_KEY_${count}`]: "http.https://github.com/.extraheader",
-				[`GIT_CONFIG_VALUE_${count}`]: `Authorization: basic ${basic}`,
+				[`GIT_CONFIG_VALUE_${count}`]: "",
+				[`GIT_CONFIG_KEY_${count + 1}`]: "http.https://github.com/.extraheader",
+				[`GIT_CONFIG_VALUE_${count + 1}`]: `Authorization: basic ${basic}`,
 			});
 			const quests = (ref: string) => run(["ls-tree", "--name-only", ref, "quest"]) !== "";
 			const based = quests(base);
