@@ -1,10 +1,10 @@
-# [M] Split XS, S and M writers between two arms
+# [M] Split each size's writers between two arms
 
 ## Goal
 
-`quest unblocked --json` routes each XS quest to Sonnet 5.5 high or Opus
-low, each S quest to Opus low or medium, and each M quest to Opus medium
-or high, 50/50. The split is stable per quest,
+`quest unblocked --json` routes each XS and S quest to Sonnet 5.5 high or
+Opus 5.5 medium, each M quest to Opus medium or high, and each XL quest to
+Opus xhigh or Fable 5.2 medium, 50/50. The split is stable per quest,
 and the review efforts in `src/cli/models.ts` stay fixed while it runs. Each `Implementer:` line
 records its arm, iterates stay on the PR's arm, and
 `quest usage` reports cost, rounds, findings, hand-backs, and later
@@ -37,6 +37,26 @@ Decided 2026-11-11 (user, /quest-plan,
   - Rejected: Sonnet medium against Sonnet high, since the same cost
     guide puts Sonnet medium about 7 points below high on its SWE-bench
     Pro subset and 15 below on its internal agentic-coding set; no XS arm
+- Re-armed 2026-11-13 (user), to test where Anthropic's
+  [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/)
+  and Theo Browne's
+  [Opus against Fable video](https://www.youtube.com/watch?v=XtykeVoSmP8)
+  disagree:
+  - S Sonnet high against Opus medium: the guide puts scoped coding on
+    Sonnet, Theo finds Sonnet runs up output tokens and costs about what
+    Opus does. S's table entry moved from Opus low to Opus medium, the
+    guide's default, since both call Opus low too weak.
+  - XS Sonnet high against Opus medium rather than Opus low, the same
+    contrast as S (agent's choice, since no table entry runs Opus low any
+    more).
+  - M Opus medium against high, as before: Theo finds medium ends its turn
+    too early and calls high the best effort.
+  - XL Opus xhigh against Fable medium: the guide moves up to Fable rather
+    than past high, while Theo finds Opus checks verifiable work more
+    carefully and a subscription gives about a quarter as much Fable. XL's
+    table entry stays Opus xhigh for that subscription cap (rejected:
+    Fable medium; dropping the Fable arm). XL quests are rare, so report
+    how many each arm got rather than wait for a detectable difference.
 - Escapes are too rare to separate the arms, about 2% of PRs. Compare
   first-round findings under the fixed review efforts, rounds, hand-backs,
   and cost, and report escapes alongside.

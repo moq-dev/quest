@@ -21,6 +21,7 @@ import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
 import { QUEUE_CHECK } from "./land-queue";
 import type { LandingCheck } from "./landed";
 import { classifyCheck } from "./status";
+import { describe, readSignals } from "./signals";
 import { Refusal, ago } from "./start";
 
 export type Method = "merge" | "squash" | "rebase";
@@ -260,6 +261,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		return { ...snapshot, unapproved: fresh.unapproved };
 	};
 	await passing(labels.github, pr, snapshot.url, sha);
+	await unsignaled(labels.github, pr, snapshot.url, sha);
 	const findings = await request.check({
 		remote: `https://github.com/${pr.owner}/${pr.repo}.git`,
 		base: snapshot.base,
@@ -279,6 +281,8 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
 		const method = signalMethod(repository, needs.rules, named, snapshot.url, snapshot.base);
 		await unchanged();
+		// A finding or decision posted during the quest check above would otherwise ride into the queue.
+		await unsignaled(labels.github, pr, snapshot.url, sha);
 		await enqueue(labels.github, snapshot.id, snapshot.head, method);
 		return;
 	}
@@ -286,7 +290,9 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 	if (snapshot.queue) {
 		if (named !== undefined && named !== "merge")
 			deps.warn(`${snapshot.url} lands through a merge queue, which applies its own merge method`);
-		await pick(labels, await unchanged(), named ?? "merge");
+		const fresh = await unchanged();
+		await unsignaled(labels.github, pr, snapshot.url, sha);
+		await pick(labels, fresh, named ?? "merge");
 		return;
 	}
 	const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
@@ -318,6 +324,8 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		);
 	}
 	const { unapproved } = await unchanged();
+	// A decision posted since the check above leaves the head as it was, so `expectedHeadOid` would not refuse it.
+	await unsignaled(labels.github, pr, snapshot.url, sha);
 	if (unapproved && repository.allow_auto_merge !== true)
 		throw new Refusal(
 			`${snapshot.url} lacks the approval its base requires, which a merge now would bypass; land it once it is approved`,
@@ -351,6 +359,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 			(await requirements(labels.github, pr, fresh.base)).checks.some((check) => check.name === LAND_CHECK)
 		)
 			throw error;
+		await unsignaled(labels.github, pr, snapshot.url, sha);
 		await submit("mergePullRequest");
 	}
 }
@@ -369,6 +378,20 @@ async function passing(github: GitHub, pr: PullRequest, url: string, sha: string
 	if (failing.length > 0)
 		throw new Refusal(
 			`${url} head ${sha} failed ${failing.length === 1 ? "a check" : "checks"}: ${failing.sort().join(", ")}; fix the PR or rerun the check, then land it again`,
+		);
+}
+
+/**
+ * Refuse a head that an online reviewer's unanswered finding or a newer maintainer decision holds, naming each:
+ * the review a pick relied on predates them, so landing would skip them.
+ */
+async function unsignaled(github: GitHub, pr: PullRequest, url: string, sha: string): Promise<void> {
+	const read = (await readSignals(github, pr, [pr.number])).get(pr.number)!;
+	if (read.head.toLowerCase() !== sha.toLowerCase())
+		throw new Refusal(`${url} head moved to ${read.head}; check the new head before landing it`);
+	if (read.signals.length > 0)
+		throw new Refusal(
+			`${url} head ${sha} is held by ${describe(read.signals)}; push a fix, or answer each: reply in a finding's thread, or link its review or the decision in a comment that answers it; then land it again`,
 		);
 }
 

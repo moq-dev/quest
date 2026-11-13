@@ -543,6 +543,7 @@ describe("usage", () => {
 		// #10's final head got a bot's review with one thread, which the agent fixed.
 		const activity = (number: number) => ({
 			headRefOid: "b".repeat(40),
+			commits: connection([{ commit: { oid: "b".repeat(40), committedDate: "2026-11-06T14:00:00Z" } }]),
 			reviews: connection(
 				number === 10
 					? [

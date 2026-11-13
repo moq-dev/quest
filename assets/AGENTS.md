@@ -195,6 +195,7 @@ Start each sub-agent in the background with its own isolated worktree, since age
 Before starting or resuming one, run `quest agent admit` in the background and go on once it exits 0, handling reports meanwhile: it waits until the host has room for another agent. `quest agent start` and `resume` admit themselves.
 A sub-agent reports only when done or blocked, and never waits on GitHub CI, reviews, or merges; stay silent on its interim notifications.
 As each reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
+Before dispatching a session to apply the user's answers to a PR's decisions, post them on the PR in a comment that opens with `Maintainer decision`: `quest merge` refuses the PR's current head until a newer commit, or a later comment linking the decision, answers it.
 Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in each later agent's brief, and report it once.
 
 A report that is an API error such as a rate limit or overload, or a cancellation the user did not ask for, is not a result.

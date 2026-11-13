@@ -19,6 +19,7 @@ import { appOf, checksState, contextOutcome } from "../github/checks";
 import { EJECTED, LAND_CHECK, pinned } from "./land";
 import { reviewSection } from "../core";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
+import { readSignals, type Signal } from "./signals";
 
 /**
  * One query covers the PR; each connection pages by its own cursor, and a
@@ -144,6 +145,8 @@ export interface Status {
 	reactions: Reaction[];
 	/** Unresolved review threads, oldest first. */
 	threads: Thread[];
+	/** What holds the head from landing: online reviewers' unanswered findings on it and newer maintainer decisions. */
+	signals: Signal[];
 	/** Ownership facts read by the same client as the state commands. */
 	holds: HoldFact[];
 	starterHold: HoldReport["starter"];
@@ -213,6 +216,10 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 	const status = summarize(first!, rollup, current, needs, reviewNodes, threadNodes);
 	status.reviewRecord = await reviewRecord(github, pr, first!, deps.warn);
 	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
+	const signaled = (await readSignals(github, pr, [pr.number])).get(pr.number)!;
+	if (signaled.head !== first!.headRefOid)
+		throw new Error("the PR head changed while reading its signals; rerun quest status");
+	status.signals = signaled.signals;
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
 }
 
@@ -500,6 +507,7 @@ function summarize(
 		reviewRecord: null,
 		reactions,
 		threads,
+		signals: [],
 		holds: [],
 		starterHold: null,
 	};
@@ -605,6 +613,7 @@ export function statusLines(status: Status): string[] {
 			(t) =>
 				`thread ${t.id} ${t.outdated ? "outdated" : "current"} ${t.lastAuthor} ${t.url} ${t.path}:${dash(t.line)}`,
 		),
+		...status.signals.map((s) => `signal ${s.kind} ${s.url} ${s.author}: ${s.text}`),
 		...(status.holds.length
 			? status.holds.map(
 					(hold) =>
