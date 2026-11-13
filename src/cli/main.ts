@@ -1185,10 +1185,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
 				"first whose model is not avoided reviews, and beside it, on the same head and each in its own session, " +
 				`${SECOND_REVIEWER.harness} ${SECOND_REVIEWER.model} ${SECOND_REVIEWER.effort} for every size, and the shadow: ` +
-				"the pick's model one effort lower (low, medium, high, xhigh, max), skipped when the pick runs at low, so " +
-				"each effort step can be compared with the one below it. The shadow runs on a branch's first run of the pair, " +
-				"then only while it has findings to settle; its findings are numbered and settled like any reviewer's, and " +
-				"its session carries over to the new pick's shadow when the pick changes. " +
+				"the pick's model one effort lower (low, medium, high, xhigh, max), skipped when the pick runs at low or an " +
+				"effort off that ladder, so each effort step can be compared with the one below it. The shadow runs on a " +
+				"branch's first run of the pair, then only while it has findings to settle or once the pick changed so it is " +
+				"no longer one step below; its findings are numbered and settled like any reviewer's, its session carries " +
+				"over to the new shadow, and a pick with no step below it seats a shadow at its own effort while the old " +
+				"shadow still has findings. " +
 				"--exclude-model names each model to avoid; without it, the " +
 				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR. " +
 				"When it names none or an `unknown` model, " +
@@ -1198,7 +1200,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"--harness names the only reviewer instead of the pair and the shadow, at its entry's model and effort, and --model and " +
 				"--effort override that reviewer's, or without --harness, the size pick's; a repository whose AGENTS.md names other reviewers " +
 				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
-				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle, as a run of the pair does while a shadow it cannot run has some. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the others and fails the " +
+				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle, as a run of the pair does while a reviewer only --harness runs has some. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the others and fails the " +
 				"run, saving no round. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +

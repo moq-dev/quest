@@ -235,7 +235,8 @@ describe("PR records", () => {
 	const tallies = [
 		tally("codex", 3, { high: 1, medium: 1, low: 2 }, 2, 1),
 		tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0),
-		tally("claude", 2, { high: 2, medium: 0, low: 0 }, 1, 0),
+		// A left-out reviewer still names its session, so `quest usage` counts that session as reviewing.
+		{ ...tally("claude", 2, { high: 2, medium: 0, low: 0 }, 1, 0), session: CLAUDE },
 	];
 
 	test("reads back each reviewer's round and tally quest review records, after the land fixer's lines", () => {
@@ -284,7 +285,7 @@ describe("PR records", () => {
 				model: "m",
 				effort: "high",
 				shadow: false,
-				session: null,
+				session: CLAUDE,
 				round: null,
 				score: null,
 				tally: {

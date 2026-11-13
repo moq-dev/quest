@@ -1392,7 +1392,10 @@ fakes.each([
 		const [picked] = round.stdout.split("\nreviewer opencode ");
 		expect(picked).toContain("round 1\n");
 		expect(picked).not.toContain("unchanged");
-		expect(s.calls().at(-2)!.argv[1]).toBe("review");
+		const effort = flags.includes("--effort") ? "xhigh" : "high";
+		expect(at(s.calls(), effort).at(-2)!.argv[1]).toBe("review");
+		// A pick at another effort leaves the shadow two steps below it, so the shadow at one step reruns.
+		expect(round.stdout.includes("gpt-6.1-sol high shadow\n")).toBe(flags.includes("--effort"));
 	},
 );
 
@@ -1992,10 +1995,11 @@ test("the shadow is the size's pick one effort lower, and none below low", () =>
 		"claude claude-opus-5-5 high",
 	]);
 	expect(shadowOf({ harness: "claude", model: "m", effort: "max" })!.effort).toBe("xhigh");
-	expect(() => shadowOf({ harness: "codex", model: "m", effort: "minimal" })).toThrow("no effort below minimal");
+	// No step below an effort off the ladder is known, so an --effort such as Codex's minimal runs no shadow.
+	expect(shadowOf({ harness: "codex", model: "m", effort: "minimal" })).toBeNull();
 });
 
-fakes("no shadow runs below low, and one with findings no run can seat holds the head", async () => {
+fakes("no shadow runs below low, though one settles a shadow's findings the pick left behind", async () => {
 	const s = setup("CODEX_THREAD_ID");
 	const opusLow = await quest("--root", s.repo, "review", "--size", "S", "--json");
 	expect(opusLow.code, opusLow.stderr).toBe(0);
@@ -2004,27 +2008,11 @@ fakes("no shadow runs below low, and one with findings no run can seat holds the
 		["opencode", "high", undefined],
 	]);
 
-	// Sol medium's shadow, Sol low, leaves a finding open; Opus low then replaces Sol, with no shadow to settle it.
+	// Sol medium's shadow, Sol low, leaves a finding open, and a --harness run leaves it to the pair.
 	const t = setup();
 	expect((await quest("--root", t.repo, "review", "--size", "S")).code).toBe(0);
 	write(t.repo, ".tmp/responses.md", "1. Fixed.\n2. Fixed.\n3. Fixed.\n");
 	const responses = join(t.repo, ".tmp", "responses.md");
-	const stuck = await quest(
-		"--root",
-		t.repo,
-		"review",
-		"--size",
-		"S",
-		"--exclude-model",
-		"gpt-6.1-sol",
-		"--responses",
-		responses,
-	);
-	expect(stuck.code).toBe(2);
-	expect(stuck.stderr).toContain(
-		"codex (shadow) still has findings to settle on this branch; no reviewer of this run can settle them, or pass --new to drop them",
-	);
-	// A single named reviewer leaves the shadow to the pair's next run.
 	const alone = await quest(
 		"--root",
 		t.repo,
@@ -2037,7 +2025,33 @@ fakes("no shadow runs below low, and one with findings no run can seat holds the
 		responses,
 	);
 	expect(alone.code).toBe(2);
-	expect(alone.stderr).toContain("settle them in a run of the pair with --responses");
+	expect(alone.stderr).toContain(
+		"opencode and codex (shadow) still have findings to settle on this branch; settle them in a run of the pair, or of that reviewer with --harness, with --responses",
+	);
+	// Opus low then replaces Sol, with no step below it, so a shadow at Opus low settles the old shadow's finding.
+	const sol = ["--size", "S", "--exclude-model", "gpt-6.1-sol"];
+	const settled = await quest("--root", t.repo, "review", ...sol, "--responses", responses, "--json");
+	expect(settled.code, settled.stderr).toBe(0);
+	const rounds: Round[] = JSON.parse(settled.stdout).rounds;
+	expect(rounds.map((r) => [r.reviewer, r.effort, r.shadow, r.earlier?.findings.map((f) => f.number)])).toEqual([
+		["claude", "low", undefined, [1]],
+		["opencode", "high", undefined, [2]],
+		["claude", "low", true, [3]],
+	]);
+});
+
+fakes("a reviewer a --harness run left with findings is named for its own run", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	vi.stubEnv("FAKE_REPLY", undefined);
+	const claude = ["--harness", "claude", "--model", "opus", "--effort", "low"];
+	expect((await quest("--root", s.repo, "review", ...claude)).code).toBe(0);
+	const held = await quest("--root", s.repo, "review");
+	expect(held.code).toBe(2);
+	expect(held.stderr).toContain(
+		"claude still has findings to settle on this branch; settle them in a run of --harness claude with --responses",
+	);
 });
 
 test("saved sessions are read only in the current format, or refused naming --new", () => {
@@ -2241,6 +2255,7 @@ test("a tally counts each finding once, by who raised it, through every round", 
 			reviewer: "codex",
 			model: "m",
 			effort: "high",
+			session: "s",
 			rounds: 2,
 			findings: { high: 2, medium: 0, low: 1 },
 			fixed: 1,

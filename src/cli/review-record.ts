@@ -94,7 +94,13 @@ export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 			);
 	}
 	for (const tally of tallies.filter((each) => !rounds.some((round) => sameSeat(round, each))))
-		lines.push("", reviewerLine(tally), `- Rounds: ${tally.rounds}; ${findingsText(counted(tally))}`);
+		lines.push(
+			"",
+			reviewerLine(tally),
+			// Its session, still named so `quest usage` counts it as reviewing.
+			...(tally.session === undefined ? [] : [`- Session: ${code(tally.session)}`]),
+			`- Rounds: ${tally.rounds}; ${findingsText(counted(tally))}`,
+		);
 	return lines.join("\n");
 }
 
@@ -106,7 +112,7 @@ export interface ReviewSummary {
 	effort: string;
 	/** Whether it is the shadow: the size's pick one effort lower, beside it on the same heads. */
 	shadow: boolean;
-	/** Its latest session and round, null when the latest run left it out. */
+	/** Its latest session, null when the record names none; its round, null when the latest run left it out. */
 	session: string | null;
 	round: number | null;
 	/** Null when the latest run left it out, or on a record written before rounds were scored. */
@@ -143,11 +149,15 @@ export function parseReview(body: string): ReviewSummary[] {
 		};
 		const reviewer = match(/^- Reviewer: (.+?), (\S+), (\S+) effort(, shadow)?\r?$/m);
 		const tally = parseCounts(text);
-		// A reviewer the latest run left out has only its tally.
+		// A reviewer the latest run left out has its tally, and its session with no round once tallies name it.
 		const session =
 			tally !== null && !/^- Session: /m.test(text)
 				? null
-				: match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
+				: match(
+						tally === null
+							? /^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m
+							: /^- Session: (`+) ?(.*?) ?\1(?:, round (\d+))?\r?$/m,
+					);
 		const score = /^- Score: (\d+)\/10,/m.exec(text);
 		const open = { high: 0, medium: 0, low: 0 };
 		for (const [, severity] of text.matchAll(/^  - (High|Medium|Low), /gm))
@@ -158,7 +168,7 @@ export function parseReview(body: string): ReviewSummary[] {
 			effort: reviewer[3]!,
 			shadow: reviewer[4] !== undefined,
 			session: session && session[2]!,
-			round: session && Number(session[3]),
+			round: session?.[3] === undefined ? null : Number(session[3]),
 			score: score ? Number(score[1]) : null,
 			tally,
 			open,

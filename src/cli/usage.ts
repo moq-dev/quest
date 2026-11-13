@@ -612,7 +612,8 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	// each round rewrites only its own PR's record; the newest breaks a tie. A deleted fork has no repository,
 	// so its PR stands alone.
 	const branch = (each: PullRow) => JSON.stringify([each.repository ?? each.number, each.branch]);
-	const rounds = (each: PullRow) => each.review.reduce((sum, review) => sum + (review.tally?.rounds ?? 0), 0);
+	const rounds = (each: PullRow) =>
+		each.review.reduce((sum, review) => sum + (review.shadow ? 0 : (review.tally?.rounds ?? 0)), 0);
 	const latest = new Map<string, PullRow>();
 	for (const each of pulls) {
 		if (each.implementers.length === 0 || each.review.every((review) => review.tally === null)) continue;

@@ -1335,9 +1335,13 @@ same head for every size, in its own session, so each head is read by a model
 family no writer runs, at about $0.05 a review. The shadow, the pick's model
 one effort lower (Sol low for an XS PR), reviews it too, in its own session, so
 the routing can be retuned from what each effort step finds over the one below
-it. It is skipped when the pick runs at low, runs on the branch's first run of
-the pair, and then reruns only while it has findings to settle; those are
-numbered, answered, and settled like any reviewer's. The reviewers run at once;
+it. It is skipped when the pick runs at low or at an `--effort` off the ladder
+(low, medium, high, xhigh, max). It runs on the branch's first run of the
+pair, then reruns only while it has findings to settle, or once the pick
+changed so that it is no longer one step below; its findings are numbered,
+answered, and settled like any reviewer's. A pick with no step below it seats
+a shadow at its own effort while the old shadow still has findings, so none
+is left unanswered. The reviewers run at once;
 the first to fail, such as on a usage limit, stops the others, and the round
 saves none.
 
@@ -1491,7 +1495,8 @@ by its latest severity, however many rounds keep it open. A finding counts
 for the reviewer that raised it when a new size pick's reviewer fixes or
 refutes it, but one that reviewer keeps open becomes its own, since its round
 reports it again. `--new` drops the findings it leaves unsettled from the
-tallies. A reviewer the run left out keeps a block with only its tally. `quest status` takes the last full SHA the section names as the
+tallies. A reviewer the run left out keeps a block with only its session and
+tally. `quest status` takes the last full SHA the section names as the
 reviewed head, so the head appears in full only once no reviewer reports a
 finding, and model text
 appears as inline code, which mentions or links nothing and never holds a full

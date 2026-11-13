@@ -310,9 +310,10 @@ export interface Tally {
 	reviewer: ReviewHarness;
 	/** The shadow's tally, kept apart from the size's pick of the same harness. */
 	shadow?: true;
-	/** Its latest round's model and effort. */
+	/** Its latest round's model, effort, and session, which the record names even once a run leaves it out. */
 	model: string;
 	effort: string;
+	session?: string;
 	rounds: number;
 	/**
 	 * Each finding it raised, once however many rounds keep it open, by its latest severity. One a replacing
@@ -1433,16 +1434,12 @@ export const sameSeat = (a: SeatId, b: SeatId) => seatKey(a) === seatKey(b);
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
 /**
- * The shadow of `routed`, the size's pick: its model one effort lower, or null when no lower effort exists, as
- * for Opus low. An effort off the ladder fails, since no step below it is known.
+ * The shadow of `routed`, the size's pick: its model one effort lower, or null when no lower effort is known,
+ * as for Opus low or an `--effort` off the ladder, such as Codex's `minimal`.
  */
 export function shadowOf(routed: Reviewing): Reviewing | null {
 	const at = EFFORTS.indexOf(routed.effort);
-	if (at < 0)
-		throw new ReviewInputError(
-			`no effort below ${routed.effort} is known for the shadow reviewer; pass --harness to run a single reviewer`,
-		);
-	return at === 0 ? null : { ...routed, effort: EFFORTS[at - 1]! };
+	return at <= 0 ? null : { ...routed, effort: EFFORTS[at - 1]! };
 }
 
 /**
@@ -1461,6 +1458,7 @@ export function parseState(value: unknown): State {
 			(tally) =>
 				typeof tally?.reviewer === "string" &&
 				(tally.shadow === undefined || tally.shadow === true) &&
+				(tally.session === undefined || typeof tally.session === "string") &&
 				typeof tally.rounds === "number" &&
 				typeof tally.fixed === "number" &&
 				typeof tally.refuted === "number" &&
@@ -1651,24 +1649,36 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const replaced =
 		pair && seats[0]!.session === undefined ? unsettled(unseated()).find((each) => !each.shadow) : undefined;
 	if (replaced !== undefined) seats[0] = { ...seats[0]!, ...seated(replaced) };
-	// The shadow reviews a branch's first run, then reruns only while it has findings to settle. Its session
-	// carries over when the size's pick changes, as a replaced reviewer's does, so its findings stay settled.
+	// The shadow reviews a branch's first run, then reruns only while it has findings to settle, or once the pick
+	// changed so that the shadow it ran is no longer one step below it. Its session carries over to the new
+	// shadow, as a replaced reviewer's does, so its findings stay settled. A pick with no step below it still
+	// seats a shadow at its own effort while the old one has findings, since only a shadow settles them.
 	const shadowed = sessions.find((each) => each.shadow);
-	if (shadow !== null && (shadowed === undefined || unsettled([shadowed]).length > 0))
-		seats.push({ reviewer: shadow, shadow: true, ...seated(shadowed) });
+	const open = shadowed !== undefined && unsettled([shadowed]).length > 0;
+	const stale =
+		shadow !== null &&
+		shadowed !== undefined &&
+		!(
+			shadowed.reviewer === shadow.harness &&
+			shadowed.last.model === shadow.model &&
+			shadowed.last.effort === shadow.effort
+		);
+	if (pair && (shadowed === undefined ? shadow !== null : open || stale))
+		seats.push({ reviewer: shadow ?? routed, shadow: true, ...seated(shadowed) });
 	// A run of the pair drops the other sessions but a shadow's, whose presence keeps it from rerunning. A run of
 	// --harness's reviewer alone keeps them all for the pair's next run. Either refuses to pass a head while one of
 	// them still has findings it cannot settle.
 	const others = unseated();
 	const kept = pair ? others.filter((each) => each.shadow) : others;
-	const open = unsettled(others);
-	if (open.length > 0) {
-		const names = open.map((each) => `${each.reviewer}${each.shadow ? " (shadow)" : ""}`).join(" and ");
-		const settle = pair
-			? "no reviewer of this run can settle them"
-			: "settle them in a run of the pair with --responses";
+	const held = unsettled(others);
+	if (held.length > 0) {
+		const names = held.map((each) => `${each.reviewer}${each.shadow ? " (shadow)" : ""}`).join(" and ");
+		// A pair run seats every shadow with findings, so what it holds is a reviewer only --harness runs.
+		const run = pair
+			? [...new Set(held.map((each) => `--harness ${each.reviewer}`))].join(" or ")
+			: "the pair, or of that reviewer with --harness,";
 		throw new ReviewInputError(
-			`${names} still ${open.length > 1 ? "have" : "has"} findings to settle on this branch; ${settle}, or pass --new to drop them`,
+			`${names} still ${held.length > 1 ? "have" : "has"} findings to settle on this branch; settle them in a run of ${run} with --responses, or pass --new to drop them`,
 		);
 	}
 	if (seats.every((seat) => seat.session === undefined) && options.responses !== undefined) {
@@ -1795,6 +1805,7 @@ export function tallied(
 		};
 		own.model = round.model;
 		own.effort = round.effort;
+		own.session = round.session;
 		own.rounds++;
 		for (const finding of round.findings) own.findings[finding.severity]++;
 		by.set(seatKey(round), own);
