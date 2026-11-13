@@ -242,7 +242,7 @@ export function pidNamespace(): string | undefined {
 }
 
 /**
- * The ledger's format version, part of its path, so builds whose ledgers disagree never share one.
+ * The format version of the gate and agents ledgers, part of their paths, so builds whose ledgers disagree never share one.
  * Bump it with any change to what an admission records or how a gate keeps one.
  */
 export const LEDGER_VERSION = 2;

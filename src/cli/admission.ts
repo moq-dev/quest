@@ -7,6 +7,7 @@ import {
 	type Admission,
 	type Host,
 	type Limits,
+	LEDGER_VERSION,
 	SETTLE_MS,
 	type Waiting,
 	claimDirectory,
@@ -82,7 +83,7 @@ export async function admit(deps: AdmissionDependencies, signal: AbortSignal, he
 }
 
 /** The agents' ledger of this host, beside the gate's. */
-const agentsDirectory = (gate: string) => join(dirname(dirname(gate)), "agents", basename(gate));
+const agentsDirectory = (gate: string) => join(dirname(dirname(gate)), `agents-v${LEDGER_VERSION}`, basename(gate));
 
 /** The admission `quest agent` runs with: the host's own limits and ledgers. */
 export function processAdmission(notice: (text: string) => void): AdmissionDependencies {
