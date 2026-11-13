@@ -29,7 +29,7 @@ function workflowOf(context: RollupContext): [unknown, unknown] | null {
  * job never loses to another workflow's same-named job; and the latest is the one created last: the highest `databaseId`. A commit
  * status is keyed by its context, and the latest is the newest `createdAt`, or on a tie the one listed
  * later. A check run and a status with the same name stay apart, since GitHub requires both.
- * Queries must ask for a check run's `databaseId name checkSuite { app { databaseId } }` and a
+ * Queries must ask for a check run's `databaseId name checkSuite { app { databaseId } workflowRun { file { path repositoryName } } }` and a
  * status's `context createdAt`.
  */
 export function latestContexts<T extends RollupContext>(contexts: T[]): T[] {

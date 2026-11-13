@@ -149,3 +149,18 @@ test("a rerun is newer than every run that started before its latest attempt", (
 	expect(currentContexts([job("test", 1, "CANCELLED", 10)], tied)).toEqual([]);
 	expect(currentContexts([job("test", 1, "CANCELLED", 20)], tied)).toHaveLength(1);
 });
+
+test("a job keeps its latest report per workflow file, so another workflow's same-named job never hides it", () => {
+	const inWorkflow = (databaseId: number, conclusion: string, repositoryName: string, path: string) => ({
+		...run("build", databaseId, conclusion),
+		checkSuite: { databaseId, app: { databaseId: ACTIONS }, workflowRun: { file: { path, repositoryName } } },
+	});
+	const ci = inWorkflow(1, "FAILURE", "example/project", ".github/workflows/ci.yml");
+	const docs = inWorkflow(2, "SUCCESS", "example/project", ".github/workflows/docs.yml");
+	const policy = inWorkflow(3, "SUCCESS", "example/policies", ".github/workflows/ci.yml");
+	expect(latestContexts([ci, docs, policy])).toEqual([ci, docs, policy]);
+	expect(checksState(latestContexts([ci, docs, policy]))).toBe("FAILURE");
+	// A rerun in the same workflow still supersedes.
+	const rerun = inWorkflow(4, "SUCCESS", "example/project", ".github/workflows/ci.yml");
+	expect(latestContexts([ci, rerun])).toEqual([rerun]);
+});
