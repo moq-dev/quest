@@ -88,7 +88,7 @@ An epic's or milestone's `Required` also holds back every quest under it.
 A child that must precede a sibling is in that sibling's `Required`.
 Nothing else orders work within a milestone: `quest unblocked` ranks it by downstream impact, then path.
 When the section is empty, delete it; the quest is now unblocked.
-`Required` must be acyclic.
+`Required` must be acyclic, and never link to a later milestone than the document listing it: move one side with `quest mv` or remove the link.
 
 `quest check` enforces this structure.
 Run it after creating or updating quests.
