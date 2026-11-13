@@ -2176,7 +2176,11 @@ function shown(forge: Forge): Record<number, string> {
 }
 
 /** The watcher's own queue on a fresh forge, and one pass of it, as the daemon runs it, with GitHub's view after it. */
-function queueSetup(options: Partial<OwnQueue> = {}) {
+function queueSetup(
+	options: Partial<OwnQueue> = {},
+	/** Whether each landing token is minted scoped to `workflows: write` only when asked, as the daemon mints them. */
+	scoped = false,
+) {
 	const forge = new Forge();
 	const queue: OwnQueue = {
 		root: forge.clone(),
@@ -2192,13 +2196,25 @@ function queueSetup(options: Partial<OwnQueue> = {}) {
 	const refuse: ((url: string, init?: RequestInit) => boolean)[] = [];
 	/** GitHub's answer to a request in place of the fake's, given the fake's, or nothing to keep it. */
 	const intercept: ((url: string, real: () => Promise<Response>) => Promise<Response> | undefined)[] = [];
+	/** Warnings the queue logged, the pauses its retries took, and each scoped token's `workflows` grant. */
+	const warnings: string[] = [];
+	const pauses: number[] = [];
+	/** The `workflows` grant of the token each merge request carried: the latest the queue asked for. */
+	const scopes: boolean[] = [];
+	let latest: boolean | undefined;
+	/** Called as the queue asks for a push or merge token, before it gets one. */
+	const hooks: { token?: (workflows: boolean) => void } = {};
 	/** One pass at `minutes` after the first, as the daemon runs it, and GitHub's view after it. */
 	const pass = async (minutes = 0, fix?: FixContext) => {
 		const forged = await forge.deps({ checks: "write", actions: "write" });
 		const deps: GitHubDependencies = {
 			...forged,
 			now: () => now + minutes * 60_000,
+			warn: (message) => void warnings.push(message),
+			sleep: async (delay) => void pauses.push(delay),
 			fetch: (async (input, init) => {
+				if (/\/pulls\/\d+\/merge$/.test(String(input)) && init?.method === "PUT" && latest !== undefined)
+					scopes.push(latest);
 				for (const answer of intercept) {
 					const response = answer(String(input), () => forged.fetch(input, init));
 					if (response) return response;
@@ -2209,7 +2225,12 @@ function queueSetup(options: Partial<OwnQueue> = {}) {
 				return Response.json({ message: "Validation Failed" }, { status: 422 });
 			}) as typeof fetch,
 		};
-		queue.token = async () => deps.token;
+		queue.token = async (workflows) => {
+			hooks.token?.(workflows);
+			if (!scoped) return deps.token;
+			latest = workflows;
+			return (await forge.deps(workflows ? { workflows: "write" } : {})).token;
+		};
 		if (fix) fix.token = queue.token;
 		const result = await ownPass(REPOSITORY, "main", queue, deps, fix);
 		forge.settle();
@@ -2220,7 +2241,7 @@ function queueSetup(options: Partial<OwnQueue> = {}) {
 		}
 		return result.lines.map((line) => line.split(" ").slice(0, 2).join(" "));
 	};
-	return { forge, queue, pass, refuse, intercept };
+	return { forge, queue, pass, refuse, intercept, warnings, pauses, scopes, hooks };
 }
 
 describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
@@ -2583,6 +2604,295 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(one.landing).toBeFalsy();
 		expect(one.comments?.at(-1)?.body).toContain("finding by rabbit[bot]: drops a frame");
 		expect(one.comments?.at(-1)?.body).toContain("<!-- quest land: unanswered_signal -->");
+	});
+
+	/** A pre-receive hook on `repository` that runs `refuse` for a push to `ref` only, so queue branches still push. */
+	function refuseRef(repository: string, ref: string, refuse: string): string {
+		const hook = join(repository, "hooks/pre-receive");
+		writeFileSync(
+			hook,
+			`#!/bin/sh\nwhile read old new ref; do\n[ "$ref" = '${ref}' ] || continue\n${refuse}\ndone\nexit 0\n`,
+			{ mode: 0o755 },
+		);
+		return hook;
+	}
+
+	/** One pick behind the base, so landing it pushes the queue's own merge of the base to its branch, built and passing. */
+	async function behind(context: ReturnType<typeof setup>) {
+		const pull = context.forge.pull("Old", { "old.txt": "yes" });
+		context.forge.advance({ "new.txt": "yes" });
+		expect(await context.pass()).toEqual(["building 1"]);
+		report(context.forge, 1, "SUCCESS");
+		return pull;
+	}
+
+	test("restart after pushing a prepared head accepts only that recorded merge", async () => {
+		const context = setup();
+		const { forge, pass, intercept } = context;
+		const pull = await behind(context);
+		const pin = pull.head!;
+		// The daemon stops after pushing its merge to the PR's branch, before GitHub merges it.
+		intercept.push((url) => (url.endsWith("/pulls/1/merge") ? Promise.reject(new Error("stopped")) : undefined));
+		await expect(pass()).rejects.toThrow("stopped");
+		expect(pull.head).not.toBe(pin);
+		expect(git(forge.origin, "show", "-s", "--format=%P", pull.head!)).toBe(`${pin} ${forge.main()}`);
+		intercept.length = 0;
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(pull.merged).toBe(true);
+	});
+
+	test("restart rejects a writer's commit after a recorded merge", async () => {
+		const context = setup();
+		const { forge, pass, intercept } = context;
+		const pull = await behind(context);
+		intercept.push((url) => (url.endsWith("/pulls/1/merge") ? Promise.reject(new Error("stopped")) : undefined));
+		await expect(pass()).rejects.toThrow("stopped");
+		intercept.length = 0;
+		// A writer pushes a commit of its own over the recorded merge.
+		const writer = git(forge.origin, "commit-tree", `${pull.head!}^{tree}`, "-p", pull.head!, "-m", "writer");
+		git(forge.origin, "update-ref", "refs/heads/topic-1", writer);
+		// The pass ejects the moved head and ends its build.
+		expect(await pass()).toEqual(["ejected 1", "left 1"]);
+		expect(forge.merges).toEqual([]);
+		expect(pull.merged).toBeFalsy();
+		expect(forge.comment(1)).toContain("<!-- quest land: head_moved -->");
+	});
+
+	test.each(["refused", "moved"])("a fork's fallback base push GitHub %s stops without closing", async (mode) => {
+		const { forge, queue, pass, hooks } = setup();
+		const pull = forge.pull("Fork", { "fork.txt": "yes" }, { contributor: "friend", edits: false });
+		forge.advance({ "base.txt": "new" });
+		await pass();
+		report(forge, 1, "SUCCESS");
+		if (mode === "refused") refuseRef(forge.origin, "refs/heads/main", "echo GH013 >&2; exit 1");
+		// The base moves after the queue checked it, as its push token is minted.
+		else hooks.token = () => void ((hooks.token = undefined), forge.advance({ "race.txt": "new" }));
+		// A moved base ends the landing silently; the next pass rebuilds the pick on it.
+		expect(await pass()).toEqual(mode === "refused" ? ["ejected 1"] : []);
+		expect(pull.closed).not.toBe(true);
+		expect(existsSync(join(queue.state, "fallback.json"))).toBe(false);
+		if (mode === "refused") {
+			expect(forge.comment(1)).toContain("GH013");
+			expect(shown(forge)[1]).toBe("failure Removed from the queue");
+		} else {
+			expect(await pass()).toEqual(["building 1"]);
+			expect(git(forge.origin, "rev-parse", `${queued(forge, 1)!}^2`)).toBe(forge.main());
+		}
+	});
+
+	test("a fork's fallback base push retries GitHub's transient Repository not found", async () => {
+		const { forge, pass, pauses } = setup();
+		const pull = forge.pull("Fork", { "fork.txt": "yes" }, { contributor: "friend", edits: false });
+		forge.advance({ "base.txt": "new" });
+		await pass();
+		report(forge, 1, "SUCCESS");
+		const hook = refuseRef(forge.origin, "refs/heads/main", `rm "$0"; echo 'Repository not found.' >&2; exit 1`);
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(existsSync(hook)).toBe(false);
+		expect(pauses).toEqual([1000]);
+		expect(pull.closed).toBe(true);
+	});
+
+	test.each([1, 5])(
+		"a prepared-head push GitHub answers Repository not found %i times retries with bounded backoff",
+		async (failures) => {
+			const context = setup();
+			const { forge, pass, pauses } = context;
+			const pull = await behind(context);
+			const count = join(tempDir(), "failures");
+			writeFileSync(count, "");
+			refuseRef(
+				forge.origin,
+				"refs/heads/topic-1",
+				`[ "$(wc -c < '${count}')" -ge ${failures} ] && exit 0\nprintf x >> '${count}'\necho 'Repository not found.' >&2; exit 1`,
+			);
+			if (failures === 1) {
+				expect(await pass()).toEqual(["landed 1"]);
+				expect(pauses).toEqual([1000]);
+			} else {
+				// Four retries, then the failure is the refusal it was before.
+				expect(await pass()).toEqual(["refused 1"]);
+				expect(pauses).toEqual([1000, 2000, 4000, 8000]);
+				expect(forge.comment(1)).toContain("Repository not found");
+				expect(forge.comment(1)).toContain("<!-- quest land: merge_refused -->");
+				expect(pull.merged).toBeFalsy();
+			}
+		},
+	);
+
+	test("a prepared head's transient 409 is retried rather than ejected as head_moved", async () => {
+		const context = setup();
+		const { forge, pass, pauses } = context;
+		const pull = await behind(context);
+		pull.mergeRefusals = [{ status: 409, message: "Head branch was modified" }];
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(pauses).toEqual([500]);
+		expect(forge.comment(1)).toBeUndefined();
+	});
+
+	// moq-dev/moq#7407: GitHub still showed the pin after the queue's base-merge push and refused the
+	// merge as conflicting, since that pin conflicts with the base.
+	test("a prepared head's 405 conflict on the stale pin is retried rather than ejected as head_moved", async () => {
+		const context = setup();
+		const { forge, pass, pauses, hooks } = context;
+		const pull = await behind(context);
+		const pin = pull.head;
+		pull.mergeRefusals = [{ status: 405, message: "Pull Request has merge conflicts" }];
+		const seen: (string | undefined)[] = [];
+		forge.beforeMerge = () => void seen.push(pull.head);
+		// The first token is the base-merge push; GitHub misses it for the merge and the re-read.
+		hooks.token = () => void ((hooks.token = undefined), (forge.lag = 2));
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(seen[1]).toBe(pin);
+		expect(pauses).toEqual([500]);
+		expect(forge.comment(1)).toBeUndefined();
+	});
+
+	// moq-dev/quest#342: GitHub already showed the queue's base merge as the head, but still called it
+	// conflicting from the pin's mergeability.
+	test.each(["false", "dirty"])(
+		"a prepared head's stale conflict report (mergeable %s) is retried rather than dropped",
+		async (mode) => {
+			const context = setup();
+			const { forge, pass, pauses } = context;
+			const pull = await behind(context);
+			const pin = pull.head;
+			pull.mergeRefusals = [{ status: 405, message: "Pull Request has merge conflicts" }];
+			let attempts = 0;
+			forge.beforeMerge = () => {
+				attempts++;
+				// GitHub settles by the second attempt.
+				pull.mergeable = attempts === 1 && mode === "false" ? false : undefined;
+				pull.mergeableState = attempts === 1 && mode === "dirty" ? "dirty" : undefined;
+			};
+			expect(await pass()).toEqual(["landed 1"]);
+			// Both attempts merge the queue's merge, which GitHub already showed, never the pin.
+			expect(forge.merges.map(({ body }) => body.sha)).toEqual([pull.head, pull.head]);
+			expect(pull.head).not.toBe(pin);
+			expect(pauses).toEqual([500]);
+			expect(forge.comment(1)).toBeUndefined();
+		},
+	);
+
+	test("a prepared head GitHub keeps calling conflicting stays queued, and the next pass lands it", async () => {
+		const context = setup();
+		const { forge, pass, pauses } = context;
+		const pull = await behind(context);
+		pull.mergeRefusals = Array.from({ length: 6 }, () => ({
+			status: 405 as const,
+			message: "Pull Request has merge conflicts",
+		}));
+		pull.mergeable = false;
+		await expect(pass()).rejects.toThrow("mergeability did not settle");
+		expect(pauses).toEqual([500, 1000, 2000, 4000, 8000]);
+		expect(forge.comment(1)).toBeUndefined();
+		expect(pull.landing).toBe(true);
+		// Once GitHub settles, the next pass accepts the queue's recorded merge and lands it.
+		pull.mergeable = undefined;
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(pull.merged).toBe(true);
+	});
+
+	test("a squash tree mismatch logs CRITICAL, stays merged, and the next pick builds on it", async () => {
+		const { forge, pass, warnings } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		forge.pull("Two", { "two.txt": "2\n" });
+		forge.mismatch = 1;
+		await pass();
+		report(forge, 1, "SUCCESS");
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(one.merged).toBe(true);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("CRITICAL");
+		expect(warnings[0]).toContain("but the tested one is");
+		expect(forge.comment(1)).toBeUndefined();
+		forge.mismatch = undefined;
+		expect(await pass()).toEqual(["building 2"]);
+		expect(git(forge.origin, "rev-parse", `${queued(forge, 2)!}^2`)).toBe(one.squash);
+	});
+
+	test("a merge commit with another second parent logs CRITICAL and stays merged", async () => {
+		const { forge, pass, warnings } = setup({ method: "merge" });
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		forge.stranger = 1;
+		await pass();
+		report(forge, 1, "SUCCESS");
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("CRITICAL: GitHub merge #1");
+		expect(warnings[0]).toContain(`its second parent must be the landed head ${one.head}`);
+		expect(one.merged).toBe(true);
+	});
+
+	test("a prepared tree mismatch logs CRITICAL and ejects tree_mismatch, and the next pick still builds", async () => {
+		const { forge, pass, warnings } = setup();
+		// The PR and the base both edit the epic, so preparing the PR's merge runs the quest merge driver.
+		const one = forge.pull("Add b", { "quest/m0/launch.md": LAUNCH(["a", "b"]), "quest/m0/b.md": QUEST("B") });
+		forge.advance({ "quest/m0/launch.md": LAUNCH(["a", "c"]), "quest/m0/c.md": QUEST("C") });
+		const pin = one.head;
+		forge.pull("Two", { "two.txt": "2\n" });
+		await pass();
+		report(forge, 1, "SUCCESS");
+		// After the build, the driver resolves differently than it did for the build.
+		const quest = join(process.env.PATH!.split(":")[0], "quest");
+		renameSync(quest, `${quest}.real`);
+		writeFileSync(
+			quest,
+			`#!/bin/sh\n'${quest}.real' "$@" || exit\nif [ "$1" = resolve ]; then echo drift >> "$2"; fi\n`,
+			{
+				mode: 0o755,
+			},
+		);
+		try {
+			expect(await pass()).toEqual(["refused 1"]);
+		} finally {
+			renameSync(`${quest}.real`, quest);
+		}
+		expect(forge.merges).toEqual([]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("CRITICAL");
+		expect(forge.comment(1)).toContain("differs from tested");
+		expect(forge.comment(1)).toContain("<!-- quest land: tree_mismatch -->");
+		expect(one.head).toBe(pin);
+		expect(one.landing).toBeFalsy();
+		expect(shown(forge)[1]).toBe("failure Removed from the queue");
+		expect(await pass()).toEqual(["building 2"]);
+	});
+
+	test("scopes each merge token to workflows only when its PR changes one", async () => {
+		const { forge, pass, scopes } = setup({}, true);
+		forge.pull("Code", { "code.txt": "two" });
+		forge.pull("Workflow", { ".github/workflows/one.yml": "one" });
+		for (const number of [1, 2]) {
+			expect(await pass()).toEqual([`building ${number}`]);
+			report(forge, number, "SUCCESS");
+			expect(await pass()).toEqual([`landed ${number}`]);
+		}
+		expect(scopes).toEqual([false, true]);
+	});
+
+	test("scopes the merge token to workflows when the queue's own base merge brings a workflow change", async () => {
+		const { forge, pass, scopes } = setup({}, true);
+		forge.pull("Behind", { "code.txt": "one" });
+		// The base changes a workflow after the PR branched, so the queue merges it into the PR's head.
+		forge.advance({ ".github/workflows/ci.yml": "on: push\n" });
+		await pass();
+		report(forge, 1, "SUCCESS");
+		expect(await pass()).toEqual(["landed 1"]);
+		// The squash changes no workflow, but GitHub refuses an App's merge of a PR whose commits do.
+		expect(scopes).toEqual([true]);
+	});
+
+	test("scopes the merge token to workflows when the author's own base merge brought a workflow change", async () => {
+		const { forge, pass, scopes } = setup({}, true);
+		forge.pull("Merged main", { "code.txt": "one" });
+		forge.advance({ ".github/workflows/ci.yml": "on: push\n" });
+		// The head is up to date, so the queue merges nothing; the workflow change is in the PR's own commits.
+		forge.mergeMain(1);
+		await pass();
+		report(forge, 1, "SUCCESS");
+		expect(await pass()).toEqual(["landed 1"]);
+		expect(scopes).toEqual([true]);
 	});
 });
 
