@@ -1308,17 +1308,16 @@ however the run ends:
 - `cpuMs` and `peakMemory` (bytes) are null when the command never ran, and
   `peakMemory` also where the host cannot say. `measured` names what they
   count:
-  - `cgroup`: the command's systemd scope. CPU covers every process the command
-    started. Peak memory is the scope's `memory.peak`, which needs Linux 5.19
-    and also counts page cache charged to the scope and the gate's own shell
-    that holds it, about a megabyte.
+  - `cgroup`: a child cgroup of the command's systemd scope, so every process
+    the command started. Peak memory is its `memory.peak`, which needs Linux
+    5.19 and also counts page cache charged to it.
   - `children`: on macOS, and Linux without a systemd user manager, the
     command's own resource usage, a lower bound: it covers the descendants the
     command waited for, not those the gate kills at the end, such as a leftover
     background server, and its peak memory is the largest single process's.
 - `exit` is the status the gate returns, `cancelled` whether it was cancelled,
-  and `error` the gate's own failure, such as a missing `systemd-run` or a scope
-  it cannot confirm stopped. A command that cannot be found is not one: it
+  and `error` the gate's own failure, such as a scope it cannot confirm stopped
+  or counters it cannot read. A command that cannot be found is not one: it
   exits 127, as in a shell.
 
 Each line is one write to a file opened for appending, so concurrent gates

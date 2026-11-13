@@ -43,7 +43,7 @@ import {
 } from "../src/cli/gate";
 import { forwards, foregroundStat, statProcess } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
-import { alive as ownerAlive, questScope } from "../src/cli/supervise";
+import { alive as ownerAlive, questScope, systemdScopes } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
 
 // Linux reports a /proc read that races a process's exit as ESRCH rather than ENOENT, so fail
@@ -1087,6 +1087,22 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 		const { command, pid } = descendant(tempDir(), "exit 3", { leave: true });
 		expect(await scoped(command, process.env, cancellation().cancel)).toBe(3);
 		await until(() => stopped(pid()));
+	});
+
+	test("runs the command as the process it spawned, which a signal to that PID reaches", async () => {
+		const dir = tempDir();
+		const ready = join(dir, "ready");
+		// What `quest agent stop` does: it signals the PID the supervisor spawned, not the scope.
+		let pid: number | undefined;
+		const result = systemdScopes.run(
+			`quest-gate-${randomUUID()}.scope`,
+			dir,
+			["/bin/sh", "-c", `trap 'exit 3' TERM; : > ${quote(ready)}; while :; do sleep 0.1; done`],
+			{ cancel: cancellation().cancel, within: null, spawned: (child) => (pid = child.pid) },
+		);
+		await created(ready);
+		process.kill(pid!, "SIGTERM");
+		expect((await result).status).toBe(3);
 	});
 
 	test("reports its CPU use to the gate until it ends", async () => {
