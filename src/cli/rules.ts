@@ -8,7 +8,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { REFERENCE_MARKER, lines } from "../core";
-import { parse, type Simple } from "./shell";
+import { parse } from "./shell";
 
 const EM_DASH = String.fromCharCode(0x2014);
 
@@ -275,84 +275,36 @@ function dropOptions(args: string[]): string[] {
  * its script, which inherits the assignments in `inherited`. A body file is
  * read from disk only for a command that is `alone` on its line: after
  * another command, it may hold something else by the time the line posts it.
- * `consumer` is the command a pipe feeds the line's output to, when the line
- * is an `sh -c` script whose own command is piped.
  */
-function shell(
-	line: string,
-	check: Check,
-	inherited: ReadonlySet<string> = new Set(),
-	alone = true,
-	consumer?: string[],
-) {
+function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set(), alone = true) {
 	const { found, scratch } = check;
 	const commands = parse(line);
 	alone &&= commands.length === 1 && !commands[0]!.runs;
-	// A `read` fed `/dev/zero` never blocks, or returns at once, so waiting on it spins a core. The
-	// redirect counts on the `read`, on the loop or group around one before it, on the
-	// subshell holding one, or on an `exec` before one.
-	const readsIn = (from: number, to: number) =>
-		commands.slice(from, to).some(({ argv }) => commandName(argv) === "read");
-	const feedsRead = ({ argv, group }: Simple, at: number) => {
-		if (group !== undefined) return readsIn(...group);
-		if (commandName(argv) === "read") return true;
-		if (["done", "}"].includes(argv[0]!)) return readsIn(opener(at), at);
-		if (argv[0] === "exec") return readsIn(at + 1, commands.length);
-		return commandName(argv) === undefined && readsIn(0, commands.length);
-	};
-	// The command opening the loop or `{` group that command `at` (`done` or `}`) closes.
-	const opener = (at: number) => {
-		const [close, opens] = commands[at]!.argv[0] === "}" ? ["}", ["{"]] : ["done", LOOPS];
-		let depth = 0;
-		for (let i = at - 1; i >= 0; i--) {
-			const [word, next] = commands[i]!.argv;
-			// A loop or group can open right after the keyword that starts a body.
-			const first = ["do", "then", "else", "elif"].includes(word!) ? next : word;
-			if (first === close) depth++;
-			else if (opens.includes(first!) && depth-- === 0) return i;
-		}
-		return 0;
-	};
-	// The subshells around command `at`, whose redirections after `)` apply to it too.
-	const around = (at: number) =>
-		commands.filter(({ group }) => group !== undefined && group[0] <= at && at < group[1]);
-	// The command a pipe from command `at` feeds: the next one past the subshells it is in.
-	const into = (at: number) => {
-		const groups = around(at);
-		return commands.slice(commands[at]!.through ?? at + 1).find((next) => !groups.includes(next))?.argv ?? [];
-	};
+	// A coarse backstop for the context's busy-wait rule, not a full analysis: a line that runs
+	// `read` and redirects from `/dev/zero`, or runs `yes` into nothing or into a loop or `read`.
+	const zero = commands.some(({ redirects }) =>
+		redirects.some(({ op, target }) => ["<", "<>"].includes(op) && target === "/dev/zero"),
+	);
 	const busy = commands.some((simple, at) => {
 		const words = commandWords(simple.argv);
+		if (words?.[0] === "read") return zero;
 		if (words?.[0] !== "yes" || ["--help", "--version"].includes(words[1]!)) return false;
-		const reader = simple.piped ? into(at) : consumer;
-		return (
-			reader === undefined ||
-			[simple, ...around(at)].some(({ redirects }) => redirectsStdout(redirects)) ||
-			spins(reader)
-		);
+		return !simple.piped || spins(commands[at + 1]?.argv ?? []);
 	});
 	if (busy) found.add("busyWait");
-	for (const [at, simple] of commands.entries()) {
+	for (const simple of commands) {
 		const env = new Set(inherited);
 		const words = [...simple.argv];
 		const argv = unwrap(simple.argv, env);
 		for (const { op, target } of simple.redirects)
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
-			else if (["<", "<>"].includes(op) && target === "/dev/zero" && feedsRead(simple, at)) found.add("busyWait");
 		if (argv === null) continue;
 		const [name, ...args] = argv;
 		// A wrapper such as `env --chdir` moves where the command reads a relative path from.
 		const moved = words.slice(0, words.length - argv.length).some((word) => /^(-C|--chdir)/.test(word));
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
-			if (flag !== -1 && args[flag + 1] !== undefined)
-				shell(
-					args[flag + 1]!,
-					check,
-					env,
-					alone && !moved,
-					redirectsStdout(simple.redirects) ? undefined : simple.piped ? into(at) : consumer,
-				);
+			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env, alone && !moved);
 			continue;
 		}
 		const asked = env.has(USER_ASKED);
@@ -395,16 +347,6 @@ function commandName(argv: readonly string[]): string | undefined {
 }
 
 /** Whether a command fed `yes` spins on it: a loop, a group, or a `read`. */
-const LOOPS = ["while", "until", "for", "select"];
-
-/** Whether `redirects` send a command's stdout somewhere other than its pipe. */
-function redirectsStdout(redirects: readonly { op: string; fd?: number }[]): boolean {
-	return redirects.some(
-		({ op, fd }) =>
-			["&>", "&>>"].includes(op) || ([">", ">|", ">>"].includes(op) && (fd === undefined || fd === 1)),
-	);
-}
-
 function spins(argv: readonly string[]): boolean {
 	const first = argv[0];
 	return (
