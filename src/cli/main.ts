@@ -154,11 +154,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"MBX_SCHEDULER_PRIORITY=normal unless it sets its own.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
-				"a systemd user scope, or inside a Quest scope through a child cgroup of its own. macOS, and Linux " +
+				"a systemd user scope, inside a Quest scope one bound to it. macOS, and Linux " +
 				"without one, own the command's process group in a new session without a controlling terminal, so a " +
 				"descendant that leaves the group or session escapes. Windows owns every descendant through a " +
 				"kill-on-close Job Object. Exits with the command's status, or 128 plus the signal's number once " +
-				"cancelled.",
+				"cancelled.\n\n" +
+				"With QUEST_GATE_RECORD naming an absolute path, an outermost gate on Linux or macOS appends one JSON " +
+				"line per run to that file, however the run ends: its command, directory, when it started and was " +
+				"admitted, its systemd scope, whose journal holds its CPU time and peak memory, and its exit status. " +
+				"A file it cannot write fails the gate.",
 		)
 		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
 		.argument("<command>", "Executable to run")
@@ -913,8 +917,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Run a command in the checkout, restoring it first when released, without the repository-location " +
 				"variables, such as GIT_DIR, that a Git hook exports. The command and its descendants " +
-				"run in a new, delegated systemd user scope; once the command exits, descendants still in the scope " +
-				"are killed. A `quest gate` inside it owns its command through a child cgroup of the scope. " +
+				"run in a new systemd user scope; once the command exits, descendants still in the scope " +
+				"are killed. A `quest gate` inside it runs its command in a scope of its own, bound to this one. " +
 				"When no other supervised run remains, the scratch declared at creation is pruned. Put the whole job, " +
 				"such as an agent session or a script that installs, builds, and tests, in one run.\n\n" +
 				"A supervisor that crashes leaves its run recorded; the next worktree command drops it once its scope " +
