@@ -12,14 +12,20 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { admission } from "../src/cli/admission";
 import { boundedLines, spawnDirectory, strippedEnvironment } from "../src/cli/agent";
 import { batchArgument, programCommand, programEnvironment, signalProcess, which } from "../src/cli/program";
 import { type Output, main } from "../src/cli/main";
 import { tempDir } from "./fixture";
 import { systemdScopes } from "../src/cli/supervise";
 import { Worktrees } from "../src/cli/worktree";
+
+// Launches here are admitted at once, whatever the host running the tests carries.
+beforeEach(() => {
+	vi.spyOn(admission, "admit").mockResolvedValue(null);
+});
 
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -363,6 +369,44 @@ test("an account at its usage limit exits 3, and the session resumes once it res
 	expect(call.argv).toContain(session);
 	expect(call.argv).not.toContain("--session-id");
 	expect(call.stdin).toBe("continue");
+});
+
+test("a launch waits for admission before it claims the worktree, and an account that cannot cover it exits 3", async () => {
+	const s = setup();
+	const admit = vi.spyOn(admission, "admit").mockImplementation(async (harness, deps, signal, held) => {
+		expect([harness, held, signal.aborted]).toEqual(["claude", process.pid, false]);
+		// Nothing holds the worktree while the launch waits.
+		const state = join(s.runtime, "quest", "agent");
+		expect(readdirSync(join(state, readdirSync(state)[0], "agents"))).toEqual([]);
+		deps.notice("waiting for the load average to fall before starting an agent");
+		return null;
+	});
+	const started = await quest("agent", "start", ...launch("claude"), s.worktree, "go");
+	expect(started).toMatchObject({
+		code: 0,
+		stderr: "quest: waiting for the load average to fall before starting an agent\n",
+	});
+
+	admit.mockResolvedValue({ resets: Date.UTC(2026, 10, 14, 15) });
+	const session = /^session (\S+)$/m.exec(started.stdout)![1];
+	const resumed = await quest("agent", "resume", ...launch("claude"), s.worktree, session, "continue");
+	const refusal = "quest: claude's reported usage cannot cover another agent; resets 2026-11-14T15:00:00.000Z\n";
+	expect(resumed).toEqual({ code: 3, stdout: "outcome limited\n", stderr: refusal });
+	expect(s.calls()).toHaveLength(1);
+});
+
+test("agent admit exits 0 once admitted and 3 when the account cannot cover an agent of its own", async () => {
+	const admit = vi.spyOn(admission, "admit").mockResolvedValue(null);
+	expect(await quest("agent", "admit", "--harness", "codex")).toEqual({ code: 0, stdout: "", stderr: "" });
+	// No process runs a coordinator's own sub-agent, so nothing holds its admission.
+	expect(admit.mock.calls[0][0]).toBe("codex");
+	expect(admit.mock.calls[0][3]).toBeUndefined();
+	admit.mockResolvedValue({ resets: 0 });
+	expect(await quest("agent", "admit", "--harness", "codex")).toMatchObject({
+		code: 3,
+		stderr: "quest: codex's reported usage cannot cover another agent; resets 1970-01-01T00:00:00.000Z\n",
+	});
+	expect((await quest("agent", "admit")).code).toBe(2);
 });
 
 test("a spent free usage allowance exits 3 as limited", async () => {

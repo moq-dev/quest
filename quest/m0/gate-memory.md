@@ -56,7 +56,3 @@ Agent's choices, for the implementer to revisit:
 ## Hosts
 
 - linux - systemd scopes carry the memory limits
-
-## Related
-
-- [Coordinators start an agent only when the host and the account can carry it](/quest/m0/agent-admission.md) - the agent-level half of host admission

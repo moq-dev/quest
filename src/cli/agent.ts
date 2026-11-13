@@ -24,7 +24,9 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { type Refusal, admission, processAdmission } from "./admission";
 import { discoveryEnv, git } from "./git";
+import { cancelled, interrupts } from "./interrupt";
 import { LIMIT } from "./limit";
 import { alive, programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
@@ -386,13 +388,51 @@ export interface AgentDependencies {
 	base: string;
 	stdout(text: string): void;
 	stderr(text: string): void;
+	/**
+	 * Wait until the host can carry one more agent of `harness`, run by process `held` if any, and
+	 * return null, or why its account cannot cover one (see admission.ts).
+	 */
+	admit(harness: HarnessName, signal: AbortSignal, held?: number): Promise<Refusal | null>;
 }
 
 export const processDependencies = (out: Pick<AgentDependencies, "stdout" | "stderr">): AgentDependencies => ({
 	env: process.env,
 	base: agentDirectory(),
 	...out,
+	admit: (harness, signal, held) =>
+		admission.admit(
+			harness,
+			processAdmission((text) => out.stderr(`quest: ${text}\n`)),
+			signal,
+			held,
+		),
 });
+
+/**
+ * Admit one agent of `harness` before it starts, for `quest agent admit` and every launch. Returns
+ * undefined once admitted, else the exit status: the usage limit's when the account cannot cover
+ * the agent, or the signal's when interrupted while waiting.
+ */
+export async function admitAgent(
+	harness: HarnessName,
+	deps: AgentDependencies,
+	held?: number,
+): Promise<number | undefined> {
+	const cancel = interrupts();
+	try {
+		const refusal = await deps.admit(harness, cancel.signal, held);
+		if (refusal === null) return undefined;
+		deps.stderr(
+			`quest: ${harness}'s reported usage cannot cover another agent; resets ${new Date(refusal.resets).toISOString()}\n`,
+		);
+		return EXIT.limited;
+	} catch (error) {
+		if (cancel.signal.aborted) return cancelled(cancel.signal);
+		throw error;
+	} finally {
+		cancel.close();
+	}
+}
 
 /** How much of an agent's output is kept for diagnostics; the rest is read as it streams. */
 const TAIL = 64 * 1024;
@@ -432,7 +472,8 @@ export function boundedLines(limit: number, read: (line: string) => void) {
 }
 
 /**
- * Run one agent turn in the foreground: a new session with `prompt`, or
+ * Run one agent turn in the foreground, once the host and account can carry it
+ * (see `admitAgent`): a new session with `prompt`, or
  * `session` resumed with it. Prints the session id as soon as it is known,
  * then the outcome and final reply. Returns the exit status.
  */
@@ -467,6 +508,12 @@ export async function runAgent(
 	const program = requireProgram(name, deps.env);
 	const command = checkouts ? undefined : programCommand(program, args, deps.env);
 	const dir = spawnDirectory(deps.base, worktree);
+	// Waited out before the worktree is claimed, so a queued launch holds nothing.
+	const refused = await admitAgent(launch.harness, deps, process.pid);
+	if (refused !== undefined) {
+		if (refused === EXIT.limited) deps.stdout("outcome limited\n");
+		return refused;
+	}
 
 	const reader = harness.reader();
 	// Claude Code takes the id this command assigns; Codex announces its own.

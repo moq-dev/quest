@@ -192,7 +192,9 @@ Relay no interim report: resume a sub-agent that ended its turn on one, telling 
 A long-running coordinator lets compaction bound its context: what must outlast it lives in the forge and the quest tree, and a PR's state is read afresh before acting, not trusted from earlier turns.
 
 Start each sub-agent in the background with its own isolated worktree, since agents cannot write to a worktree their parent created.
-It reports only when done or blocked, and never waits on GitHub CI, reviews, or merges; stay silent on its interim notifications.
+Before starting or resuming one, run `quest agent admit --harness <yours>` in the background and go on once it exits 0, handling reports meanwhile: it waits until the host has room for another agent. `quest agent start` and `resume` admit themselves.
+Its exit 3 means the account's reported usage cannot cover another agent until the reset it names: a usage limit, handled as below. Report once a harness it says reports no usage.
+A sub-agent reports only when done or blocked, and never waits on GitHub CI, reviews, or merges; stay silent on its interim notifications.
 As each reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
 Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in each later agent's brief, and report it once.
 
