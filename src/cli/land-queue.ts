@@ -721,7 +721,7 @@ export async function ownPass(
 	for (const waiting of plan.waiting ?? []) {
 		open.add(waiting.number);
 		const waits = [
-			...waiting.pending.map((name) => `the required check \`${name}\` to pass`),
+			...waiting.pending.map((name) => `the required check or workflow \`${name}\` to pass`),
 			...(waiting.approval ? [`an approving review, which ${base} requires`] : []),
 		];
 		await own.show(waiting.number, waiting.head, {

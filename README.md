@@ -415,8 +415,9 @@ this command's scope.
 
 CI results are read for the current head. The first required check to fail
 prints `checks:failed` right away. `checks:passed` prints once nothing on the
-head is still going (no pending check and no unfinished GitHub Actions run, which
-may still create jobs), every check and workflow the base branch names is
+head is still going (no pending check, no finished job whose GitHub Actions run
+is still going, and, once a cancelled check makes it read the head's runs, no
+unfinished run, since each may still create jobs), every check and workflow the base branch names is
 present (except `quest land`'s, which no head carries), each required check
 from the app its requirement names, if any, and every required
 check passed; it names the last required check that passed and is dated when
@@ -770,7 +771,8 @@ down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
 additions stay queued. A PR whose required checks are still running, or that
 still needs an approving review the base requires, stays queued and sits out
-batches until they pass and it is approved; checks count as in `quest status`. If it still waits two hours after
+batches until they pass and it is approved; checks count as in `quest status`,
+except that a required workflow also waits until its run, or a run of the same workflow replacing a cancelled one, finishes. If it still waits two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming what it waits for, since a check that never reports or an approval nobody
 gives would hold it silently. The sandbox checks the tip once, without

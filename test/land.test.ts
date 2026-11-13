@@ -1197,6 +1197,96 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[2, "failed_checks"]]);
 	});
 
+	test("refuses a required workflow from a repository it cannot read", async () => {
+		const forge = new Forge();
+		forge.repo.rules = [
+			{
+				type: "workflows",
+				ruleset_id: 4,
+				parameters: { workflows: [{ path: ".github/workflows/ci.yml", repository_id: 999 }] },
+			},
+		];
+		await expect(resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps())).rejects.toThrow(
+			"requires workflows from repositories the gate cannot read, so no job can satisfy them: repository 999:.github/workflows/ci.yml",
+		);
+	});
+
+	test("counts every job of a required workflow, and waits on one nothing reports", async () => {
+		const forge = new Forge();
+		const CI = ".github/workflows/ci.yml";
+		forge.repo.rules = [
+			{ type: "workflows", ruleset_id: 4, parameters: { workflows: [{ path: CI, repository_id: 10 }] } },
+		];
+		const runs = (
+			...jobs: { name: string; conclusion: string; workflow?: string; running?: boolean; suite?: number }[]
+		) => ({
+			pull: {
+				runs: [{ name: "test", conclusion: "SUCCESS", url: "u" }, ...jobs.map((job) => ({ url: "u", ...job }))],
+			},
+		});
+		forge.pull("Ran", { "1.txt": "1\n" }, runs({ name: "build", conclusion: "SUCCESS", workflow: CI }));
+		forge.pull("Never ran", { "2.txt": "2\n" }, runs());
+		forge.pull(
+			"Other workflow",
+			{ "3.txt": "3\n" },
+			runs({ name: "build", conclusion: "SUCCESS", workflow: ".github/workflows/other.yml" }),
+		);
+		forge.pull(
+			"Failed",
+			{ "4.txt": "4\n" },
+			runs(
+				{ name: "build", conclusion: "SUCCESS", workflow: CI },
+				{ name: "lint", conclusion: "FAILURE", workflow: CI },
+			),
+		);
+		// A passed job whose run is still going may yet be followed by a failing one.
+		forge.pull(
+			"Going",
+			{ "5.txt": "5\n" },
+			runs({ name: "build", conclusion: "SUCCESS", workflow: CI, running: true }),
+		);
+		// A newer run cancelled this one and has yet to report a job; the cancelled job drops, the passed one stays.
+		const replaced = forge.pull(
+			"Replaced",
+			{ "6.txt": "6\n" },
+			runs(
+				{ name: "build", conclusion: "SUCCESS", workflow: CI },
+				{ name: "lint", conclusion: "CANCELLED", workflow: CI, suite: 10 },
+			),
+		);
+		for (const [id, status, started] of [
+			[1, "completed", "2026-11-12T10:00:00Z"],
+			[2, "queued", "2026-11-12T11:00:00Z"],
+		] as const)
+			(forge.repo.actionRuns ??= []).push({
+				id,
+				workflow_id: 7,
+				check_suite_id: id * 10,
+				run_started_at: started,
+				name: "CI",
+				head_branch: replaced.branch ?? "",
+				head_sha: replaced.head!,
+				// A required workflow from another repository runs here, under its own path form.
+				path: `org/.github/${CI}@refs/heads/main`,
+				repository: { full_name: "upstream/project" },
+				status,
+				conclusion: status === "queued" ? null : "cancelled",
+				html_url: "u",
+				jobs: [],
+			});
+		const plan = await resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
+		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
+		expect(plan.waiting?.map(({ number, pending }) => [number, pending])).toEqual([
+			[2, [`upstream/project:${CI}`]],
+			[3, [`upstream/project:${CI}`]],
+			[5, [`upstream/project:${CI}`]],
+			[6, [`upstream/project:${CI}`]],
+		]);
+		expect(plan.eject.map((ejected) => [ejected.number, ejected.detail])).toEqual([
+			[4, `required checks or workflows failed on its head: upstream/project:${CI} (lint)`],
+		]);
+	});
+
 	test("counts a required check only from the app its rule names", async () => {
 		const forge = new Forge();
 		forge.repo.rules = [
@@ -1262,9 +1352,9 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		).toHaveLength(1);
 		forge.repo.rules.push(
 			{
-				type: "workflows",
+				type: "update",
 				ruleset_id: 4,
-				parameters: { workflows: [{ path: ".github/workflows/ci.yml", repository_id: 10 }] },
+				parameters: null,
 			},
 			{
 				type: "pull_request",
@@ -1274,7 +1364,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		);
 		const refused = resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
 		await expect(refused).rejects.toThrow(
-			"workflows from ruleset 4; pull_request (allowed_merge_methods without squash) from ruleset 5",
+			"update from ruleset 4; pull_request (allowed_merge_methods without squash) from ruleset 5",
 		);
 		await expect(refused).rejects.toThrow(`It upholds only ${Object.keys(UPHELD).join(", ")}`);
 		expect(forge.repo.pulls[0].landing).toBe(true);
@@ -1734,7 +1824,7 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(await round(picked + STALLED_AFTER - 1)).toEqual([]);
 		expect(forge.comment(1)).toBeUndefined();
 		expect(await round(picked + STALLED_AFTER)).toEqual(["stalled 1 test"]);
-		expect(forge.comment(1)).toContain("the required check <code>test</code>");
+		expect(forge.comment(1)).toContain("the required check or workflow <code>test</code>");
 		expect(forge.comment(1)).toContain("2 hours after it was picked");
 		// It stays queued, and is told only once for this pick.
 		expect(await round(picked + 2 * STALLED_AFTER)).toEqual([]);
@@ -4733,10 +4823,12 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		const summary = () =>
 			String(forge.repo.checkRuns!.filter((item) => item.name === QUEUE_CHECK).at(-1)!.output.summary);
 		await pass();
-		expect(summary()).toContain("the required check `test` to pass, an approving review, which main requires");
+		expect(summary()).toContain(
+			"the required check or workflow `test` to pass, an approving review, which main requires",
+		);
 		pick.review = "APPROVED";
 		await pass();
-		expect(summary()).toContain("the required check `test` to pass.");
+		expect(summary()).toContain("the required check or workflow `test` to pass.");
 		expect(summary()).not.toContain("approving review");
 	});
 
