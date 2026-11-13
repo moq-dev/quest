@@ -1208,8 +1208,8 @@ Where a systemd scope owns the command and the user manager may limit memory
 (the memory controller is delegated to it), each running command also has a
 share of the host's memory, so a command that overruns stops itself instead of
 the kernel's OOM killer picking a victim elsewhere on the host. A share starts
-at an eighth of one command's budget, 512 MiB on most hosts. Every second the
-gate records what its command holds, not counting file cache:
+at an eighth of one command's budget, 512 MiB on most hosts. Four times a
+second the gate records what its command holds, not counting file cache:
 
 - Once that reaches three quarters of the share, the gate raises the share by
   half, or by one starting share if that is more or all that fits. A raise
@@ -1228,8 +1228,9 @@ While raises fit, the scope's own limit stays where it started: the host's
 memory less one command's budget, with no swap. A runtime that sizes its heap
 from its cgroup's limit when it starts, as Node and the JVM do, would stay
 small under a limit that only grows later. A command can therefore pass its
-share within a second, into the budget kept free, and its share then follows
-what it took. Once no raise fits, the gate lowers the scope's limit to the
+share between two samples, into the budget kept free, and its share then
+follows what it took. Commands that together take more than that budget within
+a quarter of a second can still exhaust the host. Once no raise fits, the gate lowers the scope's limit to the
 share and says so on stderr: the kernel slows the command over the last eighth
 below it and, if the command fills the rest, kills everything in its scope,
 and the gate fails with `... ran out of memory`. The limit lifts again once

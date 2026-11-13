@@ -105,8 +105,12 @@ export interface Limits {
 /** A share starts at this fraction of one command's memory, so what a small command never uses stays free. */
 const CEILING_PARTS = 8;
 
-/** How often a gate compares its command's memory with its share. */
-export const CEILING_MS = 1000;
+/**
+ * How often a gate compares its command's memory with its share. Until a sample finds the host out
+ * of room, nothing but the memory kept free absorbs what commands take past their shares, so the
+ * interval bounds how much that can be.
+ */
+export const CEILING_MS = 250;
 
 /**
  * The scope limits that hold a command to `share` bytes: the kernel slows the command over the
