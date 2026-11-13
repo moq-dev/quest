@@ -296,9 +296,22 @@ function shell(
 	const feedsRead = ({ argv, group }: Simple, at: number) => {
 		if (group !== undefined) return readsIn(...group);
 		if (commandName(argv) === "read") return true;
-		if (["done", "}"].includes(argv[0]!)) return readsIn(0, at);
+		if (["done", "}"].includes(argv[0]!)) return readsIn(opener(at), at);
 		if (argv[0] === "exec") return readsIn(at + 1, commands.length);
 		return commandName(argv) === undefined && readsIn(0, commands.length);
+	};
+	// The command opening the loop or `{` group that command `at` (`done` or `}`) closes.
+	const opener = (at: number) => {
+		const [close, opens] = commands[at]!.argv[0] === "}" ? ["}", ["{"]] : ["done", LOOPS];
+		let depth = 0;
+		for (let i = at - 1; i >= 0; i--) {
+			const [word, next] = commands[i]!.argv;
+			// A loop or group can open right after the keyword that starts a body.
+			const first = ["do", "then", "else", "elif"].includes(word!) ? next : word;
+			if (first === close) depth++;
+			else if (opens.includes(first!) && depth-- === 0) return i;
+		}
+		return 0;
 	};
 	// The subshells around command `at`, whose redirections after `)` apply to it too.
 	const around = (at: number) =>
@@ -306,7 +319,7 @@ function shell(
 	// The command a pipe from command `at` feeds: the next one past the subshells it is in.
 	const into = (at: number) => {
 		const groups = around(at);
-		return commands.slice(at + 1).find((next) => !groups.includes(next))?.argv ?? [];
+		return commands.slice(commands[at]!.through ?? at + 1).find((next) => !groups.includes(next))?.argv ?? [];
 	};
 	const busy = commands.some((simple, at) => {
 		const words = commandWords(simple.argv);
@@ -314,13 +327,7 @@ function shell(
 		const reader = simple.piped ? into(at) : consumer;
 		return (
 			reader === undefined ||
-			[simple, ...around(at)].some(({ redirects }) =>
-				redirects.some(
-					({ op, fd }) =>
-						["&>", "&>>"].includes(op) ||
-						([">", ">|", ">>"].includes(op) && (fd === undefined || fd === 1)),
-				),
-			) ||
+			[simple, ...around(at)].some(({ redirects }) => redirectsStdout(redirects)) ||
 			spins(reader)
 		);
 	});
@@ -339,7 +346,13 @@ function shell(
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
 			if (flag !== -1 && args[flag + 1] !== undefined)
-				shell(args[flag + 1]!, check, env, alone && !moved, simple.piped ? into(at) : consumer);
+				shell(
+					args[flag + 1]!,
+					check,
+					env,
+					alone && !moved,
+					redirectsStdout(simple.redirects) ? undefined : simple.piped ? into(at) : consumer,
+				);
 			continue;
 		}
 		const asked = env.has(USER_ASKED);
@@ -382,6 +395,16 @@ function commandName(argv: readonly string[]): string | undefined {
 }
 
 /** Whether a command fed `yes` spins on it: a loop, a group, or a `read`. */
+const LOOPS = ["while", "until", "for", "select"];
+
+/** Whether `redirects` send a command's stdout somewhere other than its pipe. */
+function redirectsStdout(redirects: readonly { op: string; fd?: number }[]): boolean {
+	return redirects.some(
+		({ op, fd }) =>
+			["&>", "&>>"].includes(op) || ([">", ">|", ">>"].includes(op) && (fd === undefined || fd === 1)),
+	);
+}
+
 function spins(argv: readonly string[]): boolean {
 	const first = argv[0];
 	return (

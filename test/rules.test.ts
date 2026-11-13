@@ -307,6 +307,9 @@ test("a busy loop is denied", () => {
 		"(yes) > /dev/null | head -1",
 		"sh -c 'yes'",
 		"sh -c 'yes' | while read x; do :; done",
+		"sh -c 'yes' > /dev/null | head -n 1",
+		"{ read -t 1 x; } < /dev/zero",
+		"for i in 1; do while read -t 1 x; do :; done; done < /dev/zero",
 	])
 		expect(bash(command), command).toEqual([RULES.busyWait]);
 	for (const command of [
@@ -326,6 +329,10 @@ test("a busy loop is denied", () => {
 		"sh -c 'yes' | head -n 1",
 		"read -r answer < input.txt; (head -c 16) < /dev/zero > output.bin",
 		"head -c 16 < /dev/zero; read -t 1 < input.txt",
+		"(yes; for x in 1; do :; done) | head -n 1",
+		"read -r answer < input.txt; for i in 1; do head -c 16; done < /dev/zero > output.bin",
+		"read -r answer < input.txt; { head -c 16; } < /dev/zero > output.bin",
+		"read -r a < in.txt; for i in 1; do while false; do head -c 1; done; done < /dev/zero",
 	])
 		expect(bash(command), command).toEqual([]);
 });

@@ -31,6 +31,8 @@ export interface Simple {
 	 * with no words, the range of indices of the subshell's commands they apply to.
 	 */
 	group?: [number, number];
+	/** For a command piped by a `|` after the `)` of a subshell around it, the index just past that subshell. */
+	through?: number;
 }
 
 /** An expansion the shell performs in a word or an unquoted here-document. */
@@ -180,7 +182,11 @@ export function parse(line: string): Simple[] {
 				if (command.argv.length > 0 || command.redirects.length > 0) command.piped = true;
 				// After `)`, the pipe takes the whole subshell's output.
 				if (command.argv.length === 0 && closed !== null)
-					for (const inner of commands.slice(...closed)) inner.piped = true;
+					for (const inner of commands.slice(...closed))
+						if (!inner.piped) {
+							inner.piped = true;
+							inner.through = closed[1];
+						}
 			}
 			endCommand();
 			if (c === "(") opens.push(commands.length);
