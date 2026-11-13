@@ -1197,6 +1197,20 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[2, "failed_checks"]]);
 	});
 
+	test("refuses a required workflow from a repository it cannot read", async () => {
+		const forge = new Forge();
+		forge.repo.rules = [
+			{
+				type: "workflows",
+				ruleset_id: 4,
+				parameters: { workflows: [{ path: ".github/workflows/ci.yml", repository_id: 999 }] },
+			},
+		];
+		await expect(resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps())).rejects.toThrow(
+			"requires workflows from repositories the gate cannot read, so no job can satisfy them: repository 999:.github/workflows/ci.yml",
+		);
+	});
+
 	test("counts every job of a required workflow, and waits on one nothing reports", async () => {
 		const forge = new Forge();
 		const CI = ".github/workflows/ci.yml";
@@ -1269,7 +1283,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			[6, [`upstream/project:${CI}`]],
 		]);
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.detail])).toEqual([
-			[4, `required checks failed on its head: upstream/project:${CI} (lint)`],
+			[4, `required checks or workflows failed on its head: upstream/project:${CI} (lint)`],
 		]);
 	});
 
@@ -1810,7 +1824,7 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(await round(picked + STALLED_AFTER - 1)).toEqual([]);
 		expect(forge.comment(1)).toBeUndefined();
 		expect(await round(picked + STALLED_AFTER)).toEqual(["stalled 1 test"]);
-		expect(forge.comment(1)).toContain("the required check <code>test</code>");
+		expect(forge.comment(1)).toContain("the required check or workflow <code>test</code>");
 		expect(forge.comment(1)).toContain("2 hours after it was picked");
 		// It stays queued, and is told only once for this pick.
 		expect(await round(picked + 2 * STALLED_AFTER)).toEqual([]);
@@ -4809,10 +4823,12 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		const summary = () =>
 			String(forge.repo.checkRuns!.filter((item) => item.name === QUEUE_CHECK).at(-1)!.output.summary);
 		await pass();
-		expect(summary()).toContain("the required check `test` to pass, an approving review, which main requires");
+		expect(summary()).toContain(
+			"the required check or workflow `test` to pass, an approving review, which main requires",
+		);
 		pick.review = "APPROVED";
 		await pass();
-		expect(summary()).toContain("the required check `test` to pass.");
+		expect(summary()).toContain("the required check or workflow `test` to pass.");
 		expect(summary()).not.toContain("approving review");
 	});
 
