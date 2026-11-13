@@ -82,8 +82,7 @@ bun link
 
 With Nix, `nix run github:moq-dev/quest -- --help` builds and runs it instead.
 Native Windows needs no WSL for Quest: see [installation and removal](docs/windows.md).
-Windows ZIP artifacts are added by the next release containing this change;
-older releases remain macOS/Linux-only.
+Releases from v0.3.0 on ship Windows ZIPs; v0.1.0 is macOS/Linux-only.
 
 The [CSV export example](examples/export/quest/README.md) is a small, working
 quest tree. From this checkout:
