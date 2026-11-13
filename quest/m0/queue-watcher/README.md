@@ -1,4 +1,4 @@
-# Land through a serial merge queue with an async fixer
+# [M] Land through a serial merge queue with an async fixer
 
 ## Goal
 
@@ -145,8 +145,8 @@ Shared shape, for the children to follow:
   and its launcher, the detached fixer supervisor and its collection in
   `src/cli/land-fixer.ts`, `validateFix`'s protected paths, the ready-commit
   handback that `quest land apply` rebuilds, and the daemon posting the
-  comments the fixer writes. A `quest land watch` subcommand beside
-  `quest land serve` is the likely form; the first child settles it.
+  comments the fixer writes. `quest land watch` is that daemon; the
+  batching host gate, `quest land serve`, is retired.
 - The fixer prompt (`assets/land-fix.md`) stays as the finished land fixer epic left it.
 - The review policy is unchanged: a head the fixer pushed as a recorded
   mechanical fix lands without a new review (maintainer, 2026-10-30). A push

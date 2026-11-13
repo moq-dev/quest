@@ -50,7 +50,6 @@ import { type Hold, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
 import { apply, pushCommand } from "./land-apply";
 import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
-import { serve, type ServeOptions } from "./land-serve";
 import { watch, type WatchOptions } from "./land-watch";
 import { landed, landingCheck } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
@@ -686,7 +685,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Run a mechanical agent fix inside the credential-free fixer container; write quest-land-result.json, whose optional comments the daemon posts. Model endpoint and client key: OPENAI_BASE_URL and OPENAI_API_KEY.",
 		)
 		.argument("<log>", "Full failure log exposed by the wrapper")
-		.argument("[prs...]", "PR numbers with pr-<n> branches; none to fix the base alone, on its base branch")
+		.argument("<prs...>", "PR numbers with pr-<n> branches")
 		.option("--agent <executable>", "Agent executable", "codex")
 		.option("--model <id>", "Agent model recorded in the result (passed to default Codex)")
 		.option(
@@ -740,49 +739,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			});
 		});
 	landCommand
-		.command("serve")
-		.description(
-			"Run one daemon per base branch of a repository, resolved once at startup from --base or the default branch, each with its own state directory and locks; a renamed default branch needs a restart. Each PR lands as a squash commit, or with --method merge as a merge commit whose first parent is the tested base and whose second parent is the landed head, so the base keeps the PR's ancestry; merge commits refuse a base that requires linear history. Every commit it lands, and every base merged into a PR head, drops each list entry linking to a quest the base deleted since the PR branched, as quest rm would. As a batch is filled, park alone for the fixer (eject alone, without one) each PR it reaches that fails quest check landed alone onto the base with findings the base lacks, and comment once on each newly queued PR that conflicts with the four PRs landing soonest ahead of it. Check a base PR plus up to floor(log2 n) cleanly merging PRs once through the sandbox, alternating the oldest and the newest queued PR as the base. A failed batch is never bisected: its PRs are parked for the fixer, which blames the ones at fault, or ejected together without a fixer. It halves the next batch's size down to one PR; each landed batch grows it back by one. When the fixer blames none and the base fails its check alone, the queue halts until a moved base passes, and the fixer proposes a fix of the base as a PR. Requires quest on PATH and flock. Sandbox and fixer wrappers MUST run code as a different user from the App key owner (for example in nspawn containers); environment filtering alone cannot isolate /proc or host files. The sandbox receives <checkout> <base-sha>, with the base also in QUEST_LAND_BASE and present in the standalone shallow clone; the optional tracked background fixer receives the log path followed by PR numbers, or none for a base that fails alone. Neither receives credentials. State retains logs, fixer jobs, and one mechanical attempt per maintainer pick across restarts. Fixer results are validated, lease-pushed, recorded in Review, and pinned for requeue, and the comment a result carries for its PR is posted there; invalid results, crashes, and timeouts are handed back. A validated fix whose push GitHub refuses, or a fix that edits protected paths beyond the base merge, is handed back with its resolution for `quest land apply`. After revalidating the queue, merge the base into each behind-base PR head with quest resolve, verify the tested tree, and lease-push that head before GitHub's merge API, pinned to that head, lands it. A permissions-refused branch push falls back to a leased fast-forward of the tested commit to the base, closing the PR with a linked-commit comment. A recorded daemon merge atop the original pin is recognized after restart; other moved heads require maintainer requeueing. Pending mergeability, and GitHub still showing the pin after the daemon's own push, are retried briefly; a confirmed conflict parks only that PR for the fixer and a moved head ejects only that PR, and the rest of the batch stays queued. A refusal that would repeat, such as the method being disabled, ejects as merge_refused without the fixer. An unexpected first parent rebuilds the queue without ejecting; a tree mismatch, or a merge commit whose second parent is not the landed head, logs CRITICAL, ejects only a PR whose prepared tree differs as tree_mismatch (an already landed PR stays merged), and leaves the rest of the batch queued to be rebuilt on the new base. Merged PRs drop out of the queue after restart.",
-		)
-		.option("--base <branch>", "Base branch (default: repository default)")
-		.addOption(
-			new Option("--method <method>", "Land each PR as a squash commit or a merge commit")
-				.choices(["squash", "merge"])
-				.default("squash"),
-		)
-		.option(
-			"--state <path>",
-			"Private daemon state directory (default: <owner>-<repo>@<base> under $STATE_DIRECTORY or the XDG state home)",
-		)
-		.requiredOption(
-			"--sandbox <command>",
-			"Sandbox executable called with <checkout> <base-sha> and QUEST_LAND_BASE",
-		)
-		.option(
-			"--fixer <command>",
-			"Credential-free fixer wrapper executable (60 minutes from its admission line, 120 in total)",
-		)
-		.requiredOption("--app-id <id>", "GitHub App id")
-		.option("--timeout <minutes>", "Fail a check that runs longer than this", positiveInteger("timeout"), 60)
-		.action((options: ServeOptions) => {
-			const origin = readRemote(root(), "origin");
-			const repository = origin && remoteRepository(origin).repository;
-			if (!repository) throw new Error("origin must name a github.com repository");
-			pending = serve(root(), repository, options, warn).then(
-				() => 0,
-				(error: unknown) => {
-					warn(error instanceof Error ? error.message : String(error));
-					return 1;
-				},
-			);
-		});
-
-	landCommand
 		.command("watch")
 		.description(
 			"Watch the base's queue as a daemon, one per base branch of a repository, resolved once at startup from --base or the default branch: GitHub's merge queue where the base's rules have a merge_queue rule, otherwise the watcher's own serial queue, decided again each pass from GET /rules/branches/<base>, so enabling GitHub's queue switches the watcher with no host change; a pass that cannot read the rules does nothing. On GitHub's queue, once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A PR whose auto-merge was armed, by a writer or by the watcher, that is ready (its required checks passed and it does not conflict) but that GitHub never added to the queue is enqueued at the head auto-merge was armed on, never at a head pushed since. A pick is the latest enqueue by anyone, the App included (as for Dependabot's PRs), except the App's enqueues of heads the watcher itself put back in the queue for the pick. " +
-				`The own queue, for a base that requires the unreported \`${LAND_CHECK}\` check so GitHub never merges a pick itself, reads its picks as quest land serve does: PRs whose auto-merge \`quest merge --land\` armed pinned to their head, in arming order, with the same ejections. It tests one at a time: it merges the base into the pick with the quest merge driver, pushes that to quest-queue/<base>/<number>, which the repository's queue workflow builds on push, and waits for the base's required checks other than \`${LAND_CHECK}\` on it, at most --timeout minutes. A pass lands a passing pick through quest land serve's landing path with --method, only while the base is still the one it tested; a moved base rebuilds it. A failed or timed-out build, or a conflict, disarms the PR's auto-merge and comments with the failing jobs, as GitHub's queue removes a PR, and is recorded for the land fixer; a re-enqueue arms auto-merge again, at the back. A writer's push, a person disarming auto-merge, or a hold ends the build. Each pick carries an informational \`quest queue\` check run with its position, the build in progress and its run, and the outcome. Queue branches go once their pick lands or leaves, and those an earlier process left are pruned on its first pass. ` +
-				"With --fixer, a conflict is first merged with the base by the quest merge driver; otherwise the fixer runs in the background on the failure, at most --fixer-jobs at once, oldest removal first. A fixed or merged head is lease-pushed and recorded in Review, and each fixed, merged, or flaky head is re-enqueued at the back of the queue (or armed with auto-merge while its checks run). The pick keeps going while each round makes progress: a round with no new commit for a failure that isn't flaky, the failure a fix addressed recurring right after it, or three flaky rounds in a row hand it back, as does the fixer, with a comment. State keeps each removal handled, so a restart neither misses nor repeats one, each removal's full log, the fixer's jobs, each pick's rounds, and the own queue's build. It shares `quest land serve`'s App key, state directory, private repository, and locks on the same base, so the two never run beside each other there, while daemons on different bases run side by side, each with its own clone. On GitHub's queue the App needs `actions: read` for the logs, `merge_queues: write` to enqueue, and with a fixer `contents: write` to arm auto-merge and push, and `workflows: write` to push fixes that touch workflows. The own queue's App needs `contents: write`, `pull_requests: write`, `actions: write` to read logs and cancel builds, `checks: write`, `administration: read`, `workflows: write` for heads that touch workflows, and a bypass of the base's ruleset.",
+				`The own queue, for a base that requires the unreported \`${LAND_CHECK}\` check so GitHub never merges a pick itself, reads its picks from GitHub: PRs whose auto-merge \`quest merge --land\` armed pinned to their head, in arming order, ejecting with a comment each one that cannot land, such as a moved head, requested changes, or unresolved conversations. It tests one at a time: it merges the base into the pick with the quest merge driver, pushes that to quest-queue/<base>/<number>, which the repository's queue workflow builds on push, and waits for the base's required checks other than \`${LAND_CHECK}\` on it, at most --timeout minutes. A pass lands a passing pick with --method, only while the base is still the one it tested; a moved base rebuilds it. It lease-pushes the tested merge to the PR's head and lands it with GitHub's merge API pinned to that head, verifying the landed tree is the tested one, or, when the PR's branch refuses the push, fast-forwards the base to the tested commit and closes the PR with a comment linking it. A failed or timed-out build, or a conflict, disarms the PR's auto-merge and comments with the failing jobs, as GitHub's queue removes a PR, and is recorded for the land fixer; a re-enqueue arms auto-merge again, at the back. A writer's push, a person disarming auto-merge, or a hold ends the build. Each pick carries an informational \`quest queue\` check run with its position, the build in progress and its run, and the outcome. Queue branches go once their pick lands or leaves, and those an earlier process left are pruned on its first pass. ` +
+				"With --fixer, a conflict is first merged with the base by the quest merge driver; otherwise the fixer runs in the background on the failure, at most --fixer-jobs at once, oldest removal first. A fixed or merged head is lease-pushed and recorded in Review, and each fixed, merged, or flaky head is re-enqueued at the back of the queue (or armed with auto-merge while its checks run). The pick keeps going while each round makes progress: a round with no new commit for a failure that isn't flaky, the failure a fix addressed recurring right after it, or three flaky rounds in a row hand it back, as does the fixer, with a comment. State keeps each removal handled, so a restart neither misses nor repeats one, each removal's full log, the fixer's jobs, each pick's rounds, and the own queue's build. It holds a lock on its checkout's repository and base and one on its state directory, so two watchers never run beside each other on one base, while daemons on different bases run side by side, each with its own clone. On GitHub's queue the App needs `actions: read` for the logs, `merge_queues: write` to enqueue, and with a fixer `contents: write` to arm auto-merge and push, and `workflows: write` to push fixes that touch workflows. The own queue's App needs `contents: write`, `pull_requests: write`, `actions: write` to read logs and cancel builds, `checks: write`, `administration: read`, `workflows: write` for heads that touch workflows, and a bypass of the base's ruleset.",
 		)
 		.option("--base <branch>", "Base branch (default: repository default)")
 		.addOption(
@@ -1036,7 +997,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
 				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_GATE_ADMITTED, QUEST_GATE_PRIORITY, " +
-				"QUEST_LAND_BASE, and MBX_SCHEDULER_PRIORITY when QUEST_GATE_PRIORITY=1, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"and MBX_SCHEDULER_PRIORITY when QUEST_GATE_PRIORITY=1, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
 				"Start and resume first wait until the host can carry the agent, as agent admit describes, " +
 				"before claiming the worktree.\n\n" +
 				"Prints `session <id>` as soon as the id is known, then `outcome finished|failed|limited|logged-out|stopped`, " +

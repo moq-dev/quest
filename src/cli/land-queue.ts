@@ -55,7 +55,7 @@ import {
 	type Removal,
 	removalLog,
 } from "./land-watch";
-import { excerpt, save } from "./land-serve";
+import { excerpt, save } from "./land-daemon";
 import { advanceFixes, type FixContext, isHeld, readPull, readRemoval, requeuedHeads } from "./land-watch-fix";
 
 /** The check run each pick in the own queue carries, showing its place; informational, never a required context. */
@@ -364,12 +364,7 @@ class Queue {
 			log,
 			failure: {
 				plan: { repository: this.name, base: { ref: this.base, sha: build.base }, queue: [fixed], eject: [] },
-				ejections: [],
-				numbers: [number],
-				log,
-				tip: head,
 				reason: reason === "merge_conflict" ? "merge_conflict" : "failed_checks",
-				blame: [number],
 			},
 		};
 		const blocks = jobBlocks(jobs);
@@ -418,7 +413,7 @@ class Queue {
 	}
 
 	/**
-	 * Land `build`'s passing pick through `quest land serve`'s landing path: lease-push the base merge to
+	 * Land `build`'s passing pick: lease-push the base merge to
 	 * the PR, merge it with GitHub's merge API pinned to that head, and verify the landed tree is the tested
 	 * one, or fast-forward the base to the tested commit when the PR's branch refuses the push.
 	 */

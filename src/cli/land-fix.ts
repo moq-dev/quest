@@ -104,15 +104,6 @@ export type FixResult = {
 	| { number: number; action: "handback"; diagnosis: string; recommendation: string; log?: [number, number] }
 );
 
-/**
- * The fixer's verdict on the base alone, when no PR is supplied: a mechanical fix committed on its
- * `base` branch, which the daemon opens as a PR, or a handback, which halts the queue with an issue.
- */
-export type BaseFix = { agent?: string; model?: string; effort?: string } & (
-	| { action: "fixed"; head: string; reason: string }
-	| { action: "handback"; diagnosis: string; recommendation: string }
-);
-
 function json(text: string): unknown {
 	if (text.length > 100_000) throw new Error("fixer result exceeds 100 KB");
 	try {
@@ -122,26 +113,25 @@ function json(text: string): unknown {
 	}
 }
 
-/** Reject extra fields, multiline reasons, and oversized values in one result entry; `pr` allows a PR's own fields. */
-function validate(item: any, pr: boolean, known: KnownFlaky[] = []): void {
-	const named = pr ? ["number"] : [];
+/** Reject extra fields, multiline reasons, and oversized values in one PR's result entry. */
+function validate(item: any, known: KnownFlaky[]): void {
 	const fields =
 		item.action === "fixed"
-			? [...named, "action", "head", "reason"]
-			: item.action === "requeue" && pr
-				? [...named, "action", "reason"]
+			? ["number", "action", "head", "reason"]
+			: item.action === "requeue"
+				? ["number", "action", "reason"]
 				: item.action === "handback"
-					? [...named, "action", "diagnosis", "recommendation"]
+					? ["number", "action", "diagnosis", "recommendation"]
 					: [];
 	const metadata = ["agent", "model", "effort"].filter((key) => key in item);
 	if (metadata.some((key) => typeof item[key] !== "string" || !/^[a-zA-Z0-9 ._/-]{1,100}$/.test(item[key])))
 		throw new Error("invalid fixer identity");
-	if (pr && "blame" in item) {
+	if ("blame" in item) {
 		if (typeof item.blame !== "boolean") throw new Error("invalid fixer blame");
 		if (item.blame && item.action === "requeue") throw new Error("a blamed PR must be fixed or handed back");
 		metadata.push("blame");
 	}
-	if (pr && "log" in item) {
+	if ("log" in item) {
 		const log = item.log;
 		if (
 			item.action !== "handback" ||
@@ -153,7 +143,7 @@ function validate(item: any, pr: boolean, known: KnownFlaky[] = []): void {
 			throw new Error("invalid fixer log lines");
 		metadata.push("log");
 	}
-	if (pr && "failure" in item) {
+	if ("failure" in item) {
 		if (
 			typeof item.failure !== "string" ||
 			!signature(item.failure) ||
@@ -163,24 +153,24 @@ function validate(item: any, pr: boolean, known: KnownFlaky[] = []): void {
 			throw new Error("invalid fixer failure");
 		metadata.push("failure");
 	}
-	if (pr && "cause" in item) {
+	if ("cause" in item) {
 		if (item.action !== "requeue" || !CAUSES.includes(item.cause)) throw new Error("invalid fixer cause");
 		metadata.push("cause");
 	}
-	if (pr && "quest" in item) {
+	if ("quest" in item) {
 		if (item.cause !== "flaky" || !known.some((test) => test.quest === item.quest))
 			throw new Error("invalid fixer quest: not a known flaky test's");
 		metadata.push("quest");
 	}
-	if (pr && item.cause === "flaky" && !("quest" in item) && !("failure" in item))
+	if (item.cause === "flaky" && !("quest" in item) && !("failure" in item))
 		throw new Error("a flaky requeue must name its test");
-	if (pr && "disable" in item) {
+	if ("disable" in item) {
 		if (!("quest" in item) || typeof item.disable !== "string" || !/^[a-f0-9]{40}$/.test(item.disable))
 			throw new Error("invalid fixer disable");
 		metadata.push("disable");
 	}
 	// One optional Markdown comment per PR: multiline, but no other control characters.
-	if (pr && "comment" in item) {
+	if ("comment" in item) {
 		if (
 			typeof item.comment !== "string" ||
 			!item.comment.trim() ||
@@ -218,19 +208,10 @@ export function parseFixResult(text: string, numbers: number[], known: KnownFlak
 		if (!item || typeof item !== "object" || !numbers.includes(item.number) || seen.has(item.number))
 			throw new Error("invalid or duplicate fixer PR");
 		seen.add(item.number);
-		validate(item, true, known);
+		validate(item, known);
 		if ("failure" in item) item.failure = signature(item.failure);
 	}
 	return value as FixResult[];
-}
-
-/** The base fixer's one result object, as strictly as a PR's. */
-export function parseBaseFix(text: string): BaseFix {
-	const value = json(text);
-	if (!value || typeof value !== "object" || Array.isArray(value))
-		throw new Error("a base fix result must be one JSON object");
-	validate(value, false);
-	return value as BaseFix;
 }
 
 /** Codex's reasoning efforts, for `model_reasoning_effort`. */
@@ -251,16 +232,16 @@ export async function fix(
 	effort = "medium",
 ): Promise<void> {
 	if (!EFFORTS.includes(effort)) throw new Error(`fix effort must be one of ${EFFORTS.join(", ")}`);
-	// No PR numbers fixes the base alone, which fails its check without any PR.
 	if (
+		numbers.length === 0 ||
 		numbers.some((number) => !Number.isSafeInteger(number) || number <= 0) ||
 		new Set(numbers).size !== numbers.length
 	)
-		throw new Error("fix needs distinct positive PR numbers");
+		throw new Error("fix needs one or more distinct positive PR numbers");
 	if (!args && (!process.env.OPENAI_BASE_URL || !process.env.OPENAI_API_KEY))
 		throw new Error("fix needs OPENAI_BASE_URL and OPENAI_API_KEY from the container wrapper");
 	readFileSync(log); // Fail before starting an agent when the wrapper did not expose the log.
-	const flaky = numbers.length ? knownFlaky(root) : [];
+	const flaky = knownFlaky(root);
 	// The daemon pinned each PR's head on its pr-<n> branch; name it so the agent need not look it up.
 	const prs = numbers.map((number) => {
 		const ref = `pr-${number}`;
@@ -328,12 +309,11 @@ export async function fix(
 		child.once("error", reject);
 		child.stdin.on("error", () => {});
 		child.stdin.end(
-			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:${prs.length ? `\n${prs.join("\n")}` : " none; the base fails alone"}\n${flaky.length ? `Known flaky tests: ${JSON.stringify(flaky)}\n` : ""}`,
+			`${prompt}\n\nFailure log: ${JSON.stringify(log)}\nPRs:\n${prs.join("\n")}\n${flaky.length ? `Known flaky tests: ${JSON.stringify(flaky)}\n` : ""}`,
 		);
 		child.once("close", (code) => (code === 0 ? done() : reject(new FixerAgentError(code ?? 1))));
 	});
-	const parse = (text: string) => (numbers.length ? parseFixResult(text, numbers, flaky) : parseBaseFix(text));
-	const results = parse(readFixResult(root));
+	const results = parseFixResult(readFixResult(root), numbers, flaky);
 	const index = argv.findIndex((arg) => arg === "-m" || arg === "--model");
 	const ranModel =
 		(index >= 0 ? argv[index + 1] : argv.find((arg) => arg.startsWith("--model="))?.slice(8)) ??
@@ -344,9 +324,7 @@ export async function fix(
 		// Replaced arguments may run the agent at any effort.
 		effort: args ? "unknown" : effort,
 	};
-	const result = JSON.stringify(
-		Array.isArray(results) ? results.map((item) => ({ ...item, ...identity })) : { ...results, ...identity },
-	);
-	parse(result);
+	const result = JSON.stringify(results.map((item) => ({ ...item, ...identity })));
+	parseFixResult(result, numbers, flaky);
 	writeFileSync(join(root, FIX_RESULT), result);
 }

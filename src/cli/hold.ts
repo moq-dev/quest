@@ -303,7 +303,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 				`${snapshot.url} repository has auto-merge disabled; follow its landing instructions in CONTRIBUTING.md or AGENTS.md (for example, its label queue). Only use --direct if the user explicitly asks`,
 			);
 	}
-	// The batch gate and a merge queue test the current base themselves. Here nothing does, so the head must contain it.
+	// A merge queue tests the current base itself. Here nothing does, so the head must contain it.
 	const comparison = object(
 		await (
 			await labels.github.request(
