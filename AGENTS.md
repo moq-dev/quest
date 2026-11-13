@@ -26,4 +26,4 @@ Do not edit `CONTRIBUTING.md`, `assets/CONTEXT.md`, `assets/AGENTS.md`, or
 - Pull requests land as squash merges.
 - Do not comment on repositories outside kixelated/moq-dev without approval.
 
-Quests: before any work, run `quest context` and follow it, or read https://github.com/moq-dev/quest/blob/main/assets/CONTEXT.md where `quest` is not installed, unless this session already holds its rules.
+Quests: before any work, run `quest context` and follow it, or read https://github.com/moq-dev/quest/blob/main/docs/context.md where `quest` is not installed, unless this session already holds its rules.

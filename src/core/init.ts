@@ -24,7 +24,7 @@ export const REFERENCE_MARKER = "Quests: ";
  * whose `quest setup` hook already printed the rules skips the command.
  */
 export const REFERENCE_LINE =
-	"Quests: before any work, run `quest context` and follow it, or read https://github.com/moq-dev/quest/blob/main/assets/CONTEXT.md where `quest` is not installed, unless this session already holds its rules.";
+	"Quests: before any work, run `quest context` and follow it, or read https://github.com/moq-dev/quest/blob/main/docs/context.md where `quest` is not installed, unless this session already holds its rules.";
 
 /** Earlier releases' default reference lines, which init upgrades in place; a reworded line stays. */
 const OLD_REFERENCE_LINES: readonly string[] = [
