@@ -1132,7 +1132,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				". A spawn starts a quest on the first entry that can run, as quest unblocked --json lists them. " +
 				"--writer prints the one entry that runs that model on the work instead, for an iterate, which stays " +
 				"on its PR's writer: the size's own entry for the model, else its entry at the nearest size that " +
-				"lists it, the larger on a tie, so an XS iterate on an Opus PR runs Opus at M's effort. A model no " +
+				"lists it, the larger on a tie, so an XS iterate on an Opus PR runs Opus at S's effort. A model no " +
 				"list names is an error. Prints harness, model, and effort per line, tab-separated; --json prints an " +
 				"array of {harness, model, effort} objects.",
 		)

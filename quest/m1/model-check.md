@@ -114,12 +114,14 @@ checkpoints and outages to count by hand:
   - Changed again (maintainer, 2026-11-13), on Anthropic's
     [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/),
     which puts scoped coding on Sonnet 5.5 and advises moving up a model
-    rather than past `high`: S writes on Sonnet 5.5 high instead of Opus
-    low, whose S PRs averaged 4.7 review rounds over 6 reviewed; XL writes
-    on Fable 5.2 medium, with Opus xhigh as its fallback, reversing the
+    rather than past `high`: S writes on Opus 5.5 medium instead of low,
+    whose S PRs averaged 4.7 review rounds over 6 reviewed; XL writes on
+    Fable 5.2 medium, with Opus xhigh as its fallback, reversing the
     2026-11-09 rejection; and nothing runs `max`, which `quest agent` and
     `quest review` refuse. XS stays Sonnet high, since `quest usage` had no
-    Sonnet medium runs to compare. Tally the S and XL cells fresh.
+    Sonnet medium runs to compare. The
+    [writer A/B](/quest/m0/routing-evidence/writer-ab.md) tests each change
+    against its alternative; tally the S and XL cells fresh.
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   model of each tier the tables pin. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model

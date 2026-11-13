@@ -27,13 +27,13 @@ const fable = (effort: string): Model => ({ harness: "claude", model: "claude-fa
  * writes a PR runs all its iterates. XS runs Sonnet rather than the cheaper
  * Haiku, whose surcharge past 100k input tokens leads users to cap its
  * compaction window there, barely above an agent's fixed load of prompt,
- * context, and skill. S runs scoped work on Sonnet, at half Opus's price, and
- * XL moves up to Fable rather than push Opus past high, as Anthropic's model
+ * context, and skill. No size runs Opus at low, which misses too much, and XL
+ * moves up to Fable rather than push Opus past high, as Anthropic's model
  * guide advises.
  */
 export const WRITERS: Record<Size, readonly Model[]> = {
 	XS: [sonnet("high"), sol("low")],
-	S: [sonnet("high"), sol("medium")],
+	S: [opus("medium"), sol("medium")],
 	M: [opus("medium"), sol("high")],
 	L: [opus("high"), sol("xhigh")],
 	XL: [fable("medium"), opus("xhigh")],

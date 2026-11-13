@@ -133,7 +133,7 @@ $ quest --root examples/export unblocked
 1	quest/m0/export.md
 
 $ quest --root examples/export unblocked --json --limit 1
-[{"path":"quest/m0/export.md","dependents":1,"hosts":[],"models":[{"harness":"claude","model":"claude-sonnet-5-5","effort":"high"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
+[{"path":"quest/m0/export.md","dependents":1,"hosts":[],"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"medium"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
 ```
 
 Each plain output line contains the count, a tab, and the path. On a terminal,
@@ -1341,7 +1341,7 @@ the same for every repository unless its `AGENTS.md` names others:
 | Size | Writer | Fallback |
 |---|---|---|
 | XS | Claude Code `claude-sonnet-5-5` high | Codex `gpt-6.1-sol` low |
-| S | Claude Code `claude-sonnet-5-5` high | Codex `gpt-6.1-sol` medium |
+| S | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` medium |
 | M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
 | XL | Claude Code `claude-fable-5-2` medium | Claude Code `claude-opus-5-5` xhigh |
