@@ -188,7 +188,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", ()
 		const { stop, result } = gated(dir, home, leaf.script);
 		await created(leaf.ready);
 		stop.abort("SIGTERM");
-		expect(await result).toBe(143);
+		expect((await result).status).toBe(143);
 		expect(leaf.log()).toEqual(["SIGTERM"]);
 		// Just's copy of the signal did not kill the run's scope before the leaf's cleanup finished.
 		expect(existsSync(leaf.done)).toBe(true);
@@ -202,7 +202,7 @@ describe.runIf(process.platform === "linux")("supervised runs under systemd", ()
 		stop.abort("SIGTERM");
 		await created(leaf.received);
 		kill.abort();
-		expect(await result).toBe(143);
+		expect((await result).status).toBe(143);
 		// The gate killed the supervisor with everything else in its scope, and systemd the run's own.
 		while (!stopped(leaf.pid())) await new Promise((resolve) => setTimeout(resolve, 25));
 		expect(await worktrees.stop(record.id)).toMatchObject({ phase: "released", runs: [] });

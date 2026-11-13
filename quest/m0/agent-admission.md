@@ -92,10 +92,10 @@ Agent's choices, for the implementer to revisit:
   "as many at once as the harness allows" line in `assets/skills/run.md`
   changes with it.
 - Measure on a real `/quest-spawn` fan-out: limit errors, agents lost,
-  gate wait times, and total wall time, against the numbers above.
+  gate wait times (each agent's `QUEST_GATE_RECORD` file), and total wall
+  time, against the numbers above.
 
 ## Related
 
 - [The gate admits work through mbx's pool](/quest/m0/gate-mbx-pool.md) - changes how the gate admits commands, which this reads
-- [The gate records each run for the process that started the agent](/quest/m0/gate-record.md) - per-agent gate waits, to measure this against
 - [Cut agent token waste](/quest/m0/token-waste/README.md) - kept the 1-hour cache TTL and capped commands just under it, which a long gate wait can still outlast

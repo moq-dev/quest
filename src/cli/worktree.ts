@@ -935,7 +935,7 @@ export class Worktrees {
 		// The command runs in this checkout, where a location inherited from a Git hook names the wrong repository.
 		const env = discoveryEnv(options?.env);
 		const result = await this.scopes.run(run.unit, record.path, command, { ...options, env }).then(
-			(code) => ({ code }),
+			({ status }) => ({ code: status }),
 			(error: unknown) => ({ error }),
 		);
 		// Waits out a busy lock rather than failing: the run's record keeps its scratch until this lands.

@@ -9,9 +9,10 @@ starts.
 
 ## Plan
 
-Decided 2026-11-12 (maintainer, `/quest-plan`): split from the
-[gate run record](/quest/m0/gate-record.md), since m0 leaves native
-Windows and its suite to m1.
+Decided 2026-11-12 (maintainer, `/quest-plan`): split from the gate run
+record, since m0 leaves native Windows and its suite to m1. The README's
+"Record each run" section gives the variable and the line format; until
+this lands, `quest gate` on Windows refuses `QUEST_GATE_RECORD`.
 
 The Job Object lives in the Bun stub that `src/cli/job.ts` runs, and it
 ends with the stub, so the gate never holds it. The stub reads the job's
@@ -30,8 +31,3 @@ without a job is labeled `children`.
 ## Hosts
 
 - windows - the Job Object accounting
-
-## Required
-
-- [Gate run record](/quest/m0/gate-record.md) - the variable, the line
-  format, and the Linux and macOS measurement this extends

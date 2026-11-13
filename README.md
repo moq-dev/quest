@@ -1238,7 +1238,8 @@ gate exits with 128 plus the signal's number. How far ownership reaches depends
 on the host:
 
 - Linux with a systemd 254+ user manager, unified cgroup v2, and Linux 5.14+
-  runs the command in its own systemd user scope in `background.slice`, whose
+  runs the command in a child cgroup of its own delegated systemd user scope
+  in `background.slice`, whose
   low CPU weight keeps the desktop session ahead of gated work under contention,
   and owns every descendant, including ones that start their own process group
   or session. Only a process that asks another service manager to start it
@@ -1286,6 +1287,44 @@ kills, though when sent to Just or the gate alone, or when the two copies
 arrive together, it takes a third; a repeated Ctrl-C, which Just does not
 forward, kills at the second. There is no timeout except `--quick`'s: any other
 command waits its turn for as long as the host stays busy.
+
+### Record each run
+
+A process that starts an agent, such as a job runner or a CPU audit, can read
+back what the agent's gated commands waited for and cost by setting
+`QUEST_GATE_RECORD` in the agent's environment to an absolute path. Every
+outermost `quest gate` run on Linux or macOS, including those the agent's
+parallel shells and subagents start, then appends one JSON line to that file,
+however the run ends:
+
+```json
+{"command":["cargo","test"],"directory":"/home/me/src/app","started":"2026-11-12T19:40:01.120Z","admitted":"2026-11-12T19:40:31.452Z","ended":"2026-11-12T19:42:10.008Z","cpuMs":512340,"peakMemory":3221225472,"measured":"cgroup","exit":0,"cancelled":false,"error":null}
+```
+
+- `started`, `admitted`, and `ended` give the wait and the wall time. `ended` is
+  when the command's own process exited, before the gate stopped what it left
+  behind. A run cancelled before admission has a null `admitted`.
+- `cpuMs` and `peakMemory` (bytes) are null when the command never ran, and
+  `peakMemory` also where the host cannot say. `measured` names what they
+  count:
+  - `cgroup`: the command's systemd scope, so every process it started. Peak
+    memory is the scope's `memory.peak`, which includes page cache charged to
+    it and needs Linux 5.19.
+  - `children`: on macOS, and Linux without a systemd user manager, the
+    command's own resource usage, a lower bound: it covers the descendants the
+    command waited for, not those the gate kills at the end, such as a leftover
+    background server, and its peak memory is the largest single process's.
+- `exit` is the status the gate returns, `cancelled` whether it was cancelled,
+  and `error` the gate's own failure, such as a command that cannot start.
+
+Each line is one write to a file opened for appending, so concurrent gates
+leave only whole lines; give each agent its own file to tell them apart. Nested
+gates write nothing, since their outermost gate already counts their command.
+An unset or empty variable writes nothing, a relative path is refused, and a
+file the gate cannot open fails it before the command runs. A line it cannot
+write fails the gate too, though a cancelled run keeps its cancelled status.
+Windows refuses the variable for now. The agent's own processes write the
+file, so a record is only as trustworthy as the agent.
 
 ## Route work by size
 
