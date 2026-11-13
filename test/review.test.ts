@@ -1896,8 +1896,10 @@ test("each changed directory keeps its own instructions, and a directory's symli
 test("the next step stops for the design checkpoint when a reviewer's every third round reports findings", () => {
 	const round = (number: number, findings: number, severity = "medium") =>
 		({ round: number, findings: Array.from({ length: findings }, () => ({ severity })) }) as unknown as Round;
-	expect(nextStep([round(3, 1)])).toMatch(/^next checkpoint: /);
-	expect(nextStep([round(6, 2)])).toMatch(/^next checkpoint: /);
+	expect(nextStep([round(3, 1)])).toMatch(
+		/^next checkpoint: .*best long-term approach from first principles, compare it with the current one/,
+	);
+	expect(nextStep([round(6, 2)])).toMatch(/^next checkpoint: .*best long-term approach from first principles/);
 	expect(nextStep([round(4, 1)])).toMatch(/^next respond: /);
 	expect(nextStep([round(3, 0)])).toMatch(/^next done: /);
 	expect(nextStep([round(3, 2, "low")])).toMatch(/^next finish: /);
@@ -1905,7 +1907,9 @@ test("the next step stops for the design checkpoint when a reviewer's every thir
 	// Across reviewers: any finding not low needs another round, and a clean third round is no checkpoint.
 	expect(nextStep([round(1, 1, "low"), round(1, 1)])).toMatch(/^next respond: /);
 	expect(nextStep([round(3, 0), round(1, 1)])).toMatch(/^next respond: /);
-	expect(nextStep([round(1, 1), round(3, 1)])).toMatch(/^next checkpoint: /);
+	expect(nextStep([round(1, 1), round(3, 1)])).toMatch(
+		/^next checkpoint: .*best long-term approach from first principles/,
+	);
 	expect(nextStep([round(3, 0), round(1, 0)])).toMatch(/^next done: /);
 });
 

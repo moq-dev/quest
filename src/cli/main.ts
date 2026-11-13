@@ -1247,8 +1247,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"its one-sentence rationale, the finding count, each finding by its number, then the last round's findings with " +
 				"their numbers and dispositions; then the `record` line below and a last `next` line naming the author's next step: " +
 				"`next finish` when every finding is low severity, to fix or refute them without another round, " +
-				"`next checkpoint` when a reviewer's every third round reports other findings, to reconsider the approach " +
-				"before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
+				"`next checkpoint` when a reviewer's every third round reports other findings, to compare the current approach " +
+				"with the best long-term approach worked out from first principles before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
 				"one object: `rounds`, one per reviewer, `tallies`, every reviewer's findings across the branch's rounds, `record`, and `next`.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +

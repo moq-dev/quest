@@ -1919,7 +1919,7 @@ export function nextStep(rounds: Round[]): string {
 	if (findings.every((finding) => finding.severity === "low"))
 		return "next finish: fix or refute each finding, commit, rerun the checks, then add a line after the PR body's review record naming the new head's full SHA and each finding's disposition; run no further round";
 	if (rounds.some((round) => round.findings.length > 0 && round.round % 3 === 0))
-		return "next checkpoint: before fixing these findings, reconsider the approach and let the user decide, as /quest-review describes";
+		return "next checkpoint: before fixing these findings, step back: work out the best long-term approach from first principles, compare it with the current one, and let the user decide, as /quest-review describes";
 	return "next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number";
 }
 
