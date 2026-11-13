@@ -37,7 +37,9 @@ GitHub-hosted publish job that `run.ps1` makes unnecessary).
   that `curl -fsS -A quest https://crates.io/api/v1/crates/token-max/0.1.0 | jq .version.repository`
   prints `"https://github.com/kixel-ai/token-max"`, that
   `gh release view v0.1.0 -R kixel-ai/token-max --json assets` lists
-  binaries for Linux, macOS and Windows and their checksums, that
-  `curl -LsSf https://max.kixel.ai/run.sh | sh` runs `token-max doctor` on
-  Linux and `irm https://max.kixel.ai/run.ps1 | iex` does on Windows, and
-  that each script verifies the download against the release's checksums
+  binaries for Linux, macOS and Windows and their checksums, and that
+  `curl -fsSL` of `https://max.kixel.ai/run.sh` and of
+  `https://max.kixel.ai/run.ps1` each returns a script, not an HTML page,
+  that downloads from that release and compares the download against its
+  checksums file before running it; read the scripts, never run them, to
+  clear this
