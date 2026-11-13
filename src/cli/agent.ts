@@ -227,7 +227,7 @@ export class AgentInputError extends Error {}
  * runs on its CLI's own login rather than as the session's sub-session.
  * A launch from inside a `quest gate` command does not admit the agent's own
  * expensive commands or give them a land check's priority, so the gate's marks
- * are dropped too, as is the base a land check runs against. Each CLI keeps the
+ * are dropped too, with the mbx priority a priority gate sets, as is the base a land check runs against. Each CLI keeps the
  * user's configuration directory.
  */
 const STRIPPED = [
@@ -249,10 +249,14 @@ export function strippedEnvironment(
 	env: NodeJS.ProcessEnv,
 	platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-	const stripped = (name: string) => {
-		const normalized = platform === "win32" ? name.toUpperCase() : name;
-		return STRIPPED.some((pattern) => pattern.test(normalized));
-	};
+	const normalized = (name: string) => (platform === "win32" ? name.toUpperCase() : name);
+	// Inside a priority gate, mbx's priority is the gate's, not the agent's.
+	const priority = Object.entries(env).some(
+		([name, value]) => normalized(name) === "QUEST_GATE_PRIORITY" && value === "1",
+	);
+	const stripped = (name: string) =>
+		STRIPPED.some((pattern) => pattern.test(normalized(name))) ||
+		(priority && normalized(name) === "MBX_SCHEDULER_PRIORITY");
 	return Object.fromEntries(Object.entries(env).filter(([name]) => !stripped(name)));
 }
 

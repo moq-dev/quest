@@ -12,8 +12,7 @@ stalls in the gate with its prompt cache going cold. Agents already running
 are never paused or stopped by this; it only delays starting the next one.
 
 Non-goals: capping the user's own top-level sessions, querying a
-particular credential gateway, and changing how the gate admits commands,
-which [gate-mbx-pool](/quest/m0/gate-mbx-pool.md) owns.
+particular credential gateway, and changing how the gate admits commands.
 
 ## Plan
 
@@ -64,9 +63,6 @@ What the decisions above require, found in review:
   gated load until its first build minutes later. So agents started but
   not yet building must count against the headroom too, as the gate counts
   its recent admissions, or a whole fan-out passes the check at once.
-- On a host where [gate-mbx-pool](/quest/m0/gate-mbx-pool.md) has landed,
-  commands wait in mbx's pool after the gate admits them, so the check also
-  counts a pending mbx reservation as waiting.
 - Harnesses report a percentage of a window, while `quest usage` reports
   tokens and list cost, and neither reports the window's capacity. Convert
   through the account's own history, such as tokens spent per percentage
@@ -96,6 +92,5 @@ Agent's choices, for the implementer to revisit:
 
 ## Related
 
-- [The gate admits work through mbx's pool](/quest/m0/gate-mbx-pool.md) - changes how the gate admits commands, which this reads
 - [The gate records each run for the process that started the agent](/quest/m0/gate-record.md) - per-agent gate waits, to measure this against
 - [Cut agent token waste](/quest/m0/token-waste/README.md) - kept the 1-hour cache TTL and capped commands just under it, which a long gate wait can still outlast

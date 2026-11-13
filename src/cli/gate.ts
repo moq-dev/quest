@@ -827,8 +827,11 @@ export async function gate(command: string[], options: { quick?: boolean } = {})
 					)
 				: undefined;
 		let result: number;
+		const env: NodeJS.ProcessEnv = { ...process.env, [ADMITTED]: "1" };
+		// mbx otherwise takes its configured priority, which agents' hosts may lower.
+		if (process.env[PRIORITY] === "1") env.MBX_SCHEDULER_PRIORITY ??= "normal";
 		try {
-			result = await run(command, { ...process.env, [ADMITTED]: "1" }, cancel);
+			result = await run(command, env, cancel);
 		} finally {
 			stop.abort();
 		}

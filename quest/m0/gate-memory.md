@@ -8,7 +8,7 @@ killed as a whole group, instead of the kernel's OOM killer picking a
 victim elsewhere on the host. Other gated commands, agent sessions, and
 host services keep running.
 
-Non-goals: host-wide swap or oomd settings, which kixelated/nixos's
+Non-goals: host-wide swap or oomd settings, which kixel-ai/nixos's
 quest tree plans for the maintainer's host.
 
 ## Plan
@@ -48,7 +48,8 @@ Agent's choices, for the implementer to revisit:
   before it is killed, and `OOMPolicy=kill`, so an OOM kill inside the
   scope stops the whole command rather than leaving its wrappers running.
 - Size a command's share from its measured peak once the gate has seen
-  it, as gate-mbx-pool plans for CPU, rather than a constant; a command
+  it, rather than a constant (moq-dev/quest#673 dropped the matching CPU
+  plan); a command
   that needs more fails loud with the scope's OOM event in the gate's
   error, so the agent learns why.
 
@@ -58,5 +59,4 @@ Agent's choices, for the implementer to revisit:
 
 ## Related
 
-- [The gate admits work through mbx's pool](/quest/m0/gate-mbx-pool.md) - plans the learned per-command CPU peak this mirrors for memory; it leaves the memory budget as is
 - [Coordinators start an agent only when the host and the account can carry it](/quest/m0/agent-admission.md) - the agent-level half of host admission

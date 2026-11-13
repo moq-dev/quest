@@ -13,7 +13,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Passing checks don't show a change works. Before review, exercise it on its real surface, such as the built binary, the running app, or the endpoint, and verify core functionality a second independent way, such as a property or differential check, a model, or a measurement. Measure performance claims. Put what you ran and saw in the PR body's `## Validation`; a change with no behavior to exercise says so.
 - Keep CI fast, so bold changes can be tried and thrown away cheaply: every test runs in CI, but the merge gate holds only fast, high-signal ones, and slow or expensive ones, such as other platforms, run nightly. A PR that slows the gate says by how much and why it is worth it.
 - Unit tests mock time instead of depending on wall-clock timing or sleeps, and cover edge cases, not old bugs or trivial values.
-- A lasting fact or instruction about a project belongs in its repository, not agent memory. Propose checking it in, to the nearest `AGENTS.md` or its quest; change no rule until the user agrees, and then follow `quest guide prompting`.
+- A lasting fact or instruction about a project belongs in its repository, not agent memory. Propose checking it in, to the nearest `AGENTS.md` or its quest; change no rule until the user agrees, then follow `quest guide prompting`.
 - In a public repository, never mention customers, partners, or prospects, or link to a private repository its maintainer doesn't own. Justify work on its merits.
 
 ## Important
@@ -23,7 +23,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Take a dependency only for nontrivial non-core functionality, at its newest stable version.
 - Do not bump package versions unless asked.
 - Comments explain the non-obvious why, never the history, and every export gets one plain line, the way you'd say it out loud.
-- Audit the code you read as you go, even outside your task's scope: bugs, security, these rules, dead code, and what could be simpler. Fix in the same PR the easy findings and any docs or comments your change outdates; suggest the rest as follow-ups.
+- Audit the code you read as you go, even outside your task: bugs, security, these rules, dead code, and what could be simpler. Fix in the same PR the easy findings and any docs or comments your change outdates; suggest the rest as follow-ups.
 - Say it once, in the fewest words that hold up.
 
 ## Public API
@@ -43,7 +43,7 @@ Put scratch, such as PR bodies, review drafts, logs, patches, helper scripts, an
 Before ending a task, pausing for a decision, or handing off, commit a checkpoint and report what remains and which checks passed or did not run.
 Finish with a clean checkout: intended changes committed and pushed, incidental generated changes restored, and pre-existing or unrelated changes preserved.
 
-Run CPU-heavy commands, such as builds, test suites, model checkers, and browsers, through `quest gate <command>`, which queues, however long, until the host has room.
+Run CPU-heavy commands, such as builds, tests, model checkers, and browsers, through `quest gate <command>`, which queues until the host has room; model calls like `quest review` and servers stay out.
 Never work around the queue by polling the load average or capping agents yourself; cancel a gated command only when you no longer need its result.
 Run it in the foreground and read its exit code directly, not through a pipe.
 Never end a turn or report while your background work runs, and never poll it with `sleep`, status checks, or any busy loop: block on it with the harness's own wait for that task, at the longest interval it allows, saying nothing between waits.
@@ -64,7 +64,7 @@ A decision about an open PR never authorizes closing it. Confirm a close as its 
 
 ## Pull requests
 
-Merge the base only when the branch conflicts with it or a landing step, such as `quest merge` or a merge queue, refuses the head, and resolve the conflicts in that merge; a branch only behind needs none, since landing tests it on the current base.
+Merge the base only when the branch conflicts with it or a landing step, such as `quest merge` or a merge queue, refuses the head, and resolve the conflicts in that merge; a branch only behind needs none: landing tests it on the current base.
 Before each push to a PR's branch, confirm the PR is still open, since a push after it merges restores the deleted branch.
 
 Before a PR is marked ready for review, a model other than its latest writer reviews the committed branch locally, as `/quest-review` describes; a later push needs a new review unless `/quest-merge` exempts its changes.
