@@ -360,7 +360,7 @@ async function dequeueSignaled(
 			id: string(pull.id),
 			pick,
 			head,
-			text: `quest land watch: ended this pull request's pick, ${now.mergeQueueEntry != null ? "taking it out of the queue and disarming its auto-merge" : "disarming its auto-merge"}, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
+			text: `quest land watch: ended this pull request's pick, ${[now.mergeQueueEntry != null ? "taking it out of the queue" : "", now.autoMergeRequest != null ? "disarming its auto-merge" : ""].filter(Boolean).join(" and ")}, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
 			failures: 0,
 		};
 		saveProgress();
@@ -914,7 +914,8 @@ export function watchPermissions(
 			pushWorkflows: { ...push, workflows: "write" },
 			read: { contents: "read" },
 		};
-	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" } };
+	// Disarming a signaled PR's auto-merge needs contents: write, as arming it does.
+	if (!fixing) return { api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" } };
 	return {
 		api: {
 			contents: "write",

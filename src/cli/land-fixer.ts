@@ -227,14 +227,22 @@ export function saveCarry(
 	pick: string,
 	round: Pick<Round, "before" | "after" | "pin">,
 ): void {
-	if (!round.after || round.after === round.before || !Number.isFinite(Date.parse(pick))) return;
-	const path = carryPath(state, number, round.after);
+	const after = round.after;
+	if (!after || !Number.isFinite(Date.parse(pick))) return;
+	const path = carryPath(state, number, after);
 	if (existsSync(path)) return;
-	// The head it replaced may carry an earlier pick's signals, which picking it again answered none of.
-	const earlier = carriedBy(state, number, round.before);
-	const heads = [...(earlier?.heads ?? []), round.before, ...(round.pin ? [round.pin] : [])];
-	const picked = earlier && Date.parse(earlier.picked) < Date.parse(pick) ? earlier.picked : pick;
-	save(path, { heads: [...new Set(heads)], picked } satisfies Carried);
+	// The heads it replaced, a gate merge's pin included, may carry an earlier pick's signals, which picking them
+	// again answered none of. An unchanged requeue of a gate merge still carries its pin's.
+	const replaced = round.pin ? [round.before, round.pin] : [round.before];
+	const earlier = replaced.flatMap((head) => carriedBy(state, number, head) ?? []);
+	const heads = [...new Set([...earlier.flatMap((carry) => carry.heads), ...replaced])].filter(
+		(head) => head !== after,
+	);
+	if (heads.length === 0) return;
+	const picked = [pick, ...earlier.map((carry) => carry.picked)].reduce((a, b) =>
+		Date.parse(b) < Date.parse(a) ? b : a,
+	);
+	save(path, { heads, picked } satisfies Carried);
 }
 /** What each of `pulls`' heads carries from a pick the land fixer replaced, by number. */
 export function carriedOf(state: string, pulls: ObjectValue[]): Map<number, Carried> {

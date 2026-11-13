@@ -963,7 +963,7 @@ test("an armed pick withdrawn, retargeted, or held while the pass reads it is no
 
 test("the watcher's tokens ask for writes only with a fixer, and pushes for workflows only when they carry one", () => {
 	expect(watchPermissions(false)).toEqual({
-		api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" },
+		api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" },
 	});
 	expect(watchPermissions(true)).toEqual({
 		api: {

@@ -913,7 +913,8 @@ pass that cannot read them does nothing. It reads them with a `contents: read`
 token, so an installation granted only one mode's permissions runs it. On GitHub's queue it tells each PR the queue
 drops unmerged why, and takes a queued or armed PR whose head draws a
 [signal](#signals-that-hold-a-head) out of the queue, disarming its auto-merge
-and saying why. With `--fixer`, it also runs the land fixer on each PR the
+and saying why, even one another session holds, since GitHub's queue ignores
+hold labels. With `--fixer`, it also runs the land fixer on each PR the
 queue dropped for a failure or a conflict, and puts it back at the back of the
 queue. It polls; the host needs no public endpoint. Its base is resolved once at
 startup, from `--base` or the default branch, so a renamed default branch needs a
@@ -1043,10 +1044,11 @@ pull request GitHub refuses to enqueue says so and waits for a maintainer.
 
 It shares `quest land serve`'s App key, state directory, private repository,
 and locks, so the two never run for the same repository at once. Without a
-fixer its token asks for `contents: read`, `pull_requests: write`,
-`actions: read`, which the App needs for the logs, and `merge_queues: write`,
-which `enqueuePullRequest` needs. With one it also asks for `contents: write`,
-for arming auto-merge and pushing fixes, and `checks: read` and `statuses: read`,
+fixer its token asks for `contents: write`, which disarming a signaled pull
+request's auto-merge needs, `pull_requests: write`, `actions: read`, which
+the App needs for the logs, and `merge_queues: write`, which
+`enqueuePullRequest` needs. With one, which also arms auto-merge and pushes
+fixes, it also asks for `checks: read` and `statuses: read`,
 for the PR's own checks the fixer reads; a push that carries a workflow change
 asks for `workflows: write`.
 

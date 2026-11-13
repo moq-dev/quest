@@ -4528,6 +4528,11 @@ test("a fixed head carries the heads its pick's rounds replaced", () => {
 	expect(carriedBy(state, 5, "e")).toEqual({ heads: ["m", "a", "b", "c"], picked: pick });
 	saveRound(state, 5, { pick: later, rounds: [] }, round("4", "x", "c"));
 	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["m", "a", "b"], picked: pick });
+	// A gate merge on a carried head, whether fixed again or requeued unchanged, keeps its pin's carry.
+	saveRound(state, 5, { pick: later, rounds: [] }, round("7", "m2", "n", "e"));
+	saveRound(state, 5, { pick: later, rounds: [] }, round("8", "m3", "m3", "e"));
+	expect(carriedBy(state, 5, "n")).toEqual({ heads: ["m", "a", "b", "c", "m2", "e"], picked: pick });
+	expect(carriedBy(state, 5, "m3")).toEqual({ heads: ["m", "a", "b", "c", "e"], picked: pick });
 	// An unchanged requeue carries nothing new, and a pick that is not a time cannot bound decisions.
 	saveRound(state, 5, { pick, rounds: [] }, round("5", "f", "f"));
 	saveRound(state, 5, { pick: "f".repeat(40), rounds: [] }, round("6", "g", "h"));
