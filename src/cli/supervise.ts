@@ -210,7 +210,7 @@ function signalGroup(group: string, signal: NodeJS.Signals): void {
 }
 
 /** The processes in the cgroup and every cgroup below it; none once it is removed. */
-export function members(group: string): number[] {
+function members(group: string): number[] {
 	try {
 		const own = readFileSync(join(group, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number);
 		const children = readdirSync(group, { withFileTypes: true }).filter((entry) => entry.isDirectory());
