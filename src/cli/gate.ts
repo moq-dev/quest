@@ -19,29 +19,11 @@ import {
 } from "node:fs";
 import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, userInfo } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
-import { type Exit, questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
-
-/**
- * The part of Bun's process API the group owner needs: Node's `child_process` reports no resource
- * usage of a child, and Quest always runs on Bun.
- */
-declare const Bun: {
-	spawn(
-		command: string[],
-		options: { env: NodeJS.ProcessEnv; stdio: ["inherit", "inherit", "inherit", "pipe"]; detached: true },
-	): {
-		pid: number;
-		stdio: [null, null, null, number];
-		exited: Promise<number>;
-		exitCode: number | null;
-		signalCode: NodeJS.Signals | null;
-		resourceUsage(): { cpuTime: { total: number | bigint }; maxRSS: number } | undefined;
-	};
-	file(fd: number): { stream(): ReadableStream<Uint8Array> };
-};
+import { questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
@@ -638,13 +620,12 @@ const ADMITTED = "QUEST_GATE_ADMITTED";
 export const PRIORITY = "QUEST_GATE_PRIORITY";
 
 /**
- * Runs an admitted command with inherited streams and resolves with its exact exit status, when it
- * exited, and what it used where the owner measures that.
+ * Runs an admitted command with inherited streams and resolves with its exact exit status.
  * Asking to cancel delivers the requested signal to every process the owner holds, unless they
  * already have it (see `forwards`), so each one's own handling of it runs; killing stops them
  * outright.
  */
-export type Owner = (command: string[], env: NodeJS.ProcessEnv, cancel: Cancellation) => Promise<Exit>;
+export type Owner = (command: string[], env: NodeJS.ProcessEnv, cancel: Cancellation) => Promise<number>;
 
 /**
  * Run the command as a plain child. `held` says whether an enclosing owner that signals everything
@@ -670,7 +651,7 @@ function plain(held: boolean): Owner {
 			});
 			child.once("close", (code, killed) => {
 				cleanup();
-				resolve({ status: code ?? (killed ? 128 + constants.signals[killed] : 1), ended: Date.now() });
+				resolve(code ?? (killed ? 128 + constants.signals[killed] : 1));
 			});
 		});
 }
@@ -725,36 +706,24 @@ export const job: Owner = (command, env, cancel) => direct(...stubbed(command, e
  * it or a parent closes it, as Bun and Node do for what they start. Its read end ends once every
  * holder has exited, so each one, such as a leaf that outlives the wrappers around it, finishes its
  * own cleanup before the rest of the group is killed, unless a second signal kills it first.
- *
- * Its usage is the command's own as `wait4` reports it, which covers the descendants it waited for
- * but not those the group kills at the end, and as peak memory the largest single process's.
  */
 export const group: Owner = (command, env, cancel) =>
 	new Promise((resolve, reject) => {
-		let child: ReturnType<typeof Bun.spawn>;
-		try {
-			child = Bun.spawn(["nice", "-n", "10", ...command], {
-				env: { ...env, [GROUP]: "1" },
-				stdio: ["inherit", "inherit", "inherit", "pipe"],
-				detached: true,
-			});
-		} catch (error) {
-			return reject(error);
-		}
-		const token = child.stdio[TOKEN];
-		// Drained from the start, so a holder's writes never fill the pipe; only its end matters.
-		const reader = Bun.file(token).stream().getReader();
-		const released = (async () => {
-			try {
-				while (!(await reader.read()).done);
-			} catch {
-				// A failed read ends the wait as the pipe's end would.
-			}
-		})();
-		let signalled = false;
+		const child = spawn("nice", ["-n", "10", ...command], {
+			env: { ...env, [GROUP]: "1" },
+			stdio: ["inherit", "inherit", "inherit", "pipe"],
+			detached: true,
+		});
+		const token = child.stdio[TOKEN] as Readable;
+		const released = new Promise<void>((resolve) => {
+			token.once("end", resolve);
+			token.once("close", resolve);
+			token.once("error", () => resolve());
+		});
+		token.resume(); // Holders' writes are discarded; only the end matters.
 		const signal = (name: NodeJS.Signals) => {
 			try {
-				process.kill(-child.pid, name);
+				process.kill(-child.pid!, name);
 			} catch (error) {
 				const code = (error as NodeJS.ErrnoException).code;
 				if (code === "ESRCH") return;
@@ -769,42 +738,33 @@ export const group: Owner = (command, env, cancel) =>
 				if (live) throw error;
 			}
 		};
+		let signalled = false;
 		const stop = () => {
 			signalled = true;
 			signal(requested(cancel.signal));
 		};
 		const terminate = () => signal("SIGKILL");
+		child.once("error", reject);
+		if (child.pid === undefined) return; // It never started.
 		const cleanup = follow(cancel, stop, terminate);
 		const killed = new Promise<void>((resolve) => {
 			if (cancel.kill.aborted) resolve();
 			else cancel.kill.addEventListener("abort", () => resolve(), { once: true });
 		});
-		void child.exited.then(async () => {
-			const ended = Date.now();
-			const status = child.exitCode ?? 128 + constants.signals[child.signalCode!];
-			const usage = child.resourceUsage();
+		child.once("exit", async (code, name) => {
 			// Every process in the group got the signal, so let each holder finish its own cleanup.
 			if (signalled) await Promise.race([released, killed]);
 			cleanup();
+			token.destroy();
 			try {
-				await reader.cancel();
-				// Bun leaves a pipe it handed out open.
-				closeSync(token);
 				// The group outlives its leader while any member remains, so its ID is not reused yet. A
 				// group that emptied during the drain could only be mistaken once the host cycled through
 				// every process ID.
 				terminate();
-				if (!usage) throw new Error("gate cannot read its command's resource usage");
 			} catch (error) {
 				return reject(error);
 			}
-			const cpuMs = Math.round(Number(usage.cpuTime.total) / 1000);
-			// A cancellation that arrived while the holders drained still decides the status.
-			resolve({
-				status: cancel.signal.aborted ? cancelled(cancel.signal) : status,
-				ended,
-				usage: { cpuMs, peakMemory: usage.maxRSS, measured: "children" },
-			});
+			resolve(code ?? 128 + constants.signals[name!]);
 		});
 	});
 
@@ -842,7 +802,7 @@ const notices: Record<Waiting, string> = {
 
 /**
  * Names a file to which every outermost gate appends one JSON line describing its run, however it
- * ends (see `gate`). A nested gate runs inside a command its outermost gate already measures.
+ * ends (see `gate`). A nested gate runs inside a command its outermost gate already covers.
  */
 export const RECORD = "QUEST_GATE_RECORD";
 
@@ -850,7 +810,6 @@ export const RECORD = "QUEST_GATE_RECORD";
 function recordFile(env: NodeJS.ProcessEnv): { path: string; fd: number } | undefined {
 	const path = env[RECORD];
 	if (!path) return undefined;
-	if (process.platform === "win32") throw new Error(`gate cannot record its run on Windows yet (${RECORD})`);
 	// The command's shells change directory, so a relative path would scatter one reader's lines.
 	if (!isAbsolute(path)) throw new Error(`${RECORD} must be an absolute path: ${path}`);
 	try {
@@ -876,7 +835,8 @@ export interface GateOptions {
 interface Observed {
 	/** Wall-clock milliseconds when the command was admitted. */
 	admitted?: number;
-	exit?: Exit;
+	/** The systemd scope the command ran in, whose journal lines hold its CPU time and peak memory. */
+	unit?: string;
 }
 
 /**
@@ -903,41 +863,38 @@ export async function gate(command: string[], options: GateOptions = {}): Promis
 			failure = error;
 			// The status the CLI exits with for a gate's own failure.
 			status = 1;
-			// A command that ran keeps its measurements even when its scope cannot be confirmed stopped.
-			if (error instanceof Error && "exit" in error) observed.exit ??= error.exit as Exit;
 		}
-		if (record) {
-			const iso = (ms: number) => new Date(ms).toISOString();
-			const usage = observed.exit?.usage;
-			const line = `${JSON.stringify({
+		if (!record) {
+			if (failure !== undefined) throw failure;
+			return status;
+		}
+		const iso = (ms: number) => new Date(ms).toISOString();
+		const line = Buffer.from(
+			`${JSON.stringify({
 				command,
 				directory,
 				started: iso(started),
 				admitted: observed.admitted === undefined ? null : iso(observed.admitted),
-				ended: iso(observed.exit?.ended ?? Date.now()),
-				cpuMs: usage?.cpuMs ?? null,
-				peakMemory: usage?.peakMemory ?? null,
-				measured: usage?.measured ?? null,
+				unit: observed.unit ?? null,
 				exit: status,
 				cancelled: cancel.signal.aborted,
 				error: failure === undefined ? null : message(failure),
-			})}\n`;
-			try {
-				const bytes = Buffer.from(line);
-				const written = writeSync(record.fd, bytes);
-				if (written !== bytes.length) throw new Error(`wrote ${written} of ${bytes.length} bytes`);
-			} catch (error) {
-				const unrecorded = `gate cannot record its run in ${record.path}: ${message(error)}`;
-				// A cancelled run exits as it would have, recorded or not.
-				if (cancel.signal.aborted) {
-					process.stderr.write(`quest ${unrecorded}\n`);
-					if (failure !== undefined) throw failure;
-					return status;
-				}
-				throw new Error(failure === undefined ? unrecorded : `${message(failure)}; ${unrecorded}`);
-			} finally {
-				closeSync(record.fd);
+			})}\n`,
+		);
+		try {
+			const written = writeSync(record.fd, line);
+			if (written !== line.length) throw new Error(`wrote ${written} of ${line.length} bytes`);
+		} catch (error) {
+			const unrecorded = `gate cannot record its run in ${record.path}: ${message(error)}`;
+			// A cancelled run exits as it would have, recorded or not.
+			if (cancel.signal.aborted) {
+				process.stderr.write(`quest ${unrecorded}\n`);
+				if (failure !== undefined) throw failure;
+				return status;
 			}
+			throw new Error(failure === undefined ? unrecorded : `${message(failure)}; ${unrecorded}`);
+		} finally {
+			closeSync(record.fd);
 		}
 		if (failure !== undefined) throw failure;
 		return status;
@@ -989,13 +946,15 @@ async function gated(
 	const env: NodeJS.ProcessEnv = { ...process.env, [ADMITTED]: "1" };
 	// mbx otherwise takes its configured priority, which agents' hosts may lower.
 	if (process.env[PRIORITY] === "1") env.MBX_SCHEDULER_PRIORITY ??= "normal";
+	observed.unit = unit;
+	let result: number;
 	try {
-		observed.exit = await run(command, env, cancel);
+		result = await run(command, env, cancel);
 	} finally {
 		stop.abort();
 	}
 	const failed = await measuring;
 	if (cancel.signal.aborted) return cancelled(cancel.signal);
 	if (failed) throw failed.error;
-	return observed.exit.status;
+	return result;
 }

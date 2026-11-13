@@ -193,7 +193,7 @@ async function managed() {
 				});
 				options!.spawned!(child);
 				child.once("error", reject);
-				child.once("close", (code) => resolve({ status: code ?? 1, ended: Date.now() }));
+				child.once("close", (code) => resolve(code ?? 1));
 			}),
 	);
 	writeFileSync(join(s.worktree, ".gitignore"), "cache/\n.worktrees/\n");

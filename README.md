@@ -1249,8 +1249,7 @@ gate exits with 128 plus the signal's number. How far ownership reaches depends
 on the host:
 
 - Linux with a systemd 254+ user manager, unified cgroup v2, and Linux 5.14+
-  runs the command in a child cgroup of its own delegated systemd user scope
-  in `background.slice`, whose
+  runs the command in its own systemd user scope in `background.slice`, whose
   low CPU weight keeps the desktop session ahead of gated work under contention,
   and owns every descendant, including ones that start their own process group
   or session. Only a process that asks another service manager to start it
@@ -1302,46 +1301,36 @@ command waits its turn for as long as the host stays busy.
 ### Record each run
 
 A process that starts an agent, such as a job runner or a CPU audit, can read
-back what the agent's gated commands waited for and cost by setting
-`QUEST_GATE_RECORD` in the agent's environment to an absolute path. Every
-outermost `quest gate` run on Linux or macOS, including those the agent's
-parallel shells and subagents start, then appends one JSON line to that file,
-however the run ends:
+back what the agent's gated commands waited for by setting `QUEST_GATE_RECORD`
+in the agent's environment to an absolute path. Every outermost `quest gate`
+run, including those the agent's parallel shells and subagents start, then
+appends one JSON line to that file, however the run ends:
 
 ```json
-{"command":["cargo","test"],"directory":"/home/me/src/app","started":"2026-11-12T19:40:01.120Z","admitted":"2026-11-12T19:40:31.452Z","ended":"2026-11-12T19:42:10.008Z","cpuMs":512340,"peakMemory":3221225472,"measured":"cgroup","exit":0,"cancelled":false,"error":null}
+{"command":["cargo","test"],"directory":"/home/me/src/app","started":"2026-11-12T19:40:01.120Z","admitted":"2026-11-12T19:40:31.452Z","unit":"quest-gate-0d6c3f9e-5a51-4c1b-9d0e-2f4b8a7c6e10.scope","exit":0,"cancelled":false,"error":null}
 ```
 
-- `started`, `admitted`, and `ended` give the wait and the wall time. `ended` is
-  when the gate learned that the command's own process exited, within
-  milliseconds, before it stopped what the command left behind. A run cancelled
-  before admission has a null `admitted`.
-- `cpuMs` and `peakMemory` (bytes) are null when the gate never started the
-  command, as when cancelled before admission, and `peakMemory` also where the
-  host cannot say. A command that cannot be found still counts the little its
-  launch used. `measured` names what they
-  count:
-  - `cgroup`: a child cgroup of the command's systemd scope, so every process
-    the command started. Peak memory is its `memory.peak`, which needs Linux
-    5.19 and also counts page cache charged to it.
-  - `children`: on macOS, and Linux without a systemd user manager, the
-    command's own resource usage, a lower bound: it covers the descendants the
-    command waited for, not those the gate kills at the end, such as a leftover
-    background server, and its peak memory is the largest single process's.
+- `started` and `admitted` give the wait. A run cancelled before admission has
+  a null `admitted`.
+- `unit` is the command's systemd user scope, null where the gate owns it
+  another way, such as on macOS or Windows. Once the scope ends, systemd logs
+  `<unit>: Consumed 1.386s CPU time over 1.357s wall clock time, 8.1M memory
+  peak.` to the user journal (`journalctl --user -u <unit>`), but only when the
+  scope used a notable amount, such as a second of CPU; a run with no such line
+  used less.
 - `exit` is the status the gate returns, `cancelled` whether it was cancelled,
-  and `error` the gate's own failure, such as a scope it cannot confirm stopped
-  or counters it cannot read. A command that cannot be found is not one: it
-  exits 127, as in a shell.
+  and `error` the gate's own failure, such as a scope it cannot confirm
+  stopped.
 
 Each line is one write to a file opened for appending, so concurrent gates
 leave only whole lines; give each agent its own file to tell them apart. Nested
-gates write nothing, since their outermost gate already counts their command.
+gates write nothing, since their command runs inside their outermost gate's.
 An unset or empty variable writes nothing, a relative path or a symlink is
 refused, and a file the gate cannot open fails it before the command runs. A
 new file is readable only by its user. A line it cannot write fails the gate
 too, except that a cancelled run exits as it would have without the record.
-Windows refuses the variable for now. The agent's own processes write the
-file, so a record is only as trustworthy as the agent.
+The agent's own processes write the file, so a record is only as trustworthy
+as the agent.
 
 ## Route work by size
 

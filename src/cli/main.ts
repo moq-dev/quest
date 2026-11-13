@@ -149,9 +149,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"descendant that leaves the group or session escapes. Windows owns every descendant through a " +
 				"kill-on-close Job Object. Exits with the command's status, or 128 plus the signal's number once " +
 				"cancelled.\n\n" +
-				"With QUEST_GATE_RECORD naming an absolute path, an outermost gate on Linux or macOS appends one JSON " +
-				"line per run to that file, however the run ends: its command, directory, when it started, was " +
-				"admitted, and ended, its CPU time, peak memory, and exit status. A file it cannot write fails the gate.",
+				"With QUEST_GATE_RECORD naming an absolute path, an outermost gate appends one JSON line per run to " +
+				"that file, however the run ends: its command, directory, when it started and was admitted, its " +
+				"systemd scope, whose journal holds its CPU time and peak memory, and its exit status. A file it " +
+				"cannot write fails the gate.",
 		)
 		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
 		.argument("<command>", "Executable to run")
@@ -906,7 +907,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Run a command in the checkout, restoring it first when released, without the repository-location " +
 				"variables, such as GIT_DIR, that a Git hook exports. The command and its descendants " +
-				"run in a new, delegated systemd user scope; once the command exits, descendants still in the scope " +
+				"run in a new systemd user scope; once the command exits, descendants still in the scope " +
 				"are killed. A `quest gate` inside it runs its command in a scope of its own, bound to this one. " +
 				"When no other supervised run remains, the scratch declared at creation is pruned. Put the whole job, " +
 				"such as an agent session or a script that installs, builds, and tests, in one run.\n\n" +

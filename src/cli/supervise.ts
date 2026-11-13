@@ -1,9 +1,7 @@
 // Linux process ownership for supervised checkout commands and gated ones. Each run gets its own
 // systemd user scope, named once and never reused, so its cgroup holds every descendant that does
 // not ask another service manager to start it. Other hosts fail explicitly; only the gate settles
-// for a process group there (see `group` in gate.ts). The scope is delegated: the command runs in a
-// child cgroup whose counters cover everything it started, and a holder in another keeps the scope,
-// and with it those counters, until the owner has read them.
+// for a process group there (see `group` in gate.ts).
 import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process";
 import { closeSync, existsSync, constants as fs, openSync, readdirSync, readFileSync, watch, writeSync } from "node:fs";
 import { constants, hostname } from "node:os";
@@ -53,30 +51,6 @@ export function alive(owner: Owner): boolean {
 	}
 }
 
-/** What an owner measured of its command, including what that command started. */
-export interface Usage {
-	/** CPU time, in milliseconds. */
-	cpuMs: number;
-	/** Peak memory in bytes, or null where the host cannot say. */
-	peakMemory: number | null;
-	/**
-	 * `cgroup`: a scope's counters, which cover every process in it. `children`: the command's own
-	 * resource usage, which covers only the descendants it waited for, and as peak memory the largest
-	 * single process's.
-	 */
-	measured: "cgroup" | "children";
-}
-
-/** How an owned command ended. */
-export interface Exit {
-	/** Its exit status, 128 plus the signal's number when signalled, or the cancelled status. */
-	status: number;
-	/** Wall-clock milliseconds when the command's own process exited, before its leftovers were stopped. */
-	ended: number;
-	/** Undefined where the owner measures nothing, or lost the count to an enclosing owner's kill. */
-	usage?: Usage;
-}
-
 /** How a scope runs its command. */
 export interface RunOptions {
 	/** The command's environment; Quest's own when omitted. */
@@ -112,47 +86,27 @@ export interface Scopes {
 	 * Run a command in a new scope, then stop its remaining descendants: at once, or, when a
 	 * cancellation signalled the whole scope, once the scope empties or the run is killed, so each
 	 * process can finish its own cleanup. Resolves with the command's exit status, or the cancelled
-	 * status once asked to stop, only once the scope is empty, with the scope's counters. Rejects with
-	 * `Retained` when that cannot be confirmed, and otherwise only when the command never started or
-	 * its counters cannot be read.
+	 * status once asked to stop, only once the scope is empty. Rejects with `Retained` when that
+	 * cannot be confirmed, and otherwise only when the command never started.
 	 */
-	run(unit: string, cwd: string, command: string[], options?: RunOptions): Promise<Exit>;
+	run(unit: string, cwd: string, command: string[], options?: RunOptions): Promise<number>;
 }
 
-/**
- * The command may have started and its scope may still hold processes, so its run stays recorded.
- * `exit` is how the command ended, where its holder reported that before the failure.
- */
-export class Retained extends Error {
-	exit?: Exit;
-}
+/** The command may have started and its scope may still hold processes, so its run stays recorded. */
+export class Retained extends Error {}
 
 export const UNSUPPORTED =
 	"quest worktree run needs Linux 5.14 or later with a systemd user manager (systemd 254 or later) and unified cgroup v2";
 
 /**
- * The shell proves it runs in the scope's own v2 cgroup, creates the child cgroups `holder` and
- * `command`, and waits for the supervisor before it executes the command in `command`. A
- * supervisor that died never acknowledges, so the command never starts. The holder, a subshell
- * that ignores the signals forwarded to every process in the scope, waits in `holder` for the
- * acknowledgement pipe to close, which the supervisor does once it has stopped the command's
- * leftovers and read its counters, so systemd cannot remove the scope first. With both moved out
- * of the scope's root, the memory controller can be enabled below it, so `command` counts its own
- * peak. The command itself stays the process the supervisor started, which `quest agent stop` signals.
+ * The shell proves it runs in the scope's own v2 cgroup, then waits for the supervisor before it
+ * executes the command. A supervisor that died never acknowledges, so the command never starts.
  */
 const handshake =
 	"IFS=: read -r hierarchy controllers path </proc/self/cgroup || exit 125; " +
 	'[ "$hierarchy:$controllers" = 0: ] || exit 125; ' +
-	'scope="/sys/fs/cgroup$path"; mkdir "$scope/holder" "$scope/command" || exit 125; ' +
 	'printf "%s\\n" "$path" >&3; ' +
 	"read -r admitted <&4 || exit 125; " +
-	// Forked twice, so the command never inherits the holder as a child it might wait for.
-	'(echo 0 >"$scope/holder/cgroup.procs" || exit 125; ' +
-	'(trap "" INT TERM HUP; exec </dev/null >/dev/null 2>&1 3>&-; read -r released <&4) &) || exit 125; ' +
-	'echo 0 >"$scope/command/cgroup.procs" || exit 125; ' +
-	'read -r available <"$scope/cgroup.controllers"; ' +
-	'case " $available " in *" memory "*) echo +memory >"$scope/cgroup.subtree_control" || exit 125;; esac; ' +
-	"echo started >&3; " +
 	'exec 3>&- 4<&-; exec "$@"';
 
 function populated(group: string): boolean {
@@ -240,7 +194,6 @@ export function kill(group: string): void {
  */
 function signalGroup(group: string, signal: NodeJS.Signals): void {
 	const signalled = new Set<number>();
-	let failure: unknown;
 	for (let fresh = true; fresh;) {
 		fresh = false;
 		for (const pid of members(group)) {
@@ -250,33 +203,14 @@ function signalGroup(group: string, signal: NodeJS.Signals): void {
 			try {
 				process.kill(pid, signal);
 			} catch (error) {
-				// Such as EPERM from a process running as another user: still signal the rest.
-				if ((error as NodeJS.ErrnoException).code !== "ESRCH") failure ??= error;
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
 			}
 		}
 	}
-	if (failure) throw failure;
-}
-
-/**
- * The CPU time and peak memory of every process that ran in the command's cgroup `inner`, which
- * last only while the holder keeps the scope from being removed. `memory.peak` needs Linux 5.19
- * and the memory controller.
- */
-function counters(inner: string): Usage {
-	const usage = /^usage_usec (\d+)$/m.exec(readFileSync(join(inner, "cpu.stat"), "utf8"))?.[1];
-	if (usage === undefined) throw new Error(`cannot read the CPU use of ${inner}`);
-	let peakMemory: number | null = null;
-	try {
-		peakMemory = Number(readFileSync(join(inner, "memory.peak"), "utf8"));
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
-	return { cpuMs: Math.round(Number(usage) / 1000), peakMemory, measured: "cgroup" };
 }
 
 /** The processes in the cgroup and every cgroup below it; none once it is removed. */
-function members(group: string): number[] {
+export function members(group: string): number[] {
 	try {
 		const own = readFileSync(join(group, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number);
 		const children = readdirSync(group, { withFileTypes: true }).filter((entry) => entry.isDirectory());
@@ -362,8 +296,6 @@ export const systemdScopes: Scopes = {
 				"--scope",
 				"--quiet",
 				"--collect",
-				// The holder creates the command's child cgroup (see `handshake`).
-				"--property=Delegate=yes",
 				`--unit=${unit}`,
 				...bound,
 				...(options.slice ? [`--slice=${options.slice}`] : []),
@@ -408,8 +340,8 @@ interface Containment {
 
 /**
  * Start the handshake shell through `launch`, admit the command once the shell reports a cgroup
- * that `owns` accepts, and once the command exits, kill whatever is left of it, read the counters,
- * release the holder, and wait until the scope is empty (see `Scopes.run`).
+ * that `owns` accepts, and once the command exits, kill whatever is left in that cgroup and wait
+ * until it is empty (see `Scopes.run`).
  */
 function contain(
 	launch: string[],
@@ -418,7 +350,7 @@ function contain(
 	cwd: string,
 	command: string[],
 	options: RunOptions,
-): Promise<Exit> {
+): Promise<number> {
 	return new Promise((resolve, reject) => {
 		const own = options.cancel ? undefined : interrupts();
 		const cancel = options.cancel ?? own!;
@@ -431,12 +363,8 @@ function contain(
 		options.spawned?.(child as ChildProcessWithoutNullStreams);
 		const report = child.stdio[3] as Readable;
 		const admission = (child.stdio as unknown as (Writable | null)[])[4]!;
-		// The scope's cgroup, and the command's child cgroup in it.
 		let group: string | undefined;
-		let inner: string | undefined;
 		let admitted = false;
-		// Set once the command runs in `inner`, beside the holder.
-		let started = false;
 		let interrupted = 0;
 		let failure: Error | undefined;
 		// Set once every process in the cgroup was asked to stop; aborted once they no longer get time to.
@@ -451,11 +379,13 @@ function contain(
 			const name = requested(cancel.signal);
 			signalled = true;
 			try {
-				// The holder ignores it; every other process runs its own handling.
 				signalGroup(group!, name);
 			} catch (error) {
-				// The rest got the signal; one that did not is no reason to wait for the scope to empty.
-				process.stderr.write(`quest: cannot signal every process in ${describe.name}: ${error}\n`);
+				// Such as EPERM from a process running as another user: signal what this process can.
+				process.stderr.write(
+					`quest: cannot signal every process in ${describe.name}, only its command: ${error}\n`,
+				);
+				child.kill(name);
 				drain.abort();
 			}
 		};
@@ -464,51 +394,33 @@ function contain(
 			// The enclosing owner kills this cgroup at its own second signal (see `bound`).
 			if (describe.bound && received(cancel.signal)) return;
 			drain.abort();
-			// Once the command runs, the holder outlives it, so the scope's counters can still be read.
-			const target = started ? inner : group;
-			if (target) kill(target);
+			if (group) kill(group);
 		};
 		const unfollow = follow(cancel, stop, terminate);
 		const cleanup = () => {
 			unfollow();
 			own?.close();
 		};
-		const retained = (error: unknown) =>
-			new Retained(
-				`cannot confirm that ${describe.name} stopped: ${error instanceof Error ? error.message : error}`,
-			);
 
 		admission.on("error", (error: NodeJS.ErrnoException) => {
 			if (error.code !== "EPIPE") failure = error;
 		});
 		let text = "";
-		// Every writer closes the report before the command runs, so it ends however the run goes.
-		const reported = new Promise<void>((resolve) => {
-			report.once("close", resolve);
-			report.once("error", () => resolve());
-		});
 		report.setEncoding("utf8");
-		// The shell reports the scope's cgroup, then `started` once the command is in its own.
 		report.on("data", (data: string) => {
 			text += data;
-			for (let end = text.indexOf("\n"); end >= 0; end = text.indexOf("\n")) {
-				const line = text.slice(0, end);
-				text = text.slice(end + 1);
-				if (group === undefined) {
-					// A unique name can never name a later cgroup, so this path stays this run's.
-					if (!line.startsWith("/") || !owns(line)) {
-						failure = new Error(`${describe.unsupported}: the command ran outside its cgroup (${line})`);
-						admission.destroy();
-						return;
-					}
-					group = join("/sys/fs/cgroup", line);
-					inner = join(group, "command");
-					if (interrupted) return;
-					admitted = true;
-					admission.write("admitted\n");
-				} else if (line === "started" && !started) started = true;
-				else failure ??= new Error(`${describe.launcher} reported an unexpected line: ${line}`);
+			if (group !== undefined || !text.endsWith("\n")) return;
+			const path = text.slice(0, -1);
+			// A unique name can never name a later cgroup, so this path stays this run's.
+			if (!path.startsWith("/") || path.includes("\n") || !owns(path)) {
+				failure = new Error(`${describe.unsupported}: the command ran outside its cgroup (${path})`);
+				admission.destroy();
+				return;
 			}
+			group = join("/sys/fs/cgroup", path);
+			if (interrupted) return;
+			admitted = true;
+			admission.end("admitted\n");
 		});
 
 		child.once("error", (error) => {
@@ -520,68 +432,29 @@ function contain(
 			);
 		});
 		child.once("exit", async (code, signal) => {
-			const exit: Exit = {
-				status: code ?? 128 + constants.signals[signal!],
-				ended: Date.now(),
-			};
-			// A cancellation that arrives during the cleanup below still decides the status.
-			const settle = () => {
-				if (interrupted) exit.status = interrupted;
-			};
 			try {
-				// An exit can arrive before the report it follows, such as `started` from a short command.
-				await reported;
 				// Descendants that outlive the command are orphans of this run: stop them.
 				if (group) {
-					let counted: unknown;
 					try {
-						if (started) {
-							// Every process got the signal, so let each finish its own cleanup, even one
-							// that outlives the wrappers that exited first, until a second signal kills them.
-							if (signalled) await vacated(inner!, drain.signal);
-							kill(inner!);
-							await vacated(inner!);
-							try {
-								exit.usage = counters(inner!);
-							} catch (error) {
-								counted = error;
-							}
-						}
-					} catch (error) {
-						throw Object.assign(retained(error), { exit });
-					} finally {
-						// The holder reads end-of-file and leaves, so the scope empties.
-						if (!admission.destroyed) admission.end();
-					}
-					try {
-						// Before the command started, the signalled processes still get their cleanup.
-						if (signalled && !started) await vacated(group, drain.signal);
+						// Every process got the signal, so let each finish its own cleanup, even one that
+						// outlives the wrappers that exited first, until a second signal kills them.
+						if (signalled) await vacated(group, drain.signal);
 						kill(group);
 						await vacated(group);
 						await describe.emptied();
 					} catch (error) {
-						throw Object.assign(retained(error), { exit });
-					}
-					if (counted)
-						throw Object.assign(
-							new Error(
-								`cannot read the counters of ${describe.name}: ${counted instanceof Error ? counted.message : counted}`,
-							),
-							{ exit },
+						throw new Retained(
+							`cannot confirm that ${describe.name} stopped: ${error instanceof Error ? error.message : error}`,
 						);
+					}
 				}
 				if (failure) throw failure;
 				if (!admitted && !interrupted)
 					throw new Error(
 						`${describe.unsupported}: ${describe.launcher} exited with ${code ?? signal} before the command started`,
 					);
-				// The shell's own failure; one killed before it ran the command reports that signal instead.
-				if (admitted && !started && !interrupted && code === 125)
-					throw new Error(`${describe.unsupported}: the command never entered its cgroup`);
-				settle();
-				resolve(exit);
+				resolve(interrupted || (code ?? 128 + constants.signals[signal!]));
 			} catch (error) {
-				settle();
 				reject(error);
 			} finally {
 				cleanup();

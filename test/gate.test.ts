@@ -43,7 +43,7 @@ import {
 } from "../src/cli/gate";
 import { forwards, foregroundStat, statProcess } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
-import { alive as ownerAlive, questScope, systemdScopes } from "../src/cli/supervise";
+import { alive as ownerAlive, questScope } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
 
 // Linux reports a /proc read that races a process's exit as ESRCH rather than ENOENT, so fail
@@ -739,7 +739,7 @@ function cancellation() {
 test("a command runs in place with the given environment and its exact exit status", async () => {
 	const script = "process.exit(process.env.QUEST_GATE_ADMITTED === '1' ? 7 : 1)";
 	const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
-	expect(await exitStatus(direct)([process.execPath, "-e", script], env, cancellation().cancel)).toBe(7);
+	expect(await direct([process.execPath, "-e", script], env, cancellation().cancel)).toBe(7);
 });
 
 test("a nested gate runs at once and keeps the exact exit status", async () => {
@@ -782,11 +782,7 @@ test.runIf(process.platform === "linux")("a gated command's piped output blocks"
 test("a command cancelled before listener registration still stops", async () => {
 	const { stop, cancel } = cancellation();
 	stop.abort();
-	const result = await exitStatus(direct)(
-		[process.execPath, "-e", "setInterval(() => {}, 1000)"],
-		process.env,
-		cancel,
-	);
+	const result = await direct([process.execPath, "-e", "setInterval(() => {}, 1000)"], process.env, cancel);
 	expect(result).not.toBe(0);
 });
 
@@ -794,11 +790,7 @@ test("a command cancelled before listener registration still stops", async () =>
 test.skipIf(process.platform === "win32")("cancellation forwards the received signal to the command", async () => {
 	const { stop, cancel } = cancellation();
 	stop.abort("SIGHUP");
-	const result = await exitStatus(direct)(
-		[process.execPath, "-e", "setInterval(() => {}, 1000)"],
-		process.env,
-		cancel,
-	);
+	const result = await direct([process.execPath, "-e", "setInterval(() => {}, 1000)"], process.env, cancel);
 	expect(result).toBe(128 + constants.signals.SIGHUP);
 });
 
@@ -862,22 +854,17 @@ function descendant(dir: string, rest: string, { leave = false } = {}) {
 }
 
 /** A systemd scope owner with a new unit, as the gate names one. */
-const scoped = exitStatus((command, env, cancel) => scope(`quest-gate-${randomUUID()}.scope`)(command, env, cancel));
+const scoped: Owner = (command, env, cancel) => scope(`quest-gate-${randomUUID()}.scope`)(command, env, cancel);
 
-/** Run through `owner` and resolve with the exit status alone. */
-function exitStatus(owner: Owner): (...args: Parameters<Owner>) => Promise<number> {
-	return (...args) => owner(...args).then(({ status }) => status);
-}
-
-const owners: [string, ReturnType<typeof exitStatus>][] =
+const owners: [string, Owner][] =
 	process.platform === "linux"
 		? [
 				["a systemd scope", scoped],
-				["a process group", exitStatus(group)],
+				["a process group", group],
 			]
 		: process.platform === "win32"
 			? []
-			: [["a process group", exitStatus(group)]];
+			: [["a process group", group]];
 
 const bin = fileURLToPath(new URL("../src/cli/bin.ts", import.meta.url));
 // Bun reads the checkout's config only from its working directory, which Just changes.
@@ -994,21 +981,6 @@ describe.each(owners)("an owner using %s", (_name, run) => {
 	});
 });
 
-test.skipIf(process.platform !== "linux")(
-	"a cancellation during the scope's cleanup still decides the status",
-	async () => {
-		const { stop, cancel } = cancellation();
-		const exit = await systemdScopes.run(`quest-gate-${randomUUID()}.scope`, tempDir(), ["true"], {
-			cancel,
-			within: null,
-			// Listeners run before the owner's exit handler resumes, so this aborts after the command's
-			// own status is known and before its scope is cleaned up.
-			spawned: (child) => child.once("exit", () => queueMicrotask(() => stop.abort("SIGINT"))),
-		});
-		expect(exit.status).toBe(128 + constants.signals.SIGINT);
-	},
-);
-
 /**
  * Just, as a recipe like `[script("quest", "gate", "--", "bash")]` has it, runs an outermost gate
  * that owns `command` through a process group, as on macOS or Linux without a systemd user
@@ -1031,7 +1003,7 @@ function outermostUnderJust(dir: string, command: string[]) {
 		for (const name of ["SIGINT", "SIGTERM", "SIGHUP"])
 			process.on(name, () => writeFileSync(${JSON.stringify(dir)} + "/handled-" + ++handled, ""));
 		writeFileSync(${JSON.stringify(pid)}, String(process.pid));
-		const { status } = await group(${JSON.stringify(command)}, process.env, cancel);
+		const status = await group(${JSON.stringify(command)}, process.env, cancel);
 		cancel.close();
 		process.exit(cancel.signal.aborted ? cancelled(cancel.signal) : status);`,
 	);
@@ -1116,29 +1088,13 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 		await until(() => stopped(pid()));
 	});
 
-	test("runs the command as the process it spawned, which a signal to that PID reaches", async () => {
-		const dir = tempDir();
-		const ready = join(dir, "ready");
-		// What `quest agent stop` does: it signals the PID the supervisor spawned, not the scope.
-		let pid: number | undefined;
-		const result = systemdScopes.run(
-			`quest-gate-${randomUUID()}.scope`,
-			dir,
-			["/bin/sh", "-c", `trap 'exit 3' TERM; : > ${quote(ready)}; while :; do sleep 0.1; done`],
-			{ cancel: cancellation().cancel, within: null, spawned: (child) => (pid = child.pid) },
-		);
-		await created(ready);
-		process.kill(pid!, "SIGTERM");
-		expect((await result).status).toBe(3);
-	});
-
 	test("reports its CPU use to the gate until it ends", async () => {
 		const host = fileHost(tempDir());
 		const unit = `quest-gate-${randomUUID()}.scope`;
 		const done = join(tempDir(), "done");
 		expect(host.usage(unit)).toBeUndefined();
 		const spin = ["/bin/sh", "-c", `while [ ! -e ${quote(done)} ]; do :; done`];
-		const result = exitStatus(scope(unit))(spin, process.env, cancellation().cancel);
+		const result = scope(unit)(spin, process.env, cancellation().cancel);
 		await until(() => (host.usage(unit) ?? 0) > 0);
 		writeFileSync(done, "");
 		expect(await result).toBe(0);
@@ -1168,7 +1124,7 @@ async function insideScope(launch: (command: string[], env: NodeJS.ProcessEnv) =
 		if (${run}) {
 			const never = new AbortController().signal;
 			const command = "cat /proc/self/cgroup > " + dir + "/cgroup; systemctl --user show --property=BindsTo --value " + unit + " > " + dir + "/binds; sleep 1000 & echo $! > " + dir + "/pid; exit 7";
-			const { status } = await own(["/bin/sh", "-c", command], process.env, { signal: never, kill: never });
+			const status = await own(["/bin/sh", "-c", command], process.env, { signal: never, kill: never });
 			const path = readFileSync(dir + "/cgroup", "utf8").trim().slice(3);
 			const pid = readFileSync(dir + "/pid", "utf8").trim();
 			const ps = spawnSync("ps", ["-o", "stat=", "-p", pid], { encoding: "utf8" });
@@ -1191,7 +1147,7 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 		// Bound to the enclosing scope, a gate's scope here, so that scope's owner stops it too.
 		expect(report.binds).toMatch(/^quest-gate-[0-9a-f-]+\.scope$/);
 		// A sibling, so only the gated command yields the CPU, not the rest of the enclosing scope.
-		expect(report.path).toMatch(/\/background\.slice\/quest-gate-[0-9a-f-]+\.scope\/command$/);
+		expect(report.path).toMatch(/\/background\.slice\/quest-gate-[0-9a-f-]+\.scope$/);
 	});
 
 	test("is stopped when the enclosing scope's owner kills it", async () => {
@@ -1241,7 +1197,7 @@ describe.runIf(process.platform === "linux")("a gate inside a Quest scope", () =
 					stop.abort(new Error("cancelled by its caller"));
 				}, 25);
 			}
-			const { status } = await own(${JSON.stringify(command)}, process.env, cancel);
+			const status = await own(${JSON.stringify(command)}, process.env, cancel);
 			signals.close();
 			process.exit(cancel.signal.aborted ? cancelled(cancel.signal) : status);`,
 		);
@@ -1330,9 +1286,9 @@ describe("the Windows job stub", () => {
 		const env: NodeJS.ProcessEnv = { ...process.env, EXPECTED: "keep" };
 		delete env.BUN_BE_BUN;
 		const command = [process.execPath, "-e", script];
-		expect(await exitStatus(job)(command, { ...env, BUN_BE_BUN: "keep" }, cancellation().cancel)).toBe(7);
+		expect(await job(command, { ...env, BUN_BE_BUN: "keep" }, cancellation().cancel)).toBe(7);
 		const unset = "process.exit(process.env.BUN_BE_BUN === undefined ? 7 : 1)";
-		expect(await exitStatus(job)([process.execPath, "-e", unset], env, cancellation().cancel)).toBe(7);
+		expect(await job([process.execPath, "-e", unset], env, cancellation().cancel)).toBe(7);
 	});
 
 	test("passes the command's arguments as running it directly would", async () => {
@@ -1342,7 +1298,7 @@ describe("the Windows job stub", () => {
 		const script = "require('node:fs').writeFileSync(process.env.OUT, JSON.stringify(process.argv.slice(1)))";
 		const argv = async (owner: Owner, out: string) => {
 			const env = { ...process.env, OUT: join(dir, out) };
-			expect((await owner([process.execPath, "-e", script, ...args], env, cancellation().cancel)).status).toBe(0);
+			expect(await owner([process.execPath, "-e", script, ...args], env, cancellation().cancel)).toBe(0);
 			return JSON.parse(readFileSync(env.OUT, "utf8"));
 		};
 		const expected = await argv(direct, "direct");
@@ -1351,7 +1307,7 @@ describe("the Windows job stub", () => {
 	});
 
 	test("reports a command that cannot start as a shell would", async () => {
-		expect(await exitStatus(job)([join(tempDir(), "missing")], process.env, cancellation().cancel)).toBe(127);
+		expect(await job([join(tempDir(), "missing")], process.env, cancellation().cancel)).toBe(127);
 	});
 
 	test("hands the command the caller's environment, not the working directory's .env files", async () => {
@@ -1366,7 +1322,7 @@ describe("the Windows job stub", () => {
 		try {
 			// The command is Bun too, so it must not load them either.
 			const command = [process.execPath, "--no-env-file", "-e", script];
-			expect(await exitStatus(job)(command, env, cancellation().cancel)).toBe(0);
+			expect(await job(command, env, cancellation().cancel)).toBe(0);
 		} finally {
 			process.chdir(cwd);
 		}
@@ -1400,7 +1356,7 @@ describe.runIf(process.platform === "win32")("a job object", () => {
 
 	test("keeps the exact exit status and stops a detached descendant", async () => {
 		const { command, pid } = detached(tempDir(), "process.exit(7);");
-		expect(await exitStatus(job)(command, process.env, cancellation().cancel)).toBe(7);
+		expect(await job(command, process.env, cancellation().cancel)).toBe(7);
 		await until(() => !running(pid()));
 	});
 
@@ -1412,7 +1368,7 @@ describe.runIf(process.platform === "win32")("a job object", () => {
 			`require('node:fs').writeFileSync(${JSON.stringify(ready)}, ''); setInterval(() => {}, 1000);`,
 		);
 		const { kill, cancel } = cancellation();
-		const result = exitStatus(job)(command, process.env, cancel);
+		const result = job(command, process.env, cancel);
 		await created(ready);
 		kill.abort();
 		expect(await result).not.toBe(0);
@@ -1436,7 +1392,7 @@ describe.skipIf(process.platform === "win32")("a process group", () => {
 		);
 		const { stop, cancel } = cancellation();
 		const env = { ...process.env, QUEST_GATE_ADMITTED: "1" };
-		const result = exitStatus(group)([process.execPath, bin, "gate", process.execPath, child], env, cancel);
+		const result = group([process.execPath, bin, "gate", process.execPath, child], env, cancel);
 		await created(ready);
 		stop.abort("SIGINT");
 		expect(await result).toBe(128 + constants.signals.SIGINT);
@@ -1445,7 +1401,7 @@ describe.skipIf(process.platform === "win32")("a process group", () => {
 
 	test("leaves a descendant that started its own session", async () => {
 		const { command, pid } = descendant(tempDir(), "exit 3", { leave: true });
-		expect(await exitStatus(group)(command, process.env, cancellation().cancel)).toBe(3);
+		expect(await group(command, process.env, cancellation().cancel)).toBe(3);
 		try {
 			expect(stopped(pid())).toBe(false);
 		} finally {
@@ -1549,20 +1505,6 @@ test("gate rejects unknown options before the executable and forwards flags afte
 });
 
 describe.skipIf(process.platform === "win32")("the run record", () => {
-	/** A Bun command that spins until it has used `ms` of CPU, reports when it ran and its CPU, and exits 3. */
-	function spinner(dir: string, ms = 800) {
-		const out = join(dir, "spun.json");
-		const script =
-			`const start = Date.now(); while (process.cpuUsage().user < ${ms * 1000}); ` +
-			`const { user, system } = process.cpuUsage(); ` +
-			`require("node:fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify({ start, end: Date.now(), cpuMs: (user + system) / 1000 })); ` +
-			`process.exit(3);`;
-		return {
-			command: [process.execPath, "-e", script],
-			spun: (): { start: number; end: number; cpuMs: number } => JSON.parse(readFileSync(out, "utf8")),
-		};
-	}
-
 	/** A ledger of the test's own that admits at once, or never when `full`. */
 	const ledger = (full = false): Host => ({
 		...fileHost(tempDir()),
@@ -1588,45 +1530,26 @@ describe.skipIf(process.platform === "win32")("the run record", () => {
 		(process.listeners(name).at(-1) as () => void)();
 	}
 
-	test("an outermost run appends one line with its wait, CPU, wall time, and exit", async () => {
+	test("an outermost run appends one line with its wait, scope, and exit", async () => {
 		const dir = tempDir();
 		const file = join(dir, "record.jsonl");
+		const cgroup = join(dir, "cgroup");
 		outermost(file);
-		const { command, spun } = spinner(dir);
-		const measured = owner(process.env).unit === undefined ? "children" : "cgroup";
+		const scoped = owner(process.env).unit !== undefined;
+		const command = ["/bin/sh", "-c", `cat /proc/self/cgroup > ${quote(cgroup)} 2>/dev/null; exit 3`];
 		const before = Date.now();
 		expect(await gate(command, { host: ledger() })).toBe(3);
 		const after = Date.now();
-		const ran = spun();
 		const [line, ...rest] = lines(file);
 		expect(rest).toEqual([]);
 		expect(statSync(file).mode & 0o777).toBe(0o600);
-		expect(line).toMatchObject({
-			command,
-			directory: process.cwd(),
-			exit: 3,
-			cancelled: false,
-			error: null,
-			measured,
-		});
-		const at = (field: string) => Date.parse(line[field]);
-		expect([before, at("started"), at("admitted"), ran.start]).toEqual(
-			[before, at("started"), at("admitted"), ran.start].sort((a, b) => a - b),
-		);
-		expect([ran.end, at("ended"), after]).toEqual([ran.end, at("ended"), after].sort((a, b) => a - b));
-		// The command ends before the gate's first CPU sample, and its whole use still counts. The
-		// command's own count leaves out only its exec and the owner's few processes around it.
-		expect(line.cpuMs).toBeGreaterThanOrEqual(Math.floor(ran.cpuMs));
-		expect(line.cpuMs).toBeLessThan(ran.cpuMs + 1000);
-		// A scope's peak needs Linux 5.19 and the memory controller in the slice gated scopes run in.
-		const uid = process.getuid!();
-		const slice = `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/background.slice`;
-		const peak =
-			measured === "children" ||
-			(existsSync(join(slice, "memory.peak")) &&
-				readFileSync(join(slice, "cgroup.subtree_control"), "utf8").split(/\s+/).includes("memory"));
-		if (peak) expect(line.peakMemory).toBeGreaterThan(0);
-		else expect(line.peakMemory).toBeNull();
+		expect(line).toMatchObject({ command, directory: process.cwd(), exit: 3, cancelled: false, error: null });
+		const times = [before, Date.parse(line.started), Date.parse(line.admitted), after];
+		expect(times).toEqual([...times].sort((a, b) => a - b));
+		// The unit names the scope the command actually ran in, so a reader can find its journal lines.
+		if (scoped)
+			expect(readFileSync(cgroup, "utf8").trim()).toMatch(new RegExp(`/${line.unit.replaceAll(".", "\\.")}$`));
+		else expect(line.unit).toBeNull();
 	});
 
 	test("a nested gate records nothing, and an empty variable is unset", async () => {
@@ -1641,7 +1564,7 @@ describe.skipIf(process.platform === "win32")("the run record", () => {
 		expect(readdirSync(dir)).toEqual([]);
 	});
 
-	test("a run cancelled while queued is recorded with no admission", async () => {
+	test("a run cancelled while queued is recorded with no admission or scope", async () => {
 		const dir = tempDir();
 		const file = join(dir, "record.jsonl");
 		const ran = join(dir, "ran");
@@ -1655,9 +1578,7 @@ describe.skipIf(process.platform === "win32")("the run record", () => {
 		expect(lines(file)).toEqual([
 			expect.objectContaining({
 				admitted: null,
-				cpuMs: null,
-				peakMemory: null,
-				measured: null,
+				unit: null,
 				exit: 128 + constants.signals.SIGHUP,
 				cancelled: true,
 				error: null,
@@ -1700,20 +1621,6 @@ describe.skipIf(process.platform === "win32")("the run record", () => {
 			}
 		},
 	);
-
-	test("a process group drains what its command writes to the token", async () => {
-		const command = ["/bin/sh", "-c", "head -c 1048576 /dev/zero >&3; exit 4"];
-		expect((await group(command, process.env, cancellation().cancel)).status).toBe(4);
-	});
-
-	test("a process group measures its command's own usage", async () => {
-		const { command, spun } = spinner(tempDir());
-		const exit = await group(command, process.env, cancellation().cancel);
-		expect(exit.status).toBe(3);
-		expect(exit.usage).toMatchObject({ measured: "children" });
-		expect(exit.usage!.cpuMs).toBeGreaterThanOrEqual(Math.floor(spun().cpuMs));
-		expect(exit.usage!.peakMemory).toBeGreaterThan(0);
-	});
 
 	test("concurrent gates leave only whole lines", async () => {
 		const dir = tempDir();

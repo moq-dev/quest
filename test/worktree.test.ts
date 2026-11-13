@@ -41,13 +41,7 @@ const repository: (path: string) => string = template((dir) => {
 
 /** Scopes that are never live and whose runs exit at once, except where `overrides` says otherwise. */
 function stubScopes(overrides: Partial<Scopes>): Scopes {
-	return {
-		check() {},
-		live: () => false,
-		run: () => Promise.resolve({ status: 0, ended: 0 }),
-		stop: async () => {},
-		...overrides,
-	};
+	return { check() {}, live: () => false, run: () => Promise.resolve(0), stop: async () => {}, ...overrides };
 }
 /** Scopes whose runs finish when the test says so, and stay live while listed until stopped. */
 function fakeScopes() {
@@ -55,7 +49,7 @@ function fakeScopes() {
 	const finish = new Map<string, (code: number) => void>();
 	const scopes = stubScopes({
 		live: (unit) => live.has(unit),
-		run: (unit) => new Promise((resolve) => finish.set(unit, (status) => resolve({ status, ended: 0 }))),
+		run: (unit) => new Promise((resolve) => finish.set(unit, resolve)),
 		stop: async (unit) => void live.delete(unit),
 	});
 	return { live, finish, scopes };
