@@ -15,7 +15,7 @@ The package exports, beside `./core`, a module that reads both through GitHub's 
 
 Agent's choices, for the implementer to revisit:
 
-- Split the GitHub client in `src/cli/github.ts`: requests, GraphQL, paging, retries, and the deadline move to `src/github/`, which already holds code shared with a Worker (`checks.ts`), and the CLI keeps reading remotes and resolving its token. `GitHubDependencies` (`fetch`, `now`, `sleep`, `token`, `warn`) already fits a Worker.
+- Split the GitHub client in `src/cli/github.ts`: requests, GraphQL, paging, retries, and the deadline move to `src/github/`, which already holds GitHub logic with no `node:` imports (`checks.ts`, `merge.ts`), and the CLI keeps reading remotes and resolving its token. `GitHubDependencies` (`fetch`, `now`, `sleep`, `token`, `warn`) already fits a Worker.
 - Move `pullRequestStatus` there with what it calls: the summary, `classifyCheck`, the ejection reader and `EJECTED`, `pinned`, the review record's comparison, `enabledHead` and `headBefore`, and the read half of `readHoldStatus` with what it calls (`ago`, `repositoryPath`, and the read side of `Labels`), moving each out of its `node:`-importing module.
 - Claims: `held` takes the upstream's branch tips as a parameter but reads the head fork's through `git`; the library form takes the repository and head fork as `owner/repo` and reads tips through GitHub's matching-refs API when not given, so only finding the upstream through `git` remotes stays in the CLI.
 - Export the module as `./github`, type-checked with `types: []` like `src/core`, so a stray `node:` import fails `just check`. `src/github/models.ts` imports `src/cli/models.ts`, which reaches `node:` modules: move `models.ts` to `src/cli`, keeping agent routing out of `src/core`.

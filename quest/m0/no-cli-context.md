@@ -14,9 +14,10 @@ reviews need its dev shell.
 ## Plan
 
 Decided 2026-11-12 (user, /quest-plan), after trimming Pullfrog's per-repo
-learnings: five moq-dev repositories had learnings that only worked around
-`quest context` failing on Pullfrog's runner, which has no Nix and no
-`quest`.
+learnings: studio, rust2, quest, and web-transport had learnings that worked
+around a missing `quest`, `nix`, or `just` on Pullfrog's runner, which has
+no Nix and no `quest`. Rind's worked around its test vectors instead, which
+[pullfrog-setup](/quest/m0/pullfrog-setup.md) handles.
 
 - How should an agent without the CLI get the rules?
   - ✅ Both: a fallback in the reference line for any agent, and a setup step
@@ -28,11 +29,14 @@ Recommended: extend `REFERENCE_LINE` in `src/core/init.ts` with one clause,
 such as "or, where `quest` is not installed, read
 https://github.com/moq-dev/quest/blob/main/assets/CONTEXT.md". It stays one
 line under the `Quests: ` marker. That copy may be newer than a repository's
-pinned version, which is acceptable for review bots. Keep the line agent- and
-host-neutral: it names no bot.
+pinned version, which the decision above accepts for any agent without the
+CLI, not only review bots, since the fallback is for any agent. Keep the line
+agent- and host-neutral: it names no bot.
 
-Roll the new line out to the moq-dev repositories that install Quest by
-bumping their pin and running `quest init`. If
-[worker-leftovers](/quest/m1/worker-leftovers.md) has removed
-`OLD_REFERENCE_LINES` by then, init leaves the old line as a reworded one, so
-edit it by hand in the same PRs.
+Roll the new line out to the moq-dev repositories that install Quest, this
+one included, by editing their `Quests: ` line by hand in the PRs that bump
+their pin. `quest init` will not do it: `appendLine` in `src/core/init.ts`
+replaces only a line listed in `OLD_REFERENCE_LINES`, which the current line
+is not, and keeps any other line under the marker as a reworded one. Add no
+entry to that table, since [worker-leftovers](/quest/m1/worker-leftovers.md)
+deletes it under the no-shims rule.
