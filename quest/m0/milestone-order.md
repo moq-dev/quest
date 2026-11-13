@@ -29,8 +29,16 @@ Decided 2026-11-13 (user, /quest-plan):
 - What about the links already on main in moq, moq.pro, and rind?
   - ✅ Fix them now, in one PR per repository, before this rule ships
     (rejected: list them here and leave them to each repository's pin bump):
-    [moq-dev/moq#8645](https://github.com/moq-dev/moq/pull/8645) and
+    [moq-dev/moq#8637](https://github.com/moq-dev/moq/pull/8637), the
+    pre-cut audit, which supersedes the closed moq-dev/moq#8645, and
     [moq-dev/moq.pro#3992](https://github.com/moq-dev/moq.pro/pull/3992).
+- Challenged the same day: moq splits m1 and m2 by kind, not priority, and
+  its 2026-11-12 audit kept additive m1 quests requiring breaking m2 work on
+  purpose. Should ranking instead give a blocker its dependents' earliest
+  milestone?
+  - ✅ Keep the check rule (user: "I definitely don't want earlier milestones
+    blocked on later milestones") (rejected: ranking inheritance instead;
+    both). moq moves those quests to m3.
     rind's one link goes when
     [kixel-ai/rind#606](https://github.com/kixel-ai/rind/pull/606) merges
     and deletes the quest it points to. Before this rule ships, re-scan
