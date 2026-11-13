@@ -23,7 +23,7 @@ Decided 2026-11-11 (user, /quest-plan,
     it into quest-specific reporting; fixing quest's own reader and keeping
     ccusage
 - Pin token-max as a flake input, the way the other consumers pin quest,
-  until its npm release.
+  until its 0.1.0 release.
 
 The audit found today's failures:
 

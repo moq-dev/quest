@@ -28,11 +28,13 @@ unscoped npm name.
 Amended 2026-11-12 (maintainer, in token-max's own plan): token-max moved
 to the kixel-ai organization
 ([kixel-ai/token-max#83](https://github.com/kixel-ai/token-max/pull/83))
-and was rewritten in Rust, superseding npm distribution. Its 0.1.0 is to ship on
-crates.io with prebuilt binaries, and
-`curl -LsSf https://max.kixel.ai/run.sh | sh` runs `token-max doctor` once
-without installing; point `SETUP.md` at that line.
+and was rewritten in Rust, superseding the 2026-11-06 npm plan and its
+`npx` and `bunx` commands. Its 0.1.0 is to ship on crates.io, with prebuilt
+binaries on its GitHub Release, and
+`curl -LsSf https://max.kixel.ai/run.sh | sh` downloads one and runs
+`token-max doctor` once, with no Rust toolchain; point `SETUP.md` at that
+line.
 
 ## Waiting
 
-- kixel-ai/token-max: publish 0.1.0 and serve `run.sh`; check `cargo search token-max` lists 0.1.0 and `curl -fsSI https://max.kixel.ai/run.sh` succeeds
+- kixel-ai/token-max: publish 0.1.0 and serve `run.sh`; check `curl -fsS https://crates.io/api/v1/crates/token-max | jq '.crate | {max_version, repository}'` shows 0.1.0 from `https://github.com/kixel-ai/token-max`, and `curl -fsSI https://max.kixel.ai/run.sh` succeeds
