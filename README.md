@@ -1688,9 +1688,9 @@ agent, before claiming the worktree, and a coordinator runs `quest agent admit
   agent `start` or `resume` runs stops counting when it exits. As in the gate,
   a host loaded only by work no gate holds still starts one agent at a time.
 - The account has room while, in each usage window its harness reports, the
-  usage spent plus what this agent and the harness's agents in flight on this
+  usage spent plus what this agent and the account's agents in flight on this
   host are expected to spend stays within the window. Codex reports its windows
-  in its session logs; an agent's expected share is the token-weighted mean
+  in its session logs, read afresh at each decision; an agent's expected share is the token-weighted mean
   share of this host's sessions since the window opened, so a host with no
   history there expects none. Claude Code reports its windows only to an
   interactive session's status line, so its agents are admitted on the host

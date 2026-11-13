@@ -27,7 +27,7 @@ export interface Admission {
 	queued?: boolean;
 	start?: string;
 	cores?: number;
-	/** In the agents' ledger (see admission.ts), the harness of the agent this entry admitted. */
+	/** In the agents' ledger (see admission.ts), the account of the agent this entry admitted, or its harness. */
 	agent?: string;
 }
 

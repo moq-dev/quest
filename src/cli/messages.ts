@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { discoveryEnv } from "./git";
 import { githubRepository } from "./github";
-import { claudeLogs, eachLine, parseLine } from "./usage";
+import { eachLine } from "./lines";
+import { claudeLogs, parseLine } from "./usage";
 
 /** One message a person typed. */
 export interface Message {

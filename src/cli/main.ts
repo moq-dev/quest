@@ -1094,7 +1094,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"adds no gated load until its first build; an agent start or resume runs counts only until it exits. Agents " +
 				"already running are never paused.\n\n" +
 				"The account has room while, in each usage window its harness reports, the usage spent plus what this " +
-				"agent and the harness's agents in flight on this host are expected to spend stays within the window. " +
+				"agent and the account's agents in flight on this host are expected to spend stays within the window. " +
 				"Codex reports its windows in its session logs, read from $CODEX_HOME or ~/.codex, and an agent's " +
 				"expected share is the token-weighted mean share of this host's sessions since the window opened. " +
 				"Claude Code reports its windows to no command, so it is admitted on the host alone, saying so.\n\n" +

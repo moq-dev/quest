@@ -2,7 +2,7 @@
 // the work went by the PR's own record. ccusage reads and prices the sessions; quest ties each to a PR by the
 // branch its log names, reading only that metadata and never a prompt or reply.
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type Size, SIZES, handedBack, questBranch } from "../core";
@@ -10,6 +10,7 @@ import { recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { discoveryEnv, git } from "./git";
 import { fixes } from "./land-fixer";
+import { eachLine } from "./lines";
 import { MERGER } from "./land-watch-fix";
 import { type GitHub, type ObjectValue, type Repository, githubRepository, link, requireRemote } from "./github";
 import { type OnlineReview, readOnlineReviews } from "./online-review";
@@ -208,31 +209,6 @@ export function parseCcusage(text: string): Priced[] {
 			})),
 		};
 	});
-}
-
-/**
- * Visit each line of the file at `path`, reading it in bounded chunks since logs reach gigabytes. The last line is
- * marked incomplete when no newline ends it, as while its session is still writing it. Reading stops once `visit`
- * returns false.
- */
-export function eachLine(path: string, visit: (line: string, complete: boolean) => boolean | void): void {
-	const fd = openSync(path, "r");
-	try {
-		const chunk = Buffer.alloc(1 << 22);
-		let rest = Buffer.alloc(0);
-		for (let read = readSync(fd, chunk); read > 0; read = readSync(fd, chunk)) {
-			const data = rest.length ? Buffer.concat([rest, chunk.subarray(0, read)]) : chunk.subarray(0, read);
-			let start = 0;
-			for (let end = data.indexOf(10); end >= 0; end = data.indexOf(10, start)) {
-				if (end > start && visit(data.toString("utf8", start, end), true) === false) return;
-				start = end + 1;
-			}
-			rest = Buffer.from(data.subarray(start));
-		}
-		if (rest.length) visit(rest.toString("utf8"), false);
-	} finally {
-		closeSync(fd);
-	}
 }
 
 /** One JSON record of a log line, or null for an incomplete last line. */
