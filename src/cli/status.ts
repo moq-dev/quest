@@ -2,6 +2,7 @@
 import {
 	actor,
 	array,
+	currentChecks,
 	GitHub,
 	GitHubDeadline,
 	type GitHubDependencies,
@@ -9,10 +10,12 @@ import {
 	object,
 	type ObjectValue,
 	type PullRequest,
+	type Repository,
+	requirements,
 	string,
 } from "./github";
-import { checksState, contextOutcome, latestContexts } from "../github/checks";
-import { EJECTED, pinned } from "./land";
+import { checksState, contextOutcome } from "../github/checks";
+import { EJECTED, LAND_CHECK, pinned } from "./land";
 import { reviewSection } from "../core";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
 
@@ -43,7 +46,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 						__typename
 						... on CheckRun {
 							databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
-							checkSuite { app { databaseId } }
+							checkSuite { databaseId app { databaseId } workflowRun { file { path } } }
 						}
 						... on StatusContext { context state createdAt targetUrl isRequired(pullRequestNumber: $number) }
 					}
@@ -199,7 +202,10 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 	const ownership = await readHoldStatus(pr, deps);
 	if (ownership.head !== first!.headRefOid)
 		throw new Error("the PR head changed while reading its holds; rerun quest status");
-	const status = summarize(first!, rollup, contexts, reviewNodes, threadNodes);
+	const head = string(first!.headRefOid);
+	const current = await currentChecks(github, pr, head, contexts);
+	const needs = await requiredOf(github, pr, string(first!.baseRefName));
+	const status = summarize(first!, rollup, current, needs, reviewNodes, threadNodes);
 	status.reviewRecord = await reviewRecord(github, pr, first!, deps.warn);
 	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
@@ -313,27 +319,79 @@ export async function headBefore(
 	return pushes.find((push) => push.time < time)?.sha ?? null;
 }
 
+/** The checks and workflow files a base requires of a PR head. */
+export interface Needs {
+	/** Required check names; GitHub's own merge checks which app reports each. */
+	checks: string[];
+	/** Workflow files that must pass as a whole, by path. */
+	workflows: string[];
+}
+
+/** What `branch` requires of a PR head. The gate's own check is never on one, so it is left out. */
+export async function requiredOf(github: GitHub, repository: Repository, branch: string): Promise<Needs> {
+	const found = await requirements(github, repository, branch);
+	const names = found.checks.map((check) => check.name).filter((name) => name !== LAND_CHECK);
+	return { checks: [...new Set(names)], workflows: found.workflows };
+}
+
+/** A check as a requirement matches it: its name, and the workflow file a GitHub Actions job runs in. */
+export interface Reported {
+	name: string;
+	workflow?: string;
+}
+
+/** A rollup context as a requirement matches it; queries ask for `checkSuite { workflowRun { file { path } } }`. */
+export function reported(context: ObjectValue): Reported {
+	const run = context.__typename === "CheckRun" && context.checkSuite ? object(context.checkSuite).workflowRun : null;
+	const file = run ? object(run).file : null;
+	return {
+		name: string(context.__typename === "CheckRun" ? context.name : context.context),
+		...(file ? { workflow: string(object(file).path) } : {}),
+	};
+}
+
+/** The required checks, by name, and required workflows, by path, that nothing on the head reports yet. */
+export function unreported(found: Reported[], needs: Needs): string[] {
+	return [
+		...needs.checks.filter((name) => !found.some((entry) => entry.name === name)),
+		...needs.workflows.filter((path) => !found.some((entry) => entry.workflow === path)),
+	];
+}
+
+/**
+ * The PR's state from its pages. `current` holds the head's checks that count, from {@link currentChecks}; a
+ * check is required when the base requires it or its workflow, and a requirement nothing reports is pending.
+ */
 function summarize(
 	pull: ObjectValue,
 	rollup: ObjectValue | null,
-	contexts: ObjectValue[],
+	current: ObjectValue[],
+	needs: Needs,
 	reviewNodes: ObjectValue[],
 	threadNodes: ObjectValue[],
 ): Status {
 	const head = string(pull.headRefOid);
 	const url = string(pull.url);
+	const missing = unreported(current.map(reported), needs);
 	// The rollup's own state counts runs a newer run of the same check replaced.
+	const state = checksState(current);
 	const checks = {
-		state: rollup === null ? null : lower(checksState(contexts)),
+		state:
+			rollup === null && missing.length === 0
+				? null
+				: lower(state === "SUCCESS" && missing.length > 0 ? "PENDING" : state),
 		passed: 0,
 		failing: [],
 		pending: [],
 	} as Status["checks"];
-	for (const context of latestContexts(contexts)) {
+	for (const context of current) {
 		const { check, outcome } = classifyCheck(context);
+		const workflow = reported(context).workflow;
+		if (workflow !== undefined && needs.workflows.includes(workflow)) check.required = true;
 		if (outcome === "passed") checks.passed++;
 		else checks[outcome].push(check);
 	}
+	for (const name of missing) checks.pending.push({ name, required: true, result: "expected", url: null });
 
 	const reactions: Reaction[] = [];
 	const reacted = (owner: ObjectValue, target: string) => {

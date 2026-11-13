@@ -393,6 +393,7 @@ class Forge {
 					pull_requests: "write",
 					issues: "write",
 					metadata: "read",
+					actions: "read",
 					...permissions,
 				},
 			}),
@@ -1149,6 +1150,50 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[2, "failed_checks"]]);
 		expect(plan.waiting?.map(({ number }) => number)).toEqual([3]);
+	});
+
+	test("drops a cancelled check once a newer run of its workflow exists, even one with no checks yet", async () => {
+		const forge = new Forge();
+		const test = (conclusion: string, suite: number) => ({ name: "test", conclusion, url: "u", suite });
+		const workflow = (pull: Pull, runs: [number, string, string][]) => {
+			for (const [id, conclusion, started] of runs)
+				(forge.repo.actionRuns ??= []).push({
+					id,
+					workflow_id: 7,
+					check_suite_id: id * 10,
+					run_started_at: started,
+					name: "CI",
+					head_branch: pull.branch ?? "",
+					head_sha: pull.head!,
+					status: conclusion === "queued" ? "queued" : "completed",
+					conclusion: conclusion === "queued" ? null : conclusion,
+					html_url: "u",
+					jobs: [],
+				});
+		};
+		// As on kixelated/token-max#78: an edit's run cancelled the push's run, and has yet to report a check.
+		const replaced = forge.pull("Replaced", { "1.txt": "1\n" }, { pull: { runs: [test("CANCELLED", 10)] } });
+		workflow(replaced, [
+			[1, "cancelled", "2026-11-12T23:42:53Z"],
+			[2, "queued", "2026-11-12T23:42:56Z"],
+		]);
+		// A cancelled run that nothing replaced still fails.
+		const alone = forge.pull("Alone", { "2.txt": "2\n" }, { pull: { runs: [test("CANCELLED", 30)] } });
+		workflow(alone, [[3, "cancelled", "2026-11-12T23:42:53Z"]]);
+		// Rerunning the cancelled run makes it the newest, so the run it cancelled in turn is the replaced one.
+		const rerun = forge.pull(
+			"Rerun",
+			{ "3.txt": "3\n" },
+			{ pull: { runs: [test("SUCCESS", 40), test("CANCELLED", 50)] } },
+		);
+		workflow(rerun, [
+			[4, "success", "2026-11-12T23:50:00Z"],
+			[5, "cancelled", "2026-11-12T23:43:00Z"],
+		]);
+		const plan = await resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
+		expect(plan.queue.map((entry) => entry.number)).toEqual([3]);
+		expect(plan.waiting?.map(({ number }) => number)).toEqual([1]);
+		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[2, "failed_checks"]]);
 	});
 
 	test("counts a required check only from the app its rule names", async () => {

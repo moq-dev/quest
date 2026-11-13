@@ -26,7 +26,16 @@ export type Pull = Issue & {
 	checks: "SUCCESS" | "FAILURE" | "PENDING" | null;
 	/** The check runs behind `checks`, oldest first. */
 	/** `commit` is the one a run reports on; the head by default. */
-	runs?: { name: string; conclusion: string; url: string; app?: number; context?: boolean; commit?: string }[];
+	runs?: {
+		name: string;
+		conclusion: string;
+		url: string;
+		app?: number;
+		context?: boolean;
+		commit?: string;
+		/** The check suite of the workflow run that reported it. */
+		suite?: number;
+	}[];
 	review: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
 	/** Oldest first; `commit` is the one a review was submitted on, the head by default. */
 	reviews?: { state: string; author: string; body?: string; commit?: string }[];
@@ -143,6 +152,9 @@ export type Repo = {
 	/** GitHub Actions workflow runs, as `GET /actions/runs` lists them, with their jobs and each job's log. */
 	actionRuns?: {
 		id: number;
+		workflow_id?: number;
+		check_suite_id?: number;
+		run_started_at?: string;
 		name: string;
 		head_branch: string;
 		head_sha: string;
@@ -259,7 +271,7 @@ function contextPage(pull: Pick<Pull, "runs">, after: unknown) {
 					status: "COMPLETED",
 					conclusion: run.conclusion,
 					detailsUrl: run.url,
-					checkSuite: { app: { databaseId: run.app ?? ACTIONS_APP } },
+					checkSuite: { databaseId: run.suite ?? null, app: { databaseId: run.app ?? ACTIONS_APP } },
 				},
 	);
 	const end = start + 100;

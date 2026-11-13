@@ -1077,7 +1077,7 @@ test("a rerun supersedes a cancelled run of a required check, which never wakes 
 	expect(lines[0]).toMatch(/^2026-10-07T12:08:00Z checks:passed check /);
 	const query = (fixture.checkCalls[0].body as { query: string }).query.replace(/\s+/g, " ");
 	expect(query).toContain("... on CheckRun { databaseId name");
-	expect(query).toContain("checkSuite { status app { databaseId }");
+	expect(query).toContain("checkSuite { databaseId status app { databaseId }");
 });
 
 test("a superseded workflow run's failed gate never wakes the wait, as on moq-dev/moq#7325", async () => {
@@ -1219,7 +1219,7 @@ test("checks:passed is dated when the head goes idle, after required checks fini
 	expect(lines[0]).toMatch(/^2026-10-07T12:08:00Z checks:passed check /);
 	const query = (fixture.checkCalls[0].body as { query: string }).query.replace(/\s+/g, " ");
 	expect(query).toContain("... on CheckRun { databaseId name");
-	expect(query).toContain("checkSuite { status app { databaseId }");
+	expect(query).toContain("checkSuite { databaseId status app { databaseId }");
 });
 
 test("with no required checks, an unfinished workflow run holds back checks:passed", async () => {

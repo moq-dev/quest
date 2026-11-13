@@ -1,6 +1,7 @@
 // The GitHub client shared by the commands that talk to GitHub, outside the repository-independent core.
 import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { cancelled, currentContexts, latestContexts, type RollupContext, type WorkflowRun } from "../github/checks";
 import { git } from "./git";
 
 const API = "https://api.github.com";
@@ -568,6 +569,41 @@ export async function requirements(github: GitHub, repository: Repository, branc
 		// Unknown counts as on, so a reader that needs the settings reads them rather than assume none.
 		classic: protection.enabled !== false,
 	};
+}
+
+/** Every GitHub Actions workflow run on `head`. Reading them needs Actions read access. */
+export async function workflowRuns(github: GitHub, repository: Repository, head: string): Promise<WorkflowRun[]> {
+	const runs: WorkflowRun[] = [];
+	let path: string | undefined =
+		`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/actions/runs?head_sha=${head}&per_page=100`;
+	while (path) {
+		const response: Response = await github.request(path);
+		for (const row of array(object(await response.json()).workflow_runs))
+			runs.push({
+				...row,
+				id: Number(row.id),
+				workflow_id: Number(row.workflow_id),
+				check_suite_id: Number(row.check_suite_id),
+				run_started_at: string(row.run_started_at),
+			});
+		path = link(response, "next");
+	}
+	return runs;
+}
+
+/**
+ * Each check's latest report on `head` that still counts, as {@link currentContexts} judges it. The head's
+ * workflow runs are read only when a latest report is a cancelled check run, the only report they can drop.
+ */
+export async function currentChecks<T extends RollupContext>(
+	github: GitHub,
+	repository: Repository,
+	head: string,
+	contexts: T[],
+): Promise<T[]> {
+	const latest = latestContexts(contexts);
+	if (!latest.some(cancelled)) return latest;
+	return currentContexts(contexts, await workflowRuns(github, repository, head));
 }
 
 /**

@@ -838,6 +838,8 @@ export async function serve(
 						administration: "read",
 						checks: "read",
 						statuses: "read",
+						// The head's workflow runs, which say whether a newer run replaced a cancelled check.
+						actions: "read",
 					},
 					{ fetch, now: Date.now },
 				),

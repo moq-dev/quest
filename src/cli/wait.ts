@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
 	actor,
 	array,
+	currentChecks,
 	GitHub,
 	type GitHubDependencies,
 	GitHubInputError,
@@ -11,12 +12,18 @@ import {
 	object,
 	type ObjectValue,
 	type PullRequest,
-	requirements,
 	string,
 } from "./github";
-import { LAND_CHECK } from "./land";
-import { latestContexts } from "../github/checks";
-import { BRANCH_UPDATES, classifyCheck, enabledHead } from "./status";
+import {
+	BRANCH_UPDATES,
+	classifyCheck,
+	enabledHead,
+	type Needs,
+	type Reported,
+	reported,
+	requiredOf,
+	unreported,
+} from "./status";
 
 const POLL = 5 * 60_000;
 /**
@@ -65,7 +72,7 @@ const CHECKS = `query($owner: String!, $repo: String!, $number: Int!, $after: St
 						__typename
 						... on CheckRun {
 							databaseId name status conclusion completedAt detailsUrl isRequired(pullRequestNumber: $number)
-							checkSuite { status app { databaseId } workflowRun { file { path } } }
+							checkSuite { databaseId status app { databaseId } workflowRun { file { path } } }
 						}
 						... on StatusContext { context state createdAt targetUrl isRequired(pullRequestNumber: $number) }
 					}
@@ -117,19 +124,10 @@ interface Cursor {
 	checks: { since: number; reported: string[] };
 }
 
-/** The check names and workflow files a base branch requires. */
-interface Needs {
-	names: Set<string>;
-	workflows: string[];
-}
-
 /** One check run or commit status on the head, with its result once it has one. */
-interface Check {
-	name: string;
+interface Check extends Reported {
 	required: boolean;
 	url: string | null;
-	/** The workflow file a GitHub Actions job runs in. */
-	workflow?: string;
 	/** A GitHub Actions job whose workflow run has not finished, so it may still create jobs. */
 	running: boolean;
 	result?: { outcome: "passed" | "failed"; point: string; time: number };
@@ -375,22 +373,18 @@ async function watch(
 			const page = object(contexts.pageInfo);
 			after = page.hasNextPage === true ? string(page.endCursor) : null;
 		} while (after !== null);
-		return { head: head!, base: string(pull.baseRefName), checks: latestContexts(rows).map(check), pull };
+		const current = await currentChecks(github, pr, head!, rows);
+		return { head: head!, base: string(pull.baseRefName), checks: current.map(check), pull };
 	};
 	/**
-	 * What the base branch requires, read once per wait. Only a requirement says whether a missing
-	 * check has yet to start, or whether the repository requires none. The gate's own check is never
-	 * on a PR head, so a gated base waits only for the rest.
+	 * What the base branch requires, read once per wait, as `quest status` reads it. Only a requirement
+	 * says whether a missing check has yet to start, or whether the repository requires none.
 	 */
 	const known = new Map<string, Needs>();
 	const required = async (branch: string): Promise<Needs> => {
 		const cached = known.get(branch);
 		if (cached) return cached;
-		const found = await requirements(github, pr, branch);
-		const needs = {
-			names: new Set(found.checks.map((check) => check.name).filter((name) => name !== LAND_CHECK)),
-			workflows: found.workflows,
-		};
+		const needs = await requiredOf(github, pr, branch);
 		known.set(branch, needs);
 		return needs;
 	};
@@ -575,12 +569,10 @@ function check(row: ObjectValue): Check {
 	const run = row.__typename === "CheckRun";
 	const { check: classified, outcome } = classifyCheck(row);
 	const suite = run && row.checkSuite ? object(row.checkSuite) : undefined;
-	const file = suite?.workflowRun ? object(suite.workflowRun).file : null;
 	const found: Check = {
-		name: classified.name,
+		...reported(row),
 		required: classified.required,
 		url: classified.url,
-		...(file ? { workflow: string(object(file).path) } : {}),
 		running: suite?.workflowRun ? suite.status !== "COMPLETED" : false,
 	};
 	if (outcome === "pending") return found;
@@ -597,7 +589,9 @@ function check(row: ObjectValue): Check {
 function checkActivities(head: string, all: Check[], needs: Needs, state: Cursor["checks"], prUrl: string): Activity[] {
 	const inWorkflow = (entry: Check) => entry.workflow !== undefined && needs.workflows.includes(entry.workflow);
 	const required =
-		needs.names.size || needs.workflows.length ? all.filter((entry) => entry.required || inWorkflow(entry)) : all;
+		needs.checks.length || needs.workflows.length
+			? all.filter((entry) => entry.required || inWorkflow(entry))
+			: all;
 	const reached = (
 		outcome: "passed" | "failed",
 		entry: Check | undefined,
@@ -623,10 +617,7 @@ function checkActivities(head: string, all: Check[], needs: Needs, state: Cursor
 	// A pass waits for the head to go idle, including jobs a running workflow
 	// may still create. Its date is the last completion, but its name and link
 	// always identify a required check that passed.
-	const idle =
-		all.every((entry) => entry.result && !entry.running) &&
-		[...needs.names].every((name) => all.some((entry) => entry.name === name)) &&
-		needs.workflows.every((path) => all.some((entry) => entry.workflow === path));
+	const idle = all.every((entry) => entry.result && !entry.running) && unreported(all, needs).length === 0;
 	const passed =
 		idle && settled.length === required.length && settled.every((entry) => entry.result.outcome === "passed")
 			? settled.at(-1)
