@@ -1,19 +1,19 @@
 // GitHub-specific PR activity waiting stays outside the repository-independent core.
 import { createHash } from "node:crypto";
 
+import { GitHubInputError } from "./github";
 import {
 	actor,
 	array,
 	currentChecks,
 	GitHub,
 	type GitHubDependencies,
-	GitHubInputError,
 	link,
 	object,
 	type ObjectValue,
 	type PullRequest,
 	string,
-} from "./github";
+} from "../github/client";
 import {
 	BRANCH_UPDATES,
 	classifyCheck,
@@ -23,7 +23,7 @@ import {
 	reported,
 	requiredOf,
 	unreported,
-} from "./status";
+} from "../github/status";
 
 const POLL = 5 * 60_000;
 /**

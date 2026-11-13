@@ -15,15 +15,16 @@ import {
 import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { reviewSection } from "../core";
-import { GitHub, type GitHubDependencies, type ObjectValue, object, string } from "./github";
-import { baseRemote, commandEnvironment, contains, git, tryGit, type Entry, type Plan, type Reason } from "./land";
+import { GitHub, type GitHubDependencies, type ObjectValue, object, string } from "../github/client";
+import { baseRemote, commandEnvironment, contains, git, tryGit, type Entry, type Plan } from "./land";
 import { COMMENT_LIMIT, resolution, type Resolution } from "./land-apply";
 import { CAUSES, type Cause, signature, type FixResult } from "./land-fix";
 import type { RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
 import { push } from "./land-head";
 import { excerpt } from "./land-daemon";
-import type { Carried } from "./signals";
+import type { Carried } from "../github/signals";
+import { type Reason } from "../github/land";
 
 /**
  * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused, or a fix

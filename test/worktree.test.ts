@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Owner, Retained, type Scopes, currentOwner, kill, killable } from "../src/cli/supervise";
-import { GitHub, mergedHolds } from "../src/cli/github";
+import { GitHub, mergedHolds } from "../src/github/client";
 import { REFERENCE_LINE } from "../src/core";
 import { main } from "../src/cli/main";
 import { Worktrees, canonical, derivedDefaults, diskUsage } from "../src/cli/worktree";

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
 import { isQuest, remove } from "../core";
-import { repositoryPath } from "./claims";
+import { LAND_CHECK, type Reason, pin, pinned } from "../github/land";
 import { programEnvironment } from "./program";
 import {
 	GitHub,
@@ -16,24 +16,14 @@ import {
 	currentChecks,
 	requirements,
 	string,
-} from "./github";
+	repositoryPath,
+} from "../github/client";
 import type { WorkflowRun } from "../github/checks";
 import { appOf } from "../github/checks";
-import { classifyCheck, reported, type Needs } from "./status";
-import { type Carried, describe, readSignals } from "./signals";
+import { classifyCheck, reported, type Needs } from "../github/status";
+import { type Carried, describe, readSignals } from "../github/signals";
 import type { Method } from "./hold";
 import { committedSources } from "./tree";
-
-/** The check a gated base requires. Nothing reports it on a PR head, so GitHub's auto-merge only waits. */
-export const LAND_CHECK = "quest land";
-
-/** The auto-merge commit body trailer that pins the head `quest merge --land` approved. */
-const PIN = "Quest-Land-Head";
-
-/** The auto-merge commit body that queues `sha`. */
-export function pin(sha: string): string {
-	return `${PIN}: ${sha}`;
-}
 
 /** How the watcher's own queue lands each PR: as a squash commit, or as a merge commit keeping its ancestry. */
 export type LandMethod = "squash" | "merge";
@@ -94,27 +84,6 @@ export async function enqueue(github: GitHub, id: string, head: string, method: 
 		{ id, sha: head, method: method.toUpperCase(), body: pin(head) },
 	);
 }
-
-/** The head an auto-merge commit body pins, if any. */
-export function pinned(body: string): string | null {
-	return new RegExp(`^${PIN}: ([0-9a-f]{40})$`, "m").exec(body)?.[1] ?? null;
-}
-
-/** Why the gate removed a PR from the queue; `quest status` prints it under `landing-stopped`. */
-export type Reason =
-	| "merge_conflict"
-	| "failed_checks"
-	| "changes_requested"
-	| "unresolved_conversations"
-	| "head_moved"
-	| "not_pinned"
-	| "tree_mismatch"
-	| "merge_refused"
-	| "fork_head"
-	| "unanswered_signal";
-
-/** The hidden line an ejection comment carries, which `quest status` reads. */
-export const EJECTED = /^<!-- quest land: ([a-z_]+) -->$/m;
 
 /** A queued PR, as the queue resolved it. */
 export interface Entry {

@@ -27,4 +27,4 @@ until `main` moves again. Update README.md's "Pin bumps" section to match.
 
 ## Required
 
-- [Release every merge that changes what ships](/quest/m0/pin-bumps/release.md) - the releases a bump follows
+- [Check the first automated release](/quest/m0/pin-bumps/release.md) - a published release for a bump to follow

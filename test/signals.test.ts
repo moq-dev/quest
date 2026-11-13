@@ -1,7 +1,7 @@
 import { describe as group, expect, test } from "vitest";
 
-import type { Activity } from "../src/cli/online-review";
-import { signals } from "../src/cli/signals";
+import type { Activity } from "../src/github/online-review";
+import { signals } from "../src/github/signals";
 
 const HEAD = "h".repeat(40);
 const OLD = "o".repeat(40);

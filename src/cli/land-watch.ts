@@ -13,9 +13,10 @@ import {
 	type ObjectValue,
 	type Repository,
 	string,
-} from "./github";
+} from "../github/client";
 import { lacksApproval } from "../github/merge";
-import type { Entry, LandMethod, Plan, Reason } from "./land";
+import type { Entry, LandMethod, Plan } from "./land";
+import type { Reason } from "../github/land";
 import { authenticatedRead } from "./land-git";
 import { jobLog } from "./land-checks";
 import { COLLECTION_ATTEMPTS, carriedOf, fixerText, post } from "./land-fixer";
@@ -43,8 +44,8 @@ import {
 import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
 import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools } from "./land-bump";
 import { pruneLogs } from "./land-prune";
-import { enabledHead, headBefore } from "./status";
-import { describe, readSignals } from "./signals";
+import { enabledHead, headBefore } from "../github/status";
+import { describe, readSignals } from "../github/signals";
 
 export { readRemoval } from "./land-watch-fix";
 

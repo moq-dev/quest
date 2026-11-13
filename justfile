@@ -32,10 +32,11 @@ _test:
     bun run test
     bash scripts/install-check.test.sh
     bash scripts/installer.test.sh
+    bash scripts/release-plan.test.sh
     bun run build
-    bash scripts/lifecycle-check.sh "$PWD/dist/quest.js"
+    bash scripts/lifecycle-check.sh "$PWD/dist/quest.js" dev
     bun run compile
-    bash scripts/lifecycle-check.sh "$PWD/dist/quest"
+    bash scripts/lifecycle-check.sh "$PWD/dist/quest" dev
 
 # Check that `quest review` runs nothing a reviewed head plants, with the real
 # Codex and Claude Code CLIs. Uses each CLI's login and spends its usage; run it

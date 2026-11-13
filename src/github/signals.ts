@@ -1,6 +1,6 @@
 // What holds a PR's head from landing besides its checks: an online reviewer's finding on the head that no writer has
 // answered, and a maintainer decision recorded in a comment after the head was committed that nothing has answered.
-import { type GitHub, type ObjectValue, type Repository, array, object, string } from "./github";
+import { type GitHub, type ObjectValue, type Repository, array, object, string } from "./client";
 import { type Activity, bodyFindings, isBot, login, readActivity, reviewerOf } from "./online-review";
 
 /** One signal on a PR's head that holds it from landing until it is fixed or answered. */

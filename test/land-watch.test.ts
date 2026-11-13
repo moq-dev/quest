@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { beforeEach, describe, expect, test } from "vitest";
 
-import type { GitHubDependencies } from "../src/cli/github";
+import type { GitHubDependencies } from "../src/github/client";
 import { readRemote } from "../src/cli/land";
 import { parseResolution } from "../src/cli/land-apply";
 import { CHECK_LOG } from "../src/cli/land-checks";

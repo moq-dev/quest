@@ -5,7 +5,6 @@ import { join } from "node:path";
 
 import { expect, test, vi } from "vitest";
 
-import { version } from "../package.json";
 import { Tree, run, tempDir } from "./fixture";
 
 test("check reports the document count", () => {
@@ -95,7 +94,7 @@ test("init and uninstall print each changed path and nothing else", () => {
 });
 
 test("version", () => {
-	expect(run("--version")).toEqual({ code: 0, stdout: `quest ${version}\n`, stderr: "" });
+	expect(run("--version")).toEqual({ code: 0, stdout: "quest dev\n", stderr: "" });
 });
 
 test("skill lists every skill", () => {

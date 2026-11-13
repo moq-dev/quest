@@ -4,7 +4,7 @@ import { createPrivateKey, createSign } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
+import { GitHub, type GitHubDependencies, type Repository, object, string } from "../github/client";
 import { git } from "./land";
 
 /** Mint a short-lived token for this repository, never the installation's other repositories. */

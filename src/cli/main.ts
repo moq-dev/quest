@@ -6,13 +6,14 @@ import { relative, resolve, sep } from "node:path";
 
 import { Argument, Command, CommanderError, InvalidArgumentError, Option } from "commander";
 
-import { description, version } from "../../package.json";
+import { description } from "../../package.json";
 import {
 	type Doc,
 	type RankedQuest,
 	blockers,
 	check,
 	formatFinding,
+	hosts,
 	label,
 	lookup,
 	questBranch,
@@ -37,24 +38,16 @@ import {
 import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { PENDING_MS } from "./admission";
 import { gate, QUICK_MS } from "./gate";
-import {
-	gitHubDependencies,
-	GitHubInputError,
-	mergedHolds,
-	pullRequest,
-	readRemote,
-	remoteRepository,
-	type Repository,
-} from "./github";
+import { gitHubDependencies, GitHubInputError, pullRequest, readRemote, remoteRepository } from "./github";
+import { mergedHolds, type Repository } from "../github/client";
 import { type Hold, finish, land, release, take } from "./hold";
-import { LAND_CHECK } from "./land";
+import { LAND_CHECK } from "../github/land";
 import { apply, pushCommand } from "./land-apply";
 import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { watch, type WatchOptions } from "./land-watch";
 import { landed, landingCheck } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
-import { hosts } from "../core/doc";
 import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
 import {
 	ReviewInputError,
@@ -82,9 +75,11 @@ import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./star
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
 import { type Terminal, Theme } from "./theme";
 import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
-import { pullRequestStatus, statusLines } from "./status";
+import { statusLines } from "./status";
+import { pullRequestStatus } from "../github/status";
 import { CCUSAGE_MISSING, daysBefore, usage, usageDependencies, usageLines } from "./usage";
 import { waitForActivity, WaitTimeout } from "./wait";
+import { version } from "./version";
 import { Worktrees } from "./worktree";
 import { HOOK_EVENTS, claudeHook } from "./worktree-hook";
 
