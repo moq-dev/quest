@@ -88,6 +88,10 @@ interface CheckFixture {
 	running?: boolean;
 	/** A check run's ID, which grows with each run; its place in the page by default. */
 	id?: number;
+	/** The app behind a check run; GitHub Actions by default. */
+	app?: number;
+	/** The check suite of the workflow run behind a check run. */
+	suite?: number;
 }
 
 /** The head's checks; `null` means the head has no checks at all. */
@@ -119,6 +123,8 @@ function checks(
 					isRequired: entry.required ?? false,
 					checkSuite: {
 						status: entry.result && !entry.running ? "COMPLETED" : "IN_PROGRESS",
+						databaseId: entry.suite ?? null,
+						app: { databaseId: entry.app ?? ACTIONS },
 						workflowRun: { file: { path: entry.workflow ?? ".github/workflows/check.yml" } },
 					},
 				};
@@ -165,6 +171,8 @@ function setup(
 		contextsOnly?: boolean;
 		ruled?: string[];
 		rules?: unknown[];
+		/** The head's workflow runs, as `GET /actions/runs` lists them, one listing per read; the last repeats. */
+		runs?: unknown[][];
 	} = {},
 ) {
 	let now = Date.parse("2026-10-07T12:10:00Z");
@@ -216,6 +224,11 @@ function setup(
 							: { enforcement_level: level, checks },
 					},
 				});
+			}
+			if (parsed.pathname === `${base}/actions/runs` && side.runs) {
+				ruleCalls.push(call);
+				const listed = side.runs.length > 1 ? side.runs.shift()! : side.runs[0]!;
+				return response({ total_count: listed.length, workflow_runs: listed });
 			}
 			if (parsed.pathname === `${base}/rules/branches/main`) {
 				ruleCalls.push(call);
@@ -1135,7 +1148,7 @@ test("a required check named on a later page of rules holds back checks:passed",
 			checks([{ name: "check", required: true, result: "SUCCESS", time: LATER }]),
 			checks([
 				{ name: "check", required: true, result: "SUCCESS", time: LATER },
-				{ name: "deploy", required: true, result: "SUCCESS", time: LATEST },
+				{ name: "deploy", required: true, result: "SUCCESS", time: LATEST, app: 42 },
 			]),
 		],
 		ruled: ["check"],
@@ -1155,6 +1168,59 @@ test("a required check named on a later page of rules holds back checks:passed",
 		`${base}/rules/branches/main?per_page=100`,
 		`${base}/rules/branches/main?per_page=100&page=2`,
 	]);
+});
+
+test("a required check from another app than its requirement names holds back checks:passed", async () => {
+	const fixture = setup([pull(), response([pushed()]), response([committed(A)]), response([committed(A)])], [A], {
+		checks: [
+			checks([{ name: "check", required: true, result: "SUCCESS", time: LATER, app: 99 }]),
+			checks([
+				{ name: "check", required: true, result: "SUCCESS", time: LATER, app: 99 },
+				{ name: "check", required: true, result: "SUCCESS", time: LATEST, id: 5 },
+			]),
+		],
+		ruled: ["check"],
+	});
+	const lines = await waitForActivity(pr, {}, fixture.deps);
+	expect(fixture.sleeps).toEqual([300_000]);
+	expect(lines).toEqual([expect.stringMatching(/^2026-10-07T12:08:00Z checks:passed check /)]);
+});
+
+test("a cancelled check a newer run replaced never fails the wait, which stays busy until that run finishes", async () => {
+	const run = (id: number, status: string) => ({
+		id,
+		workflow_id: 7,
+		check_suite_id: id * 10,
+		status,
+		// A run not started yet has no start time.
+		run_started_at: status === "queued" ? null : "2026-10-07T12:01:00Z",
+		created_at: `2026-10-07T12:0${id}:00Z`,
+	});
+	const cancelled: CheckFixture = {
+		name: "Tests (${{ matrix.os }})",
+		result: "CANCELLED",
+		time: LATER,
+		id: 1,
+		suite: 10,
+	};
+	const fixture = setup([pull(), response([pushed()]), response([committed(A)]), response([committed(A)])], [A], {
+		checks: [
+			checks([cancelled, { name: "check", required: true, result: "SUCCESS", time: LATER, id: 2 }]),
+			checks([
+				cancelled,
+				{ name: "check", required: true, result: "SUCCESS", time: LATER, id: 2 },
+				{ name: "later", result: "SUCCESS", time: LATEST, id: 3 },
+			]),
+		],
+		ruled: ["check"],
+		runs: [
+			[run(1, "completed"), run(2, "queued")],
+			[run(1, "completed"), { ...run(2, "completed"), run_started_at: "2026-10-07T12:02:00Z" }],
+		],
+	});
+	const lines = await waitForActivity(pr, {}, fixture.deps);
+	expect(fixture.sleeps).toEqual([300_000]);
+	expect(lines).toEqual([expect.stringMatching(/^2026-10-07T12:08:00Z checks:passed check /)]);
 });
 
 const CI = ".github/workflows/ci.yml";

@@ -434,7 +434,7 @@ export async function resolveQueue(
 			const commit = object(object(array(object(node.commits).nodes)[0]).commit);
 			const rollup = commit.oid === approved ? commit.statusCheckRollup : undefined;
 			const found = await contexts(github, repository, approved, rollup);
-			const unmet = checks(await currentChecks(github, repository, approved, found), required);
+			const unmet = checks((await currentChecks(github, repository, approved, found)).checks, required);
 			// An approval can still arrive on the pinned head, such as an automated reviewer's, so it waits like a check.
 			const approval = node.reviewDecision === "REVIEW_REQUIRED";
 			if (unmet.failing.length > 0) {
@@ -498,7 +498,10 @@ export async function requiredChecks(
 	sha: string,
 	required: RequiredCheck[],
 ): Promise<{ failing: string[]; pending: string[] }> {
-	return checks(await currentChecks(github, repository, sha, await contexts(github, repository, sha)), required);
+	return checks(
+		(await currentChecks(github, repository, sha, await contexts(github, repository, sha))).checks,
+		required,
+	);
 }
 
 /**

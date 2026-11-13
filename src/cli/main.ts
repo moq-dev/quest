@@ -540,7 +540,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
 				"url, state, draft, head, mergeable, merge-state, review-decision, review-record, auto-merge, merge-queue, " +
-				"landing-stopped, and checks, whose state and counts follow each check's latest run; review-record gives whether the PR body's ## Review record " +
+				"landing-stopped, and checks, whose state and counts follow the checks that count, pending while an open PR's base requires a check or workflow nothing reports; review-record gives whether the PR body's ## Review record " +
 				"covers the head, as current, diff-identical (git diff <base>...<head> prints the same as for the head it names), " +
 				"stale, or unknown when GitHub cannot compare them, then the head it names last; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
@@ -548,7 +548,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
 				"quest land's queue, with the reason (such as merge_conflict, failed_checks, manual, or manually_disabled), " +
 				"actor, and time, until the PR enters the merge queue or auto-merge again. Then " +
-				"a check line per failing or pending check, marked required or optional, counting only each check's latest run; a review line per " +
+				"a check line per failing or pending check, marked required or optional, counting only each check's latest run " +
+				"and dropping a cancelled check once a newer GitHub Actions run of its workflow exists on the head (reading the head's " +
+				"workflow runs, which needs Actions read access); a required check or workflow nothing reports prints as pending required " +
+				"expected, with its name or the workflow's path; a review line per " +
 				"reviewer's latest review, marked current or stale against the head; a checkpoint line per bot " +
 				"reviewer that approves or requests changes, its round, and its review, when that review is of the " +
 				"head, while its latest verdict on the head is neither an approval nor a dismissal, and ends its third, sixth, ... round (one commit it reviewed), as " +

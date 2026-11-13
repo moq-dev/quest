@@ -118,6 +118,8 @@ function setup(
 		diffs?: Record<string, string | number>;
 		/** The base's active ruleset rules. */
 		rules?: Node[];
+		/** The base branch is gone, so reading it fails. */
+		noBase?: boolean;
 		/** The head's workflow runs, as `GET /actions/runs` lists them. */
 		runs?: Node[];
 	} = {},
@@ -146,7 +148,9 @@ function setup(
 				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
 			}
 			if (path.pathname === "/repos/example/project/branches/main")
-				return Response.json({ protection: { enabled: false } });
+				return options.noBase
+					? Response.json({ message: "Branch not found" }, { status: 404 })
+					: Response.json({ protection: { enabled: false } });
 			if (path.pathname === "/repos/example/project/rules/branches/main")
 				return Response.json(options.rules ?? []);
 			if (path.pathname === "/repos/example/project/actions/runs") {
@@ -534,6 +538,51 @@ test("a required check or workflow nothing reports is pending, except the gate's
 	// With no checks on the head at all, the requirements still leave it pending.
 	const empty = setup([pull({ checks: null, reviews: page([]), threads: page([]) })], { rules });
 	expect((await pullRequestStatus(pr, empty.deps)).checks.state).toBe("pending");
+});
+
+test("a required check from another app than its requirement names stays pending, and a closed PR reads no requirements", async () => {
+	const rules = [
+		{
+			type: "required_status_checks",
+			parameters: { required_status_checks: [{ context: "test", integration_id: 99 }] },
+		},
+	];
+	const test = {
+		...run("test", "COMPLETED", "SUCCESS", false),
+		databaseId: 1,
+		checkSuite: { databaseId: 10, app: { databaseId: 15368 }, workflowRun: { file: { path: CI } } },
+	};
+	const open = setup([pull({ checks: page([test]), reviews: page([]), threads: page([]) })], { rules });
+	expect(statusLines(await pullRequestStatus(pr, open.deps)).filter((line) => line.startsWith("check"))).toEqual([
+		"checks pending passed=1 failing=0 pending=1",
+		"check pending required expected - test (from app 99)",
+	]);
+	// A merged PR's base may be gone, and nothing it requires can change the PR anymore.
+	const merged = setup([pull({ state: "MERGED", checks: page([test]), reviews: page([]), threads: page([]) })], {
+		rules: undefined,
+		noBase: true,
+	});
+	expect((await pullRequestStatus(pr, merged.deps)).checks.state).toBe("success");
+});
+
+test("a replacing run that has not started yet stands in by its creation time", async () => {
+	const job = {
+		...run("Tests (${{ matrix.os }})", "COMPLETED", "CANCELLED", false),
+		databaseId: 1,
+		checkSuite: { databaseId: 10, app: { databaseId: 15368 }, workflowRun: { file: { path: CI } } },
+	};
+	const fixture = setup([pull({ checks: page([job]), reviews: page([]), threads: page([]) })], {
+		runs: [
+			{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" },
+			{ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: null, created_at: "2026-11-12T23:42:56Z" },
+		],
+	});
+	expect((await pullRequestStatus(pr, fixture.deps)).checks).toEqual({
+		state: "success",
+		passed: 0,
+		failing: [],
+		pending: [],
+	});
 });
 
 test("a job in a required workflow counts as required", async () => {

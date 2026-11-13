@@ -354,7 +354,7 @@ async function watch(
 	};
 	/** GraphQL says which checks the base branch requires, through branch protection or rulesets. */
 	const checks = async (): Promise<
-		{ head: string; base: string; checks: Check[]; pull: ObjectValue } | undefined
+		{ head: string; base: string; checks: Check[]; unfinished: boolean; pull: ObjectValue } | undefined
 	> => {
 		const rows: ObjectValue[] = [];
 		let head: string | undefined;
@@ -374,7 +374,9 @@ async function watch(
 			after = page.hasNextPage === true ? string(page.endCursor) : null;
 		} while (after !== null);
 		const current = await currentChecks(github, pr, head!, rows);
-		return { head: head!, base: string(pull.baseRefName), checks: current.map(check), pull };
+		// A replacing run may have no check run yet, so an unfinished run it read keeps the head busy.
+		const unfinished = current.runs?.some((run) => run.status !== "completed") ?? false;
+		return { head: head!, base: string(pull.baseRefName), checks: current.checks.map(check), unfinished, pull };
 	};
 	/**
 	 * What the base branch requires, read once per wait, as `quest status` reads it. Only a requirement
@@ -491,7 +493,7 @@ async function watch(
 		const head = await checks();
 		const reached = head
 			? [
-					...checkActivities(head.head, head.checks, await required(head.base), cursor.checks, prUrl),
+					...checkActivities(head, await required(head.base), cursor.checks, prUrl),
 					...(await movedAutoMerge(head.head, head.pull)),
 				]
 			: [];
@@ -586,7 +588,12 @@ function check(row: ObjectValue): Check {
  * reported once per head when reached at or after the starting point. A base branch that requires
  * no checks requires them all.
  */
-function checkActivities(head: string, all: Check[], needs: Needs, state: Cursor["checks"], prUrl: string): Activity[] {
+function checkActivities(
+	{ head, checks: all, unfinished }: { head: string; checks: Check[]; unfinished: boolean },
+	needs: Needs,
+	state: Cursor["checks"],
+	prUrl: string,
+): Activity[] {
 	const inWorkflow = (entry: Check) => entry.workflow !== undefined && needs.workflows.includes(entry.workflow);
 	const required =
 		needs.checks.length || needs.workflows.length
@@ -617,7 +624,8 @@ function checkActivities(head: string, all: Check[], needs: Needs, state: Cursor
 	// A pass waits for the head to go idle, including jobs a running workflow
 	// may still create. Its date is the last completion, but its name and link
 	// always identify a required check that passed.
-	const idle = all.every((entry) => entry.result && !entry.running) && unreported(all, needs).length === 0;
+	const idle =
+		!unfinished && all.every((entry) => entry.result && !entry.running) && unreported(all, needs).length === 0;
 	const passed =
 		idle && settled.length === required.length && settled.every((entry) => entry.result.outcome === "passed")
 			? settled.at(-1)

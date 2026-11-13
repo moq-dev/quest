@@ -561,10 +561,14 @@ export async function requirements(github: GitHub, repository: Repository, branc
 			(check, index) =>
 				checks.findIndex((other) => other.name === check.name && other.app === check.app) === index,
 		),
-		workflows: rules
-			.filter((rule) => rule.type === "workflows")
-			.flatMap((rule) => array(object(rule.parameters).workflows))
-			.map((row) => string(row.path)),
+		workflows: [
+			...new Set(
+				rules
+					.filter((rule) => rule.type === "workflows")
+					.flatMap((rule) => array(object(rule.parameters).workflows))
+					.map((row) => string(row.path)),
+			),
+		],
 		rules,
 		// Unknown counts as on, so a reader that needs the settings reads them rather than assume none.
 		classic: protection.enabled !== false,
@@ -584,7 +588,8 @@ export async function workflowRuns(github: GitHub, repository: Repository, head:
 				id: Number(row.id),
 				workflow_id: Number(row.workflow_id),
 				check_suite_id: Number(row.check_suite_id),
-				run_started_at: string(row.run_started_at),
+				// A run not yet started, such as one awaiting approval, has no start time, so its creation stands in.
+				run_started_at: string(row.run_started_at ?? row.created_at),
 			});
 		path = link(response, "next");
 	}
@@ -592,18 +597,20 @@ export async function workflowRuns(github: GitHub, repository: Repository, head:
 }
 
 /**
- * Each check's latest report on `head` that still counts, as {@link currentContexts} judges it. The head's
- * workflow runs are read only when a latest report is a cancelled check run, the only report they can drop.
+ * Each check's latest report on `head` that still counts, as {@link currentContexts} judges it, and the
+ * head's workflow runs when they were read: only when a latest report is a cancelled check run, the only
+ * report they can drop.
  */
 export async function currentChecks<T extends RollupContext>(
 	github: GitHub,
 	repository: Repository,
 	head: string,
 	contexts: T[],
-): Promise<T[]> {
+): Promise<{ checks: T[]; runs?: WorkflowRun[] }> {
 	const latest = latestContexts(contexts);
-	if (!latest.some(cancelled)) return latest;
-	return currentContexts(contexts, await workflowRuns(github, repository, head));
+	if (!latest.some(cancelled)) return { checks: latest };
+	const runs = await workflowRuns(github, repository, head);
+	return { checks: currentContexts(contexts, runs), runs };
 }
 
 /**

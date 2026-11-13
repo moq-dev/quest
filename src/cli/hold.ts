@@ -326,7 +326,7 @@ export async function land(
  * own queue's informational check, which reports how a past pick ended rather than the head.
  */
 async function passing(github: GitHub, pr: PullRequest, url: string, sha: string): Promise<void> {
-	const failing = (await currentChecks(github, pr, sha, await contexts(github, pr, sha)))
+	const failing = (await currentChecks(github, pr, sha, await contexts(github, pr, sha))).checks
 		.filter((context) => context.name !== QUEUE_CHECK)
 		.map(classifyCheck)
 		.filter(({ outcome }) => outcome === "failing")

@@ -417,7 +417,8 @@ CI results are read for the current head. The first required check to fail
 prints `checks:failed` right away. `checks:passed` prints once nothing on the
 head is still going (no pending check and no unfinished GitHub Actions run, which
 may still create jobs), every check and workflow the base branch names is
-present (except `quest land`'s, which no head carries), and every required
+present (except `quest land`'s, which no head carries), each required check
+from the app its requirement names, if any, and every required
 check passed; it names the last required check that passed and is dated when
 the head went idle. Each prints once per head, with the check's name
 (spaces as `_`) in the actor field and its details URL. Results count as
@@ -503,7 +504,7 @@ comes last, and a missing value prints as `-`:
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
 | `checks` | `failure` if any check fails, else `pending` if any is pending or a requirement is unreported, else `success`, and `passed=`, `failing=`, `pending=` counts, all from the checks that count; `-` when the head has no checks and the base requires none. |
-| `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. A required check or required workflow nothing reports yet prints as `pending required expected -` with its name, or the workflow's path. |
+| `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. A required check or required workflow nothing reports yet prints as `pending required expected -` with its name, followed by `(from app <id>)` when the requirement names an app, or the workflow's path. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
 | `checkpoint` | Each bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head and its latest verdict there, ignoring plain comments, is neither an approval nor a dismissal, at the end of its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed; a dismissed review counts as one that approves or requests changes. Only printed when due. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
@@ -524,8 +525,10 @@ before it. Any other result keeps counting, as does a cancelled run nothing
 replaced. Only then does it read the head's workflow runs, which needs Actions
 read access. GitHub's own rollup state counts the superseded runs too. A required
 check is one branch protection or a ruleset requires for this PR, or a job of a
-workflow a ruleset requires; like `quest wait`, it matches a requirement by name
-and leaves out `quest land`'s check, which no head carries. `--json` prints the
+workflow a ruleset requires. Like `quest wait`, it reads an open PR's
+requirements from the base, matches a required check by name and, when the
+requirement names one, its app, as GitHub and `quest land` do, and leaves out
+`quest land`'s check, which no head carries. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
 `landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `checkpoints` (`reviewer`, `round`, `url`), `reactions`,
