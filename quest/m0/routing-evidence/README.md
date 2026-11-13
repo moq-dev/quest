@@ -25,7 +25,7 @@ Decided 2026-11-11 (user, /quest-plan, from an audit of PRs merged
   - Rejected: records and experiments only; routing changes only
 - Review table? ✅ Restore the efforts in place before 2026-11-05 and raise
   XS: Sol medium, medium, high, xhigh, xhigh for XS to XL, A/B tested by
-  [the shadow review](/quest/m0/routing-evidence/shadow-review.md).
+  `quest review`'s shadow reviewer, the size's pick one effort lower.
   Rejected: raising only XS and M; no change until measured.
 - Experiments? ✅ Shadow reviews and a writer A/B (rejected: shadow reviews
   only; none).
@@ -47,7 +47,12 @@ Readout, the agent's choices for the implementer to revisit:
   `src/cli/models.ts`, review rounds, hand-backs, later `## Caused by` culprits, and cost
   per merged PR. For each shadow pair, compare findings the routed reviewer
   raised that the shadow missed, and the reverse, along with fixed and
-  refuted findings and cost per PR. Recommend each table change to the
+  refuted findings and cost per PR. A shadow finding that matches a routed
+  finding on the same file, within a few lines, counts as found by both;
+  check a sample of matches by hand before trusting the rule. The PR body's
+  `## Review` record keeps only tallies and the latest findings, so read
+  each finding's location from the branch's saved rounds under the clones'
+  `.git/quest/review/`. Recommend each table change to the
   maintainer with its tally. End the writer A/B by deleting its arms from
   `src/cli/models.ts`. Keep the shadow reviewer only if the maintainer
   chooses to.
@@ -94,8 +99,9 @@ Baseline from the 2026-11-11 audit, at API list price:
 
 ## Waiting
 
-- moq-dev/quest: one week of PRs since both
-  [the shadow review](/quest/m0/routing-evidence/shadow-review.md) and
+- moq-dev/quest: one week of PRs since both the shadow reviewer
+  (`quest review`'s, PR titled "quest: run a shadow reviewer one effort
+  below the routed one") and
   [the writer A/B](/quest/m0/routing-evidence/writer-ab.md) merged; check
   their merge dates with `gh pr list --state merged` and the day with `date`
 

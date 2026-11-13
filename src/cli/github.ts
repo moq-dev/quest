@@ -1,6 +1,7 @@
 // The GitHub client shared by the commands that talk to GitHub, outside the repository-independent core.
 import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { cancelled, currentContexts, latestContexts, type RollupContext, type WorkflowRun } from "../github/checks";
 import { git } from "./git";
 
 const API = "https://api.github.com";
@@ -505,7 +506,7 @@ export interface RequiredCheck {
 /** What a base branch requires, read from branch protection and rulesets. */
 export interface Requirements {
 	checks: RequiredCheck[];
-	/** Workflow files that must pass as a whole, so each of their jobs is required. */
+	/** Workflow files that must pass as a whole, so each of their jobs is required, from {@link workflowKey}. */
 	workflows: string[];
 	/** Every rule the branch's active rulesets apply: `type`, `parameters`, and the ruleset's source. */
 	rules: ObjectValue[];
@@ -528,6 +529,32 @@ async function branchRules(github: GitHub, path: string): Promise<ObjectValue[]>
 	throw new Error(
 		`GitHub HTTP 403 for ${new URL(path, API).pathname}; ${reason ?? "check repository access and token permissions"}`,
 	);
+}
+
+/**
+ * A workflow file as requirements name it: its repository's `owner/name` and its path, since a ruleset may
+ * require a workflow from another repository at the same path as a local one.
+ */
+export function workflowKey(repository: string, path: string): string {
+	return `${repository.toLowerCase()}:${path}`;
+}
+
+/** The workflow files `rules` require, each keyed by {@link workflowKey} from its rule's `repository_id`. */
+async function requiredWorkflows(github: GitHub, rules: ObjectValue[]): Promise<string[]> {
+	const names = new Map<number, string>();
+	const keys: string[] = [];
+	for (const row of rules
+		.filter((rule) => rule.type === "workflows")
+		.flatMap((rule) => array(object(rule.parameters).workflows))) {
+		const id = Number(row.repository_id);
+		if (!names.has(id)) {
+			const response = await github.request(`/repositories/${id}`, { allow: [404] });
+			// A repository the token cannot see is still required; nothing on the head can match its name.
+			names.set(id, response.ok ? string(object(await response.json()).full_name) : `repository ${id}`);
+		}
+		keys.push(workflowKey(names.get(id)!, string(row.path)));
+	}
+	return [...new Set(keys)];
 }
 
 /** What `branch` of `repository` requires, read with read access from branch protection and rulesets. */
@@ -560,14 +587,49 @@ export async function requirements(github: GitHub, repository: Repository, branc
 			(check, index) =>
 				checks.findIndex((other) => other.name === check.name && other.app === check.app) === index,
 		),
-		workflows: rules
-			.filter((rule) => rule.type === "workflows")
-			.flatMap((rule) => array(object(rule.parameters).workflows))
-			.map((row) => string(row.path)),
+		workflows: await requiredWorkflows(github, rules),
 		rules,
 		// Unknown counts as on, so a reader that needs the settings reads them rather than assume none.
 		classic: protection.enabled !== false,
 	};
+}
+
+/** Every GitHub Actions workflow run on `head`. Reading them needs Actions read access. */
+export async function workflowRuns(github: GitHub, repository: Repository, head: string): Promise<WorkflowRun[]> {
+	const runs: WorkflowRun[] = [];
+	let path: string | undefined =
+		`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/actions/runs?head_sha=${head}&per_page=100`;
+	while (path) {
+		const response: Response = await github.request(path);
+		for (const row of array(object(await response.json()).workflow_runs))
+			runs.push({
+				...row,
+				id: Number(row.id),
+				workflow_id: Number(row.workflow_id),
+				check_suite_id: Number(row.check_suite_id),
+				// A run not yet started, such as one awaiting approval, has no start time, so its creation stands in.
+				run_started_at: string(row.run_started_at ?? row.created_at),
+			});
+		path = link(response, "next");
+	}
+	return runs;
+}
+
+/**
+ * Each check's latest report on `head` that still counts, as {@link currentContexts} judges it, and the
+ * head's workflow runs when they were read: only when a latest report is a cancelled check run, the only
+ * report they can drop.
+ */
+export async function currentChecks<T extends RollupContext>(
+	github: GitHub,
+	repository: Repository,
+	head: string,
+	contexts: T[],
+): Promise<{ checks: T[]; runs?: WorkflowRun[] }> {
+	const latest = latestContexts(contexts);
+	if (!latest.some(cancelled)) return { checks: latest };
+	const runs = await workflowRuns(github, repository, head);
+	return { checks: currentContexts(contexts, runs), runs };
 }
 
 /**

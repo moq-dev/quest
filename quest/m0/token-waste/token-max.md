@@ -17,6 +17,8 @@ so this quest keeps only quest's side.
 
 Amended 2026-11-12 (maintainer, /quest-plan,
 [moq-dev/quest#669](https://github.com/moq-dev/quest/pull/669)): token-max
+moved to the kixel-ai organization
+([kixel-ai/token-max#83](https://github.com/kixel-ai/token-max/pull/83)) and
 was rewritten in Rust on 2026-11-08 and ships its crate on crates.io and
 prebuilt binaries with checksums on GitHub Releases, rejecting npm, which
 supersedes the 2026-11-06 npm plan. Point to the run-once lines its install
