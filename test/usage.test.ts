@@ -246,6 +246,7 @@ describe("PR records", () => {
 				harness: "Codex",
 				model: "gpt-6.1-sol",
 				effort: "high",
+				shadow: false,
 				session: THREAD,
 				round: 3,
 				score: 7,
@@ -263,6 +264,7 @@ describe("PR records", () => {
 				harness: "opencode",
 				model: "opencode-go/deepseek-v4.1-flash",
 				effort: "high",
+				shadow: false,
 				session: "ses_1",
 				round: 1,
 				score: 10,
@@ -281,6 +283,7 @@ describe("PR records", () => {
 				harness: "Claude Code",
 				model: "m",
 				effort: "high",
+				shadow: false,
 				session: null,
 				round: null,
 				score: null,
@@ -463,6 +466,10 @@ describe("usage", () => {
 			// A reviewer the latest run left out, such as one a new size pick replaced, has only its tally.
 			"- Reviewer: Claude Code, claude-opus-5-5, high effort",
 			"- Rounds: 1; findings 1 (medium 1): fixed 1, refuted 0, open 0",
+			"",
+			// The shadow, which measures an effort step and so stays out of the writer's accuracy.
+			"- Reviewer: Codex, gpt-6.1-sol, medium effort, shadow",
+			"- Rounds: 1; findings 3 (high 3): fixed 2, refuted 1, open 0",
 		].join("\n");
 		// #9's claim of the same branch named ses_1 before #10 resumed it, so #10, the newer, takes it.
 		// Its record and #10's tally the same branch, so the rollup counts the tally once, from #10.
@@ -745,6 +752,15 @@ describe("usage", () => {
 			"  review: Claude Code, claude-opus-5-5, high effort; not in the latest run; rounds 1, findings 1 (medium 1): fixed 1, refuted 0, open 0\n",
 		);
 		expect(text).toContain("rounds 2.0, findings 3 (high 1, medium 1, low 1): fixed 2, refuted 1, open 0;");
+		expect(ten.review.map((r) => [r.effort, r.shadow])).toEqual([
+			["high", false],
+			["high", false],
+			["high", false],
+			["medium", true],
+		]);
+		expect(text).toContain(
+			"  review: Codex, gpt-6.1-sol, medium effort, shadow; not in the latest run; rounds 1, findings 3 (high 3): fixed 2, refuted 1, open 0\n",
+		);
 		expect(text).toContain("#10 L merged: PR 10 (quest/m0/a)");
 		expect(text).toContain("findings 2 (high 1, low 1): fixed 1, refuted 0, settled 1, open 0\n");
 		expect(text).toContain(
@@ -777,6 +793,6 @@ describe("usage", () => {
 			[5, 0],
 			[6, 0],
 		]);
-		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8, null]);
+		expect(quest.pulls[0]!.review.map((r) => r.score)).toEqual([9, 8, null, null]);
 	});
 });

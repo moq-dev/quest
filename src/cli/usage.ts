@@ -103,10 +103,10 @@ export interface AccuracyRow {
 	handedBack: number;
 	/** PRs whose record tallies their reviews; a record written before tallies counts for none of what follows. */
 	reviewed: number;
-	/** The reviewers' latest rounds on the reviewed PRs that have a score, and the scores' sum. */
+	/** The reviewers' latest rounds on the reviewed PRs that have a score, and the scores' sum, leaving out the shadow's. */
 	scored: number;
 	score: number;
-	/** Every reviewer's findings across every round on the reviewed PRs, and as `rounds`, each PR's most rounds. */
+	/** Every reviewer's findings but the shadow's across every round on the reviewed PRs, and as `rounds`, each PR's most rounds. */
 	tally: Counts;
 	/** The land fixer's model-run fixes, leaving out the watcher's own base merges. */
 	landFixes: number;
@@ -666,8 +666,11 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			if (each.handedBack) row.handedBack++;
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
+			// The shadow's findings measure an effort step, not the writer, so they stay out of the writer's row.
 			const tallied =
-				latest.get(branch(each)) === each ? each.review.filter((review) => review.tally !== null) : [];
+				latest.get(branch(each)) === each
+					? each.review.filter((review) => review.tally !== null && !review.shadow)
+					: [];
 			if (tallied.length > 0) {
 				row.reviewed++;
 				row.tally.rounds += Math.max(...tallied.map((review) => review.tally!.rounds));
@@ -827,7 +830,7 @@ export function usageLines(report: Usage): string[] {
 		for (const item of row.unread) lines.push(`  unread: ${item}`);
 		for (const r of row.review)
 			lines.push(
-				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; ${r.round === null ? "not in the latest run" : `round ${r.round}, score ${r.score ?? "-"}/10`}; ${r.tally === null ? "no tally" : `rounds ${r.tally.rounds}, ${findingsText(r.tally)}`}`,
+				`  review: ${r.harness}, ${r.model}, ${r.effort} effort${r.shadow ? ", shadow" : ""}; ${r.round === null ? "not in the latest run" : `round ${r.round}, score ${r.score ?? "-"}/10`}; ${r.tally === null ? "no tally" : `rounds ${r.tally.rounds}, ${findingsText(r.tally)}`}`,
 			);
 		for (const o of row.online)
 			lines.push(`  online review: ${o.reviewer}, ${o.finalHead ? "" : "not "}at the final head; ${answers(o)}`);

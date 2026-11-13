@@ -1332,8 +1332,14 @@ size. Each size ranks its reviewers, the same for every repository:
 
 Beside it, opencode `opencode-go/deepseek-v4.1-flash` at `high` reviews the
 same head for every size, in its own session, so each head is read by a model
-family no writer runs, at about $0.05 a review. Both run at once; the first to
-fail, such as on a usage limit, stops the other, and the round saves neither.
+family no writer runs, at about $0.05 a review. The shadow, the pick's model
+one effort lower (Sol low for an XS PR), reviews it too, in its own session, so
+the routing can be retuned from what each effort step finds over the one below
+it. It is skipped when the pick runs at low, runs on the branch's first run of
+the pair, and then reruns only while it has findings to settle; those are
+numbered, answered, and settled like any reviewer's. The reviewers run at once;
+the first to fail, such as on a usage limit, stops the others, and the round
+saves none.
 
 A quest branch takes its quest's size, read from the base branch's tip so a
 change cannot lower its own review; any other PR, such as a skill's own, takes
@@ -1346,7 +1352,7 @@ Without a record, or when its last line names an `unknown` model, the harness
 running the command, usually the session that
 just pushed, is taken to be the latest writer, so Codex reviews from Claude Code
 and Claude Code from Codex. `--harness` names the only reviewer instead of
-the pair, at its entry's model and effort, and `--model` and `--effort`
+the pair and the shadow, at its entry's model and effort, and `--model` and `--effort`
 override the size pick's or that reviewer's, as a repository whose `AGENTS.md`
 names other reviewers needs. The second reviewer's model is avoided like any
 other, which, without `--harness`, is an error. A `--harness` run keeps the other
@@ -1354,7 +1360,7 @@ reviewers' sessions for the pair's next run, and refuses while one has
 findings to settle, so a head never passes one reviewer alone while the other's
 findings are open. When the latest writer changes the size's pick to one with
 no session on the branch, its first session settles the open findings of the
-reviewer it replaces. An unknown harness, a size whose
+reviewer it replaces, and the new pick's shadow settles the old shadow's. An unknown harness, a size whose
 every reviewer is avoided, or a missing or logged-out CLI, is an error
 rather than a same-model review, as is a login the API rejects mid-round, such
 as an expired or revoked token. The reviewer reaches its model as the user's own CLI does:
@@ -1476,7 +1482,8 @@ After each round, `quest review` rewrites the `## Review` section of the open PR
 from the branch into the base, found among the upstream's PRs from the
 repository the base's remote pushes to, and prints `record <url>`. The record
 names the reviewed head and the base's short SHA, then for each reviewer its
-harness, model, and effort, the session and round, the score and rationale, its tally, each finding with
+harness, model, and effort, its Reviewer line ending in `, shadow` for the
+shadow, the session and round, the score and rationale, its tally, each finding with
 its location, and the last round's findings with their dispositions. The
 tally, as `- Rounds: 3; findings 4 (high 1, medium 3): fixed 3, refuted 1, open 0`,
 counts the reviewer's rounds on the branch and each finding it raised once,
@@ -1544,7 +1551,7 @@ it or Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. An opencode session, whose log quest does not read, is
 the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
-findings across every round, where a merged PR whose last round left only low
+findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
 findings open counts them settled, since `/quest-review` fixes or refutes those
 before merge without another round; the land fixer's fixes; the later PRs that list it under
 `## Caused by`; and each online reviewer's record, read from GitHub.
@@ -1566,8 +1573,9 @@ a bot resolving its own thread or a later review leaving it out, and as
 unanswered otherwise.
 
 Rollups follow: spend by size, role, harness, model, and effort; accuracy
-by size and implementer, which sums the tallies, so it counts every finding
-caught before merge. Since a branch's tallies span every PR from it, only the
+by size and implementer, which sums the tallies but the shadow's, so it counts
+every finding the routed reviewers caught before merge, while the shadow's
+findings measure an effort step rather than the writer. Since a branch's tallies span every PR from it, only the
 PR whose record holds its latest tally, by the most rounds and then the newest,
 counts them, and a record written before tallies
 counts as unreviewed. An `Implementer:` line's own size, as

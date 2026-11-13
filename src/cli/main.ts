@@ -1115,14 +1115,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"before the PR opened, and iterating otherwise. An opencode session, whose log quest does not read, belongs to the newest PR whose " +
 				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, and as unread each Implementer line it cannot read, " +
-				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, " +
+				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, marked when it is the shadow, " +
 				"where a merged PR whose last round left only low findings open counts them settled, since the author fixes or refutes those before merge, " +
 				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
 				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
 				"is a bot whose review has a body or opens a thread, or a review whose body opens with Automated review by <name>; a finding is a " +
 				"review thread it opens or a [P<n>] line in its review body, and its first answer's first word takes or " +
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
-				"effort, accuracy by size and implementer, summing each branch's tallies once, where an Implementer line's own size, as (iterate, XS), wins " +
+				"effort, accuracy by size and implementer, summing each branch's tallies but the shadow's once, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's, and each online reviewer's coverage and findings over the merged PRs. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
@@ -1183,19 +1183,23 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
-				"first whose model is not avoided reviews, and beside it, on the same head and in its own session, " +
-				`${SECOND_REVIEWER.harness} ${SECOND_REVIEWER.model} ${SECOND_REVIEWER.effort} for every size. ` +
+				"first whose model is not avoided reviews, and beside it, on the same head and each in its own session, " +
+				`${SECOND_REVIEWER.harness} ${SECOND_REVIEWER.model} ${SECOND_REVIEWER.effort} for every size, and the shadow: ` +
+				"the pick's model one effort lower (low, medium, high, xhigh, max), skipped when the pick runs at low, so " +
+				"each effort step can be compared with the one below it. The shadow runs on a branch's first run of the pair, " +
+				"then only while it has findings to settle; its findings are numbered and settled like any reviewer's, and " +
+				"its session carries over to the new pick's shadow when the pick changes. " +
 				"--exclude-model names each model to avoid; without it, the " +
 				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR. " +
 				"When it names none or an `unknown` model, " +
 				"it is any model of the harness running this command, usually the session that just pushed, detected from the " +
 				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; with --harness it is " +
 				"none. " +
-				"--harness names the only reviewer instead of the pair, at its entry's model and effort, and --model and " +
+				"--harness names the only reviewer instead of the pair and the shadow, at its entry's model and effort, and --model and " +
 				"--effort override that reviewer's, or without --harness, the size pick's; a repository whose AGENTS.md names other reviewers " +
 				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
-				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the other and fails the " +
-				"run, saving neither round. The " +
+				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle, as a run of the pair does while a shadow it cannot run has some. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the others and fails the " +
+				"run, saving no round. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
 				"The reviewer reaches its model as the user's own CLI " +
@@ -1241,7 +1245,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reviewer, and is told to disregard other instructions and run no builds, tests, or quest commands. " +
 				"The base is fetched first, since the sandbox has no network.\n\n" +
 				"Prints the size and where it came from, base, and head, then for each reviewer its harness, model, and " +
-				"effort, session, round, an " +
+				"effort, followed by shadow for the shadow, session, round, an " +
 				"unchanged line for a repeated round, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
 				"its one-sentence rationale, the finding count, each finding by its number, then the last round's findings with " +
@@ -1253,7 +1257,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"one object: `rounds`, one per reviewer, `tallies`, every reviewer's findings across the branch's rounds, `record`, and `next`.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
 				"user the GitHub token names, keeping the rest of the body, and prints `record <url>`: the reviewed " +
-				"head, named in full only once no reviewer reports a finding, the base, and each reviewer, its " +
+				"head, named in full only once no reviewer reports a finding, the base, and each reviewer, its Reviewer line ending in `, shadow` for the shadow, its " +
 				"session and round, score, its tally of findings across the branch's rounds, and each finding with its disposition. With no " +
 				"such PR, or a remote off GitHub, it prints `record skipped: <why>` and changes nothing.\n\n" +
 				"Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
@@ -1268,7 +1272,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.addOption(
 			new Option(
 				"--harness <name>",
-				"The only reviewer to run, instead of the size's pick and the second",
+				"The only reviewer to run, instead of the size's pick, the second, and the shadow",
 			).choices(REVIEW_HARNESSES),
 		)
 		.option("--model <model>", "Model the size's pick, or --harness's reviewer, runs instead")
