@@ -303,6 +303,10 @@ test("a busy loop is denied", () => {
 		"yes | while read x; do :; done",
 		"yes | read -t 1",
 		"yes | { read x; }",
+		"(yes)",
+		"(yes) > /dev/null | head -1",
+		"sh -c 'yes'",
+		"sh -c 'yes' | while read x; do :; done",
 	])
 		expect(bash(command), command).toEqual([RULES.busyWait]);
 	for (const command of [
@@ -317,6 +321,11 @@ test("a busy loop is denied", () => {
 		"yes | apt-get install foo",
 		"yes y | ./configure | tee log",
 		"echo yes > answer.txt",
+		"(yes) | head -n 1",
+		"(yes; echo) | head -n 1",
+		"sh -c 'yes' | head -n 1",
+		"read -r answer < input.txt; (head -c 16) < /dev/zero > output.bin",
+		"head -c 16 < /dev/zero; read -t 1 < input.txt",
 	])
 		expect(bash(command), command).toEqual([]);
 });

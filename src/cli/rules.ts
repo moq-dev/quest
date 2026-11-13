@@ -8,7 +8,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { REFERENCE_MARKER, lines } from "../core";
-import { parse } from "./shell";
+import { parse, type Simple } from "./shell";
 
 const EM_DASH = String.fromCharCode(0x2014);
 
@@ -275,44 +275,71 @@ function dropOptions(args: string[]): string[] {
  * its script, which inherits the assignments in `inherited`. A body file is
  * read from disk only for a command that is `alone` on its line: after
  * another command, it may hold something else by the time the line posts it.
+ * `consumer` is the command a pipe feeds the line's output to, when the line
+ * is an `sh -c` script whose own command is piped.
  */
-function shell(line: string, check: Check, inherited: ReadonlySet<string> = new Set(), alone = true) {
+function shell(
+	line: string,
+	check: Check,
+	inherited: ReadonlySet<string> = new Set(),
+	alone = true,
+	consumer?: string[],
+) {
 	const { found, scratch } = check;
 	const commands = parse(line);
 	alone &&= commands.length === 1 && !commands[0]!.runs;
 	// A `read` fed `/dev/zero` never blocks, or returns at once, so waiting on it spins a core. The
-	// redirect counts on the `read`, on the loop or group around it, or on an `exec`.
-	const reads = commands.some(({ argv }) => commandName(argv) === "read");
-	const feedsRead = ({ argv }: { argv: string[] }) =>
-		["read", undefined].includes(commandName(argv)) || ["done", "}", "exec"].includes(argv[0]!);
+	// redirect counts on the `read`, on the loop or group around one before it, on the
+	// subshell holding one, or on an `exec` before one.
+	const readsIn = (from: number, to: number) =>
+		commands.slice(from, to).some(({ argv }) => commandName(argv) === "read");
+	const feedsRead = ({ argv, group }: Simple, at: number) => {
+		if (group !== undefined) return readsIn(...group);
+		if (commandName(argv) === "read") return true;
+		if (["done", "}"].includes(argv[0]!)) return readsIn(0, at);
+		if (argv[0] === "exec") return readsIn(at + 1, commands.length);
+		return commandName(argv) === undefined && readsIn(0, commands.length);
+	};
+	// The subshells around command `at`, whose redirections after `)` apply to it too.
+	const around = (at: number) =>
+		commands.filter(({ group }) => group !== undefined && group[0] <= at && at < group[1]);
+	// The command a pipe from command `at` feeds: the next one past the subshells it is in.
+	const into = (at: number) => {
+		const groups = around(at);
+		return commands.slice(at + 1).find((next) => !groups.includes(next))?.argv ?? [];
+	};
 	const busy = commands.some((simple, at) => {
 		const words = commandWords(simple.argv);
 		if (words?.[0] !== "yes" || ["--help", "--version"].includes(words[1]!)) return false;
+		const reader = simple.piped ? into(at) : consumer;
 		return (
-			!simple.piped ||
-			simple.redirects.some(
-				({ op, fd }) =>
-					["&>", "&>>"].includes(op) || ([">", ">|", ">>"].includes(op) && (fd === undefined || fd === 1)),
+			reader === undefined ||
+			[simple, ...around(at)].some(({ redirects }) =>
+				redirects.some(
+					({ op, fd }) =>
+						["&>", "&>>"].includes(op) ||
+						([">", ">|", ">>"].includes(op) && (fd === undefined || fd === 1)),
+				),
 			) ||
-			spins(commands[at + 1]?.argv ?? [])
+			spins(reader)
 		);
 	});
 	if (busy) found.add("busyWait");
-	for (const simple of commands) {
+	for (const [at, simple] of commands.entries()) {
 		const env = new Set(inherited);
 		const words = [...simple.argv];
 		const argv = unwrap(simple.argv, env);
 		for (const { op, target } of simple.redirects)
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
-			else if (reads && ["<", "<>"].includes(op) && target === "/dev/zero" && feedsRead(simple))
-				found.add("busyWait");
+			else if (["<", "<>"].includes(op) && target === "/dev/zero" && feedsRead(simple, at)) found.add("busyWait");
 		if (argv === null) continue;
 		const [name, ...args] = argv;
 		// A wrapper such as `env --chdir` moves where the command reads a relative path from.
 		const moved = words.slice(0, words.length - argv.length).some((word) => /^(-C|--chdir)/.test(word));
 		if (["bash", "sh", "zsh", "dash"].includes(name!)) {
 			const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
-			if (flag !== -1 && args[flag + 1] !== undefined) shell(args[flag + 1]!, check, env, alone && !moved);
+			if (flag !== -1 && args[flag + 1] !== undefined)
+				shell(args[flag + 1]!, check, env, alone && !moved, simple.piped ? into(at) : consumer);
 			continue;
 		}
 		const asked = env.has(USER_ASKED);

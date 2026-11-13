@@ -26,6 +26,11 @@ export interface Simple {
 	runs?: true;
 	/** Whether a pipe, `|` or `|&`, feeds the command's output to the next. */
 	piped?: true;
+	/**
+	 * For the redirections written after a subshell's `)`, held as a command
+	 * with no words, the range of indices of the subshell's commands they apply to.
+	 */
+	group?: [number, number];
 }
 
 /** An expansion the shell performs in a word or an unquoted here-document. */
@@ -48,6 +53,10 @@ export function parse(line: string): Simple[] {
 	let expands = false;
 	let quoted = false;
 	let i = 0;
+	// Where each open subshell's commands start, and the range of the subshell
+	// that closed just before the current command, if nothing followed its `)` yet.
+	const opens: number[] = [];
+	let closed: [number, number] | null = null;
 
 	const endWord = () => {
 		if (word === null) return;
@@ -77,6 +86,7 @@ export function parse(line: string): Simple[] {
 	};
 	const endCommand = () => {
 		endWord();
+		closed = null;
 		if (command.argv.length > 0 || command.redirects.length > 0 || heredocs.some((h) => h.command === command))
 			commands.push(command);
 		command = { argv: [], redirects: [] };
@@ -159,6 +169,7 @@ export function parse(line: string): Simple[] {
 				word = null;
 			}
 			endWord();
+			if (closed !== null && command.argv.length === 0) command.group = closed;
 			const op = /^(&>>|&>|>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)/.exec(line.slice(i))![1]!;
 			i += op.length;
 			redirect = op;
@@ -167,8 +178,13 @@ export function parse(line: string): Simple[] {
 			if (c === "|" && line[i + 1] !== "|") {
 				endWord();
 				if (command.argv.length > 0 || command.redirects.length > 0) command.piped = true;
+				// After `)`, the pipe takes the whole subshell's output.
+				if (command.argv.length === 0 && closed !== null)
+					for (const inner of commands.slice(...closed)) inner.piped = true;
 			}
 			endCommand();
+			if (c === "(") opens.push(commands.length);
+			else if (c === ")") closed = [opens.pop() ?? 0, commands.length];
 			i += c !== "\n" && line[i + 1] === c ? 2 : 1;
 			if (c === "\n") i = readHeredocs(i);
 		} else {
