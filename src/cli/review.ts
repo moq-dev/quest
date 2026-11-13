@@ -16,7 +16,7 @@ import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
 
 import { SIZES, type Size, branchQuest, parse, size as questSize } from "../core";
-import { type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
+import { HARNESSES, type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
 import { DEFAULT_SIZE, type Model, REVIEWERS } from "./models";
@@ -1278,7 +1278,10 @@ export function parseState(value: unknown): State {
 		) &&
 		state.sessions.filter((session) => session.shadow).length <= 1;
 	if (!valid) throw new ReviewInputError("the saved review sessions are not ones quest review reads; pass --new");
-	return state as State;
+	// A reviewer this quest no longer runs has no CLI to resume its session or settle its findings, so its tally and
+	// session are dropped, open findings included: the routed reviewer reviews the whole branch.
+	const runs = (seat: { reviewer: string }) => (HARNESSES as readonly string[]).includes(seat.reviewer);
+	return { ...state, sessions: state.sessions!.filter(runs), tallies: state.tallies!.filter(runs) } as State;
 }
 
 /**

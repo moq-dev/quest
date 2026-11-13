@@ -1846,6 +1846,15 @@ test("saved sessions are read only in the current format, or refused naming --ne
 		tallies: [tally, { ...tally, shadow: true }],
 	};
 	expect(parseState(shadowed)).toEqual(shadowed);
+	// A retired reviewer's session and tally, open findings included, are dropped rather than recorded or held.
+	const retired = { reviewer: "opencode", model: "opencode-go/deepseek-v4.1-flash", effort: "high" };
+	expect(
+		parseState({
+			branch: "feature",
+			sessions: [session, { ...session, ...retired, session: "ses_1" }],
+			tallies: [tally, { ...tally, ...retired }],
+		}),
+	).toEqual(current);
 	for (const older of [
 		null,
 		// One reviewer's session alone, outside a sessions list.
