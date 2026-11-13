@@ -133,7 +133,7 @@ $ quest --root examples/export unblocked
 1	quest/m0/export.md
 
 $ quest --root examples/export unblocked --json --limit 1
-[{"path":"quest/m0/export.md","dependents":1,"hosts":[],"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"low"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
+[{"path":"quest/m0/export.md","dependents":1,"hosts":[],"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"medium"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
 ```
 
 Each plain output line contains the count, a tab, and the path. On a terminal,
@@ -1346,7 +1346,7 @@ the same for every repository unless its `AGENTS.md` names others:
 | Size | Writer | Fallback |
 |---|---|---|
 | XS | Claude Code `claude-sonnet-5-5` high | Codex `gpt-6.1-sol` low |
-| S | Claude Code `claude-opus-5-5` low | Codex `gpt-6.1-sol` medium |
+| S | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` medium |
 | M | Claude Code `claude-opus-5-5` medium | Codex `gpt-6.1-sol` high |
 | L | Claude Code `claude-opus-5-5` high | Codex `gpt-6.1-sol` xhigh |
 | XL | Claude Code `claude-opus-5-5` xhigh | none |
@@ -1371,14 +1371,14 @@ claude	claude-sonnet-5-5	high
 codex	gpt-6.1-sol	low
 
 $ quest models XS --writer claude-opus-5-5
-claude	claude-opus-5-5	low
+claude	claude-opus-5-5	medium
 ```
 
 `--writer` prints the size's entry for that model, or else its entry at the
 nearest size that lists it, the larger on a tie; a model no list names is an
 error. `--json` prints an array of `{harness, model, effort}` objects. The
 iterate records the size it was given in its `Implementer:` line, as
-`Implementer: Claude Code, claude-opus-5-5, low effort (iterate, XS)`, so
+`Implementer: Claude Code, claude-opus-5-5, medium effort (iterate, XS)`, so
 the model check can audit the routing. `quest review` still reviews the
 whole branch at the PR's size.
 
@@ -1399,8 +1399,9 @@ size. Each size ranks its reviewers, the same for every repository:
 Beside it, the shadow, the pick's model one effort lower (Sol low for an XS
 PR), reviews the same head in its own session, so the routing can be retuned
 from what each effort step finds over the one below it. It is skipped when the
-pick runs at low or at an `--effort` off the ladder (low, medium, high, xhigh,
-max). It runs on the branch's first run of the pick, then reruns only while it has findings to settle, or once the pick
+pick runs at low or at an `--effort` off the ladder (low, medium, high, xhigh).
+
+It runs on the branch's first run of the pick, then reruns only while it has findings to settle, or once the pick
 changed so that it is no longer one step below; its findings are numbered,
 answered, and settled like any reviewer's. A pick with no step below it seats
 a shadow at its own effort while the old shadow still has findings, so none
@@ -1682,6 +1683,10 @@ quest agent stop .worktrees/foo
 quest agent stop --all
 quest agent admit
 ```
+
+`--effort` takes any level the CLI does except `max`, which costs about as much
+as a stronger model at a lower effort without matching it; `quest review`
+refuses it too.
 
 Codex starts and resumes only in a checkout registered by `quest worktree create`,
 on Linux with the `quest worktree run` supervisor available.

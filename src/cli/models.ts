@@ -25,11 +25,13 @@ const sonnet = (effort: string): Model => ({ harness: "claude", model: "claude-s
  * writes a PR runs all its iterates. XS runs Sonnet rather than the cheaper
  * Haiku, whose surcharge past 100k input tokens leads users to cap its
  * compaction window there, barely above an agent's fixed load of prompt,
- * context, and skill.
+ * context, and skill. No size runs Opus at low, which misses too much. XL
+ * stays on Opus rather than Fable, which a subscription caps at half its
+ * weekly limit and which uses that limit faster.
  */
 export const WRITERS: Record<Size, readonly Model[]> = {
 	XS: [sonnet("high"), sol("low")],
-	S: [opus("low"), sol("medium")],
+	S: [opus("medium"), sol("medium")],
 	M: [opus("medium"), sol("high")],
 	L: [opus("high"), sol("xhigh")],
 	XL: [opus("xhigh")],
