@@ -13,6 +13,7 @@ import {
 	type Repository,
 	requirements,
 	string,
+	workflowKey,
 } from "./github";
 import { appOf, checksState, contextOutcome } from "../github/checks";
 import { EJECTED, LAND_CHECK, pinned } from "./land";
@@ -46,7 +47,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 						__typename
 						... on CheckRun {
 							databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
-							checkSuite { databaseId app { databaseId } workflowRun { file { path } } }
+							checkSuite { databaseId app { databaseId } workflowRun { file { path repositoryName } } }
 						}
 						... on StatusContext { context state createdAt targetUrl isRequired(pullRequestNumber: $number) }
 					}
@@ -209,7 +210,7 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 		first!.state === "OPEN"
 			? await requiredOf(github, pr, string(first!.baseRefName))
 			: { checks: [], workflows: [] };
-	const status = summarize(first!, rollup, current, needs, reviewNodes, threadNodes);
+	const status = summarize(first!, rollup, current, contexts, needs, reviewNodes, threadNodes);
 	status.reviewRecord = await reviewRecord(github, pr, first!, deps.warn);
 	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
@@ -327,7 +328,7 @@ export async function headBefore(
 export interface Needs {
 	/** Required checks, each from its app, or from any when `app` is null. */
 	checks: { name: string; app: number | null }[];
-	/** Workflow files that must pass as a whole, by path. */
+	/** Workflow files that must pass as a whole, from {@link workflowKey}. */
 	workflows: string[];
 }
 
@@ -342,25 +343,28 @@ export interface Reported {
 	name: string;
 	/** The app behind a check run; null for a commit status. */
 	app: number | null;
+	/** The workflow file a GitHub Actions job runs in, from {@link workflowKey}. */
 	workflow?: string;
 }
 
-/** A rollup context as a requirement matches it; queries ask for `checkSuite { workflowRun { file { path } } }`. */
+/** A rollup context as a requirement matches it; queries ask for `checkSuite { workflowRun { file { path repositoryName } } }`. */
 export function reported(context: ObjectValue): Reported {
 	const run = context.__typename === "CheckRun" && context.checkSuite ? object(context.checkSuite).workflowRun : null;
 	const file = run ? object(run).file : null;
 	return {
 		name: string(context.__typename === "CheckRun" ? context.name : context.context),
 		app: appOf(context),
-		...(file ? { workflow: string(object(file).path) } : {}),
+		...(file ? { workflow: workflowKey(string(object(file).repositoryName), string(object(file).path)) } : {}),
 	};
 }
 
 /**
  * The required checks and workflows nothing on the head reports yet: a check by its name, from its app when
- * the requirement names one, as GitHub and `quest land` match it, and a workflow by its path.
+ * the requirement names one, as GitHub and `quest land` match it, and a workflow by its repository and path.
+ * `ran` holds every current report, before keeping one per name and app, so a required workflow's job still
+ * counts when a same-named job from another workflow replaced it in `found`.
  */
-export function unreported(found: Reported[], needs: Needs): string[] {
+export function unreported(found: Reported[], needs: Needs, ran: Reported[] = found): string[] {
 	return [
 		...needs.checks
 			.filter(
@@ -368,7 +372,7 @@ export function unreported(found: Reported[], needs: Needs): string[] {
 					!found.some((entry) => entry.name === need.name && (need.app === null || entry.app === need.app)),
 			)
 			.map((need) => (need.app === null ? need.name : `${need.name} (from app ${need.app})`)),
-		...needs.workflows.filter((path) => !found.some((entry) => entry.workflow === path)),
+		...needs.workflows.filter((key) => !ran.some((entry) => entry.workflow === key)),
 	];
 }
 
@@ -380,13 +384,14 @@ function summarize(
 	pull: ObjectValue,
 	rollup: ObjectValue | null,
 	current: ObjectValue[],
+	ran: ObjectValue[],
 	needs: Needs,
 	reviewNodes: ObjectValue[],
 	threadNodes: ObjectValue[],
 ): Status {
 	const head = string(pull.headRefOid);
 	const url = string(pull.url);
-	const missing = unreported(current.map(reported), needs);
+	const missing = unreported(current.map(reported), needs, ran.map(reported));
 	// The rollup's own state counts runs a newer run of the same check replaced.
 	const state = checksState(current);
 	const checks = {

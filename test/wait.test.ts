@@ -125,7 +125,12 @@ function checks(
 						status: entry.result && !entry.running ? "COMPLETED" : "IN_PROGRESS",
 						databaseId: entry.suite ?? null,
 						app: { databaseId: entry.app ?? ACTIONS },
-						workflowRun: { file: { path: entry.workflow ?? ".github/workflows/check.yml" } },
+						workflowRun: {
+							file: {
+								path: entry.workflow ?? ".github/workflows/check.yml",
+								repositoryName: "example/project",
+							},
+						},
 					},
 				};
 	return response({
@@ -211,6 +216,7 @@ function setup(
 				sideCalls.push({ ...call, body });
 				return side.graphql?.shift() ?? reactions();
 			}
+			if (parsed.pathname === "/repositories/1") return Response.json({ full_name: "example/project" });
 			if (parsed.pathname === `${base}/branches/main`) {
 				ruleCalls.push(call);
 				const contexts = side.protected ?? [];
@@ -1251,6 +1257,21 @@ test("a required workflow requires its jobs, keeps optional checks optional, and
 	expect(fixture.sleeps).toEqual([300_000, 300_000]);
 	expect(lines).toHaveLength(1);
 	expect(lines[0]).toMatch(/^2026-10-07T12:08:00Z checks:passed gate /);
+});
+
+test("a required workflow's job counts toward checks:passed when another workflow's same-named job is newer", async () => {
+	const fixture = setup([pull(), response([pushed()]), response([committed(A)]), response([committed(A)])], [A], {
+		checks: [
+			checks([
+				{ name: "build", result: "SUCCESS", time: LATER, workflow: CI, id: 1 },
+				{ name: "build", result: "SUCCESS", time: LATEST, workflow: ".github/workflows/docs.yml", id: 2 },
+			]),
+		],
+		rules: [workflowRule],
+	});
+	const lines = await waitForActivity(pr, {}, fixture.deps);
+	expect(lines).toHaveLength(1);
+	expect(lines[0]).toMatch(/ checks:passed /);
 });
 
 test("a failing job in a required workflow wakes the wait", async () => {

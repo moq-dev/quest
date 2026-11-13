@@ -1181,10 +1181,11 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		const alone = forge.pull("Alone", { "2.txt": "2\n" }, { pull: { runs: [test("CANCELLED", 30)] } });
 		workflow(alone, [[3, "cancelled", "2026-11-12T23:42:53Z"]]);
 		// Rerunning the cancelled run makes it the newest, so the run it cancelled in turn is the replaced one.
+		// The rerun reports anew, after the run it cancelled.
 		const rerun = forge.pull(
 			"Rerun",
 			{ "3.txt": "3\n" },
-			{ pull: { runs: [test("SUCCESS", 40), test("CANCELLED", 50)] } },
+			{ pull: { runs: [test("CANCELLED", 50), test("SUCCESS", 40)] } },
 		);
 		workflow(rerun, [
 			[4, "success", "2026-11-12T23:50:00Z"],

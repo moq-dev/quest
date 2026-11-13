@@ -72,7 +72,7 @@ const CHECKS = `query($owner: String!, $repo: String!, $number: Int!, $after: St
 						__typename
 						... on CheckRun {
 							databaseId name status conclusion completedAt detailsUrl isRequired(pullRequestNumber: $number)
-							checkSuite { databaseId status app { databaseId } workflowRun { file { path } } }
+							checkSuite { databaseId status app { databaseId } workflowRun { file { path repositoryName } } }
 						}
 						... on StatusContext { context state createdAt targetUrl isRequired(pullRequestNumber: $number) }
 					}
@@ -354,7 +354,8 @@ async function watch(
 	};
 	/** GraphQL says which checks the base branch requires, through branch protection or rulesets. */
 	const checks = async (): Promise<
-		{ head: string; base: string; checks: Check[]; unfinished: boolean; pull: ObjectValue } | undefined
+		| { head: string; base: string; checks: Check[]; ran: Reported[]; unfinished: boolean; pull: ObjectValue }
+		| undefined
 	> => {
 		const rows: ObjectValue[] = [];
 		let head: string | undefined;
@@ -376,7 +377,14 @@ async function watch(
 		const current = await currentChecks(github, pr, head!, rows);
 		// A replacing run may have no check run yet, so an unfinished run it read keeps the head busy.
 		const unfinished = current.runs?.some((run) => run.status !== "completed") ?? false;
-		return { head: head!, base: string(pull.baseRefName), checks: current.checks.map(check), unfinished, pull };
+		return {
+			head: head!,
+			base: string(pull.baseRefName),
+			checks: current.checks.map(check),
+			ran: rows.map(reported),
+			unfinished,
+			pull,
+		};
 	};
 	/**
 	 * What the base branch requires, read once per wait, as `quest status` reads it. Only a requirement
@@ -589,7 +597,7 @@ function check(row: ObjectValue): Check {
  * no checks requires them all.
  */
 function checkActivities(
-	{ head, checks: all, unfinished }: { head: string; checks: Check[]; unfinished: boolean },
+	{ head, checks: all, ran, unfinished }: { head: string; checks: Check[]; ran: Reported[]; unfinished: boolean },
 	needs: Needs,
 	state: Cursor["checks"],
 	prUrl: string,
@@ -625,17 +633,19 @@ function checkActivities(
 	// may still create. Its date is the last completion, but its name and link
 	// always identify a required check that passed.
 	const idle =
-		!unfinished && all.every((entry) => entry.result && !entry.running) && unreported(all, needs).length === 0;
-	const passed =
-		idle && settled.length === required.length && settled.every((entry) => entry.result.outcome === "passed")
-			? settled.at(-1)
-			: undefined;
+		!unfinished && all.every((entry) => entry.result && !entry.running) && unreported(all, needs, ran).length === 0;
 	const last = idle
 		? all.reduce<Check | undefined>(
 				(latest, entry) => (!latest || entry.result!.time >= latest.result!.time ? entry : latest),
 				undefined,
 			)
 		: undefined;
+	// A required workflow whose only job lost to a same-named job of another workflow leaves no required
+	// check to name, so the head's last check names the pass.
+	const passed =
+		idle && settled.length === required.length && settled.every((entry) => entry.result.outcome === "passed")
+			? (settled.at(-1) ?? (needs.workflows.length ? last : undefined))
+			: undefined;
 	const optional = all.filter((entry) => !required.includes(entry) && entry.result?.outcome === "failed");
 	return [
 		...reached("failed", failed),

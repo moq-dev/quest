@@ -112,7 +112,7 @@ const tokenMax = {
 test("a cancelled check drops once a newer run of its workflow exists, as on kixelated/token-max's daaaadc", () => {
 	expect(checksState(latestContexts(tokenMax.contexts))).toBe("FAILURE");
 	const current = currentContexts(tokenMax.contexts, tokenMax.runs);
-	expect(current.map((context) => context.databaseId)).toEqual([21, 41, 42]);
+	expect(current.map((context) => context.databaseId)).toEqual([41, 42]);
 	expect(checksState(current)).toBe("SUCCESS");
 });
 
@@ -141,8 +141,9 @@ test("a cancelled check counts while nothing replaced its run, and other results
 test("a rerun is newer than every run that started before its latest attempt", () => {
 	// Run 1 was rerun after run 2 started, and its rerun cancelled run 2.
 	const runs = [workflowRun(1, "2026-11-12T12:00:00Z"), workflowRun(2, "2026-11-12T11:00:00Z")];
-	const contexts = [job("test", 1, "SUCCESS", 10), job("test", 2, "CANCELLED", 20)];
-	expect(currentContexts(contexts, runs)).toEqual([contexts[0]]);
+	// The rerun reports anew, after the run it cancelled.
+	const contexts = [job("test", 2, "CANCELLED", 20), job("test", 3, "SUCCESS", 10)];
+	expect(currentContexts(contexts, runs)).toEqual([contexts[1]]);
 	// Runs that started in the same second order by ID.
 	const tied = [workflowRun(1, "2026-11-12T12:00:00Z"), workflowRun(2, "2026-11-12T12:00:00Z")];
 	expect(currentContexts([job("test", 1, "CANCELLED", 10)], tied)).toEqual([]);

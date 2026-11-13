@@ -147,6 +147,9 @@ function setup(
 					return Response.json({ message: "Resource not accessible by integration" }, { status: 403 });
 				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
 			}
+			// Ruleset workflows name their repository by ID: 1 is this one, 2 another.
+			if (path.pathname === "/repositories/1") return Response.json({ full_name: "example/project" });
+			if (path.pathname === "/repositories/2") return Response.json({ full_name: "example/policies" });
 			if (path.pathname === "/repos/example/project/branches/main")
 				return options.noBase
 					? Response.json({ message: "Branch not found" }, { status: 404 })
@@ -491,7 +494,11 @@ test("drops a cancelled check a newer run of its workflow replaced, as on kixela
 	const job = (name: string, conclusion: string, databaseId: number, suite: number) => ({
 		...run(name, "COMPLETED", conclusion, false),
 		databaseId,
-		checkSuite: { databaseId: suite, app: { databaseId: 15368 }, workflowRun: { file: { path: CI } } },
+		checkSuite: {
+			databaseId: suite,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
 	});
 	const runs = (started: string) => [
 		{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" },
@@ -515,7 +522,11 @@ test("a required check or workflow nothing reports is pending, except the gate's
 	const job = (name: string, workflow: string) => ({
 		...run(name, "COMPLETED", "SUCCESS", false),
 		databaseId: 1,
-		checkSuite: { databaseId: 10, app: { databaseId: 15368 }, workflowRun: { file: { path: workflow } } },
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: workflow, repositoryName: "example/project" } },
+		},
 	});
 	const rules = [
 		{
@@ -524,7 +535,15 @@ test("a required check or workflow nothing reports is pending, except the gate's
 				required_status_checks: [{ context: "test" }, { context: "lint" }, { context: "quest land" }],
 			},
 		},
-		{ type: "workflows", parameters: { workflows: [{ path: CI }, { path: ".github/workflows/pr.yml" }] } },
+		{
+			type: "workflows",
+			parameters: {
+				workflows: [
+					{ path: CI, repository_id: 1 },
+					{ path: ".github/workflows/pr.yml", repository_id: 1 },
+				],
+			},
+		},
 	];
 	const fixture = setup([pull({ checks: page([job("test", CI)]), reviews: page([]), threads: page([]) })], {
 		rules,
@@ -533,7 +552,7 @@ test("a required check or workflow nothing reports is pending, except the gate's
 	expect(statusLines(status).filter((line) => line.startsWith("check"))).toEqual([
 		"checks pending passed=1 failing=0 pending=2",
 		"check pending required expected - lint",
-		"check pending required expected - .github/workflows/pr.yml",
+		"check pending required expected - example/project:.github/workflows/pr.yml",
 	]);
 	// With no checks on the head at all, the requirements still leave it pending.
 	const empty = setup([pull({ checks: null, reviews: page([]), threads: page([]) })], { rules });
@@ -550,7 +569,11 @@ test("a required check from another app than its requirement names stays pending
 	const test = {
 		...run("test", "COMPLETED", "SUCCESS", false),
 		databaseId: 1,
-		checkSuite: { databaseId: 10, app: { databaseId: 15368 }, workflowRun: { file: { path: CI } } },
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
 	};
 	const open = setup([pull({ checks: page([test]), reviews: page([]), threads: page([]) })], { rules });
 	expect(statusLines(await pullRequestStatus(pr, open.deps)).filter((line) => line.startsWith("check"))).toEqual([
@@ -569,7 +592,11 @@ test("a replacing run that has not started yet stands in by its creation time", 
 	const job = {
 		...run("Tests (${{ matrix.os }})", "COMPLETED", "CANCELLED", false),
 		databaseId: 1,
-		checkSuite: { databaseId: 10, app: { databaseId: 15368 }, workflowRun: { file: { path: CI } } },
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
 	};
 	const fixture = setup([pull({ checks: page([job]), reviews: page([]), threads: page([]) })], {
 		runs: [
@@ -585,6 +612,48 @@ test("a replacing run that has not started yet stands in by its creation time", 
 	});
 });
 
+test("a required workflow matches its repository as well as its path", async () => {
+	const build = {
+		...run("build", "COMPLETED", "SUCCESS", false),
+		databaseId: 1,
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
+	};
+	// The rule requires example/policies's ci.yml, which the local ci.yml at the same path does not satisfy.
+	const fixture = setup([pull({ checks: page([build]), reviews: page([]), threads: page([]) })], {
+		rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 2 }] } }],
+	});
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks.state).toBe("pending");
+	expect(status.checks.pending.map((check) => check.name)).toEqual([`example/policies:${CI}`]);
+});
+
+test("a required workflow counts as reported when another workflow's same-named job is the newer one", async () => {
+	const build = (databaseId: number, path: string) => ({
+		...run("build", "COMPLETED", "SUCCESS", false),
+		databaseId,
+		checkSuite: {
+			databaseId: databaseId * 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path, repositoryName: "example/project" } },
+		},
+	});
+	const fixture = setup(
+		[
+			pull({
+				checks: page([build(1, CI), build(2, ".github/workflows/docs.yml")]),
+				reviews: page([]),
+				threads: page([]),
+			}),
+		],
+		{ rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 1 }] } }] },
+	);
+	expect((await pullRequestStatus(pr, fixture.deps)).checks.state).toBe("success");
+});
+
 test("a job in a required workflow counts as required", async () => {
 	const fixture = setup(
 		[
@@ -593,14 +662,18 @@ test("a job in a required workflow counts as required", async () => {
 					{
 						...run("build", "COMPLETED", "FAILURE", false),
 						databaseId: 1,
-						checkSuite: { databaseId: 10, app: { databaseId: 15368 }, workflowRun: { file: { path: CI } } },
+						checkSuite: {
+							databaseId: 10,
+							app: { databaseId: 15368 },
+							workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+						},
 					},
 				]),
 				reviews: page([]),
 				threads: page([]),
 			}),
 		],
-		{ rules: [{ type: "workflows", parameters: { workflows: [{ path: CI }] } }] },
+		{ rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 1 }] } }] },
 	);
 	const status = await pullRequestStatus(pr, fixture.deps);
 	expect(status.checks.failing.map((check) => [check.name, check.required])).toEqual([["build", true]]);
@@ -629,7 +702,7 @@ test("counts only each check's newest run from its app", async () => {
 	const status = await pullRequestStatus(pr, fixture.deps);
 	// The fixture answers whatever is asked, so the query must ask for what tells runs apart.
 	expect(fixture.texts[0].replace(/\s+/g, " ")).toContain(
-		"... on CheckRun { databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number) checkSuite { databaseId app { databaseId } workflowRun { file { path } } } }",
+		"... on CheckRun { databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number) checkSuite { databaseId app { databaseId } workflowRun { file { path repositoryName } } } }",
 	);
 	expect(status.checks.passed).toBe(2);
 	expect(status.checks.failing.map((check) => check.name)).toEqual(["test", "lint"]);

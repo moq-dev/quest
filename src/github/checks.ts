@@ -69,7 +69,7 @@ export function cancelled(context: RollupContext): boolean {
 
 /**
  * Each check's latest report that still counts: a check that reported cancelled drops once a newer run of
- * its workflow exists on the head, as when `cancel-in-progress` cancels a run for a newer one, which may
+ * its workflow exists on the head, leaving the check unreported rather than reviving an older report, as when `cancel-in-progress` cancels a run for a newer one, which may
  * never report the cancelled run's names, such as a matrix job's unexpanded name. Any other result keeps
  * counting, as does a cancelled run nothing replaced. A rerun reports anew in its run's check suite, so
  * the rollup holds only its latest attempt. Queries must also ask for a check run's `conclusion` and
@@ -80,7 +80,7 @@ export function currentContexts<T extends RollupContext>(contexts: T[], runs: Wo
 	const replaced = new Set(runs.filter((run) => replacedRun(run, runs)).map((run) => run.check_suite_id));
 	const suite = (context: T) =>
 		Number((context.checkSuite as { databaseId?: unknown } | null | undefined)?.databaseId);
-	return latestContexts(contexts.filter((context) => !(cancelled(context) && replaced.has(suite(context)))));
+	return latestContexts(contexts).filter((context) => !(cancelled(context) && replaced.has(suite(context))));
 }
 
 /** Whether a context passed, failed, or is still pending. Neutral and skipped check runs pass. */

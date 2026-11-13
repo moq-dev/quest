@@ -506,7 +506,7 @@ export interface RequiredCheck {
 /** What a base branch requires, read from branch protection and rulesets. */
 export interface Requirements {
 	checks: RequiredCheck[];
-	/** Workflow files that must pass as a whole, so each of their jobs is required. */
+	/** Workflow files that must pass as a whole, so each of their jobs is required, from {@link workflowKey}. */
 	workflows: string[];
 	/** Every rule the branch's active rulesets apply: `type`, `parameters`, and the ruleset's source. */
 	rules: ObjectValue[];
@@ -529,6 +529,32 @@ async function branchRules(github: GitHub, path: string): Promise<ObjectValue[]>
 	throw new Error(
 		`GitHub HTTP 403 for ${new URL(path, API).pathname}; ${reason ?? "check repository access and token permissions"}`,
 	);
+}
+
+/**
+ * A workflow file as requirements name it: its repository's `owner/name` and its path, since a ruleset may
+ * require a workflow from another repository at the same path as a local one.
+ */
+export function workflowKey(repository: string, path: string): string {
+	return `${repository.toLowerCase()}:${path}`;
+}
+
+/** The workflow files `rules` require, each keyed by {@link workflowKey} from its rule's `repository_id`. */
+async function requiredWorkflows(github: GitHub, rules: ObjectValue[]): Promise<string[]> {
+	const names = new Map<number, string>();
+	const keys: string[] = [];
+	for (const row of rules
+		.filter((rule) => rule.type === "workflows")
+		.flatMap((rule) => array(object(rule.parameters).workflows))) {
+		const id = Number(row.repository_id);
+		if (!names.has(id)) {
+			const response = await github.request(`/repositories/${id}`, { allow: [404] });
+			// A repository the token cannot see is still required; nothing on the head can match its name.
+			names.set(id, response.ok ? string(object(await response.json()).full_name) : `repository ${id}`);
+		}
+		keys.push(workflowKey(names.get(id)!, string(row.path)));
+	}
+	return [...new Set(keys)];
 }
 
 /** What `branch` of `repository` requires, read with read access from branch protection and rulesets. */
@@ -561,14 +587,7 @@ export async function requirements(github: GitHub, repository: Repository, branc
 			(check, index) =>
 				checks.findIndex((other) => other.name === check.name && other.app === check.app) === index,
 		),
-		workflows: [
-			...new Set(
-				rules
-					.filter((rule) => rule.type === "workflows")
-					.flatMap((rule) => array(object(rule.parameters).workflows))
-					.map((row) => string(row.path)),
-			),
-		],
+		workflows: await requiredWorkflows(github, rules),
 		rules,
 		// Unknown counts as on, so a reader that needs the settings reads them rather than assume none.
 		classic: protection.enabled !== false,
