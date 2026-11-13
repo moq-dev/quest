@@ -55,8 +55,3 @@ Agent's choices, for the implementer to revisit:
   arm on the PR's first Implementer line: `--writer` also takes that line's
   effort, or a new option names the arm.
 - [The readout](/quest/m0/routing-evidence/README.md) ends the split.
-
-## Required
-
-- [usage through token-max](/quest/m0/routing-evidence/usage-token-max.md) -
-  counts sub-agent writers' cost, without which an arm's cost is undercounted

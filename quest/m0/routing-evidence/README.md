@@ -31,7 +31,7 @@ Decided 2026-11-11 (user, /quest-plan, from an audit of PRs merged
   only; none).
 - Records?
   - ✅ Cumulative review tallies and online reviewers in usage
-  - ✅ [Attribution through token-max](/quest/m0/routing-evidence/usage-token-max.md),
+  - ✅ Attribution through token-max,
     kept after the maintainer first left it out, because the writer A/B
     compares cost and `quest usage` crashes on this host
   - Rejected: a PR-body hook that validates `## Models` and `## Caused by`

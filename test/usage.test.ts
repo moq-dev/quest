@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -8,7 +8,7 @@ import { implementer } from "../src/github/models";
 import { fixes } from "../src/cli/land-fixer";
 import type { Round, Tally } from "../src/cli/review";
 import { parseReview, reviewRecord } from "../src/cli/review-record";
-import { type Priced, parseCcusage, readClaudeLog, readCodexLog, usage, usageLines } from "../src/cli/usage";
+import { type Session, causes, fold, parseSessions, usage, usageLines } from "../src/cli/usage";
 import { tempDir } from "./fixture";
 
 const THREAD = "01a1b8e8-8fca-7793-99d1-062f41f8a7b0";
@@ -17,138 +17,139 @@ const OTHER = "961c731d-399c-46c5-81ef-069105f87cc4";
 const OWNED = "f1913a12-44c4-438c-a9d9-06e5b1192c04";
 const GONE = "83a08f0e-6ef1-4b41-ad0c-58b37fc993f8";
 const BOTH = "5d2c7f3e-8a41-4b6e-9f0d-2c6a1e7b4d93";
+const REMOTE = "a1c2e3f4-0000-4000-8000-000000000001";
+const ITERATE = "11111111-1111-1111-1111-111111111111";
 
-const lines = (...records: unknown[]) => `${records.map((r) => JSON.stringify(r)).join("\n")}\n`;
-
-/** A Claude Code log line; the message stands in for a prompt the report must never read out. */
-const claude = (timestamp: string, gitBranch: string, extra: object = {}) => ({
-	type: "user",
-	timestamp,
-	gitBranch,
-	message: { content: "SECRET PROMPT" },
+/** A session as `token-max sessions` prints it, on one model and effort. */
+const exported = (session: string, model: string, effort: string, cost: number, extra: object = {}) => ({
+	host: null,
+	harness: model.startsWith("gpt") ? "codex" : "claude",
+	session,
+	parent: null,
+	review: false,
+	cwd: "/work",
+	repositories: ["https://github.com/acme/proj.git"],
+	repositoriesSource: "checkout",
+	branches: [{ name: "quest/m0/a", first: "2026-11-06T10:05:00Z", last: "2026-11-06T10:06:00Z" }],
+	start: "2026-11-06T10:05:00Z",
+	end: "2026-11-06T10:06:00Z",
+	models: [
+		{
+			model,
+			effort,
+			requests: 3,
+			inputTokens: 10,
+			cacheWriteTokens: 20,
+			cacheReadTokens: 30,
+			outputTokens: 40,
+			costUsd: cost,
+			complete: true,
+		},
+	],
+	costUsd: cost,
+	complete: true,
+	skippedLines: 0,
+	files: ["/home/me/.claude/projects/-work/x.jsonl"],
 	...extra,
 });
 
-const codexLog = (
-	timestamp: string,
-	branch: string | null,
-	extra: { source?: unknown; url?: string; cwd?: string } = {},
-) =>
-	lines(
-		{
-			type: "session_meta",
-			timestamp,
-			payload: {
-				id: THREAD,
-				timestamp,
-				cwd: extra.cwd ?? "/work",
-				source: extra.source ?? "exec",
-				git: branch ? { branch, repository_url: extra.url ?? "https://github.com/acme/proj.git" } : undefined,
-			},
-		},
-		{ type: "response_item", payload: { type: "message", content: "SECRET PROMPT" } },
-		{ type: "turn_context", payload: { model: "gpt-6.1-sol", effort: "medium" } },
-		{ type: "turn_context", payload: { model: "gpt-6.1-sol", effort: "high" } },
-	);
+const parse = (...rows: object[]) => parseSessions(rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
 
-const spent = (model: string, cost: number) => ({
-	model,
-	input: 10,
-	cacheWrite: 20,
-	cacheRead: 30,
-	output: 40,
-	cost,
-});
-
-describe("parseCcusage", () => {
-	test("reads each session's agent, ID, and spend per model", () => {
-		const text = JSON.stringify({
-			session: [
+describe("parseSessions", () => {
+	test("reads each session's host, ID, repositories, branches, and spend per model and effort", () => {
+		const [session] = parse(
+			exported(THREAD, "gpt-6.1-sol", "high", 0.5, {
+				host: "box",
+				repositories: ["https://github.com/Acme/Proj.git", "https://gitlab.com/acme/proj.git"],
+			}),
+		);
+		expect(session).toEqual({
+			host: "box",
+			harness: "codex",
+			id: THREAD,
+			review: false,
+			cwd: "/work",
+			repositories: ["acme/proj"],
+			branches: [
 				{
-					agent: "codex",
-					period: `2026/11/06/rollout-2026-11-06T20-23-41-${THREAD}`,
-					metadata: { lastActivity: "2026-11-07T00:00:00Z" },
-					modelBreakdowns: [
-						{
-							modelName: "gpt-6.1-sol",
-							inputTokens: 1,
-							cacheCreationTokens: 0,
-							cacheReadTokens: 2,
-							outputTokens: 3,
-							cost: 0.5,
-						},
-					],
+					name: "quest/m0/a",
+					first: Date.parse("2026-11-06T10:05:00Z"),
+					last: Date.parse("2026-11-06T10:06:00Z"),
 				},
 			],
-			totals: {},
+			start: Date.parse("2026-11-06T10:05:00Z"),
+			models: [
+				{
+					model: "gpt-6.1-sol",
+					effort: "high",
+					input: 10,
+					cacheWrite: 20,
+					cacheRead: 30,
+					output: 40,
+					cost: 0.5,
+					complete: true,
+				},
+			],
+			cost: 0.5,
+			complete: true,
+			skippedLines: 0,
 		});
-		expect(parseCcusage(text)).toEqual([
-			{
-				harness: "codex",
-				id: `2026/11/06/rollout-2026-11-06T20-23-41-${THREAD}`,
-				models: [{ model: "gpt-6.1-sol", input: 1, cacheWrite: 0, cacheRead: 2, output: 3, cost: 0.5 }],
-			},
-		]);
+		// A session token-max could not resolve a repository, model, or ID for keeps the gap as null.
+		const [unknown] = parse({
+			...exported(THREAD, "gpt-6.1-sol", "high", 1, { repositories: null, session: null }),
+			models: [{ ...exported(THREAD, "x", "y", 1).models[0], model: null, effort: null }],
+		});
+		expect([unknown!.id, unknown!.repositories, unknown!.models[0]!.model]).toEqual([null, null, null]);
 	});
 
-	test("fails on a session missing a field", () => {
-		expect(() => parseCcusage(JSON.stringify({ session: [{ agent: "claude", period: "x" }] }))).toThrow(
-			/modelBreakdowns/,
-		);
-		expect(() => parseCcusage(JSON.stringify({ daily: [] }))).toThrow(/no session list/);
+	test("fails on a session missing a field, and on a line that is not JSON", () => {
+		const { skippedLines: _, ...missing } = exported(THREAD, "gpt-6.1-sol", "high", 1);
+		expect(() => parse(missing)).toThrow(/skipped line count/);
+		expect(() => parse(exported(THREAD, "gpt-6.1-sol", "high", 1, { start: "soon" }))).toThrow(/a start/);
+		expect(() => parseSessions('{"host"\n')).toThrow();
 	});
 });
 
-describe("session logs", () => {
-	test("a Claude Code log gives each branch's first and last time, and the last reply's effort", () => {
-		const path = join(tempDir(), "log.jsonl");
-		writeFileSync(
-			path,
-			lines(
-				{ type: "custom-title", customTitle: "no timestamp" },
-				claude("2026-11-06T10:00:00Z", "t3/scratch"),
-				claude("2026-11-06T10:05:00Z", "quest/m0/a"),
-				{ type: "assistant", timestamp: "2026-11-06T10:06:00Z", gitBranch: "quest/m0/a", effort: "medium" },
-				claude("2026-11-06T10:07:00Z", "HEAD"),
-				{ type: "assistant", timestamp: "2026-11-06T10:09:00Z", gitBranch: "quest/m0/a", effort: "high" },
-			) + '{"type":"user","timestamp":"2026-11-06T11:00',
+describe("fold", () => {
+	test("keeps each session's costliest copy across hosts, and leaves alone sessions without an ID", () => {
+		const [here, there, alone, anonymous, again] = parse(
+			exported(CLAUDE, "claude-opus-5-5", "high", 2),
+			exported(CLAUDE, "claude-opus-5-5", "high", 5, { host: "box" }),
+			exported(OTHER, "claude-opus-5-5", "high", 1, { host: "box" }),
+			exported(THREAD, "gpt-6.1-sol", "high", 1, { session: null }),
+			exported(THREAD, "gpt-6.1-sol", "high", 1, { session: null, host: "box" }),
 		);
-		const log = readClaudeLog(path);
-		expect(log.started).toBe(Date.parse("2026-11-06T10:00:00Z"));
-		expect([...log.branches]).toEqual([
-			[
-				"t3/scratch",
-				{ first: Date.parse("2026-11-06T10:00:00Z"), last: Date.parse("2026-11-06T10:00:00Z"), cwd: null },
-			],
-			[
-				"quest/m0/a",
-				{ first: Date.parse("2026-11-06T10:05:00Z"), last: Date.parse("2026-11-06T10:09:00Z"), cwd: null },
-			],
+		const { kept, dropped } = fold([here!, there!, alone!, anonymous!, again!]);
+		expect(kept).toEqual([there, alone, anonymous, again]);
+		expect(dropped).toEqual([here]);
+	});
+});
+
+describe("causes", () => {
+	const repository = { owner: "moq-dev", repo: "moq" };
+	const link = (n: number) => `[moq-dev/moq#${n}](https://github.com/moq-dev/moq/pull/${n})`;
+	const body = (section: string) => `Fix.\n\n## Caused by\n\n${section}\n\n## Models\n\n- Size: S\n`;
+
+	test("counts only a bullet that opens with the culprit's link and says why", () => {
+		// The shapes the 2026-11-11 mistake audit found counted by mistake, from moq-dev/moq's PRs.
+		expect(causes(body(`No bug on \`main\`; the \`release\` fix is ${link(8469)}.`), repository)).toEqual([]);
+		expect(
+			causes(body(`- No single PR: see ${link(8441)}.\n\nMerged \`main\`: ${link(8441)}.`), repository),
+		).toEqual([]);
+		expect(causes(body(`None: new coverage for the models ${link(8447)} added.`), repository)).toEqual([]);
+		expect(causes(body(`- ${link(8054)} - \`ready\` waits (fixed by ${link(8351)})`), repository)).toEqual([8054]);
+		expect(causes(body(`- ${link(8459)} put a shaper profile among the fixtures.`), repository)).toEqual([]);
+		// Another repository's culprit, or a link whose text names another PR, is no culprit here.
+		expect(
+			causes(body(`- [moq-dev/quest#494](https://github.com/moq-dev/quest/pull/494) - a gap`), repository),
+		).toEqual([]);
+		expect(causes(body(`- [moq-dev/moq#1](https://github.com/moq-dev/moq/pull/2) - mismatch`), repository)).toEqual(
+			[],
+		);
+		expect(causes(body(`- ${link(7)} - one\r\n- ${link(8)} - two\n- ${link(7)} - again`), repository)).toEqual([
+			7, 8,
 		]);
-		expect(log.effort).toBe("high");
-		expect(log.repository).toBeNull();
-	});
-
-	test("a malformed line before the last fails", () => {
-		const path = join(tempDir(), "log.jsonl");
-		writeFileSync(path, `{"oops"\n${lines(claude("2026-11-06T10:00:00Z", "main"))}`);
-		expect(() => readClaudeLog(path)).toThrow(/not JSON/);
-	});
-
-	test("a Codex rollout gives its branch, remote, review mark, and last turn's effort", () => {
-		const path = join(tempDir(), "rollout.jsonl");
-		writeFileSync(path, codexLog("2026-11-06T10:00:00Z", "quest/m0/a", { source: { subagent: "review" } }));
-		const log = readCodexLog(path);
-		expect([...log.branches.keys()]).toEqual(["quest/m0/a"]);
-		expect(log.repository).toEqual({ owner: "acme", repo: "proj" });
-		expect(log.review).toBe(true);
-		expect(log.effort).toBe("high");
-	});
-
-	test("a Codex rollout that does not start with its session_meta fails", () => {
-		const path = join(tempDir(), "rollout.jsonl");
-		writeFileSync(path, lines({ type: "turn_context", payload: {} }));
-		expect(() => readCodexLog(path)).toThrow(/session_meta/);
+		expect(causes(`- ${link(7)} - outside the section`, repository)).toEqual([]);
 	});
 });
 
@@ -381,58 +382,53 @@ describe("usage", () => {
 		execFileSync("git", ["init", "-q"], { cwd: root });
 		execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/proj.git"], { cwd: root });
 
-		const claudeHome = join(dir, "claude");
-		mkdirSync(join(claudeHome, "projects", "-work"), { recursive: true });
-		writeFileSync(
-			join(claudeHome, "projects", "-work", `${CLAUDE}.jsonl`),
-			lines(
-				claude("2026-11-06T09:00:00Z", "t3/scratch"),
-				claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: root }),
-				{ type: "assistant", timestamp: "2026-11-06T10:06:00Z", gitBranch: "quest/m0/a", effort: "high" },
-			),
-		);
-		// A session in a checkout of another repository, on a branch of the same name.
-		const other = join(dir, "other");
-		mkdirSync(other);
-		execFileSync("git", ["init", "-q"], { cwd: other });
-		execFileSync("git", ["remote", "add", "origin", "git@github.com:other/repo.git"], { cwd: other });
-		writeFileSync(
-			join(claudeHome, "projects", "-work", `${OTHER}.jsonl`),
-			lines(claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: join(other, "sub") })),
-		);
-		mkdirSync(join(other, "sub"));
-		// A session in a checkout with remotes for both the fork and its upstream, on a branch each has a PR from.
-		const both = join(dir, "both");
-		mkdirSync(both);
-		execFileSync("git", ["init", "-q"], { cwd: both });
-		execFileSync("git", ["remote", "add", "origin", "https://github.com/fork/proj.git"], { cwd: both });
-		execFileSync("git", ["remote", "add", "upstream", "https://github.com/acme/proj.git"], { cwd: both });
-		writeFileSync(
-			join(claudeHome, "projects", "-work", `${BOTH}.jsonl`),
-			lines(claude("2026-11-06T10:05:00Z", "quest/m0/a", { cwd: both })),
-		);
-		// Two sessions in checkouts since deleted: one in the directory a Codex log names, and one in a clone nested
-		// below it, which may be another repository's and so is not charged to this one.
-		writeFileSync(
-			join(claudeHome, "projects", "-work", `${OWNED}.jsonl`),
-			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/work" })),
-		);
-		writeFileSync(
-			join(claudeHome, "projects", "-work", `${GONE}.jsonl`),
-			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/work/nested" })),
-		);
-		const codexHome = join(dir, "codex");
-		const day = join(codexHome, "sessions", "2026", "11", "06");
-		mkdirSync(day, { recursive: true });
-		// The reviewer, named by #10's record; an iterate on #10; one on another repository's branch of the same name.
-		writeFileSync(join(day, `rollout-a-${THREAD}.jsonl`), codexLog("2026-11-06T12:00:00Z", "quest/m0/a"));
-		writeFileSync(
-			join(day, "rollout-b-11111111-1111-1111-1111-111111111111.jsonl"),
-			codexLog("2026-11-06T13:00:00Z", "quest/m0/a"),
-		);
-		writeFileSync(
-			join(day, "rollout-c-22222222-2222-2222-2222-222222222222.jsonl"),
-			codexLog("2026-11-06T13:00:00Z", "quest/m0/a", { url: "https://github.com/other/repo.git", cwd: "/other" }),
+		const sessions: Session[] = parse(
+			exported(CLAUDE, "claude-opus-5-5", "high", 5, {
+				branches: [
+					{ name: "t3/scratch", first: "2026-11-06T09:00:00Z", last: "2026-11-06T09:00:00Z" },
+					{ name: "quest/m0/a", first: "2026-11-06T10:05:00Z", last: "2026-11-06T10:06:00Z" },
+				],
+				start: "2026-11-06T09:00:00Z",
+			}),
+			// A session in a checkout of another repository, on a branch of the same name.
+			exported(OTHER, "claude-opus-5-5", "high", 6, {
+				cwd: "/other/sub",
+				repositories: ["git@github.com:other/repo.git"],
+			}),
+			// The reviewer, named by #10's record; an iterate on #10, with a cheaper copy on another host; one on
+			// another repository's branch of the same name.
+			exported(THREAD, "gpt-6.1-sol", "high", 1, { start: "2026-11-06T12:00:00Z" }),
+			exported(ITERATE, "gpt-6.1-sol", "high", 2, { start: "2026-11-06T13:00:00Z" }),
+			exported(ITERATE, "gpt-6.1-sol", "high", 1, { start: "2026-11-06T13:00:00Z", host: "box" }),
+			exported("22222222-2222-2222-2222-222222222222", "gpt-6.1-sol", "high", 3, {
+				cwd: "/other",
+				repositories: ["https://github.com/other/repo.git"],
+				start: "2026-11-06T13:00:00Z",
+			}),
+			// Two sessions in checkouts since deleted: one in the directory the Codex sessions name, and one in a
+			// clone nested below it, which may be another repository's and so is not charged to this one. The
+			// nested one had lines token-max could not read, so its cost is a lower bound.
+			exported(OWNED, "claude-opus-5-5", "unknown", 7, {
+				repositories: null,
+				start: "2026-11-06T14:00:00Z",
+			}),
+			{
+				...exported(GONE, "claude-opus-5-5", "high", 8, {
+					cwd: "/work/nested",
+					repositories: null,
+					start: "2026-11-06T14:00:00Z",
+					complete: false,
+					skippedLines: 2,
+				}),
+				models: [{ ...exported(GONE, "claude-opus-5-5", "high", 8).models[0], complete: false }],
+			},
+			// Another host's session in a directory of the same path: this host's sessions there tell nothing of it.
+			exported(REMOTE, "claude-opus-5-5", "high", 4, { host: "box", repositories: null }),
+			// A checkout with remotes for both the fork and its upstream, on a branch each has a PR from.
+			exported(BOTH, "claude-opus-5-5", "high", 9, {
+				cwd: "/both",
+				repositories: ["https://github.com/fork/proj.git", "https://github.com/acme/proj.git"],
+			}),
 		);
 
 		const body10 = [
@@ -479,6 +475,7 @@ describe("usage", () => {
 		const fork13 = body10.slice(body10.indexOf("## Review")).replaceAll(THREAD, "thread-fork");
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
+		// A closed duplicate of #11's fix: it never landed, so it fixed nothing.
 		const pulls = [
 			pr(11, "fix/a", body11, "2026-11-06T20:00:00Z"),
 			pr(10, "quest/m0/a", body10, "2026-11-06T10:00:00Z"),
@@ -538,6 +535,7 @@ describe("usage", () => {
 					updated_at: "2026-11-06T00:00:00Z",
 				}),
 			),
+			pr(12, "fix/a-again", body11, "2026-11-06T21:00:00Z", { merged_at: null }),
 			pr(8, "old", "", "2026-10-01T00:00:00Z", { updated_at: "2026-10-01T00:00:00Z" }),
 		];
 		const requests: string[] = [];
@@ -622,25 +620,8 @@ describe("usage", () => {
 			if (url.pathname === "/repos/acme/proj/pulls") return json(pulls);
 			return new Response("not found", { status: 404 });
 		};
-		const priced: Priced[] = [
-			{ harness: "claude", id: CLAUDE, models: [spent("claude-opus-5-5", 5)] },
-			{ harness: "claude", id: OTHER, models: [spent("claude-opus-5-5", 6)] },
-			{ harness: "codex", id: `2026/11/06/rollout-a-${THREAD}`, models: [spent("gpt-6.1-sol", 1)] },
-			{
-				harness: "codex",
-				id: "2026/11/06/rollout-b-11111111-1111-1111-1111-111111111111",
-				models: [spent("gpt-6.1-sol", 2)],
-			},
-			{
-				harness: "codex",
-				id: "2026/11/06/rollout-c-22222222-2222-2222-2222-222222222222",
-				models: [spent("gpt-6.1-sol", 3)],
-			},
-			{ harness: "claude", id: OWNED, models: [spent("claude-opus-5-5", 7)] },
-			{ harness: "claude", id: GONE, models: [spent("claude-opus-5-5", 8)] },
-			{ harness: "claude", id: BOTH, models: [spent("claude-opus-5-5", 9)] },
-		];
-		const deps = (ccusage: Priced[] | null) => ({
+		const calls: [Date, string[]][] = [];
+		const deps = (exported: Session[] | null) => ({
 			github: () => ({
 				fetch: fetch as typeof globalThis.fetch,
 				now: Date.now,
@@ -649,25 +630,30 @@ describe("usage", () => {
 				warn: () => {},
 			}),
 			warn: () => {},
-			ccusage: () => ccusage,
-			env: { CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: codexHome },
-			home: dir,
+			sessions: (since: Date, ssh: string[]) => {
+				calls.push([since, ssh]);
+				return exported;
+			},
 		});
-		return { root, deps, priced, requests };
+		return { root, deps, sessions, calls, requests };
 	}
 
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {
-		const { root, deps, priced } = setup();
-		const report = await usage(root, { since: "2026-11-05" }, deps(priced));
-		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7, 13, 5, 6, 3, 4]);
+		const { root, deps, sessions, calls } = setup();
+		const report = await usage(root, { since: "2026-11-05", ssh: ["box"] }, deps(sessions));
+		expect(calls).toEqual([[new Date("2026-11-05T00:00:00"), ["box"]]]);
+		expect(report.pulls.map((p) => p.number)).toEqual([11, 10, 9, 7, 13, 5, 6, 3, 4, 12]);
 		const ten = report.pulls.find((p) => p.number === 10)!;
-		expect(ten.sessions.map((s) => [s.harness, s.session, s.role, s.effort])).toEqual([
-			["claude", CLAUDE, "implementing", "high"],
-			["codex", THREAD, "reviewing", "high"],
-			["codex", "11111111-1111-1111-1111-111111111111", "iterating", "high"],
-			["claude", OWNED, "iterating", null],
+		expect(ten.sessions.map((s) => [s.host, s.harness, s.session, s.role, s.models[0]!.effort])).toEqual([
+			[null, "claude", CLAUDE, "implementing", "high"],
+			[null, "codex", THREAD, "reviewing", "high"],
+			[null, "codex", ITERATE, "iterating", "high"],
+			[null, "claude", OWNED, "iterating", "unknown"],
 		]);
+		// #12 names #10 too, but closed without merging.
 		expect(ten.fixedBy).toEqual([11]);
+		expect(report.folded).toEqual({ copies: 1, hosts: ["box"] });
+		expect(report.incomplete).toEqual([{ host: null, harness: "claude", session: GONE, skippedLines: 2 }]);
 		expect(ten.implementers).toEqual([
 			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null },
 			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: "L" },
@@ -678,12 +664,13 @@ describe("usage", () => {
 		expect(report.pulls.find((p) => p.number === 9)!.sessions).toEqual([]);
 		expect(report.pulls.find((p) => p.number === 7)!.sessions).toEqual([]);
 		expect(report.unattributed).toEqual({
-			sessions: 4,
-			input: 40,
-			cacheWrite: 80,
-			cacheRead: 120,
-			output: 160,
-			cost: 26,
+			sessions: 5,
+			input: 50,
+			cacheWrite: 100,
+			cacheRead: 150,
+			output: 200,
+			cost: 30,
+			complete: false,
 		});
 		expect(report.spend.map((s) => [s.size, s.role, s.harness, s.cost])).toEqual([
 			["L", "implementing", "claude", 5],
@@ -764,19 +751,31 @@ describe("usage", () => {
 		expect(text).toContain(
 			"rabbit[bot]  reviewed 1/4 (25%), final head 1 (25%), 1.0 findings per PR reviewed, 100% accepted;",
 		);
-		expect(text).toContain("fixed later by: #11");
+		expect(text).toContain("fixed later by: #11\n");
+		expect(text).toContain(
+			"    implementing  local  claude  claude-opus-5-5  high     in 10, cache 20 written 30 read, out 40, ~$5.00\n",
+		);
+		expect(text).toContain(
+			"Unattributed: 5 sessions on no PR here, any repository or agent: in 50, cache 100 written 150 read, out 200, ~$30.00 or more\n",
+		);
+		expect(text).toContain(
+			"Folded 1 copy of sessions found on several hosts, keeping each one's costliest; left out from box\n",
+		);
+		expect(text).toContain(`  local  claude  ${GONE}  2 unreadable lines`);
 		expect(text).not.toContain("SECRET");
 		expect(JSON.stringify(report)).not.toContain("SECRET");
 	});
 
-	test("narrows to one PR, and reports the records alone without ccusage", async () => {
-		const { root, deps, priced } = setup();
-		const one = await usage(root, { since: "2026-11-05", pr: 10 }, deps(priced));
+	test("narrows to one PR, and reports the records alone without token-max", async () => {
+		const { root, deps, sessions } = setup();
+		const one = await usage(root, { since: "2026-11-05", pr: 10 }, deps(sessions));
 		expect(one.pulls.map((p) => p.number)).toEqual([10]);
 		expect(one.pulls[0]!.fixedBy).toEqual([11]);
 		expect(one.unattributed).toBeNull();
+		// The unreadable lines were an unattributed session's, which a narrowed report leaves out.
+		expect(one.incomplete).toEqual([]);
 		// #9 shares #10's branch but closed before any session reached it, so narrowing to it hands it none.
-		const nine = await usage(root, { since: "2026-11-05", pr: 9 }, deps(priced));
+		const nine = await usage(root, { since: "2026-11-05", pr: 9 }, deps(sessions));
 		expect(nine.pulls.map((p) => [p.number, p.sessions.length])).toEqual([[9, 0]]);
 		const quest = await usage(root, { since: "2026-11-05", quest: "quest/m0/a.md" }, deps(null));
 		expect(quest.priced).toBe(false);

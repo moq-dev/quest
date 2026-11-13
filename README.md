@@ -1568,9 +1568,9 @@ own retries, which also counts as the limit there.
 ## Audit cost and accuracy
 
 `quest usage` reports `origin`'s PRs updated since `--since` (a local
-`YYYY-MM-DD`, by default 7 days ago) and the agent sessions this host ran
-since then: which harness, model, and effort worked on each PR, in which role,
-at what token cost, and how the work went.
+`YYYY-MM-DD`, by default 7 days ago) and the agent sessions this host, and
+each host `--ssh` names, ran since then: which harness, model, and effort
+worked on each PR, in which role, at what token cost, and how the work went.
 
 ```console
 $ quest usage --pr 569
@@ -1582,27 +1582,32 @@ moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) esti
   online review: review (OpenAI), not at the final head; 0 findings: 0 accepted, 0 declined, 0 unclassified, 0 unanswered
   land fixes: codex, gpt-6.1-sol, medium effort
   sessions:
-     implementing  claude  claude-opus-5-5  low     in 50, cache 36.2k written 1.1M read, out 6.1k, ~$0.63
-     reviewing     codex   gpt-6.1-sol      medium  in 14.7k, cache 0 written 39.8k read, out 421, ~$0.04
+     implementing  local  claude  claude-opus-5-5  low     in 50, cache 36.2k written 1.1M read, out 6.1k, ~$0.63
+     reviewing     local  codex   gpt-6.1-sol      medium  in 14.7k, cache 0 written 39.8k read, out 421, ~$0.04
 ```
 
-[ccusage](https://github.com/ccusage/ccusage)'s `session --json` reads and
+[token-max](https://github.com/kixel-ai/token-max)'s `sessions` reads and
 prices the sessions, at each model's API list price, which subscriptions do
-not bill, so the cost is an estimate. `quest usage` ties each Claude Code or
-Codex session to the PR whose head branch its log last names, reading only the
-branch, directory, remote, start time, and effort from `$CLAUDE_CONFIG_DIR` (or
-`~/.config/claude` and `~/.claude`) and `$CODEX_HOME` (or `~/.codex`), never a
+not bill, so the cost is an estimate. A Claude sub-agent or a Codex review or
+spawned thread is a session of its own, so a quest a sub-agent worked on
+carries its own cost, not its coordinator's. `quest usage` ties each Claude
+Code or Codex session to the PR whose head branch it last names, from the
+branches, directory, repositories, and start token-max exports for it, never a
 prompt or reply. Since another repository may use the same branch name, the
-session must also be this repository's, as its Codex log, its checkout's
-remotes, or, once the checkout is deleted, a Codex log for that exact directory
-names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
+session must also be this repository's, as the repositories token-max resolved
+for it on its own host name, or, once its checkout is deleted, those resolved
+there for another session in that exact directory, as a Codex log records
+(never a parent's, which a nested clone may not share); otherwise it stays
+unattributed. A session is reviewing when the PR's `## Review` record names
 it or Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
 findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
 findings open counts them settled, since `/quest-review` fixes or refutes those
-before merge without another round; the land fixer's fixes; the later PRs that list it under
-`## Caused by`; and each online reviewer's record, read from GitHub.
+before merge without another round; the land fixer's fixes; the later merged PRs
+whose `## Caused by` names it on a bullet that opens with its link, as
+`- [owner/repo#N](url) - why`, never a link elsewhere on a line; and each
+online reviewer's record, read from GitHub.
 
 An online reviewer is any bot account whose review has a body or opens a
 thread, as a reply-only review does not, or a review whose body opens with
@@ -1630,11 +1635,21 @@ counts as unreviewed. An `Implementer:` line's own size, as
 `(iterate, XS)`, counts over the PR's; and, over the merged PRs, each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. Sessions on no PR here, from any
-repository or agent ccusage reads, total on an `Unattributed` line. `--pr` and
+repository or agent token-max reads, total on an `Unattributed` line. `--pr` and
 `--quest` narrow the report to one PR or one quest's branch, and `--json`
-prints it as one object. Without `ccusage` on `PATH`, it says how to install it
-and reports the PRs' records alone. Each host reports its own sessions; the
-land fixer's container keeps no session log, so its fixes show without tokens.
+prints it as one object. Without `token-max` on `PATH`, it says how to install
+it and reports the PRs' records alone.
+
+`--ssh HOST`, repeatable, also reads that SSH destination's sessions through
+the token-max installed there, matching each through the repositories resolved
+on its own host. A host that fails fails the report, naming it; drop it from
+`--ssh` to report without it. A session found on several hosts, such as a
+history copied between them, counts once at its costliest copy, and the report
+says how many copies it folded from which hosts. A session with a request
+token-max could not price, or a transcript line it could not read or that was
+unfinished, is listed under `Lower bounds` with its unreadable lines, and every
+cost it reaches reads `or more`. The land fixer's container keeps no session log, so
+its fixes show without tokens.
 
 ### Typed messages
 

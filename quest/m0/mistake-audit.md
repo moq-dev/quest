@@ -47,11 +47,10 @@ Agent's choices, for the implementer to revisit. Each run:
   of those culprits and their fixes; and the typed messages from
   `quest messages --since <date> --json`.
 - Read each culprit pair's `## Caused by` line before counting it. On
-  2026-11-11 only 7 of 20 pairs were escapes: `fixedBy` takes every link
-  in the section, including "No single PR" lines and unmerged PRs, until
-  [the token-max attribution](/quest/m0/routing-evidence/usage-token-max.md)
-  lands; the rest named a PR that left the work to a planned follow-up
-  or kept older behavior.
+  2026-11-11 only 7 of 20 pairs were escapes. `fixedBy` now counts only a
+  merged fix's bullet that opens with the culprit's link, but a culprit
+  can still name a PR that left the work to a planned follow-up or kept
+  older behavior.
 - `quest messages` returns every human turn as a `kind: "message"` entry,
   beside the `kind: "answer"` entries tallied below, so set aside machine-written
   ones yourself: bare skill invocations, pasted relays and logs, accepted

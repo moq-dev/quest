@@ -840,6 +840,8 @@ test("githubRepository reads HTTPS, ssh://, and scp-like remote URLs", () => {
 		"ssh://git@github.com:22/example/project",
 		"git@github.com:example/project.git",
 		"org-123@github.com:example/project.git",
+		// An scp-like remote without its user, as token-max exports one after stripping userinfo.
+		"github.com:example/project.git",
 	]) {
 		expect(githubRepository(url), url).toEqual(repository);
 	}
@@ -847,6 +849,7 @@ test("githubRepository reads HTTPS, ssh://, and scp-like remote URLs", () => {
 		"https://gitlab.com/example/project.git",
 		"https://github.com.evil.example/example/project",
 		"git@github.com:example",
+		"notgithub.com:example/project",
 		"/srv/git/project.git",
 	]) {
 		expect(githubRepository(url), url).toBeNull();

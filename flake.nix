@@ -17,6 +17,14 @@
       url = "github:moq-dev/quest";
       flake = false;
     };
+    # token-max, which reads and prices `quest usage`'s sessions; the lock pins it so its JSON stays what the
+    # parser reads. Its own quest input follows this flake, so the lock never chains older quest pins.
+    token-max = {
+      url = "github:kixel-ai/token-max";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+      inputs.quest.follows = "";
+    };
   };
 
   outputs =
@@ -26,6 +34,7 @@
       nixpkgs-bun,
       flake-utils,
       quest-pinned,
+      token-max,
       ...
     }:
     # The pinned nixpkgs no longer evaluates on x86_64-darwin; Intel Macs use the release binary.
@@ -66,8 +75,8 @@
                 jq
                 git
                 gh
-                # Prices `quest usage`'s sessions, pinned with the lock so its JSON stays what the parser reads.
-                ccusage
+                # Exports and prices `quest usage`'s sessions.
+                token-max.packages.${system}.default
                 direnv
                 actionlint
                 shellcheck
