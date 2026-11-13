@@ -63,6 +63,17 @@ class FakePull {
 	/** The error GitHub answers `enqueuePullRequest` with, if any. */
 	beforeEnqueue?: () => { message: string; type?: string } | undefined;
 	reads = 0;
+	/** The base's REVIEW.md, absent when null. */
+	reviewMd: string | null = null;
+	/** The PR's reviews and review threads, as the online reviewer's activity read lists them. */
+	reviews: ObjectValue[] = [];
+	threads: ObjectValue[] = [];
+	/** The head's check runs, as `GET /commits/{sha}/check-runs` lists them. */
+	checkRuns: ObjectValue[] = [];
+	/** Each account's repository permission; absent ones are no collaborators. */
+	permissions: Record<string, string> = {};
+	/** Each commit's diff from the base. */
+	diffs: Record<string, string> = {};
 	private clock = Date.parse("2026-10-21T12:00:00Z");
 
 	/** Add a label as GitHub does: re-adding one already on the PR records no event. */
@@ -118,6 +129,18 @@ class FakePull {
 		if (url.pathname === "/repos/example/project/branches/main") return json(200, { protection: {} });
 		if (url.pathname === "/repos/example/project/actions/runs" && url.searchParams.get("head_sha") === this.head)
 			return json(200, { total_count: this.runs.length, workflow_runs: this.runs });
+		if (url.pathname === "/repos/example/project/contents/REVIEW.md" && url.searchParams.get("ref") === this.base)
+			return this.reviewMd === null ? json(404, { message: "Not Found" }) : new Response(this.reviewMd);
+		if (url.pathname === `/repos/example/project/commits/${this.head}/check-runs`)
+			return json(200, { total_count: this.checkRuns.length, check_runs: this.checkRuns });
+		const permission = /^\/repos\/example\/project\/collaborators\/(.+)\/permission$/.exec(url.pathname);
+		if (permission) {
+			const level = this.permissions[decodeURIComponent(permission[1])];
+			return level ? json(200, { permission: level }) : json(404, { message: "Not Found" });
+		}
+		const diff = /^\/repos\/example\/project\/compare\/main\.\.\.(\w+)$/.exec(url.pathname);
+		if (diff && new Headers(init.headers).get("accept") === "application/vnd.github.diff")
+			return new Response(this.diffs[diff[1]] ?? "");
 		if (url.pathname === `/repos/example/project/compare/main...${this.head}`) {
 			this.comparisons.push(`${url.pathname}${url.search}`);
 			return json(200, { status: this.comparison, base_commit: { sha: this.base } });
@@ -164,6 +187,21 @@ class FakePull {
 			return { data: { [name]: { clientMutationId: null } } };
 		}
 		if (query.includes("node(id: $id)")) return { data: { node: { autoMergeRequest: this.autoMerge } } };
+		if (query.includes("p7: pullRequest")) {
+			const page = (nodes: ObjectValue[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
+			return {
+				data: {
+					repository: {
+						p7: {
+							headRefOid: this.head,
+							reviews: page(this.reviews),
+							reviewThreads: page(this.threads),
+							comments: page([]),
+						},
+					},
+				},
+			};
+		}
 		if (query.includes("statusCheckRollup"))
 			return {
 				data: {
@@ -854,4 +892,116 @@ test("iterate and release exit 0 when stdout returns a value", async () => {
 		vi.unstubAllEnvs();
 		vi.unstubAllGlobals();
 	}
+});
+
+describe("merge --land with an online reviewer", () => {
+	const OLD = "c".repeat(40);
+	const bot = { __typename: "Bot", login: "pullfrog" };
+	const review = (id: string, commit: string, author: ObjectValue = bot, body = "Reviewed.") => ({
+		id,
+		url: `${URL_}#pullrequestreview-${id}`,
+		state: "COMMENTED",
+		author,
+		body,
+		submittedAt: `2026-10-21T11:0${id}:00Z`,
+		commit: { oid: commit },
+	});
+	const thread = (id: string, resolvedBy: ObjectValue | null = null) => ({
+		id: `T_${id}`,
+		isResolved: resolvedBy !== null,
+		resolvedBy,
+		comments: {
+			pageInfo: { hasNextPage: false, endCursor: null },
+			nodes: [{ author: bot, body: "A bug.", url: `${URL_}#discussion_r${id}`, pullRequestReview: { id } }],
+		},
+	});
+	const run = (status: string, conclusion: string | null, slug = "pullfrog") => ({
+		name: slug,
+		status,
+		conclusion,
+		app: { slug },
+	});
+	const declared = () => {
+		const pull = new FakePull();
+		pull.reviewMd = "---\nonline-reviewer: pullfrog[bot]\n---\n\nBe adversarial.\n";
+		return pull;
+	};
+	const merge = (pull: FakePull) => land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
+
+	test("lands on the local review alone when the base's REVIEW.md names no online reviewer", async () => {
+		const pull = new FakePull();
+		pull.reviewMd = "Be adversarial.\n";
+		await merge(pull);
+		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("refuses a head it has not reviewed, and one it is still reviewing", async () => {
+		const pull = declared();
+		expect(await refused(merge(pull))).toBe(
+			`${URL_} head ${HEAD}: pullfrog[bot], the online reviewer REVIEW.md names, has not reviewed it or a head with the same diff; land it once it has, asking it to review if it does not start`,
+		);
+		// Another app's check says nothing of this reviewer.
+		pull.checkRuns = [run("in_progress", null), run("completed", "success", "coderabbitai")];
+		expect(await refused(merge(pull))).toContain("is still reviewing it");
+		pull.checkRuns = [run("completed", "cancelled")];
+		expect(await refused(merge(pull))).toContain("has not reviewed it");
+		expect(pull.writes).toEqual([]);
+	});
+
+	test("counts a review of the head, or its own app's successful check run on it", async () => {
+		const checked = declared();
+		checked.checkRuns = [run("completed", "success")];
+		await merge(checked);
+		expect(checked.writes).not.toEqual([]);
+		const reviewed = declared();
+		reviewed.reviews = [review("1", HEAD)];
+		await merge(reviewed);
+		expect(reviewed.writes).not.toEqual([]);
+	});
+
+	test("counts no review another account posts in its name", async () => {
+		const pull = declared();
+		pull.permissions = { outsider: "read" };
+		pull.reviews = [
+			review("1", HEAD, { __typename: "User", login: "outsider" }, "Automated review by pullfrog[bot]\n\nFine."),
+		];
+		expect(await refused(merge(pull))).toContain("has not reviewed it");
+	});
+
+	test("counts an earlier head's review only while the head's diff from the base matches it", async () => {
+		const same = declared();
+		same.reviews = [review("1", OLD)];
+		same.diffs = { [HEAD]: "diff", [OLD]: "diff" };
+		await merge(same);
+		expect(same.writes).not.toEqual([]);
+		const changed = declared();
+		changed.reviews = [review("1", OLD)];
+		changed.diffs = { [HEAD]: "new", [OLD]: "old" };
+		expect(await refused(merge(changed))).toContain("has not reviewed it");
+	});
+
+	test("refuses while a thread it opened on any head is unresolved, or resolved by an account that cannot push", async () => {
+		const pull = declared();
+		pull.reviews = [review("1", OLD), review("2", HEAD)];
+		pull.threads = [thread("1")];
+		expect(await refused(merge(pull))).toContain(
+			`has findings no writer resolved: ${URL_}#discussion_r1; fix or refute each in its thread and resolve it`,
+		);
+		// GitHub lets the PR's author resolve a thread without write access.
+		pull.threads = [thread("1", { __typename: "User", login: "author" })];
+		pull.permissions = { author: "read" };
+		expect(await refused(merge(pull))).toContain(`${URL_}#discussion_r1`);
+		expect(pull.writes).toEqual([]);
+		pull.permissions = { author: "write" };
+		await merge(pull);
+		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("a thread it resolved itself is settled", async () => {
+		const pull = declared();
+		pull.reviews = [review("1", HEAD)];
+		pull.threads = [thread("1", bot)];
+		await merge(pull);
+		expect(pull.writes).not.toEqual([]);
+	});
 });

@@ -26,6 +26,7 @@ import {
 import {
 	AgentInputError,
 	HARNESSES,
+	type HarnessName,
 	type Launch,
 	admitAgent,
 	processDependencies,
@@ -55,10 +56,8 @@ import { landed, landingCheck } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { hosts } from "../core/doc";
-import { DEFAULT_SIZE, REVIEWERS, SECOND_REVIEWER, WRITERS, questWriters, writerAt } from "./models";
+import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
 import {
-	REVIEW_HARNESSES,
-	type ReviewHarness,
 	ReviewInputError,
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
@@ -555,10 +554,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Print a pull request's head, checks, merge state, reviews, reactions, and unresolved review threads " +
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
-				"url, state, draft, head, mergeable, merge-state, review-decision, review-record, auto-merge, merge-queue, " +
+				"url, state, draft, head, mergeable, merge-state, review-decision, review-record, online-review, auto-merge, merge-queue, " +
 				"landing-stopped, and checks, whose state and counts follow the checks that count, pending while an open PR's base requires a check or workflow nothing reports; review-record gives whether the PR body's ## Review record " +
 				"covers the head, as current, diff-identical (git diff <base>...<head> prints the same as for the head it names), " +
-				"stale, or unknown when GitHub cannot compare them, then the head it names last; auto-merge gives its method, who enabled it and when, and the head it was " +
+				"stale, or unknown when GitHub cannot compare them, then the head it names last; online-review, on an open PR whose " +
+				"base's REVIEW.md names an online reviewer in its front matter (online-reviewer: <login>), gives where that reviewer " +
+				"stands on the head as quest merge reads it: current, diff-identical, running (its app's check on the head has not " +
+				"finished), or missing, then the reviewer, the head it reviewed, and open=<n> with the URL of each review thread it " +
+				"opened that neither it nor a writer resolved; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
 				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
@@ -642,7 +645,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
 				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
 				"first, once the head has moved, and while the latest run of any check on the head failed, required " +
-				"or not, naming each; a pending or absent check does not block. It refuses a head on which quest check " +
+				"or not, naming each; a pending or absent check does not block. When the base's REVIEW.md names an online " +
+				"reviewer in its front matter (online-reviewer: <login>), it refuses a head that reviewer has not reviewed, " +
+				"in a review of it or a successful check run of its own app on it, unless it reviewed a head whose diff from " +
+				"the base matches, and a head with a review thread it opened on any head that neither it nor an account that " +
+				"can push resolved; a base that names none lands on its local review alone. It refuses a head on which quest check " +
 				"--no-stubs --base <base> --branch <head branch> finds anything, read from git objects fetched from the base repository, " +
 				"so nothing from the head runs, except findings the base already has; a base without quests skips it. It uses the method --squash or --rebase names, refusing one " +
 				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
@@ -1159,8 +1166,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"checkout's remotes, or a Codex log for its directory names this repository, read from " +
 				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
 				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
-				"before the PR opened, and iterating otherwise. An opencode session, whose log quest does not read, belongs to the newest PR whose " +
-				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
+				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, and as unread each Implementer line it cannot read, " +
 				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, marked when it is the shadow, " +
 				"where a merged PR whose last round left only low findings open counts them settled, since the author fixes or refutes those before merge, " +
@@ -1230,11 +1236,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
-				"first whose model is not avoided reviews, and beside it, on the same head and each in its own session, " +
-				`${SECOND_REVIEWER.harness} ${SECOND_REVIEWER.model} ${SECOND_REVIEWER.effort} for every size, and the shadow: ` +
+				"first whose model is not avoided reviews, and beside it, on the same head in its own session, the shadow: " +
 				"the pick's model one effort lower (low, medium, high, xhigh, max), skipped when the pick runs at low or an " +
 				"effort off that ladder, so each effort step can be compared with the one below it. The shadow runs on a " +
-				"branch's first run of the pair, then only while it has findings to settle or once the pick changed so it is " +
+				"branch's first run of the pick, then only while it has findings to settle or once the pick changed so it is " +
 				"no longer one step below; its findings are numbered and settled like any reviewer's, its session carries " +
 				"over to the new shadow, and a pick with no step below it seats a shadow at its own effort while the old " +
 				"shadow still has findings. " +
@@ -1244,10 +1249,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"it is any model of the harness running this command, usually the session that just pushed, detected from the " +
 				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; with --harness it is " +
 				"none. " +
-				"--harness names the only reviewer instead of the pair and the shadow, at its entry's model and effort, and --model and " +
+				"--harness names the only reviewer instead of the pick and the shadow, at its entry's model and effort, and --model and " +
 				"--effort override that reviewer's, or without --harness, the size pick's; a repository whose AGENTS.md names other reviewers " +
-				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
-				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle, as a run of the pair does while a reviewer only --harness runs has some. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the others and fails the " +
+				"passes them. A --harness run keeps the other reviewers' sessions for the next run of the pick, and refuses while one has findings to settle, as a run of the pick does while a reviewer only --harness runs has some. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the others and fails the " +
 				"run, saving no round. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
@@ -1259,9 +1263,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
 				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
 				"(ANTHROPIC_AWS_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN) only while one is set. A logged-out error names the profile it checked, " +
-				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider. opencode " +
-				"keeps the user's own config and login, and counts as logged out when `opencode models` does not " +
-				"list the model.\n\n" +
+				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider.\n\n" +
 				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
 				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
 				"reviewer's own review (`codex exec review` with custom instructions, or Claude Code's " +
@@ -1278,18 +1280,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
 				"repeats that round, marked unchanged, so on the same head only a reviewer with findings to settle runs. " +
-				"--new starts new sessions, continuing each reviewer's tally of its findings on the branch, less those it drops unsettled, unless the saved state is one this quest cannot read. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
+				"--new starts new sessions, continuing each reviewer's tally of its findings on the branch, less those it drops unsettled, unless the saved state is one this quest cannot read. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
 				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
 				"skills catalog, Claude Code with " +
-				"no settings files, only read tools, and the Bash commands it judges read-only, and opencode with no " +
-				"project config, Claude Code files, or tool but its shell, whose commands run under sandbox-runtime " +
-				"(`srt` on PATH; on Linux it must refuse Unix sockets) with no network, reading only the checkout " +
-				"and its Git directories and writing only a private directory. opencode has no review mode, so its " +
-				"first turn asks for the review in a prompt. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
+				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
 				"reviewer, and is told to disregard other instructions and run no builds, tests, or quest commands. " +
 				"The base is fetched first, since the sandbox has no network.\n\n" +
@@ -1321,8 +1319,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.addOption(
 			new Option(
 				"--harness <name>",
-				"The only reviewer to run, instead of the size's pick, the second, and the shadow",
-			).choices(REVIEW_HARNESSES),
+				"The only reviewer to run, instead of the size's pick and the shadow",
+			).choices(HARNESSES),
 		)
 		.option("--model <model>", "Model the size's pick, or --harness's reviewer, runs instead")
 		.option("--effort <level>", "Reasoning effort the size's pick, or --harness's reviewer, runs at instead")
@@ -1348,7 +1346,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			(options: {
 				base?: string;
 				branch?: string;
-				harness?: ReviewHarness;
+				harness?: HarnessName;
 				model?: string;
 				effort?: string;
 				excludeModel?: string[];

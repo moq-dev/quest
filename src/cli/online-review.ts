@@ -2,7 +2,18 @@
 // thread, and any review whose
 // body opens with `Automated review by <name>`, as a reviewer posting under a person's account does. A finding is a
 // review thread one opens, or a `[P<n>]` line in its review body; whoever answers it says whether it was taken.
-import { type GitHub, type ObjectValue, type Repository, array, object } from "./github";
+// The repository's own online reviewer, which REVIEW.md names, also gates `quest merge`: see {@link onlineGate}.
+import {
+	type GitHub,
+	GitHubDeadline,
+	type ObjectValue,
+	type PullRequest,
+	type Repository,
+	array,
+	link,
+	object,
+	string,
+} from "./github";
 
 /** One online reviewer's record on one PR. */
 export interface OnlineReview {
@@ -49,9 +60,9 @@ export function bodyFindings(body: string): string[] {
 	});
 }
 
-const THREAD_COMMENT = "author { __typename login } body pullRequestReview { id }";
+const THREAD_COMMENT = "author { __typename login } body url pullRequestReview { id }";
 const FIELDS = {
-	reviews: "id url author { __typename login } body submittedAt commit { oid }",
+	reviews: "id url state author { __typename login } body submittedAt commit { oid }",
 	reviewThreads:
 		"id isResolved resolvedBy { __typename login } " +
 		`comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT} } }`,
@@ -274,4 +285,186 @@ export async function readOnlineReviews(
 ): Promise<Map<number, OnlineReview[]>> {
 	const pulls = await read(client, repository, numbers);
 	return new Map([...pulls].map(([number, pull]) => [number, onlineReviews(pull)]));
+}
+
+/** The key of REVIEW.md's front matter that names the repository's online reviewer. */
+const DECLARATION = "online-reviewer";
+
+/**
+ * The online reviewer REVIEW.md's front matter names, such as `pullfrog[bot]`, or null when it names none.
+ * A key given twice or left empty throws, so a typo cannot silently drop the gate.
+ */
+export function reviewerIn(text: string): string | null {
+	const matter = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+	if (!matter) return null;
+	const lines = matter[1]!.split(/\r?\n/).filter((line) => line.startsWith(`${DECLARATION}:`));
+	if (lines.length === 0) return null;
+	if (lines.length > 1) throw new Error(`REVIEW.md names its ${DECLARATION} more than once`);
+	const value = lines[0]!
+		.slice(DECLARATION.length + 1)
+		.trim()
+		.replace(/^(["'])(.*)\1$/, "$2")
+		.trim();
+	if (value === "") throw new Error(`REVIEW.md's ${DECLARATION} is empty`);
+	return value;
+}
+
+/** The online reviewer REVIEW.md names at `ref`, read from GitHub so a PR cannot drop its own gate; null for none. */
+export async function declaredReviewer(client: GitHub, repository: Repository, ref: string): Promise<string | null> {
+	const response = await client.request(
+		`/repos/${repository.owner}/${repository.repo}/contents/REVIEW.md?ref=${encodeURIComponent(ref)}`,
+		{ accept: "application/vnd.github.raw", allow: [404] },
+	);
+	return response.status === 404 ? null : reviewerIn(await response.text());
+}
+
+/**
+ * Whether two commits have the same diff from `base` (`git diff <base>...<sha>`), or null when GitHub cannot
+ * compare one, such as a diff too large to render; `warn` says why.
+ */
+export async function sameDiff(
+	client: GitHub,
+	repository: Repository,
+	base: string,
+	shas: [string, string],
+	warn: (message: string) => void,
+): Promise<boolean | null> {
+	const diffs: string[] = [];
+	for (const sha of shas) {
+		let response: Response;
+		try {
+			response = await client.request(
+				`/repos/${repository.owner}/${repository.repo}/compare/${encodeURIComponent(base)}...${sha}`,
+				{ accept: "application/vnd.github.diff", allow: [404, 406, 422] },
+			);
+		} catch (error) {
+			// A deadline is the caller's to handle; a forbidden or failing compare is not.
+			if (error instanceof GitHubDeadline || !(error instanceof Error)) throw error;
+			warn(`cannot compare ${sha} with ${base}: ${error.message}`);
+			return null;
+		}
+		if (!response.ok) {
+			warn(`cannot compare ${sha} with ${base}: GitHub answered ${response.status}`);
+			return null;
+		}
+		diffs.push(await response.text());
+	}
+	return diffs[0] === diffs[1];
+}
+
+/** Where the repository's online reviewer stands on a PR's head, as {@link onlineGate} reads it. */
+export interface OnlineGate {
+	reviewer: string;
+	/** The PR's head when it was read. */
+	head: string;
+	/**
+	 * `current`: it reviewed the head, in a review of it or a successful check run of its own app on it, which a
+	 * re-review that finds nothing new leaves without a review; `diff-identical`: its latest review is of an earlier head
+	 * whose diff from the base matches the head's; `running`: its app's check on the head has not finished;
+	 * `missing`: none of these.
+	 */
+	state: "current" | "diff-identical" | "running" | "missing";
+	/** The head it reviewed, or null. */
+	reviewed: string | null;
+	/** Each review thread it opened on the PR, on any head, that neither it nor a writer resolved, by URL. */
+	open: string[];
+}
+
+/** Permissions that can push, the only ones besides the reviewer's own whose resolution settles a finding. */
+const PUSH = ["admin", "maintain", "write"];
+
+/**
+ * How `reviewer`, the repository's online reviewer, stands on `pr`'s head against `base`: whether it reviewed the head
+ * or a diff-identical one, and which of its findings, its review threads, are still open. GitHub lets the PR's author
+ * resolve a thread too, so a resolution counts only from the reviewer or an account that can push.
+ */
+export async function onlineGate(
+	client: GitHub,
+	pr: PullRequest,
+	reviewer: string,
+	base: string,
+	warn: (message: string) => void,
+): Promise<OnlineGate> {
+	const pull = (await read(client, pr, [pr.number])).get(pr.number)!;
+	const head = pull.head;
+	const pushers = new Map<string, boolean>();
+	const canPush = async (account: string) => {
+		if (!pushers.has(account)) {
+			const response = await client.request(
+				`/repos/${pr.owner}/${pr.repo}/collaborators/${encodeURIComponent(account)}/permission`,
+				{ allow: [404] },
+			);
+			pushers.set(
+				account,
+				response.status !== 404 && PUSH.includes(string(object(await response.json()).permission)),
+			);
+		}
+		return pushers.get(account)!;
+	};
+	// A bot's reviews are its own account's; a named reviewer's body names it under a writer's account, which only a
+	// writer's own review may claim, so no one else can forge its review.
+	const ids = new Set<string>();
+	for (const review of pull.reviews) {
+		if (reviewerOf(review) !== reviewer || review.state === "DISMISSED" || review.state === "PENDING") continue;
+		const author = login(review.author);
+		if (reviewer.endsWith("[bot]") ? author === reviewer : author !== null && (await canPush(author)))
+			ids.add(String(review.id));
+	}
+	const reviews = pull.reviews
+		.filter((review) => ids.has(String(review.id)))
+		.map((review) => ({
+			commit: review.commit ? string(object(review.commit).oid) : null,
+			at: Date.parse(String(review.submittedAt)),
+		}))
+		.sort((a, b) => a.at - b.at);
+
+	const open: string[] = [];
+	for (const thread of pull.reviewThreads) {
+		const first = array(object(thread.comments).nodes)[0];
+		if (!first?.pullRequestReview || !ids.has(String(object(first.pullRequestReview).id))) continue;
+		const resolver = thread.isResolved === true ? login(thread.resolvedBy) : null;
+		if (resolver === null || (resolver !== reviewer && !(await canPush(resolver))))
+			open.push(String(first.url ?? ""));
+	}
+
+	const gate = (state: OnlineGate["state"], reviewed: string | null): OnlineGate => ({
+		reviewer,
+		head,
+		state,
+		reviewed,
+		open,
+	});
+	if (reviews.some((review) => review.commit === head)) return gate("current", head);
+	// A GitHub App's bot is `<slug>[bot]`; GitHub lists only each check's latest run.
+	const slug = /^(.+)\[bot\]$/.exec(reviewer)?.[1];
+	let running = false;
+	if (slug !== undefined) {
+		for (
+			let path: string | undefined = `/repos/${pr.owner}/${pr.repo}/commits/${head}/check-runs?per_page=100`;
+			path;
+		) {
+			const response = await client.request(path);
+			for (const run of array(object(await response.json()).check_runs)) {
+				if (run.app == null || object(run.app).slug !== slug) continue;
+				if (run.status !== "completed") running = true;
+				else if (run.conclusion === "success") return gate("current", head);
+			}
+			path = link(response, "next");
+		}
+	}
+	const last = reviews.filter((review) => review.commit !== null).at(-1);
+	if (last && (await sameDiff(client, pr, base, [head, last.commit!], warn)))
+		return gate("diff-identical", last.commit);
+	return gate(running ? "running" : "missing", null);
+}
+
+/** Why `quest merge` refuses `gate`'s head, or null when the online reviewer's review lets it land. */
+export function onlineRefusal(gate: OnlineGate): string | null {
+	const who = `${gate.reviewer}, the online reviewer REVIEW.md names,`;
+	if (gate.state === "running") return `${who} is still reviewing it; land it once its check finishes`;
+	if (gate.state === "missing")
+		return `${who} has not reviewed it or a head with the same diff; land it once it has, asking it to review if it does not start`;
+	if (gate.open.length > 0)
+		return `${who} has findings no writer resolved: ${gate.open.join(", ")}; fix or refute each in its thread and resolve it, then land it again`;
+	return null;
 }

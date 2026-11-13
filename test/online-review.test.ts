@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { type Activity, bodyFindings, classify, onlineReviews } from "../src/cli/online-review";
+import { type Activity, bodyFindings, classify, onlineReviews, reviewerIn } from "../src/cli/online-review";
 
 const HEAD = "h".repeat(40);
 const bot = (login: string) => ({ __typename: "Bot", login });
@@ -154,5 +154,26 @@ describe("onlineReviews", () => {
 				unanswered: 0,
 			},
 		]);
+	});
+});
+
+describe("reviewerIn", () => {
+	test("reads the online reviewer from REVIEW.md's front matter", () => {
+		expect(reviewerIn("---\nonline-reviewer: pullfrog[bot]\n---\n\nBe adversarial.")).toBe("pullfrog[bot]");
+		expect(reviewerIn("---\r\ntitle: Review\r\nonline-reviewer: 'review (OpenAI)'\r\n---\r\n")).toBe(
+			"review (OpenAI)",
+		);
+	});
+
+	test("names none without front matter or the key, even when the body mentions it", () => {
+		expect(reviewerIn("# Review\n\nonline-reviewer: pullfrog[bot]\n")).toBeNull();
+		expect(reviewerIn("---\ntitle: Review\n---\nonline-reviewer: pullfrog[bot]\n")).toBeNull();
+	});
+
+	test("refuses an empty or repeated name, so a typo cannot drop the gate", () => {
+		expect(() => reviewerIn("---\nonline-reviewer:\n---\n")).toThrow("is empty");
+		expect(() => reviewerIn("---\nonline-reviewer: a[bot]\nonline-reviewer: b[bot]\n---\n")).toThrow(
+			"more than once",
+		);
 	});
 });

@@ -20,6 +20,7 @@ import {
 import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
 import { QUEUE_CHECK } from "./land-queue";
 import type { LandingCheck } from "./landed";
+import { declaredReviewer, onlineGate, onlineRefusal } from "./online-review";
 import { classifyCheck } from "./status";
 import { Refusal, ago } from "./start";
 
@@ -253,6 +254,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		}
 	};
 	await passing(labels.github, pr, snapshot.url, sha);
+	await reviewed(labels.github, pr, snapshot, deps.warn);
 	const findings = await request.check({
 		remote: `https://github.com/${pr.owner}/${pr.repo}.git`,
 		base: snapshot.base,
@@ -359,6 +361,20 @@ async function passing(github: GitHub, pr: PullRequest, url: string, sha: string
 		throw new Refusal(
 			`${url} head ${sha} failed ${failing.length === 1 ? "a check" : "checks"}: ${failing.sort().join(", ")}; fix the PR or rerun the check, then land it again`,
 		);
+}
+
+/**
+ * Refuse a head the online reviewer the base's REVIEW.md names has not reviewed, nor a head with the same diff, or
+ * whose findings it opened on the PR are not all resolved. A base that names none lands on its local review alone.
+ */
+async function reviewed(github: GitHub, pr: PullRequest, snapshot: Snapshot, warn: (message: string) => void) {
+	const reviewer = await declaredReviewer(github, pr, snapshot.baseSha);
+	if (reviewer === null) return;
+	const gate = await onlineGate(github, pr, reviewer, snapshot.base, warn);
+	if (gate.head !== snapshot.head)
+		throw new Refusal(`${snapshot.url} head moved to ${gate.head}; check the new head before landing it`);
+	const refusal = onlineRefusal(gate);
+	if (refusal !== null) throw new Refusal(`${snapshot.url} head ${snapshot.head}: ${refusal}`);
 }
 
 /** GraphQL error types that fault the token or the request, not the PR GitHub would enqueue. */

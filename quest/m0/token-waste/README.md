@@ -41,6 +41,13 @@ Decision prompts, chosen options marked ✅:
   Changed 2026-11-12: Pullfrog reviews with Claude, configured in the
   Pullfrog console, and its workflow is back in moq-dev/quest, rind, rust2,
   studio, and web-transport.
+  Changed 2026-11-13 (maintainer), reversing
+  [moq-dev/quest#620](https://github.com/moq-dev/quest/pull/620), whose
+  cost reason Claude through the console removed, after opencode's quota ran
+  out and failed every `quest review` that day: Pullfrog replaces the
+  DeepSeek review, so `quest review` runs only the size's pick, and ✅ the
+  online reviewer the base's `REVIEW.md` names gates `quest merge`
+  (rejected: advisory only).
 - Rules to hooks or lint: first not planned, then ✅ planned the same day
   (user, adopting practices from the research below).
 - Adopted 2026-11-05 (user) from a survey of AI-heavy developers' setups

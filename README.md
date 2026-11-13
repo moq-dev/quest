@@ -483,6 +483,7 @@ mergeable conflicting
 merge-state dirty
 review-decision -
 review-record diff-identical 5f1c2e9a8b7d6c5e4f3a2b1c0d9e8f7a6b5c4d3e
+online-review current pullfrog[bot] 0ade9d977d54c6f48152410532c58e9ea78db3d0 open=0
 auto-merge -
 merge-queue -
 landing-stopped -
@@ -501,6 +502,7 @@ comes last, and a missing value prints as `-`:
 | `url`, `state`, `draft`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the head SHA. |
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
 | `review-record` | Whether the PR body's [`## Review` record](#review-locally) still covers the head, and the head it names last: `current` when it is the head, `diff-identical` when `git diff <base>...<head>` prints the same as for it, `stale` otherwise, or `unknown` when GitHub cannot compare them, such as a diff too large; `-` when the record names no full SHA. Whose record counts is the reader's call. |
+| `online-review` | Where the [online reviewer](#require-an-online-review) the base's `REVIEW.md` names stands on an open PR's head, as `quest merge` reads it: `current` when it reviewed the head, `diff-identical` when it reviewed a head whose diff from the base matches, `running` while its app's check on the head has not finished, or `missing`; then the reviewer, the head it reviewed, and `open=<n>` with the URL of each review thread it opened that neither it nor a writer resolved. `-` when the base names none. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
@@ -531,7 +533,7 @@ requirements from the base, matches a required check by name and, when the
 requirement names one, its app, as GitHub and `quest land` do, and leaves out
 `quest land`'s check, which no head carries. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
-`mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
+`mergeable`, `mergeState`, `reviewDecision`, `reviewRecord`, `onlineReview` (`reviewer`, `head`, `state`, `reviewed`, `open`, or null), `autoMerge`, `mergeQueue`,
 `landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `checkpoints` (`reviewer`, `round`, `url`), `reactions`,
 `threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
@@ -580,7 +582,9 @@ It also refuses a head that fails `quest check --no-stubs --base <base> --branch
 <head branch>`, which it runs on git objects it fetches, so nothing from the
 head runs, and ignores findings the base already has; run a `quest` the PR
 cannot modify, since the head's own build could skip the check. A base without
-quests skips it. It enables auto-merge bound to that SHA, or merges at once when nothing is
+quests skips it. It refuses a head the base's online reviewer has not reviewed, or
+whose findings are open, as [Require an online review](#require-an-online-review)
+describes. It enables auto-merge bound to that SHA, or merges at once when nothing is
 left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
 the repository disallows; otherwise it uses the only method the repository
 allows, or else a merge commit, and refuses when merge commits are off and more
@@ -625,6 +629,34 @@ instructions in the diff and reads the PR's own CI results as context. It hands 
 only what needs a maintainer: a behavior or design decision gets a diagnosis on the
 PR, and a fix that edits protected paths or that GitHub refuses to push gets a ready
 commit for `quest land apply <pr>`.
+
+### Require an online review
+
+A repository names the online reviewer whose review gates `quest merge`, such as
+[Pullfrog](https://pullfrog.com), in its `REVIEW.md` front matter, read from the
+base so a PR cannot drop its own gate:
+
+```markdown
+---
+online-reviewer: pullfrog[bot]
+---
+```
+
+The name is the reviewer's GitHub login, or the name a review body opens with
+as `Automated review by <name>` for a reviewer posting under a person's account,
+whose reviews then count only from accounts that can push. `quest merge`
+refuses a head until that reviewer has reviewed it, in a review of the head or
+a successful check run of its own GitHub App on it (a re-review that finds
+nothing new may post only the check), or reviewed an earlier head whose diff
+from the base matches. It also refuses while any review thread the reviewer
+opened, on any head, is unresolved, or was resolved by an account that cannot
+push, since GitHub lets the PR's author resolve one: fix or refute each finding
+in its thread and resolve it. Findings it lists only in a review body are not
+read. A reviewer that has not started, or whose run failed, holds the PR until
+it reviews the head; ask it to, as its documentation says. A repository whose
+`REVIEW.md` names none lands on its local review alone, the
+[`quest review`](#review-locally) round its PR body records. Other online
+reviewers, such as a capped CodeRabbit, are never required to review.
 
 ## Land a batch with quest land
 
@@ -1391,14 +1423,11 @@ size. Each size ranks its reviewers, the same for every repository:
 | L | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
 | XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` xhigh |
 
-Beside it, opencode `opencode-go/deepseek-v4.1-flash` at `high` reviews the
-same head for every size, in its own session, so each head is read by a model
-family no writer runs, at about $0.05 a review. The shadow, the pick's model
-one effort lower (Sol low for an XS PR), reviews it too, in its own session, so
-the routing can be retuned from what each effort step finds over the one below
-it. It is skipped when the pick runs at low or at an `--effort` off the ladder
-(low, medium, high, xhigh, max). It runs on the branch's first run of the
-pair, then reruns only while it has findings to settle, or once the pick
+Beside it, the shadow, the pick's model one effort lower (Sol low for an XS
+PR), reviews the same head in its own session, so the routing can be retuned
+from what each effort step finds over the one below it. It is skipped when the
+pick runs at low or at an `--effort` off the ladder (low, medium, high, xhigh,
+max). It runs on the branch's first run of the pick, then reruns only while it has findings to settle, or once the pick
 changed so that it is no longer one step below; its findings are numbered,
 answered, and settled like any reviewer's. A pick with no step below it seats
 a shadow at its own effort while the old shadow still has findings, so none
@@ -1417,11 +1446,10 @@ Without a record, or when its last line names an `unknown` model, the harness
 running the command, usually the session that
 just pushed, is taken to be the latest writer, so Codex reviews from Claude Code
 and Claude Code from Codex. `--harness` names the only reviewer instead of
-the pair and the shadow, at its entry's model and effort, and `--model` and `--effort`
+the pick and the shadow, at its entry's model and effort, and `--model` and `--effort`
 override the size pick's or that reviewer's, as a repository whose `AGENTS.md`
-names other reviewers needs. The second reviewer's model is avoided like any
-other, which, without `--harness`, is an error. A `--harness` run keeps the other
-reviewers' sessions for the pair's next run, and refuses while one has
+names other reviewers needs. A `--harness` run keeps the other
+reviewers' sessions for the pick's next run, and refuses while one has
 findings to settle, so a head never passes one reviewer alone while the other's
 findings are open. When the latest writer changes the size's pick to one with
 no session on the branch, its first session settles the open findings of the
@@ -1443,16 +1471,12 @@ gateway or provider is set. Variables that would change the reviewer's plugins,
 permissions, model, or configuration stay stripped.
 A logged-out error names the profile the CLI checked, `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME`, or the default when unset, and any gateway or provider.
-`--harness opencode` runs opencode alone, with `--model` as `provider/model`
-and `--effort` as the model's variant, since no size lists it. It keeps the user's own opencode config, such as custom providers, and login,
-and counts as logged out when `opencode models` does not list the model.
 ```sh
 quest review                                  # round 1 against origin's default branch
 quest review --responses .tmp/responses.md    # round 2: the new head, with fixes and refutations
 quest review --base origin/release --new      # a new session against another base
 quest review --size S --exclude-model gpt-6.1-sol  # an S PR that Sol wrote, with no record in its body
 quest review --branch quest/m1/foo --responses .tmp/responses.md  # a detached checkout of that branch's head
-quest review --harness opencode --model opencode-go/deepseek-v4-pro --effort high  # opencode alone, on another model
 ```
 
 Every turn reviews only the branch's own change, from the merge base of `HEAD`
@@ -1460,10 +1484,9 @@ with the base's tip, so a branch behind its base draws no findings on code the
 base gained since, which a diff against its tip shows as reverted.
 The first round explores the change once. It runs the reviewer's own review,
 `codex exec review` with custom instructions or Claude Code's `/code-review
-<effort> <merge-base>...HEAD` with text after the target, or for opencode, which
-has no review mode, a prompt asking for one, given the range, the
+<effort> <merge-base>...HEAD` with text after the target, given the range, the
 base's `REVIEW.md`, if any, and any earlier findings and responses up front.
-None returns a JSON schema itself, so the round resumes that session for one
+Neither returns a JSON schema itself, so the round resumes that session for one
 turn that reads nothing and reports the review in one schema, with a score from
 0 to 10 for how ready the head is to land and one sentence on why: 10 lands as
 is, 7 to 9 lands after the findings are fixed, 4 to 6 needs rework, and 0 to 3
@@ -1489,8 +1512,7 @@ reviewer settles only its own findings, and gets `--responses` only when it has
 some, so on the same head only a reviewer with findings runs. Resuming keeps the
 reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. Each reviewer's session is kept per branch in the clone's
-common Git directory, so any worktree of the clone resumes it, except opencode's,
-which stays in the checkout it started in, so another worktree starts a new one;
+common Git directory, so any worktree of the clone resumes it;
 `--new` starts new sessions, but continues each reviewer's tally of its findings
 on the branch, less those it drops unsettled, unless the saved state is one
 this quest cannot read. `--branch` names the branch instead of the checked-out one, which a
@@ -1506,28 +1528,16 @@ commands. Codex leaves out its skills catalog; it still loads the user's
 split the login, so the reviewer is told to disregard it. Claude Code loads no settings files, so no
 allow rule, even the user's own, widens that. Codex skips the user's config,
 whose project trust would load the checkout's `.codex/config.toml` and start its
-MCP servers outside the sandbox. opencode loads no project config, which would
-start the checkout's plugins and MCP servers and name its shell, nor Claude
-Code's files, and has every tool but its shell denied, after the user's own
-rules so none outranks the denial. Its shell runs each command under
-sandbox-runtime (`srt` on `PATH`, which this repository's dev shell provides),
-with no network, reading only the checkout and its Git directories, and writing
-only a private directory; on Linux, `srt` must also refuse Unix sockets, which
-it does only with its seccomp helper, so nixpkgs' plain package is refused.
-Whether those flags isolate is up to each
+MCP servers outside the sandbox. Whether those flags isolate is up to each
 CLI's release, so `just review-sandbox`, in this repository, plants project MCP
-servers and hooks for Codex and Claude Code on a head, for Claude Code local settings,
-an allow rule, an `env` shell prefix, an API key helper, and a status line, and
-for opencode an MCP server, plugins, and a shell. It
-runs `quest review` with the installed CLIs and copies of your logins
-(opencode's own, which it shares with every session), and
-fails if any of it runs, the review trusts a new directory, the reviewer's
-flags let the planted rule allow a command, or opencode's shell writes, reads
-your home, reaches the network, or goes unused. `QUEST_LIVE_OPENCODE_MODEL`
-names opencode's model, as `provider/model#variant`. A login with no file to copy, such
+servers and hooks for both CLIs on a head, and for Claude Code local settings,
+an allow rule, an `env` shell prefix, an API key helper, and a status line. It
+runs `quest review` with the installed CLIs and copies of your logins, and
+fails if any of it runs, the review trusts a new directory, or the reviewer's
+flags let the planted rule allow a command. A login with no file to copy, such
 as one in the macOS keychain, needs the CLI's credential exported instead:
 `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, or `CODEX_API_KEY`. It spends real usage, so CI never runs it; run it
-after upgrading any of the CLIs. The base is fetched first, since
+after upgrading either CLI. The base is fetched first, since
 the sandbox has no network. The reviewer follows the base's `AGENTS.md` and `CLAUDE.md`, at the
 root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
@@ -1614,8 +1624,7 @@ session must also be this repository's, as its Codex log, its checkout's
 remotes, or, once the checkout is deleted, a Codex log for that exact directory
 names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
 it or Codex marks it a review, implementing when it began before the PR opened,
-and iterating otherwise. An opencode session, whose log quest does not read, is
-the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
+and iterating otherwise. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
 findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
 findings open counts them settled, since `/quest-review` fixes or refutes those

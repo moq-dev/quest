@@ -124,6 +124,10 @@ function setup(
 		noBase?: boolean;
 		/** The head's workflow runs, as `GET /actions/runs` lists them. */
 		runs?: Node[];
+		/** The base's REVIEW.md, absent when unset. */
+		reviewMd?: string;
+		/** The PR's reviews, as the online reviewer's activity read lists them, and the head's check runs. */
+		online?: { reviews: Node[]; checkRuns: Node[] };
 	} = {},
 ) {
 	const queries: Record<string, unknown>[] = [];
@@ -171,6 +175,12 @@ function setup(
 					? Response.json({ message: "No diff" }, { status: diff })
 					: new Response(diff);
 			}
+			if (path.pathname === "/repos/example/project/contents/REVIEW.md")
+				return options.reviewMd === undefined
+					? Response.json({ message: "Not Found" }, { status: 404 })
+					: new Response(options.reviewMd);
+			if (path.pathname === `/repos/example/project/commits/${A}/check-runs`)
+				return Response.json({ check_runs: options.online?.checkRuns ?? [] });
 			if (path.pathname !== "/graphql") {
 				expect(path.pathname).toBe("/repos/example/project/issues/1/events");
 				eventRequests.push(String(url));
@@ -179,6 +189,21 @@ function setup(
 				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
 			}
 			const request = JSON.parse(String(init?.body));
+			if (request.query.includes("p1: pullRequest")) {
+				const nodes = (rows: Node[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes: rows });
+				return Response.json({
+					data: {
+						repository: {
+							p1: {
+								headRefOid: A,
+								reviews: nodes(options.online?.reviews ?? []),
+								reviewThreads: nodes([]),
+								comments: nodes([]),
+							},
+						},
+					},
+				});
+			}
 			if (request.query.includes("query HoldOwnership(")) {
 				holdQueries.push(request.variables);
 				if (!last) throw new Error("ownership read before PR state");
@@ -260,6 +285,7 @@ test("reports checks by requiredness, each reviewer's latest review against the 
 		"merge-state blocked",
 		"review-decision review_required",
 		"review-record -",
+		"online-review -",
 		"auto-merge -",
 		"merge-queue -",
 		"landing-stopped -",
@@ -296,13 +322,14 @@ test("a queued PR with auto-merge and no checks reports both, and JSON is determ
 		threads: page([]),
 	});
 	const status = await pullRequestStatus(pr, setup([body]).deps);
-	expect(statusLines(status).slice(2, 12)).toEqual([
+	expect(statusLines(status).slice(2, 13)).toEqual([
 		"draft true",
 		`head ${A}`,
 		"mergeable mergeable",
 		"merge-state blocked",
 		"review-decision -",
 		"review-record -",
+		"online-review -",
 		"auto-merge squash kixelated 2026-10-07T12:00:00Z -",
 		"merge-queue awaiting_checks 2 2026-10-07T12:01:00Z",
 		"landing-stopped -",
@@ -924,6 +951,30 @@ test("refuses a head moved between the paged state and ownership read", async ()
 		holdFields: { headRefOid: B },
 	});
 	await expect(pullRequestStatus(pr, fixture.deps)).rejects.toThrow("head changed while reading its holds");
+});
+
+describe("the online review", () => {
+	const line = async (options: Parameters<typeof setup>[1] = {}) => {
+		const fixture = setup([pull({ checks: null, reviews: page([]), threads: page([]) })], options);
+		return statusLines(await pullRequestStatus(pr, fixture.deps)).find((l) => l.startsWith("online-review "));
+	};
+	const reviewMd = "---\nonline-reviewer: pullfrog[bot]\n---\n";
+
+	test("is absent when the base's REVIEW.md names no online reviewer", async () => {
+		expect(await line()).toBe("online-review -");
+		expect(await line({ reviewMd: "Be adversarial.\n" })).toBe("online-review -");
+	});
+
+	test("reports where the named reviewer stands on the head", async () => {
+		expect(await line({ reviewMd })).toBe("online-review missing pullfrog[bot] - open=0");
+		const run = (status: string, conclusion: string | null) => ({ status, conclusion, app: { slug: "pullfrog" } });
+		expect(await line({ reviewMd, online: { reviews: [], checkRuns: [run("in_progress", null)] } })).toBe(
+			"online-review running pullfrog[bot] - open=0",
+		);
+		expect(await line({ reviewMd, online: { reviews: [], checkRuns: [run("completed", "success")] } })).toBe(
+			`online-review current pullfrog[bot] ${A} open=0`,
+		);
+	});
 });
 
 describe("the review record", () => {

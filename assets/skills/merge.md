@@ -15,11 +15,12 @@ The head is landable when:
 
 - the PR is not a draft;
 - a review counts for it, as below;
+- when the base's `REVIEW.md` names an online reviewer, its `online-review` line is `current` or `diff-identical` with `open=0`;
 - every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, and no decision is open;
 - no check failed on it, required or not, its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base;
 - no review requests changes; an approval its base requires may still be to come, since the queue waits for it.
 
-While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
+While its required checks are only pending, or its online review `running` or `missing`, report that the pick stands until they finish; do not wait for them.
 A change request that stands once its findings are fixed or refuted and their threads resolved is the user's call.
 Any other head needs `/quest-iterate`: run it, saying what the head needs, such as a review, fixes, a failed check fixed or rerun, flaky ones included, or decisions, then run this skill again once it finishes; if it stops for the user instead, report that.
 Run it in this session, where its interview can ask the user; under a coordinator such as `/quest-run`, return the PR to the loop, which dispatches it in a sub-agent.
