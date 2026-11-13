@@ -1594,6 +1594,7 @@ describe("a learned share of mbx's pool", () => {
 		const now = Date.now();
 		const stale = (now - SHARE_MS - 1000) / 1000;
 		utimesSync(join(directory, "old"), stale, stale);
+		expect(learned.read("old", now)).toBeUndefined();
 		learned.write("new", 4, now);
 		expect(readdirSync(directory)).toEqual(["new"]);
 	});

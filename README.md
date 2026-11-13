@@ -1218,10 +1218,11 @@ Two kinds of command go ahead of the rest. `quest gate --quick <command>` waits
 at most a minute, then starts the command whatever the host's load, memory, and
 place in the queue;
 pass it only for cheap commands, such as a formatter or `quest check`, that cost
-less to run than to hold back. Where mbx's pool admits it, a quick command
-waits at most a minute for its reservation; then the gate stops the pending
-reservation before its command can start and runs the command outside it,
-uncapped, where mbx still schedules its compiles. A check that lands PRs goes
+less to run than to hold back. Where mbx's pool admits it, the minute covers
+both waits. A reservation still pending at the deadline is stopped before its
+command can start, and the command runs outside it, uncapped, where mbx still
+schedules its compiles. A reservation granted in time keeps its command,
+which starts inside it at the deadline even if memory is short. A check that lands PRs goes
 first: with `QUEST_GATE_PRIORITY=1` in its environment, every gate inside the
 check waits for memory but never for load, the queue, or mbx's pool, whether
 or not other gated commands run, and its command gets

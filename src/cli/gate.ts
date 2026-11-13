@@ -769,9 +769,10 @@ export function commandKey(command: string[], cwd = process.cwd()): string {
 export function shares(directory: string) {
 	const file = (key: string) => join(directory, key);
 	return {
-		/** The cores the command's next run reserves, or undefined before its first measured run. */
-		read(key: string): number | undefined {
+		/** The cores the command's next run reserves, or undefined before its first measured run or SHARE_MS after its last. */
+		read(key: string, now = Date.now()): number | undefined {
 			try {
+				if (statSync(file(key)).mtimeMs < now - SHARE_MS) return undefined;
 				const value: unknown = JSON.parse(readFileSync(file(key), "utf8"));
 				const cores =
 					typeof value === "object" && value !== null ? (value as { cores?: unknown }).cores : undefined;
