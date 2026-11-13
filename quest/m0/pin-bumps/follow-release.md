@@ -8,7 +8,7 @@ the PR names the release it moves to.
 
 ## Plan
 
-Decided 2026-11-13 (maintainer, /quest-plan; see the
+Decided 2026-11-12 (maintainer, /quest-plan; see the
 [epic](/quest/m0/pin-bumps/README.md)): ✅ consumers pin releases (rejected:
 quest's `main`).
 
@@ -26,4 +26,4 @@ until `main` moves again.
 
 ## Required
 
-- [Release every user-facing merge](/quest/m0/pin-bumps/release.md) - the releases a bump follows
+- [Release every merge that changes what ships](/quest/m0/pin-bumps/release.md) - the releases a bump follows

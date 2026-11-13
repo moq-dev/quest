@@ -2,19 +2,19 @@
 
 ## Goal
 
-A user-facing merge to quest's `main` ships as a release, and within the hour
+A merge to quest's `main` that changes what ships becomes a release, and within the hour
 every repository whose flake locks quest and has moq-bot installed gets a bump
 PR to that release, which lands on its own. No person or agent hand-bumps a
 flake pin. Pins through mise or the installer stay out of scope: no moq-dev,
 kixel-ai, or kixelated repository uses them.
 
-The epic finishes with an end-to-end run: a user-facing merge cuts a release,
+The epic finishes with an end-to-end run: a merge to `src/` cuts a release,
 and the watcher opens and lands a bump to it in an enrolled repository whose
 stubs that release changes, with `quest init`'s refreshed stubs in the PR.
 
 ## Plan
 
-Decided 2026-11-13 (maintainer, /quest-plan), after moq-dev/moq sat on
+Decided 2026-11-12 (maintainer, /quest-plan), after moq-dev/moq sat on
 `93c9c2ef` past [moq-dev/quest#646](https://github.com/moq-dev/quest/pull/646),
 so quest spawns there kept writing XS quests on Haiku 5.5 xhigh and hit its
 rate limits until a hand bump
@@ -23,7 +23,7 @@ from [moq-dev/quest#550](https://github.com/moq-dev/quest/pull/550) never ran:
 the host's watcher has no `--bump` flags, since its wiring sits in the stale
 draft [kixelated/nixos#36](https://github.com/kixelated/nixos/pull/36).
 
-- What do consumers pin? ✅ A release, cut on every user-facing merge
+- What do consumers pin? ✅ A release, cut on every merge that changes what ships
   (rejected: quest's `main`, which the bump pass follows today).
 - What bumps them? ✅ The watcher's `--bump`, following the latest release
   (rejected: Renovate with a stale-stub check, since hosted Renovate cannot run
