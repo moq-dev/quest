@@ -415,8 +415,9 @@ this command's scope.
 
 CI results are read for the current head. The first required check to fail
 prints `checks:failed` right away. `checks:passed` prints once nothing on the
-head is still going (no pending check and no unfinished GitHub Actions run, which
-may still create jobs), every check and workflow the base branch names is
+head is still going (no pending check, no finished job whose GitHub Actions run
+is still going, and, once a cancelled check makes it read the head's runs, no
+unfinished run, since each may still create jobs), every check and workflow the base branch names is
 present (except `quest land`'s, which no head carries), each required check
 from the app its requirement names, if any, and every required
 check passed; it names the last required check that passed and is dated when
@@ -770,7 +771,8 @@ down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
 additions stay queued. A PR whose required checks are still running, or that
 still needs an approving review the base requires, stays queued and sits out
-batches until they pass and it is approved; checks count as in `quest status`. If it still waits two hours after
+batches until they pass and it is approved; checks count as in `quest status`,
+except that a required workflow also waits until its run, or a run of the same workflow replacing a cancelled one, finishes. If it still waits two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming what it waits for, since a check that never reports or an approval nobody
 gives would hold it silently. The sandbox checks the tip once, without
@@ -960,7 +962,10 @@ its PR still waits as the queue dropped it:
   which `quest land fix --effort` reads by default. Each `--fixer-tag`
   pattern, such as `deploy-*`, fetches the matching tags from GitHub into
   the checkout, pruning those GitHub deleted, so a check that reads them
-  runs there as in the queue's build.
+  runs there as in the queue's build. Each `--fixer-branch` pattern, such
+  as `release`, does the same for GitHub's branches, as `origin/<branch>`,
+  for a check that diffs against one. The checkout has no remote, so it
+  always gets the base it starts from as `origin/<base>`.
 
 Each finished round is recorded in its pick's history, as the host gate
 records its rounds: `fixed` for a fixer commit, `merged` for a clean merge,
@@ -1153,6 +1158,10 @@ quest gate bun run test
 quest gate cargo build --release
 ```
 
+Leave model calls, such as `quest review`, and long-running servers out of the
+gate: they wait rather than compute, and a server never exits, so it would hold
+its admission forever.
+
 Like every command Quest runs, the gated command gets the environment Quest was
 started with. Quest never loads the working directory's `.env` files, as Bun
 otherwise would, so a repository's `.env.development` cannot override the
@@ -1209,7 +1218,9 @@ pass it only for cheap commands, such as a formatter or `quest check`, that cost
 less to run than to hold back. A check that lands PRs goes first: with
 `QUEST_GATE_PRIORITY=1` in its environment, every gate inside the check waits
 for memory but never for load or the queue, whether or not other gated commands
-run. Both
+run, and its command gets `MBX_SCHEDULER_PRIORITY=normal` unless it sets its
+own, so [mbx](https://github.com/jdx/mr-boxington), where installed, schedules
+its compiles ahead of lower-priority builds. Both kinds of command
 record their admissions, so the other callers count them against the host's
 headroom. Set the variable where the check starts, such as a merge queue
 build's workflow or the land daemon's sandbox, rather than relying on a slot in

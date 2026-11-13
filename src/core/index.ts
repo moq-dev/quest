@@ -2,9 +2,8 @@
 // documents, validating them, whether a given quest can be started, and its
 // dependencies.
 //
-// The core is pure: no filesystem, process, or Node APIs, so the CLI, the
-// Worker, and the site share one implementation. Callers load the documents
-// and say which paths exist.
+// The core is pure: no filesystem, process, or Node APIs, so it runs wherever
+// JavaScript does. Callers load the documents and say which paths exist.
 
 export {
 	type Doc,
