@@ -878,6 +878,30 @@ describe("merge --land on a base that requires an approval the head lacks", () =
 		},
 	);
 
+	test("never enqueues when GitHub refuses auto-merge as clean, which an admin's enqueue would bypass", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.reviewDecision = "REVIEW_REQUIRED";
+		pull.beforeAutoMerge = () => "Pull request is in clean status";
+		expect(await refused(land(PR, { sha: HEAD, check: clean }, pull.deps()))).toContain(
+			"GitHub refused to enqueue",
+		);
+		// The refused attempt is all: no enqueue follows.
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
+	});
+
+	test("decides on the last read, so an approval dismissed while it checks still holds", async () => {
+		const pull = new FakePull();
+		pull.mergeState = "CLEAN";
+		pull.reviewDecision = "APPROVED";
+		pull.afterRead = () => {
+			pull.reviewDecision = "REVIEW_REQUIRED";
+		};
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH`]);
+		expect(pull.state).toBe("OPEN");
+	});
+
 	test("arms auto-merge rather than merging at once", async () => {
 		const pull = new FakePull();
 		pull.mergeState = "CLEAN";

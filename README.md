@@ -938,7 +938,8 @@ ready ([community#209348](https://github.com/orgs/community/discussions/209348))
 as for a pick `quest merge --land` armed while required checks ran. Each pass,
 the watcher enqueues every such PR: open, armed, ready (its merge state is
 `CLEAN`, `HAS_HOOKS`, or `UNSTABLE`: its required checks passed and it does not
-conflict), not in the queue, and not added to it since it was armed. It
+conflict), not lacking an approval its base requires, which auto-merge waits
+for, not in the queue, and not added to it since it was armed. It
 enqueues only the head auto-merge was armed on, with `expectedHeadOid` bound to
 it: GitHub keeps auto-merge across a push, but a push by anyone but the land
 fixer ends the pick, and a head it cannot tell yet waits for the next pass. An
