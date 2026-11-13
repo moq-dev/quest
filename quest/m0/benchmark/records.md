@@ -49,5 +49,5 @@ Agent's choices, for the implementer to revisit:
 
 - [Development as a benchmark](/quest/m0/benchmark/README.md) - the
   decisions this builds on
-- [Price sessions through token-max](/quest/m0/routing-evidence/usage-token-max.md) -
+- [Price sessions through token-max](https://github.com/moq-dev/quest/pull/704) -
   the per-session pricing these records reuse
