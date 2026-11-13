@@ -56,15 +56,21 @@ export async function admit(deps: AdmissionDependencies, signal: AbortSignal, he
 		signal.throwIfAborted();
 		const ledger = deps.agents.ledger();
 		const now = deps.agents.now();
+		// A clock stepped backward dates an entry in the future; restart it from now, so it still expires.
+		if (ledger.admissions.some((entry) => entry.at > now)) {
+			deps.agents.publish(
+				ledger,
+				ledger.admissions.map((entry) => (entry.at > now ? { ...entry, at: now } : entry)),
+			);
+			continue;
+		}
 		const pending = ledger.admissions.filter(
 			(entry) => entry.at > now - PENDING_MS && (entry.pid === undefined || deps.agents.running(entry)),
 		);
 		const reason = room(deps.limits, deps.gate, pending.length);
 		if (reason === null) {
-			// A clock stepped backward dates an entry in the future; count it from now instead.
-			const kept = pending.map((entry) => (entry.at > now ? { ...entry, at: now } : entry));
 			const entry: Admission = { id: randomUUID(), at: now, ...holder };
-			if (deps.agents.publish(ledger, [...kept, entry])) return;
+			if (deps.agents.publish(ledger, [...pending, entry])) return;
 			continue;
 		}
 		if (!shown.has(reason)) {

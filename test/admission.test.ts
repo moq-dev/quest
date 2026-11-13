@@ -114,3 +114,11 @@ test("an agent whose launcher exited no longer counts, and one still running cou
 	state.now += PENDING_MS;
 	expect(await atOnce()).toBe(true);
 });
+
+test("an agent dated in the future by a clock stepped backward counts from now, and still expires", async () => {
+	const { state, deps, sleeps } = host();
+	state.load = 7;
+	deps.agents.publish(deps.agents.ledger(), [{ id: "ahead", at: state.now + 12 * PENDING_MS }]);
+	await admit(deps, signal);
+	expect(sleeps.reduce((sum, ms) => sum + ms, 0)).toBe(PENDING_MS);
+});
