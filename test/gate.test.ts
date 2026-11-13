@@ -358,17 +358,16 @@ test("a gate keeps its command's ceiling ahead of what it holds while the host h
 		// Three quarters of the ceiling: one more step.
 		{ held: 0.8, available: 9 },
 		{ held: 1.6, available: 9 },
+		// Past 2 GiB, half of the ceiling is more than a step.
 		{ held: 2.4, available: 9 },
-		{ held: 3.2, available: 9 },
-		// Past 4 GiB, a quarter of the ceiling is more than a step.
-		{ held: 4, available: 9 },
+		{ held: 3.5, available: 9 },
 		// Half of it is no reason to move.
-		{ held: 3.2, available: 9 },
+		{ held: 3.4, available: 9 },
 		// Less is: a step above what it holds.
 		{ held: 1.2, available: 9 },
 		{ held: 0.1, available: 9 },
 	]);
-	expect(caps).toEqual([2, 3, 4, 5, 6.25, 3, 2]);
+	expect(caps).toEqual([2, 3, 4.5, 6.75, 3, 2]);
 	expect(throttled).toEqual([]);
 	expect(mine).toEqual({ id: "build", at: 0, ...me, memory: 2 * GiB, held: 0 });
 });

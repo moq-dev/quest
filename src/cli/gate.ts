@@ -681,8 +681,9 @@ export async function measure(host: Host, admission: { id: string; unit: string 
  * to what the command holds, rounded down to half a `step`, so other callers count the rest of its
  * ceiling as promised:
  *
- * - Once the command holds three quarters of its ceiling, its gate raises the ceiling by a quarter
- *   of it, or by `step` if that is more or all that fits. The raise comes from the host's available
+ * - Once the command holds three quarters of its ceiling, its gate raises the ceiling by half of
+ *   it, so a command that grows fast is slowed for few samples, or by `step` if that is more or
+ *   all that fits. The raise comes from the host's available
  *   memory, less what the other running commands may still take of their ceilings and less
  *   `reserve`, which stays free for everything outside the gate. Ceilings therefore never promise
  *   more than the host has.
@@ -729,7 +730,7 @@ export async function ration(
 					.reduce((sum, entry) => sum + unused(entry), 0);
 				// This command's own unused ceiling is already promised to it.
 				const room = host.memory() - promised - reserve - Math.max(0, share - memory);
-				const wanted = Math.max(step, Math.floor(share / 4));
+				const wanted = Math.max(step, Math.floor(share / 2));
 				next += room >= wanted ? wanted : room >= step ? step : 0;
 			}
 			if (mine.memory === next && mine.held === held) break;

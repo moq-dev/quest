@@ -1204,6 +1204,29 @@ the load counts as at least the sum of those records, and nothing starts while
 they kept every CPU busy. macOS, Windows, and Linux without a systemd user
 manager have no scope to measure, so the load average alone decides there.
 
+Where a systemd scope owns the command and the user manager may limit memory
+(the memory controller is delegated to it), the scope also holds the command's
+memory to a ceiling, with no swap, so a command that overruns stops itself
+instead of the kernel's OOM killer picking a victim elsewhere on the host. A
+ceiling starts at an eighth of one command's budget, 512 MiB on most hosts.
+Every second the gate records what its command holds, not counting file cache:
+
+- Once that reaches three quarters of the ceiling, the gate raises the ceiling
+  by half, or by one starting ceiling if that is more or all that fits. A raise
+  comes out of the host's available memory, less what the other running
+  commands may still take of their ceilings, and less one command's budget,
+  which stays free for everything outside the gate.
+- Once it falls below half, the ceiling drops to one starting ceiling above
+  what the command holds.
+
+What running commands may still take of their ceilings also counts as taken
+when a new command asks to start, so the ceilings fit the host together. With
+no room to raise a ceiling, the kernel slows the command over the last eighth
+below it, and the gate says so on stderr. A command that fills the rest is
+killed with everything in its scope, and the gate fails with
+`... ran out of memory`. A nested gate's command stays under the enclosing
+command's ceiling; a gate inside another Quest scope has a ceiling of its own.
+
 A user's admissions on one host are recorded under
 `~/.cache/quest/admissions/<hostname>`, whatever the caller's environment or
 login session. The home directory comes from the user database, not `$HOME`;
