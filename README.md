@@ -419,8 +419,9 @@ head is still going (no pending check and no unfinished GitHub Actions run, whic
 may still create jobs), every check and workflow the base branch names is
 present (except `quest land`'s, which no head carries), each required check
 from the app its requirement names, if any, and every required
-check passed; it names the last required check that passed and is dated when
-the head went idle. Each prints once per head, with the check's name
+check passed; it names the last required check that passed, or the last check
+when a required workflow's only job lost to another workflow's same-named job,
+and is dated when the head went idle. Each prints once per head, with the check's name
 (spaces as `_`) in the actor field and its details URL. Results count as
 `quest status` counts them, so neutral and skipped results pass, a rerun
 supersedes an earlier run of the same check, and a cancelled check a newer run
@@ -504,7 +505,7 @@ comes last, and a missing value prints as `-`:
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
 | `checks` | `failure` if any check fails, else `pending` if any is pending or a requirement is unreported, else `success`, and `passed=`, `failing=`, `pending=` counts, all from the checks that count; `-` when the head has no checks and the base requires none. |
-| `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. A required check or required workflow nothing reports yet prints as `pending required expected -` with its name, followed by `(from app <id>)` when the requirement names an app, or the workflow's path. |
+| `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. A required check or required workflow nothing reports yet prints as `pending required expected -` with its name, followed by `(from app <id>)` when the requirement names an app, or the workflow's repository and path, as `owner/name:path`. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
 | `checkpoint` | Each bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head and its latest verdict there, ignoring plain comments, is neither an approval nor a dismissal, at the end of its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed; a dismissed review counts as one that approves or requests changes. Only printed when due. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |

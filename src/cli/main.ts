@@ -503,7 +503,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"The head's first failing required check prints as checks:failed, and every required check passing as checks:passed, " +
 				"each once per head, with the required check's name as the actor and its details URL. " +
 				"Results count as quest status counts them, so neutral and skipped results pass. " +
-				"checks:passed waits until no check is pending, no GitHub Actions run is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
+				"checks:passed waits until no check is pending, no GitHub Actions run is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed, or the last check when a required workflow's only job lost to another workflow's same-named job. " +
 				"Optional failures print separately as check:failed; a base branch requiring no checks requires them all. " +
 				"When auto-merge stays enabled on a head other than the current one, which GitHub allows across a writer's push, " +
 				"auto-merge:moved prints once per head, with the account that enabled it as the actor and a URL naming the head it " +
@@ -551,7 +551,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"a check line per failing or pending check, marked required or optional, counting only each check's latest run " +
 				"and dropping a cancelled check once a newer GitHub Actions run of its workflow exists on the head (reading the head's " +
 				"workflow runs, which needs Actions read access); a required check or workflow nothing reports prints as pending required " +
-				"expected, with its name, followed by (from app <id>) when the requirement names an app, or the workflow's path; a review line per " +
+				"expected, with its name, followed by (from app <id>) when the requirement names an app, or the workflow's repository and path, as owner/name:path; a review line per " +
 				"reviewer's latest review, marked current or stale against the head; a checkpoint line per bot " +
 				"reviewer that approves or requests changes, its round, and its review, when that review is of the " +
 				"head, while its latest verdict on the head is neither an approval nor a dismissal, and ends its third, sixth, ... round (one commit it reviewed), as " +
