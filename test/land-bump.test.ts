@@ -244,6 +244,9 @@ const bare = (world: World) => world.remote.slice("file://".length);
 
 beforeEach(() => landed.mockClear());
 
+/** A workflow run as `GET /actions/runs` lists it, before its status. */
+const STARTED = { id: 1, workflow_id: 10, event: "push", check_suite_id: 100, run_started_at: "2026-11-12T12:00:00Z" };
+
 describe("questInput", () => {
 	test("finds the one root input locking the source, skipping follows and other inputs", () => {
 		expect(questInput(JSON.parse(lockFile(OLD, true)), SOURCE)).toEqual({
@@ -383,11 +386,11 @@ describe("bumpPass", () => {
 		target.suites[head][0].status = "completed";
 		// A queued workflow with no check run yet still holds it.
 		target.suites[head].push({ status: "queued", latest_check_runs_count: 0, app: { slug: "github-actions" } });
-		target.runs[head] = [{ status: "queued", conclusion: null }];
+		target.runs[head] = [{ ...STARTED, status: "queued", conclusion: null }];
 		expect(await bumpPass(ctx, NEW)).toEqual([]);
 		expect(landed).not.toHaveBeenCalled();
 
-		target.runs[head] = [{ status: "completed", conclusion: "success" }];
+		target.runs[head] = [{ ...STARTED, status: "completed", conclusion: "success" }];
 		expect(await bumpPass(ctx, NEW)).toEqual(["bump landing moq-dev/widget 7"]);
 		expect(landed).toHaveBeenCalledExactlyOnceWith(
 			{ ...target.target, number: 7 },
@@ -403,8 +406,20 @@ describe("bumpPass", () => {
 		const head = git(bare(target), "rev-parse", BUMP_BRANCH);
 		// Push and pull_request share a cancel-in-progress group: the pull_request run cancelled the push run,
 		// whose later job reported cancelled before the newer run started it.
-		const cancelled = { id: 1, workflow_id: 10, event: "push", check_suite_id: 100 };
-		const newer = { id: 2, workflow_id: 10, event: "pull_request", check_suite_id: 200 };
+		const cancelled = {
+			id: 1,
+			workflow_id: 10,
+			event: "push",
+			check_suite_id: 100,
+			run_started_at: "2026-11-12T12:00:00Z",
+		};
+		const newer = {
+			id: 2,
+			workflow_id: 10,
+			event: "pull_request",
+			check_suite_id: 200,
+			run_started_at: "2026-11-12T12:00:01Z",
+		};
 		const run = (suite: number, id: number, name: string, status: string, conclusion?: string) => ({
 			__typename: "CheckRun",
 			databaseId: id,
@@ -444,7 +459,7 @@ describe("bumpPass", () => {
 			{ id: 5, workflow_id: 30, event: "push", conclusion: "failure" },
 			{ id: 6, workflow_id: 30, event: "pull_request", conclusion: "success" },
 			{ id: 7, workflow_id: 40, event: "push", conclusion: "cancelled" },
-		];
+		].map((run) => ({ ...run, check_suite_id: run.id * 10, run_started_at: "2026-11-12T12:00:00Z" }));
 		// Another event's failure still counts, as does a cancellation nothing replaced.
 		expect(latestRuns(runs).map((run) => run.id)).toEqual([2, 4, 5, 6, 7]);
 	});

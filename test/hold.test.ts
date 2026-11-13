@@ -51,6 +51,8 @@ class FakePull {
 	rules: ObjectValue[] = [];
 	/** The head's check runs, as its `statusCheckRollup` lists them. */
 	checks: ObjectValue[] = [];
+	/** The head's workflow runs, as `GET /actions/runs` lists them. */
+	runs: ObjectValue[] = [];
 	autoMerge: ObjectValue | null = null;
 	queueEntry: ObjectValue | null = null;
 	labels: string[] = [];
@@ -114,6 +116,8 @@ class FakePull {
 			return json(200, []);
 		}
 		if (url.pathname === "/repos/example/project/branches/main") return json(200, { protection: {} });
+		if (url.pathname === "/repos/example/project/actions/runs" && url.searchParams.get("head_sha") === this.head)
+			return json(200, { total_count: this.runs.length, workflow_runs: this.runs });
 		if (url.pathname === `/repos/example/project/compare/main...${this.head}`) {
 			this.comparisons.push(`${url.pathname}${url.search}`);
 			return json(200, { status: this.comparison, base_commit: { sha: this.base } });
@@ -340,6 +344,28 @@ describe("merge --land", () => {
 		expect(pull.writes).toEqual([]);
 		// A rerun that passed supersedes the failure; a pending check does not block.
 		pull.checks.push(run(3, "Check", "COMPLETED", "SUCCESS"));
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
+		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("lands past a cancelled check once a newer run of its workflow exists, as on kixelated/token-max#78", async () => {
+		const pull = new FakePull();
+		const run = (databaseId: number, name: string, conclusion: string, suite: number) => ({
+			__typename: "CheckRun",
+			databaseId,
+			name,
+			status: "COMPLETED",
+			conclusion,
+			detailsUrl: `https://ci.example/${databaseId}`,
+			checkSuite: { databaseId: suite, app: { databaseId: 15368 } },
+		});
+		pull.checks = [run(1, "Tests (${{ matrix.os }})", "CANCELLED", 10), run(2, "Tests (macos-15)", "SUCCESS", 20)];
+		pull.runs = [{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" }];
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			"Tests (${{ matrix.os }})",
+		);
+		expect(pull.writes).toEqual([]);
+		pull.runs.push({ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: "2026-11-12T23:42:56Z" });
 		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes).not.toEqual([]);
 	});

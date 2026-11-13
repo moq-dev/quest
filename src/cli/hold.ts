@@ -7,6 +7,7 @@ import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../github/merg
 import { repositoryPath } from "./claims";
 import {
 	array,
+	currentChecks,
 	GitHub,
 	type GitHubDependencies,
 	GitHubGraphQLError,
@@ -16,7 +17,6 @@ import {
 	requirements,
 	string,
 } from "./github";
-import { latestContexts } from "../github/checks";
 import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
 import { QUEUE_CHECK } from "./land-queue";
 import type { LandingCheck } from "./landed";
@@ -345,12 +345,12 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 }
 
 /**
- * Refuse a head on which any check's latest run failed, required or not, naming each: landing it
+ * Refuse a head on which any current check failed, required or not, naming each: landing it
  * would spend a queue build on a known failure. Pending and absent checks do not block, nor does the
  * own queue's informational check, which reports how a past pick ended rather than the head.
  */
 async function passing(github: GitHub, pr: PullRequest, url: string, sha: string): Promise<void> {
-	const failing = latestContexts(await contexts(github, pr, sha))
+	const failing = (await currentChecks(github, pr, sha, await contexts(github, pr, sha))).checks
 		.filter((context) => context.name !== QUEUE_CHECK)
 		.map(classifyCheck)
 		.filter(({ outcome }) => outcome === "failing")

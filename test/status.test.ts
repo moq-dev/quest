@@ -16,6 +16,8 @@ const page = (nodes: Node[], next?: string) => ({
 });
 
 /** A recorded GraphQL response; omitted connections stand for ones the query skipped. */
+const CI = ".github/workflows/ci.yml";
+
 function pull(
 	fields: {
 		head?: string;
@@ -116,6 +118,12 @@ function setup(
 		warnings?: string[];
 		/** The base-to-head diff per compared head, or the status GitHub refuses it with. */
 		diffs?: Record<string, string | number>;
+		/** The base's active ruleset rules. */
+		rules?: Node[];
+		/** The base branch is gone, so reading it fails. */
+		noBase?: boolean;
+		/** The head's workflow runs, as `GET /actions/runs` lists them. */
+		runs?: Node[];
 	} = {},
 ) {
 	const queries: Record<string, unknown>[] = [];
@@ -140,6 +148,19 @@ function setup(
 				if (page.status === 403)
 					return Response.json({ message: "Resource not accessible by integration" }, { status: 403 });
 				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
+			}
+			// Ruleset workflows name their repository by ID: 1 is this one, 2 another.
+			if (path.pathname === "/repositories/1") return Response.json({ full_name: "example/project" });
+			if (path.pathname === "/repositories/2") return Response.json({ full_name: "example/policies" });
+			if (path.pathname === "/repos/example/project/branches/main")
+				return options.noBase
+					? Response.json({ message: "Branch not found" }, { status: 404 })
+					: Response.json({ protection: { enabled: false } });
+			if (path.pathname === "/repos/example/project/rules/branches/main")
+				return Response.json(options.rules ?? []);
+			if (path.pathname === "/repos/example/project/actions/runs") {
+				if (!options.runs) throw new Error("unexpected workflow run request");
+				return Response.json({ total_count: options.runs.length, workflow_runs: options.runs });
 			}
 			const compare = /^\/repos\/example\/project\/compare\/main\.\.\.([0-9a-f]{40})$/.exec(path.pathname);
 			if (compare) {
@@ -187,36 +208,45 @@ function setup(
 }
 
 test("reports checks by requiredness, each reviewer's latest review against the head, and open threads", async () => {
-	const fixture = setup([
-		pull({
-			checks: page([
-				run("lint", "COMPLETED", "FAILURE", true),
-				run("docs", "COMPLETED", "CANCELLED", false),
-				run("test", "IN_PROGRESS", null, true),
-				run("build", "COMPLETED", "SUCCESS", true),
-				run("publish", "COMPLETED", "SKIPPED", false),
-				{
-					__typename: "StatusContext",
-					context: "ci/legacy",
-					state: "ERROR",
-					targetUrl: null,
-					isRequired: false,
-				},
-				{ __typename: "StatusContext", context: "deploy", state: "EXPECTED", targetUrl: "", isRequired: true },
-			]),
-			reviews: page([
-				review("alice", "APPROVED", B, 1),
-				review("bob", "CHANGES_REQUESTED", B, 2),
-				review("alice", "COMMENTED", A, 3, [
-					{ content: "THUMBS_UP", createdAt: "2026-10-07T12:04:00Z", user: { login: "codex[bot]" } },
+	const fixture = setup(
+		[
+			pull({
+				checks: page([
+					run("lint", "COMPLETED", "FAILURE", true),
+					run("docs", "COMPLETED", "CANCELLED", false),
+					run("test", "IN_PROGRESS", null, true),
+					run("build", "COMPLETED", "SUCCESS", true),
+					run("publish", "COMPLETED", "SKIPPED", false),
+					{
+						__typename: "StatusContext",
+						context: "ci/legacy",
+						state: "ERROR",
+						targetUrl: null,
+						isRequired: false,
+					},
+					{
+						__typename: "StatusContext",
+						context: "deploy",
+						state: "EXPECTED",
+						targetUrl: "",
+						isRequired: true,
+					},
 				]),
-				review("viewer", "PENDING", A, 4),
-				review("gone", "COMMENTED", null, 5),
-			]),
-			threads: page([thread("T1", true), thread("T2", false), thread("T3", false, null, "author")]),
-			reactions: [{ content: "EYES", createdAt: "2026-10-07T12:00:00Z", user: null }],
-		}),
-	]);
+				reviews: page([
+					review("alice", "APPROVED", B, 1),
+					review("bob", "CHANGES_REQUESTED", B, 2),
+					review("alice", "COMMENTED", A, 3, [
+						{ content: "THUMBS_UP", createdAt: "2026-10-07T12:04:00Z", user: { login: "codex[bot]" } },
+					]),
+					review("viewer", "PENDING", A, 4),
+					review("gone", "COMMENTED", null, 5),
+				]),
+				threads: page([thread("T1", true), thread("T2", false), thread("T3", false, null, "author")]),
+				reactions: [{ content: "EYES", createdAt: "2026-10-07T12:00:00Z", user: null }],
+			}),
+		],
+		{ runs: [] },
+	);
 	const status = await pullRequestStatus(pr, fixture.deps);
 	expect(fixture.queries).toHaveLength(1);
 	expect(fixture.holdQueries).toHaveLength(1);
@@ -462,6 +492,242 @@ test("drops the landing exit once the PR enters the merge queue or auto-merge ag
 	expect(await stopped(ejected, { mergeQueueEntry: queue("2026-10-07T12:00:59Z") })).toBe("merge_conflict");
 });
 
+test("drops a cancelled check a newer run of its workflow replaced, as on kixelated/token-max#78", async () => {
+	const job = (name: string, conclusion: string, databaseId: number, suite: number) => ({
+		...run(name, "COMPLETED", conclusion, false),
+		databaseId,
+		checkSuite: {
+			databaseId: suite,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
+	});
+	const runs = (started: string) => [
+		{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" },
+		{ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: started },
+	];
+	const checks = () =>
+		page([job("Tests (${{ matrix.os }})", "CANCELLED", 1, 10), job("Tests (macos-15)", "SUCCESS", 2, 20)]);
+	const fixture = setup([pull({ checks: checks(), reviews: page([]), threads: page([]) })], {
+		runs: runs("2026-11-12T23:42:56Z"),
+	});
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks).toEqual({ state: "success", passed: 1, failing: [], pending: [] });
+	// A rerun of the cancelled run started later, so its run is the newest and its cancellation counts.
+	const rerun = setup([pull({ checks: checks(), reviews: page([]), threads: page([]) })], {
+		runs: runs("2026-11-12T23:40:00Z"),
+	});
+	expect((await pullRequestStatus(pr, rerun.deps)).checks.state).toBe("failure");
+});
+
+test("a required check or workflow nothing reports is pending, except the gate's own check", async () => {
+	const job = (name: string, workflow: string) => ({
+		...run(name, "COMPLETED", "SUCCESS", false),
+		databaseId: 1,
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: workflow, repositoryName: "example/project" } },
+		},
+	});
+	const rules = [
+		{
+			type: "required_status_checks",
+			parameters: {
+				required_status_checks: [{ context: "test" }, { context: "lint" }, { context: "quest land" }],
+			},
+		},
+		{
+			type: "workflows",
+			parameters: {
+				workflows: [
+					{ path: CI, repository_id: 1 },
+					{ path: ".github/workflows/pr.yml", repository_id: 1 },
+				],
+			},
+		},
+	];
+	const fixture = setup([pull({ checks: page([job("test", CI)]), reviews: page([]), threads: page([]) })], {
+		rules,
+	});
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(statusLines(status).filter((line) => line.startsWith("check"))).toEqual([
+		"checks pending passed=1 failing=0 pending=2",
+		"check pending required expected - lint",
+		"check pending required expected - example/project:.github/workflows/pr.yml",
+	]);
+	// With no checks on the head at all, the requirements still leave it pending.
+	const empty = setup([pull({ checks: null, reviews: page([]), threads: page([]) })], { rules });
+	expect((await pullRequestStatus(pr, empty.deps)).checks.state).toBe("pending");
+});
+
+test("a required check from another app than its requirement names stays pending, and a closed PR reads no requirements", async () => {
+	const rules = [
+		{
+			type: "required_status_checks",
+			parameters: { required_status_checks: [{ context: "test", integration_id: 99 }] },
+		},
+	];
+	const test = {
+		...run("test", "COMPLETED", "SUCCESS", false),
+		databaseId: 1,
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
+	};
+	const open = setup([pull({ checks: page([test]), reviews: page([]), threads: page([]) })], { rules });
+	expect(statusLines(await pullRequestStatus(pr, open.deps)).filter((line) => line.startsWith("check"))).toEqual([
+		"checks pending passed=1 failing=0 pending=1",
+		"check pending required expected - test (from app 99)",
+	]);
+	// A merged PR's base may be gone, and nothing it requires can change the PR anymore.
+	const merged = setup([pull({ state: "MERGED", checks: page([test]), reviews: page([]), threads: page([]) })], {
+		rules: undefined,
+		noBase: true,
+	});
+	expect((await pullRequestStatus(pr, merged.deps)).checks.state).toBe("success");
+});
+
+test("a replacing run that has not started yet stands in by its creation time", async () => {
+	const job = {
+		...run("Tests (${{ matrix.os }})", "COMPLETED", "CANCELLED", false),
+		databaseId: 1,
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
+	};
+	const fixture = setup([pull({ checks: page([job]), reviews: page([]), threads: page([]) })], {
+		runs: [
+			{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" },
+			{ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: null, created_at: "2026-11-12T23:42:56Z" },
+		],
+	});
+	expect((await pullRequestStatus(pr, fixture.deps)).checks).toEqual({
+		state: "success",
+		passed: 0,
+		failing: [],
+		pending: [],
+	});
+});
+
+test("a required workflow matches its repository as well as its path", async () => {
+	const build = {
+		...run("build", "COMPLETED", "SUCCESS", false),
+		databaseId: 1,
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
+	};
+	// The rule requires example/policies's ci.yml, which the local ci.yml at the same path does not satisfy.
+	const fixture = setup([pull({ checks: page([build]), reviews: page([]), threads: page([]) })], {
+		rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 2 }] } }],
+	});
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks.state).toBe("pending");
+	expect(status.checks.pending.map((check) => check.name)).toEqual([`example/policies:${CI}`]);
+});
+
+test("a required workflow counts as reported when another workflow's same-named job is the newer one", async () => {
+	const build = (databaseId: number, path: string) => ({
+		...run("build", "COMPLETED", "SUCCESS", false),
+		databaseId,
+		checkSuite: {
+			databaseId: databaseId * 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path, repositoryName: "example/project" } },
+		},
+	});
+	const fixture = setup(
+		[
+			pull({
+				checks: page([build(1, CI), build(2, ".github/workflows/docs.yml")]),
+				reviews: page([]),
+				threads: page([]),
+			}),
+		],
+		{ rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 1 }] } }] },
+	);
+	expect((await pullRequestStatus(pr, fixture.deps)).checks.state).toBe("success");
+});
+
+test("a required workflow's failed job still fails when another workflow's same-named job passed later", async () => {
+	const build = (databaseId: number, path: string, conclusion: string) => ({
+		...run("build", "COMPLETED", conclusion, false),
+		databaseId,
+		checkSuite: {
+			databaseId: databaseId * 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path, repositoryName: "example/project" } },
+		},
+	});
+	const fixture = setup(
+		[
+			pull({
+				checks: page([build(1, CI, "FAILURE"), build(2, ".github/workflows/docs.yml", "SUCCESS")]),
+				reviews: page([]),
+				threads: page([]),
+			}),
+		],
+		{ rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 1 }] } }] },
+	);
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks.state).toBe("failure");
+	expect(status.checks.failing.map((check) => [check.name, check.required])).toEqual([["build", true]]);
+});
+
+test("a required workflow whose only job a queued run replaced is pending", async () => {
+	const build = {
+		...run("build", "COMPLETED", "CANCELLED", false),
+		databaseId: 1,
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
+	};
+	const fixture = setup([pull({ checks: page([build]), reviews: page([]), threads: page([]) })], {
+		rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 1 }] } }],
+		runs: [
+			{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" },
+			{ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: null, created_at: "2026-11-12T23:42:56Z" },
+		],
+	});
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks.state).toBe("pending");
+	expect(status.checks.pending.map((check) => check.name)).toEqual([`example/project:${CI}`]);
+});
+
+test("a job in a required workflow counts as required", async () => {
+	const fixture = setup(
+		[
+			pull({
+				checks: page([
+					{
+						...run("build", "COMPLETED", "FAILURE", false),
+						databaseId: 1,
+						checkSuite: {
+							databaseId: 10,
+							app: { databaseId: 15368 },
+							workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+						},
+					},
+				]),
+				reviews: page([]),
+				threads: page([]),
+			}),
+		],
+		{ rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 1 }] } }] },
+	);
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks.failing.map((check) => [check.name, check.required])).toEqual([["build", true]]);
+});
+
 test("counts only each check's newest run from its app", async () => {
 	const rerun = (name: string, conclusion: string, databaseId: number, app = 15368) => ({
 		...run(name, "COMPLETED", conclusion, true),
@@ -485,7 +751,7 @@ test("counts only each check's newest run from its app", async () => {
 	const status = await pullRequestStatus(pr, fixture.deps);
 	// The fixture answers whatever is asked, so the query must ask for what tells runs apart.
 	expect(fixture.texts[0].replace(/\s+/g, " ")).toContain(
-		"... on CheckRun { databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number) checkSuite { app { databaseId } } }",
+		"... on CheckRun { databaseId name status conclusion detailsUrl isRequired(pullRequestNumber: $number) checkSuite { databaseId app { databaseId } workflowRun { file { path repositoryName } } } }",
 	);
 	expect(status.checks.passed).toBe(2);
 	expect(status.checks.failing.map((check) => check.name)).toEqual(["test", "lint"]);
