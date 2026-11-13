@@ -372,8 +372,8 @@ type Permission =
 type Grant = { repositories: Set<string>; permissions: Partial<Record<Permission, string>> };
 
 /**
- * Answer one outbound request from the Worker. Sign-in always completes as the
- * world's first user; repository reads check that user's maintainer role.
+ * Answer one outbound request to GitHub's API from the world's repositories,
+ * checking the caller's role on each read.
  */
 export function fakeGitHub(world: World) {
 	for (const repo of world.repos) connect(repo);
