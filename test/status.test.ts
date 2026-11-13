@@ -189,6 +189,14 @@ function setup(
 				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
 			}
 			const request = JSON.parse(String(init?.body));
+			if (request.query.includes("commits(last: 100)"))
+				return Response.json({
+					data: {
+						repository: {
+							pullRequest: { commits: { nodes: [{ commit: { oid: A, checkSuites: { nodes: [] } } }] } },
+						},
+					},
+				});
 			if (request.query.includes("p1: pullRequest")) {
 				const nodes = (rows: Node[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes: rows });
 				return Response.json({

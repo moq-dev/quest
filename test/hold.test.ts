@@ -74,6 +74,9 @@ class FakePull {
 	permissions: Record<string, string> = {};
 	/** Each commit's diff from the base. */
 	diffs: Record<string, string> = {};
+	/** The PR's commits before its head, oldest first, and the apps whose check suites succeeded on each. */
+	history: string[] = [];
+	suites: Record<string, string[]> = {};
 	private clock = Date.parse("2026-10-21T12:00:00Z");
 
 	/** Add a label as GitHub does: re-adding one already on the PR records no event. */
@@ -187,6 +190,21 @@ class FakePull {
 			return { data: { [name]: { clientMutationId: null } } };
 		}
 		if (query.includes("node(id: $id)")) return { data: { node: { autoMergeRequest: this.autoMerge } } };
+		if (query.includes("commits(last: 100)")) {
+			const commit = (oid: string) => ({
+				commit: {
+					oid,
+					checkSuites: {
+						nodes: (this.suites[oid] ?? []).map((slug) => ({ conclusion: "SUCCESS", app: { slug } })),
+					},
+				},
+			});
+			return {
+				data: {
+					repository: { pullRequest: { commits: { nodes: [...this.history, this.head].map(commit) } } },
+				},
+			};
+		}
 		if (query.includes("p7: pullRequest")) {
 			const page = (nodes: ObjectValue[]) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
 			return {
@@ -978,6 +996,31 @@ describe("merge --land with an online reviewer", () => {
 		changed.reviews = [review("1", OLD)];
 		changed.diffs = { [HEAD]: "new", [OLD]: "old" };
 		expect(await refused(merge(changed))).toContain("has not reviewed it");
+	});
+
+	test("counts an approval without a body as a review of the head", async () => {
+		const pull = declared();
+		pull.reviews = [{ ...review("1", HEAD, bot, ""), state: "APPROVED" }];
+		await merge(pull);
+		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("compares with the newest earlier head its app's check passed on, not only its reviews", async () => {
+		const MID = "d".repeat(40);
+		const pull = declared();
+		pull.reviews = [review("1", OLD)];
+		pull.history = [OLD, MID];
+		pull.suites = { [MID]: ["pullfrog"] };
+		pull.diffs = { [OLD]: "old", [MID]: "fixed", [HEAD]: "fixed" };
+		await merge(pull);
+		expect(pull.writes).not.toEqual([]);
+		// Another app's passing suite reviewed nothing.
+		const other = declared();
+		other.reviews = [review("1", OLD)];
+		other.history = [OLD, MID];
+		other.suites = { [MID]: ["coderabbitai"] };
+		other.diffs = { [OLD]: "old", [MID]: "fixed", [HEAD]: "fixed" };
+		expect(await refused(merge(other))).toContain("has not reviewed it");
 	});
 
 	test("refuses while a thread it opened on any head is unresolved, or resolved by an account that cannot push", async () => {

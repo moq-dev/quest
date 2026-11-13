@@ -417,14 +417,17 @@ export async function onlineGate(
 			return review ? [String(object(review).id)] : [];
 		}),
 	);
-	// A pass over a head has a body or opens a thread; a reply in an older thread also makes an empty review of the
-	// head without reviewing it, and a dismissed review is withdrawn.
+	// A pass over a head gives a verdict, has a body, or opens a thread; a reply in an older thread also makes an empty
+	// comment review of the head without reviewing it, and a dismissed review is withdrawn.
 	const reviews = pull.reviews
 		.filter(
 			(review) =>
 				ids.has(String(review.id)) &&
 				review.state !== "DISMISSED" &&
-				(String(review.body ?? "").trim() !== "" || opened.has(String(review.id))),
+				(review.state === "APPROVED" ||
+					review.state === "CHANGES_REQUESTED" ||
+					String(review.body ?? "").trim() !== "" ||
+					opened.has(String(review.id))),
 		)
 		.map((review) => ({
 			commit: review.commit ? string(object(review.commit).oid) : null,
@@ -467,10 +470,44 @@ export async function onlineGate(
 			path = link(response, "next");
 		}
 	}
-	const last = reviews.filter((review) => review.commit !== null).at(-1);
-	if (last && (await sameDiff(client, pr, base, [head, last.commit!], warn)))
-		return gate("diff-identical", last.commit);
+	const earlier = await earlierReviewed(client, pr, head, slug === "github-actions" ? undefined : slug, reviews);
+	if (earlier !== null && (await sameDiff(client, pr, base, [head, earlier], warn)))
+		return gate("diff-identical", earlier);
 	return gate(running ? "running" : "missing", null);
+}
+
+/**
+ * The newest earlier head of `pr` the reviewer reviewed: among the PR's last 100 commits, the newest before the head
+ * with one of its `reviews` or a successful check suite of its app `slug`, else its latest review's commit.
+ */
+async function earlierReviewed(
+	client: GitHub,
+	pr: PullRequest,
+	head: string,
+	slug: string | undefined,
+	reviews: { commit: string | null }[],
+): Promise<string | null> {
+	const last = reviews.filter((review) => review.commit !== null).at(-1)?.commit ?? null;
+	if (slug === undefined) return last;
+	const data = await client.graphql(
+		"query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { " +
+			"pullRequest(number: $number) { commits(last: 100) { nodes { commit { oid " +
+			"checkSuites(first: 50) { nodes { conclusion app { slug } } } } } } } } }",
+		{ owner: pr.owner, name: pr.repo, number: pr.number },
+	);
+	const commits = array(object(object(object(object(data.repository).pullRequest).commits)).nodes).map((node) =>
+		object(node.commit),
+	);
+	const reviewed = new Set(reviews.flatMap((review) => (review.commit === null ? [] : [review.commit])));
+	for (const commit of commits.reverse()) {
+		const oid = string(commit.oid);
+		if (oid === head) continue;
+		const checked = array(object(commit.checkSuites ?? { nodes: [] }).nodes).some(
+			(suite) => suite.conclusion === "SUCCESS" && suite.app != null && object(suite.app).slug === slug,
+		);
+		if (checked || reviewed.has(oid)) return oid;
+	}
+	return last;
 }
 
 /** Why `quest merge` refuses `gate`'s head, or null when the online reviewer's review lets it land. */
