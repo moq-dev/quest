@@ -483,7 +483,6 @@ mergeable conflicting
 merge-state dirty
 review-decision -
 review-record diff-identical 5f1c2e9a8b7d6c5e4f3a2b1c0d9e8f7a6b5c4d3e
-online-review current pullfrog[bot] 0ade9d977d54c6f48152410532c58e9ea78db3d0 open=0
 auto-merge -
 merge-queue -
 landing-stopped -
@@ -502,7 +501,6 @@ comes last, and a missing value prints as `-`:
 | `url`, `state`, `draft`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the head SHA. |
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
 | `review-record` | Whether the PR body's [`## Review` record](#review-locally) still covers the head, and the head it names last: `current` when it is the head, `diff-identical` when `git diff <base>...<head>` prints the same as for it, `stale` otherwise, or `unknown` when GitHub cannot compare them, such as a diff too large; `-` when the record names no full SHA. Whose record counts is the reader's call. |
-| `online-review` | Where the [online reviewer](#require-an-online-review) the base's `REVIEW.md` names stands on an open PR's head, as `quest merge` reads it: `current` when it reviewed the head, `diff-identical` when it reviewed a head whose diff from the base matches, `running` while its app's check on the head has not finished, or `missing`; then the reviewer, the head it reviewed, and `open=<n>` with the URL of each review thread it opened that neither it nor a writer resolved. `-` when the base names none. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#land-a-batch-with-quest-land) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
@@ -533,7 +531,7 @@ requirements from the base, matches a required check by name and, when the
 requirement names one, its app, as GitHub and `quest land` do, and leaves out
 `quest land`'s check, which no head carries. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
-`mergeable`, `mergeState`, `reviewDecision`, `reviewRecord`, `onlineReview` (`reviewer`, `head`, `state`, `reviewed`, `open`, or null), `autoMerge`, `mergeQueue`,
+`mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
 `landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `checkpoints` (`reviewer`, `round`, `url`), `reactions`,
 `threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
@@ -582,9 +580,11 @@ It also refuses a head that fails `quest check --no-stubs --base <base> --branch
 <head branch>`, which it runs on git objects it fetches, so nothing from the
 head runs, and ignores findings the base already has; run a `quest` the PR
 cannot modify, since the head's own build could skip the check. A base without
-quests skips it. It refuses a head the base's online reviewer has not reviewed, or
-whose findings are open, as [Require an online review](#require-an-online-review)
-describes. It enables auto-merge bound to that SHA, or merges at once when nothing is
+quests skips it. While the base requires an approval the PR lacks, such as an
+online reviewer's that a ruleset requires (GitHub's review decision is
+`review_required` or `changes_requested`), it only arms auto-merge, which waits
+for the approval, and refuses where nothing would wait, since an admin's token
+would merge or enqueue past the requirement. It enables auto-merge bound to that SHA, or merges at once when nothing is
 left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
 the repository disallows; otherwise it uses the only method the repository
 allows, or else a merge commit, and refuses when merge commits are off and more
@@ -629,37 +629,6 @@ instructions in the diff and reads the PR's own CI results as context. It hands 
 only what needs a maintainer: a behavior or design decision gets a diagnosis on the
 PR, and a fix that edits protected paths or that GitHub refuses to push gets a ready
 commit for `quest land apply <pr>`.
-
-### Require an online review
-
-A repository names the online reviewer whose review gates `quest merge`, such as
-[Pullfrog](https://pullfrog.com), in its `REVIEW.md` front matter, read from the
-base so a PR cannot drop its own gate:
-
-```markdown
----
-online-reviewer: pullfrog[bot]
----
-```
-
-The name is the reviewer's GitHub login, or the name a review body opens with
-as `Automated review by <name>` for a reviewer posting under a person's account,
-whose reviews then count only from accounts that can push. `quest merge`
-refuses a head until that reviewer has reviewed it, in a review of the head or
-a successful check run of its own GitHub App on it (a re-review that finds
-nothing new may post only the check), or reviewed an earlier head whose diff
-from the base matches. A review that only replies in an older thread, or that
-was dismissed, reviews nothing, and a reviewer posting as
-`github-actions[bot]` counts only by its reviews, since that app runs every
-workflow job. It also refuses while any review thread the reviewer
-opened, on any head, is unresolved, or was resolved by an account that cannot
-push, since GitHub lets the PR's author resolve one: fix or refute each finding
-in its thread and resolve it. Findings it lists only in a review body are not
-read. A reviewer that has not started, or whose run failed, holds the PR until
-it reviews the head; ask it to, as its documentation says. A repository whose
-`REVIEW.md` names none lands on its local review alone, the
-[`quest review`](#review-locally) round its PR body records. Other online
-reviewers, such as a capped CodeRabbit, are never required to review.
 
 ## Land a batch with quest land
 

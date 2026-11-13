@@ -554,14 +554,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Print a pull request's head, checks, merge state, reviews, reactions, and unresolved review threads " +
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
-				"url, state, draft, head, mergeable, merge-state, review-decision, review-record, online-review, auto-merge, merge-queue, " +
+				"url, state, draft, head, mergeable, merge-state, review-decision, review-record, auto-merge, merge-queue, " +
 				"landing-stopped, and checks, whose state and counts follow the checks that count, pending while an open PR's base requires a check or workflow nothing reports; review-record gives whether the PR body's ## Review record " +
 				"covers the head, as current, diff-identical (git diff <base>...<head> prints the same as for the head it names), " +
-				"stale, or unknown when GitHub cannot compare them, then the head it names last; online-review, on an open PR whose " +
-				"base's REVIEW.md names an online reviewer in its front matter (online-reviewer: <login>), gives where that reviewer " +
-				"stands on the head as quest merge reads it: current, diff-identical, running (its app's check on the head has not " +
-				"finished), or missing, then the reviewer, the head it reviewed, and open=<n> with the URL of each review thread it " +
-				"opened that neither it nor a writer resolved; auto-merge gives its method, who enabled it and when, and the head it was " +
+				"stale, or unknown when GitHub cannot compare them, then the head it names last; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
 				"push (- when it cannot be told: a quest land pin names it, and otherwise the head branch's push " +
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
@@ -645,11 +641,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
 				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
 				"first, once the head has moved, and while the latest run of any check on the head failed, required " +
-				"or not, naming each; a pending or absent check does not block. When the base's REVIEW.md names an online " +
-				"reviewer in its front matter (online-reviewer: <login>), it refuses a head that reviewer has not reviewed, " +
-				"in a review of it or a successful check run of its own app on it, unless it reviewed a head whose diff from " +
-				"the base matches, and a head with a review thread it opened on any head that neither it nor an account that " +
-				"can push resolved; a base that names none lands on its local review alone. It refuses a head on which quest check " +
+				"or not, naming each; a pending or absent check does not block. While the base requires an approval the PR " +
+				"lacks (GitHub's review decision is review_required or changes_requested), it only arms auto-merge, which waits " +
+				"for it, and refuses where nothing would wait, since an admin's token merges or enqueues past the requirement. It refuses a head on which quest check " +
 				"--no-stubs --base <base> --branch <head branch> finds anything, read from git objects fetched from the base repository, " +
 				"so nothing from the head runs, except findings the base already has; a base without quests skips it. It uses the method --squash or --rebase names, refusing one " +
 				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +

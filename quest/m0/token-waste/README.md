@@ -45,9 +45,10 @@ Decision prompts, chosen options marked ✅:
   [moq-dev/quest#620](https://github.com/moq-dev/quest/pull/620), whose
   cost reason Claude through the console removed, after opencode's quota ran
   out and failed every `quest review` that day: Pullfrog replaces the
-  DeepSeek review, so `quest review` runs only the size's pick, and ✅ the
-  online reviewer the base's `REVIEW.md` names gates `quest merge`
-  (rejected: advisory only).
+  DeepSeek review, so `quest review` runs only the size's pick, and ✅ its
+  approval gates the merge (rejected: advisory only), ✅ through a GitHub
+  ruleset requiring an approval, which `quest merge` and `quest land` honor
+  (rejected: a `REVIEW.md` declaration that `quest merge` checks).
 - Rules to hooks or lint: first not planned, then ✅ planned the same day
   (user, adopting practices from the research below).
 - Adopted 2026-11-05 (user) from a survey of AI-heavy developers' setups

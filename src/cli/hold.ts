@@ -20,7 +20,6 @@ import {
 import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
 import { QUEUE_CHECK } from "./land-queue";
 import type { LandingCheck } from "./landed";
-import { declaredReviewer, onlineGate, onlineRefusal } from "./online-review";
 import { classifyCheck } from "./status";
 import { Refusal, ago } from "./start";
 
@@ -30,7 +29,7 @@ export type Method = "merge" | "squash" | "rebase";
 const READ = `query HoldOwnership($owner: String!, $repo: String!, $number: Int!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
-			id url state isDraft body updatedAt baseRefName baseRefOid headRefName headRefOid mergeStateStatus isMergeQueueEnabled isInMergeQueue
+			id url state isDraft body updatedAt baseRefName baseRefOid headRefName headRefOid mergeStateStatus reviewDecision isMergeQueueEnabled isInMergeQueue
 			labels(first: 100) { nodes { name } }
 			timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
 				nodes { __typename ... on LabeledEvent { id createdAt label { name } } }
@@ -60,6 +59,11 @@ interface Snapshot {
 	branch: string;
 	head: string;
 	mergeState: string;
+	/**
+	 * The base requires an approval the PR lacks, such as an online reviewer's that a ruleset requires. An admin's
+	 * token may merge or enqueue past it, so only auto-merge, which waits for it, may pick such a head.
+	 */
+	unapproved: boolean;
 	queue: boolean;
 	/** Whether the PR is in its base's merge queue. */
 	queued: boolean;
@@ -254,7 +258,6 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		}
 	};
 	await passing(labels.github, pr, snapshot.url, sha);
-	await reviewed(labels.github, pr, snapshot, deps.warn);
 	const findings = await request.check({
 		remote: `https://github.com/${pr.owner}/${pr.repo}.git`,
 		base: snapshot.base,
@@ -299,6 +302,10 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 				`${snapshot.url} repository has auto-merge disabled; follow its landing instructions in CONTRIBUTING.md or AGENTS.md (for example, its label queue). Only use --direct if the user explicitly asks`,
 			);
 	}
+	if (snapshot.unapproved && repository.allow_auto_merge !== true)
+		throw new Refusal(
+			`${snapshot.url} lacks the approval its base requires, which a merge now would bypass; land it once it is approved`,
+		);
 	// The batch gate and a merge queue test the current base themselves. Here nothing does, so the head must contain it.
 	const comparison = object(
 		await (
@@ -322,7 +329,10 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 			{ id: snapshot.id, sha: snapshot.head, method: method.toUpperCase() },
 		);
 	// Only --direct reaches here without auto-merge on; it merges at once rather than arm what GitHub refuses.
-	if (repository.allow_auto_merge !== true || immediateMerge(snapshot.mergeState, snapshot.queue)) {
+	if (
+		!snapshot.unapproved &&
+		(repository.allow_auto_merge !== true || immediateMerge(snapshot.mergeState, snapshot.queue))
+	) {
 		await submit("mergePullRequest");
 		return;
 	}
@@ -337,6 +347,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		if (
 			fresh.state !== "OPEN" ||
 			fresh.draft ||
+			fresh.unapproved ||
 			fresh.base !== snapshot.base ||
 			!immediateMerge(fresh.mergeState, fresh.queue) ||
 			(await requirements(labels.github, pr, fresh.base)).checks.some((check) => check.name === LAND_CHECK)
@@ -363,20 +374,6 @@ async function passing(github: GitHub, pr: PullRequest, url: string, sha: string
 		);
 }
 
-/**
- * Refuse a head the online reviewer the base's REVIEW.md names has not reviewed, nor a head with the same diff, or
- * whose findings it opened on the PR are not all resolved. A base that names none lands on its local review alone.
- */
-async function reviewed(github: GitHub, pr: PullRequest, snapshot: Snapshot, warn: (message: string) => void) {
-	const reviewer = await declaredReviewer(github, pr, snapshot.baseSha);
-	if (reviewer === null) return;
-	const gate = await onlineGate(github, pr, reviewer, snapshot.base, warn);
-	if (gate.head !== snapshot.head)
-		throw new Refusal(`${snapshot.url} head moved to ${gate.head}; check the new head before landing it`);
-	const refusal = onlineRefusal(gate);
-	if (refusal !== null) throw new Refusal(`${snapshot.url} head ${snapshot.head}: ${refusal}`);
-}
-
 /** GraphQL error types that fault the token or the request, not the PR GitHub would enqueue. */
 export const UNREFUSED = ["FORBIDDEN", "NOT_FOUND", "INSUFFICIENT_SCOPES", "INTERNAL"];
 
@@ -393,7 +390,8 @@ async function pick(labels: Labels, snapshot: Snapshot, method: Method): Promise
 			(query, variables) => labels.github.graphql(query, variables),
 			snapshot.id,
 			snapshot.head,
-			snapshot.mergeState,
+			// A missing approval is pending like a check, so it arms auto-merge, which waits for it, and never enqueues.
+			snapshot.unapproved ? "BLOCKED" : snapshot.mergeState,
 			method,
 		);
 	} catch (error) {
@@ -562,6 +560,7 @@ class Labels {
 			branch: string(row.headRefName),
 			head: string(row.headRefOid),
 			mergeState: string(row.mergeStateStatus),
+			unapproved: row.reviewDecision === "REVIEW_REQUIRED" || row.reviewDecision === "CHANGES_REQUESTED",
 			queue: row.isMergeQueueEnabled === true,
 			queued: row.isInMergeQueue === true,
 			labels: array(object(row.labels).nodes)

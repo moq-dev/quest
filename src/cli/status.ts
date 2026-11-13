@@ -19,7 +19,6 @@ import { appOf, checksState, contextOutcome } from "../github/checks";
 import { EJECTED, LAND_CHECK, pinned } from "./land";
 import { reviewSection } from "../core";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
-import { type OnlineGate, declaredReviewer, onlineGate, sameDiff } from "./online-review";
 
 /**
  * One query covers the PR; each connection pages by its own cursor, and a
@@ -142,8 +141,6 @@ export interface Status {
 	checkpoints: { reviewer: string; round: number; url: string }[];
 	/** Null when the `## Review` section names no full SHA. */
 	reviewRecord: ReviewRecord | null;
-	/** The online reviewer the base's REVIEW.md names, on an open PR; null when it names none. */
-	onlineReview: OnlineGate | null;
 	reactions: Reaction[];
 	/** Unresolved review threads, oldest first. */
 	threads: Thread[];
@@ -215,15 +212,6 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 			: { checks: [], workflows: [] };
 	const status = summarize(first!, rollup, current, needs, reviewNodes, threadNodes);
 	status.reviewRecord = await reviewRecord(github, pr, first!, deps.warn);
-	if (first!.state === "OPEN") {
-		const base = string(first!.baseRefName);
-		const reviewer = await declaredReviewer(github, pr, base);
-		if (reviewer !== null) {
-			status.onlineReview = await onlineGate(github, pr, reviewer, base, deps.warn);
-			if (status.onlineReview.head !== head)
-				throw new Error("the PR head changed while reading its online review; rerun quest status");
-		}
-	}
 	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
 }
@@ -246,10 +234,28 @@ async function reviewRecord(
 	if (!reviewed) return null;
 	const head = string(pull.headRefOid);
 	if (reviewed === head) return { state: "current", head: reviewed };
-	const same = await sameDiff(github, pr, string(pull.baseRefName), [head, reviewed], (why) =>
-		warn(`${why}, so whether the review of ${reviewed} carries is unknown`),
-	);
-	return { state: same === null ? "unknown" : same ? "diff-identical" : "stale", head: reviewed };
+	const base = encodeURIComponent(string(pull.baseRefName));
+	const diffs: string[] = [];
+	for (const sha of [head, reviewed]) {
+		const unknown = (why: string): ReviewRecord => {
+			warn(`cannot compare ${sha} with the base, so whether the review of ${reviewed} carries is unknown${why}`);
+			return { state: "unknown", head: reviewed };
+		};
+		let response: Response;
+		try {
+			response = await github.request(`/repos/${pr.owner}/${pr.repo}/compare/${base}...${sha}`, {
+				accept: "application/vnd.github.diff",
+				allow: [404, 406, 422],
+			});
+		} catch (error) {
+			// A deadline is the caller's to handle; a forbidden or failing compare is not.
+			if (error instanceof GitHubDeadline || !(error instanceof Error)) throw error;
+			return unknown(`: ${error.message}`);
+		}
+		if (!response.ok) return unknown("");
+		diffs.push(await response.text());
+	}
+	return { state: diffs[0] === diffs[1] ? "diff-identical" : "stale", head: reviewed };
 }
 
 /** Repository activity types that move a branch to a new head, including merges into it. */
@@ -492,7 +498,6 @@ function summarize(
 		reviews: [...latest.values()],
 		checkpoints: checkpoints(head, submitted),
 		reviewRecord: null,
-		onlineReview: null,
 		reactions,
 		threads,
 		holds: [],
@@ -579,16 +584,6 @@ export function statusLines(status: Status): string[] {
 		status.reviewRecord === null
 			? "review-record -"
 			: `review-record ${status.reviewRecord.state} ${status.reviewRecord.head}`,
-		status.onlineReview === null
-			? "online-review -"
-			: [
-					"online-review",
-					status.onlineReview.state,
-					status.onlineReview.reviewer,
-					dash(status.onlineReview.reviewed),
-					`open=${status.onlineReview.open.length}`,
-					...status.onlineReview.open,
-				].join(" "),
 		status.autoMerge === null
 			? "auto-merge -"
 			: `auto-merge ${status.autoMerge.method} ${status.autoMerge.enabledBy} ${status.autoMerge.enabledAt} ${dash(status.autoMerge.head)}`,
