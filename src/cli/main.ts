@@ -551,7 +551,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"a check line per failing or pending check, marked required or optional, counting only each check's latest run " +
 				"and dropping a cancelled check once a newer GitHub Actions run of its workflow exists on the head (reading the head's " +
 				"workflow runs, which needs Actions read access); a required check or workflow nothing reports prints as pending required " +
-				"expected, with its name or the workflow's path; a review line per " +
+				"expected, with its name, followed by (from app <id>) when the requirement names an app, or the workflow's path; a review line per " +
 				"reviewer's latest review, marked current or stale against the head; a checkpoint line per bot " +
 				"reviewer that approves or requests changes, its round, and its review, when that review is of the " +
 				"head, while its latest verdict on the head is neither an approval nor a dismissal, and ends its third, sixth, ... round (one commit it reviewed), as " +
