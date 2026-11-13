@@ -2,8 +2,9 @@
 
 import { execFileSync } from "node:child_process";
 
-import { readdirSync } from "node:fs";
+import { chmodSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
@@ -129,7 +130,8 @@ describe("quest merge's landing check", () => {
 	/** Check `branch`'s tip in `tree` as `quest merge` would, fetching from `tree` into `root`. */
 	function inspect(tree: Tree, branch: string, root = tempDir()) {
 		const sha = git(tree, "rev-parse", branch).trim();
-		return landingCheck(root)({ remote: tree.path, base: "main", branch, sha, token: "token" });
+		const baseSha = git(tree, "rev-parse", "main").trim();
+		return landingCheck(root)({ remote: tree.path, base: "main", baseSha, branch, sha, token: "token" });
 	}
 
 	test("finds a head that leaves its quest untouched, against the fetched base", async () => {
@@ -186,13 +188,14 @@ describe("quest merge's landing check", () => {
 		expect((await inspect(tree, "fix/again")).map((finding) => finding.path)).toEqual(["quest/m0/epic/one.md"]);
 	});
 
-	test("fetches into a checkout's repository, leaving none of its refs behind", async () => {
+	test("fetches into a checkout's repository, writing none of its refs", async () => {
 		const tree = repo("quest/m0/epic/one");
 		tree.write("src.ts", "work\n");
 		commit(tree, "work");
 		const local = Tree.committed();
+		const refs = git(local, "for-each-ref");
 		expect(await inspect(tree, "quest/m0/epic/one", local.path)).toHaveLength(1);
-		expect(git(local, "for-each-ref", "refs/quest-merge")).toBe("");
+		expect(git(local, "for-each-ref")).toBe(refs);
 		// The head's objects arrived in the checkout's repository.
 		git(local, "cat-file", "-e", git(tree, "rev-parse", "quest/m0/epic/one").trim());
 	});
@@ -204,7 +207,21 @@ describe("quest merge's landing check", () => {
 		const shallow = tempDir();
 		execFileSync("git", ["clone", "--quiet", "--depth=1", `file://${tree.path}`, shallow], { stdio: "ignore" });
 		expect(await inspect(tree, "quest/m0/epic/one", shallow)).toEqual([]);
-		expect(git(new Tree(shallow), "for-each-ref", "refs/quest-merge")).toBe("");
+		// It fetched nothing into the shallow checkout.
+		expect(() => git(new Tree(shallow), "cat-file", "-e", git(tree, "rev-parse", "main").trim())).toThrow();
+	});
+
+	test("does not write to a checkout it cannot write", async () => {
+		const tree = repo("quest/m0/epic/one");
+		tree.append("quest/m0/epic/one.md", "\nMore.\n");
+		commit(tree, "edit");
+		const local = Tree.committed();
+		chmodSync(join(local.path, ".git/objects"), 0o555);
+		try {
+			expect(await inspect(tree, "quest/m0/epic/one", local.path)).toEqual([]);
+		} finally {
+			chmodSync(join(local.path, ".git/objects"), 0o755);
+		}
 	});
 
 	test("a head that adopts quests is checked", async () => {
@@ -245,6 +262,7 @@ describe("quest merge's landing check", () => {
 		const check = landingCheck(tempDir())({
 			remote: tree.path,
 			base: "main",
+			baseSha: git(tree, "rev-parse", "main").trim(),
 			branch: "quest/m0/epic/one",
 			sha: "c".repeat(40),
 			token: "token",

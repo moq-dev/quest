@@ -29,7 +29,7 @@ export type Method = "merge" | "squash" | "rebase";
 const READ = `query HoldOwnership($owner: String!, $repo: String!, $number: Int!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
-			id url state isDraft body updatedAt baseRefName headRefName headRefOid mergeStateStatus isMergeQueueEnabled isInMergeQueue
+			id url state isDraft body updatedAt baseRefName baseRefOid headRefName headRefOid mergeStateStatus isMergeQueueEnabled isInMergeQueue
 			labels(first: 100) { nodes { name } }
 			timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
 				nodes { __typename ... on LabeledEvent { id createdAt label { name } } }
@@ -53,6 +53,8 @@ interface Snapshot {
 	body: string;
 	updatedAt: string;
 	base: string;
+	/** The commit the base branch points at. */
+	baseSha: string;
 	/** The head branch's name. */
 	branch: string;
 	head: string;
@@ -254,6 +256,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 	const findings = await request.check({
 		remote: `https://github.com/${pr.owner}/${pr.repo}.git`,
 		base: snapshot.base,
+		baseSha: snapshot.baseSha,
 		branch: snapshot.branch,
 		sha,
 		token: deps.token,
@@ -539,6 +542,7 @@ class Labels {
 			body: typeof row.body === "string" ? row.body : "",
 			updatedAt: string(row.updatedAt),
 			base: string(row.baseRefName),
+			baseSha: string(row.baseRefOid),
 			branch: string(row.headRefName),
 			head: string(row.headRefOid),
 			mergeState: string(row.mergeStateStatus),

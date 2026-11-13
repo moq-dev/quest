@@ -190,6 +190,7 @@ class FakePull {
 						body: this.body,
 						updatedAt: new Date(this.clock).toISOString(),
 						baseRefName: this.baseRef,
+						baseRefOid: this.base,
 						headRefName: "quest/m0/example",
 						headRefOid: this.head,
 						mergeStateStatus: this.mergeState,

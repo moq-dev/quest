@@ -4,8 +4,7 @@
 // lives here rather than in the core.
 
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,7 +54,9 @@ export function landed(root: string, base: string, options: { branch?: string; h
 export interface LandingHead {
 	/** The base repository's Git URL, which serves the head's commits even from a fork. */
 	remote: string;
+	/** The base branch's name, and the commit it points at. */
 	base: string;
+	baseSha: string;
 	branch: string;
 	sha: string;
 	token: string;
@@ -67,9 +68,10 @@ export type LandingCheck = (head: LandingHead) => Promise<Finding[]>;
 /**
  * What `quest check --no-stubs --base <base> --branch <branch>` reports on `head.sha`, against a
  * freshly fetched base. The head is untrusted, so nothing from it runs or is checked out: the
- * check reads git objects. It fetches into the repository of the checkout at `root`, under refs of
- * its own that it then deletes, so Git sends only what that repository lacks; with no checkout, or
- * a shallow one whose history could hide the merge base, it uses a temporary bare repository.
+ * check reads git objects. It fetches both commits by SHA into the repository of the checkout at
+ * `root`, writing no ref, so Git sends only what that repository lacks and an interrupted run leaves
+ * nothing behind. A checkout it cannot write, or a shallow one whose history could hide the merge
+ * base, gives way to a temporary bare repository, as does no checkout.
  * A finding the base already has is not the head's, as the land daemon screens a head, and a
  * repository with no quests on either side does not use them.
  */
@@ -77,11 +79,9 @@ export function landingCheck(root: string): LandingCheck {
 	return async (head) => {
 		const local = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir", "--is-shallow-repository"]);
 		const [common, shallow] = local.stdout.trim().split("\n");
-		const borrowed = local.status === 0 && shallow === "false";
+		const borrowed = local.status === 0 && shallow === "false" && writable(common);
 		const dir = borrowed ? common : mkdtempSync(join(tmpdir(), "quest-merge-"));
-		const namespace = `refs/quest-merge/${randomUUID()}`;
-		const base = `${namespace}/base`;
-		const tip = `${namespace}/head`;
+		const { baseSha: base, sha: tip } = head;
 		const run = (args: string[], env: Record<string, string> = {}) => {
 			const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-C", dir, ...args], {
 				encoding: "utf8",
@@ -92,35 +92,21 @@ export function landingCheck(root: string): LandingCheck {
 			if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
 			return result.stdout.trim();
 		};
-		// Findings and errors name the scratch refs and directory, which the refusal need not show.
+		// Findings and errors name the scratch directory and the base's SHA, which the refusal need not show.
 		const tidy = (finding: Finding): Finding => ({
 			...finding,
-			message: finding.message
-				.replaceAll(`${dir}/`, "")
-				.replaceAll(base, `origin/${head.base}`)
-				.replaceAll(tip, head.sha),
+			message: finding.message.replaceAll(`${dir}/`, "").replaceAll(base, `origin/${head.base}`),
 		});
 		try {
 			if (!borrowed) run(["init", "--quiet", "--bare"]);
 			// The token rides in the environment, after any configuration the user's environment already passes.
 			const count = Number(process.env.GIT_CONFIG_COUNT ?? 0) || 0;
 			const basic = Buffer.from(`x-access-token:${head.token}`).toString("base64");
-			run(
-				[
-					"fetch",
-					"--quiet",
-					"--no-tags",
-					"--no-write-fetch-head",
-					head.remote,
-					`+refs/heads/${head.base}:${base}`,
-					`+${head.sha}:${tip}`,
-				],
-				{
-					GIT_CONFIG_COUNT: String(count + 1),
-					[`GIT_CONFIG_KEY_${count}`]: "http.https://github.com/.extraheader",
-					[`GIT_CONFIG_VALUE_${count}`]: `Authorization: basic ${basic}`,
-				},
-			);
+			run(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", head.remote, base, tip], {
+				GIT_CONFIG_COUNT: String(count + 1),
+				[`GIT_CONFIG_KEY_${count}`]: "http.https://github.com/.extraheader",
+				[`GIT_CONFIG_VALUE_${count}`]: `Authorization: basic ${basic}`,
+			});
 			const quests = (ref: string) => run(["ls-tree", "--name-only", ref, "quest"]) !== "";
 			const based = quests(base);
 			if (!based && !quests(tip)) return [];
@@ -144,12 +130,19 @@ export function landingCheck(root: string): LandingCheck {
 			}
 			return [...findings, ...accurate].map(tidy);
 		} finally {
-			if (borrowed) {
-				for (const ref of [base, tip])
-					spawnSync("git", ["-C", dir, "update-ref", "-d", ref], { env: discoveryEnv() });
-			} else rmSync(dir, { recursive: true, force: true });
+			if (!borrowed) rmSync(dir, { recursive: true, force: true });
 		}
 	};
+}
+
+/** Whether this process may write the objects of the Git directory `dir`. */
+function writable(dir: string): boolean {
+	try {
+		accessSync(join(dir, "objects"), constants.W_OK);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /** `quest check`'s findings on `commit`; a tree it cannot read, such as one with no quests left, is one. */
