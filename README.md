@@ -265,8 +265,8 @@ git fetch origin main
 quest check --base origin/main --branch quest/m0/export
 ```
 
-Fetch the base first, since a stale one can predate the quest. The
-`quest-merge` skill runs this before landing a PR. A repository with
+Fetch the base first, since a stale one can predate the quest. `quest merge`
+runs this on the head it lands. A repository with
 `quest` installed in CI can also run it on pull requests, where the checkout is
 detached, so pass the head branch:
 
@@ -284,8 +284,8 @@ still judge whether a rewrite matches what remains.
 binary carries, and reports a missing, outdated, or retired one. A job that
 checks a PR with a binary built from the base passes `--no-stubs`, since that
 binary's skills would reject a PR that changes a stub; the PR's own binary
-checks them in its own `quest check`. This repository's merge queue and the
-`quest-merge` skill's preflight do so.
+checks them in its own `quest check`. This repository's merge queue and
+`quest merge` do so.
 
 A link into a submodule that is not checked out, as in a fresh worktree or
 `actions/checkout` by default, resolves at the commit its gitlink pins when a
@@ -563,7 +563,11 @@ it creates is the queue signal, so a queued PR shows no hold. It refuses while
 any session holds the PR, so release your own hold first. `--land` needs the full 40-character
 head SHA and refuses once the head moves, or while the latest run of any
 check on it failed, required or not, naming each; pending checks do not block.
-It enables auto-merge bound to that SHA, or merges at once when nothing is
+It also refuses a head that fails `quest check --no-stubs --base <base> --branch
+<head branch>`, which it runs on git objects it fetches, so nothing from the
+head runs, and ignores findings the base already has; run a `quest` the PR
+cannot modify, since the head's own build could skip the check. A base without
+quests skips it. It enables auto-merge bound to that SHA, or merges at once when nothing is
 left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
 the repository disallows; otherwise it uses the only method the repository
 allows, or else a merge commit, and refuses when merge commits are off and more
