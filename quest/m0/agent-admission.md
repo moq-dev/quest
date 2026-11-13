@@ -2,12 +2,14 @@
 
 ## Goal
 
-`/quest-run`, `/quest-spawn`, `/quest-complete`, and `quest agent start`
-start a new agent only while the host's gate admits work at once and the
-account's remaining usage covers the agents already in flight. A fan-out
-never dies en masse on a usage limit, and a started agent rarely stalls
-in the gate with its prompt cache going cold. Agents already running are
-never paused or stopped by this; it only delays starting the next one.
+Every skill that starts agents, such as `/quest-run`, `/quest-spawn`,
+`/quest-complete`, and `/quest-audit`, and `quest agent start` and
+`quest agent resume`, starts or resumes an agent only while the host's gate
+would admit work at once and the account's remaining usage covers the agents
+already in flight. A fan-out, including the resumes after a usage limit
+resets, never dies en masse on a usage limit, and a started agent rarely
+stalls in the gate with its prompt cache going cold. Agents already running
+are never paused or stopped by this; it only delays starting the next one.
 
 Non-goals: capping the user's own top-level sessions, querying a
 particular credential gateway, and changing how the gate admits commands,
@@ -40,9 +42,9 @@ Decided 2026-11-12 (maintainer, /quest-plan):
   account; a fixed smaller fan-out in skill text, which is blind to quota
   and load).
 - What says the host can carry one more agent? ✅ The gate would admit a
-  command at once: no gated command is waiting (rejected: a fixed agent
-  count per host, a guess; a count derived from cores and memory, a poor
-  proxy for gated load). It targets the measured harm and adds no constant.
+  command at once (rejected: a fixed agent count per host, a guess; a
+  count derived from cores and memory, a poor proxy for gated load). It
+  targets the measured harm and adds no constant.
 - What says the account can? ✅ The usage each harness reports, such as
   Codex's `rate_limits.used_percent` in its session log and Claude's
   5-hour and weekly utilization where its login or gateway exposes it.
@@ -54,14 +56,33 @@ Decided 2026-11-12 (maintainer, /quest-plan):
   say once when one gives none, rather than trying and falling back.
 - Milestone: ✅ m0 (rejected: m1), since both harms are live.
 
+What the decisions above require, found in review:
+
+- "Would admit at once" is the gate's own admission decision (load,
+  memory, and the headroom recent admissions take), not an empty queue: a
+  host can be full with nothing queued, and an agent just started adds no
+  gated load until its first build minutes later. So agents started but
+  not yet building must count against the headroom too, as the gate counts
+  its recent admissions, or a whole fan-out passes the check at once.
+- On a host where [gate-mbx-pool](/quest/m0/gate-mbx-pool.md) has landed,
+  commands wait in mbx's pool after the gate admits them, so the check also
+  counts a pending mbx reservation as waiting.
+- Harnesses report a percentage of a window, while `quest usage` reports
+  tokens and list cost, and neither reports the window's capacity. Convert
+  through the account's own history, such as tokens spent per percentage
+  point over recent sessions, or an absolute budget where a harness exposes
+  one.
+
 Agent's choices, for the implementer to revisit:
 
-- Admission waits in the coordinator before it starts an agent, never
-  inside a started agent, so only one cheap context waits. `quest agent
-  start` can admit itself; native sub-agents need either a command the
-  coordinator runs first or the `SubagentStart` hook `quest worktree hook`
-  already handles. Pick whichever keeps a coordinator able to handle
-  reports while it waits.
+- Admission waits in the coordinator before it starts or resumes an agent,
+  never inside a started agent, so only one cheap context waits. `quest
+  agent start` and `quest agent resume` can admit themselves; native
+  sub-agents need a step the coordinator runs first, since Claude Code's
+  `SubagentStart` hook fires once the sub-agent exists and runs `quest
+  hook` by default (`quest worktree hook` only with `quest setup
+  --worktrees`). Keep the coordinator able to handle reports while it
+  waits.
 - Verify whether Claude's utilization reaches a session through the
   maintainer's credential-pool gateway (`ANTHROPIC_BASE_URL` on a local
   port); if not, that setup reports no signal rather than a wrong one.
@@ -77,4 +98,4 @@ Agent's choices, for the implementer to revisit:
 
 - [The gate admits work through mbx's pool](/quest/m0/gate-mbx-pool.md) - changes how the gate admits commands, which this reads
 - [The gate records each run for the process that started the agent](/quest/m0/gate-record.md) - per-agent gate waits, to measure this against
-- [Cut agent token waste](/quest/m0/token-waste/README.md) - set the 1-hour cache TTL that a long gate wait can outlast
+- [Cut agent token waste](/quest/m0/token-waste/README.md) - kept the 1-hour cache TTL and capped commands just under it, which a long gate wait can still outlast
