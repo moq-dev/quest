@@ -38,6 +38,7 @@ export function statusLines(status: Status): string[] {
 			(t) =>
 				`thread ${t.id} ${t.outdated ? "outdated" : "current"} ${t.lastAuthor} ${t.url} ${t.path}:${dash(t.line)}`,
 		),
+		...status.signals.map((s) => `signal ${s.kind} ${s.url} ${s.author}: ${s.text}`),
 		...(status.holds.length
 			? status.holds.map(
 					(hold) =>

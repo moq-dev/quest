@@ -45,6 +45,8 @@ class FakePull {
 	/** Runs after each pull request read, to change it between reads. */
 	afterRead?: () => void;
 	comparison = "ahead";
+	/** Runs on each base comparison, the last request before landing. */
+	afterCompare?: () => void;
 	base = BASE;
 	readonly comparisons: string[] = [];
 	/** Check names the base branch's rulesets require. */
@@ -53,6 +55,9 @@ class FakePull {
 	rules: ObjectValue[] = [];
 	/** The head's check runs, as its `statusCheckRollup` lists them. */
 	checks: ObjectValue[] = [];
+	/** The PR's reviews, threads, and comments as the signal reader reads them, and its head's commit time. */
+	activity: ObjectValue = {};
+	committed = "2026-10-21T11:00:00Z";
 	/** The head's workflow runs, as `GET /actions/runs` lists them. */
 	runs: ObjectValue[] = [];
 	autoMerge: ObjectValue | null = null;
@@ -122,6 +127,7 @@ class FakePull {
 			return json(200, { total_count: this.runs.length, workflow_runs: this.runs });
 		if (url.pathname === `/repos/example/project/compare/main...${this.head}`) {
 			this.comparisons.push(`${url.pathname}${url.search}`);
+			this.afterCompare?.();
 			return json(200, { status: this.comparison, base_commit: { sha: this.base } });
 		}
 		if (url.pathname === "/repos/example/project/rules/branches/main") {
@@ -164,6 +170,23 @@ class FakePull {
 				this.queueEntry = { state: "QUEUED" };
 			}
 			return { data: { [name]: { clientMutationId: null } } };
+		}
+		if (query.includes("p7: pullRequest(number: 7)")) {
+			const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+			return {
+				data: {
+					repository: {
+						p7: {
+							headRefOid: this.head,
+							commits: { nodes: [{ commit: { oid: this.head, committedDate: this.committed } }] },
+							reviews: empty,
+							reviewThreads: empty,
+							comments: empty,
+							...this.activity,
+						},
+					},
+				},
+			};
 		}
 		if (query.includes("node(id: $id)")) return { data: { node: { autoMergeRequest: this.autoMerge } } };
 		if (query.includes("statusCheckRollup"))
@@ -371,6 +394,91 @@ describe("merge --land", () => {
 		pull.runs.push({ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: "2026-11-12T23:42:56Z" });
 		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("refuses a head an unanswered online finding or a newer maintainer decision holds", async () => {
+		const pull = new FakePull();
+		const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+		const decision = `${URL_}#issuecomment-9`;
+		pull.activity = {
+			comments: {
+				...empty,
+				nodes: [
+					{
+						author: { __typename: "User", login: "maintainer" },
+						authorAssociation: "OWNER",
+						body: "Maintainer decision: add the timeout.",
+						createdAt: "2026-10-21T11:30:00Z",
+						url: decision,
+					},
+				],
+			},
+		};
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			`head ${HEAD} is held by decision by maintainer: Maintainer decision: add the timeout. (${decision})`,
+		);
+		expect(pull.writes).toEqual([]);
+		// A head committed after it may apply it.
+		pull.committed = "2026-10-21T11:45:00Z";
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
+		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("rechecks signals right before a direct merge", async () => {
+		const pull = new FakePull();
+		pull.allowAutoMerge = false;
+		const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+		pull.afterCompare = () => {
+			pull.activity = {
+				comments: {
+					...empty,
+					nodes: [
+						{
+							author: { __typename: "User", login: "maintainer" },
+							authorAssociation: "OWNER",
+							body: "Maintainer decision: late.",
+							createdAt: "2026-10-21T11:30:00Z",
+							url: `${URL_}#issuecomment-9`,
+						},
+					],
+				},
+			};
+		};
+		expect(
+			await refused(land(PR, { sha: HEAD, method: "merge", direct: true, check: clean }, pull.deps())),
+		).toContain("Maintainer decision: late.");
+		expect(pull.writes).toEqual([]);
+	});
+
+	test.each([
+		["a merge queue", (pull: FakePull) => (pull.queue = true)],
+		["the quest land gate", (pull: FakePull) => (pull.required = ["quest land"])],
+	])("rechecks signals after the quest check before queueing on %s", async (_, gate) => {
+		const pull = new FakePull();
+		gate(pull);
+		const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+		// A decision posted while the quest check fetched and read the head.
+		const check = async () => {
+			pull.activity = {
+				comments: {
+					...empty,
+					nodes: [
+						{
+							author: { __typename: "User", login: "maintainer" },
+							authorAssociation: "OWNER",
+							body: "Maintainer decision: during the check.",
+							createdAt: "2026-10-21T11:30:00Z",
+							url: `${URL_}#issuecomment-10`,
+						},
+					],
+				},
+			};
+			return [];
+		};
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check }, pull.deps()))).toContain(
+			"Maintainer decision: during the check.",
+		);
+		expect(pull.writes).toEqual([]);
 	});
 
 	test("refuses when the token cannot see the auto-merge setting", async () => {

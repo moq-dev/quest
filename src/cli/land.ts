@@ -20,6 +20,7 @@ import {
 import type { WorkflowRun } from "../github/checks";
 import { appOf } from "../github/checks";
 import { classifyCheck, reported, type Needs } from "../github/status";
+import { type Carried, describe, readSignals } from "../github/signals";
 import type { Method } from "./hold";
 import { committedSources, snapshot } from "./tree";
 import { LAND_CHECK, type Reason, pin, pinned } from "../github/land";
@@ -280,6 +281,27 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 }
 
 /**
+ * What a landing PR's head carries unread: a head the gate merged the base into after its pin carries the pin's
+ * signals since the pick, and whatever the land fixer's history carries for the pin or the head.
+ */
+function carriedFrom(node: ObjectValue, carried: QueueOptions["carried"]): Carried | undefined {
+	const request = object(node.autoMergeRequest);
+	const head = string(node.headRefOid);
+	const approved = pinned(typeof request.commitBody === "string" ? request.commitBody : "");
+	const fixed = carried?.(Number(node.number), approved ?? head);
+	if (approved === null || approved === head) return fixed;
+	return { heads: [approved, ...(fixed?.heads ?? [])], picked: fixed?.picked ?? string(request.enabledAt) };
+}
+
+/** How `resolveQueue` reads its picks beyond what GitHub says. */
+export interface QueueOptions {
+	/** Whether a head that moved since its pick is still the pick's, as the gate's own base merge is. */
+	acceptHead?: (entry: Entry) => boolean;
+	/** What PR `number`'s `head` carries from a pick the land fixer replaced. */
+	carried?: (number: number, head: string) => Carried | undefined;
+}
+
+/**
  * Read the queue: open PRs to `base` with auto-merge enabled, in the order it
  * was enabled. A PR is queued while its auto-merge commit body pins its current
  * head; one whose required checks are still running, or that still needs a
@@ -290,8 +312,9 @@ export async function resolveQueue(
 	repository: Repository,
 	target: Target,
 	deps: GitHubDependencies,
-	acceptHead?: (entry: Entry) => boolean,
+	options: QueueOptions = {},
 ): Promise<Plan> {
+	const { acceptHead, carried } = options;
 	const github = new GitHub(deps);
 	const name = `${repository.owner}/${repository.repo}`;
 	const settings = object(await (await github.request(repositoryPath(repository))).json());
@@ -378,6 +401,17 @@ export async function resolveQueue(
 	const landing = nodes.filter((node) => node.autoMergeRequest !== null && node.isDraft !== true);
 	const order = (node: ObjectValue) => string(object(node.autoMergeRequest).enabledAt);
 	landing.sort((a, b) => order(a).localeCompare(order(b)) || Number(a.number) - Number(b.number));
+	const held = await readSignals(
+		github,
+		repository,
+		landing.map((node) => Number(node.number)),
+		new Map(
+			landing.flatMap((node) => {
+				const carry = carriedFrom(node, carried);
+				return carry ? [[Number(node.number), carry] as const] : [];
+			}),
+		),
+	);
 	for (const node of landing) {
 		const request = object(node.autoMergeRequest);
 		const head = string(node.headRefOid);
@@ -411,6 +445,11 @@ export async function resolveQueue(
 			eject("changes_requested", "a reviewer requested changes");
 		} else if (resolution && (await unresolved(github, entry.id)) > 0) {
 			eject("unresolved_conversations", "it has unresolved review threads; resolve them and land it again");
+		} else if (held.get(entry.number)?.head === head && held.get(entry.number)!.signals.length > 0) {
+			eject(
+				"unanswered_signal",
+				`its head is held by ${describe(held.get(entry.number)!.signals)}; push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again`,
+			);
 		} else {
 			// The queue's first page holds the head's checks, unless the head moved from the pin since.
 			const commit = object(object(array(object(node.commits).nodes)[0]).commit);

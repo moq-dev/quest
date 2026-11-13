@@ -17,7 +17,7 @@ import {
 import { constants as osConstants } from "node:os";
 import { basename, join } from "node:path";
 import { reviewSection } from "../core";
-import { GitHub, type GitHubDependencies, object, string } from "../github/client";
+import { GitHub, type GitHubDependencies, type ObjectValue, object, string } from "../github/client";
 import { baseRemote, commandEnvironment, contains, git, tryGit, enqueue, type Entry, type Plan } from "./land";
 import { type Reason } from "../github/land";
 import { COMMENT_LIMIT, resolution, resolutionSection, type Resolution } from "./land-apply";
@@ -38,6 +38,7 @@ import { isPrepared, push, remoteHead } from "./land-head";
 import { BASE_JOB, type Halt, haltNotice, readHalt, saveHalt } from "./land-halt";
 import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
+import { type Carried, describe, readSignals } from "../github/signals";
 
 /**
  * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused, or a fix
@@ -51,6 +52,8 @@ export class FixerRefusal extends Error {
 		super(message);
 	}
 }
+/** A refusal because a finding or decision holds the head, which `quest status` reports as `unanswered_signal`. */
+export class SignalRefusal extends FixerRefusal {}
 class BaseCheckError extends Error {}
 /** A fix that edits protected paths beyond what the base merge carries: only a maintainer's push lands it. */
 export class ProtectedEdit extends Error {}
@@ -143,6 +146,8 @@ interface Job extends Process {
 	base?: boolean;
 	results?: FixResult[];
 	handbacks?: Record<number, string>;
+	/** The PRs a finding or decision handed back, whose handback marker says `unanswered_signal`. */
+	signaled?: number[];
 	/** Passes that failed to collect each PR, so one that keeps failing is set aside rather than holding up the rest. */
 	failures?: Record<number, number>;
 	/** PRs a handback is taking out of the queue, recorded before their auto-merge is disabled. */
@@ -166,7 +171,9 @@ export interface Round {
 	outcome: Outcome;
 	/** The head that failed. */
 	before: string;
-	/** The head the PR went back to the queue at, which a fix or merge moves; a handback has none. */
+	/** The pin `before` stood on, when it was the gate's base merge on that pin rather than the pin itself. */
+	pin?: string;
+	/** The head the round put back in the queue or published, which a fix or merge moves; a handback may keep it. */
 	after?: string;
 	/** The failure's signature: what failed, so a recurrence after a fix can be told from a new failure. */
 	failure: string;
@@ -197,9 +204,55 @@ export function history(state: string, number: number): History | undefined {
 	const record = JSON.parse(readFileSync(path, "utf8")) as Omit<History, "rounds"> & { rounds?: Round[] };
 	return { ...record, rounds: record.rounds ?? [] };
 }
+const carryPath = (state: string, number: number, head: string) => join(state, `carry-${number}-${head}.json`);
+/**
+ * What the fixer's `head` of PR `number` carries from the pick it replaces: the heads its rounds replaced, with the
+ * pins the gate's base merges stood on, and when the pick was made. Its own record, written once when a round puts the
+ * head back, outlives handbacks, holds, and removals, since the person who picks the head again has answered nothing;
+ * a head no round put back, such as a writer's push, carries nothing.
+ */
+export function carriedBy(state: string, number: number, head: string): Carried | undefined {
+	const path = carryPath(state, number, head);
+	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Carried) : undefined;
+}
+/** Record what the head `round` put back carries, unless a record already holds it: a carry is never rewritten. */
+export function saveCarry(
+	state: string,
+	number: number,
+	pick: string,
+	round: Pick<Round, "before" | "after" | "pin">,
+): void {
+	const after = round.after;
+	if (!after || !Number.isFinite(Date.parse(pick))) return;
+	const path = carryPath(state, number, after);
+	if (existsSync(path)) return;
+	// The heads it replaced, a gate merge's pin included, may carry an earlier pick's signals, which picking them
+	// again answered none of. An unchanged requeue of a gate merge still carries its pin's.
+	const replaced = round.pin ? [round.before, round.pin] : [round.before];
+	const earlier = replaced.flatMap((head) => carriedBy(state, number, head) ?? []);
+	const heads = [...new Set([...earlier.flatMap((carry) => carry.heads), ...replaced])].filter(
+		(head) => head !== after,
+	);
+	if (heads.length === 0) return;
+	const picked = [pick, ...earlier.map((carry) => carry.picked)].reduce((a, b) =>
+		Date.parse(b) < Date.parse(a) ? b : a,
+	);
+	save(path, { heads, picked } satisfies Carried);
+}
+/** What each of `pulls`' heads carries from a pick the land fixer replaced, by number. */
+export function carriedOf(state: string, pulls: ObjectValue[]): Map<number, Carried> {
+	return new Map(
+		pulls.flatMap((pull) => {
+			const carried = carriedBy(state, Number(pull.number), string(pull.headRefOid));
+			return carried ? [[Number(pull.number), carried] as const] : [];
+		}),
+	);
+}
+
 /** Record `round` in `record`, replacing the same job's earlier one, and save it as PR `number`'s history. */
 export function saveRound(state: string, number: number, record: History, round: Round): History {
 	const next = { ...record, rounds: [...record.rounds.filter((item) => item.job !== round.job), round] };
+	saveCarry(state, number, record.pick, round);
 	save(historyPath(state, number), next);
 	return next;
 }
@@ -1072,9 +1125,19 @@ async function collectJob(
 				{ outcome, failure },
 			);
 			if (rule) error = stopReason(rule, { outcome, failure });
+			// The gate's merge stood on the pin: either the plan's head is that merge, or the merge is newer than it.
+			const pinned = [entry.approved, entry.head].find((pin) => pin !== standing);
+			const pin = pinned ? { pin: pinned } : {};
 			round = rule
-				? { job: name, outcome: "handback", before: standing, failure, rule }
-				: { job: name, outcome, before: standing, failure, ...(outcome === "handback" ? {} : { after: head }) };
+				? { job: name, outcome: "handback", before: standing, ...pin, failure, rule }
+				: {
+						job: name,
+						outcome,
+						before: standing,
+						...pin,
+						failure,
+						...(outcome === "handback" ? {} : { after: head }),
+					};
 			previous = saveRound(state, number, previous, round);
 		}
 		if (requeued) {
@@ -1094,6 +1157,13 @@ async function collectJob(
 						standing,
 						deps.warn,
 					);
+				// Before the head moves, and for a fix of collateral too, which records no round.
+				const pinned = [entry.approved, entry.head].find((pin) => pin !== standing);
+				saveCarry(state, number, previous.pick, {
+					before: standing,
+					after: head,
+					...(pinned ? { pin: pinned } : {}),
+				});
 				if (!job.published.includes(number)) {
 					job.published.push(number);
 					save(path, job);
@@ -1107,6 +1177,22 @@ async function collectJob(
 						attribution: author(result),
 					});
 
+				// The fix read no finding or decision on the pick it replaces, so those still hold it.
+				if (head !== entry.head) {
+					const [owner, repo] = job.plan.repository.split("/");
+					const carried = carriedBy(state, number, head);
+					const held = (
+						await readSignals(
+							github,
+							{ owner: owner!, repo: repo! },
+							[number],
+							carried && new Map([[number, carried]]),
+						)
+					).get(number)!;
+					if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
+					if (held.signals.length > 0)
+						throw new SignalRefusal(`its head is held by ${describe(held.signals)}`);
+				}
 				// A parked PR requeued unchanged is still queued as it was; anything else is pinned anew.
 				if (queuedAs !== entry.enabledAt || head !== entry.head) {
 					// Save intent before enabling, so a lost response can be reconciled after restart.
@@ -1122,6 +1208,7 @@ async function collectJob(
 			} catch (failure) {
 				if (!(failure instanceof FixerRefusal)) throw failure;
 				if (failure.resolution) (job.resolutions ??= {})[number] = failure.resolution;
+				if (failure instanceof SignalRefusal) job.signaled = [...(job.signaled ?? []), number];
 				error = `${String(failure)}; run /quest-iterate before picking it again`;
 			}
 		}
@@ -1139,8 +1226,7 @@ async function collectJob(
 		const handback = error !== undefined || result?.action === "handback";
 		// A refused fix or requeue ends the round in a handback after all.
 		if (handback && round && round.outcome !== "handback") {
-			const { after: _, ...rest } = round;
-			saveRound(state, number, history(state, number)!, { ...rest, outcome: "handback" });
+			saveRound(state, number, history(state, number)!, { ...round, outcome: "handback" });
 		}
 		if (error) {
 			// Before leaving the queue, so a restart keeps this reason rather than finding it left.
@@ -1178,8 +1264,13 @@ async function collectJob(
 				"handback",
 				author(result),
 				handbackLog(job.log ?? "", !error && result?.action === "handback" ? result.log : undefined),
-				// The marker `quest status` reads, now that no ejection comment precedes this one.
-				job.parked && leaves ? (job.reason ?? "failed_checks") : undefined,
+				// The marker `quest status` reads, now that no ejection comment precedes this one; a signal that
+				// arrived while the fixer ran replaces the failure's reason, since that is why the pick stopped.
+				job.signaled?.includes(number)
+					? "unanswered_signal"
+					: job.parked && leaves
+						? (job.reason ?? "failed_checks")
+						: undefined,
 				error && job.resolutions?.[number]
 					? (room) => resolutionSection(number, job.resolutions![number], room)
 					: undefined,

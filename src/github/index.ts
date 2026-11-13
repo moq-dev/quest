@@ -20,6 +20,7 @@ export {
 	pullRequestStatus,
 } from "./status";
 export { type HoldFact, type HoldReport } from "./hold";
+export { type Signal } from "./signals";
 export {
 	type Claim,
 	type Holdings,

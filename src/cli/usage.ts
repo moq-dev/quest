@@ -14,7 +14,7 @@ import { fixes } from "./land-fixer";
 import { MERGER } from "./land-watch-fix";
 import { githubRepository, requireRemote } from "./github";
 import { type GitHub, type ObjectValue, type Repository, link } from "../github/client";
-import { type OnlineReview, readOnlineReviews } from "./online-review";
+import { type OnlineReview, readOnlineReviews } from "../github/online-review";
 import { type Counts, type ReviewSummary, findingsText, parseReview } from "./review-record";
 import { SEVERITIES } from "./review";
 

@@ -18,7 +18,7 @@ import { lacksApproval } from "../github/merge";
 import type { Entry, LandMethod, Plan } from "./land";
 import { authenticatedRead } from "./land-git";
 import { jobLog } from "./land-checks";
-import { fixerText, post } from "./land-fixer";
+import { COLLECTION_ATTEMPTS, carriedOf, fixerText, post } from "./land-fixer";
 import {
 	apiDependencies,
 	daemonLoop,
@@ -45,6 +45,7 @@ import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
 import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools } from "./land-bump";
 import { pruneLogs } from "./land-prune";
 import { enabledHead, headBefore } from "../github/status";
+import { describe, readSignals } from "../github/signals";
 
 export { readRemoval } from "./land-watch-fix";
 
@@ -139,6 +140,8 @@ interface Progress {
 	handled: Record<number, Record<string, string>>;
 	/** Per open PR, the armed pick GitHub refused to enqueue on the last pass, so each refusal is reported once. */
 	refused?: Record<number, string>;
+	/** Per PR the watcher took out of the queue for a signal, the comment saying why that GitHub has not taken yet. */
+	unsaid?: Record<number, { id: string; pick: string; head: string; text: string; failures: number }>;
 }
 
 /** How far back of the last pass each pass reads again, for an event GitHub shows late. */
@@ -315,6 +318,160 @@ async function enqueueArmed(
 		}
 	}
 	progress.refused = refused;
+	return output;
+}
+
+/**
+ * Take each queued or armed PR whose head draws a signal, an online reviewer's unanswered finding or a newer
+ * maintainer decision, out of the merge queue and disarm its auto-merge, so neither it nor {@link enqueueArmed} lands
+ * it, and say why on it once per pick and head. Nothing waits for a reviewer: a signal that arrives before the merge
+ * ends the pick until a writer fixes or answers it and picks the PR again. A pull is read again just before, so a
+ * head pushed since is left for the next pass.
+ */
+async function dequeueSignaled(
+	github: GitHub,
+	repository: Repository,
+	base: string,
+	pulls: ObjectValue[],
+	progress: Progress,
+	saveProgress: () => void,
+	state: string,
+): Promise<string[]> {
+	const picked = pulls.filter((pull) => pull.mergeQueueEntry != null || pull.autoMergeRequest != null);
+	const output: string[] = [];
+	const read = await readSignals(
+		github,
+		repository,
+		picked.map((pull) => Number(pull.number)),
+		carriedOf(state, picked),
+	);
+	for (const pull of picked) {
+		const number = Number(pull.number);
+		const head = string(pull.headRefOid);
+		const found = read.get(number);
+		if (!found || found.head !== head || found.signals.length === 0) continue;
+		const now = await readPull(github, string(pull.id));
+		if (now.state !== "OPEN" || string(now.baseRefName) !== base || string(now.headRefOid) !== head) continue;
+		const pick =
+			now.autoMergeRequest != null
+				? string(object(now.autoMergeRequest).enabledAt)
+				: now.mergeQueueEntry != null
+					? string(object(now.mergeQueueEntry).enqueuedAt)
+					: null;
+		if (pick === null) continue;
+		// Out of the queue, no later pass reads the PR, so its comment is kept from before the mutations, which a lost
+		// response or a crash may apply unseen, until GitHub takes it or it no longer holds.
+		(progress.unsaid ??= {})[number] = {
+			id: string(pull.id),
+			pick,
+			head,
+			text: `quest land watch: ended this pull request's pick, ${[now.mergeQueueEntry != null ? "taking it out of the queue" : "", now.autoMergeRequest != null ? "disarming its auto-merge" : ""].filter(Boolean).join(" and ")}, since its head ${head} is held by ${describe(found.signals)}. Push a fix, or answer each by a thread reply or a comment linking its review or decision, then land it again.`,
+			failures: 0,
+		};
+		saveProgress();
+		// GitHub may disarm auto-merge with the dequeue, so the disarm reads the PR again first. Either one taken
+		// ends the pick and is said; when GitHub or a person moved first and neither was taken, nothing is said.
+		let taken = false;
+		try {
+			if (now.mergeQueueEntry != null) {
+				await github.graphql(
+					"mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }",
+					{ id: pull.id },
+				);
+				taken = true;
+			}
+			// Only the request this pass read is disarmed: a writer's push or new arming since is a newer pick.
+			const was = now.autoMergeRequest == null ? null : string(object(now.autoMergeRequest).enabledAt);
+			const after = taken ? await readPull(github, string(pull.id)) : now;
+			const armed =
+				string(after.headRefOid) === head && after.autoMergeRequest != null
+					? string(object(after.autoMergeRequest).enabledAt)
+					: null;
+			if (armed !== null && armed === was) {
+				await github.graphql(
+					"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+					{ id: pull.id },
+				);
+				taken = true;
+			}
+		} catch (error) {
+			if (!(error instanceof GitHubGraphQLError)) throw error;
+			const fresh = await readPull(github, string(pull.id));
+			const ended =
+				fresh.state !== "OPEN" ||
+				string(fresh.headRefOid) !== head ||
+				(fresh.mergeQueueEntry == null && fresh.autoMergeRequest == null);
+			if (!ended) throw error;
+			// GitHub refused each mutation it was sent, so whoever ended the pick, it was not the watcher.
+			if (!taken) {
+				delete progress.unsaid[number];
+				saveProgress();
+				continue;
+			}
+		}
+		output.push(
+			`${now.mergeQueueEntry != null ? "dequeued" : "disarmed"} ${number} ${head} ${found.signals.length} signals`,
+		);
+	}
+	output.push(...(await sayUnsaid(github, repository, progress, saveProgress)));
+	return output;
+}
+
+/**
+ * Post each kept signal comment whose pick has ended with its PR open on the same head. One still in the queue on
+ * that pick waits for its dequeue; a closed, merged, pushed, or picked-again PR, or one GitHub refused the comment
+ * {@link COLLECTION_ATTEMPTS} times, drops it.
+ */
+async function sayUnsaid(
+	github: GitHub,
+	repository: Repository,
+	progress: Progress,
+	saveProgress: () => void,
+): Promise<string[]> {
+	const output: string[] = [];
+	for (const [key, entry] of Object.entries(progress.unsaid ?? {})) {
+		const number = Number(key);
+		const drop = () => {
+			delete progress.unsaid![number];
+			saveProgress();
+		};
+		const now = await readPull(github, entry.id);
+		const pick =
+			now.autoMergeRequest != null
+				? string(object(now.autoMergeRequest).enabledAt)
+				: now.mergeQueueEntry != null
+					? string(object(now.mergeQueueEntry).enqueuedAt)
+					: null;
+		if (now.state !== "OPEN" || string(now.headRefOid) !== entry.head || (pick !== null && pick !== entry.pick)) {
+			drop();
+			continue;
+		}
+		if (pick !== null) continue;
+		try {
+			await post(
+				github,
+				{ repository: `${repository.owner}/${repository.repo}` },
+				{ number, enabledAt: entry.pick },
+				entry.text,
+				`signaled ${entry.head}`,
+				"quest land watch",
+				"unanswered_signal",
+			);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			if (++entry.failures >= COLLECTION_ATTEMPTS) {
+				output.push(
+					`set aside the signal comment on ${number} after ${COLLECTION_ATTEMPTS} refusals: ${reason}`,
+				);
+				drop();
+			} else {
+				output.push(`unsaid ${number} ${entry.head}: ${reason}`);
+				saveProgress();
+			}
+			continue;
+		}
+		drop();
+	}
 	return output;
 }
 
@@ -695,6 +852,9 @@ export async function watchPass(
 			save(path, progress);
 		}
 	}
+	output.push(
+		...(await dequeueSignaled(github, repository, ref, pulls, progress, () => save(path, progress), options.state)),
+	);
 	output.push(...(await enqueueArmed(github, ref, pulls, progress, (text) => output.push(text))));
 	// The next pass reads from SETTLE before this one's start; nothing older can come back.
 	const kept = new Date(Date.parse(started) - SETTLE).toISOString();
@@ -727,8 +887,8 @@ const same = (a: Repository, b: Repository) =>
 /**
  * The installation token permissions the watcher asks for. On GitHub's merge queue, `api` reads the
  * queue's events, comments, and the `merge_group` logs (`actions: read`), and enqueues the armed picks
- * GitHub left out of the queue, which `enqueuePullRequest` needs `merge_queues: write` for; with a fixer
- * it also re-enqueues, which needs `contents: write` for arming auto-merge, edits the PR body's Review,
+ * GitHub left out of the queue, which `enqueuePullRequest` needs `merge_queues: write` for, and disarms a
+ * signaled PR's auto-merge, which needs `contents: write`; with a fixer it also re-enqueues, edits the PR body's Review,
  * and reads the PR's own checks for the fixer (`checks: read` and `statuses: read`). The `own` queue
  * also disarms and arms auto-merge, cancels a build's runs (`actions: write`), posts each pick's queue
  * check (`checks: write`), and reads the base's classic protection (`administration: read`), as
@@ -759,7 +919,8 @@ export function watchPermissions(
 			pushWorkflows: { ...push, workflows: "write" },
 			read: { contents: "read" },
 		};
-	if (!fixing) return { api: { contents: "read", pull_requests: "write", actions: "read", merge_queues: "write" } };
+	// Disarming a signaled PR's auto-merge needs contents: write, as arming it does.
+	if (!fixing) return { api: { contents: "write", pull_requests: "write", actions: "read", merge_queues: "write" } };
 	return {
 		api: {
 			contents: "write",
