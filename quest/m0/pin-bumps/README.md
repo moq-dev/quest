@@ -3,8 +3,10 @@
 ## Goal
 
 A user-facing merge to quest's `main` ships as a release, and within the hour
-every repository that pins quest and has moq-bot installed gets a bump PR to
-that release, which lands on its own. No person or agent hand-bumps a pin.
+every repository whose flake locks quest and has moq-bot installed gets a bump
+PR to that release, which lands on its own. No person or agent hand-bumps a
+flake pin. Pins through mise or the installer stay out of scope: no moq-dev,
+kixel-ai, or kixelated repository uses them.
 
 The epic finishes with an end-to-end run: a user-facing merge cuts a release,
 and the watcher opens and lands a bump to it in an enrolled repository whose
@@ -34,6 +36,13 @@ draft [kixelated/nixos#36](https://github.com/kixelated/nixos/pull/36).
   dependency bumps; a quest bump is the exception).
 - Which repositories? ✅ Every repository moq-bot is installed on whose
   `flake.lock` locks quest (rejected: a `--bump` list in the host's
-  configuration, which #36's went stale within five days).
+  configuration, since #36's list went stale within five days).
 
 Turning it on is the host's work, planned in kixelated/nixos's tree.
+
+## Waiting
+
+- kixelated/nixos: the quest watcher runs the bump pass, planned as
+  `quest/m0/quest-bump.md` there
+  ([kixelated/nixos#70](https://github.com/kixelated/nixos/pull/70)); check
+  that the `quest-land` journal on the maintainer's host shows a `bump` line.

@@ -20,15 +20,27 @@ CONTRIBUTING.md's rule reserving release tags for the maintainer: no release
 has shipped since v0.1.0, because v0.2.0's run failed and v0.2.1 was never
 tagged.
 
-- A push with no user-facing change (only `quest/`, CI, tests, or chores)
-  cuts nothing. The next version follows semver's 0.x convention from the
-  conventional-commit subjects since the last tag: minor when one carries `!`,
-  patch otherwise.
+- Each run compares `main` with the last tag, not the push alone, and cuts
+  when that range holds a user-facing change (anything beyond `quest/`, CI,
+  tests, or chores). So a run that failed or was cancelled ships its change
+  with the next run, and runs on `main` queue rather than cancel each other,
+  unlike the PR runs Release's concurrency cancels today. The next version
+  follows semver's 0.x convention from the range's conventional-commit
+  subjects: minor when one carries `!`, patch otherwise.
 - The version comes from the tag, not a commit: `package.json` stops carrying
-  one, so no release needs a PR. A tag pushed with `GITHUB_TOKEN` starts no
-  other workflow, so the run that tags also builds and publishes.
-- The first release checks what [the release cut](https://github.com/moq-dev/quest/blob/2a80c902/quest/m1/release.md)
-  waited to check: the Windows ZIPs SETUP.md expects and every Install check
-  job. Then drop SETUP.md's v0.1.0 caveat and the "next release" notes in
-  README.md and docs/windows.md.
+  one, so no release needs a PR. Every reader of it takes the version from the
+  build instead: the CLI's `--version` (`src/cli/main.ts`, `src/cli/hooks.ts`),
+  `nix/package.nix`, and Release's version check. A release binary embeds its
+  tag; a flake build, which cannot see tags, embeds its commit. A tag pushed
+  with `GITHUB_TOKEN` starts no other workflow, so the run that tags also
+  builds and publishes.
 - Update CONTRIBUTING.md's Releases section and SETUP.md's pinning advice.
+- The first automated release only exists after the implementing PR merges.
+  That PR rewrites this quest to its checks, with a `## Waiting` item on the
+  release, rather than deleting it: the Windows ZIPs SETUP.md expects, every
+  Install check job, and `quest worktree hook --help` from a release binary,
+  which [the v0.2.1 cut](https://github.com/moq-dev/quest/blob/2a80c902/quest/m1/release.md)
+  waited to check. Then drop SETUP.md's v0.1.0 caveat and the "next release"
+  notes in README.md and docs/windows.md, and delete this quest.
+- Milestone: ✅ m0 (rejected: m1), so those first-release checks, which the
+  deleted m1 quests held, move to m0 with it.
