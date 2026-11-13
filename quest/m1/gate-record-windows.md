@@ -18,12 +18,14 @@ ends with the stub, so the gate never holds it. The stub reads the job's
 basic accounting (total user and kernel time) and its peak job memory
 once the command exits, before it closes the handle, and passes them to
 the gate over a channel of its own, such as an extra pipe, keeping the
-command's stdio untouched. Without a job, which the stub only warns
-about today, the line carries null CPU and memory.
+command's stdio untouched. Its line's `measured` is `job`, since the
+job covers everything the command started. Without a job, which the stub
+only warns about today, the line carries `children` from the stub's own
+child, as on a process group.
 
 Tests, in the native Windows suite: a stub command's line carries its
 CPU and peak memory, a grandchild's CPU counts toward it, and a run
-without a job records nulls.
+without a job is labeled `children`.
 
 ## Hosts
 

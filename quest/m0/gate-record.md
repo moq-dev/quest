@@ -62,13 +62,24 @@ Agent's choices, for the implementer to revisit:
   version.
 - `ended` is when the command's own process exits, before the gate stops
   descendants it left behind, so cleanup does not count as wall time.
-- On Linux with a systemd scope, the owner reads the scope's `cpu.stat`
-  `usage_usec` and `memory.peak` once the cgroup has emptied and before
-  it is released (between `vacated` and `emptied` in
-  `src/cli/supervise.ts`), and returns them with the exit status: the
-  5-second CPU samples miss a short command and the last interval, and
-  the cgroup is gone once the owner resolves. `memory.peak` needs Linux
-  5.19, so on 5.14 to 5.18 `peakMemory` is null.
+- On Linux with a systemd scope, the counters must outlive the command:
+  the scope runs with `--collect`, and `vacated` in
+  `src/cli/supervise.ts` already succeeds when systemd has removed the
+  emptied cgroup, so a read after the command's tree exits can find
+  nothing, and the 5-second CPU samples miss a short command and the
+  last interval. Recommended: the handshake shell stays in the scope as
+  a holder instead of becoming the command, and runs the command in a
+  child cgroup of the scope, which is delegated (`Delegate=yes`) with no
+  controllers enabled below it, so the scope's own `cpu.stat`
+  `usage_usec` and `memory.peak` cover everything the command started.
+  The owner stops the command's leftovers with the child's
+  `cgroup.kill`, reads the scope's counters while the holder keeps it
+  populated, then releases the holder and returns the counters with the
+  exit status. An implementer may prove another way instead, such as
+  holding a D-Bus reference to the unit and reading systemd's
+  `CPUUsageNSec` and `MemoryPeak`; the short-command test below decides.
+  `memory.peak` needs Linux 5.19, so on 5.14 to 5.18 `peakMemory` is
+  null.
 - On a process group, `cpuMs` and `peakMemory` come from the command's
   rusage at exit, which `wait4` reports for it and the descendants it
   waited for. Node's `child_process` exposes none; Bun's
