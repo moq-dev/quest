@@ -41,5 +41,6 @@ GitHub-hosted publish job that `run.ps1` makes unnecessary).
   `curl -fsSL` of `https://max.kixel.ai/run.sh` and of
   `https://max.kixel.ai/run.ps1` each returns a script, not an HTML page,
   that downloads from that release and compares the download against its
-  checksums file before running it; read the scripts, never run them, to
+  checksums file before running `token-max doctor`; read the scripts, never
+  run them, to
   clear this
