@@ -20,17 +20,20 @@ CONTRIBUTING.md's rule reserving release tags for the maintainer: no release
 has shipped since v0.1.0, because v0.2.0's run failed and v0.2.1 was never
 tagged.
 
-- Each run compares `main` with the last tag, not the push alone, and cuts
-  when that range holds a user-facing change (anything beyond `quest/`, CI,
-  tests, or chores). So a run that failed or was cancelled ships its change
-  with the next run, and runs on `main` queue rather than cancel each other,
-  unlike the PR runs Release's concurrency cancels today. The next version
-  follows semver's 0.x convention from the range's conventional-commit
-  subjects: minor when one carries `!`, patch otherwise.
+- Each run compares `main` with the last published release, not the push
+  alone, and cuts when that range holds a user-facing change (anything beyond
+  `quest/`, CI, tests, or chores). A tag whose run failed before publishing
+  is built and published again before any newer one is cut, so a failed run's
+  change ships with the next run instead of hiding behind its tag. Release's
+  concurrency cancels superseded pull request runs today; runs on `main` must
+  queue instead. The next version follows semver's 0.x convention from the
+  range's conventional-commit subjects: minor when one carries `!`, patch
+  otherwise.
 - The version comes from the tag, not a commit: `package.json` stops carrying
   one, so no release needs a PR. Every reader of it takes the version from the
-  build instead: the CLI's `--version` (`src/cli/main.ts`, `src/cli/hooks.ts`),
-  `nix/package.nix`, and Release's version check. A release binary embeds its
+  build instead: `--version` in `src/cli/main.ts`, the stale-stub notice in
+  `src/cli/hooks.ts`, `nix/package.nix`, and Release's version check and its
+  Windows install check's fallback tag. A release binary embeds its
   tag; a flake build, which cannot see tags, embeds its commit. A tag pushed
   with `GITHUB_TOKEN` starts no other workflow, so the run that tags also
   builds and publishes.
