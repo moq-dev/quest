@@ -30,7 +30,8 @@ Agent's choices, for the implementer to revisit:
 - Build on `quest agent start`, which already runs a headless turn on the
   CLI's own login and reports `limited` on a usage limit, rather than a
   second runner. A limit ends the run cleanly; the next scheduled run
-  resumes it.
+  resumes it. `quest agent start` admits itself, so the loop starts only
+  what the host and account can carry.
 - Push once per transition to "only decisions wait", never per run, so a
   schedule that finds nothing new says nothing.
 - Keep the configured command in the user's own Quest settings, where
@@ -38,7 +39,5 @@ Agent's choices, for the implementer to revisit:
 
 ## Related
 
-- [Agent admission](/quest/m0/agent-admission.md) - what an unattended
-  loop may start
 - [Standing picks](/quest/m0/ask-less/standing-picks.md) - what it may
   merge without the maintainer

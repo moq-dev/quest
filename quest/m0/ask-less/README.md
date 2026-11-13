@@ -116,7 +116,5 @@ forge timelines of PRs created and merged 11-03 to 11-13.
   the answers taken as recommended each week
 - [Late signals](/quest/m0/late-signals.md) - holds a head on a marked
   decision comment, which recorded picks can share
-- [Agent admission](/quest/m0/agent-admission.md) - limits what an
-  unattended loop starts to what the host and account can carry
 - [Queue watcher](/quest/m0/queue-watcher/README.md) - re-enqueues the
   merge queue's drops, 21% of merged PRs' lead time
