@@ -14,7 +14,7 @@ Engineering rules for every task, as `quest context` prints them. The repository
 - Keep CI fast, so bold changes can be tried and thrown away cheaply: every test runs in CI, but the merge gate holds only fast, high-signal ones, and slow or expensive ones, such as other platforms, run nightly. A PR that slows the gate says by how much and why it is worth it.
 - Unit tests mock time instead of depending on wall-clock timing or sleeps, and cover edge cases, not old bugs or trivial values.
 - A lasting fact or instruction about a project belongs in its repository, not agent memory. Propose checking it in, to the nearest `AGENTS.md` or its quest; change no rule until the user agrees, and then follow `quest guide prompting`.
-- In a public repository, never mention customers, partners, or prospects, or link to another owner's private repository. Justify work on its merits.
+- In a public repository, never mention customers, partners, or prospects, or link to a private repository its maintainer doesn't own. Justify work on its merits.
 
 ## Important
 
