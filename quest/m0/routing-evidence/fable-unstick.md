@@ -26,8 +26,9 @@ Agent's choices, for the implementer to revisit:
   usage` already does, and pick the arm from a hash of the PR's branch, as
   [the writer A/B](/quest/m0/routing-evidence/writer-ab.md) does for
   quests.
-- Fable is a Claude model, so the reviewer pick still avoids it when it
-  wrote last; Sol keeps reviewing such a PR.
+- The reviewer pick avoids models by exact id, not family, so it avoids only
+  `claude-fable-5-2` when Fable wrote last; Sol, first in every size's
+  reviewer list, keeps reviewing such a PR.
 - Record the arm on the Implementer line as `(iterate, S, unstick)` or
   `(iterate, S, writer)`.
 

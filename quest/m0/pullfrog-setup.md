@@ -17,6 +17,10 @@ Pullfrog reviews with Claude since 2026-11-12, its model access configured in
 the Pullfrog console, and its workflow is back in moq-dev/quest (#659),
 kixel-ai/rind, moq-dev/rust2, moq-dev/studio, and moq-dev/web-transport after
 the 2026-11-10 removal [token-waste](/quest/m0/token-waste/README.md) records.
+Since 2026-11-13 its approval, which an identical `Pullfrog approval` ruleset
+requires in every moq-dev and kixel-ai repository (kept in kixel-ai/dotfiles'
+`bin/repo-settings`), gates merges in place of the DeepSeek review, so what its
+runs can check now decides merges.
 
 Evidence from the trimmed Pullfrog learnings: rind's bot could not fetch its
 test vector submodules because `.git` is read-only, so about 20 tests failed;

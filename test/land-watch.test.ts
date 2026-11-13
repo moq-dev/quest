@@ -59,6 +59,8 @@ interface Pull {
 	state?: string;
 	/** `mergeStateStatus`, CLEAN by default. */
 	mergeState?: string;
+	/** `reviewDecision`, null by default: the base requires no review. */
+	reviewDecision?: string;
 	/** Its base branch, main by default. */
 	base?: string;
 	/** When it joined the merge queue, while it is in it. */
@@ -247,6 +249,7 @@ function deps(world: World): GitHubDependencies {
 								baseRefName: pull.base ?? "main",
 								headRefOid: headOf(world, pull),
 								mergeStateStatus: pull.mergeState ?? "CLEAN",
+								reviewDecision: pull.reviewDecision ?? null,
 								mergeQueueEntry: pull.queued ? { enqueuedAt: pull.queued } : null,
 								autoMergeRequest: pull.armed ? { enabledAt: pull.armed } : null,
 								labels: labelsOf(pull),
@@ -290,6 +293,7 @@ function deps(world: World): GitHubDependencies {
 										maintainerCanModify: false,
 										headRepository: { nameWithOwner: "upstream/project" },
 										mergeStateStatus: pull.mergeState ?? "CLEAN",
+										reviewDecision: pull.reviewDecision ?? null,
 										mergeQueueEntry: pull.queued ? { id: `MQE_${pull.number}` } : null,
 										autoMergeRequest: pull.armed ? { enabledAt: pull.armed, commitBody: "" } : null,
 										labels: labelsOf(pull),
@@ -722,6 +726,8 @@ test("an armed pick GitHub never queued is enqueued once ready, only at the head
 		armed(25),
 		// In the queue already, or never armed.
 		armed(26, { queued: at(3) }),
+		// It lacks an approval its base requires, which auto-merge waits for; an admin's enqueue would bypass it.
+		armed(28, { reviewDecision: "REVIEW_REQUIRED" }),
 		{ number: 27, head: HEAD, enqueues: [], removals: [] },
 	]);
 	github.unlisted = [25];
