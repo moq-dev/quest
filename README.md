@@ -1247,11 +1247,16 @@ they kept every CPU busy. macOS, Windows, and Linux without a systemd user
 manager have no scope to measure, so the load average alone decides there.
 
 A user's admissions on one host are recorded under
-`~/.cache/quest/admissions/<hostname>`, whatever the caller's environment or
-login session. The home directory comes from the user database, not `$HOME`;
-an account missing from it, as in arbitrary-UID containers, uses
-`/tmp/quest-<uid>/admissions/<hostname>`, and refuses that directory unless only
-its UID can write it.
+`~/.cache/quest/admissions-v2/<hostname>`, whatever the caller's environment or
+login session. A gate judges whether another still runs by its process ID, so
+on Linux each PID namespace, such as a sandbox's, keeps a ledger of its own,
+named `<hostname>-pid<inode>`, and its gates do not count the host's. A gate
+that finds its running admission dropped records it again and warns. The home
+directory comes from the user database, not `$HOME`; an account missing from
+it, as in arbitrary-UID containers, uses
+`/tmp/quest-<uid>/admissions-v2/<hostname>`, and refuses that directory unless
+only its UID can write it. `quest agent` keeps its admissions beside them, in
+`agents-v2/<hostname>`.
 
 Two kinds of command go ahead of the rest. `quest gate --quick <command>` waits
 at most a minute, then starts the command whatever the host's load, memory, and
