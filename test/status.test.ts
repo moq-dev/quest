@@ -736,3 +736,78 @@ describe("the review record", () => {
 		expect(await line(`Fixes ${A}.\n\n## Review\n\nSkipped.\n\n## Models\n\n${C}`)).toBe("review-record -");
 	});
 });
+
+describe("checkpoint", () => {
+	const C = "c".repeat(40);
+	const bot = (login: string, state: string, commit: string, minute: number) => ({
+		author: { __typename: "Bot", login },
+		state,
+		submittedAt: `2026-10-07T12:${String(minute).padStart(2, "0")}:00Z`,
+		url: `${URL_}#pullrequestreview-${minute}`,
+		commit: { oid: commit },
+		reactions: { nodes: [] },
+	});
+	const line = async (reviews: Node[]) =>
+		statusLines(
+			await pullRequestStatus(
+				pr,
+				setup([
+					pull({
+						checks: null,
+						reviews: page(reviews),
+						threads: page([]),
+					}),
+				]).deps,
+			),
+		).filter((entry) => entry.startsWith("checkpoint "));
+
+	test("falls due when an approving reviewer's third round leaves findings on the head", async () => {
+		const rounds = [
+			bot("pullfrog", "CHANGES_REQUESTED", B, 1),
+			bot("pullfrog", "CHANGES_REQUESTED", C, 2),
+			bot("pullfrog", "CHANGES_REQUESTED", A, 3),
+		];
+		expect(await line(rounds)).toEqual([`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`]);
+		// An approval or a dismissed review of the head, a second review of one commit, or an unreviewed head is none.
+		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "APPROVED", A, 3)])).toEqual([]);
+		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "DISMISSED", A, 3)])).toEqual([]);
+		expect(await line([...rounds.slice(0, 2), bot("pullfrog", "CHANGES_REQUESTED", C, 3)])).toEqual([]);
+		expect(await line([...rounds, bot("pullfrog", "COMMENTED", A, 4)])).toEqual([
+			`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-4`,
+		]);
+		// A reviewer whose only approval a push dismissed still gates, and a comment after approving the head is none.
+		const dismissed = [
+			bot("pullfrog", "DISMISSED", B, 1),
+			bot("pullfrog", "COMMENTED", C, 2),
+			bot("pullfrog", "COMMENTED", A, 3),
+		];
+		expect(await line(dismissed)).toEqual([`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`]);
+		expect(
+			await line([...rounds.slice(0, 2), bot("pullfrog", "APPROVED", A, 3), bot("pullfrog", "COMMENTED", A, 4)]),
+		).toEqual([]);
+		// The latest verdict on the head wins: a change request after an approval of it is due.
+		expect(
+			await line([
+				...rounds.slice(0, 2),
+				bot("pullfrog", "APPROVED", A, 3),
+				bot("pullfrog", "CHANGES_REQUESTED", A, 4),
+			]),
+		).toEqual([`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-4`]);
+		// Every reviewer due on the head is named.
+		const other = [B, C, A].map((commit, index) => bot("other", "CHANGES_REQUESTED", commit, index + 5));
+		expect(await line([...rounds, ...other])).toEqual([
+			`checkpoint pullfrog round 3 ${URL_}#pullrequestreview-3`,
+			`checkpoint other round 3 ${URL_}#pullrequestreview-7`,
+		]);
+	});
+
+	test("ignores reviewers that only comment, and people", async () => {
+		const commented = [B, C, A].map((commit, index) => bot("coderabbitai", "COMMENTED", commit, index + 1));
+		expect(await line(commented)).toEqual([]);
+		const person = [B, C, A].map((commit, index) => ({
+			...bot("alice", "CHANGES_REQUESTED", commit, index + 1),
+			author: { __typename: "User", login: "alice" },
+		}));
+		expect(await line(person)).toEqual([]);
+	});
+});

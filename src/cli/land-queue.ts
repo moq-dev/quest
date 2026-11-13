@@ -115,6 +115,7 @@ interface Shown {
 	id: number;
 	status: View["status"];
 	title: string;
+	summary: string;
 	url?: string;
 }
 
@@ -166,6 +167,7 @@ class Queue {
 			shown?.head === head &&
 			shown.status === view.status &&
 			shown.title === view.title &&
+			shown.summary === view.summary &&
 			shown.url === view.url
 		)
 			return;
@@ -200,6 +202,7 @@ class Queue {
 			id,
 			status: view.status,
 			title: view.title,
+			summary: view.summary,
 			...(view.url ? { url: view.url } : {}),
 		};
 		save(shownPath(this.queue.state), this.shown);
@@ -714,8 +717,19 @@ export async function ownPass(
 					},
 		);
 	}
-	// A pick waiting on its own required checks keeps the check it last showed.
-	for (const waiting of plan.waiting ?? []) open.add(waiting.number);
+	// A pick waiting on its own required checks or an approval shows what, so the wait is never silent.
+	for (const waiting of plan.waiting ?? []) {
+		open.add(waiting.number);
+		const waits = [
+			...waiting.pending.map((name) => `the required check \`${name}\` to pass`),
+			...(waiting.approval ? [`an approving review, which ${base} requires`] : []),
+		];
+		await own.show(waiting.number, waiting.head, {
+			status: "queued",
+			title: "Waiting",
+			summary: `It keeps its place and joins the queue once nothing is left to wait for: ${waits.join(", ")}.`,
+		});
+	}
 	await own.leave(open, "The pick ended: its auto-merge was disabled, or it closed.");
 	if (fix)
 		own.lines.push(

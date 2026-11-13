@@ -52,7 +52,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 			} } } }
 			reviews(first: 100, after: $reviews) @include(if: $moreReviews) {
 				pageInfo { hasNextPage endCursor }
-				nodes { author { login } state submittedAt url commit { oid } reactions(last: 100) { nodes { ...reaction } } }
+				nodes { author { __typename login } state submittedAt url commit { oid } reactions(last: 100) { nodes { ...reaction } } }
 			}
 			reviewThreads(first: 100, after: $threads) @include(if: $moreThreads) {
 				pageInfo { hasNextPage endCursor }
@@ -134,6 +134,8 @@ export interface Status {
 	checks: { state: string | null; passed: number; failing: Check[]; pending: Check[] };
 	/** Each reviewer's latest submitted review, oldest first. */
 	reviews: Review[];
+	/** The design checkpoints online reviewers put on the head, as {@link checkpoints} finds them. */
+	checkpoints: { reviewer: string; round: number; url: string }[];
 	/** Null when the `## Review` section names no full SHA. */
 	reviewRecord: ReviewRecord | null;
 	reactions: Reaction[];
@@ -427,6 +429,7 @@ function summarize(
 					},
 		checks,
 		reviews: [...latest.values()],
+		checkpoints: checkpoints(head, submitted),
 		reviewRecord: null,
 		reactions,
 		threads,
@@ -434,6 +437,39 @@ function summarize(
 		holds: [],
 		starterHold: null,
 	};
+}
+
+/**
+ * The design checkpoint `/quest-review` takes every third round, put on the head by an online reviewer: a bot that
+ * approves or requests changes, such as one whose approval the base requires, whose latest review is of the head
+ * and whose latest verdict on the head, ignoring plain comments, is not an approval or a dismissal, in its third,
+ * sixth, ... round. A dismissed review was an approval or a change
+ * request, so it shows the bot gates too, as when a push dismisses its approval. A round is one commit it reviewed;
+ * a rethink at a checkpoint leaves the next one three rounds on, so nothing restarts the count.
+ */
+const GATING = ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"];
+
+function checkpoints(head: string, submitted: ObjectValue[]): Status["checkpoints"] {
+	const due: Status["checkpoints"] = [];
+	const rounds = new Map<string, ObjectValue[]>();
+	for (const row of submitted) {
+		if (row.author == null || object(row.author).__typename !== "Bot") continue;
+		const reviewer = actor(row.author);
+		rounds.set(reviewer, [...(rounds.get(reviewer) ?? []), row]);
+	}
+	for (const [reviewer, rows] of rounds) {
+		if (!rows.some((row) => GATING.includes(string(row.state)))) continue;
+		const counted = rows.filter((row) => row.commit != null);
+		const last = counted.at(-1);
+		if (last === undefined || string(object(last.commit).oid) !== head) continue;
+		const verdict = counted
+			.filter((row) => string(object(row.commit).oid) === head && GATING.includes(string(row.state)))
+			.at(-1);
+		if (verdict?.state === "APPROVED" || verdict?.state === "DISMISSED") continue;
+		const round = new Set(counted.map((row) => string(object(row.commit).oid))).size;
+		if (round % 3 === 0) due.push({ reviewer, round, url: string(last.url) });
+	}
+	return due;
 }
 
 /**
@@ -497,6 +533,7 @@ export function statusLines(status: Status): string[] {
 		...status.reviews.map(
 			(r) => `review ${r.current ? "current" : "stale"} ${r.state} ${r.reviewer} ${r.submittedAt} ${r.url}`,
 		),
+		...status.checkpoints.map((c) => `checkpoint ${c.reviewer} round ${c.round} ${c.url}`),
 		...status.reactions.map((r) => `reacted:${r.content} ${r.actor} ${r.createdAt} ${r.url}`),
 		...status.threads.map(
 			(t) =>

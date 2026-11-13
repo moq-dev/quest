@@ -504,6 +504,7 @@ comes last, and a missing value prints as `-`:
 | `checks` | `failure` if any check fails, else `pending` if any is pending, else `success`, and `passed=`, `failing=`, `pending=` counts, all from each check's latest run; `-` when the head has no checks. |
 | `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
+| `checkpoint` | Each bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head and its latest verdict there, ignoring plain comments, is neither an approval nor a dismissal, at the end of its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed; a dismissed review counts as one that approves or requests changes. Only printed when due. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
 | `thread` | Node ID, `current` or `outdated`, last commenter, latest comment URL, and `path:line` of each unresolved thread. |
 | `signal` | `finding` or `decision`, its URL, who posted it, and its text, for each [signal](#signals-that-hold-a-head) holding the head. |
@@ -519,7 +520,7 @@ own rollup state counts the superseded runs too. A required check
 is one branch protection or a ruleset requires for this PR. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
-`landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `reactions`,
+`landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `checkpoints` (`reviewer`, `round`, `url`), `reactions`,
 `threads`, `signals` (`kind`, `url`, `author`, `text`), `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
 failures exit 1.
@@ -754,11 +755,13 @@ up to floor(log2 n) further PRs that merge cleanly in that order, resolving
 quest links with `quest resolve`. A failed batch halves the next batch's size,
 down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
-additions stay queued. A PR whose required checks are still running stays queued
-and sits out batches until they pass; only each check's latest run counts, as in
-`quest status`. If any are still pending two hours after
+additions stay queued. A PR whose required checks are still running, or that
+still needs an approving review the base requires, stays queued and sits out
+batches until they pass and it is approved; only each check's latest run counts,
+as in `quest status`. If it still waits two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
-naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
+naming what it waits for, since a check that never reports or an approval nobody
+gives would hold it silently. The sandbox checks the tip once, without
 bisection: success lands one commit per PR, as `--method` says. A failure, or a base that
 conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
 auto-merge and place, get no comment, and sit out batches while its
@@ -1056,9 +1059,10 @@ watcher is the base's only writer outside an admin's emergency bypass.
 
 Its picks are those `quest land serve` reads: open PRs whose auto-merge
 `quest merge --land` armed, pinned to their head, in the order they were armed,
-with the same ejections for a moved head, a missing pin, a blocking review, or
-a failing required check. A pick still waiting on its required checks keeps its
-place, and one another session holds waits, armed, until its hold clears.
+with the same ejections for a moved head, a missing pin, a requested change, or
+a failing required check. A pick still waiting on its required checks or a
+required approval keeps its place, and one another session holds waits, armed,
+until its hold clears.
 
 For the oldest pick it merges the base into the picked head with the quest
 merge driver, in the daemon's private repository, and pushes that merge to
