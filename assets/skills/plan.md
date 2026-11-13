@@ -21,3 +21,4 @@ A fix quest's Plan names the PR that caused the problem when it is known, so its
 When the PR deletes the quest, record its decisions in the PR body's `## Decisions` section instead, since the deletion takes the Plan with it.
 
 Then commit on a `quest-plan/<slug>` branch, open the PR as a draft, and run `/quest-review` on it.
+The interview was the user's pick to merge it: unless the review leaves a decision open, skip its closing question and run `/quest-merge` on the PR.
