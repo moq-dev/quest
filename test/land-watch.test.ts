@@ -243,6 +243,15 @@ function deps(world: World): GitHubDependencies {
 				const mutation = /^\s*mutation[^{]*\{\s*(\w+)/.exec(query)?.[1];
 				if (mutation === "dequeuePullRequest" || mutation === "disablePullRequestAutoMerge") {
 					const pull = pullOf();
+					// Like GitHub, which refuses to disable an auto-merge request that is gone.
+					if (
+						mutation === "disablePullRequestAutoMerge" &&
+						pull.armed === undefined &&
+						pull.queued === undefined
+					)
+						return Response.json({
+							errors: [{ type: "UNPROCESSABLE", message: "auto-merge is not enabled" }],
+						});
 					world.mutations.push(`${mutation} ${pull.number}`);
 					// Like GitHub, leaving the queue also disarms auto-merge.
 					if (mutation === "dequeuePullRequest") pull.queued = undefined;
@@ -1395,6 +1404,8 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["handback 5"]);
 		expect(github.mutations).toEqual([]);
 		expect(github.comments[5].at(-1)!.body).toContain("finding by rabbit[bot]: drops the last frame");
+		// `quest status` reports why the pick stopped as the signal, not the failure the fixer took on.
+		expect(github.comments[5].at(-1)!.body).toContain("<!-- quest land: unanswered_signal -->");
 		// The handed-back fix still carries the dropped head, should anyone pick it again unanswered.
 		const pushed = git(repo.origin, "rev-parse", "refs/heads/branch-5");
 		expect(pushed).not.toBe(head);
@@ -1403,6 +1414,55 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		endPick(state, 5, history(state, 5)!.pick);
 		expect(history(state, 5)).toBeUndefined();
 		expect(carriedBy(state, 5, pushed)?.heads).toEqual([head]);
+	});
+
+	test("a fix a workflow queued and armed is dequeued once its dropped head draws a finding, without disarming twice", async () => {
+		const { repo, state, fix, context } = setup();
+		const base = repo.main();
+		const head = repo.pull(5, { "feature.txt": "new\n" });
+		const pull: Pull = {
+			number: 5,
+			head,
+			enqueues: [{ createdAt: at(1), actor: "maintainer" }],
+			removals: [
+				{ id: "R1", createdAt: at(5), reason: "failed_checks", actor: "github-merge-queue", before: head },
+			],
+		};
+		const github = { ...world([pull], [failedRun(5, at(3), base)]), origin: repo.origin };
+		github.now = Date.parse(at(6));
+		fix.round(5, fixScript("fixed.txt"));
+		await watchPass(REPOSITORY, { state }, deps(github), context);
+		await exited(state);
+		// A workflow queues and arms the fixer's push once it lands, before the fixer's requeue reads the PR.
+		github.onPull = (read) => {
+			const requeuing = readdirSync(state)
+				.filter((name) => /^watch-job-.*\.json$/.test(name))
+				.some((name) => JSON.parse(readFileSync(join(state, name), "utf8")).requeuing !== undefined);
+			if (requeuing && read.queued === undefined && !github.mutations.length) {
+				read.queued = at(8);
+				read.armed = at(8);
+			}
+		};
+		pull.activity = {
+			reviews: {
+				pageInfo: { hasNextPage: false, endCursor: null },
+				nodes: [
+					{
+						id: "r1",
+						url: "https://github.com/upstream/project/pull/5#pullrequestreview-1",
+						author: { __typename: "Bot", login: "rabbit" },
+						body: "[P1] Drops the last frame",
+						submittedAt: at(7),
+						commit: { oid: head },
+					},
+				],
+			},
+		};
+		github.now = Date.parse(at(10));
+		expect(await watchPass(REPOSITORY, { state }, deps(github), context)).toEqual(["handback 5"]);
+		// Leaving the queue disarmed it, so nothing asks GitHub to disarm a request that is gone.
+		expect(github.mutations).toEqual(["dequeuePullRequest 5"]);
+		expect(github.comments[5].at(-1)!.body).toContain("<!-- quest land: unanswered_signal -->");
 	});
 
 	test("a fix queued without its finding still carries the dropped head's, and leaves the queue once one arrives", async () => {

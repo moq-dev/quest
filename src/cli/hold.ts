@@ -281,6 +281,8 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
 		const method = signalMethod(repository, needs.rules, named, snapshot.url, snapshot.base);
 		await unchanged();
+		// A finding or decision posted during the quest check above would otherwise ride into the queue.
+		await unsignaled(labels.github, pr, snapshot.url, sha);
 		await enqueue(labels.github, snapshot.id, snapshot.head, method);
 		return;
 	}
@@ -288,7 +290,9 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 	if (snapshot.queue) {
 		if (named !== undefined && named !== "merge")
 			deps.warn(`${snapshot.url} lands through a merge queue, which applies its own merge method`);
-		await pick(labels, await unchanged(), named ?? "merge");
+		const fresh = await unchanged();
+		await unsignaled(labels.github, pr, snapshot.url, sha);
+		await pick(labels, fresh, named ?? "merge");
 		return;
 	}
 	const repository = object(await (await labels.github.request(repositoryPath(pr))).json());

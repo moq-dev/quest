@@ -61,6 +61,8 @@ export class FixerRefusal extends Error {
 		super(message);
 	}
 }
+/** A refusal because a finding or decision holds the head, which `quest status` reports as `unanswered_signal`. */
+export class SignalRefusal extends FixerRefusal {}
 class BaseCheckError extends Error {}
 /** A fix that edits protected paths beyond what the base merge carries: only a maintainer's push lands it. */
 export class ProtectedEdit extends Error {}
@@ -153,6 +155,8 @@ interface Job extends Process {
 	base?: boolean;
 	results?: FixResult[];
 	handbacks?: Record<number, string>;
+	/** The PRs a finding or decision handed back, whose handback marker says `unanswered_signal`. */
+	signaled?: number[];
 	/** Passes that failed to collect each PR, so one that keeps failing is set aside rather than holding up the rest. */
 	failures?: Record<number, number>;
 	/** PRs a handback is taking out of the queue, recorded before their auto-merge is disabled. */
@@ -1196,7 +1200,7 @@ async function collectJob(
 					).get(number)!;
 					if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 					if (held.signals.length > 0)
-						throw new FixerRefusal(`its head is held by ${describe(held.signals)}`);
+						throw new SignalRefusal(`its head is held by ${describe(held.signals)}`);
 				}
 				// A parked PR requeued unchanged is still queued as it was; anything else is pinned anew.
 				if (queuedAs !== entry.enabledAt || head !== entry.head) {
@@ -1213,6 +1217,7 @@ async function collectJob(
 			} catch (failure) {
 				if (!(failure instanceof FixerRefusal)) throw failure;
 				if (failure.resolution) (job.resolutions ??= {})[number] = failure.resolution;
+				if (failure instanceof SignalRefusal) job.signaled = [...(job.signaled ?? []), number];
 				error = `${String(failure)}; run /quest-iterate before picking it again`;
 			}
 		}
@@ -1268,8 +1273,13 @@ async function collectJob(
 				"handback",
 				author(result),
 				handbackLog(job.log ?? "", !error && result?.action === "handback" ? result.log : undefined),
-				// The marker `quest status` reads, now that no ejection comment precedes this one.
-				job.parked && leaves ? (job.reason ?? "failed_checks") : undefined,
+				// The marker `quest status` reads, now that no ejection comment precedes this one; a signal that
+				// arrived while the fixer ran replaces the failure's reason, since that is why the pick stopped.
+				job.signaled?.includes(number)
+					? "unanswered_signal"
+					: job.parked && leaves
+						? (job.reason ?? "failed_checks")
+						: undefined,
 				error && job.resolutions?.[number]
 					? (room) => resolutionSection(number, job.resolutions![number], room)
 					: undefined,

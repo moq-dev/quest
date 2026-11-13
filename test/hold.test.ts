@@ -450,6 +450,37 @@ describe("merge --land", () => {
 		expect(pull.writes).toEqual([]);
 	});
 
+	test.each([
+		["a merge queue", (pull: FakePull) => (pull.queue = true)],
+		["the quest land gate", (pull: FakePull) => (pull.required = ["quest land"])],
+	])("rechecks signals after the quest check before queueing on %s", async (_, gate) => {
+		const pull = new FakePull();
+		gate(pull);
+		const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+		// A decision posted while the quest check fetched and read the head.
+		const check = async () => {
+			pull.activity = {
+				comments: {
+					...empty,
+					nodes: [
+						{
+							author: { __typename: "User", login: "maintainer" },
+							authorAssociation: "OWNER",
+							body: "Maintainer decision: during the check.",
+							createdAt: "2026-10-21T11:30:00Z",
+							url: `${URL_}#issuecomment-10`,
+						},
+					],
+				},
+			};
+			return [];
+		};
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check }, pull.deps()))).toContain(
+			"Maintainer decision: during the check.",
+		);
+		expect(pull.writes).toEqual([]);
+	});
+
 	test("refuses when the token cannot see the auto-merge setting", async () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = null;

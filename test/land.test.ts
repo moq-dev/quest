@@ -5058,6 +5058,7 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(await pass(0, fix)).toEqual(["handback 1"]);
 		expect(one.landing).toBeFalsy();
 		expect(one.comments?.at(-1)?.body).toContain("finding by rabbit[bot]: drops a frame");
+		expect(one.comments?.at(-1)?.body).toContain("<!-- quest land: unanswered_signal -->");
 	});
 });
 

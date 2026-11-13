@@ -17,6 +17,7 @@ import {
 	comment,
 	conflictFailure,
 	FixerRefusal,
+	SignalRefusal,
 	handbackLog,
 	fixerMarkdown,
 	fixerText,
@@ -100,6 +101,8 @@ interface WatchJob extends Process {
 	requeued?: Queued;
 	/** Why the round ended in a handback, recorded before posting it, so a restart keeps the reason. */
 	handback?: string;
+	/** A finding or decision on the head handed it back, so its marker says `unanswered_signal`. */
+	signaled?: boolean;
 	/** A validated fix whose push GitHub refused, handed back for `quest land apply`. */
 	resolution?: Resolution;
 	/** Passes that failed to collect it, so one that keeps failing is set aside rather than holding a fixer slot. */
@@ -712,6 +715,7 @@ async function collect(
 			if (!(failure instanceof FixerRefusal)) throw failure;
 			handback = failure.message;
 			if (failure.resolution) job.resolution = failure.resolution;
+			if (failure instanceof SignalRefusal) job.signaled = true;
 		}
 	}
 
@@ -743,7 +747,7 @@ async function collect(
 		`handback ${name}`,
 		attribution,
 		handbackLog(job.log, !handback && result?.action === "handback" ? result.log : undefined),
-		job.reason,
+		job.signaled ? "unanswered_signal" : job.reason,
 		job.resolution ? (room) => resolutionSection(number, job.resolution!, room) : undefined,
 	);
 	finish(path, job);
@@ -780,16 +784,19 @@ async function requeue(
 	).get(number)!;
 	if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
 	if (held.signals.length > 0) {
-		if (pull.mergeQueueEntry != null)
+		if (pull.mergeQueueEntry != null) {
 			await github.graphql("mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }", {
 				id,
 			});
-		if (queued(pull, dropped) && pull.autoMergeRequest != null)
+			// Dequeuing can disarm auto-merge too, and GitHub refuses to disable a request that is gone.
+			pull = await readPull(github, id);
+		}
+		if (string(pull.headRefOid) === head && queued(pull, dropped) && pull.autoMergeRequest != null)
 			await github.graphql(
 				"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
 				{ id },
 			);
-		throw new FixerRefusal(`its head is held by ${describe(held.signals)}`);
+		throw new SignalRefusal(`its head is held by ${describe(held.signals)}`);
 	}
 	if (!queued(pull, dropped)) {
 		try {
