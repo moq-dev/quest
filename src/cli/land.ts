@@ -17,8 +17,9 @@ import {
 	requirements,
 	string,
 } from "./github";
+import type { WorkflowRun } from "../github/checks";
 import { appOf } from "../github/checks";
-import { classifyCheck } from "./status";
+import { classifyCheck, reported, type Needs } from "./status";
 import type { Method } from "./hold";
 import { committedSources, snapshot } from "./tree";
 
@@ -165,7 +166,7 @@ export interface Waiting {
 	enabledAt: string;
 	/** The pinned head it waits on. */
 	head: string;
-	/** The required checks still pending on its head. */
+	/** The required checks, and required workflows as `owner/name:path`, still pending on its head. */
 	pending: string[];
 	/** It still needs an approving review its base requires, which an automated reviewer may give. */
 	approval: boolean;
@@ -175,7 +176,7 @@ export interface Waiting {
 const CONTEXTS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		__typename
-		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { databaseId app { databaseId } workflowRun { file { path repositoryName } } } }
+		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { databaseId status app { databaseId } workflowRun { file { path repositoryName } } } }
 		... on StatusContext { context state createdAt targetUrl }
 	}`;
 
@@ -215,6 +216,7 @@ export const UPHELD: Record<string, string> = {
 	pull_request:
 		"each PR's review decision must not block it, and its review threads must be resolved if the rule says so",
 	required_status_checks: "each required check must pass on each PR's head, from the app the rule names",
+	workflows: "each job of each required workflow must pass on each PR's head, which waits until the workflow reports",
 	copilot_code_review: "it requests a review and blocks nothing",
 };
 
@@ -345,6 +347,13 @@ export async function resolveQueue(
 			`${name}'s ${ref} has ruleset rules the gate does not uphold, and its merge bypasses them: ${refused.join("; ")}. It upholds only ${Object.keys(UPHELD).join(", ")}`,
 		);
 	}
+	// A workflow from a repository the token cannot read is named by id, which no job can match.
+	const unreadable = needs.workflows.filter((key) => key.startsWith("repository "));
+	if (unreadable.length > 0) {
+		throw new Error(
+			`${name}'s ${ref} requires workflows from repositories the gate cannot read, so no job can satisfy them: ${unreadable.join(", ")}`,
+		);
+	}
 	// Classic protection's required checks are already among `needs.checks`.
 	const classic = needs.classic ? await classicProtection(github, repository, ref) : null;
 	const unmodeled = classic === null ? [] : unheldClassic(classic, target.method);
@@ -362,7 +371,10 @@ export async function resolveQueue(
 				rule.parameters != null &&
 				object(rule.parameters).required_review_thread_resolution === true,
 		);
-	const required = needs.checks.filter((check) => check.name !== LAND_CHECK);
+	const required: Needs = {
+		checks: needs.checks.filter((check) => check.name !== LAND_CHECK),
+		workflows: needs.workflows,
+	};
 
 	let sha: string | undefined;
 	const nodes: ObjectValue[] = [];
@@ -434,11 +446,12 @@ export async function resolveQueue(
 			const commit = object(object(array(object(node.commits).nodes)[0]).commit);
 			const rollup = commit.oid === approved ? commit.statusCheckRollup : undefined;
 			const found = await contexts(github, repository, approved, rollup);
-			const unmet = checks((await currentChecks(github, repository, approved, found)).checks, required);
+			const current = await currentChecks(github, repository, approved, found);
+			const unmet = checks(current.checks, required, current.runs, found);
 			// An approval can still arrive on the pinned head, such as an automated reviewer's, so it waits like a check.
 			const approval = node.reviewDecision === "REVIEW_REQUIRED";
 			if (unmet.failing.length > 0) {
-				eject("failed_checks", `required checks failed on its head: ${unmet.failing.join(", ")}`);
+				eject("failed_checks", `required checks or workflows failed on its head: ${unmet.failing.join(", ")}`);
 			} else if (unmet.pending.length > 0 || approval) {
 				// It keeps its auto-merge and its place, and joins a batch once its checks pass and it is approved.
 				plan.waiting!.push({
@@ -491,28 +504,63 @@ export async function contexts(
 	}
 }
 
-/** The checks of `required` that commit `sha` failed, and those still pending or not yet reported. */
+/**
+ * The checks of `required` that commit `sha` failed, and those still pending or not yet reported. A queue
+ * build's commit is no PR head, so the workflows a ruleset runs only on PRs are not asked of it.
+ */
 export async function requiredChecks(
 	github: GitHub,
 	repository: Repository,
 	sha: string,
 	required: RequiredCheck[],
 ): Promise<{ failing: string[]; pending: string[] }> {
-	return checks(
-		(await currentChecks(github, repository, sha, await contexts(github, repository, sha))).checks,
-		required,
-	);
+	return checks((await currentChecks(github, repository, sha, await contexts(github, repository, sha))).checks, {
+		checks: required,
+		workflows: [],
+	});
 }
 
 /**
- * The required checks a head failed, and those pending or not yet reported, each from its app. Only the
- * head's current checks count, from {@link currentChecks}: each check's latest run, as for GitHub's
- * mergeability, so a rerun supersedes a cancelled or failed run, without a cancelled run a newer one replaced.
+ * The required checks a head failed, and those pending or not yet reported, each from its app, and the
+ * required workflows any job of which failed, or that nothing reports, or whose run, or a run of the same
+ * workflow replacing a cancelled one, is still going, since it may still create a failing job; `quest status`
+ * reads only the jobs. Only the head's current checks count, from {@link currentChecks}: each check's latest run, as
+ * for GitHub's mergeability, so a rerun supersedes a cancelled or failed run, without a cancelled run a newer
+ * one replaced.
  */
-function checks(latest: ObjectValue[], required: RequiredCheck[]): { failing: string[]; pending: string[] } {
+function checks(
+	latest: ObjectValue[],
+	required: Needs,
+	runs: WorkflowRun[] = [],
+	all: ObjectValue[] = latest,
+): { failing: string[]; pending: string[] } {
 	const failing: string[] = [];
 	const pending: string[] = [];
-	for (const need of required) {
+	for (const key of required.workflows) {
+		const jobs = latest.filter((context) => reported(context).workflow === key);
+		const suites = new Set(
+			all
+				.filter((context) => reported(context).workflow === key && context.checkSuite != null)
+				.map((context) => Number(object(context.checkSuite).databaseId)),
+		);
+		const replaced = new Set(runs.filter((run) => suites.has(run.check_suite_id)).map((run) => run.workflow_id));
+		const failed = jobs.filter((context) => classifyCheck(context).outcome === "failing");
+		// A finished job does not finish its run, which may still create jobs, and a run replacing a cancelled one may have none yet.
+		const going =
+			jobs.length === 0 ||
+			jobs.some(
+				(context) =>
+					classifyCheck(context).outcome === "pending" ||
+					(context.checkSuite != null && object(context.checkSuite).status !== "COMPLETED"),
+			) ||
+			// A run's REST repository and path name where it runs, not its workflow file, so a replacement is
+			// matched by workflow id to a run whose check suite reported one of this workflow's jobs.
+			runs.some((run) => run.status !== "completed" && replaced.has(run.workflow_id));
+		if (failed.length > 0)
+			failing.push(`${key} (${failed.map((context) => classifyCheck(context).check.name).join(", ")})`);
+		else if (going) pending.push(key);
+	}
+	for (const need of required.checks) {
 		let result: "passed" | "failing" | "pending" = "pending";
 		let reported = false;
 		for (const context of latest) {

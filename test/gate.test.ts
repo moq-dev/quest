@@ -748,6 +748,18 @@ test("a nested gate runs at once and keeps the exact exit status", async () => {
 	expect(await gate([process.execPath, "-e", "process.exit(23)"])).toBe(23);
 });
 
+test("a priority gate schedules mbx at normal priority unless the command sets its own", async () => {
+	vi.stubEnv("QUEST_GATE_ADMITTED", "1");
+	vi.stubEnv("QUEST_GATE_PRIORITY", undefined);
+	vi.stubEnv("MBX_SCHEDULER_PRIORITY", undefined);
+	const exits = "process.exit({ normal: 3, low: 4 }[process.env.MBX_SCHEDULER_PRIORITY] ?? 5)";
+	expect(await gate([process.execPath, "-e", exits])).toBe(5);
+	vi.stubEnv("QUEST_GATE_PRIORITY", "1");
+	expect(await gate([process.execPath, "-e", exits])).toBe(3);
+	vi.stubEnv("MBX_SCHEDULER_PRIORITY", "low");
+	expect(await gate([process.execPath, "-e", exits])).toBe(4);
+});
+
 // Bun 1.4.2 marked the gate's own piped output O_NONBLOCK, a flag its command shares, and uv
 // aborts on the EAGAIN that follows (astral-sh/uv#22170). Bun 1.4.4 clears it before spawning.
 test.runIf(process.platform === "linux")("a gated command's piped output blocks", () => {

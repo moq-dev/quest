@@ -981,8 +981,11 @@ async function gated(
 					(error: unknown) => ({ error }),
 				)
 			: undefined;
+	const env: NodeJS.ProcessEnv = { ...process.env, [ADMITTED]: "1" };
+	// mbx otherwise takes its configured priority, which agents' hosts may lower.
+	if (process.env[PRIORITY] === "1") env.MBX_SCHEDULER_PRIORITY ??= "normal";
 	try {
-		observed.exit = await run(command, { ...process.env, [ADMITTED]: "1" }, cancel);
+		observed.exit = await run(command, env, cancel);
 	} finally {
 		stop.abort();
 	}

@@ -253,6 +253,7 @@ test("the agent environment holds no session credentials or harness state", () =
 		ANTHROPIC_BASE_URL: "https://proxy",
 		QUEST_GATE_ADMITTED: "1",
 		QUEST_GATE_PRIORITY: "1",
+		MBX_SCHEDULER_PRIORITY: "normal",
 		QUEST_LAND_BASE: "0123456789abcdef0123456789abcdef01234567",
 		OP_SERVICE_ACCOUNT_TOKEN: "t",
 		OP_SESSION_me: "s",
@@ -267,6 +268,13 @@ test("the agent environment holds no session credentials or harness state", () =
 		HOME: "/home/me",
 		CODEX_HOME: "/home/me/.codex",
 		CLAUDE_CONFIG_DIR: "/home/me/.claude-work",
+	});
+});
+
+test("outside a priority gate, the agent keeps its mbx priority", () => {
+	expect(strippedEnvironment({ PATH: "/bin", MBX_SCHEDULER_PRIORITY: "low" })).toEqual({
+		PATH: "/bin",
+		MBX_SCHEDULER_PRIORITY: "low",
 	});
 });
 

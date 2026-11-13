@@ -1,4 +1,4 @@
-// How a head's `statusCheckRollup` contexts are judged, shared by the CLI and the Worker.
+// How a head's `statusCheckRollup` contexts are judged.
 // GitHub lists every check run on a head, including those a newer run of the same check replaced,
 // and its rollup `state` counts them all; mergeability counts only each check's latest run.
 
