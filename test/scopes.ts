@@ -26,8 +26,13 @@ beforeAll(async () => {
 // Stops what a failed or timed-out test left, and the gates bound to it; one failure never hides the rest.
 afterEach(async () => {
 	const units = [...live];
-	live.clear();
-	const stops = await Promise.allSettled(units.map((unit) => supervise!.systemdScopes.stop(unit)));
+	// A unit leaves only once stopped, so a later hook or the signal handler retries one whose stop failed.
+	const stops = await Promise.allSettled(
+		units.map(async (unit) => {
+			await supervise!.systemdScopes.stop(unit);
+			live.delete(unit);
+		}),
+	);
 	const failed = stops.flatMap((stop) => (stop.status === "rejected" ? [stop.reason] : []));
 	if (failed.length) throw new AggregateError(failed, `cannot stop ${failed.length} of ${units.length} test scopes`);
 });
