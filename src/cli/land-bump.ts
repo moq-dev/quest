@@ -145,15 +145,19 @@ export async function discoverTargets(
 				if (row.archived === true || name(target).toLowerCase() === name(source).toLowerCase()) continue;
 				const response = await github.request(`/repos/${owner}/${repo}/contents/flake.lock`, { allow: [404] });
 				if (response.status === 404) continue;
-				const content = string(object(await response.json()).content);
-				let lock: ObjectValue;
+				let found: number;
 				try {
-					lock = object(JSON.parse(Buffer.from(content, "base64").toString("utf8")));
-				} catch {
-					output.push(`bump skips ${name(target)}: its flake.lock is not valid JSON`);
+					const content = string(object(await response.json()).content);
+					found = questInputs(
+						object(JSON.parse(Buffer.from(content, "base64").toString("utf8"))),
+						source,
+					).length;
+				} catch (error) {
+					output.push(
+						`bump skips ${name(target)}: its flake.lock cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+					);
 					continue;
 				}
-				const found = questInputs(lock, source).length;
 				if (found === 1) targets.push(target);
 				else if (found > 1)
 					output.push(

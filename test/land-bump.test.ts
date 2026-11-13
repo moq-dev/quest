@@ -647,6 +647,7 @@ describe("discoverTargets", () => {
 						"moq-dev/widget": lockFile(OLD, false),
 						"moq-dev/quest": lockFile(OLD, false),
 						"moq-dev/plain": undefined,
+						"moq-dev/broken": "{}",
 						"moq-dev/other": lockFile(OLD, false).replace(/moq-dev/g, "other"),
 					},
 					requests,
@@ -660,6 +661,7 @@ describe("discoverTargets", () => {
 			{ owner: "kixelated", repo: "gadget" },
 		]);
 		expect(output).toEqual([
+			"bump skips moq-dev/broken: its flake.lock cannot be read: invalid GitHub response: expected an object",
 			"bump skips kixelated/twice: flake.lock locks github:moq-dev/quest through 2 root inputs",
 		]);
 		expect(requests).not.toContain("/repos/moq-dev/quest/contents/flake.lock");

@@ -109,7 +109,8 @@ export async function installations(
 	const ids: number[] = [];
 	for (let page = 1; ; page++) {
 		const rows = array(await appRequest(options, deps)(`/app/installations?per_page=100&page=${page}`));
-		ids.push(...rows.map((row) => Number(row.id)));
+		// GitHub lists a suspended installation but refuses to mint its tokens.
+		ids.push(...rows.filter((row) => row.suspended_at == null).map((row) => Number(row.id)));
 		if (rows.length < 100) break;
 	}
 	return ids.map(
