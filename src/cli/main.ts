@@ -23,8 +23,19 @@ import {
 	onMaintainer,
 	waiting,
 } from "../core";
-import { AgentInputError, HARNESSES, type Launch, processDependencies, runAgent, stopAgent, stopAll } from "./agent";
+import {
+	AgentInputError,
+	HARNESSES,
+	type HarnessName,
+	type Launch,
+	admitAgent,
+	processDependencies,
+	runAgent,
+	stopAgent,
+	stopAll,
+} from "./agent";
 import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
+import { PENDING_MS } from "./admission";
 import { gate, QUICK_MS } from "./gate";
 import {
 	gitHubDependencies,
@@ -41,14 +52,12 @@ import { apply, pushCommand } from "./land-apply";
 import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { watch, type WatchOptions } from "./land-watch";
-import { landed } from "./landed";
+import { landed, landingCheck } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { hosts } from "../core/doc";
-import { DEFAULT_SIZE, REVIEWERS, SECOND_REVIEWER, WRITERS, questWriters, writerAt } from "./models";
+import { DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
 import {
-	REVIEW_HARNESSES,
-	type ReviewHarness,
 	ReviewInputError,
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
@@ -134,19 +143,25 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"only the raw measures do. The load limit applies only while a gated command still runs. Where a " +
 				"systemd scope owns each running command, the load counts as at least the sum of their peak CPU " +
 				"use in the last minute, and nothing starts while those fill every CPU, so a lull between a " +
-				"command's phases does not free its CPUs. Nested " +
+				"command's phases does not free its CPUs. Leave model calls, such as quest review, and long-running " +
+				"servers out of the gate. Nested gate " +
 				"calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +
 				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
 				"cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the environment, as a check " +
-				"that lands PRs should set, the command waits for memory but never for load.\n\n" +
+				"that lands PRs should set, the command waits for memory but never for load, and gets " +
+				"MBX_SCHEDULER_PRIORITY=normal unless it sets its own.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
-				"a systemd user scope, or inside a Quest scope through a child cgroup of its own. macOS, and Linux " +
+				"a systemd user scope, inside a Quest scope one bound to it. macOS, and Linux " +
 				"without one, own the command's process group in a new session without a controlling terminal, so a " +
 				"descendant that leaves the group or session escapes. Windows owns every descendant through a " +
 				"kill-on-close Job Object. Exits with the command's status, or 128 plus the signal's number once " +
-				"cancelled.",
+				"cancelled.\n\n" +
+				"With QUEST_GATE_RECORD naming an absolute path, an outermost gate on Linux or macOS appends one JSON " +
+				"line per run to that file, however the run ends: its command, directory, when it started and was " +
+				"admitted, its systemd scope, whose journal holds its CPU time and peak memory, and its exit status. " +
+				"A file it cannot write fails the gate.",
 		)
 		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
 		.argument("<command>", "Executable to run")
@@ -203,7 +218,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			}
 			const tree = checkout(root(), warn);
 			const findings = check(tree.docs, tree.exists);
-			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
+			if (options.base !== undefined) findings.push(...landed(root(), options.base, { branch: options.branch }));
 			// A tree nested in another checkout, such as an example, has no stubs of its own.
 			const stubs = options.stubs && questRoot(resolve(root())) === resolve(root()) ? stubFindings(root()) : [];
 			if (findings.length === 0 && stubs.length === 0) {
@@ -503,7 +518,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"The head's first failing required check prints as checks:failed, and every required check passing as checks:passed, " +
 				"each once per head, with the required check's name as the actor and its details URL. " +
 				"Results count as quest status counts them, so neutral and skipped results pass. " +
-				"checks:passed waits until no check is pending, no GitHub Actions run is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
+				"checks:passed waits until no check is pending, no finished job's GitHub Actions run is still going, no run read to replace a cancelled check is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
 				"Optional failures print separately as check:failed; a base branch requiring no checks requires them all. " +
 				"When auto-merge stays enabled on a head other than the current one, which GitHub allows across a writer's push, " +
 				"auto-merge:moved prints once per head, with the account that enabled it as the actor and a URL naming the head it " +
@@ -540,7 +555,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"in one call. It reports facts; it does not decide whether the PR is ready or whose review counts.\n\n" +
 				"Plain output prints one record per line, its type first and any free text (a check name or path) last: " +
 				"url, state, draft, head, mergeable, merge-state, review-decision, review-record, auto-merge, merge-queue, " +
-				"landing-stopped, and checks, whose state and counts follow each check's latest run; review-record gives whether the PR body's ## Review record " +
+				"landing-stopped, and checks, whose state and counts follow the checks that count, pending while an open PR's base requires a check or workflow nothing reports; review-record gives whether the PR body's ## Review record " +
 				"covers the head, as current, diff-identical (git diff <base>...<head> prints the same as for the head it names), " +
 				"stale, or unknown when GitHub cannot compare them, then the head it names last; auto-merge gives its method, who enabled it and when, and the head it was " +
 				"enabled on, which differs from head once a push follows, as GitHub keeps auto-merge across a writer's " +
@@ -548,7 +563,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"activity, which GitHub lists up to minutes late); landing-stopped is the latest exit from the merge queue, auto-merge, or " +
 				"quest land's queue, with the reason (such as merge_conflict, failed_checks, manual, or manually_disabled), " +
 				"actor, and time, until the PR enters the merge queue or auto-merge again. Then " +
-				"a check line per failing or pending check, marked required or optional, counting only each check's latest run; a review line per " +
+				"a check line per failing or pending check, marked required or optional, counting only each check's latest run (by name, app, and workflow file) " +
+				"and dropping a cancelled check once a newer GitHub Actions run of its workflow exists on the head (reading the head's " +
+				"workflow runs, which needs Actions read access); a required check or workflow nothing reports prints as pending required " +
+				"expected, with its name, followed by (from app <id>) when the requirement names an app, or the workflow's repository and path, as owner/name:path; a review line per " +
 				"reviewer's latest review, marked current or stale against the head; a checkpoint line per bot " +
 				"reviewer that approves or requests changes, its round, and its review, when that review is of the " +
 				"head, while its latest verdict on the head is neither an approval nor a dismissal, and ends its third, sixth, ... round (one commit it reviewed), as " +
@@ -624,7 +642,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
 				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
 				"first, once the head has moved, and while the latest run of any check on the head failed, required " +
-				"or not, naming each; a pending or absent check does not block; and while an online reviewer's " +
+				"or not, naming each; a pending or absent check does not block. While the base requires an approval the PR " +
+				"lacks (GitHub's review decision is review_required or changes_requested), it only arms auto-merge, which waits " +
+				"for it, and refuses where nothing would wait, since an admin's token merges or enqueues past the requirement. It refuses a head on which quest check " +
+				"--no-stubs --base <base> --branch <head branch> finds anything, read from git objects fetched from the base repository, " +
+				"so nothing from the head runs, except findings the base already has; a base without quests skips it. It also refuses while an online reviewer's " +
 				"unanswered finding on the head, or a newer comment opening with 'Maintainer decision', holds it. It uses the method --squash or --rebase names, refusing one " +
 				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
 				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
@@ -649,7 +671,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const pr = pullRequest(value, root());
 			if (!/^[\da-f]{40}$/i.test(options.land)) throw new UsageError("--land needs a full 40-character SHA");
 			const method = options.squash ? "squash" : options.rebase ? "rebase" : undefined;
-			settle(land(pr, options.land, method, gitHubDependencies(warn), options.direct), () => undefined);
+			settle(
+				land(
+					pr,
+					{ sha: options.land, method, direct: options.direct, check: landingCheck(root()) },
+					gitHubDependencies(warn),
+				),
+				() => undefined,
+			);
 		});
 
 	const landCommand = program.command("land").summary("Land queued PRs through a host daemon");
@@ -790,11 +819,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option(
 			"--fixer-tag <pattern>",
 			"Fetch the tags matching this pattern (repeatable), such as `deploy-*`, from GitHub into each fixer checkout, so checks that read them, such as which commit is deployed, run there as in the queue's build",
-			(value: string, previous: string[]) => {
-				if (!/^[\w.*/-]+$/.test(value) || value.startsWith("-") || value.includes(".."))
-					throw new InvalidArgumentError("expected a tag name pattern, such as deploy-*");
-				return [...previous, value];
-			},
+			refPattern("tag", "deploy-*", 1),
+			[] as string[],
+		)
+		.option(
+			"--fixer-branch <pattern>",
+			"Fetch the branches matching this pattern (repeatable), such as `release`, from GitHub into each fixer checkout as `origin/<branch>`, so checks that diff against them run there as in the queue's build; the base is always there as `origin/<base>`",
+			refPattern("branch", "release"),
 			[] as string[],
 		)
 		.option(
@@ -889,8 +920,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Run a command in the checkout, restoring it first when released, without the repository-location " +
 				"variables, such as GIT_DIR, that a Git hook exports. The command and its descendants " +
-				"run in a new, delegated systemd user scope; once the command exits, descendants still in the scope " +
-				"are killed. A `quest gate` inside it owns its command through a child cgroup of the scope. " +
+				"run in a new systemd user scope; once the command exits, descendants still in the scope " +
+				"are killed. A `quest gate` inside it runs its command in a scope of its own, bound to this one. " +
 				"When no other supervised run remains, the scratch declared at creation is pruned. Put the whole job, " +
 				"such as an agent session or a script that installs, builds, and tests, in one run.\n\n" +
 				"A supervisor that crashes leaves its run recorded; the next worktree command drops it once its scope " +
@@ -1007,7 +1038,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
 				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_GATE_ADMITTED, QUEST_GATE_PRIORITY, " +
-				"and QUEST_LAND_BASE variable, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"QUEST_LAND_BASE, and MBX_SCHEDULER_PRIORITY when QUEST_GATE_PRIORITY=1, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"Start and resume first wait until the host can carry the agent, as agent admit describes, " +
+				"before claiming the worktree.\n\n" +
 				"Prints `session <id>` as soon as the id is known, then `outcome finished|failed|limited|logged-out|stopped`, " +
 				"a blank line, and the agent's final reply. Exits 0 when the agent finished, 3 when its account hit a " +
 				"usage limit or ran out of credit, 4 when the CLI is logged out (after printing its login command), 2 for " +
@@ -1056,6 +1089,21 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	).action((worktree: string, session: string, message: string, options: LaunchOptions) =>
 		launch(worktree, message, session, options),
 	);
+	agent
+		.command("admit")
+		.summary("Wait until the host can carry one more agent")
+		.description(
+			"Wait until this host can carry one more agent, for a coordinator to run before it starts or resumes " +
+				"an agent of its own, such as a sub-agent; start and resume do the same themselves. The host has room " +
+				"while quest gate would admit a command at once, counting every queued command and, as one recent " +
+				`admission each, every agent admitted in the last ${PENDING_MS / 60_000} minutes, since an agent adds ` +
+				"no gated load until its first build; an agent start or resume runs counts only until it exits. Agents " +
+				"already running are never paused.\n\n" +
+				"Exits 0 once admitted, 128 plus the signal number when interrupted, and 1 otherwise.",
+		)
+		.action(() => {
+			pending = admitAgent(agentDependencies()).then((status) => status ?? 0, agentFailure);
+		});
 	agent
 		.command("stop")
 		.summary("Stop the agent in a worktree, or end the spawn with --all")
@@ -1114,17 +1162,16 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"checkout's remotes, or a Codex log for its directory names this repository, read from " +
 				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
 				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
-				"before the PR opened, and iterating otherwise. An opencode session, whose log quest does not read, belongs to the newest PR whose " +
-				"## Review record names it, as reviewing. Tokens and cost come from ccusage (session --json), the " +
+				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
 				"cost an estimate at each model's API list price. Each PR also shows its ## Models size and implementers, and as unread each Implementer line it cannot read, " +
-				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, " +
+				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, marked when it is the shadow, " +
 				"where a merged PR whose last round left only low findings open counts them settled, since the author fixes or refutes those before merge, " +
 				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
 				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
 				"is a bot whose review has a body or opens a thread, or a review whose body opens with Automated review by <name>; a finding is a " +
 				"review thread it opens or a [P<n>] line in its review body, and its first answer's first word takes or " +
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
-				"effort, accuracy by size and implementer, summing each branch's tallies once, where an Implementer line's own size, as (iterate, XS), wins " +
+				"effort, accuracy by size and implementer, summing each branch's tallies but the shadow's once, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's, and each online reviewer's coverage and findings over the merged PRs. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
@@ -1185,19 +1232,23 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
-				"first whose model is not avoided reviews, and beside it, on the same head and in its own session, " +
-				`${SECOND_REVIEWER.harness} ${SECOND_REVIEWER.model} ${SECOND_REVIEWER.effort} for every size. ` +
+				"first whose model is not avoided reviews, and beside it, on the same head in its own session, the shadow: " +
+				"the pick's model one effort lower (low, medium, high, xhigh, max), skipped when the pick runs at low or an " +
+				"effort off that ladder, so each effort step can be compared with the one below it. The shadow runs on a " +
+				"branch's first run of the pick, then only while it has findings to settle or once the pick changed so it is " +
+				"no longer one step below; its findings are numbered and settled like any reviewer's, its session carries " +
+				"over to the new shadow, and a pick with no step below it seats a shadow at its own effort while the old " +
+				"shadow still has findings. " +
 				"--exclude-model names each model to avoid; without it, the " +
 				"latest writer is avoided: the model the last Implementer line names in the `## Models` record of the body of the branch's open PR. " +
 				"When it names none or an `unknown` model, " +
 				"it is any model of the harness running this command, usually the session that just pushed, detected from the " +
 				"variables each sets, so Codex reviews from Claude Code and Claude Code from Codex; with --harness it is " +
 				"none. " +
-				"--harness names the only reviewer instead of the pair, at its entry's model and effort, and --model and " +
+				"--harness names the only reviewer instead of the pick and the shadow, at its entry's model and effort, and --model and " +
 				"--effort override that reviewer's, or without --harness, the size pick's; a repository whose AGENTS.md names other reviewers " +
-				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
-				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the other and fails the " +
-				"run, saving neither round. The " +
+				"passes them. A --harness run keeps the other reviewers' sessions for the next run of the pick, and refuses while one has findings to settle, as a run of the pick does while a reviewer only --harness runs has some. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the others and fails the " +
+				"run, saving no round. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
 				"The reviewer reaches its model as the user's own CLI " +
@@ -1208,9 +1259,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"or CLAUDE_CODE_OAUTH_TOKEN for Claude Code, CODEX_API_KEY or CODEX_ACCESS_TOKEN for Codex) passes only " +
 				"when the CLI has no stored login or a gateway or provider is set, and a provider's own keys " +
 				"(ANTHROPIC_AWS_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, ANTHROPIC_FOUNDRY_AUTH_TOKEN) only while one is set. A logged-out error names the profile it checked, " +
-				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider. opencode " +
-				"keeps the user's own config and login, and counts as logged out when `opencode models` does not " +
-				"list the model.\n\n" +
+				"CLAUDE_CONFIG_DIR or CODEX_HOME, or the default when unset, and any gateway or provider.\n\n" +
 				"Every turn reviews only the branch's own change, from the merge base of HEAD with the base's tip, so " +
 				"a branch behind its base draws no findings on the base's newer code. The first round runs the " +
 				"reviewer's own review (`codex exec review` with custom instructions, or Claude Code's " +
@@ -1227,35 +1276,31 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"starts a new session that reviews the whole change and still weighs --responses. A round that would " +
 				"resume on the head the last round reviewed, when that round found nothing, runs no reviewer and " +
 				"repeats that round, marked unchanged, so on the same head only a reviewer with findings to settle runs. " +
-				"--new starts new sessions, continuing each reviewer's tally of its findings on the branch, less those it drops unsettled, unless the saved state is one this quest cannot read. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it, except opencode's, which stays in the checkout it started in. " +
+				"--new starts new sessions, continuing each reviewer's tally of its findings on the branch, less those it drops unsettled, unless the saved state is one this quest cannot read. Each reviewer's session is kept per branch in the clone's common Git directory, so any worktree of the clone resumes it. " +
 				"A checked-out branch with an upstream other than the base continues its upstream branch's session, so a " +
 				"temporary branch tracking the PR's head shares the head's rounds. " +
 				"--branch names the branch instead of the checked-out one, as a detached HEAD requires, such as a " +
 				"checkout of a branch another worktree holds.\n\n" +
 				"The reviewer is read-only: Codex in its read-only sandbox without execpolicy rules, user config, or its " +
 				"skills catalog, Claude Code with " +
-				"no settings files, only read tools, and the Bash commands it judges read-only, and opencode with no " +
-				"project config, Claude Code files, or tool but its shell, whose commands run under sandbox-runtime " +
-				"(`srt` on PATH; on Linux it must refuse Unix sockets) with no network, reading only the checkout " +
-				"and its Git directories and writing only a private directory. opencode has no review mode, so its " +
-				"first turn asks for the review in a prompt. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
+				"no settings files, only read tools, and the Bash commands it judges read-only. It follows the base's AGENTS.md and CLAUDE.md, from the root and " +
 				"each directory holding a changed path, never the checkout's, so a change cannot instruct its own " +
 				"reviewer, and is told to disregard other instructions and run no builds, tests, or quest commands. " +
 				"The base is fetched first, since the sandbox has no network.\n\n" +
 				"Prints the size and where it came from, base, and head, then for each reviewer its harness, model, and " +
-				"effort, session, round, an " +
+				"effort, followed by shadow for the shadow, session, round, an " +
 				"unchanged line for a repeated round, a usage line per turn (input tokens, the " +
 				"part read from the prompt cache, and output), a score from 0 to 10 for how ready the head is to land with " +
 				"its one-sentence rationale, the finding count, each finding by its number, then the last round's findings with " +
 				"their numbers and dispositions; then the `record` line below and a last `next` line naming the author's next step: " +
 				"`next finish` when every finding is low severity, to fix or refute them without another round, " +
-				"`next checkpoint` when a reviewer's every third round reports other findings, to reconsider the approach " +
-				"before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
+				"`next checkpoint` when a reviewer's every third round reports other findings, to compare the current approach " +
+				"with the best long-term approach worked out from first principles before fixing them, `next respond` to fix or refute the findings, or `next done`. A reply without a valid score " +
 				"fails as any malformed reply does. --json prints " +
 				"one object: `rounds`, one per reviewer, `tallies`, every reviewer's findings across the branch's rounds, `record`, and `next`.\n\n" +
 				"After each round, it rewrites the `## Review` section of the branch's open PR into the base, as the " +
 				"user the GitHub token names, keeping the rest of the body, and prints `record <url>`: the reviewed " +
-				"head, named in full only once no reviewer reports a finding, the base, and each reviewer, its " +
+				"head, named in full only once no reviewer reports a finding, the base, and each reviewer, its Reviewer line ending in `, shadow` for the shadow, its " +
 				"session and round, score, its tally of findings across the branch's rounds, and each finding with its disposition. With no " +
 				"such PR, or a remote off GitHub, it prints `record skipped: <why>` and changes nothing.\n\n" +
 				"Exits 0 once the round finishes, whatever it found, 2 for invalid arguments " +
@@ -1270,8 +1315,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.addOption(
 			new Option(
 				"--harness <name>",
-				"The only reviewer to run, instead of the size's pick and the second",
-			).choices(REVIEW_HARNESSES),
+				"The only reviewer to run, instead of the size's pick and the shadow",
+			).choices(HARNESSES),
 		)
 		.option("--model <model>", "Model the size's pick, or --harness's reviewer, runs instead")
 		.option("--effort <level>", "Reasoning effort the size's pick, or --harness's reviewer, runs at instead")
@@ -1297,7 +1342,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			(options: {
 				base?: string;
 				branch?: string;
-				harness?: ReviewHarness;
+				harness?: HarnessName;
 				model?: string;
 				effort?: string;
 				excludeModel?: string[];
@@ -1648,6 +1693,23 @@ export function gateBoundary(argv: string[]): string[] {
 	const command = skip(index + 1, ["--quick"]);
 	if (!argv[command] || argv[command].startsWith("-")) return argv;
 	return [...argv.slice(0, command), "--", ...argv.slice(command)];
+}
+
+/**
+ * Collect a repeatable ref name pattern, such as `deploy-*`, refusing one that could read as an option or escape its
+ * namespace, or that holds more `*` than `stars`: a pattern that becomes a fetch refspec may hold only one.
+ */
+function refPattern(kind: string, example: string, stars = Infinity) {
+	return (value: string, previous: string[]) => {
+		if (
+			!/^[\w.*/-]+$/.test(value) ||
+			value.startsWith("-") ||
+			value.includes("..") ||
+			value.split("*").length > stars + 1
+		)
+			throw new InvalidArgumentError(`expected a ${kind} name pattern, such as ${example}`);
+		return [...previous, value];
+	};
 }
 
 /** Parses a positive, safe integer option named `name`. */

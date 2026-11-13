@@ -8,10 +8,18 @@ import { withoutHandBack } from "../src/core";
 import { type Output, main } from "../src/cli/main";
 import { Refusal } from "../src/cli/start";
 
+// `quest merge` through main would fetch the PR from GitHub to check it; these PRs exist only in memory.
+vi.mock("../src/cli/landed", async (original) => ({
+	...(await original<typeof import("../src/cli/landed")>()),
+	landingCheck: () => async () => [],
+}));
+
 const PR = { owner: "example", repo: "project", number: 7 };
 const URL_ = "https://github.com/example/project/pull/7";
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
+/** A landing check that finds nothing. */
+const clean = async () => [];
 
 interface Event {
 	__typename: "LabeledEvent" | "AutoMergeEnabledEvent" | "AddedToMergeQueueEvent";
@@ -27,6 +35,8 @@ class FakePull {
 	body = "Summary.";
 	head = HEAD;
 	mergeState = "BLOCKED";
+	/** GitHub's review decision, null when the base requires no review. */
+	reviewDecision: string | null = null;
 	queue = false;
 	allowAutoMerge: boolean | null = true;
 	/** The repository's merge method settings, hidden from the token when null. */
@@ -48,6 +58,8 @@ class FakePull {
 	/** The PR's reviews, threads, and comments as the signal reader reads them, and its head's commit time. */
 	activity: ObjectValue = {};
 	committed = "2026-10-21T11:00:00Z";
+	/** The head's workflow runs, as `GET /actions/runs` lists them. */
+	runs: ObjectValue[] = [];
 	autoMerge: ObjectValue | null = null;
 	queueEntry: ObjectValue | null = null;
 	labels: string[] = [];
@@ -111,6 +123,8 @@ class FakePull {
 			return json(200, []);
 		}
 		if (url.pathname === "/repos/example/project/branches/main") return json(200, { protection: {} });
+		if (url.pathname === "/repos/example/project/actions/runs" && url.searchParams.get("head_sha") === this.head)
+			return json(200, { total_count: this.runs.length, workflow_runs: this.runs });
 		if (url.pathname === `/repos/example/project/compare/main...${this.head}`) {
 			this.comparisons.push(`${url.pathname}${url.search}`);
 			this.afterCompare?.();
@@ -205,8 +219,11 @@ class FakePull {
 						body: this.body,
 						updatedAt: new Date(this.clock).toISOString(),
 						baseRefName: this.baseRef,
+						baseRefOid: this.base,
+						headRefName: "quest/m0/example",
 						headRefOid: this.head,
 						mergeStateStatus: this.mergeState,
+						reviewDecision: this.reviewDecision,
 						isMergeQueueEnabled: this.queue,
 						autoMergeRequest: this.autoMerge,
 						mergeQueueEntry: this.queueEntry,
@@ -322,7 +339,9 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = false;
 		pull.mergeState = state;
-		expect(await refused(land(PR, HEAD, "squash", pull.deps()))).toContain("CONTRIBUTING.md or AGENTS.md");
+		expect(await refused(land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps()))).toContain(
+			"CONTRIBUTING.md or AGENTS.md",
+		);
 		expect(pull.writes).toEqual([]);
 		expect(pull.state).toBe("OPEN");
 	});
@@ -345,13 +364,35 @@ describe("merge --land", () => {
 			run(2, "Lint", "IN_PROGRESS", null),
 			run(4, "quest queue", "COMPLETED", "FAILURE"),
 		];
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
 			`head ${HEAD} failed a check: Check (https://ci.example/1)`,
 		);
 		expect(pull.writes).toEqual([]);
 		// A rerun that passed supersedes the failure; a pending check does not block.
 		pull.checks.push(run(3, "Check", "COMPLETED", "SUCCESS"));
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
+		expect(pull.writes).not.toEqual([]);
+	});
+
+	test("lands past a cancelled check once a newer run of its workflow exists, as on kixelated/token-max#78", async () => {
+		const pull = new FakePull();
+		const run = (databaseId: number, name: string, conclusion: string, suite: number) => ({
+			__typename: "CheckRun",
+			databaseId,
+			name,
+			status: "COMPLETED",
+			conclusion,
+			detailsUrl: `https://ci.example/${databaseId}`,
+			checkSuite: { databaseId: suite, app: { databaseId: 15368 } },
+		});
+		pull.checks = [run(1, "Tests (${{ matrix.os }})", "CANCELLED", 10), run(2, "Tests (macos-15)", "SUCCESS", 20)];
+		pull.runs = [{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" }];
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			"Tests (${{ matrix.os }})",
+		);
+		expect(pull.writes).toEqual([]);
+		pull.runs.push({ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: "2026-11-12T23:42:56Z" });
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes).not.toEqual([]);
 	});
 
@@ -411,21 +452,25 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = null;
 		pull.mergeState = "CLEAN";
-		expect(await refused(land(PR, HEAD, "squash", pull.deps()))).toContain("not visible to this token");
+		expect(await refused(land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps()))).toContain(
+			"not visible to this token",
+		);
 		expect(pull.writes).toEqual([]);
 	});
 
 	test("takes no label, and refuses while a session holds the PR", async () => {
 		const pull = new FakePull();
 		const { token } = await take(PR, undefined, pull.deps());
-		const message = await refused(land(PR, HEAD, "merge", pull.deps()));
+		const message = await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()));
 		expect(message).toContain("held by quest:active, added just now");
 		expect(message).not.toContain(token);
 		await release(PR, token, pull.deps());
 		pull.label("quest:active");
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("held by quest:active");
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			"held by quest:active",
+		);
 		pull.labels = ["quest:merge"];
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 		expect(pull.labels).toEqual(["quest:merge"]);
 	});
@@ -437,16 +482,22 @@ describe("merge --land", () => {
 			pull.afterRead = undefined;
 			pull.baseRef = "release";
 		};
-		expect(await refused(land(PR, HEAD, "squash", pull.deps()))).toContain("retargeted from main to release");
+		expect(await refused(land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps()))).toContain(
+			"retargeted from main to release",
+		);
 		expect(pull.writes).toEqual([]);
 	});
 
 	test("refuses a merged PR or a draft its starter still holds", async () => {
 		const pull = new FakePull();
 		pull.draft = true;
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("its starter still holds");
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			"its starter still holds",
+		);
 		pull.state = "MERGED";
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("is merged");
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			"is merged",
+		);
 		expect(pull.writes).toEqual([]);
 	});
 
@@ -454,7 +505,7 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = false;
 		pull.queue = true;
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 	});
 
@@ -466,7 +517,7 @@ describe("merge --land", () => {
 			pull.mergeState = state;
 			pull.comparison = "diverged";
 			const warnings: string[] = [];
-			await land(PR, HEAD, "merge", pull.deps(warnings));
+			await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps(warnings));
 			expect(pull.writes).toEqual([`enqueuePullRequest ${HEAD}`]);
 			expect(pull.queueEntry).not.toBeNull();
 			expect(pull.comparisons).toEqual([]);
@@ -478,7 +529,7 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.queue = true;
 		pull.mergeState = "BLOCKED";
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
 	});
 
@@ -487,7 +538,7 @@ describe("merge --land", () => {
 		pull.queue = true;
 		pull.mergeState = "UNKNOWN";
 		pull.beforeAutoMerge = () => "Pull request is in clean status";
-		await land(PR, HEAD, "squash", pull.deps());
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
 		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH`, `enqueuePullRequest ${HEAD}`]);
 	});
 
@@ -496,7 +547,7 @@ describe("merge --land", () => {
 		pull.queue = true;
 		pull.mergeState = "DIRTY";
 		pull.beforeEnqueue = () => ({ message: "Pull request is not mergeable", type: "UNPROCESSABLE" });
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toBe(
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toBe(
 			`${URL_}: GitHub refused to enqueue ${HEAD} (GitHub GraphQL error: Pull request is not mergeable); fix the PR, for example with /quest-iterate, and land it again`,
 		);
 		expect(pull.queueEntry).toBeNull();
@@ -511,7 +562,7 @@ describe("merge --land", () => {
 			return { message: "Pull request is already queued" };
 		};
 		const warnings: string[] = [];
-		await land(PR, HEAD, "merge", pull.deps(warnings));
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps(warnings));
 		expect(warnings).toEqual([]);
 	});
 
@@ -523,7 +574,9 @@ describe("merge --land", () => {
 			pull.head = "c".repeat(40);
 			return { message: "Head ref has moved" };
 		};
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(`head moved to ${"c".repeat(40)}`);
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			`head moved to ${"c".repeat(40)}`,
+		);
 	});
 
 	test("passes on an enqueue error that faults the token rather than the PR", async () => {
@@ -531,7 +584,9 @@ describe("merge --land", () => {
 		pull.queue = true;
 		pull.mergeState = "CLEAN";
 		pull.beforeEnqueue = () => ({ message: "Resource not accessible by integration", type: "FORBIDDEN" });
-		const error = await land(PR, HEAD, "merge", pull.deps()).catch((caught: unknown) => caught);
+		const error = await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()).catch(
+			(caught: unknown) => caught,
+		);
 		expect(error).not.toBeInstanceOf(Refusal);
 		expect(error).toMatchObject({ message: "GitHub GraphQL error: Resource not accessible by integration" });
 	});
@@ -562,7 +617,7 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.allowAutoMerge = false;
 		pull.mergeState = state;
-		await land(PR, HEAD, "squash", pull.deps(), true);
+		await land(PR, { sha: HEAD, method: "squash", direct: true, check: clean }, pull.deps());
 		expect(pull.writes).toEqual([`mergePullRequest ${HEAD} SQUASH`]);
 	});
 
@@ -571,12 +626,12 @@ describe("merge --land", () => {
 		async (status) => {
 			const pull = new FakePull();
 			pull.comparison = status;
-			const refusal = await refused(land(PR, HEAD, "squash", pull.deps()));
+			const refusal = await refused(land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps()));
 			expect(refusal).toContain(`head ${HEAD} does not contain main at ${BASE}`);
 			expect(pull.writes).toEqual([]);
 			pull.head = "c".repeat(40);
 			pull.comparison = "ahead";
-			await land(PR, pull.head, "squash", pull.deps());
+			await land(PR, { sha: pull.head, method: "squash", check: clean }, pull.deps());
 			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${pull.head} SQUASH`);
 		},
 	);
@@ -585,13 +640,13 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.comparison = "identical";
 		pull.base = HEAD;
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 	});
 
 	test("enables auto-merge with a merge commit by default, bound to the head", async () => {
 		const pull = new FakePull();
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
 		expect(pull.labels).toEqual([]);
 	});
@@ -600,7 +655,7 @@ describe("merge --land", () => {
 		for (const method of ["squash", "rebase"] as const) {
 			const pull = new FakePull();
 			pull.mergeState = "CLEAN";
-			await land(PR, HEAD, method, pull.deps());
+			await land(PR, { sha: HEAD, method: method, check: clean }, pull.deps());
 			expect(pull.writes.at(-1)).toBe(`mergePullRequest ${HEAD} ${method.toUpperCase()}`);
 		}
 	});
@@ -619,14 +674,14 @@ describe("merge --land", () => {
 		test("uses the only method allowed without a flag", async () => {
 			for (const method of ["squash", "rebase"]) {
 				const pull = allowing(method);
-				await land(PR, HEAD, undefined, pull.deps());
+				await land(PR, { sha: HEAD, check: clean }, pull.deps());
 				expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} ${method.toUpperCase()}`);
 			}
 		});
 
 		test("keeps a merge commit by default while one is allowed", async () => {
 			const pull = allowing("merge", "squash");
-			await land(PR, HEAD, undefined, pull.deps());
+			await land(PR, { sha: HEAD, check: clean }, pull.deps());
 			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 		});
 
@@ -634,7 +689,7 @@ describe("merge --land", () => {
 			const pull = allowing("squash");
 			pull.allowAutoMerge = false;
 			pull.mergeState = "CLEAN";
-			await land(PR, HEAD, undefined, pull.deps(), true);
+			await land(PR, { sha: HEAD, direct: true, check: clean }, pull.deps());
 			expect(pull.writes).toEqual([`mergePullRequest ${HEAD} SQUASH`]);
 		});
 
@@ -647,7 +702,9 @@ describe("merge --land", () => {
 			];
 			for (const [methods, named, refusal] of cases) {
 				const pull = allowing(...methods);
-				expect(await refused(land(PR, HEAD, named, pull.deps()))).toContain(refusal);
+				expect(await refused(land(PR, { sha: HEAD, method: named, check: clean }, pull.deps()))).toContain(
+					refusal,
+				);
 				expect(pull.writes).toEqual([]);
 			}
 		});
@@ -663,7 +720,7 @@ describe("merge --land", () => {
 				const gated = allowing(...methods);
 				gated.required = ["quest land"];
 				if (ruled) gated.rules = [{ type: "pull_request", parameters: { allowed_merge_methods: [...ruled] } }];
-				await land(PR, HEAD, undefined, gated.deps());
+				await land(PR, { sha: HEAD, check: clean }, gated.deps());
 				expect(gated.writes.at(-1)).toBe(
 					`enablePullRequestAutoMerge ${HEAD} ${signal} Quest-Land-Head: ${HEAD}`,
 				);
@@ -671,11 +728,11 @@ describe("merge --land", () => {
 			const refusing = allowing("merge", "squash");
 			refusing.required = ["quest land"];
 			refusing.rules = [{ type: "pull_request", parameters: { allowed_merge_methods: ["merge"] } }];
-			expect(await refused(land(PR, HEAD, "squash", refusing.deps()))).toContain(
+			expect(await refused(land(PR, { sha: HEAD, method: "squash", check: clean }, refusing.deps()))).toContain(
 				"cannot land with squash merges on main, by its repository settings or rulesets",
 			);
 			refusing.rules.push({ type: "pull_request", parameters: { allowed_merge_methods: ["squash"] } });
-			expect(await refused(land(PR, HEAD, undefined, refusing.deps()))).toContain(
+			expect(await refused(land(PR, { sha: HEAD, check: clean }, refusing.deps()))).toContain(
 				"has no merge method its repository and main's rulesets both allow",
 			);
 			expect(refusing.writes).toEqual([]);
@@ -683,7 +740,7 @@ describe("merge --land", () => {
 			const queued = allowing("squash");
 			queued.queue = true;
 			const warnings: string[] = [];
-			await land(PR, HEAD, undefined, queued.deps(warnings));
+			await land(PR, { sha: HEAD, check: clean }, queued.deps(warnings));
 			expect(queued.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 			expect(warnings).toEqual([]);
 		});
@@ -694,7 +751,7 @@ describe("merge --land", () => {
 		pull.mergeState = "CLEAN";
 		pull.queue = true;
 		const warnings: string[] = [];
-		await land(PR, HEAD, "squash", pull.deps(warnings));
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps(warnings));
 		expect(pull.writes.at(-1)).toBe(`enqueuePullRequest ${HEAD}`);
 		expect(warnings).toEqual([`${URL_} lands through a merge queue, which applies its own merge method`]);
 	});
@@ -705,7 +762,7 @@ describe("merge --land", () => {
 		pull.allowAutoMerge = false; // The host-gated path does not use the ungated pre-check.
 		pull.comparison = "diverged";
 		const warnings: string[] = [];
-		await land(PR, HEAD, "merge", pull.deps(warnings));
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps(warnings));
 		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE Quest-Land-Head: ${HEAD}`]);
 		expect(warnings).toEqual([`${URL_} lands through quest land, which applies its own merge method`]);
 		expect(pull.comparisons).toEqual([]);
@@ -715,7 +772,7 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.required = ["test", "quest land"];
 		pull.autoMerge = { enabledAt: "2026-10-20T12:00:00Z", commitBody: `Quest-Land-Head: ${"0".repeat(40)}` };
-		await land(PR, HEAD, "squash", pull.deps());
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
 		expect(pull.writes.slice(-2)).toEqual([
 			"disablePullRequestAutoMerge",
 			`enablePullRequestAutoMerge ${HEAD} SQUASH Quest-Land-Head: ${HEAD}`,
@@ -727,7 +784,7 @@ describe("merge --land", () => {
 		const pull = new FakePull();
 		pull.required = ["test", "quest land"];
 		pull.autoMerge = { enabledAt: "2026-10-20T12:00:00Z", commitBody: "" };
-		await land(PR, HEAD, "squash", pull.deps());
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
 		expect(pull.autoMerge?.commitBody).toBe(`Quest-Land-Head: ${HEAD}`);
 	});
 
@@ -740,7 +797,7 @@ describe("merge --land", () => {
 				pull.mergeState = state;
 				return "Pull request is in clean status";
 			};
-			await land(PR, HEAD, "squash", pull.deps());
+			await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
 			expect(pull.writes).toEqual([
 				`enablePullRequestAutoMerge ${HEAD} SQUASH`,
 				`mergePullRequest ${HEAD} SQUASH`,
@@ -753,7 +810,7 @@ describe("merge --land", () => {
 	test("keeps UNKNOWN on auto-merge when GitHub accepts it", async () => {
 		const pull = new FakePull();
 		pull.mergeState = "UNKNOWN";
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 		expect(pull.reads).toBe(2);
 		expect(pull.state).toBe("OPEN");
@@ -765,7 +822,7 @@ describe("merge --land", () => {
 			const pull = new FakePull();
 			pull.mergeState = "UNKNOWN";
 			pull.beforeAutoMerge = () => reason;
-			await expect(land(PR, HEAD, "merge", pull.deps())).rejects.toThrow(reason);
+			await expect(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps())).rejects.toThrow(reason);
 			expect(pull.reads).toBe(reason.includes("clean status") ? 3 : 2);
 			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 		},
@@ -785,7 +842,7 @@ describe("merge --land", () => {
 				if (change === "queue") pull.queue = true;
 				return "Pull request is in clean status";
 			};
-			await expect(land(PR, HEAD, "merge", pull.deps())).rejects.toThrow();
+			await expect(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps())).rejects.toThrow();
 			expect(pull.state).toBe("OPEN");
 			expect(pull.writes.at(-1)).toBe(`enablePullRequestAutoMerge ${HEAD} MERGE`);
 		},
@@ -794,7 +851,9 @@ describe("merge --land", () => {
 	test("refuses a head that moved", async () => {
 		const pull = new FakePull();
 		pull.head = "b".repeat(40);
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(`head moved to ${"b".repeat(40)}`);
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			`head moved to ${"b".repeat(40)}`,
+		);
 		expect(pull.writes).toEqual([]);
 	});
 });
@@ -873,4 +932,71 @@ test("iterate and release exit 0 when stdout returns a value", async () => {
 		vi.unstubAllEnvs();
 		vi.unstubAllGlobals();
 	}
+});
+
+describe("merge --land on a base that requires an approval the head lacks", () => {
+	// An admin's token sees such a PR as mergeable past the requirement, so only auto-merge may pick it.
+	test.each(["REVIEW_REQUIRED", "CHANGES_REQUESTED"])(
+		"arms auto-merge in a merge queue, never enqueueing (%s)",
+		async (decision) => {
+			const pull = new FakePull();
+			pull.queue = true;
+			pull.mergeState = "CLEAN";
+			pull.reviewDecision = decision;
+			await land(PR, { sha: HEAD, check: clean }, pull.deps());
+			expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
+			pull.reviewDecision = "APPROVED";
+			pull.autoMerge = null;
+			pull.writes.length = 0;
+			await land(PR, { sha: HEAD, check: clean }, pull.deps());
+			expect(pull.writes).toEqual([`enqueuePullRequest ${HEAD}`]);
+		},
+	);
+
+	test("never enqueues when GitHub refuses auto-merge as clean, which an admin's enqueue would bypass", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.reviewDecision = "REVIEW_REQUIRED";
+		pull.beforeAutoMerge = () => "Pull request is in clean status";
+		expect(await refused(land(PR, { sha: HEAD, check: clean }, pull.deps()))).toContain(
+			"GitHub refused to enqueue",
+		);
+		// The refused attempt is all: no enqueue follows.
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
+	});
+
+	test("decides on the last read, so an approval dismissed while it checks still holds", async () => {
+		const pull = new FakePull();
+		pull.mergeState = "CLEAN";
+		pull.reviewDecision = "APPROVED";
+		pull.afterRead = () => {
+			pull.reviewDecision = "REVIEW_REQUIRED";
+		};
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH`]);
+		expect(pull.state).toBe("OPEN");
+	});
+
+	test("arms auto-merge rather than merging at once", async () => {
+		const pull = new FakePull();
+		pull.mergeState = "CLEAN";
+		pull.reviewDecision = "REVIEW_REQUIRED";
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH`]);
+		expect(pull.state).toBe("OPEN");
+	});
+
+	test("refuses --direct with auto-merge off, which would merge past it", async () => {
+		const pull = new FakePull();
+		pull.allowAutoMerge = false;
+		pull.mergeState = "CLEAN";
+		pull.reviewDecision = "REVIEW_REQUIRED";
+		expect(await refused(land(PR, { sha: HEAD, method: "squash", direct: true, check: clean }, pull.deps()))).toBe(
+			`${URL_} lacks the approval its base requires, which a merge now would bypass; land it once it is approved`,
+		);
+		expect(pull.writes).toEqual([]);
+		pull.reviewDecision = "APPROVED";
+		await land(PR, { sha: HEAD, method: "squash", direct: true, check: clean }, pull.deps());
+		expect(pull.state).toBe("MERGED");
+	});
 });

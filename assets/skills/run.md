@@ -1,5 +1,5 @@
 ---
-description: Run a project's quest work from one session, starting ready quests and taking open PRs to merge in a loop until only the user's decisions remain.
+description: Run a project's quest work from one session, starting ready quests and taking open PRs to merge in a loop until only the user's decisions remain, then planning the follow-ups no quest owns yet.
 guide: Creation, Coordination, Summaries, Questions
 skills: grill, merge
 ---
@@ -16,7 +16,7 @@ A brief gives the task, its reason and context, such as the quest or PR and the 
 
 Starting quests asks the user nothing: each agent works headless, and its decisions surface in its PR.
 
-`quest unblocked --unclaimed --json` ranks the unclaimed ready quests, reading the upstream tree afresh; start them in that order, as many at once as the harness allows.
+`quest unblocked --unclaimed --json` ranks the unclaimed ready quests, reading the upstream tree afresh; start them in that order, each once `quest agent admit` admits it, as the guide's Coordination section describes.
 It lists each skipped claim on stderr, with how long ago it was last active when it has an open PR; name any that look stale in the summary, for the user to take over.
 
 Start every quest you would recommend: well planned, with no blockers, and no conflict with work already started. For one waiting on an outside condition, first check whether it has cleared.
@@ -69,7 +69,8 @@ Never wait on any other PR, and read none between rounds: list each PR left for 
 A usage or rate limit is waited out until its reset; it never ends the run.
 
 Finish once nothing is running, no queued merge would make a quest ready, and every PR left needs the user or a later round.
-Write the final summary so a fresh session can act on it, with each open decision's options beside your recommendation.
+Then run `/quest-plan` on the run's follow-ups, each in a checkout of the repository whose quest tree owns it: problems it surfaced that no quest or open PR owns, such as a blocker agents hit, and the follow-ups kept in each of this run's own merge picks for another repository's quest tree, landed or not, unless the user withdrew the pick.
+Write the final summary, naming those plan PRs, so a fresh session can act on it, with each open decision's options beside your recommendation.
 
 Besides the guide's controls, answer "decisions": ask every pending question now, in one batch, such as before the user steps away; the loop continues after.
-On "finish up", still run `/quest-merge` when a picked PR's sub-agent reports, but dispatch nothing it hands back, and list each pick left standing.
+On "finish up", still run `/quest-merge` when a picked PR's sub-agent reports, but dispatch nothing it hands back and plan nothing, and list each pick left standing and each follow-up left to plan.

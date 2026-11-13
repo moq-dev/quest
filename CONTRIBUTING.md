@@ -39,6 +39,7 @@ need no review.
 
 PRs land on `main` through GitHub's merge queue, one PR at a time, as squash commits.
 Queue the reviewed head with `quest merge <pr> --land <sha>` (`/quest-merge` does this).
+The `Pullfrog approval` ruleset requires Pullfrog's approval of the head, which the queue waits for; other online reviewers are never waited for.
 The required `Queue` check skips on pull requests; the merge group runs `just check` and `just test` on the self-hosted runner.
 That build lives in `.github/workflows/queue-build.yml`, which the merge group calls from `main`, so a PR's edit to it runs only after the PR lands.
 The host runs one `quest land watch` daemon per base, here `main`'s; it runs the Codex fixer when the queue drops a PR for a failed build or a conflict, and re-enqueues healthy heads at the back of the queue.

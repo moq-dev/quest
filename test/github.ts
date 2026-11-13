@@ -26,7 +26,20 @@ export type Pull = Issue & {
 	checks: "SUCCESS" | "FAILURE" | "PENDING" | null;
 	/** The check runs behind `checks`, oldest first. */
 	/** `commit` is the one a run reports on; the head by default. */
-	runs?: { name: string; conclusion: string; url: string; app?: number; context?: boolean; commit?: string }[];
+	runs?: {
+		name: string;
+		conclusion: string;
+		url: string;
+		app?: number;
+		context?: boolean;
+		commit?: string;
+		/** The check suite of the workflow run that reported it. */
+		suite?: number;
+		/** The path of the workflow file in this repository whose run reported it. */
+		workflow?: string;
+		/** Whether that run is still going, so it may create more jobs. */
+		running?: boolean;
+	}[];
 	review: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
 	/** Oldest first; `commit` is the one a review was submitted on, the head by default. */
 	reviews?: { state: string; author: string; body?: string; commit?: string }[];
@@ -143,9 +156,15 @@ export type Repo = {
 	/** GitHub Actions workflow runs, as `GET /actions/runs` lists them, with their jobs and each job's log. */
 	actionRuns?: {
 		id: number;
+		workflow_id?: number;
+		check_suite_id?: number;
+		run_started_at?: string;
 		name: string;
 		head_branch: string;
 		head_sha: string;
+		/** The workflow file it runs, and the repository that holds it. */
+		path?: string;
+		repository?: { full_name: string };
 		status: string;
 		conclusion: string | null;
 		html_url: string;
@@ -234,7 +253,7 @@ function queueTarget(repo: Repo, pull: Pull) {
 				{
 					commit: {
 						oid: headOf(repo, pull),
-						statusCheckRollup: pull.checks && { contexts: contextPage(pull, null) },
+						statusCheckRollup: pull.checks && { contexts: contextPage(repo, pull, null) },
 					},
 				},
 			],
@@ -246,7 +265,7 @@ function queueTarget(repo: Repo, pull: Pull) {
 export const ACTIONS_APP = 15368;
 
 /** One page of a head's check runs and commit statuses, as `statusCheckRollup.contexts` pages them. */
-function contextPage(pull: Pick<Pull, "runs">, after: unknown) {
+function contextPage(repo: Repo, pull: Pick<Pull, "runs">, after: unknown) {
 	const start = typeof after === "string" ? Number(after) : 0;
 	const all = (pull.runs ?? []).map((run, index) =>
 		run.context
@@ -259,7 +278,14 @@ function contextPage(pull: Pick<Pull, "runs">, after: unknown) {
 					status: "COMPLETED",
 					conclusion: run.conclusion,
 					detailsUrl: run.url,
-					checkSuite: { app: { databaseId: run.app ?? ACTIONS_APP } },
+					checkSuite: {
+						databaseId: run.suite ?? null,
+						status: run.running ? "IN_PROGRESS" : "COMPLETED",
+						app: { databaseId: run.app ?? ACTIONS_APP },
+						workflowRun: run.workflow
+							? { file: { path: run.workflow, repositoryName: `${repo.owner}/${repo.name}` } }
+							: null,
+					},
 				},
 	);
 	const end = start + 100;
@@ -275,7 +301,9 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 		if (runs)
 			return {
 				data: {
-					repository: { object: { statusCheckRollup: { contexts: contextPage({ runs }, variables.after) } } },
+					repository: {
+						object: { statusCheckRollup: { contexts: contextPage(repo, { runs }, variables.after) } },
+					},
 				},
 			};
 		const pull = repo.pulls.find(
@@ -285,7 +313,7 @@ function graphql(repo: Repo, query: string, variables: Record<string, unknown>) 
 			data: {
 				repository: {
 					object: pull
-						? { statusCheckRollup: pull.checks && { contexts: contextPage(pull, variables.after) } }
+						? { statusCheckRollup: pull.checks && { contexts: contextPage(repo, pull, variables.after) } }
 						: null,
 				},
 			},
@@ -419,8 +447,9 @@ type Permission =
 type Grant = { repositories: Set<string>; permissions: Partial<Record<Permission, string>> };
 
 /**
- * Answer one outbound request from the Worker. Sign-in always completes as the
- * world's first user; repository reads check that user's maintainer role.
+ * Answer one outbound request to GitHub's API from the world's repositories,
+ * scoping each read and write to the repositories and permissions of the
+ * installation token it carries.
  */
 export function fakeGitHub(world: World) {
 	for (const repo of world.repos) connect(repo);
@@ -522,6 +551,12 @@ export function fakeGitHub(world: World) {
 			if (!scope) return unauthorized();
 			grants.delete(token);
 			return new Response(null, { status: 204 });
+		}
+		const byId = path.match(/^\/repositories\/(\d+)$/);
+		if (byId) {
+			const found = world.repos.find((r) => r.id === Number(byId[1]));
+			if (!found || !scope?.repositories.has(`${found.owner}/${found.name}`)) return notFound();
+			return json({ full_name: `${found.owner}/${found.name}` });
 		}
 		const match = path.match(/^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/);
 		const fullName = match && `${match[1]}/${match[2]}`;

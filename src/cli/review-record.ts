@@ -5,9 +5,9 @@ import { recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { git } from "./git";
 import { requireRemote, string } from "./github";
-import { type PullModels, type Round, SEVERITIES, type Tally, located, parseBase } from "./review";
+import { type PullModels, type Round, SEVERITIES, type Tally, located, parseBase, sameSeat } from "./review";
 
-const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex", opencode: "opencode" };
+const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex" };
 
 /**
  * Model text as one inline code span, so a mention, issue reference, or Markdown in it renders as text.
@@ -24,6 +24,10 @@ function code(text: string): string {
 }
 
 const capitalized = (word: string) => word[0]!.toUpperCase() + word.slice(1);
+
+/** A block's Reviewer line, ending in `, shadow` for the shadow, the size's pick one effort lower. */
+const reviewerLine = (seat: Pick<Tally, "reviewer" | "model" | "effort" | "shadow">) =>
+	`- Reviewer: ${HARNESSES[seat.reviewer]}, ${seat.model}, ${seat.effort} effort${seat.shadow ? ", shadow" : ""}`;
 
 /** A tally's counts, as the record's `Rounds:` line and `quest usage` write them. */
 export interface Counts {
@@ -71,11 +75,11 @@ export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 	for (const round of rounds) {
 		lines.push(
 			"",
-			`- Reviewer: ${HARNESSES[round.reviewer]}, ${round.model}, ${round.effort} effort`,
+			reviewerLine(round),
 			`- Session: ${code(round.session)}, round ${round.round}`,
 			`- Score: ${round.score}/10, ${code(round.rationale)}`,
 		);
-		const tally = tallies.find((each) => each.reviewer === round.reviewer);
+		const tally = tallies.find((each) => sameSeat(each, round));
 		if (tally === undefined) throw new Error(`no tally for ${round.reviewer}'s round`);
 		lines.push(`- Rounds: ${tally.rounds}; ${findingsText(counted(tally))}`);
 		if (round.findings.length === 0) lines.push("- Findings: none");
@@ -89,10 +93,12 @@ export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 				`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
 			);
 	}
-	for (const tally of tallies.filter((each) => !rounds.some((round) => round.reviewer === each.reviewer)))
+	for (const tally of tallies.filter((each) => !rounds.some((round) => sameSeat(round, each))))
 		lines.push(
 			"",
-			`- Reviewer: ${HARNESSES[tally.reviewer]}, ${tally.model}, ${tally.effort} effort`,
+			reviewerLine(tally),
+			// Its session, still named so `quest usage` counts it as reviewing.
+			...(tally.session === undefined ? [] : [`- Session: ${code(tally.session)}`]),
 			`- Rounds: ${tally.rounds}; ${findingsText(counted(tally))}`,
 		);
 	return lines.join("\n");
@@ -104,7 +110,9 @@ export interface ReviewSummary {
 	harness: string;
 	model: string;
 	effort: string;
-	/** Its latest session and round, null when the latest run left it out. */
+	/** Whether it is the shadow: the size's pick one effort lower, beside it on the same heads. */
+	shadow: boolean;
+	/** Its latest session, null when the record names none; its round, null when the latest run left it out. */
 	session: string | null;
 	round: number | null;
 	/** Null when the latest run left it out, or on a record written before rounds were scored. */
@@ -139,13 +147,17 @@ export function parseReview(body: string): ReviewSummary[] {
 			if (!found) throw new Error(`the ## Review record has no line matching ${pattern.source}`);
 			return found;
 		};
-		const reviewer = match(/^- Reviewer: (.+?), (\S+), (\S+) effort\r?$/m);
+		const reviewer = match(/^- Reviewer: (.+?), (\S+), (\S+) effort(, shadow)?\r?$/m);
 		const tally = parseCounts(text);
-		// A reviewer the latest run left out has only its tally.
+		// A reviewer the latest run left out has its tally, and its session with no round once tallies name it.
 		const session =
 			tally !== null && !/^- Session: /m.test(text)
 				? null
-				: match(/^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m);
+				: match(
+						tally === null
+							? /^- Session: (`+) ?(.*?) ?\1, round (\d+)\r?$/m
+							: /^- Session: (`+) ?(.*?) ?\1(?:, round (\d+))?\r?$/m,
+					);
 		const score = /^- Score: (\d+)\/10,/m.exec(text);
 		const open = { high: 0, medium: 0, low: 0 };
 		for (const [, severity] of text.matchAll(/^  - (High|Medium|Low), /gm))
@@ -154,8 +166,9 @@ export function parseReview(body: string): ReviewSummary[] {
 			harness: reviewer[1]!,
 			model: reviewer[2]!,
 			effort: reviewer[3]!,
+			shadow: reviewer[4] !== undefined,
 			session: session && session[2]!,
-			round: session && Number(session[3]),
+			round: session?.[3] === undefined ? null : Number(session[3]),
 			score: score ? Number(score[1]) : null,
 			tally,
 			open,

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { basename, join } from "node:path";
 import { isHoldLabel } from "../core";
 import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
-import { type Queued, queueHead } from "../github/merge";
+import { type Queued, lacksApproval, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
 import { type Carried, describe, readSignals } from "./signals";
 import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
@@ -67,6 +67,8 @@ export interface FixContext {
 	timeout: number;
 	/** Patterns of tags, such as `deploy-*`, fetched from GitHub into each fixer checkout so its checks can read them. */
 	tags: string[];
+	/** Patterns of branches fetched from GitHub into each fixer checkout as `origin/<branch>`, for checks that diff against them. */
+	branches: string[];
 	token: (workflows: boolean) => Promise<string>;
 	read: RemoteRead;
 }
@@ -123,7 +125,7 @@ const JUDGED: Record<Cause, string> = {
 };
 
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
-	number repository { nameWithOwner } state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
+	number repository { nameWithOwner } state baseRefName headRefOid mergeStateStatus reviewDecision mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 	labels(first: 100) { nodes { name } }
 	headRepository { nameWithOwner }
 } } }`;
@@ -420,6 +422,16 @@ async function take(
 	);
 	log = input;
 
+	const branches = await fixerBranches(context, repository, base.ref);
+	if (branches.length)
+		await context.read(context.root, [
+			"fetch",
+			"--quiet",
+			"--no-tags",
+			baseRemote({ repository }),
+			...branches.map((branch) => branch.sha),
+		]);
+
 	const checkout = mkdtempSync(join(state, "fix-"));
 	try {
 		const packs = prepare(
@@ -427,12 +439,12 @@ async function take(
 			checkout,
 			[
 				`${removal.head}:refs/heads/batch`,
-				`${base.sha}:refs/heads/base`,
 				`${removal.head}:refs/heads/pr-${number}`,
 				...tags,
+				...branches.map((branch) => `${branch.sha}:refs/remotes/origin/${branch.name}`),
 			],
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
-			base.sha,
+			base,
 		);
 		if (!conflict) writeKnownFlaky(state, checkout);
 		const job: WatchJob = {
@@ -459,6 +471,30 @@ async function take(
 		rmSync(checkout, { recursive: true, force: true });
 		throw error;
 	}
+}
+
+/**
+ * GitHub's branches that a `--fixer-branch` pattern matches, other than the base, which the round pins itself.
+ * Matched here rather than by a fetch refspec, so a pattern naming a branch GitHub no longer has matches nothing.
+ */
+async function fixerBranches(
+	context: FixContext,
+	repository: string,
+	base: string,
+): Promise<{ name: string; sha: string }[]> {
+	if (!context.branches.length) return [];
+	const glob = (pattern: string) =>
+		pattern
+			.split("*")
+			.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+			.join(".*");
+	const match = new RegExp(`^(?:${context.branches.map(glob).join("|")})$`);
+	const listed = await context.read(context.root, ["ls-remote", "--heads", baseRemote({ repository })]);
+	return listed
+		.split("\n")
+		.map((line) => /^([0-9a-f]{40}|[0-9a-f]{64})\trefs\/heads\/(.+)$/.exec(line))
+		.filter((found) => found !== null && found[2] !== base && match.test(found[2]))
+		.map((found) => ({ name: found![2], sha: found![1] }));
 }
 
 /** End a job: its checkout and its records go, and its output log stays for diagnosis on the host. */
@@ -759,13 +795,13 @@ async function requeue(
 		try {
 			if (queue.kind === "own") await enqueue(github, id, head, queue.method);
 			else
-				await queueHead(
-					(query, variables) => github.graphql(query, variables),
+				await queueHead((query, variables) => github.graphql(query, variables), {
 					id,
 					head,
-					string(pull.mergeStateStatus),
-					"merge",
-				);
+					mergeState: string(pull.mergeStateStatus),
+					unapproved: lacksApproval(pull.reviewDecision),
+					method: "merge",
+				});
 		} catch (error) {
 			if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 				throw error;

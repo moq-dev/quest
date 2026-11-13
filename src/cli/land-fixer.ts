@@ -405,14 +405,10 @@ export async function startFixer(
 	const packs = prepare(
 		root,
 		checkout,
-		[
-			`${failure.tip}:refs/heads/batch`,
-			`${failure.plan.base.sha}:refs/heads/base`,
-			...entries.map((entry) => `${entry.head}:refs/heads/pr-${entry.number}`),
-		],
+		[`${failure.tip}:refs/heads/batch`, ...entries.map((entry) => `${entry.head}:refs/heads/pr-${entry.number}`)],
 		// Start at the base, never the batch: the agent loads its instructions and tooling only from code
 		// already landed, and inspects the PRs through their branches.
-		failure.plan.base.sha,
+		failure.plan.base,
 	);
 	const path = join(state, `fix-job-${checkout.split("/").at(-1)}.json`);
 	const job: Job = {
@@ -433,10 +429,12 @@ export async function startFixer(
 }
 
 /**
- * A standalone repository in `checkout` holding `refs` fetched from the daemon's, detached at
- * `start`. Returns the packs the fetch wrote, whose objects the daemon already has.
+ * A standalone repository in `checkout` holding `refs` fetched from the daemon's, with `base` as both `base` and
+ * `origin/<base>`, detached at it. Returns the packs the fetch wrote, whose objects the daemon already has.
  */
-export function prepare(root: string, checkout: string, refs: string[], start: string): string[] {
+export function prepare(root: string, checkout: string, refs: string[], base: { ref: string; sha: string }): string[] {
+	// The checkout has no remote, so checks that diff against `origin/<base>` find the base the round works on.
+	refs = [...refs, `${base.sha}:refs/heads/base`, `${base.sha}:refs/remotes/origin/${base.ref}`];
 	git(checkout, ["init", "--quiet"]);
 	// No background gc or maintenance may rewrite objects while the daemon imports the fixer's result.
 	git(checkout, ["config", "gc.auto", "0"]);
@@ -444,7 +442,7 @@ export function prepare(root: string, checkout: string, refs: string[], start: s
 	git(checkout, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", root, ...refs]);
 	git(checkout, ["config", "user.name", "quest fixer"]);
 	git(checkout, ["config", "user.email", "quest-fixer@localhost"]);
-	git(checkout, ["checkout", "--quiet", "--detach", start]);
+	git(checkout, ["checkout", "--quiet", "--detach", base.sha]);
 	return readdirSync(join(checkout, ".git", "objects", "pack")).filter((name) => name.endsWith(".pack"));
 }
 
@@ -472,7 +470,7 @@ export async function startBaseFixer(
 ): Promise<void> {
 	const checkout = mkdtempSync(join(state, "fix-"));
 	try {
-		const packs = prepare(root, checkout, [`${base.sha}:refs/heads/base`], base.sha);
+		const packs = prepare(root, checkout, [], base);
 		const job: BaseJob = {
 			checkout,
 			repository,

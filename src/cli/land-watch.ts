@@ -14,6 +14,7 @@ import {
 	type Repository,
 	string,
 } from "./github";
+import { lacksApproval } from "../github/merge";
 import type { Entry, LandMethod, Plan } from "./land";
 import { authenticatedRead } from "./land-git";
 import { jobLog } from "./land-checks";
@@ -65,6 +66,8 @@ export interface WatchOptions {
 	fixerEffort: string;
 	/** Patterns of tags fetched from GitHub into each fixer checkout. */
 	fixerTag: string[];
+	/** Patterns of GitHub branches mirrored into each fixer checkout as `origin/<branch>`. */
+	fixerBranch: string[];
 	/** Repositories whose flake input on this repository each pass bumps to this repository's base. */
 	bump: Repository[];
 	/** On the own queue, eject fork picks before pushing their build, so a fork's code never reaches a private runner. */
@@ -165,7 +168,7 @@ const OPEN = `query($owner: String!, $name: String!, $base: String!, $qualified:
 		pullRequests(states: OPEN, baseRefName: $base, first: 50, after: $after) {
 			pageInfo { hasNextPage endCursor }
 			nodes {
-				id number url title headRefOid headRefName maintainerCanModify mergeStateStatus
+				id number url title headRefOid headRefName maintainerCanModify mergeStateStatus reviewDecision
 				headRepository { nameWithOwner }
 				labels(first: 100) { nodes { name } }
 				mergeQueueEntry { id }
@@ -271,7 +274,8 @@ async function enqueueArmed(
 	const refused: Record<number, string> = {};
 	for (const pull of pulls) {
 		if (pull.autoMergeRequest == null || pull.mergeQueueEntry != null) continue;
-		if (!READY.includes(string(pull.mergeStateStatus))) continue;
+		// An armed pick waiting on a required approval is auto-merge's to enqueue once it arrives.
+		if (!READY.includes(string(pull.mergeStateStatus)) || lacksApproval(pull.reviewDecision)) continue;
 		const number = Number(pull.number);
 		const head = string(pull.headRefOid);
 		const armed = string(object(pull.autoMergeRequest).enabledAt);
@@ -290,6 +294,7 @@ async function enqueueArmed(
 			now.mergeQueueEntry != null ||
 			request === null ||
 			string(request.enabledAt) !== armed ||
+			lacksApproval(now.reviewDecision) ||
 			// Another session holds it: leave the pick armed, for the next pass once the hold clears.
 			isHeld(now)
 		)
@@ -973,6 +978,7 @@ export async function watch(
 					jobs: options.fixerJobs,
 					effort: options.fixerEffort,
 					tags: options.fixerTag,
+					branches: options.fixerBranch,
 					timeout: 60,
 					token,
 					read,

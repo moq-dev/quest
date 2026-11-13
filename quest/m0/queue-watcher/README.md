@@ -119,8 +119,9 @@ GitHub Team: moq.pro leaves the host gate for an own serial queue in
 `quest land watch`, rather than a plan upgrade, making moq.pro public, or a
 third-party queue. The maintainer expects the own queue to become every
 repository's, for visibility. The own queue landed in
-[moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540); the rest is
-recorded in [moq.pro's cutover](/quest/m0/queue-watcher/pro-cutover.md).
+[moq-dev/quest#540](https://github.com/moq-dev/quest/pull/540). moq.pro's
+`main` moved onto it on 2026-11-12; on 2026-11-13 its queue dropped a PR for
+a failing build, and the fixer fixed and re-enqueued it.
 
 Decided 2026-11-09 (user, /quest-plan), from a workflow audit of
 moq-dev/moq's queue, 2026-11-03 to 11-10: 800 `merge_group` builds at a

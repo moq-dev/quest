@@ -1,7 +1,6 @@
 // How a quest's PR and branch say whose move it is. A draft is its starter's
 // claim until its body hands it back with a `## Waiting` section, and a branch
-// whose work merged holds nothing (the guide's Execution section); the CLI and
-// the Worker read both the same way.
+// whose work merged holds nothing (the guide's Execution section).
 
 import type { Nodes, RootContent } from "mdast";
 
@@ -129,7 +128,7 @@ export interface ClosedPull {
  * The PR that landed a quest branch at `tip`: one from it that merged with
  * `tip` as its head, so the branch holds no claim. One whose PR closed unmerged
  * still holds its quest, since that work may be wanted back, and so does one
- * with commits pushed after its merge. The CLI and the Worker share this rule.
+ * with commits pushed after its merge.
  */
 export function landed<P extends ClosedPull>(tip: string, pulls: Iterable<P>): P | undefined {
 	for (const pull of pulls) if (pull.merged && pull.head === tip) return pull;

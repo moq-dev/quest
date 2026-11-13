@@ -8,8 +8,8 @@ Rules a program can check are enforced instead of read. The epic finishes by
 re-measuring the baseline below with `quest usage` and token-max over a
 week of sessions and recording the comparison in its closing PR.
 
-Non-goal: the online reviewers (CodeRabbit, and Pullfrog on moq-dev/moq,
-which Pullfrog for OSS pays for, are free and stay).
+Non-goal: the online reviewers (CodeRabbit, and Pullfrog, which reviews with
+Claude through the Pullfrog console's model access) stay.
 
 ## Plan
 
@@ -38,6 +38,17 @@ Decision prompts, chosen options marked ✅:
   (rejected: drop them). Changed 2026-11-10 (user): Pullfrog spent the
   OpenCode Go plan outside moq-dev/moq, so it stays only there, and
   a second local review, by DeepSeek in `quest review`, replaces it.
+  Changed 2026-11-12: Pullfrog reviews with Claude, configured in the
+  Pullfrog console, and its workflow is back in moq-dev/quest, rind, rust2,
+  studio, and web-transport.
+  Changed 2026-11-13 (maintainer), reversing
+  [moq-dev/quest#620](https://github.com/moq-dev/quest/pull/620), whose
+  cost reason Claude through the console removed, after opencode's quota ran
+  out and failed every `quest review` that day: Pullfrog replaces the
+  DeepSeek review, so `quest review` runs only the size's pick, and ✅ its
+  approval gates the merge (rejected: advisory only), ✅ through a GitHub
+  ruleset requiring an approval, which `quest merge` and `quest land` honor
+  (rejected: a `REVIEW.md` declaration that `quest merge` checks).
 - Rules to hooks or lint: first not planned, then ✅ planned the same day
   (user, adopting practices from the research below).
 - Adopted 2026-11-05 (user) from a survey of AI-heavy developers' setups

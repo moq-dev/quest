@@ -336,7 +336,7 @@ async function reportStalled(github: GitHub, plan: Plan, state: string, now: num
 	for (const waiting of plan.waiting ?? []) {
 		if (kept[waiting.number] === waiting.enabledAt || now - Date.parse(waiting.enabledAt) < STALLED_AFTER) continue;
 		const list = [
-			...waiting.pending.map((name) => `- the required check <code>${excerpt(name)}</code>`),
+			...waiting.pending.map((name) => `- the required check or workflow <code>${excerpt(name)}</code>`),
 			...(waiting.approval ? [`- an approving review, which ${plan.base.ref} requires`] : []),
 		].join("\n");
 		await github.request(`/repos/${plan.repository}/issues/${waiting.number}/comments`, {
@@ -838,6 +838,8 @@ export async function serve(
 						administration: "read",
 						checks: "read",
 						statuses: "read",
+						// The head's workflow runs, which say whether a newer run replaced a cancelled check.
+						actions: "read",
 					},
 					{ fetch, now: Date.now },
 				),

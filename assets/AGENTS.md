@@ -146,6 +146,8 @@ In a fork's clone, it pushes to the fork and opens the PR upstream; a fork
 whose parent keeps no quests is its own upstream.
 It exits 3 when the quest is blocked or someone else holds it; pick other work.
 `quest start --release <quest>` gives back a claim before any work is pushed.
+Claim before any other work, even work a fork reviews first, and push the work
+to the quest's branch: a PR from any other branch claims nothing.
 If a claim looks stale, such as a draft without `## Waiting` or a
 branch with no open PR quiet a long time, offer the user to take
 it over, saying how long ago it was last active.
@@ -190,7 +192,8 @@ Relay no interim report: resume a sub-agent that ended its turn on one, telling 
 A long-running coordinator lets compaction bound its context: what must outlast it lives in the forge and the quest tree, and a PR's state is read afresh before acting, not trusted from earlier turns.
 
 Start each sub-agent in the background with its own isolated worktree, since agents cannot write to a worktree their parent created.
-It reports only when done or blocked, and never waits on GitHub CI, reviews, or merges; stay silent on its interim notifications.
+Before starting or resuming one, run `quest agent admit` in the background and go on once it exits 0, handling reports meanwhile: it waits until the host has room for another agent. `quest agent start` and `resume` admit themselves.
+A sub-agent reports only when done or blocked, and never waits on GitHub CI, reviews, or merges; stay silent on its interim notifications.
 As each reports, explain its result in a few lines: its PR, whether it is still a draft, and its open decisions with recommendations.
 Before dispatching a session to apply the user's answers to a PR's decisions, post them on the PR in a comment that opens with `Maintainer decision`: `quest merge` refuses the PR's current head until a newer commit, or a later comment linking the decision, answers it.
 Once two agents report the same blocker, such as a check failure that reproduces on the base or a reviewer outage, name it with its evidence in each later agent's brief, and report it once.

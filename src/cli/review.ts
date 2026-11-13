@@ -1,17 +1,17 @@
 // `quest review`: a model other than the latest writer reviews the committed branch, read-only,
-// picked by the PR's size from the lists in `models.ts`, and the second reviewer reviews the same head
-// beside it, each in its own session.
+// picked by the PR's size from the lists in `models.ts`, and the shadow, the picked model one effort
+// lower, reviews the same head beside it, each in its own session.
 //
-// A branch's first round runs the reviewer CLI's own review, or for opencode, which
-// has none, a review prompt, given the scope, the base's REVIEW.md, and any
-// responses up front, then resumes that session for one turn that only reports the
-// review in the schema, since no CLI's built-in review returns a schema itself. Later rounds resume the same session with the new
+// A branch's first round runs the reviewer CLI's own review, given the scope, the
+// base's REVIEW.md, and any responses up front, then resumes that session for one
+// turn that only reports the review in the schema, since neither CLI's built-in
+// review returns a schema itself. Later rounds resume the same session with the new
 // head and the author's responses, checking only what changed and the open findings,
 // so the reviewer keeps its context and its prompt cache, and a finding the author
 // refuted with evidence does not recur.
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { promisify } from "node:util";
 
@@ -19,17 +19,10 @@ import { SIZES, type Size, branchQuest, parse, size as questSize } from "../core
 import { HARNESSES, type HarnessName, LINE_LIMIT, LOGINS, boundedLines, strippedEnvironment } from "./agent";
 import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
-import { DEFAULT_SIZE, type Model, REVIEWERS, SECOND_REVIEWER } from "./models";
+import { DEFAULT_SIZE, type Model, REVIEWERS } from "./models";
 import { programEnvironment, requireProgram } from "./program";
-import { type Sandbox, openSandbox } from "./sandbox";
 import type { recorded } from "../github/models";
 import { save } from "./worktree";
-
-/** The CLIs that review: the agent harnesses, and opencode, which reviews only when named. */
-export const REVIEW_HARNESSES = [...HARNESSES, "opencode"] as const;
-export type ReviewHarness = (typeof REVIEW_HARNESSES)[number];
-/** A reviewer: a size list's entry, or one `--harness`, `--model`, and `--effort` name. */
-export type Reviewing = Omit<Model, "harness"> & { harness: ReviewHarness };
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
 export class ReviewInputError extends Error {}
@@ -39,7 +32,7 @@ export class ResponsesError extends ReviewInputError {}
 /** The reviewer's account hit its usage limit on `model`, which resets at `until` (epoch milliseconds) if the CLI named it. */
 export class ReviewLimitError extends Error {
 	constructor(
-		readonly harness: ReviewHarness,
+		readonly harness: HarnessName,
 		readonly until: number | null,
 		readonly model: string,
 	) {
@@ -82,7 +75,9 @@ export interface Usage {
 
 /** One reviewer's finished round, as `quest review` prints it. */
 export interface Round {
-	reviewer: ReviewHarness;
+	reviewer: HarnessName;
+	/** The round is the shadow's: the size's pick one effort lower, whose findings measure what that step buys. */
+	shadow?: true;
 	model: string;
 	effort: string;
 	/** The branch whose session the round continues. */
@@ -184,7 +179,7 @@ export function runningHarness(env: NodeJS.ProcessEnv): HarnessName {
 
 /** What picks a round's reviewer from its size's list. */
 export interface Choice {
-	harness?: ReviewHarness;
+	harness?: HarnessName;
 	model?: string;
 	effort?: string;
 	/** The models never to pick; without any, the latest writer's is avoided. */
@@ -198,7 +193,7 @@ export interface Choice {
  * the harness running this command, which is usually the session that just
  * pushed, unless `--harness` names the reviewer, which then avoids nothing.
  */
-export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest?: string): (entry: Reviewing) => boolean {
+export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest?: string): (entry: Model) => boolean {
 	const exclude = choice.exclude ?? [];
 	if (exclude.length > 0) return (entry) => exclude.includes(entry.model);
 	if (latest !== undefined && latest !== "unknown") return (entry) => entry.model === latest;
@@ -213,7 +208,7 @@ export function authored(choice: Choice, env: NodeJS.ProcessEnv, latest?: string
  * overriding its model and effort. An override never brings back an avoided
  * model.
  */
-export function pickReviewer(size: Size, choice: Choice, avoided: (entry: Reviewing) => boolean): Reviewing {
+export function pickReviewer(size: Size, choice: Choice, avoided: (entry: Model) => boolean): Model {
 	const list = REVIEWERS[size];
 	const entry =
 		choice.harness === undefined ? list.find((e) => !avoided(e)) : list.find((e) => e.harness === choice.harness);
@@ -267,7 +262,7 @@ export type ReviewOptions = BaseOptions & {
 	/** The checkout to review. */
 	root: string;
 	/** The reviewer; defaults to the first of the size's list whose model is not the latest writer's. */
-	harness?: ReviewHarness;
+	harness?: HarnessName;
 	model?: string;
 	effort?: string;
 	/** The models never to pick; without any, the latest writer's is avoided. */
@@ -305,10 +300,13 @@ export const processDependencies = (): ReviewDependencies => ({ env: process.env
 
 /** One reviewer's findings across every round on a branch, which a `--new` session continues. */
 export interface Tally {
-	reviewer: ReviewHarness;
-	/** Its latest round's model and effort. */
+	reviewer: HarnessName;
+	/** The shadow's tally, kept apart from the size's pick of the same harness. */
+	shadow?: true;
+	/** Its latest round's model, effort, and session, which the record names even once a run leaves it out. */
 	model: string;
 	effort: string;
+	session?: string;
 	rounds: number;
 	/**
 	 * Each finding it raised, once however many rounds keep it open, by its latest severity. One a replacing
@@ -331,16 +329,17 @@ export interface Reviewed {
  */
 interface State {
 	branch: string;
+	/** As read, these may include a retired reviewer's, which a run only numbers past; see `runs`. */
 	sessions: Session[];
 	tallies: Tally[];
 }
 
 /** One reviewer's session on a branch. */
 interface Session {
-	reviewer: ReviewHarness;
+	reviewer: HarnessName;
+	/** The shadow's session; the branch keeps at most one. */
+	shadow?: true;
 	session: string;
-	/** The checkout the session started in. */
-	root: string;
 	/** Each round's head, the merge base its change started from, and its findings. */
 	rounds: { head: string; mergeBase: string; findings: Finding[] }[];
 	/** The session's last round, which a round on the same head with nothing to settle repeats. */
@@ -369,8 +368,6 @@ export interface Context {
 	schemaFile: string;
 	/** The gateway Codex sends its requests to, from OPENAI_BASE_URL, which Codex itself no longer reads. */
 	openaiBaseUrl?: string;
-	/** opencode's: the sandboxed shell its commands run through, and the file holding `instructions`. */
-	sandbox?: { shell: string; instructions: string };
 }
 
 interface Turn {
@@ -395,24 +392,13 @@ interface Reply {
 
 interface Reader {
 	line(line: string): void;
-	/** Whether to stop the CLI now, as when it would wait out a usage limit; the turn then fails. */
-	stop?(): boolean;
 	/** The turn's reply once the CLI exited with `code`, given the tail of its stderr. */
 	reply(code: number, stderr: string): Reply;
 }
 
 interface Reviewer {
-	/** Whether a session stays in the checkout it started in, so a round from another worktree starts a new one. */
-	bound?: true;
 	/** Exits non-zero when the CLI is logged out. */
 	status: string[];
-	/**
-	 * Whether the status check's output lists `model`, for a CLI that may be
-	 * logged in to some providers but not the model's.
-	 */
-	lists?(output: string[], model: string): boolean;
-	/** Variables every run of the CLI gets, its status check's included. */
-	env: Record<string, string>;
 	/** How the user logs in. */
 	login: string;
 	/** The variable naming the configuration directory, and so the stored login, the status check reads. */
@@ -470,7 +456,6 @@ const CLAUDE_PROVIDERS = ["BEDROCK", "VERTEX", "FOUNDRY", "MANTLE", "ANTHROPIC_A
  */
 const claude: Reviewer = {
 	status: ["claude", "auth", "status"],
-	env: {},
 	login: LOGINS.claude.command,
 	profile: "CLAUDE_CONFIG_DIR",
 	credentials: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
@@ -615,7 +600,6 @@ const claudeEnv = () => ({ CLAUDE_CODE_PROMPT_CACHE_TTL: "1h" });
  */
 const codex: Reviewer = {
 	status: ["codex", "login", "status"],
-	env: {},
 	login: LOGINS.codex.command,
 	profile: "CODEX_HOME",
 	// `codex exec` reads CODEX_API_KEY, though `codex login status` does not count it; it ignores OPENAI_API_KEY.
@@ -706,161 +690,7 @@ function codexFlags(context: Context): string[] {
 	];
 }
 
-/** opencode's errors for an account's spent usage limit or budget, which it may retry until the reset. */
-const OPENCODE_LIMITS = new Set([
-	"provider.quota",
-	"provider.go-limit",
-	"provider.free-limit",
-	"provider.chatgpt-limit",
-	"provider.budget-limit",
-	"provider.model-budget-limit",
-]);
-
-/**
- * When an opencode limit error resets, in epoch milliseconds: the `resetsAt`
- * its provider's response names, or its `retryAfterMs` from `at`, as
- * opencode's own interface reads it.
- */
-export function opencodeReset(error: Record<string, unknown>, at: number): number | null {
-	const body = text(record(error.response)?.body) ?? "";
-	const resets = Date.parse(/"resetsAt"\s*:\s*"([^"]+)"/.exec(body)?.[1] ?? "");
-	if (!Number.isNaN(resets)) return resets;
-	const after = error.retryAfterMs;
-	return typeof after === "number" && Number.isFinite(after) && after >= 0 ? at + after : null;
-}
-
-/** A reply that wraps its JSON in a Markdown code fence, as models without an enforced schema may. */
-const unfenced = (reply: string) => /^\s*```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/.exec(reply)?.[1] ?? reply;
-
-/** What opencode is asked to do on a branch's first turn, since it has no review mode of its own. */
-const OPENCODE_REVIEW =
-	"Review this change for bugs: read it with read-only shell commands, such as `git diff`, `git show`, `cat`, " +
-	"and `rg`, and report each problem that holds, with its file, line, and the concrete scenario that breaks.";
-
-/**
- * opencode loads no project config, which holds plugins, MCP servers, a
- * shell, and instructions that would run or speak in the reviewer, nor Claude
- * Code's files, and every tool but its shell is denied: no file writes, web
- * access, questions, skills, or Code Mode. The shell runs each command under
- * sandbox-runtime (`sandbox.ts`), with no network, writes only to a private
- * directory, and reads only the checkout and its Git directories, since the
- * server itself runs unconfined. No language servers or formatters run, and
- * no snapshot or share. It keeps the user's config, such as custom providers,
- * and its login; the denials come last, so none of the user's own rules
- * outrank them. Sessions are created archived, out of the user's list.
- */
-const opencode: Reviewer = {
-	status: ["opencode", "models", "--standalone"],
-	lists: (output, model) => output.some((line) => line.trim() === model),
-	env: {
-		OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-		OPENCODE_DISABLE_CLAUDE_CODE: "1",
-		OPENCODE_DISABLE_AUTOUPDATE: "1",
-	},
-	login: "opencode auth login",
-	profile: "XDG_DATA_HOME",
-	credentials: [],
-	routeCredentials: [],
-	connection: [],
-	routes: () => [],
-	unauthorized: /\bprovider\.auth\b/,
-	// A resumed session runs in the directory it started in, and fails once that worktree is gone.
-	bound: true,
-	review: (context, _session, prompt) => opencodeTurn(context, [], `${OPENCODE_REVIEW}\n\n${prompt}`),
-	// `opencode run` takes no schema, so the prompt carries it.
-	resume: (context, session, prompt) =>
-		opencodeTurn(
-			context,
-			["--session", session],
-			`${prompt}\n\nThe response schema:\n\n${JSON.stringify(context.schema)}\n\nReply with only the JSON object.`,
-		),
-	// A spent limit fails the turn as an `error` event, or shows up as a `retry` one, which would
-	// wait for the reset, however far off, so the turn stops there.
-	reader() {
-		let session: string | undefined;
-		// The text since the last tool call, which holds the answer.
-		let reply: string[] = [];
-		let usage: Omit<Usage, "turn"> | undefined;
-		let error: string | undefined;
-		let limited: { until: number | null } | undefined;
-		let stop = false;
-		const failed = (value: unknown, at: number) => {
-			const failure = record(value) ?? {};
-			const message = `${text(failure.type) ?? "error"}: ${text(failure.message) ?? "opencode reported an error"}`;
-			if (OPENCODE_LIMITS.has(text(failure.type) ?? "") || LIMIT.test(message))
-				limited ??= { until: opencodeReset(failure, at) };
-			return message;
-		};
-		return {
-			line(line) {
-				const event = json(line);
-				if (event === undefined) return;
-				session ??= text(event.sessionID);
-				const part = record(event.part);
-				const at = typeof event.timestamp === "number" ? event.timestamp : Date.now();
-				if (event.type === "tool_use") reply = [];
-				if (event.type === "text") reply.push(text(part?.text) ?? "");
-				if (event.type === "step_finish") {
-					const tokens = record(part?.tokens) ?? {};
-					const cache = record(tokens.cache) ?? {};
-					usage ??= { input: 0, cached: 0, output: 0 };
-					usage.input += count(tokens.input) + count(cache.read) + count(cache.write);
-					usage.cached += count(cache.read);
-					usage.output += count(tokens.output) + count(tokens.reasoning);
-				}
-				if (event.type === "error") error = failed(event.error, at);
-				if (event.type === "retry") {
-					const message = failed(event.error, at);
-					if (limited || opencode.unauthorized.test(message)) {
-						error = message;
-						stop = true;
-					}
-				}
-			},
-			stop: () => stop,
-			reply(_code, stderr) {
-				if (!limited && error === undefined && LIMIT.test(stderr)) limited = { until: null };
-				const answer = reply.join("").trim();
-				return { session, text: answer === "" ? undefined : unfenced(answer), usage, error, limited };
-			},
-		};
-	},
-};
-
-/**
- * One `opencode run` in a private server, configured on every turn since a
- * resumed session takes its config from the server, not the session.
- */
-export function opencodeTurn(context: Context, resume: string[], prompt: string): Turn {
-	if (context.sandbox === undefined) throw new Error("opencode reviews only with a sandboxed shell");
-	const deny = (action: string) => ({ action, resource: "*", effect: "deny" });
-	const config = {
-		shell: context.sandbox.shell,
-		instructions: [context.sandbox.instructions],
-		lsp: false,
-		formatter: false,
-		snapshot: false,
-		share: "disabled",
-		permissions: [deny("*"), deny("skill"), { action: "shell", resource: "*", effect: "allow" }],
-	};
-	return {
-		argv: [
-			"opencode",
-			"run",
-			"--standalone",
-			"--format",
-			"json",
-			"--archived",
-			"--model",
-			`${context.model}#${context.effort}`,
-			...resume,
-		],
-		stdin: prompt,
-		env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
-	};
-}
-
-const CLIS: Record<ReviewHarness, Reviewer> = { claude, codex, opencode };
+const CLIS: Record<HarnessName, Reviewer> = { claude, codex };
 
 /** Codex's review turn reports all zeros, which is no measurement. */
 const reported = (usage: Omit<Usage, "turn"> | undefined): usage is Omit<Usage, "turn"> =>
@@ -894,10 +724,9 @@ function run(
 			reject(new ReviewInputError((error as Error).message));
 			return;
 		}
-		// opencode runs in PWD rather than its working directory.
 		const child = spawn(program, argv.slice(1), {
 			cwd,
-			env: programEnvironment({ ...env, PWD: cwd }),
+			env: programEnvironment(env),
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
@@ -916,14 +745,7 @@ function run(
 			clearTimeout(killing);
 		};
 		let stderr = "";
-		let stopped = false;
-		const lines = boundedLines(LINE_LIMIT, (line) => {
-			reader?.line(line);
-			if (!stopped && reader?.stop?.()) {
-				stopped = true;
-				abort();
-			}
-		});
+		const lines = boundedLines(LINE_LIMIT, (line) => reader?.line(line));
 		child.stdout.setEncoding("utf8").on("data", (chunk: string) => lines.data(chunk));
 		child.stdout.once("end", () => lines.end());
 		child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
@@ -948,7 +770,7 @@ const ABORT_GRACE_MS = 10_000;
 
 /** The reviewer CLI with the environment it runs in and the error for a login the API rejects. */
 interface Cli {
-	harness: ReviewHarness;
+	harness: HarnessName;
 	reviewer: Reviewer;
 	env: NodeJS.ProcessEnv;
 	/** Thrown when a turn fails on authentication, as a logged-out status check fails. */
@@ -978,36 +800,21 @@ const pick = (env: NodeJS.ProcessEnv, names: string[]) =>
  * shell's API key never overrides a stored subscription login, so a review is
  * billed as the user's own CLI sessions are.
  */
-async function prepare(
-	harness: ReviewHarness,
-	model: string,
-	cwd: string,
-	env: NodeJS.ProcessEnv,
-	signal?: AbortSignal,
-): Promise<Cli> {
+async function prepare(harness: HarnessName, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Cli> {
 	const reviewer = CLIS[harness];
-	const connected = { ...strippedEnvironment(env), ...pick(env, reviewer.connection), ...reviewer.env };
+	const connected = { ...strippedEnvironment(env), ...pick(env, reviewer.connection) };
 	const routes = reviewer.routes(env);
 	const through = routes.length > 0 ? ` through ${names(routes)}` : "";
 	const loggedOut = `${harness} is not logged in to ${profile(reviewer, env)}${through}; run \`${reviewer.login}\``;
-	// A CLI logged in to some providers passes its status check only for their models.
-	const unlisted =
-		reviewer.lists === undefined
-			? loggedOut
-			: `${harness} lists no model ${model} for ${profile(reviewer, env)}; run \`${reviewer.login}\` for its provider, or name a model \`${reviewer.status.join(" ")}\` lists`;
-	const loggedIn = async (env: NodeJS.ProcessEnv) => {
-		const output: string[] = [];
-		const listed = { line: (line: string) => void output.push(line), reply: () => ({}) };
-		const { code } = await run(reviewer.status, cwd, env, "", listed, signal);
-		return code === 0 && (reviewer.lists === undefined || reviewer.lists(output, model));
-	};
+	const loggedIn = async (env: NodeJS.ProcessEnv) =>
+		(await run(reviewer.status, cwd, env, "", undefined, signal)).code === 0;
 	const credentials = [...reviewer.credentials, ...(routes.length > 0 ? reviewer.routeCredentials : [])].filter(
 		(name) => env[name],
 	);
 	const withCredentials = { ...connected, ...pick(env, credentials) };
 	const rejected = `${harness} rejected ${names(credentials)}${through}; replace it, or run \`${reviewer.login}\``;
 	if (routes.length > 0) {
-		if (!(await loggedIn(withCredentials))) throw new ReviewInputError(unlisted);
+		if (!(await loggedIn(withCredentials))) throw new ReviewInputError(loggedOut);
 		return {
 			harness,
 			reviewer,
@@ -1021,18 +828,17 @@ async function prepare(
 			credentials.length > 0 ? `; quest review strips ${names(credentials)} while a stored login exists` : "";
 		return { harness, reviewer, env: connected, unauthorized: `${loggedOut}${ignored}`, signal };
 	}
-	if (credentials.length === 0) throw new ReviewInputError(unlisted);
+	if (credentials.length === 0) throw new ReviewInputError(loggedOut);
 	return { harness, reviewer, env: withCredentials, unauthorized: rejected, signal };
 }
 
-/** The environment `quest review` runs `harness`'s CLI on `model` in, for a caller that runs it with the same login. */
+/** The environment `quest review` runs `harness`'s CLI in, for a caller that runs it with the same login. */
 export async function reviewerEnvironment(
-	harness: ReviewHarness,
-	model: string,
+	harness: HarnessName,
 	cwd: string,
 	env: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv> {
-	return (await prepare(harness, model, cwd, env)).env;
+	return (await prepare(harness, cwd, env)).env;
 }
 
 /**
@@ -1417,6 +1223,24 @@ function load(path: string): unknown {
 	}
 }
 
+/** A reviewer's seat on a branch: its harness, and whether it is the shadow. */
+type SeatId = { reviewer: HarnessName; shadow?: true };
+const seatKey = (seat: SeatId) => `${seat.reviewer}${seat.shadow ? " shadow" : ""}`;
+/** Whether two reviewers hold the same seat: the same harness, both the shadow or neither. */
+export const sameSeat = (a: SeatId, b: SeatId) => seatKey(a) === seatKey(b);
+
+/** The efforts the harnesses take, from lowest to highest. */
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * The shadow of `routed`, the size's pick: its model one effort lower, or null when no lower effort is known,
+ * as for Opus low or an `--effort` off the ladder, such as Codex's `minimal`.
+ */
+export function shadowOf(routed: Model): Model | null {
+	const at = EFFORTS.indexOf(routed.effort);
+	return at <= 0 ? null : { ...routed, effort: EFFORTS[at - 1]! };
+}
+
 /**
  * A branch's saved sessions, read before any reviewer runs, so a file this
  * quest cannot resume is refused, naming `--new`, rather than failing after a
@@ -1432,6 +1256,8 @@ export function parseState(value: unknown): State {
 		state.tallies.every(
 			(tally) =>
 				typeof tally?.reviewer === "string" &&
+				(tally.shadow === undefined || tally.shadow === true) &&
+				(tally.session === undefined || typeof tally.session === "string") &&
 				typeof tally.rounds === "number" &&
 				typeof tally.fixed === "number" &&
 				typeof tally.refuted === "number" &&
@@ -1439,10 +1265,10 @@ export function parseState(value: unknown): State {
 		) &&
 		state.sessions.every(
 			(session) =>
-				state.tallies!.some((tally) => tally.reviewer === session?.reviewer) &&
 				typeof session?.reviewer === "string" &&
+				(session.shadow === undefined || session.shadow === true) &&
+				state.tallies!.some((tally) => sameSeat(tally, session)) &&
 				typeof session.session === "string" &&
-				typeof session.root === "string" &&
 				Array.isArray(session.rounds) &&
 				session.rounds.length > 0 &&
 				session.rounds.every((round) => Array.isArray(round?.findings)) &&
@@ -1450,10 +1276,19 @@ export function parseState(value: unknown): State {
 				session.last !== null &&
 				typeof session.given === "object" &&
 				session.given !== null,
-		);
+		) &&
+		state.sessions.filter((session) => session.shadow).length <= 1;
 	if (!valid) throw new ReviewInputError("the saved review sessions are not ones quest review reads; pass --new");
-	return state as State;
+	// A retired reviewer's tally is dropped, so the record never names it. Its session stays only until the run numbers
+	// the last round's findings as that round printed them, so the author's responses keep their numbers.
+	return { ...state, tallies: state.tallies!.filter(runs) } as State;
 }
+
+/**
+ * Whether quest still runs `seat`'s reviewer. A retired one has no CLI to resume its session or settle its findings,
+ * so its session is dropped, open findings included, and the routed reviewer reviews the whole branch.
+ */
+const runs = (seat: { reviewer: string }) => (HARNESSES as readonly string[]).includes(seat.reviewer);
 
 /**
  * The branch whose session a round continues: `name`, checked as a branch
@@ -1541,21 +1376,9 @@ function recordedLatest(record: ModelsRecord, options: ReviewOptions): string | 
 	return record.implementers.at(-1)?.fields?.model;
 }
 
-/** The sandbox opencode's commands run in, reading the checkout at `root` and its Git directories. */
-function sandboxFor(root: string, env: NodeJS.ProcessEnv): Sandbox {
-	const dirs = ["--absolute-git-dir", "--path-format=absolute --git-common-dir"].map((flag) =>
-		git(root, ["rev-parse", ...flag.split(" ")]),
-	);
-	try {
-		return openSandbox([...new Set([root, ...dirs])], env);
-	} catch (error) {
-		throw new ReviewInputError(`opencode reviews only in a sandbox: ${(error as Error).message}`);
-	}
-}
-
 /**
- * Review the checkout's committed branch: one round of each reviewer on the same head, the size's pick
- * and `SECOND_REVIEWER`, or only `--harness`'s, each resuming its session on the branch unless `fresh`.
+ * Review the checkout's committed branch: one round of each reviewer on the same head, the size's pick and its
+ * shadow while it runs, or only `--harness`'s, each resuming its session on the branch unless `fresh`.
  * Every reviewer runs at once, and the first to fail stops the others and fails the whole, saving no round.
  */
 export async function review(options: ReviewOptions, deps: ReviewDependencies): Promise<Reviewed> {
@@ -1581,46 +1404,69 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const record = needed ? await deps.models?.(root, baseRef, branch) : undefined;
 	const sized = reviewSize(root, baseSha, options.sizeBranch ?? branch, options.size, recordedSize(record, options));
 	const avoided = authored(options, deps.env, recordedLatest(record, options));
-	const picked = [pickReviewer(sized.size, options, avoided)];
-	// A named reviewer replaces the pair, as for a repository whose instructions name its own.
-	if (options.harness === undefined) {
-		if (avoided(SECOND_REVIEWER))
-			throw new ReviewInputError(`${SECOND_REVIEWER.model} is avoided; pass --harness to name a single reviewer`);
-		picked.push(SECOND_REVIEWER);
-	}
+	const routed = pickReviewer(sized.size, options, avoided);
+	// A named reviewer runs without the shadow, as for a repository whose instructions name its own.
+	const auto = options.harness === undefined;
+	const shadow = auto ? shadowOf(routed) : null;
 
 	const statePath = sessionFile(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]), branch);
 	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
 	const saved = savedState(statePath, options.fresh);
-	const sessions = options.fresh || saved === undefined ? [] : saved.sessions;
-	// The last run numbered each session's findings after those of the sessions before it.
+	const all = options.fresh || saved === undefined ? [] : saved.sessions;
+	// The last run numbered each session's findings after those of the sessions before it, a retired reviewer's
+	// included, which are then dropped.
 	const firsts = new Map<Session, number>();
 	let next = 1;
-	for (const session of sessions) {
+	for (const session of all) {
 		firsts.set(session, next);
 		next += session.rounds.at(-1)!.findings.length;
 	}
-	const seats = picked.map((reviewer): Seat => {
-		const session = sessions.find((each) => each.reviewer === reviewer.harness);
-		return { reviewer, session, first: session === undefined ? 1 : firsts.get(session)! };
+	const sessions = all.filter(runs);
+	const seated = (session: Session | undefined) => ({
+		session,
+		first: session === undefined ? 1 : firsts.get(session)!,
 	});
+	const seats: Seat[] = [
+		{ reviewer: routed, ...seated(sessions.find((each) => each.reviewer === routed.harness && !each.shadow)) },
+	];
 	const unseated = () => sessions.filter((each) => !seats.some((seat) => seat.session === each));
 	const unsettled = (list: Session[]) => list.filter((each) => each.rounds.at(-1)!.findings.length > 0);
 	// When the latest writer changed the size's pick, the new pick's first session settles the open findings
 	// of the reviewer it replaces, by their numbers, so they are never dropped unanswered.
 	const replaced =
-		options.harness === undefined && seats[0]!.session === undefined ? unsettled(unseated())[0] : undefined;
-	if (replaced !== undefined) seats[0] = { ...seats[0]!, session: replaced, first: firsts.get(replaced)! };
-	// A run of the pair drops the other sessions. A run of --harness's reviewer alone keeps them for the pair's
-	// next run. Either refuses to pass a head while one of them still has findings it cannot settle.
+		auto && seats[0]!.session === undefined ? unsettled(unseated()).find((each) => !each.shadow) : undefined;
+	if (replaced !== undefined) seats[0] = { ...seats[0]!, ...seated(replaced) };
+	// The shadow reviews a branch's first run, then reruns only while it has findings to settle, or once the pick
+	// changed so that the shadow it ran is no longer one step below it. Its session carries over to the new
+	// shadow, as a replaced reviewer's does, so its findings stay settled. A pick with no step below it still
+	// seats a shadow at its own effort while the old one has findings, since only a shadow settles them.
+	const shadowed = sessions.find((each) => each.shadow);
+	const open = shadowed !== undefined && unsettled([shadowed]).length > 0;
+	const stale =
+		shadow !== null &&
+		shadowed !== undefined &&
+		!(
+			shadowed.reviewer === shadow.harness &&
+			shadowed.last.model === shadow.model &&
+			shadowed.last.effort === shadow.effort
+		);
+	if (auto && (shadowed === undefined ? shadow !== null : open || stale))
+		seats.push({ reviewer: shadow ?? routed, shadow: true, ...seated(shadowed) });
+	// A run of the size's pick drops the other sessions but a shadow's, whose presence keeps it from rerunning. A
+	// run of --harness's reviewer alone keeps them all for the pick's next run. Either refuses to pass a head while
+	// one of them still has findings it cannot settle.
 	const others = unseated();
-	const kept = options.harness === undefined ? [] : others;
-	const open = unsettled(others);
-	if (open.length > 0) {
-		const names = open.map((each) => each.reviewer).join(" and ");
+	const kept = auto ? others.filter((each) => each.shadow) : others;
+	const held = unsettled(others);
+	if (held.length > 0) {
+		const names = held.map((each) => `${each.reviewer}${each.shadow ? " (shadow)" : ""}`).join(" and ");
+		// A run of the size's pick seats every shadow with findings, so what it holds is a reviewer only --harness runs.
+		const run = auto
+			? `${[...new Set(held.map((each) => `--harness ${each.reviewer}`))].join(" or ")}, adding --model or --exclude-model when its size's model is avoided,`
+			: "the size's pick, or of that reviewer with --harness,";
 		throw new ReviewInputError(
-			`${names} still ${open.length > 1 ? "have" : "has"} findings to settle on this branch; settle them in a run of that reviewer with --responses, or pass --new to drop them`,
+			`${names} still ${held.length > 1 ? "have" : "has"} findings to settle on this branch; settle them in a run of ${run} with --responses, or pass --new to drop them`,
 		);
 	}
 	if (seats.every((seat) => seat.session === undefined) && options.responses !== undefined) {
@@ -1679,7 +1525,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const done = results.map((result) => (result as PromiseFulfilledResult<Seated>).value);
 	const tallies = tallied(
 		options.fresh ? dropped(saved) : (saved?.tallies ?? []),
-		done.map((each, i) => ({ round: each.round, settles: seats[i]!.session?.reviewer })),
+		done.map((each, i) => ({ round: each.round, settles: seats[i]!.session })),
 	);
 	save(statePath, { branch, sessions: [...done.map((each) => each.session), ...kept], tallies } satisfies State);
 	return { rounds: done.map((each) => each.round), tallies };
@@ -1706,8 +1552,8 @@ function savedState(path: string, fresh: boolean | undefined): State | undefined
  */
 function dropped(saved: State | undefined): Tally[] {
 	const tallies = (saved?.tallies ?? []).map((tally) => ({ ...tally, findings: { ...tally.findings } }));
-	for (const session of saved?.sessions ?? []) {
-		const tally = tallies.find((each) => each.reviewer === session.reviewer)!;
+	for (const session of (saved?.sessions ?? []).filter(runs)) {
+		const tally = tallies.find((each) => sameSeat(each, session))!;
 		for (const finding of session.rounds.at(-1)!.findings) tally.findings[finding.severity]--;
 	}
 	return tallies;
@@ -1718,13 +1564,16 @@ function dropped(saved: State | undefined): Tally[] {
  * and settles the last round's for the reviewer that raised them, `settles`, which is another when the round
  * replaced it; one it keeps open moves to its own count, since the round reports it again.
  */
-export function tallied(tallies: Tally[], rounds: { round: Round; settles?: ReviewHarness }[]): Tally[] {
-	const by = new Map(tallies.map((tally) => [tally.reviewer, { ...tally, findings: { ...tally.findings } }]));
+export function tallied(
+	tallies: Tally[],
+	rounds: { round: Round; settles?: { reviewer: HarnessName; shadow?: true } }[],
+): Tally[] {
+	const by = new Map(tallies.map((tally) => [seatKey(tally), { ...tally, findings: { ...tally.findings } }]));
 	for (const { round, settles } of rounds) {
 		if (round.unchanged) continue;
 		const settled = round.earlier?.findings ?? [];
 		if (settled.length > 0) {
-			const raiser = settles === undefined ? undefined : by.get(settles);
+			const raiser = settles === undefined ? undefined : by.get(seatKey(settles));
 			if (raiser === undefined) throw new Error(`no tally holds the findings ${round.reviewer}'s round settles`);
 			for (const finding of settled) {
 				if (finding.disposition === "fixed") raiser.fixed++;
@@ -1732,8 +1581,9 @@ export function tallied(tallies: Tally[], rounds: { round: Round; settles?: Revi
 				else raiser.findings[finding.severity]--;
 			}
 		}
-		const own = by.get(round.reviewer) ?? {
+		const own = by.get(seatKey(round)) ?? {
 			reviewer: round.reviewer,
+			...(round.shadow && { shadow: true as const }),
 			model: round.model,
 			effort: round.effort,
 			rounds: 0,
@@ -1743,14 +1593,15 @@ export function tallied(tallies: Tally[], rounds: { round: Round; settles?: Revi
 		};
 		own.model = round.model;
 		own.effort = round.effort;
+		own.session = round.session;
 		own.rounds++;
 		for (const finding of round.findings) own.findings[finding.severity]++;
-		by.set(round.reviewer, own);
+		by.set(seatKey(round), own);
 	}
-	const run = rounds.map(({ round }) => round.reviewer);
+	const run = rounds.map(({ round }) => seatKey(round));
 	return [
-		...run.flatMap((reviewer) => by.get(reviewer) ?? []),
-		...[...by.values()].filter((tally) => !run.includes(tally.reviewer)),
+		...run.flatMap((key) => by.get(key) ?? []),
+		...[...by].filter(([key]) => !run.includes(key)).map(([, tally]) => tally),
 	];
 }
 
@@ -1775,7 +1626,8 @@ interface Shared {
  * or the replaced reviewer's, whose findings its new session settles.
  */
 interface Seat {
-	reviewer: Reviewing;
+	reviewer: Model;
+	shadow?: true;
 	session?: Session;
 	first: number;
 }
@@ -1789,7 +1641,7 @@ interface Seated {
 /** One reviewer's round, resuming its session when nothing but the head changed. */
 async function reviewWith(shared: Shared, seat: Seat, responses: string | undefined): Promise<Seated> {
 	const { root, change, given, rules } = shared;
-	const { reviewer: picked, session: stored, first } = seat;
+	const { reviewer: picked, session: stored, first, shadow } = seat;
 	const harness = picked.harness;
 	const reviewer = CLIS[harness];
 	const previous = stored?.rounds.at(-1);
@@ -1797,20 +1649,18 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 	// Responses answer findings by number; a reviewer with none of its own would read others' as its own.
 	const answered = earlier.length > 0 ? responses : undefined;
 	// A round checks only what changed since the last one when nothing but the head changed: the same
-	// reviewer, base, instructions, and REVIEW.md, a range the last round's covers, and for a reviewer bound
-	// to its checkout, the same one. Anything else starts a new session that reviews the whole change, since a
-	// resumed one keeps its first instructions.
+	// reviewer, base, instructions, and REVIEW.md, and a range the last round's covers. Anything else starts a
+	// new session that reviews the whole change, since a resumed one keeps its first instructions.
 	const last = stored?.last;
 	const resume =
 		previous !== undefined &&
 		last !== undefined &&
-		stored!.reviewer === harness &&
+		sameSeat(stored!, { reviewer: harness, shadow }) &&
 		stored!.given.instructions === given.instructions &&
 		stored!.given.rules === given.rules &&
 		last.model === picked.model &&
 		last.effort === picked.effort &&
 		last.base.ref === shared.base.ref &&
-		(!reviewer.bound || stored!.root === root) &&
 		covers(root, previous.mergeBase, change.mergeBase);
 
 	// The last round already passed this head, and has nothing left to settle; it repeats against the run's base
@@ -1820,7 +1670,7 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 		return { round: { ...last!, base: shared.base, size, sizeFrom, usage: [], unchanged: true }, session: stored! };
 	}
 
-	const cli = await prepare(harness, picked.model, root, shared.env, shared.signal);
+	const cli = await prepare(harness, root, shared.env, shared.signal);
 
 	// Named by its bound, so a round on another branch never rewrites the file this one reads.
 	const replySchema = schema(earlier.length);
@@ -1839,32 +1689,22 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 	const usage: Usage[] = [];
 	let session: string;
 	let reply: Reply;
-	const sandbox = harness === "opencode" ? sandboxFor(root, cli.env) : undefined;
-	try {
-		if (sandbox !== undefined) {
-			const instructions = join(sandbox.dir, "instructions.md");
-			writeFileSync(instructions, context.instructions, { mode: 0o600 });
-			context.sandbox = { shell: sandbox.shell, instructions };
-		}
-		if (!resume) {
-			const prompt = reviewPrompt(change, rules, earlier, answered, first);
-			const opened = await turn(cli, reviewer.review(context, randomUUID(), prompt), root, context.model);
-			if (opened.session === undefined) throw new Error(`${harness} did not report its session`);
-			session = opened.session;
-			if (reported(opened.usage)) usage.push({ turn: "review", ...opened.usage });
-			reply = await turn(
-				cli,
-				reviewer.resume(context, session, reportPrompt(change.head, earlier, first)),
-				root,
-				context.model,
-			);
-		} else {
-			session = stored!.session;
-			const prompt = laterPrompt({ ...change, previous: previous!.head, earlier, first, responses: answered });
-			reply = await turn(cli, reviewer.resume(context, session, prompt), root, context.model);
-		}
-	} finally {
-		sandbox?.close();
+	if (!resume) {
+		const prompt = reviewPrompt(change, rules, earlier, answered, first);
+		const opened = await turn(cli, reviewer.review(context, randomUUID(), prompt), root, context.model);
+		if (opened.session === undefined) throw new Error(`${harness} did not report its session`);
+		session = opened.session;
+		if (reported(opened.usage)) usage.push({ turn: "review", ...opened.usage });
+		reply = await turn(
+			cli,
+			reviewer.resume(context, session, reportPrompt(change.head, earlier, first)),
+			root,
+			context.model,
+		);
+	} else {
+		session = stored!.session;
+		const prompt = laterPrompt({ ...change, previous: previous!.head, earlier, first, responses: answered });
+		reply = await turn(cli, reviewer.resume(context, session, prompt), root, context.model);
 	}
 	if (reported(reply.usage)) usage.push({ turn: "findings", ...reply.usage });
 	const { score, rationale, findings: found, earlier: answers } = verdict(reply, earlier.length, first);
@@ -1875,6 +1715,7 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 	];
 	const round: Round = {
 		reviewer: harness,
+		...(shadow && { shadow }),
 		model: context.model,
 		effort: context.effort,
 		branch: shared.branch,
@@ -1904,7 +1745,10 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 					},
 		unchanged: false,
 	};
-	return { round, session: { reviewer: harness, session, root, rounds, last: round, given } };
+	return {
+		round,
+		session: { reviewer: harness, ...(shadow && { shadow }), session, rounds, last: round, given },
+	};
 }
 
 /**
@@ -1919,7 +1763,7 @@ export function nextStep(rounds: Round[]): string {
 	if (findings.every((finding) => finding.severity === "low"))
 		return "next finish: fix or refute each finding, commit, rerun the checks, then add a line after the PR body's review record naming the new head's full SHA and each finding's disposition; run no further round";
 	if (rounds.some((round) => round.findings.length > 0 && round.round % 3 === 0))
-		return "next checkpoint: before fixing these findings, reconsider the approach and let the user decide, as /quest-review describes";
+		return "next checkpoint: before fixing these findings, step back: work out the best long-term approach from first principles, compare it with the current one, and let the user decide, as /quest-review describes";
 	return "next respond: fix each finding or refute it with evidence the reviewer cannot rebut, commit, rerun the checks, then run the next round with --responses, one response per finding by its number";
 }
 
@@ -1938,7 +1782,7 @@ export function roundLines(rounds: Round[]): string[] {
 	for (const round of rounds) {
 		lines.push(
 			"",
-			`reviewer ${round.reviewer} ${round.model} ${round.effort}`,
+			`reviewer ${round.reviewer} ${round.model} ${round.effort}${round.shadow ? " shadow" : ""}`,
 			`session ${round.session}`,
 			`round ${round.round}`,
 			...(round.unchanged

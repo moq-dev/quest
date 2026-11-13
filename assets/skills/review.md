@@ -23,24 +23,25 @@ Run no new round when a review already counts for the committed head, as `/quest
 If you judge the change too trivial to review, skip the review instead and record the skip and its reason in `## Review`.
 
 Otherwise, review the committed branch with `quest review --base <remote>/<base>`, in the foreground; a round takes minutes.
-It picks a reviewer other than the model that changed the branch last, at an effort the PR's size sets, with a second reviewer beside it.
+It picks a reviewer other than the model that changed the branch last, at an effort the PR's size sets.
 It reads that model, and off a quest branch the size, from the PR body's `## Models` record: open the draft PR and write the record before the first round, as `Size: M` and `Implementer: Claude Code, claude-opus-5-5, high effort`.
 Pass `--exclude-model` or `--size` only for a PR whose body cannot hold the record.
 Where the repository's root instructions name other reviewers, pass them with `--harness`, `--model`, and `--effort`, which runs that reviewer alone.
 Each round rewrites the PR body's `## Review` section, so add context only after it, and write a round's record by hand only when it printed `record skipped`.
 
 Each round ends with a `next` line: follow it until a round of the head reports no finding you have not refuted; never block on the score.
-Fix every finding relevant to the PR in the PR: review findings you do not refute, gaps the change exposes, and bugs in the code it touches; only out-of-scope discoveries become follow-ups.
+Fix in the PR every review finding relevant to it that you do not refute and every gap the change exposes; in other code you read, fix easy findings and suggest the rest as follow-ups.
 Refute a finding only with evidence the reviewer cannot rebut: a `path:line`, a command's output, or a recorded maintainer decision.
 A finding the reviewer keeps against such a refutation is a decision for the user.
 Write each round's `--responses` file in the checkout's `.tmp/`.
 
 At a `next checkpoint` line, which a reviewer's every third round prints when it reports findings, stop before fixing them and reconsider the approach; `quest status <pr>` prints a `checkpoint` line when an online reviewer's round is due the same way.
-Findings that keep coming usually mean the approach is wrong, not the last fix: brainstorm other designs that would avoid the whole class of findings, favoring simpler ones, and compare them with the current one.
-Report the alternatives and what remains, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
+Findings that keep coming usually mean the approach is wrong, not the last fix.
+Step back before another patch: state the problem the PR solves without reference to its current code, work out the best long-term design you would build if starting today, favoring simpler ones that avoid the whole class of findings, and compare it with the current approach and the remaining findings.
+Report that comparison, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
-Either reviewer out of quota or logged out is an outage, not a skip: stop reviewing rather than go on with the other alone, keep the PR a draft, hand it back, and report the outage.
+A reviewer out of quota or logged out is an outage, not a skip: stop reviewing, keep the PR a draft, hand it back, and report the outage.
 Its `## Waiting` item names the reviewer, its error, and the check, such as `Codex: out of quota until 2026-11-03 15:00 UTC; check that quest review runs`, with the reset time `quest review` prints when it exits 3 on a usage limit; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
 Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
 

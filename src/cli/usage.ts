@@ -103,10 +103,10 @@ export interface AccuracyRow {
 	handedBack: number;
 	/** PRs whose record tallies their reviews; a record written before tallies counts for none of what follows. */
 	reviewed: number;
-	/** The reviewers' latest rounds on the reviewed PRs that have a score, and the scores' sum. */
+	/** The reviewers' latest rounds on the reviewed PRs that have a score, and the scores' sum, leaving out the shadow's. */
 	scored: number;
 	score: number;
-	/** Every reviewer's findings across every round on the reviewed PRs, and as `rounds`, each PR's most rounds. */
+	/** Every reviewer's findings but the shadow's across every round on the reviewed PRs, and as `rounds`, each PR's most rounds. */
 	tally: Counts;
 	/** The land fixer's model-run fixes, leaving out the watcher's own base merges. */
 	landFixes: number;
@@ -513,16 +513,14 @@ function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
  * Attribute each priced session to the PR whose head branch its log last named, among those still open when the
  * session reached the branch and headed from the repository its log, checkout, or directory names, and give it a
  * role: reviewing when a PR's review record names it or Codex marks it a review, implementing when it began before
- * its PR opened, and iterating otherwise. A session whose log quest cannot read, such as opencode's, is the
- * reviewing session of the PR whose record names it, the newest when a branch's later PR resumed it. Returns the
- * sessions on no PR here.
+ * its PR opened, and iterating otherwise. Returns the sessions on no PR here.
  */
 function attribute(
 	sessions: Priced[],
 	logs: (SessionLog | null)[],
 	pulls: Pull[],
 	rows: Map<number, PullRow>,
-	reviewers: Map<string, { number: number; effort: string }>,
+	reviewers: Set<string>,
 ): Priced[] {
 	const byBranch = new Map<string, Pull[]>();
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
@@ -530,16 +528,7 @@ function attribute(
 	const unattributed: Priced[] = [];
 	const owned = owners(logs);
 	sessions.forEach((session, index) => {
-		const id = sessionId(session);
-		const named = reviewers.get(id);
 		const log = logs[index];
-		if (!log && named) {
-			const row = rows.get(named.number);
-			const { harness, models } = session;
-			if (row) row.sessions.push({ harness, session: id, role: "reviewing", effort: named.effort, models });
-			else unattributed.push(session);
-			return;
-		}
 		const branches = log ? [...log.branches].sort((a, b) => b[1].last - a[1].last) : [];
 		let found: Pull | undefined;
 		for (const [branch, seen] of branches) {
@@ -563,10 +552,16 @@ function attribute(
 			unattributed.push(session);
 			return;
 		}
+		const id = sessionId(session);
 		row.sessions.push({
 			harness: session.harness,
 			session: id,
-			role: log.review || named ? "reviewing" : log.started < found.created ? "implementing" : "iterating",
+			role:
+				log.review || reviewers.has(id)
+					? "reviewing"
+					: log.started < found.created
+						? "implementing"
+						: "iterating",
 			effort: log.effort,
 			models: session.models,
 		});
@@ -612,7 +607,8 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	// each round rewrites only its own PR's record; the newest breaks a tie. A deleted fork has no repository,
 	// so its PR stands alone.
 	const branch = (each: PullRow) => JSON.stringify([each.repository ?? each.number, each.branch]);
-	const rounds = (each: PullRow) => each.review.reduce((sum, review) => sum + (review.tally?.rounds ?? 0), 0);
+	const rounds = (each: PullRow) =>
+		each.review.reduce((sum, review) => sum + (review.shadow ? 0 : (review.tally?.rounds ?? 0)), 0);
 	const latest = new Map<string, PullRow>();
 	for (const each of pulls) {
 		if (each.implementers.length === 0 || each.review.every((review) => review.tally === null)) continue;
@@ -666,8 +662,11 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			if (each.handedBack) row.handedBack++;
 			row.fixes += each.fixedBy.length;
 			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
+			// The shadow's findings measure an effort step, not the writer, so they stay out of the writer's row.
 			const tallied =
-				latest.get(branch(each)) === each ? each.review.filter((review) => review.tally !== null) : [];
+				latest.get(branch(each)) === each
+					? each.review.filter((review) => review.tally !== null && !review.shadow)
+					: [];
 			if (tallied.length > 0) {
 				row.reviewed++;
 				row.tally.rounds += Math.max(...tallied.map((review) => review.tally!.rounds));
@@ -759,11 +758,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	let unattributed: Usage["unattributed"] = null;
 	if (priced !== null) {
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
-		const reviewers = new Map<string, { number: number; effort: string }>();
-		for (const row of [...allRows].sort((a, b) => a.number - b.number))
-			for (const review of row.review)
-				if (review.session !== null)
-					reviewers.set(review.session, { number: row.number, effort: review.effort });
+		const reviewers = new Set(allRows.flatMap((row) => row.review.flatMap((review) => review.session ?? [])));
 		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };
@@ -827,7 +822,7 @@ export function usageLines(report: Usage): string[] {
 		for (const item of row.unread) lines.push(`  unread: ${item}`);
 		for (const r of row.review)
 			lines.push(
-				`  review: ${r.harness}, ${r.model}, ${r.effort} effort; ${r.round === null ? "not in the latest run" : `round ${r.round}, score ${r.score ?? "-"}/10`}; ${r.tally === null ? "no tally" : `rounds ${r.tally.rounds}, ${findingsText(r.tally)}`}`,
+				`  review: ${r.harness}, ${r.model}, ${r.effort} effort${r.shadow ? ", shadow" : ""}; ${r.round === null ? "not in the latest run" : `round ${r.round}, score ${r.score ?? "-"}/10`}; ${r.tally === null ? "no tally" : `rounds ${r.tally.rounds}, ${findingsText(r.tally)}`}`,
 			);
 		for (const o of row.online)
 			lines.push(`  online review: ${o.reviewer}, ${o.finalHead ? "" : "not "}at the final head; ${answers(o)}`);
