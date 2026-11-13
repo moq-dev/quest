@@ -27,19 +27,22 @@ Decided 2026-11-12 (user, iterating
 [kixel-ai/rind#714](https://github.com/kixel-ai/rind/pull/714)): ✅ files a
 repository's tests read are checked in, so a plain clone runs every test
 (rejected: fetching them in a Pullfrog setup step on every run; pinning them
-as Nix flake inputs, which still needs Nix in the reviewer). Rind now copies
+as Nix flake inputs, which still needs Nix in the reviewer). That PR copies
 the Wycheproof, CAVP, and CCTV files its tests open into `thirdparty/vectors/`
-with `admin/sync-vectors`, and its Pullfrog workflow gets no setup step:
+with `admin/sync-vectors`, and rind's Pullfrog workflow gets no setup step:
 `ubuntu-latest` already has cargo, and vectors were its only recorded
-problem. Until that PR merges, rind's `main` still has the submodules. Once
-it merges, dispatch one Pullfrog review in rind (`gh workflow run
-pullfrog.yml`) and check its log for passing tests; rind is done unless that
-run shows another gap.
+problem. Until that PR merges, rind's `main` still has the submodules.
 
-Remaining: studio, rust2, quest, and web-transport, whose gaps are tools, not
-files. Prefer making the bot need no tool it lacks, as rind did, over
-installing one. Where a repository's checks still need Nix or `just`, add
-only that.
+Remaining:
+
+- Rind: once its PR merges, dispatch one Pullfrog review
+  (`gh workflow run pullfrog.yml -R kixel-ai/rind`) and check its log for
+  passing tests. Rind is done when that run passes, and needs this quest's
+  setup work only if it shows another gap.
+- Studio, rust2, quest, and web-transport, whose gaps are tools, not
+  files. Prefer making the bot need no tool it lacks, as rind did, over
+  installing one. Where a repository's checks still need Nix or `just`, add
+  only that.
 
 Trust boundary: the run holds `id-token: write` to mint the token Pullfrog
 trades for model access, and `assets/CONTEXT.md` forbids running code from a
@@ -71,4 +74,5 @@ Open for the implementer, with recommendations:
 
 - kixel-ai/rind: merge [kixel-ai/rind#714](https://github.com/kixel-ai/rind/pull/714),
   which vendors rind's test vectors; check that rind's `main` has
-  `thirdparty/vectors/wycheproof/` and no `thirdparty/wycheproof` submodule
+  `thirdparty/vectors/{wycheproof,cavp,cctv}/` and none of those three
+  submodules. The review run the Plan's Remaining list names follows it.
