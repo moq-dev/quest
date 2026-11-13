@@ -1158,6 +1158,10 @@ quest gate bun run test
 quest gate cargo build --release
 ```
 
+Leave model calls, such as `quest review`, and long-running servers out of the
+gate: they wait rather than compute, and a server never exits, so it would hold
+its admission forever.
+
 Like every command Quest runs, the gated command gets the environment Quest was
 started with. Quest never loads the working directory's `.env` files, as Bun
 otherwise would, so a repository's `.env.development` cannot override the
@@ -1214,7 +1218,9 @@ pass it only for cheap commands, such as a formatter or `quest check`, that cost
 less to run than to hold back. A check that lands PRs goes first: with
 `QUEST_GATE_PRIORITY=1` in its environment, every gate inside the check waits
 for memory but never for load or the queue, whether or not other gated commands
-run. Both
+run, and its command gets `MBX_SCHEDULER_PRIORITY=normal` unless it sets its
+own, so [mbx](https://github.com/jdx/mr-boxington), where installed, schedules
+its compiles ahead of lower-priority builds. Both kinds of command
 record their admissions, so the other callers count them against the host's
 headroom. Set the variable where the check starts, such as a merge queue
 build's workflow or the land daemon's sandbox, rather than relying on a slot in
