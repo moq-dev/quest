@@ -4,13 +4,13 @@
 // lives here rather than in the core.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { type Finding, branchQuest, check } from "../core";
 import { discoveryEnv } from "./git";
-import { gitEnvironment } from "./land";
 import { snapshot } from "./tree";
 
 /**
@@ -22,9 +22,12 @@ import { snapshot } from "./tree";
  */
 export function landed(root: string, base: string, options: { branch?: string; head?: string } = {}): Finding[] {
 	const name = options.branch ?? currentBranch(root);
-	const mergeBase = git(root, ["merge-base", base, options.head ?? "HEAD"]);
+	const head = options.head ?? "HEAD";
+	const mergeBase = git(root, ["merge-base", base, head]);
 	if (mergeBase.status !== 0) {
-		throw new Error(`no merge base between ${base} and HEAD: ${mergeBase.stderr.trim() || "unrelated histories"}`);
+		throw new Error(
+			`no merge base between ${base} and ${head}: ${mergeBase.stderr.trim() || "unrelated histories"}`,
+		);
 	}
 	const commit = mergeBase.stdout.trim();
 	// Without a head, the pathspec and `<rev>:./path` are relative to the root,
@@ -64,58 +67,87 @@ export type LandingCheck = (head: LandingHead) => Promise<Finding[]>;
 /**
  * What `quest check --no-stubs --base <base> --branch <branch>` reports on `head.sha`, against a
  * freshly fetched base. The head is untrusted, so nothing from it runs or is checked out: the
- * check reads git objects in a temporary bare repository that borrows the objects of the
- * checkout at `root`, if any, and fetches only what it lacks. A base without quests is a
- * repository that does not use them, so it has no findings, and a finding the base already
- * has is not the head's, as the land daemon screens a head.
+ * check reads git objects. It fetches into the repository of the checkout at `root`, under refs of
+ * its own that it then deletes, so Git sends only what that repository lacks; with no checkout, or
+ * a shallow one whose history could hide the merge base, it uses a temporary bare repository.
+ * A finding the base already has is not the head's, as the land daemon screens a head, and a
+ * repository with no quests on either side does not use them.
  */
 export function landingCheck(root: string): LandingCheck {
 	return async (head) => {
-		const dir = mkdtempSync(join(tmpdir(), "quest-merge-"));
+		const local = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir", "--is-shallow-repository"]);
+		const [common, shallow] = local.stdout.trim().split("\n");
+		const borrowed = local.status === 0 && shallow === "false";
+		const dir = borrowed ? common : mkdtempSync(join(tmpdir(), "quest-merge-"));
+		const namespace = `refs/quest-merge/${randomUUID()}`;
+		const base = `${namespace}/base`;
+		const tip = `${namespace}/head`;
+		const run = (args: string[], env: Record<string, string> = {}) => {
+			const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-C", dir, ...args], {
+				encoding: "utf8",
+				env: { ...discoveryEnv(), GIT_TERMINAL_PROMPT: "0", ...env },
+				maxBuffer: 1 << 30,
+			});
+			if (result.error) throw result.error;
+			if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
+			return result.stdout.trim();
+		};
+		// Findings and errors name the scratch refs and directory, which the refusal need not show.
+		const tidy = (finding: Finding): Finding => ({
+			...finding,
+			message: finding.message
+				.replaceAll(`${dir}/`, "")
+				.replaceAll(base, `origin/${head.base}`)
+				.replaceAll(tip, head.sha),
+		});
 		try {
-			const run = (args: string[], env: Record<string, string> = {}) => {
-				const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-C", dir, ...args], {
-					encoding: "utf8",
-					env: { ...gitEnvironment(), ...env },
-					maxBuffer: 1 << 30,
-				});
-				if (result.error) throw result.error;
-				if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
-				return result.stdout.trim();
-			};
-			run(["init", "--quiet", "--bare"]);
-			const local = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-			if (local.status === 0)
-				writeFileSync(join(dir, "objects/info/alternates"), `${local.stdout.trim()}/objects\n`);
-			// The token rides in the environment, never in arguments other processes can read.
+			if (!borrowed) run(["init", "--quiet", "--bare"]);
+			// The token rides in the environment, after any configuration the user's environment already passes.
+			const count = Number(process.env.GIT_CONFIG_COUNT ?? 0) || 0;
 			const basic = Buffer.from(`x-access-token:${head.token}`).toString("base64");
 			run(
 				[
 					"fetch",
 					"--quiet",
 					"--no-tags",
+					"--no-write-fetch-head",
 					head.remote,
-					`+refs/heads/${head.base}:refs/remotes/origin/${head.base}`,
-					`+${head.sha}:refs/quest/head`,
+					`+refs/heads/${head.base}:${base}`,
+					`+${head.sha}:${tip}`,
 				],
 				{
-					GIT_CONFIG_COUNT: "1",
-					GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-					GIT_CONFIG_VALUE_0: `Authorization: basic ${basic}`,
+					GIT_CONFIG_COUNT: String(count + 1),
+					[`GIT_CONFIG_KEY_${count}`]: "http.https://github.com/.extraheader",
+					[`GIT_CONFIG_VALUE_${count}`]: `Authorization: basic ${basic}`,
 				},
 			);
-			if (run(["ls-tree", "--name-only", `origin/${head.base}`, "quest"]) === "") return [];
-			const known = treeCheck(dir, `origin/${head.base}`);
-			// A finding the base already has is not this PR's, such as one a `quest` older than the tree's format reports.
-			const findings = treeCheck(dir, "refs/quest/head").filter(
-				(finding) => !known.some((old) => old.path === finding.path && old.message === finding.message),
-			);
-			return [
-				...findings,
-				...landed(dir, `origin/${head.base}`, { branch: head.branch, head: "refs/quest/head" }),
-			];
+			const quests = (ref: string) => run(["ls-tree", "--name-only", ref, "quest"]) !== "";
+			const based = quests(base);
+			if (!based && !quests(tip)) return [];
+			// A finding the base already has is not this PR's, such as one a `quest` older than the tree's
+			// format reports; one more of the same in the head is.
+			const known = based ? treeCheck(dir, base) : [];
+			const findings = treeCheck(dir, tip).filter((finding) => {
+				const index = known.findIndex((old) => old.path === finding.path && old.message === finding.message);
+				if (index === -1) return true;
+				known.splice(index, 1);
+				return false;
+			});
+			let accurate: Finding[];
+			try {
+				accurate = landed(dir, base, { branch: head.branch, head: tip });
+			} catch (error) {
+				throw new Error(
+					tidy({ path: "", line: null, message: String(error instanceof Error ? error.message : error) })
+						.message,
+				);
+			}
+			return [...findings, ...accurate].map(tidy);
 		} finally {
-			rmSync(dir, { recursive: true, force: true });
+			if (borrowed) {
+				for (const ref of [base, tip])
+					spawnSync("git", ["-C", dir, "update-ref", "-d", ref], { env: discoveryEnv() });
+			} else rmSync(dir, { recursive: true, force: true });
 		}
 	};
 }

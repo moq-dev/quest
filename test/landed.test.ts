@@ -176,6 +176,48 @@ describe("quest merge's landing check", () => {
 		expect(findings.map((finding) => finding.path)).toEqual(["quest/m0/epic/two.md"]);
 	});
 
+	test("reports one more of a finding the base already has", async () => {
+		const tree = Tree.committed();
+		tree.append("quest/m0/epic/one.md", "\n## Related\n\n- [Gone](/quest/m0/gone.md) - missing\n");
+		commit(tree, "dangling link on main");
+		git(tree, "switch", "--quiet", "-c", "fix/again");
+		tree.append("quest/m0/epic/one.md", "- [Gone again](/quest/m0/gone.md) - missing\n");
+		commit(tree, "the same dangling link");
+		expect((await inspect(tree, "fix/again")).map((finding) => finding.path)).toEqual(["quest/m0/epic/one.md"]);
+	});
+
+	test("fetches into a checkout's repository, leaving none of its refs behind", async () => {
+		const tree = repo("quest/m0/epic/one");
+		tree.write("src.ts", "work\n");
+		commit(tree, "work");
+		const local = Tree.committed();
+		expect(await inspect(tree, "quest/m0/epic/one", local.path)).toHaveLength(1);
+		expect(git(local, "for-each-ref", "refs/quest-merge")).toBe("");
+		// The head's objects arrived in the checkout's repository.
+		git(local, "cat-file", "-e", git(tree, "rev-parse", "quest/m0/epic/one").trim());
+	});
+
+	test("does not borrow a shallow checkout's history", async () => {
+		const tree = repo("quest/m0/epic/one");
+		tree.append("quest/m0/epic/one.md", "\nMore.\n");
+		commit(tree, "edit");
+		const shallow = tempDir();
+		execFileSync("git", ["clone", "--quiet", "--depth=1", `file://${tree.path}`, shallow], { stdio: "ignore" });
+		expect(await inspect(tree, "quest/m0/epic/one", shallow)).toEqual([]);
+		expect(git(new Tree(shallow), "for-each-ref", "refs/quest-merge")).toBe("");
+	});
+
+	test("a head that adopts quests is checked", async () => {
+		const tree = new Tree(initRepository());
+		tree.write("README.md", "hi\n");
+		commit(tree, "init");
+		git(tree, "switch", "--quiet", "-c", "adopt");
+		Tree.baseline().copy(tree.path);
+		tree.append("quest/m0/epic/one.md", "\n## Related\n\n- [Gone](/quest/m0/gone.md) - missing\n");
+		commit(tree, "adopt quests");
+		expect((await inspect(tree, "adopt")).map((finding) => finding.path)).toEqual(["quest/m0/epic/one.md"]);
+	});
+
 	test("a head that removes every quest is a finding", async () => {
 		const tree = repo("fix/purge");
 		git(tree, "rm", "--quiet", "-r", "quest");
