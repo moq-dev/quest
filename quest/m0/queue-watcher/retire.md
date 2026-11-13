@@ -7,7 +7,7 @@ gate is gone: `quest land serve`'s batching, parking,
 halting, and squash-push code, its tests, and its README and `CONTRIBUTING.md`
 sections are deleted, keeping only what the watcher and `quest land apply`
 use. Removing the host's `quest land serve` instances is planned in
-kixel-ai/nixos's tree. The unreported `quest land` check and
+kixel-ai/dotfiles' tree. The unreported `quest land` check and
 `quest merge --land`'s pinned auto-merge for it stay, since the watcher's own
 queue reads its picks from them.
 
