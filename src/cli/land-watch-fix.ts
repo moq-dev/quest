@@ -6,7 +6,7 @@ import { isHoldLabel } from "../core";
 import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
 import { type Queued, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
-import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
+import { baseRemote, enqueue, type Entry, git, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";
 import { type Cause, EFFORT_VARIABLE, type FixResult, knownFlaky, parseFixResult, readFixResult } from "./land-fix";
@@ -65,6 +65,8 @@ export interface FixContext {
 	timeout: number;
 	/** Patterns of tags, such as `deploy-*`, fetched from GitHub into each fixer checkout so its checks can read them. */
 	tags: string[];
+	/** Patterns of branches fetched from GitHub into each fixer checkout as `origin/<branch>`, for checks that diff against them. */
+	branches: string[];
 	token: (workflows: boolean) => Promise<string>;
 	read: RemoteRead;
 }
@@ -356,7 +358,10 @@ async function take(
 	if (history(state, number)?.pick !== entry.enabledAt)
 		save(historyPath(state, number), { pick: entry.enabledAt, rounds: [] } satisfies History);
 	const tags = context.tags.map((pattern) => `+refs/tags/${pattern}:refs/tags/${pattern}`);
-	// Pruning drops a tag GitHub no longer has, so a check never reads one deleted there.
+	const branches = context.branches.map(
+		(pattern) => `+refs/remotes/origin/${pattern}:refs/remotes/origin/${pattern}`,
+	);
+	// Pruning drops a tag or branch GitHub no longer has, so a check never reads one deleted there.
 	await context.read(context.root, [
 		"fetch",
 		"--quiet",
@@ -366,6 +371,7 @@ async function take(
 		base.sha,
 		removal.head,
 		...tags,
+		...context.branches.map((pattern) => `+refs/heads/${pattern}:refs/remotes/origin/${pattern}`),
 	]);
 	let log = removal.log;
 	if (conflict) {
@@ -428,10 +434,14 @@ async function take(
 				`${base.sha}:refs/heads/base`,
 				`${removal.head}:refs/heads/pr-${number}`,
 				...tags,
+				...branches,
 			],
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
 			base.sha,
 		);
+		// The checkout has no remote: `origin/<base>` is the base the round works on, as checks that diff against it
+		// expect, even where a `--fixer-branch` pattern fetched GitHub's newer one.
+		git(checkout, ["update-ref", `refs/remotes/origin/${base.ref}`, base.sha]);
 		if (!conflict) writeKnownFlaky(state, checkout);
 		const job: WatchJob = {
 			checkout,

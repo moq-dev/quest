@@ -4800,6 +4800,7 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 			jobs: 1,
 			effort: "medium",
 			tags: [],
+			branches: [],
 			timeout: 60,
 			token: queue.token,
 			read: readRemote,
