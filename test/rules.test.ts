@@ -1,11 +1,12 @@
 // The rules `quest hook` checks on a tool call, and the shell parsing they rest on.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, expect, test } from "vitest";
 
-import { RULES, USER_ASKED, broken } from "../src/cli/rules";
+import { CHECKED_CONTEXT, RULES, USER_ASKED, broken } from "../src/cli/rules";
+import { CONTEXT } from "../src/cli/skills";
 import { parse } from "../src/cli/shell";
 import { tempDir } from "./fixture";
 
@@ -273,4 +274,10 @@ test("a body file is read only for a command alone on its line", () => {
 	expect(bash("git -Csub commit -F dash.md")).toEqual([]);
 	expect(bash(`git -C sub commit -F ${join(cwd, "dash.md")}`)).toEqual([RULES.emDash]);
 	expect(bash(`git -C sub commit -F - <<'EOF'\nfix: a ${DASH} b\nEOF`)).toEqual([RULES.emDash]);
+});
+
+test("docs/context.md is the rules `quest context` prints, for agents without the CLI", () => {
+	expect(readFileSync(join(import.meta.dirname, "../docs/context.md"), "utf8")).toBe(
+		`${CONTEXT}\n${CHECKED_CONTEXT}`,
+	);
 });
