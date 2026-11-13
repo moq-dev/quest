@@ -43,6 +43,7 @@ Before ending a task, pausing for a decision, or handing off, commit a checkpoin
 Finish with a clean checkout: intended changes committed and pushed, incidental generated changes restored, and pre-existing or unrelated changes preserved.
 
 Run CPU-heavy commands, such as builds, test suites, model checkers, and browsers, through `quest gate <command>`, which queues, however long, until the host has room.
+Model calls, such as `quest review`, and long-running servers stay out of the gate: they wait rather than compute, and a server never exits.
 Never work around the queue by polling the load average or capping agents yourself; cancel a gated command only when you no longer need its result.
 Run it in the foreground and read its exit code directly, not through a pipe.
 Never end a turn or report while your background work runs, and never poll it with `sleep` or status checks: block on it with the harness's own wait for that task, at the longest interval it allows, saying nothing between waits.

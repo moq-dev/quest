@@ -1143,8 +1143,8 @@ started with. Quest never loads the working directory's `.env` files, as Bun
 otherwise would, so a repository's `.env.development` cannot override the
 variables a gated build was given.
 
-Admission is sized from the host, with no configuration. Every platform waits
-while the host-wide 1-minute load average exceeds the host's CPU count, or while
+Admission is sized from the host, with no configuration. Unless mbx's pool
+admits the command (see below), every platform waits while the host-wide 1-minute load average exceeds the host's CPU count, or while
 available memory is below one command's budget: 4 GiB, or a quarter of RAM on
 smaller hosts, where RAM is capped by any container memory limit. On Linux,
 available memory includes reclaimable host and cgroup file cache and is bounded
@@ -1180,6 +1180,30 @@ the load counts as at least the sum of those records, and nothing starts while
 they kept every CPU busy. macOS, Windows, and Linux without a systemd user
 manager have no scope to measure, so the load average alone decides there.
 
+Where the gate owns the command in such a scope, the user manager can cap a
+scope's CPU (the cpu controller is delegated to it, as systemd 254 does by
+default), and [mbx](https://github.com/jdx/mr-boxington) 1.30.0 or later
+would schedule a build in the command's directory, mbx's machine-wide pool
+admits the command instead of the load average, so gated work shares one CPU
+budget with every Cargo build on the host. The gate still waits for memory,
+then runs the command under `mbx reserve --priority low`, holding its share of
+the pool, `scheduler.cpus` less `scheduler.reserve_cpus`, and caps its scope at
+that many CPUs (`CPUQuota`), which bounds every tool inside it, Cargo or not.
+mbx switches its own scheduling off inside a reservation, so the command's
+compiles take no further permits. A command's first run holds half the pool.
+Each later run of the same argv, in the same directory of any worktree of the
+same repository, holds a share learned from the last: double after a run the
+cap throttled, otherwise halfway down to the run's busiest 5 seconds. Shares
+are kept under `~/.cache/quest/shares/<hostname>`. A low-priority reservation
+above three quarters of the pool cannot fit beside the quarter mbx keeps for
+normal-priority builds, so it waits for those to finish.
+
+mbx would not schedule the command when its scheduler is off in its global
+configuration, in its environment, or in the `.mbx.toml` at the root of the
+Cargo workspace holding the command's directory, or when the gate itself runs
+inside an mbx reservation. The gate then admits the command by load, as it
+does on macOS, Windows, and Linux without a systemd user manager.
+
 A user's admissions on one host are recorded under
 `~/.cache/quest/admissions/<hostname>`, whatever the caller's environment or
 login session. The home directory comes from the user database, not `$HOME`;
@@ -1191,10 +1215,15 @@ Two kinds of command go ahead of the rest. `quest gate --quick <command>` waits
 at most a minute, then starts the command whatever the host's load, memory, and
 place in the queue;
 pass it only for cheap commands, such as a formatter or `quest check`, that cost
-less to run than to hold back. A check that lands PRs goes first: with
-`QUEST_GATE_PRIORITY=1` in its environment, every gate inside the check waits
-for memory but never for load or the queue, whether or not other gated commands
-run. Both
+less to run than to hold back. Where mbx's pool admits it, a quick command
+waits at most a minute for its reservation; then the gate stops the pending
+reservation before its command can start and runs the command outside it,
+uncapped, where mbx still schedules its compiles. A check that lands PRs goes
+first: with `QUEST_GATE_PRIORITY=1` in its environment, every gate inside the
+check waits for memory but never for load, the queue, or mbx's pool, whether
+or not other gated commands run, and its command gets
+`MBX_SCHEDULER_PRIORITY=normal` unless it sets its own, so mbx schedules its
+compiles ahead of agents' low-priority builds. Both
 record their admissions, so the other callers count them against the host's
 headroom. Set the variable where the check starts, such as a merge queue
 build's workflow or the land daemon's sandbox, rather than relying on a slot in

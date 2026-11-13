@@ -134,12 +134,18 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"only the raw measures do. The load limit applies only while a gated command still runs. Where a " +
 				"systemd scope owns each running command, the load counts as at least the sum of their peak CPU " +
 				"use in the last minute, and nothing starts while those fill every CPU, so a lull between a " +
-				"command's phases does not free its CPUs. Nested " +
+				"command's phases does not free its CPUs.\n\n" +
+				"Where such a scope can cap CPU and mbx 1.30.0+ would schedule a build in the working directory, " +
+				"mbx's machine-wide pool admits the command instead of the load: after waiting for memory, it runs " +
+				"under `mbx reserve --priority low`, holding a share of the pool learned from its earlier runs (half " +
+				"the pool at first), with its scope capped at that many CPUs.\n\n" +
+				"Nested " +
 				"calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +
-				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
-				"cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the environment, as a check " +
-				"that lands PRs should set, the command waits for memory but never for load.\n\n" +
+				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway, outside any mbx ` +
+				"reservation; pass it only for cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the " +
+				"environment, as a check that lands PRs should set, the command waits for memory but never for load " +
+				"or mbx's pool, and mbx schedules its compiles at normal priority.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
 				"a systemd user scope, or inside a Quest scope through a child cgroup of its own. macOS, and Linux " +

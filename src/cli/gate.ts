@@ -1,11 +1,23 @@
 // Host-wide command admission, sized from the host itself: every platform waits
-// for CPU load and free memory before starting the command. The gate then owns
-// the command's descendants until they stop, and holds nothing else while it runs.
-import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+// for CPU load and free memory before starting the command, unless mbx's
+// machine-wide pool admits its CPU instead. The gate then owns the command's
+// descendants until they stop, and holds nothing else while it runs.
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import {
+	existsSync,
+	linkSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, userInfo } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
@@ -53,8 +65,11 @@ export interface Host {
 	 */
 	publish(base: Ledger, admissions: Admission[]): boolean;
 	sleep(ms: number, signal: AbortSignal): Promise<void>;
-	/** CPU microseconds the processes in systemd scope `unit` have used, or undefined while it does not exist. */
-	usage(unit: string): number | undefined;
+	/**
+	 * CPU microseconds the processes in systemd scope `unit` have used, and how many of its CPU
+	 * quota's periods throttled them, or undefined while it does not exist.
+	 */
+	usage(unit: string): { usage: number; throttled: number } | undefined;
 }
 
 export interface Limits {
@@ -94,10 +109,13 @@ export const QUICK_MS = RECENT_MS;
  * - `quick`: wait at most QUICK_MS, then start whatever the load and memory.
  *   For a command too cheap to be worth holding back, such as a formatter or a
  *   linter. Once started, it holds a slot like any admission.
+ * - `pooled`: mbx's pool admits the command's CPU (see `reserve`), so it waits
+ *   only for memory, as a priority caller does.
  */
 export interface Precedence {
 	priority?: boolean;
 	quick?: boolean;
+	pooled?: boolean;
 }
 
 /** The memory one gated build or test stack is assumed to need. */
@@ -408,7 +426,9 @@ export function fileHost(directory: string, now = Date.now): Host {
 			}
 			const usage = stat.match(/^usage_usec (\d+)$/m)?.[1];
 			if (usage === undefined) throw new Error(`gate cannot read the CPU use of ${unit}`);
-			return Number(usage);
+			// Present only where the cpu controller is enabled, which a scope without a quota may lack.
+			const throttled = stat.match(/^nr_throttled (\d+)$/m)?.[1];
+			return { usage: Number(usage), throttled: Number(throttled ?? 0) };
 		},
 	};
 }
@@ -469,6 +489,8 @@ export async function admit(
 		// Sampled after the read, so only a backward clock step dates an admission in the future.
 		const now = host.now();
 		const live = new Set(ledger.admissions.filter((admission) => host.running(admission)));
+		// Waits for memory alone: the queue and the load are for callers the load decides.
+		const memoryOnly = precedence.priority || precedence.pooled;
 		const kept = ledger.admissions.filter((admission) =>
 			admission.queued
 				? // A place whose gate cannot be told from a reused process ID lasts only while refreshed.
@@ -491,10 +513,7 @@ export async function admit(
 		}
 		const position = kept.findIndex((admission) => admission.id === place);
 		const mine = kept[position];
-		if (
-			!precedence.priority &&
-			(mine === undefined || (mine.start === undefined && mine.at <= now - RECENT_MS / 2))
-		) {
+		if (!memoryOnly && (mine === undefined || (mine.start === undefined && mine.at <= now - RECENT_MS / 2))) {
 			// Take a place at the back, or refresh one that would otherwise expire where it stands.
 			const entry = { id: place, at: now, ...self, queued: true };
 			host.publish(
@@ -510,8 +529,8 @@ export async function admit(
 		// Recorded like any admission, so it still counts against the others' headroom.
 		if (now >= deadline) return admitted(now);
 		// Priority ignores load, whether or not a gated command runs; memory still applies.
-		const used = precedence.priority ? 0 : [...running].reduce((sum, admission) => sum + (admission.cores ?? 0), 0);
-		const load = precedence.priority
+		const used = memoryOnly ? 0 : [...running].reduce((sum, admission) => sum + (admission.cores ?? 0), 0);
+		const load = memoryOnly
 			? 0
 			: running.size > 0
 				? Math.max(host.load(), used)
@@ -562,12 +581,27 @@ export async function admit(
 }
 
 /**
+ * What `measure` saw of a whole run: the most CPUs it kept busy over one sample, undefined before
+ * any sample, and whether its scope's CPU quota throttled it.
+ */
+export interface Measured {
+	peak?: number;
+	throttled: boolean;
+}
+
+/**
  * Until `signal` aborts, sample the CPU use of the admitted command in systemd scope `unit` every
  * SETTLE_MS, and keep its admission's `cores` at the most CPUs it kept busy over one sample in the
- * last RECENT_MS, rounded, so other callers count it at its busiest rather than at a lull.
+ * last RECENT_MS, rounded, so other callers count it at its busiest rather than at a lull. Resolves
+ * with what it saw of the whole run.
  */
-export async function measure(host: Host, admission: { id: string; unit: string }, signal: AbortSignal) {
+export async function measure(
+	host: Host,
+	admission: { id: string; unit: string },
+	signal: AbortSignal,
+): Promise<Measured> {
 	const samples: { at: number; cores: number }[] = [];
+	const run: Measured = { throttled: false };
 	// The command's scope starts with no CPU use, so a burst before the first sample still counts.
 	let previous = { at: host.now(), usage: 0 };
 	let recorded = 0;
@@ -575,15 +609,20 @@ export async function measure(host: Host, admission: { id: string; unit: string 
 		try {
 			await host.sleep(SETTLE_MS, signal);
 		} catch (error) {
-			if (signal.aborted) return;
+			if (signal.aborted) return run;
 			throw error;
 		}
-		const usage = host.usage(admission.unit);
+		const used = host.usage(admission.unit);
 		const at = host.now();
-		if (usage !== undefined) {
+		if (used !== undefined) {
 			// A clock stepped backward yields no rate for its interval.
-			if (at > previous.at) samples.push({ at, cores: (usage - previous.usage) / ((at - previous.at) * 1000) });
-			previous = { at, usage };
+			if (at > previous.at) {
+				const cores = (used.usage - previous.usage) / ((at - previous.at) * 1000);
+				samples.push({ at, cores });
+				run.peak = Math.max(run.peak ?? 0, cores);
+			}
+			run.throttled ||= used.throttled > 0;
+			previous = { at, usage: used.usage };
 		}
 		while (samples.length > 0 && samples[0].at <= at - RECENT_MS) samples.shift();
 		const cores = Math.round(Math.max(0, ...samples.map((sample) => sample.cores)));
@@ -594,6 +633,262 @@ export async function measure(host: Host, admission: { id: string; unit: string 
 			if (host.publish(ledger, updated)) recorded = cores;
 		}
 	}
+}
+
+/** mbx's machine-wide scheduler pool: `cpus` is the most cores it admits at once (see `mbxPool`). */
+export interface Pool {
+	cpus: number;
+}
+
+/** The oldest mbx whose `mbx reserve` switches mbx's scheduling off for its command, so its compiles take no permits. */
+const MBX_MINIMUM = [1, 30, 0];
+
+/**
+ * mbx's pool, where mbx would schedule a command started in `cwd`: `scheduler.cpus` minus
+ * `scheduler.reserve_cpus`, at least one, as `mbx reserve` reads them from the environment and the
+ * global configuration. Undefined when mbx is missing or older than 1.30.0, its scheduler is off,
+ * globally or by the workspace's `.mbx.toml`, or this process already runs inside a reservation or
+ * a session that switched scheduling off: a second reservation there could wait on the first.
+ */
+export function mbxPool(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): Pool | undefined {
+	if (env.MBX_SCHED_DISABLE !== undefined || env.MBX_SCHED_DIR === "") return undefined;
+	const mbx = (...args: string[]) => {
+		const run = spawnSync("mbx", args, { cwd, env, encoding: "utf8" });
+		if (run.error) throw run.error;
+		if (run.status !== 0) throw new Error(`gate cannot run mbx ${args.join(" ")}: ${run.stderr.trim()}`);
+		return run.stdout.trim();
+	};
+	let version: string;
+	try {
+		version = mbx("--version");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+	const parts = /^mbx (\d+)\.(\d+)\.(\d+)/.exec(version)?.slice(1).map(Number);
+	if (parts === undefined) throw new Error(`gate cannot read mbx's version: ${version}`);
+	const older = parts.findIndex((part, index) => part !== MBX_MINIMUM[index]);
+	if (older !== -1 && parts[older] < MBX_MINIMUM[older]) return undefined;
+	const enabled = mbx("settings", "get", "scheduler.enabled");
+	if (enabled !== "true" && enabled !== "false")
+		throw new Error(`gate cannot read mbx's scheduler.enabled: ${enabled}`);
+	// `mbx reserve` needs the global scheduler; a workspace can only switch its own builds off.
+	if (enabled === "false") return undefined;
+	if (env.MBX_SCHEDULER === undefined && workspaceScheduler(cwd) === false) return undefined;
+	const count = (key: string, fallback?: number) => {
+		const text = mbx("settings", "get", key);
+		const value = text === "" ? fallback : Number(text);
+		if (value === undefined || !Number.isSafeInteger(value) || value < 0)
+			throw new Error(`gate cannot read mbx's ${key}: ${text}`);
+		return value;
+	};
+	// Unset, mbx counts the logical CPUs.
+	const total = count("scheduler.cpus", availableParallelism());
+	return { cpus: Math.max(1, total - count("scheduler.reserve_cpus")) };
+}
+
+/**
+ * The `scheduler.enabled` of the `.mbx.toml` that mbx applies to a Cargo build started in `cwd`,
+ * at the workspace root as mbx finds it: the outermost directory holding a Cargo.lock, else a
+ * Cargo.toml, else `cwd` itself. Undefined when it sets none. `mbx settings get` leaves workspace
+ * settings out, so the gate reads the file itself.
+ */
+export function workspaceScheduler(cwd: string): boolean | undefined {
+	let lockfile: string | undefined;
+	let manifest: string | undefined;
+	for (let directory = resolve(cwd); ; directory = dirname(directory)) {
+		if (existsSync(join(directory, "Cargo.lock"))) lockfile = directory;
+		if (existsSync(join(directory, "Cargo.toml"))) manifest = directory;
+		if (directory === dirname(directory)) break;
+	}
+	const file = join(lockfile ?? manifest ?? resolve(cwd), ".mbx.toml");
+	let text: string;
+	try {
+		text = readFileSync(file, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+	// Quest runs on Bun, whose TOML parser Node's types do not describe.
+	const toml = (globalThis as unknown as { Bun: { TOML: { parse(text: string): unknown } } }).Bun.TOML;
+	let enabled: unknown;
+	try {
+		enabled = (toml.parse(text) as { scheduler?: { enabled?: unknown } }).scheduler?.enabled;
+	} catch (error) {
+		throw new Error(`gate cannot parse ${file}: ${error instanceof Error ? error.message : error}`);
+	}
+	if (enabled !== undefined && typeof enabled !== "boolean")
+		throw new Error(`gate cannot read ${file}: scheduler.enabled must be a boolean`);
+	return enabled;
+}
+
+/** Whether the systemd user manager can cap a scope's CPU, which needs the cpu controller delegated to it. */
+export function cappable(): boolean {
+	// The manager's own process lives in init.scope, directly in the manager's cgroup.
+	const own = execFileSync("systemctl", ["--user", "show", "--property=ControlGroup", "--value", "init.scope"], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	}).trim();
+	if (!own.endsWith("/init.scope")) throw new Error(`unexpected cgroup for the systemd user manager: ${own}`);
+	return readFileSync(join("/sys/fs/cgroup", dirname(own), "cgroup.controllers"), "utf8")
+		.trim()
+		.split(" ")
+		.includes("cpu");
+}
+
+/**
+ * What a command identifies by across a repository's worktrees, hashed: its repository's common
+ * Git directory, the working directory's path inside its checkout, and its argv. Outside a
+ * repository, the working directory stands for the first two.
+ */
+export function commandKey(command: string[], cwd = process.cwd()): string {
+	const git = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir", "--show-prefix"], {
+		cwd,
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	const place = git.status === 0 ? git.stdout.split("\n").slice(0, 2) : [resolve(cwd)];
+	return createHash("sha256")
+		.update(JSON.stringify([...place, command]))
+		.digest("hex");
+}
+
+/**
+ * Each command's share of mbx's pool, learned from its runs, as one file per `commandKey` in
+ * `directory`: beside the admission ledger, never in it, since the ledger prunes what it does not
+ * own.
+ */
+export function shares(directory: string) {
+	const file = (key: string) => join(directory, key);
+	return {
+		/** The cores the command's next run reserves, or undefined before its first measured run. */
+		read(key: string): number | undefined {
+			try {
+				const cores = (JSON.parse(readFileSync(file(key), "utf8")) as { cores?: unknown }).cores;
+				return Number.isSafeInteger(cores) && (cores as number) > 0 ? (cores as number) : undefined;
+			} catch (error) {
+				// A file cut short, as by power loss, holds nothing learned.
+				if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT")
+					return undefined;
+				throw error;
+			}
+		},
+		write(key: string, cores: number) {
+			mkdirSync(directory, { recursive: true });
+			const draft = join(directory, `${randomUUID()}.tmp`);
+			writeFileSync(draft, JSON.stringify({ cores }));
+			renameSync(draft, file(key));
+		},
+	};
+}
+
+/** The directory that holds the learned shares for the admission ledger in `claims` (see `claimDirectory`). */
+export function sharesDirectory(claims: string): string {
+	return join(dirname(dirname(claims)), "shares", basename(claims));
+}
+
+/** A command's share before its first measured run: half of mbx's pool, which fits beside the quarter mbx keeps for normal-priority work. */
+export function firstShare(pool: Pool): number {
+	return Math.max(1, Math.ceil(pool.cpus / 2));
+}
+
+/**
+ * The share a command's next run reserves after one that reserved `cores` (see `reserve`), at
+ * least one core and at most the pool. A throttled run used every core its cap allowed, so its
+ * peak says nothing about what it wanted: the share doubles. Otherwise it moves halfway down to the
+ * run's peak, since a 5-second sample understates a burst that a cap at the peak would throttle.
+ */
+export function learn(cores: number, run: Measured, pool: Pool): number {
+	const next = run.throttled ? cores * 2 : Math.ceil((cores + (run.peak ?? cores)) / 2);
+	return Math.min(pool.cpus, Math.max(1, next));
+}
+
+/**
+ * The shell between `mbx reserve` and the command: it reports the grant on descriptor 5, then waits
+ * for the gate's go on descriptor 6, so a gate that already abandoned the reservation never starts
+ * the command.
+ */
+const GRANT = 'printf "granted\\n" >&5; read -r go <&6 || exit 125; exec 5>&- 6<&-; exec "$@"';
+
+/** A command to run under `mbx reserve` (see `reserve`). */
+export interface Reserved {
+	/** A new name for its background scope. */
+	unit: string;
+	/** The Quest scope its scope binds to (see `background`), or null outside one. */
+	enclosing: string | null;
+	/** The cores it holds of mbx's pool, and the CPUs its scope may keep busy. */
+	cores: number;
+	command: string[];
+	env: NodeJS.ProcessEnv;
+	cancel: Cancellation;
+}
+
+/**
+ * Run the command in a background scope (see `background`) under a low-priority `mbx reserve` of
+ * `cores`, and cap the scope at that many CPUs, which bounds every tool inside it whether or not
+ * mbx schedules it. mbx switches its scheduling off inside the reservation, so the command's
+ * compiles take no permits of their own and cannot wait on the reservation that covers them.
+ *
+ * `granted` resolves once mbx grants the reservation, just before the command starts. `abandon`
+ * stops a reservation mbx has not granted and resolves true once its scope is empty, so the command
+ * never runs; it resolves false once the command started. `done` resolves with the command's exit
+ * status, or the cancelled status once cancelled, and rejects when mbx exits without granting.
+ */
+export function reserve(run: Reserved): { granted: Promise<void>; abandon(): Promise<boolean>; done: Promise<number> } {
+	const abandoning = new AbortController();
+	// An abort without a signal's name always passes (see `forwards`): it stops mbx however Quest was signalled.
+	const cancel = { signal: AbortSignal.any([run.cancel.signal, abandoning.signal]), kill: run.cancel.kill };
+	let state: "waiting" | "started" | "abandoned" = "waiting";
+	let failure: Error | undefined;
+	let grant!: () => void;
+	const granted = new Promise<void>((resolve) => {
+		grant = resolve;
+	});
+	const reservation = ["mbx", "reserve", "--cpus", String(run.cores), "--priority", "low", "--"];
+	const done = systemdScopes
+		.run(run.unit, process.cwd(), [...reservation, "/bin/sh", "-c", GRANT, "quest-gate", ...run.command], {
+			env: run.env,
+			cancel,
+			within: run.enclosing,
+			slice: "background.slice",
+			cpus: run.cores,
+			channel(report, reply) {
+				// The shell, killed with its scope, may never read the go.
+				reply.on("error", () => {});
+				let text = "";
+				report.setEncoding("utf8");
+				report.on("data", (data: string) => {
+					text += data;
+					if (state !== "waiting" || !text.endsWith("\n")) return;
+					if (text !== "granted\n") {
+						failure = new Error(`gate cannot read the grant of mbx reserve: ${JSON.stringify(text)}`);
+						state = "abandoned";
+						abandoning.abort(failure);
+						return;
+					}
+					state = "started";
+					reply.end("go\n");
+					grant();
+				});
+			},
+		})
+		.then((status) => {
+			if (failure) throw failure;
+			if (state === "waiting" && !run.cancel.signal.aborted)
+				throw new Error(`mbx reserve exited with ${status} before it granted ${run.cores} cores`);
+			return status;
+		});
+	return {
+		granted,
+		done,
+		async abandon() {
+			if (state !== "waiting") return false;
+			state = "abandoned";
+			abandoning.abort(new Error("the gate abandoned its reservation"));
+			await done.catch(() => undefined);
+			return true;
+		},
+	};
 }
 
 /** Marks an admitted command, so nested gated calls inside it run at once. */
@@ -763,19 +1058,23 @@ const TOKEN = 3;
  * enclosing Quest owner also signals when it is Quest's group or a Quest scope (see `inside`). A
  * call inside a Quest scope runs its command in a background scope bound to it. Linux owns descendants through a systemd scope, and settles for a process group,
  * like macOS, without a systemd user manager. Windows owns them through a Job Object. A systemd
- * scope also lets the gate measure its command's CPU use (see `measure`), so `unit` names it.
+ * scope also lets the gate measure its command's CPU use (see `measure`), so `unit` names it, and
+ * `enclosing` the Quest scope it binds to, or null outside one.
  */
-export function owner(env = process.env, cgroup = "/proc/self/cgroup"): { run: Owner; unit?: string } {
+export function owner(
+	env = process.env,
+	cgroup = "/proc/self/cgroup",
+): { run: Owner; unit?: string; enclosing?: string | null } {
 	// A Quest scope around this process holds the command too, since it shares the cgroup or an ancestor.
 	const enclosing = process.platform === "linux" ? questScope(cgroup) : undefined;
 	if (env[ADMITTED] === "1") return { run: env[GROUP] === "1" || enclosing ? inside : direct };
 	if (process.platform === "win32") return { run: job };
 	const unit = `quest-gate-${randomUUID()}.scope`;
-	if (enclosing) return { run: bound(unit, enclosing.unit), unit };
+	if (enclosing) return { run: bound(unit, enclosing.unit), unit, enclosing: enclosing.unit };
 	if (process.platform !== "linux") return { run: group };
 	try {
 		systemdScopes.check();
-		return { run: scope(unit), unit };
+		return { run: scope(unit), unit, enclosing: null };
 	} catch {
 		return { run: group };
 	}
@@ -788,53 +1087,116 @@ const notices: Record<Waiting, string> = {
 };
 
 /**
+ * Wait until mbx grants `reservation`, it ends ungranted, or `deadline` passes, saying so on `slow`
+ * once the wait reaches SETTLE_MS.
+ */
+async function granting(
+	reservation: ReturnType<typeof reserve>,
+	deadline: number,
+	slow: () => void,
+): Promise<"granted" | "ended" | "late"> {
+	const done = new AbortController();
+	const timer = (ms: number) => sleep(Math.max(0, ms), undefined, { signal: done.signal });
+	const quiet = new Promise<never>(() => {});
+	try {
+		timer(SETTLE_MS).then(slow, () => {});
+		return await Promise.race([
+			reservation.granted.then(() => "granted" as const),
+			reservation.done.then(
+				() => "ended" as const,
+				() => "ended" as const,
+			),
+			deadline === Infinity ? quiet : timer(deadline - Date.now()).then(() => "late" as const),
+		]);
+	} finally {
+		done.abort();
+	}
+}
+
+/**
  * Run from the CLI. A failure to measure the command is fatal even when the command succeeded,
  * since every other gate on the host relies on that accounting; a cancelled command still
  * reports its cancellation.
+ *
+ * Where a systemd scope that can cap CPU owns the command and mbx would schedule it (see
+ * `mbxPool`), mbx's pool admits it instead of the load: the gate waits only for memory, then runs
+ * the command under a reservation of its learned share (see `reserve` and `learn`). A priority
+ * command skips the reservation, and mbx schedules its compiles at normal priority instead.
  */
 export async function gate(command: string[], options: { quick?: boolean } = {}): Promise<number> {
 	const cancel = interrupts();
 	try {
-		const { run, unit } = owner();
-		let admitted: { host: Host; id: string } | undefined;
+		const { run, unit, enclosing } = owner();
+		const priority = process.env[PRIORITY] === "1";
+		const env: NodeJS.ProcessEnv = { ...process.env, [ADMITTED]: "1" };
+		// mbx otherwise takes its configured priority, which agents' hosts lower.
+		if (priority) env.MBX_SCHEDULER_PRIORITY ??= "normal";
 		// A nested invocation executes inside the already admitted command.
-		if (process.env[ADMITTED] !== "1") {
+		if (process.env[ADMITTED] === "1") {
+			const result = await run(command, env, cancel);
+			return cancel.signal.aborted ? cancelled(cancel.signal) : result;
+		}
+		const pool = unit !== undefined && enclosing !== undefined && !priority ? mbxPool() : undefined;
+		const pooled = pool !== undefined && cappable() ? pool : undefined;
+		const started = Date.now();
+		const claims = claimDirectory();
+		const host = fileHost(claims);
+		let id: string;
+		try {
 			const shown = new Set<Waiting>();
-			try {
-				const notice = (reason: Waiting) => {
-					if (shown.has(reason)) return;
-					shown.add(reason);
-					process.stderr.write(`${notices[reason]}\n`);
-				};
-				const precedence = {
-					priority: process.env[PRIORITY] === "1",
-					quick: options.quick,
-				};
-				const host = fileHost(claimDirectory());
-				admitted = { host, id: await admit(hostLimits(), host, cancel.signal, notice, precedence) };
-			} catch (error) {
-				if (cancel.signal.aborted) return cancelled(cancel.signal);
-				throw error;
-			}
+			const notice = (reason: Waiting) => {
+				if (shown.has(reason)) return;
+				shown.add(reason);
+				process.stderr.write(`${notices[reason]}\n`);
+			};
+			const precedence = { priority, quick: options.quick, pooled: pooled !== undefined };
+			id = await admit(hostLimits(), host, cancel.signal, notice, precedence);
+		} catch (error) {
+			if (cancel.signal.aborted) return cancelled(cancel.signal);
+			throw error;
 		}
 		const stop = new AbortController();
 		// Held as a value until the command ends, so a failure never goes unhandled meanwhile.
-		const measuring =
-			admitted !== undefined && unit !== undefined
-				? measure(admitted.host, { id: admitted.id, unit }, stop.signal).then(
-						() => undefined,
-						(error: unknown) => ({ error }),
-					)
-				: undefined;
+		const measuring = (scope: string) =>
+			measure(host, { id, unit: scope }, stop.signal).then(
+				(measured) => ({ measured }),
+				(error: unknown) => ({ error }),
+			);
+		let measured: ReturnType<typeof measuring> | undefined;
 		let result: number;
 		try {
-			result = await run(command, { ...process.env, [ADMITTED]: "1" }, cancel);
+			if (pooled !== undefined) {
+				const learned = shares(sharesDirectory(claims));
+				const key = commandKey(command);
+				const cores = Math.min(pooled.cpus, learned.read(key) ?? firstShare(pooled));
+				const reservation = reserve({ unit: unit!, enclosing: enclosing!, cores, command, env, cancel });
+				const deadline = options.quick ? started + QUICK_MS : Infinity;
+				const waited = await granting(reservation, deadline, () =>
+					process.stderr.write(`quest gate: waiting for ${cores} of mbx's ${pooled.cpus} cores\n`),
+				);
+				if (waited === "late" && (await reservation.abandon())) {
+					// A quick command starts anyway, outside the reservation, where mbx still schedules its compiles.
+					const fallback = `quest-gate-${randomUUID()}.scope`;
+					measured = measuring(fallback);
+					result = await background(fallback, enclosing!)(command, env, cancel);
+				} else {
+					measured = measuring(unit!);
+					result = await reservation.done;
+					stop.abort();
+					const seen = await measured;
+					if (!cancel.signal.aborted && "measured" in seen && seen.measured.peak !== undefined)
+						learned.write(key, learn(cores, seen.measured, pooled));
+				}
+			} else {
+				measured = unit !== undefined ? measuring(unit) : undefined;
+				result = await run(command, env, cancel);
+			}
 		} finally {
 			stop.abort();
 		}
-		const failed = await measuring;
+		const failed = await measured;
 		if (cancel.signal.aborted) return cancelled(cancel.signal);
-		if (failed) throw failed.error;
+		if (failed && "error" in failed) throw failed.error;
 		return result;
 	} finally {
 		cancel.close();
