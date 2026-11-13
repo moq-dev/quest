@@ -364,7 +364,7 @@ async function take(
 		? (
 				await context.read(context.root, [
 					"ls-remote",
-					"--heads",
+					"--branches",
 					remote,
 					...context.branches.map((p) => `refs/heads/${p}`),
 				])
