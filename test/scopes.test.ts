@@ -36,7 +36,14 @@ describe.runIf(process.platform === "linux")("the test run's scope sweep", () =>
 			{ env: { ...process.env, [RUN]: run }, stdio: "ignore" },
 		);
 		const exited = once(child, "exit");
-		await created(ready);
+		// A launcher that exits first, such as one no user manager answers, fails the test at once.
+		await new Promise<void>((resolve, reject) => {
+			created(ready).then(resolve, reject);
+			exited.then(
+				([code, signal]) => reject(new Error(`systemd-run ended (${code ?? signal}) before its command ran`)),
+				reject,
+			);
+		});
 		return { unit, exited };
 	}
 
