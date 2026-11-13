@@ -2050,7 +2050,7 @@ fakes("a reviewer a --harness run left with findings is named for its own run", 
 	const held = await quest("--root", s.repo, "review");
 	expect(held.code).toBe(2);
 	expect(held.stderr).toContain(
-		"claude still has findings to settle on this branch; settle them in a run of --harness claude with --responses",
+		"claude still has findings to settle on this branch; settle them in a run of --harness claude, adding --model or --exclude-model when its size's model is avoided, with --responses",
 	);
 });
 

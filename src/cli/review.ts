@@ -1675,7 +1675,7 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		const names = held.map((each) => `${each.reviewer}${each.shadow ? " (shadow)" : ""}`).join(" and ");
 		// A pair run seats every shadow with findings, so what it holds is a reviewer only --harness runs.
 		const run = pair
-			? [...new Set(held.map((each) => `--harness ${each.reviewer}`))].join(" or ")
+			? `${[...new Set(held.map((each) => `--harness ${each.reviewer}`))].join(" or ")}, adding --model or --exclude-model when its size's model is avoided,`
 			: "the pair, or of that reviewer with --harness,";
 		throw new ReviewInputError(
 			`${names} still ${held.length > 1 ? "have" : "has"} findings to settle on this branch; settle them in a run of ${run} with --responses, or pass --new to drop them`,
