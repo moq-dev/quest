@@ -15,7 +15,7 @@ import {
 import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { reviewSection } from "../core";
-import { GitHub, type GitHubDependencies, object, string } from "./github";
+import { GitHub, type GitHubDependencies, type ObjectValue, object, string } from "./github";
 import { baseRemote, commandEnvironment, contains, git, tryGit, type Entry, type Plan, type Reason } from "./land";
 import { COMMENT_LIMIT, resolution, type Resolution } from "./land-apply";
 import { CAUSES, type Cause, signature, type FixResult } from "./land-fix";
@@ -23,6 +23,7 @@ import type { RemoteRead } from "./land";
 import { importFixer } from "./land-fixer-repository";
 import { push } from "./land-head";
 import { excerpt } from "./land-daemon";
+import type { Carried } from "./signals";
 
 /**
  * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused, or a fix
@@ -36,6 +37,8 @@ export class FixerRefusal extends Error {
 		super(message);
 	}
 }
+/** A refusal because a finding or decision holds the head, which `quest status` reports as `unanswered_signal`. */
+export class SignalRefusal extends FixerRefusal {}
 /** A fix that edits protected paths beyond what the base merge carries: only a maintainer's push lands it. */
 export class ProtectedEdit extends Error {}
 
@@ -125,7 +128,9 @@ export interface Round {
 	outcome: Outcome;
 	/** The head that failed. */
 	before: string;
-	/** The head the PR went back to the queue at, which a fix or merge moves; a handback has none. */
+	/** The pin `before` stood on, when it was the gate's base merge on that pin rather than the pin itself. */
+	pin?: string;
+	/** The head the round put back in the queue or published, which a fix or merge moves; a handback may keep it. */
 	after?: string;
 	/** The failure's signature: what failed, so a recurrence after a fix can be told from a new failure. */
 	failure: string;
@@ -156,9 +161,55 @@ export function history(state: string, number: number): History | undefined {
 	const record = JSON.parse(readFileSync(path, "utf8")) as Omit<History, "rounds"> & { rounds?: Round[] };
 	return { ...record, rounds: record.rounds ?? [] };
 }
+const carryPath = (state: string, number: number, head: string) => join(state, `carry-${number}-${head}.json`);
+/**
+ * What the fixer's `head` of PR `number` carries from the pick it replaces: the heads its rounds replaced, with the
+ * pins the gate's base merges stood on, and when the pick was made. Its own record, written once when a round puts the
+ * head back, outlives handbacks, holds, and removals, since the person who picks the head again has answered nothing;
+ * a head no round put back, such as a writer's push, carries nothing.
+ */
+export function carriedBy(state: string, number: number, head: string): Carried | undefined {
+	const path = carryPath(state, number, head);
+	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Carried) : undefined;
+}
+/** Record what the head `round` put back carries, unless a record already holds it: a carry is never rewritten. */
+export function saveCarry(
+	state: string,
+	number: number,
+	pick: string,
+	round: Pick<Round, "before" | "after" | "pin">,
+): void {
+	const after = round.after;
+	if (!after || !Number.isFinite(Date.parse(pick))) return;
+	const path = carryPath(state, number, after);
+	if (existsSync(path)) return;
+	// The heads it replaced, a gate merge's pin included, may carry an earlier pick's signals, which picking them
+	// again answered none of. An unchanged requeue of a gate merge still carries its pin's.
+	const replaced = round.pin ? [round.before, round.pin] : [round.before];
+	const earlier = replaced.flatMap((head) => carriedBy(state, number, head) ?? []);
+	const heads = [...new Set([...earlier.flatMap((carry) => carry.heads), ...replaced])].filter(
+		(head) => head !== after,
+	);
+	if (heads.length === 0) return;
+	const picked = [pick, ...earlier.map((carry) => carry.picked)].reduce((a, b) =>
+		Date.parse(b) < Date.parse(a) ? b : a,
+	);
+	save(path, { heads, picked } satisfies Carried);
+}
+/** What each of `pulls`' heads carries from a pick the land fixer replaced, by number. */
+export function carriedOf(state: string, pulls: ObjectValue[]): Map<number, Carried> {
+	return new Map(
+		pulls.flatMap((pull) => {
+			const carried = carriedBy(state, Number(pull.number), string(pull.headRefOid));
+			return carried ? [[Number(pull.number), carried] as const] : [];
+		}),
+	);
+}
+
 /** Record `round` in `record`, replacing the same job's earlier one, and save it as PR `number`'s history. */
 export function saveRound(state: string, number: number, record: History, round: Round): History {
 	const next = { ...record, rounds: [...record.rounds.filter((item) => item.job !== round.job), round] };
+	saveCarry(state, number, record.pick, round);
 	save(historyPath(state, number), next);
 	return next;
 }

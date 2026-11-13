@@ -570,7 +570,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"reviewer that approves or requests changes, its round, and its review, when that review is of the " +
 				"head, while its latest verdict on the head is neither an approval nor a dismissal, and ends its third, sixth, ... round (one commit it reviewed), as " +
 				"/quest-review's design checkpoint; a reacted:<content> line per " +
-				"reaction on the PR or a review; and a thread line per unresolved review thread, led by its node ID. " +
+				"reaction on the PR or a review; a thread line per unresolved review thread, led by its node ID; and a " +
+				"signal line per finding or decision that holds the head from landing (see the README). " +
 				"A missing value prints as -. --json prints the same facts as one deterministic object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 for any PR state, 2 for invalid arguments, " +
 				"and 1 for other failures.",
@@ -644,7 +645,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"lacks (GitHub's review decision is review_required or changes_requested), it only arms auto-merge, which waits " +
 				"for it, and refuses where nothing would wait, since an admin's token merges or enqueues past the requirement. It refuses a head on which quest check " +
 				"--no-stubs --base <base> --branch <head branch> finds anything, read from git objects fetched from the base repository, " +
-				"so nothing from the head runs, except findings the base already has; a base without quests skips it. It uses the method --squash or --rebase names, refusing one " +
+				"so nothing from the head runs, except findings the base already has; a base without quests skips it. It also refuses while an online reviewer's " +
+				"unanswered finding on the head, or a newer comment opening with 'Maintainer decision', holds it. It uses the method --squash or --rebase names, refusing one " +
 				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
 				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
 				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
@@ -741,7 +743,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 	landCommand
 		.command("watch")
 		.description(
-			"Watch the base's queue as a daemon, one per base branch of a repository, resolved once at startup from --base or the default branch: GitHub's merge queue where the base's rules have a merge_queue rule, otherwise the watcher's own serial queue, decided again each pass from GET /rules/branches/<base>, so enabling GitHub's queue switches the watcher with no host change; a pass that cannot read the rules does nothing. On GitHub's queue, once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A PR whose auto-merge was armed, by a writer or by the watcher, that is ready (its required checks passed and it does not conflict) but that GitHub never added to the queue is enqueued at the head auto-merge was armed on, never at a head pushed since. A pick is the latest enqueue by anyone, the App included (as for Dependabot's PRs), except the App's enqueues of heads the watcher itself put back in the queue for the pick. " +
+			"Watch the base's queue as a daemon, one per base branch of a repository, resolved once at startup from --base or the default branch: GitHub's merge queue where the base's rules have a merge_queue rule, otherwise the watcher's own serial queue, decided again each pass from GET /rules/branches/<base>, so enabling GitHub's queue switches the watcher with no host change; a pass that cannot read the rules does nothing. On GitHub's queue, once a minute, read the base's open PRs and the merge queue's removals since the last pass, and comment once on each PR the queue dropped unmerged, naming GitHub's reason and, for a failed `merge_group` build, the failing jobs and their logs' tails. A failed build or a conflict is recorded for the land fixer; a push since the removal, a person's removal, or an unknown reason ends the pick. A PR whose auto-merge was armed, by a writer or by the watcher, that is ready (its required checks passed and it does not conflict) but that GitHub never added to the queue is enqueued at the head auto-merge was armed on, never at a head pushed since. A pick is the latest enqueue by anyone, the App included (as for Dependabot's PRs), except the App's enqueues of heads the watcher itself put back in the queue for the pick. A queued or armed PR whose head draws a signal, an online reviewer's unanswered finding or a newer maintainer decision, is taken out of the queue and its auto-merge disarmed, with a comment; the own queue ejects it, and the fixer hands it back rather than re-enqueue it, counting those on the head its fix replaced. " +
 				`The own queue, for a base that requires the unreported \`${LAND_CHECK}\` check so GitHub never merges a pick itself, reads its picks from GitHub: PRs whose auto-merge \`quest merge --land\` armed pinned to their head, in arming order, ejecting with a comment each one that cannot land, such as a moved head, requested changes, or unresolved conversations. It tests one at a time: it merges the base into the pick with the quest merge driver, pushes that to quest-queue/<base>/<number>, which the repository's queue workflow builds on push, and waits for the base's required checks other than \`${LAND_CHECK}\` on it, at most --timeout minutes. A pass lands a passing pick with --method, only while the base is still the one it tested; a moved base rebuilds it. It lease-pushes the tested merge to the PR's head and lands it with GitHub's merge API pinned to that head, verifying the landed tree is the tested one, or, when the PR's branch refuses the push, fast-forwards the base to the tested commit and closes the PR with a comment linking it. A failed or timed-out build, or a conflict, disarms the PR's auto-merge and comments with the failing jobs, as GitHub's queue removes a PR, and is recorded for the land fixer; a re-enqueue arms auto-merge again, at the back. A writer's push, a person disarming auto-merge, or a hold ends the build. Each pick carries an informational \`quest queue\` check run with its position, the build in progress and its run, and the outcome. Queue branches go once their pick lands or leaves, and those an earlier process left are pruned on its first pass. ` +
 				"With --fixer, a conflict is first merged with the base by the quest merge driver; otherwise the fixer runs in the background on the failure, at most --fixer-jobs at once, oldest removal first. A fixed or merged head is lease-pushed and recorded in Review, and each fixed, merged, or flaky head is re-enqueued at the back of the queue (or armed with auto-merge while its checks run). The pick keeps going while each round makes progress: a round with no new commit for a failure that isn't flaky, the failure a fix addressed recurring right after it, or three flaky rounds in a row hand it back, as does the fixer, with a comment. State keeps each removal handled, so a restart neither misses nor repeats one, each removal's full log, the fixer's jobs, each pick's rounds, and the own queue's build. It holds a lock on its checkout's repository and base and one on its state directory, so two watchers never run beside each other on one base, while daemons on different bases run side by side, each with its own clone. On GitHub's queue the App needs `actions: read` for the logs, `merge_queues: write` to enqueue, and with a fixer `contents: write` to arm auto-merge and push, and `workflows: write` to push fixes that touch workflows. The own queue's App needs `contents: write`, `pull_requests: write`, `actions: write` to read logs and cancel builds, `checks: write`, `administration: read`, `workflows: write` for heads that touch workflows, and a bypass of the base's ruleset.",
 		)
@@ -1009,7 +1011,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		command
 			.addOption(new Option("--harness <name>", "Agent CLI to run").choices(HARNESSES).makeOptionMandatory())
 			.requiredOption("--model <model>", "Model the agent runs")
-			.requiredOption("--effort <level>", "Reasoning effort the agent runs at")
+			.requiredOption("--effort <level>", "Reasoning effort the agent runs at, never max", effortLevel)
 			.requiredOption(
 				"--permission-mode <mode>",
 				"Claude Code's --permission-mode, or Codex's sandbox mode; the agent cannot prompt",
@@ -1192,7 +1194,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Review the checkout's committed branch against its base with a reviewer its size picks, never the " +
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
 				"first whose model is not avoided reviews, and beside it, on the same head in its own session, the shadow: " +
-				"the pick's model one effort lower (low, medium, high, xhigh, max), skipped when the pick runs at low or an " +
+				"the pick's model one effort lower (low, medium, high, xhigh), skipped when the pick runs at low or an " +
 				"effort off that ladder, so each effort step can be compared with the one below it. The shadow runs on a " +
 				"branch's first run of the pick, then only while it has findings to settle or once the pick changed so it is " +
 				"no longer one step below; its findings are numbered and settled like any reviewer's, its session carries " +
@@ -1278,7 +1280,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			).choices(HARNESSES),
 		)
 		.option("--model <model>", "Model the size's pick, or --harness's reviewer, runs instead")
-		.option("--effort <level>", "Reasoning effort the size's pick, or --harness's reviewer, runs at instead")
+		.option(
+			"--effort <level>",
+			"Reasoning effort the size's pick, or --harness's reviewer, runs at instead, never max",
+			effortLevel,
+		)
 		.option(
 			"--exclude-model <model>",
 			"A model never picked to review it, instead of the PR's latest writer; repeat for each",
@@ -1596,6 +1602,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		warn(error instanceof Error ? error.message : String(error));
 		return 1;
 	}
+}
+
+/**
+ * An agent's effort: any level but `max`, which costs as much as a stronger
+ * model at a lower effort without matching it.
+ */
+function effortLevel(value: string): string {
+	if (value === "max") throw new InvalidArgumentError("max is never run; use a stronger model instead");
+	return nonEmpty(value);
 }
 
 /** An empty path names no directory, so it is a usage error rather than `.`. */

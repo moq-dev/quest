@@ -118,6 +118,8 @@ function setup(
 		warnings?: string[];
 		/** The base-to-head diff per compared head, or the status GitHub refuses it with. */
 		diffs?: Record<string, string | number>;
+		/** The PR's reviews, threads, and comments as the signal reader reads them; none by default. */
+		signals?: Node;
 		/** The base's active ruleset rules. */
 		rules?: Node[];
 		/** The base branch is gone, so reading it fails. */
@@ -179,6 +181,25 @@ function setup(
 				return Response.json(page.rows, { headers: page.next ? { Link: `<${page.next}>; rel="next"` } : {} });
 			}
 			const request = JSON.parse(String(init?.body));
+			if (request.query.includes("p1: pullRequest(number: 1)")) {
+				if (!last) throw new Error("signals read before PR state");
+				const head = last.data.repository.pullRequest.headRefOid;
+				const empty = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+				return Response.json({
+					data: {
+						repository: {
+							p1: {
+								headRefOid: head,
+								commits: { nodes: [{ commit: { oid: head, committedDate: "2026-10-16T00:00:00Z" } }] },
+								reviews: empty,
+								reviewThreads: empty,
+								comments: empty,
+								...options.signals,
+							},
+						},
+					},
+				});
+			}
 			if (request.query.includes("query HoldOwnership(")) {
 				holdQueries.push(request.variables);
 				if (!last) throw new Error("ownership read before PR state");
@@ -278,6 +299,30 @@ test("reports checks by requiredness, each reviewer's latest review against the 
 		`thread T3 outdated author ${URL_}#discussion_rT3 src/a.ts:2`,
 		"hold -",
 	]);
+});
+
+test("lists the signals that hold the head: unanswered online findings and newer maintainer decisions", async () => {
+	const body = pull({ checks: null, reviews: page([]), threads: page([]) });
+	const decision = `${URL_}#issuecomment-9`;
+	const status = await pullRequestStatus(
+		pr,
+		setup([body], {
+			signals: {
+				comments: page([
+					{
+						author: { __typename: "User", login: "kixelated" },
+						authorAssociation: "OWNER",
+						body: "Maintainer decision: raise the timeout.",
+						createdAt: "2026-10-16T01:00:00Z",
+						url: decision,
+					},
+				]),
+			},
+		}).deps,
+	);
+	expect(statusLines(status)).toContain(
+		`signal decision ${decision} kixelated: Maintainer decision: raise the timeout.`,
+	);
 });
 
 test("a queued PR with auto-merge and no checks reports both, and JSON is deterministic", async () => {

@@ -29,7 +29,7 @@ and `/reflect`):
   - Rejected: forge records only; transcripts through a script each run
 - What gates each run?
   - ✅ A week since the last run, the way
-    [the release cut](/quest/m1/release-cut.md) waits. The decision named a
+    the release cut waited. The decision named a
     `## Waiting` item because quests could not yet be held until a date;
     since `## Scheduled` exists, the run holds the date there (agent,
     2026-11-11).
@@ -107,7 +107,7 @@ Check first next run:
   [moq-dev/quest#625](https://github.com/moq-dev/quest/pull/625) landed
   2026-11-11T18:43Z: no data yet.
 - Heads that landed past a finding or decision, after
-  [late signals](/quest/m0/late-signals.md) lands.
+  [moq-dev/quest#652](https://github.com/moq-dev/quest/pull/652) lands.
 - Whether moq-dev/moq and moq-dev/moq.pro planned the runtime follow-ups
   of moq-dev/quest's 2026-11-11 run PR, and whether their escapes recurred.
 
@@ -124,7 +124,7 @@ messages 2026-10-26 to 11-11, classed by one sub-agent, approximate):
   and 7, with 5 races.
 - Landed past an open signal: 3 in moq-dev/moq, 2 catchable and 1
   maybe. A review finding posted after enqueue, a recorded decision the
-  head lacked, and a red platform run. [Late signals](/quest/m0/late-signals.md) takes the
+  head lacked, and a red platform run. [moq-dev/quest#652](https://github.com/moq-dev/quest/pull/652) takes the
   first two; `quest merge`'s refusal of failed checks
   ([moq-dev/quest#601](https://github.com/moq-dev/quest/pull/601)) covers
   none of them.

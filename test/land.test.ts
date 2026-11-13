@@ -25,12 +25,16 @@ import { authenticatedRead, gitAuthentication } from "../src/cli/land-git";
 import {
 	ADMITTED,
 	author,
+	carriedBy,
+	COLLECTION_ATTEMPTS,
 	validateFix,
 	fixerMarkdown,
 	fixerText,
 	REQUEUE_LIMIT,
 	history,
+	historyPath,
 	redactTokens,
+	saveRound,
 	type Round,
 	stopReason,
 	stopRule,
@@ -821,6 +825,21 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			[3, "unresolved_conversations"],
 		]);
 		expect(plan.waiting?.map(({ number }) => number)).toEqual([2, 4]);
+	});
+
+	test("ejects a pick whose head draws an unanswered online finding", async () => {
+		const forge = new Forge();
+		const runs = [{ name: "test", conclusion: "SUCCESS", url: "u" }];
+		forge.pull("Ready", { "1.txt": "1\n" }, { pull: { runs } });
+		forge.pull(
+			"Found",
+			{ "2.txt": "2\n" },
+			{ pull: { runs, reviews: [{ state: "COMMENTED", author: "rabbit[bot]", body: "[P1] Drops a frame" }] } },
+		);
+		const plan = await resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
+		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
+		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[2, "unanswered_signal"]]);
+		expect(plan.eject[0]!.detail).toContain("finding by rabbit[bot]: drops a frame");
 	});
 
 	test("refuses classic protection settings it does not uphold, or cannot read", async () => {
@@ -2067,6 +2086,46 @@ describe("land fixer stop rules", () => {
 	});
 });
 
+test("a fixed head carries the heads its pick's rounds replaced", () => {
+	const state = tempDir();
+	const round = (job: string, before: string, after?: string, pin?: string): Round => ({
+		job,
+		outcome: after ? "fixed" : "handback",
+		before,
+		failure: "f",
+		...(after ? { after } : {}),
+		...(pin ? { pin } : {}),
+	});
+	const pick = "2026-11-10T17:00:00Z";
+	expect(carriedBy(state, 5, "b")).toBeUndefined();
+	let record = saveRound(state, 5, { pick, rounds: [] }, round("1", "m", "b", "a"));
+	record = saveRound(state, 5, record, round("2", "b", "c"));
+	expect(carriedBy(state, 5, "b")).toEqual({ heads: ["m", "a"], picked: pick });
+	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["m", "a", "b"], picked: pick });
+	// A head no round put back, such as a writer's push, carries nothing.
+	expect(carriedBy(state, 5, "d")).toBeUndefined();
+	// A handback that drops `after`, even re-saving the round that set it, and the history's end leave it.
+	record = saveRound(state, 5, record, round("2", "b"));
+	rmSync(historyPath(state, 5));
+	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["m", "a", "b"], picked: pick });
+	// A later pick of the carried head keeps the earlier pick's time and heads, and never rewrites the record.
+	const later = "2026-11-11T17:00:00Z";
+	record = saveRound(state, 5, { pick: later, rounds: [] }, round("3", "c", "e"));
+	expect(carriedBy(state, 5, "e")).toEqual({ heads: ["m", "a", "b", "c"], picked: pick });
+	saveRound(state, 5, { pick: later, rounds: [] }, round("4", "x", "c"));
+	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["m", "a", "b"], picked: pick });
+	// A gate merge on a carried head, whether fixed again or requeued unchanged, keeps its pin's carry.
+	saveRound(state, 5, { pick: later, rounds: [] }, round("7", "m2", "n", "e"));
+	saveRound(state, 5, { pick: later, rounds: [] }, round("8", "m3", "m3", "e"));
+	expect(carriedBy(state, 5, "n")).toEqual({ heads: ["m", "a", "b", "c", "m2", "e"], picked: pick });
+	expect(carriedBy(state, 5, "m3")).toEqual({ heads: ["m", "a", "b", "c", "e"], picked: pick });
+	// An unchanged requeue carries nothing new, and a pick that is not a time cannot bound decisions.
+	saveRound(state, 5, { pick, rounds: [] }, round("5", "f", "f"));
+	saveRound(state, 5, { pick: "f".repeat(40), rounds: [] }, round("6", "g", "h"));
+	expect(carriedBy(state, 5, "f")).toBeUndefined();
+	expect(carriedBy(state, 5, "h")).toBeUndefined();
+});
+
 /** The test commit the own queue pushed for PR `number`, if its branch exists. */
 function queued(forge: Forge, number: number): string | null {
 	const found = spawnSync("git", ["-C", forge.origin, "rev-parse", `refs/heads/${queueBranch("main", number)}`], {
@@ -2493,6 +2552,39 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		report(forge, 2, "SUCCESS");
 		expect(await pass(0, fix)).toEqual(["landed 2"]);
 		expect(await pass(0, fix)).toEqual(["building 1"]);
+	});
+
+	test("the land fixer's requeue hands back a head a finding drew while it ran", async () => {
+		const { forge, queue, pass } = setup();
+		const one = forge.pull("One", { "one.txt": "1\n" });
+		const tools = tempDir();
+		const wrapper = join(tools, "wrapper");
+		writeFileSync(
+			wrapper,
+			`#!/bin/sh\nset -eu\nprintf '[{"number":%s,"action":"requeue","reason":"healthy","failure":"just test: render","cause":"flaky"}]' "$2" > quest-land-result.json\n`,
+			{ mode: 0o755 },
+		);
+		const fix: FixContext = {
+			root: queue.root,
+			fixer: wrapper,
+			jobs: 1,
+			effort: "medium",
+			branches: [],
+			tags: [],
+			timeout: 60,
+			token: queue.token,
+			read: readRemote,
+		};
+		await pass(0, fix);
+		report(forge, 1, "FAILURE", "flaked\n");
+		const finished = eventFile(queue.state, (name) => name.endsWith(".exit"));
+		expect(await pass(0, fix)).toEqual(["removed 1", "fixing 1"]);
+		await finished;
+		one.reviews = [{ state: "COMMENTED", author: "rabbit[bot]", body: "[P1] Drops a frame" }];
+		expect(await pass(0, fix)).toEqual(["handback 1"]);
+		expect(one.landing).toBeFalsy();
+		expect(one.comments?.at(-1)?.body).toContain("finding by rabbit[bot]: drops a frame");
+		expect(one.comments?.at(-1)?.body).toContain("<!-- quest land: unanswered_signal -->");
 	});
 });
 

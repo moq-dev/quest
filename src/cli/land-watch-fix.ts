@@ -6,6 +6,7 @@ import { isHoldLabel } from "../core";
 import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
 import { type Queued, lacksApproval, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
+import { type Carried, describe, readSignals } from "./signals";
 import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";
@@ -16,11 +17,13 @@ import {
 	comment,
 	conflictFailure,
 	FixerRefusal,
+	SignalRefusal,
 	handbackLog,
 	fixerMarkdown,
 	fixerText,
 	history,
 	type History,
+	carriedBy,
 	historyPath,
 	identity,
 	importFix,
@@ -98,6 +101,8 @@ interface WatchJob extends Process {
 	requeued?: Queued;
 	/** Why the round ended in a handback, recorded before posting it, so a restart keeps the reason. */
 	handback?: string;
+	/** A finding or decision on the head handed it back, so its marker says `unanswered_signal`. */
+	signaled?: boolean;
 	/** A validated fix whose push GitHub refused, handed back for `quest land apply`. */
 	resolution?: Resolution;
 	/** Passes that failed to collect it, so one that keeps failing is set aside rather than holding a fixer slot. */
@@ -123,7 +128,7 @@ const JUDGED: Record<Cause, string> = {
 };
 
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
-	state baseRefName headRefOid mergeStateStatus reviewDecision mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
+	number repository { nameWithOwner } state baseRefName headRefOid mergeStateStatus reviewDecision mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 	labels(first: 100) { nodes { name } }
 	headRepository { nameWithOwner }
 } } }`;
@@ -695,13 +700,22 @@ async function collect(
 				job.requeuing = head;
 				save(path, job);
 			}
-			job.requeued = await requeue(github, entry.id, head, job.base.ref, job.dropped, queue);
+			job.requeued = await requeue(
+				github,
+				entry.id,
+				head,
+				job.base.ref,
+				job.dropped,
+				queue,
+				carriedBy(state, number, head),
+			);
 			save(path, job);
 		} catch (failure) {
 			if (failure instanceof Held) return [...said, ...(await leave())];
 			if (!(failure instanceof FixerRefusal)) throw failure;
 			handback = failure.message;
 			if (failure.resolution) job.resolution = failure.resolution;
+			if (failure instanceof SignalRefusal) job.signaled = true;
 		}
 	}
 
@@ -711,8 +725,10 @@ async function collect(
 	// Every handback ends the pick with a round of its own, a crash's or a timeout's too, so the App's
 	// next enqueue of a head this pick put back starts a new pick.
 	if (round?.outcome !== "handback") {
-		const { after: _, ...rest } = round ?? { job: name, before: entry.head, failure };
-		saveRound(state, number, history(state, number)!, { ...rest, outcome: "handback" });
+		saveRound(state, number, history(state, number)!, {
+			...(round ?? { job: name, before: entry.head, failure }),
+			outcome: "handback",
+		});
 	}
 	if (handback) {
 		job.handback = handback;
@@ -731,7 +747,7 @@ async function collect(
 		`handback ${name}`,
 		attribution,
 		handbackLog(job.log, !handback && result?.action === "handback" ? result.log : undefined),
-		job.reason,
+		job.signaled ? "unanswered_signal" : job.reason,
 		job.resolution ? (room) => resolutionSection(number, job.resolution!, room) : undefined,
 	);
 	finish(path, job);
@@ -741,8 +757,9 @@ async function collect(
 /**
  * Put `head` back in `base`'s queue, at the back: GitHub's merge queue, or the watcher's own, by arming
  * auto-merge pinned to it. A PR queued or armed at it since the queue dropped it, at `dropped`, needs
- * nothing more: a restart finds its own request, and a workflow may pick the fixer's push first. A
- * refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves it to the session that holds it.
+ * no enqueue: a restart finds its own request, and a workflow may pick the fixer's push first. A
+ * refusal, or a PR retargeted from `base`, hands the PR back; a hold leaves it to the session that holds it. A signal
+ * on `head` or on the `carried` pick it replaces, queued or not, takes it out of the queue and hands it back.
  */
 async function requeue(
 	github: GitHub,
@@ -751,13 +768,37 @@ async function requeue(
 	base: string,
 	dropped: string,
 	queue: QueueMode,
+	carried?: Carried,
 ): Promise<Queued> {
 	const how = (pull: ObjectValue): Queued => (pull.mergeQueueEntry != null ? "enqueued" : "armed");
 	let pull = await readPull(github, id);
 	if (string(pull.baseRefName) !== base) throw new FixerRefusal(`retargeted from ${base} before it was re-enqueued`);
 	if (string(pull.headRefOid) !== head) throw new FixerRefusal("head moved before it was re-enqueued");
+	if (!queued(pull, dropped) && isHeld(pull)) throw new Held();
+	// A finding or decision that arrived while the fixer ran holds the head as it would a writer's pick, even one a
+	// workflow already queued. The fixer's own commit, which read neither, answers none on the pick it replaces.
+	const [owner, repo] = string(object(pull.repository).nameWithOwner).split("/");
+	const number = Number(pull.number);
+	const held = (
+		await readSignals(github, { owner: owner!, repo: repo! }, [number], carried && new Map([[number, carried]]))
+	).get(number)!;
+	if (held.head !== head) throw new FixerRefusal("head moved before it was re-enqueued");
+	if (held.signals.length > 0) {
+		if (pull.mergeQueueEntry != null) {
+			await github.graphql("mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }", {
+				id,
+			});
+			// Dequeuing can disarm auto-merge too, and GitHub refuses to disable a request that is gone.
+			pull = await readPull(github, id);
+		}
+		if (string(pull.headRefOid) === head && queued(pull, dropped) && pull.autoMergeRequest != null)
+			await github.graphql(
+				"mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+				{ id },
+			);
+		throw new SignalRefusal(`its head is held by ${describe(held.signals)}`);
+	}
 	if (!queued(pull, dropped)) {
-		if (isHeld(pull)) throw new Held();
 		try {
 			if (queue.kind === "own") await enqueue(github, id, head, queue.method);
 			else

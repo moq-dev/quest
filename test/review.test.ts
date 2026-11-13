@@ -493,9 +493,13 @@ fakes.each([
 		const result = await quest("--root", s.repo, "review");
 		expect(result.stderr).toContain(message);
 		expect(result.code).toBe(2);
-		// Both seats' status checks passed, and the first turn to fail stopped the other's before it resumed.
+		// The failing seat's status check passed, and the first turn to fail stopped the other seat before it
+		// resumed. That seat runs its own status check concurrently, so the abort may stop it before its CLI
+		// logs, or before it spawns at all.
 		const calls = s.calls();
-		expect(calls.filter((c) => effortOf(c) === null)).toHaveLength(2);
+		const checks = calls.filter((c) => effortOf(c) === null).length;
+		expect(checks).toBeGreaterThanOrEqual(1);
+		expect(checks).toBeLessThanOrEqual(2);
 		const turns = calls.filter((c) => effortOf(c) !== null);
 		expect(turns.length).toBeGreaterThanOrEqual(1);
 		expect(turns.every((c) => !c.argv.includes("--resume") && !c.argv.includes("resume"))).toBe(true);
@@ -1023,6 +1027,12 @@ fakes("--base reviews against another branch, fetched first, with that branch's 
 	const unknown = await quest("--root", s.repo, "review", "--base", "upstream/release", "--new");
 	expect(unknown.code).toBe(2);
 	expect(unknown.stderr).toContain("--base must be <remote>/<branch>");
+});
+
+test("review refuses max effort", async () => {
+	const result = await quest("review", "--harness", "claude", "--model", "opus", "--effort", "max");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain("max is never run");
 });
 
 fakes("claude reviews read-only with the base's instructions, then reports in the schema", async () => {
@@ -1761,7 +1771,7 @@ test("the shadow is the size's pick one effort lower, and none below low", () =>
 		"claude claude-opus-5-5 medium",
 		"claude claude-opus-5-5 high",
 	]);
-	expect(shadowOf({ harness: "claude", model: "m", effort: "max" })!.effort).toBe("xhigh");
+	expect(shadowOf({ harness: "claude", model: "m", effort: "xhigh" })!.effort).toBe("high");
 	// No step below an effort off the ladder is known, so an --effort such as Codex's minimal runs no shadow.
 	expect(shadowOf({ harness: "codex", model: "m", effort: "minimal" })).toBeNull();
 });

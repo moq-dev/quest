@@ -299,6 +299,13 @@ test("on Windows, the agent environment drops credentials whatever their case", 
 	expect(strippedEnvironment({ op_token: "t" }, "linux")).toEqual({ op_token: "t" });
 });
 
+test("start refuses max effort before launching anything", async () => {
+	const args = launch("claude").map((arg) => (arg === "high" ? "max" : arg));
+	const result = await quest("agent", "start", ...args, ".", "go");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain("max is never run");
+});
+
 test("start runs claude with every launch setting on its own login", async () => {
 	const s = setup();
 	const result = await quest("agent", "start", ...launch("claude"), s.worktree, "/quest-start quest/m0/a.md");

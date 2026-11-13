@@ -1,6 +1,7 @@
 // Trusted preparation and publication. Sandboxes and fixers never receive this repository or state.
 import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { carriedBy } from "./land-fixer";
 import { gitAuthentication } from "./land-git";
 import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
 import {
@@ -48,7 +49,10 @@ export async function resolvePreparedQueue(
 	target: Target,
 	deps: GitHubDependencies,
 ): Promise<Plan> {
-	const plan = await resolveQueue(repository, target, deps, (entry) => isPrepared(root, state, entry));
+	const plan = await resolveQueue(repository, target, deps, {
+		acceptHead: (entry) => isPrepared(root, state, entry),
+		carried: (number, head) => carriedBy(state, number, head),
+	});
 	const numbers = new Set(
 		readdirSync(state).flatMap((name) => {
 			const match = /^head-(\d+)-.*\.json$/.exec(name);
