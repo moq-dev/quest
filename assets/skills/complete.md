@@ -1,5 +1,5 @@
 ---
-description: Decide which open PRs to merge and settle what quests and drafts wait on, queue the merges, then plan the run's follow-ups.
+description: Decide which open PRs to merge and settle what quests and drafts wait on, queue the merges, then plan the follow-ups no quest owns yet.
 guide: Format, Deletion, Summaries
 skills: run
 ---
