@@ -1205,27 +1205,37 @@ they kept every CPU busy. macOS, Windows, and Linux without a systemd user
 manager have no scope to measure, so the load average alone decides there.
 
 Where a systemd scope owns the command and the user manager may limit memory
-(the memory controller is delegated to it), the scope also holds the command's
-memory to a ceiling, with no swap, so a command that overruns stops itself
-instead of the kernel's OOM killer picking a victim elsewhere on the host. A
-ceiling starts at an eighth of one command's budget, 512 MiB on most hosts.
-Every second the gate records what its command holds, not counting file cache:
+(the memory controller is delegated to it), each running command also has a
+share of the host's memory, so a command that overruns stops itself instead of
+the kernel's OOM killer picking a victim elsewhere on the host. A share starts
+at an eighth of one command's budget, 512 MiB on most hosts. Every second the
+gate records what its command holds, not counting file cache:
 
-- Once that reaches three quarters of the ceiling, the gate raises the ceiling
-  by half, or by one starting ceiling if that is more or all that fits. A raise
+- Once that reaches three quarters of the share, the gate raises the share by
+  half, or by one starting share if that is more or all that fits. A raise
   comes out of the host's available memory, less what the other running
-  commands may still take of their ceilings, and less one command's budget,
+  commands may still take of their shares, and less one command's budget,
   which stays free for everything outside the gate.
-- Once it falls below half, the ceiling drops to one starting ceiling above
-  what the command holds.
+- Once it falls below half, the share drops to one starting share above what
+  the command holds.
 
-What running commands may still take of their ceilings also counts as taken
-when a new command asks to start, so the ceilings fit the host together. With
-no room to raise a ceiling, the kernel slows the command over the last eighth
-below it, and the gate says so on stderr. A command that fills the rest is
-killed with everything in its scope, and the gate fails with
-`... ran out of memory`. A nested gate's command stays under the enclosing
-command's ceiling; a gate inside another Quest scope has a ceiling of its own.
+What running commands may still take of their shares also counts as taken when
+a new command asks to start, so the shares fit the host together. Available
+memory here is also bounded by any memory limit on `background.slice` or the
+cgroups that hold it.
+
+While raises fit, the scope's own limit stays where it started: the host's
+memory less one command's budget, with no swap. A runtime that sizes its heap
+from its cgroup's limit when it starts, as Node and the JVM do, would stay
+small under a limit that only grows later. A command can therefore pass its
+share within a second, into the budget kept free, and its share then follows
+what it took. Once no raise fits, the gate lowers the scope's limit to the
+share and says so on stderr: the kernel slows the command over the last eighth
+below it and, if the command fills the rest, kills everything in its scope,
+and the gate fails with `... ran out of memory`. The limit lifts again once
+the command wants no more or a raise fits. A nested gate's command stays under
+the enclosing command's limit; a gate inside another Quest scope has a share
+of its own.
 
 A user's admissions on one host are recorded under
 `~/.cache/quest/admissions/<hostname>`, whatever the caller's environment or

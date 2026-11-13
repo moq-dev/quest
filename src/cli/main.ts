@@ -135,8 +135,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"systemd scope owns each running command, the load counts as at least the sum of their peak CPU " +
 				"use in the last minute, and nothing starts while those fill every CPU, so a lull between a " +
 				"command's phases does not free its CPUs. Where the user manager may limit memory, the scope also " +
-				"holds the command to a memory ceiling, which the gate raises while the host has room; a command " +
-				"that fills its ceiling is killed whole, and the gate fails. Leave model calls, such as quest review, and long-running " +
+				"gives the command a share of memory, which the gate raises while the host has room; once it has " +
+				"none, the command is held to its share, and killed whole if it fills it, failing the gate. Leave model calls, such as quest review, and long-running " +
 				"servers out of the gate. Nested gate " +
 				"calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +

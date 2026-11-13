@@ -314,10 +314,10 @@ test("what running commands may still take of their ceilings is not free, howeve
 });
 
 /**
- * Run `ration` for a command with a 1 GiB ceiling that moves by as much, on a host that keeps
- * 1 GiB free, over `samples`: what the command holds and what the host has available at each
- * CEILING_MS. Returns each ceiling the scope was moved to, each one it was held at, and its
- * admission.
+ * Run `ration` for a command whose share starts at 1 GiB and moves by as much, on a host that
+ * keeps 1 GiB free and gives one command at most 64, over `samples`: what the command holds and
+ * what the host has available at each CEILING_MS. Returns its share after each sample, each limit
+ * its scope was moved to, each share it was held to, and its admission.
  */
 async function rationed(samples: { held: number; available: number }[], others: Admission[] = []) {
 	const state = { now: 0, load: 0, memory: Infinity };
@@ -327,13 +327,20 @@ async function rationed(samples: { held: number; available: number }[], others: 
 	host.usage = () => ({ cpu: 0, memory: held });
 	const caps: number[] = [];
 	host.cap = (_unit, { high, max }) => {
-		expect(high).toBe(max - max / 8);
-		// The ledger already promises a raised ceiling, and still promises a lowered one.
-		expect(host.ledger().admissions[0].memory).toBeGreaterThanOrEqual(max);
+		// Back at the most one command may hold, or held to its share and slowed over its last eighth.
+		if (high === max) expect(max).toBe(64 * GiB);
+		else {
+			expect(high).toBe(max - max / 8);
+			expect(host.ledger().admissions[0].memory).toBe(max);
+		}
 		caps.push(max / GiB);
 	};
 	const stop = new AbortController();
+	const shares: number[] = [];
+	let sampled = false;
 	host.sleep = async () => {
+		if (sampled) shares.push(host.ledger().admissions[0].memory! / GiB);
+		sampled = true;
 		const sample = samples.shift();
 		if (sample === undefined) {
 			stop.abort();
@@ -345,46 +352,54 @@ async function rationed(samples: { held: number; available: number }[], others: 
 	const throttled: number[] = [];
 	await ration(
 		host,
-		{ id: "build", unit: "quest-gate-build.scope", step: GiB, reserve: GiB },
+		{ id: "build", unit: "quest-gate-build.scope", step: GiB, reserve: GiB, most: 64 * GiB },
 		stop.signal,
-		(ceiling) => throttled.push(ceiling / GiB),
+		(share) => throttled.push(share / GiB),
 	);
-	return { caps, throttled, mine: host.ledger().admissions[0] };
+	return { shares, caps, throttled, mine: host.ledger().admissions[0] };
 }
 
-test("a gate keeps its command's ceiling ahead of what it holds while the host has room", async () => {
-	const { caps, throttled, mine } = await rationed([
-		{ held: 0.25, available: 9 },
-		// Three quarters of the ceiling: one more step.
-		{ held: 0.8, available: 9 },
-		{ held: 1.6, available: 9 },
-		// Past 2 GiB, half of the ceiling is more than a step.
-		{ held: 2.4, available: 9 },
-		{ held: 3.5, available: 9 },
+test("a gate keeps its command's share ahead of what it holds while the host has room", async () => {
+	const { shares, caps, throttled, mine } = await rationed([
+		{ held: 0.25, available: 99 },
+		// Three quarters of the share: one more step.
+		{ held: 0.8, available: 99 },
+		{ held: 1.6, available: 99 },
+		// Past 2 GiB, half of the share is more than a step.
+		{ held: 2.4, available: 99 },
+		{ held: 3.5, available: 99 },
 		// Half of it is no reason to move.
-		{ held: 3.4, available: 9 },
+		{ held: 3.4, available: 99 },
 		// Less is: a step above what it holds.
-		{ held: 1.2, available: 9 },
-		{ held: 0.1, available: 9 },
+		{ held: 1.2, available: 99 },
+		{ held: 0.1, available: 99 },
+		// What it took between samples is its share, and it wants more.
+		{ held: 7.5, available: 99 },
+		// One command never gets more than the host gives one.
+		{ held: 63.5, available: 99 },
 	]);
-	expect(caps).toEqual([2, 3, 4.5, 6.75, 3, 2]);
-	expect(throttled).toEqual([]);
-	expect(mine).toEqual({ id: "build", at: 0, ...me, memory: 2 * GiB, held: 0 });
+	expect(shares).toEqual([1, 2, 3, 4.5, 6.75, 6.75, 3, 2, 12, 64]);
+	// The scope keeps the limit it started with, so a runtime never sizes itself to a small one.
+	expect(caps).toEqual([64]);
+	expect(throttled).toEqual([64]);
+	expect(mine).toEqual({ id: "build", at: 0, ...me, memory: 64 * GiB, held: 63.5 * GiB });
 });
 
-test("with no room, a ceiling stays until other commands free memory", async () => {
-	// Another command may still take 3 GiB of its ceiling, which is not this one's to grow into.
+test("with no room, a command is held to its share until other commands free memory", async () => {
+	// Another command may still take 3 GiB of its share, which is not this one's to grow into.
 	const other = { id: "other", at: 0, ...me, memory: 4 * GiB, held: GiB };
-	const { caps, throttled, mine } = await rationed(
+	const { shares, caps, throttled, mine } = await rationed(
 		[
 			// 4.7 GiB less the 3 GiB promised, the 1 GiB kept free, and its own 0.2 GiB left: no step.
 			{ held: 0.8, available: 4.7 },
-			// Held where the kernel slows it: reported once, not at every sample.
+			// Still held: reported once, not at every sample.
 			{ held: 0.9, available: 4.6 },
-			{ held: 0.95, available: 4.6 },
 			// A step now fits, though a queued caller's place and a finished command hold nothing.
 			{ held: 0.95, available: 5.1 },
-			{ held: 1.9, available: 4.2 },
+			// It took more than its share before the next sample, and nothing more fits.
+			{ held: 2.6, available: 4.2 },
+			// It no longer wants more, so its scope's limits lift.
+			{ held: 2.1, available: 4.2 },
 		],
 		[
 			other,
@@ -392,12 +407,13 @@ test("with no room, a ceiling stays until other commands free memory", async () 
 			{ id: "gone", at: 0, pid: 2 ** 22 + 1, memory: 64 * GiB },
 		],
 	);
-	expect(caps).toEqual([2]);
-	expect(throttled).toEqual([1, 2]);
-	expect(mine).toMatchObject({ memory: 2 * GiB, held: 1.5 * GiB });
+	expect(shares).toEqual([1, 1, 2, 3, 3]);
+	expect(caps).toEqual([1, 64, 3, 64]);
+	expect(throttled).toEqual([1, 3]);
+	expect(mine).toMatchObject({ memory: 3 * GiB, held: 2 * GiB });
 });
 
-test("a ceiling slows its command over the last eighth before it is killed", () => {
+test("a held command is slowed over the last eighth of its share before it is killed", () => {
 	expect(bounds(GiB)).toEqual({ high: GiB - GiB / 8, max: GiB });
 });
 
@@ -803,6 +819,14 @@ test("Linux memory reads the container cgroup mounted as the root", () => {
 	writeFileSync(join(cgroups, gated, "memory.current"), String(GiB));
 	writeFileSync(join(proc, "self/cgroup"), `0::/${gated}\n`);
 	expect(linuxMemory(proc, cgroups)).toEqual(limited);
+	// A limit on the slice a command's own scope runs in bounds it, though the caller is outside it.
+	writeFileSync(join(cgroups, "background.slice/memory.max"), String(4 * GiB));
+	writeFileSync(join(cgroups, "background.slice/memory.current"), String(3 * GiB));
+	writeFileSync(join(cgroups, "background.slice/memory.stat"), `inactive_file ${GiB}\n`);
+	writeFileSync(join(proc, "self/cgroup"), "0::/session.scope\n");
+	expect(linuxMemory(proc, cgroups, ["/background.slice"])).toEqual({ total: 4 * GiB, available: 2 * GiB });
+	// A slice no unit has started in yet has no cgroup; what holds it still bounds it.
+	expect(linuxMemory(proc, cgroups, ["/absent.slice"])).toEqual(limited);
 });
 
 test("every caller on this host shares one ledger, whatever its environment or sessions", () => {
@@ -1245,7 +1269,7 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 		const wait = `until [ -e ${quote(raised)} ]; do sleep 0.05; done`;
 		const limits = `cd /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup) && cat memory.high memory.max memory.swap.max memory.oom.group`;
 		const result = scope(unit, { high: 192 * MiB, max: 256 * MiB })(
-			["/bin/sh", "-c", `${limits} > ${quote(report)}; ${wait}; ${limits} >> ${quote(report)}`],
+			["/bin/sh", "-c", `${limits} > ${quote(report)}; ${wait}; ${limits} >> ${quote(report)}; exit 7`],
 			process.env,
 			cancellation().cancel,
 		);
@@ -1253,7 +1277,7 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 		expect(host.usage(unit)?.memory).toBeLessThan(192 * MiB);
 		host.cap(unit, { high: 448 * MiB, max: 512 * MiB });
 		writeFileSync(raised, "");
-		expect(await result).toBe(0);
+		expect(await result).toBe(7);
 		expect(readFileSync(report, "utf8").trim().split("\n").map(Number)).toEqual([
 			...[192 * MiB, 256 * MiB, 0, 1],
 			...[448 * MiB, 512 * MiB, 0, 1],
@@ -1289,7 +1313,9 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 					process.env,
 					cancellation().cancel,
 				);
-				await expect(run).rejects.toThrow(/ran out of memory: the kernel killed its command/);
+				await expect(run).rejects.toThrow(
+					/ran out of memory: the kernel killed its command at its memory limit/,
+				);
 				await expect(run).rejects.toBeInstanceOf(Exhausted);
 				// The wrapper and its other child died with the hog, and the scope beside it still runs.
 				await until(() => stopped(Number(readFileSync(pid, "utf8"))));

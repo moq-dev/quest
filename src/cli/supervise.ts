@@ -272,17 +272,28 @@ async function stopBound(unit: string): Promise<void> {
 
 /** Whether the user manager may limit a scope's memory: the memory controller is delegated to it. */
 export function capped(): boolean {
+	const manager = managerGroup();
+	if (manager === undefined) return false;
 	try {
-		const manager = execFileSync("systemctl", ["--user", "show", "--property=ControlGroup", "--value"], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
-		}).trim();
 		return readFileSync(join("/sys/fs/cgroup", manager, "cgroup.controllers"), "utf8")
 			.trim()
 			.split(" ")
 			.includes("memory");
 	} catch {
 		return false;
+	}
+}
+
+/** The user manager's cgroup, as a path below the cgroup mount, which holds its slices; undefined without one. */
+export function managerGroup(): string | undefined {
+	try {
+		const group = execFileSync("systemctl", ["--user", "show", "--property=ControlGroup", "--value"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+		return group || undefined;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -523,8 +534,8 @@ function contain(
 				if (failure) throw failure;
 				if (code !== 0 && !interrupted && describe.exhausted())
 					throw new Exhausted(
-						`${describe.name} ran out of memory: the kernel killed its command at its memory ceiling, ` +
-							"which its gate raises only while the host has free memory",
+						`${describe.name} ran out of memory: the kernel killed its command at its memory limit, ` +
+							"which its gate lowers to what the command holds once the host has none to spare",
 					);
 				if (!admitted && !interrupted)
 					throw new Error(
