@@ -1,10 +1,10 @@
-# [S] Pullfrog reviews run in the dev shell
+# [S] Pullfrog reviews have what their checks need
 
 ## Goal
 
 Before the agent starts, Pullfrog's review run has what the repository's
 checks and tests need, such as Nix, the dev shell, `quest`, and `just`, in
-each moq-dev repository whose reviews would run them. The bot then runs the
+each repository whose Pullfrog reviews would run them. The bot then runs the
 repository's checks and tests instead of reasoning around their absence.
 
 ## Plan
@@ -15,7 +15,7 @@ Decided 2026-11-12 (user, /quest-plan): ✅ both a reference-line fallback
 
 Pullfrog reviews with Claude since 2026-11-12, its model access configured in
 the Pullfrog console, and its workflow is back in moq-dev/quest (#659),
-moq-dev/rind, moq-dev/rust2, moq-dev/studio, and moq-dev/web-transport after
+kixel-ai/rind, moq-dev/rust2, moq-dev/studio, and moq-dev/web-transport after
 the 2026-11-10 removal [token-waste](/quest/m0/token-waste/README.md) records.
 
 Evidence from the trimmed Pullfrog learnings: rind's bot could not fetch its
@@ -29,9 +29,12 @@ repository's tests read are checked in, so a plain clone runs every test
 (rejected: fetching them in a Pullfrog setup step on every run; pinning them
 as Nix flake inputs, which still needs Nix in the reviewer). Rind now copies
 the Wycheproof, CAVP, and CCTV files its tests open into `thirdparty/vectors/`
-with `admin/sync-vectors`, and its Pullfrog workflow has no setup step:
+with `admin/sync-vectors`, and its Pullfrog workflow gets no setup step:
 `ubuntu-latest` already has cargo, and vectors were its only recorded
-problem. Rind is done unless a review run after #714 merges shows another gap.
+problem. Until that PR merges, rind's `main` still has the submodules. Once
+it merges, dispatch one Pullfrog review in rind (`gh workflow run
+pullfrog.yml`) and check its log for passing tests; rind is done unless that
+run shows another gap.
 
 Remaining: studio, rust2, quest, and web-transport, whose gaps are tools, not
 files. Prefer making the bot need no tool it lacks, as rind did, over
@@ -48,13 +51,14 @@ PR's head and that the agent's instructions say so.
 Token exposure: `DeterminateSystems/nix-installer-action` writes the job's
 `GITHUB_TOKEN` into the world-readable `/etc/nix/nix.conf` as
 `access-tokens`, where the agent's shell can read it, as Pullfrog's review of
-rind#714's first approach found. Any step that installs Nix before the agent
-removes that line once the dev shell is built.
+[kixel-ai/rind#714](https://github.com/kixel-ai/rind/pull/714)'s first
+approach found. A setup step that installs Nix must delete that line before
+the agent starts, whether or not it builds a dev shell.
 
 Open for the implementer, with recommendations:
 
 - Where the step runs. Pullfrog's per-repository `hooks.setup` setting
-  (`pullfrog config set hooks.setup ... --repo moq-dev/<repo>`) or steps
+  (`pullfrog config set hooks.setup ... --repo <owner>/<repo>`) or steps
   before the action in `.github/workflows/pullfrog.yml`, whose header says to
   edit only where indicated. Recommended: workflow steps, since the Pullfrog
   CLI could not read a repository's settings without the maintainer's login;
@@ -62,3 +66,9 @@ Open for the implementer, with recommendations:
 - Which repositories. Measure the added setup time on one run; recommended:
   every repository whose reviews would run its tests, and none where the
   fallback alone covers what reviews need.
+
+## Waiting
+
+- kixel-ai/rind: merge [kixel-ai/rind#714](https://github.com/kixel-ai/rind/pull/714),
+  which vendors rind's test vectors; check that rind's `main` has
+  `thirdparty/vectors/wycheproof/` and no `thirdparty/wycheproof` submodule

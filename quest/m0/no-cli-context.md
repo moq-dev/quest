@@ -16,8 +16,8 @@ reviews need its dev shell.
 Decided 2026-11-12 (user, /quest-plan), after trimming Pullfrog's per-repo
 learnings: studio, rust2, quest, and web-transport had learnings that worked
 around a missing `quest`, `nix`, or `just` on Pullfrog's runner, which has
-no Nix and no `quest`. Rind's worked around its test vectors instead, which it
-now checks in ([pullfrog-setup](/quest/m0/pullfrog-setup.md)).
+no Nix and no `quest`. Rind's worked around its test vectors instead, which
+[pullfrog-setup](/quest/m0/pullfrog-setup.md) has it check in.
 
 - How should an agent without the CLI get the rules?
   - ✅ Both: a fallback in the reference line for any agent, and a setup step
