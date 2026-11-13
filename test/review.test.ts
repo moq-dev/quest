@@ -1896,7 +1896,9 @@ test("each changed directory keeps its own instructions, and a directory's symli
 test("the next step stops for the design checkpoint when a reviewer's every third round reports findings", () => {
 	const round = (number: number, findings: number, severity = "medium") =>
 		({ round: number, findings: Array.from({ length: findings }, () => ({ severity })) }) as unknown as Round;
-	expect(nextStep([round(3, 1)])).toMatch(/^next checkpoint: /);
+	expect(nextStep([round(3, 1)])).toMatch(
+		/^next checkpoint: .*best long-term approach from first principles, compare it with the current one/,
+	);
 	expect(nextStep([round(6, 2)])).toMatch(/^next checkpoint: /);
 	expect(nextStep([round(4, 1)])).toMatch(/^next respond: /);
 	expect(nextStep([round(3, 0)])).toMatch(/^next done: /);
