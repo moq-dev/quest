@@ -85,25 +85,40 @@ export function isPrepared(root: string, state: string, entry: Entry): boolean {
 	);
 }
 
-/** Fresh tokens go only to git over HTTPS, with no inherited credential helper or global config. */
-export async function push(
-	root: string,
-	remote: string,
-	from: string,
-	to: string,
-	ref: string,
-	token: (workflows: boolean) => Promise<string>,
-	/** What `ref` must be before the push; empty when it must not exist yet. */
-	lease = from,
-) {
+/** What `push` sends where, and the credential it sends it with. */
+export interface Push {
+	remote: string;
+	/** The commit `to` builds on, for whether the push changes workflows. */
+	from: string;
+	to: string;
+	ref: string;
+	/** What `ref` must be before the push, `from` when absent; empty when it must not exist yet. */
+	lease?: string;
+	token: (workflows: boolean) => Promise<string>;
+}
+
+/**
+ * Fresh tokens go only to git over HTTPS, with no inherited credential helper or global config. GitHub
+ * intermittently answers a push to a repository the token reaches with "Repository not found", so that
+ * is retried as `github` retries a failed request; any other refusal returns at once. A fork the App's
+ * token cannot reach answers the same lasting 404, and so reaches its caller's fallback only after the
+ * retries, about 15 seconds later.
+ */
+export async function push(github: GitHub, root: string, { remote, from, to, ref, lease = from, token }: Push) {
 	// A push that replaces another head than the one it builds on can change workflows relative to either.
 	const workflows = [...new Set([from, lease])].some(
 		(old) => old !== "" && git(root, ["diff", "--name-only", old, to, "--", ".github/workflows"]) !== "",
 	);
-	const credential = await token(workflows);
-	return tryGit(root, ["push", "--quiet", remote, `${to}:${ref}`, `--force-with-lease=${ref}:${lease}`], {
-		env: gitAuthentication(credential),
-	});
+	return github.retry(
+		async () =>
+			tryGit(root, ["push", "--quiet", remote, `${to}:${ref}`, `--force-with-lease=${ref}:${lease}`], {
+				env: gitAuthentication(await token(workflows)),
+			}),
+		(result) =>
+			result.status !== 0 && /^remote: Repository not found\.\s*$/m.test(result.stderr)
+				? `pushing ${ref} to ${remote}: GitHub answered Repository not found`
+				: undefined,
+	);
 }
 export async function remoteHead(root: string, remote: string, ref: string, read: RemoteRead): Promise<string | null> {
 	return (
@@ -125,6 +140,7 @@ export async function prepareHead(
 	entry: Entry,
 	base: string,
 	tree: string,
+	deps: GitHubDependencies,
 	token: (workflows: boolean) => Promise<string>,
 	read: RemoteRead = readRemote,
 ): Promise<Preparation> {
@@ -160,7 +176,7 @@ export async function prepareHead(
 		enabledAt: entry.enabledAt,
 		base,
 	});
-	const result = await push(root, remote, entry.head, prepared.head, ref, token);
+	const result = await push(new GitHub(deps), root, { remote, from: entry.head, to: prepared.head, ref, token });
 	if (result.status === 0) return { head: prepared.head };
 	if ((await remoteHead(root, remote, ref, read)) !== entry.head)
 		return { reason: "head_moved", detail: `PR #${entry.number}'s head moved while preparing its merge` };
@@ -211,7 +227,13 @@ export async function finishFallback(
 			return null;
 		}
 		if (fresh.base.sha !== parent) throw new Error("fallback base is not yet reflected in the queue; retrying");
-		const result = await push(root, remote, parent, commit, `refs/heads/${plan.base.ref}`, token);
+		const result = await push(new GitHub(deps), root, {
+			remote,
+			from: parent,
+			to: commit,
+			ref: `refs/heads/${plan.base.ref}`,
+			token,
+		});
 		if (result.status !== 0) {
 			await read(root, ["fetch", "--quiet", remote, plan.base.ref]);
 			if (!contains(root, commit, "FETCH_HEAD")) {

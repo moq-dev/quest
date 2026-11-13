@@ -679,6 +679,21 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(existsSync(join(options.state, "fallback.json"))).toBe(false);
 	});
 
+	test("fallback base push retries GitHub's transient Repository not found", async () => {
+		const forge = new Forge();
+		const pull = forge.pull("Fork", { "fork.txt": "yes" }, { contributor: "friend", edits: false });
+		forge.advance({ "base.txt": "new" });
+		const deps = await forge.deps();
+		const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
+		const root = forge.clone();
+		const hook = join(forge.origin, "hooks/pre-receive");
+		writeFileSync(hook, `#!/bin/sh\nrm '${hook}'\necho 'Repository not found.' >&2\nexit 1\n`, { mode: 0o755 });
+		const landing = await serveBatch(root, plan, sandbox(), deps, async () => deps.token);
+		expect(landing).toEqual([expect.stringMatching(/^landed 1 /)]);
+		expect(existsSync(hook)).toBe(false);
+		expect(pull.closed).toBe(true);
+	});
+
 	test("a preparation merge refusal returns merge_conflict", async () => {
 		const forge = new Forge();
 		const pull = forge.pull("Conflict", { "code.txt": "PR\n" });
@@ -687,6 +702,39 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		git(root, "fetch", "origin", pull.head!);
 		expect(mergeBase(root, pull.head!, forge.main())).toMatchObject({ reason: "merge_conflict" });
 	});
+
+	test.each([1, 5])(
+		"a same-repository push GitHub answers Repository not found %i times retries with bounded backoff",
+		async (failures) => {
+			const forge = new Forge();
+			const pull = forge.pull("Local", { "local.txt": "yes" });
+			forge.advance({ "base.txt": "new" });
+			const count = join(tempDir(), "failures");
+			writeFileSync(count, "");
+			writeFileSync(
+				join(forge.origin, "hooks/pre-receive"),
+				`#!/bin/sh\n[ "$(wc -c < '${count}')" -ge ${failures} ] && exit 0\nprintf x >> '${count}'\necho 'Repository not found.' >&2\nexit 1\n`,
+				{ mode: 0o755 },
+			);
+			const deps = await forge.deps();
+			const slept: number[] = [];
+			deps.sleep = async (delay) => void slept.push(delay);
+			const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
+			const root = forge.clone();
+			await build(root, plan);
+			const landing = await serveBatch(root, plan, sandbox(), deps, async () => deps.token);
+			if (failures === 1) {
+				expect(landing).toEqual([expect.stringMatching(/^landed 1 /)]);
+				expect(slept).toEqual([1000]);
+			} else {
+				// Four retries, then the failure is the refusal it was before.
+				expect(landing).toEqual(["ejected 1 merge_refused"]);
+				expect(slept).toEqual([1000, 2000, 4000, 8000]);
+				expect(forge.comment(1)).toContain("Repository not found");
+				expect(pull.closed).not.toBe(true);
+			}
+		},
+	);
 
 	test("same-repository branch refusal ejects instead of closing", async () => {
 		const forge = new Forge();
@@ -803,6 +851,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			plan.queue[0],
 			plan.base.sha,
 			link.tree,
+			deps,
 			async () => deps.token,
 		);
 		expect(prepared).toHaveProperty("head");
@@ -828,6 +877,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			plan.queue[0],
 			plan.base.sha,
 			link.tree,
+			deps,
 			async () => deps.token,
 		);
 		const reused = await prepareHead(
@@ -837,6 +887,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 			plan.queue[0],
 			plan.base.sha,
 			link.tree,
+			deps,
 			async () => {
 				throw new Error("must not push again");
 			},
@@ -969,7 +1020,16 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		const root = forge.clone();
 		const options = sandbox();
 		const link = (await build(root, plan)).links[0];
-		await prepareHead(root, options.state, plan, plan.queue[0], plan.base.sha, link.tree, async () => deps.token);
+		await prepareHead(
+			root,
+			options.state,
+			plan,
+			plan.queue[0],
+			plan.base.sha,
+			link.tree,
+			deps,
+			async () => deps.token,
+		);
 		git(forge.origin, "update-ref", "refs/heads/topic-1", plan.base.sha);
 		expect((await resolvePreparedQueue(root, options.state, REPOSITORY, SQUASH, deps)).eject[0].reason).toBe(
 			"head_moved",
@@ -1012,7 +1072,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		).toBe(false);
 	});
 
-	test("ejects auto-merging PRs that are not queued or not ready, in enqueue order, and waits on running checks", async () => {
+	test("ejects auto-merging PRs that are not queued or not ready, in enqueue order, and waits on running checks and approvals", async () => {
 		const forge = new Forge();
 		forge.pull(
 			"Unpinned",
@@ -1021,26 +1081,35 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		);
 		const moved = forge.pull("Moved", { "2.txt": "2\n" });
 		moved.autoMerge = { ...moved.autoMerge!, commitBody: pin("f".repeat(40)) };
-		forge.pull("Unreviewed", { "3.txt": "3\n" }, { pull: { review: "REVIEW_REQUIRED" } });
+		const unreviewed = forge.pull("Unreviewed", { "3.txt": "3\n" }, { pull: { review: "REVIEW_REQUIRED" } });
 		forge.pull("Red", { "4.txt": "4\n" }, { pull: { runs: [{ name: "test", conclusion: "FAILURE", url: "u" }] } });
-		forge.pull("Running", { "5.txt": "5\n" }, { pull: { runs: [] } });
+		const running = forge.pull("Running", { "5.txt": "5\n" }, { pull: { runs: [] } });
 		forge.pull("Ready", { "6.txt": "6\n" });
 		forge.pull("Not landing", { "7.txt": "7\n" }, { pull: { landing: false } });
 		const plan = await resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
 		expect(plan.queue.map((entry) => entry.number)).toEqual([6]);
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([
 			[2, "head_moved"],
-			[3, "review_required"],
 			[4, "failed_checks"],
 			[1, "not_pinned"],
 		]);
-		// Its required checks are still running: it stays queued, keeping its auto-merge, and sits out batches.
+		// Its approval or its required checks are still to come: it stays queued, keeping its auto-merge, and sits out batches.
 		expect(plan.waiting).toEqual([
+			{
+				number: 3,
+				url: "https://github.com/upstream/project/pull/3",
+				enabledAt: "2026-10-26T00:00:03Z",
+				head: unreviewed.head,
+				pending: [],
+				approval: true,
+			},
 			{
 				number: 5,
 				url: "https://github.com/upstream/project/pull/5",
 				enabledAt: "2026-10-26T00:00:05Z",
+				head: running.head,
 				pending: ["test"],
+				approval: false,
 			},
 		]);
 	});
@@ -1209,9 +1278,8 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([
 			[3, "unresolved_conversations"],
-			[4, "review_required"],
 		]);
-		expect(plan.waiting?.map(({ number }) => number)).toEqual([2]);
+		expect(plan.waiting?.map(({ number }) => number)).toEqual([2, 4]);
 	});
 
 	test("refuses classic protection settings it does not uphold, or cannot read", async () => {
@@ -1620,7 +1688,7 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(await round(picked + STALLED_AFTER - 1)).toEqual([]);
 		expect(forge.comment(1)).toBeUndefined();
 		expect(await round(picked + STALLED_AFTER)).toEqual(["stalled 1 test"]);
-		expect(forge.comment(1)).toContain("<code>test</code>");
+		expect(forge.comment(1)).toContain("the required check <code>test</code>");
 		expect(forge.comment(1)).toContain("2 hours after it was picked");
 		// It stays queued, and is told only once for this pick.
 		expect(await round(picked + 2 * STALLED_AFTER)).toEqual([]);
@@ -1632,6 +1700,21 @@ describe.skipIf(process.platform === "win32")("host daemon", () => {
 		expect(await round(repicked + STALLED_AFTER - 1)).toEqual([]);
 		expect(await round(repicked + STALLED_AFTER)).toEqual(["stalled 1 test"]);
 		expect(silent.comments).toHaveLength(2);
+	});
+
+	test("waits on a required approval like a check, and names it once the wait stalls", async () => {
+		const forge = new Forge();
+		const unapproved = forge.pull("Unapproved", { "1.txt": "1\n" }, { pull: { review: "REVIEW_REQUIRED" } });
+		const options = sandbox();
+		const root = forge.clone();
+		const picked = Date.parse(unapproved.autoMerge!.enabledAt);
+		const deps = { ...(await forge.deps()), now: () => picked + STALLED_AFTER };
+		const plan = await resolveQueue(REPOSITORY, SQUASH, deps);
+		expect(plan.queue).toEqual([]);
+		expect(plan.eject).toEqual([]);
+		expect(await serveBatch(root, plan, options, deps, async () => deps.token)).toEqual(["stalled 1 approval"]);
+		expect(forge.comment(1)).toContain("an approving review, which main requires");
+		expect(unapproved.landing).toBe(true);
 	});
 
 	test("collects finished fixer jobs while a check runs", async () => {
@@ -3017,6 +3100,7 @@ fi`);
 			plan.queue[0],
 			plan.base.sha,
 			link.tree,
+			deps,
 			async () => deps.token,
 		);
 		if (!("head" in prepared)) throw new Error(`no gate merge: ${JSON.stringify(prepared)}`);
@@ -4584,6 +4668,30 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 		expect(readRemoval(queue.state, 1)!.reason).toBe("merge_conflict");
 		expect(forge.comment(1)).toContain(`because it conflicts with`);
 		expect(queued(forge, 1)).toBeNull();
+	});
+
+	test("a pick waiting on a required approval shows it, and builds once approved", async () => {
+		const { forge, pass } = setup();
+		const pick = forge.pull("Unapproved", { "one.txt": "1\n" }, { pull: { review: "REVIEW_REQUIRED" } });
+		expect(await pass()).toEqual([]);
+		expect(shown(forge)).toEqual({ 1: "queued Waiting" });
+		const run = forge.repo.checkRuns!.filter((item) => item.name === QUEUE_CHECK).at(-1)!;
+		expect(String(run.output.summary)).toContain("an approving review, which main requires");
+		pick.review = "APPROVED";
+		expect(await pass()).toEqual(["building 1"]);
+	});
+
+	test("a waiting pick's check follows what it still waits for", async () => {
+		const { forge, pass } = setup();
+		const pick = forge.pull("Both", { "one.txt": "1\n" }, { pull: { review: "REVIEW_REQUIRED", runs: [] } });
+		const summary = () =>
+			String(forge.repo.checkRuns!.filter((item) => item.name === QUEUE_CHECK).at(-1)!.output.summary);
+		await pass();
+		expect(summary()).toContain("the required check `test` to pass, an approving review, which main requires");
+		pick.review = "APPROVED";
+		await pass();
+		expect(summary()).toContain("the required check `test` to pass.");
+		expect(summary()).not.toContain("approving review");
 	});
 
 	test("a held pick keeps its place unbuilt, and stale queue branches and their runs are cleared on the first pass", async () => {

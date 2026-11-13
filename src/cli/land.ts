@@ -101,7 +101,6 @@ export function pinned(body: string): string | null {
 export type Reason =
 	| "merge_conflict"
 	| "failed_checks"
-	| "review_required"
 	| "changes_requested"
 	| "unresolved_conversations"
 	| "head_moved"
@@ -150,18 +149,25 @@ export interface Plan {
 	/** Queued PRs in enqueue order. */
 	queue: Entry[];
 	eject: Ejection[];
-	/** Queued PRs whose required checks have not finished: they stay queued and sit out batches until they pass. */
+	/**
+	 * Queued PRs whose required checks have not finished or that still need a required approval: they stay
+	 * queued and sit out batches until both are in.
+	 */
 	waiting?: Waiting[];
 }
 
-/** A queued PR waiting on required checks that are still running or have not reported. */
+/** A queued PR waiting on required checks that have not reported, or on an approving review. */
 export interface Waiting {
 	number: number;
 	url: string;
-	/** Its pick, from which the wait for its checks is measured. */
+	/** Its pick, from which the wait is measured. */
 	enabledAt: string;
+	/** The pinned head it waits on. */
+	head: string;
 	/** The required checks still pending on its head. */
 	pending: string[];
+	/** It still needs an approving review its base requires, which an automated reviewer may give. */
+	approval: boolean;
 }
 
 /** A page of a commit's check runs and commit statuses, with the app behind each run. */
@@ -303,8 +309,9 @@ async function unresolved(github: GitHub, id: string): Promise<number> {
 /**
  * Read the queue: open PRs to `base` with auto-merge enabled, in the order it
  * was enabled. A PR is queued while its auto-merge commit body pins its current
- * head; one whose required checks are still running waits, and the rest of the
- * auto-merging PRs are ejected with a reason.
+ * head; one whose required checks are still running, or that still needs a
+ * required approval, waits, and the rest of the auto-merging PRs are ejected
+ * with a reason.
  */
 export async function resolveQueue(
 	repository: Repository,
@@ -417,8 +424,6 @@ export async function resolveQueue(
 			eject("not_pinned", "auto-merge was enabled without `quest merge --land`, which pins the head to land");
 		} else if (approved !== head && !acceptHead?.(entry)) {
 			eject("head_moved", `its head moved from ${approved} to ${head} after it was queued`);
-		} else if (node.reviewDecision === "REVIEW_REQUIRED") {
-			eject("review_required", "it still needs an approving review");
 		} else if (node.reviewDecision === "CHANGES_REQUESTED") {
 			eject("changes_requested", "a reviewer requested changes");
 		} else if (resolution && (await unresolved(github, entry.id)) > 0) {
@@ -428,15 +433,19 @@ export async function resolveQueue(
 			const commit = object(object(array(object(node.commits).nodes)[0]).commit);
 			const rollup = commit.oid === approved ? commit.statusCheckRollup : undefined;
 			const unmet = checks(await contexts(github, repository, approved, rollup), required);
+			// An approval can still arrive on the pinned head, such as an automated reviewer's, so it waits like a check.
+			const approval = node.reviewDecision === "REVIEW_REQUIRED";
 			if (unmet.failing.length > 0) {
 				eject("failed_checks", `required checks failed on its head: ${unmet.failing.join(", ")}`);
-			} else if (unmet.pending.length > 0) {
-				// Still running: it keeps its auto-merge and its place, and joins a batch once they pass.
+			} else if (unmet.pending.length > 0 || approval) {
+				// It keeps its auto-merge and its place, and joins a batch once its checks pass and it is approved.
 				plan.waiting!.push({
 					number: entry.number,
 					url: entry.url,
 					enabledAt: entry.enabledAt,
+					head: entry.head,
 					pending: unmet.pending,
+					approval,
 				});
 			} else {
 				plan.queue.push(entry);
