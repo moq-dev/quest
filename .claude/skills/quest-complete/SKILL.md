@@ -1,6 +1,6 @@
 ---
 name: quest-complete
-description: Decide which open PRs to merge, queue them, then plan the run's follow-ups.
+description: Decide which open PRs to merge and settle what quests and drafts wait on, queue the merges, then plan the run's follow-ups.
 allowed-tools: Bash(quest skill complete) PowerShell(quest skill complete)
 ---
 

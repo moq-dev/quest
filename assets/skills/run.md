@@ -17,7 +17,7 @@ A brief gives the task, its reason and context, such as the quest or PR and the 
 Starting quests asks the user nothing: each agent works headless, and its decisions surface in its PR.
 
 `quest unblocked --unclaimed --json` ranks the unclaimed ready quests, reading the upstream tree afresh; start them in that order, as many at once as the harness allows.
-It lists each skipped claim on stderr with how long ago it was last active; name any that look stale in the summary, for the user to take over.
+It lists each skipped claim on stderr, with how long ago it was last active when it has an open PR; name any that look stale in the summary, for the user to take over.
 
 Start every quest you would recommend: well planned, with no blockers, and no conflict with work already started. For one waiting on an outside condition, first check whether it has cleared.
 Skip the rest, such as one you doubt is worth doing at all or now, and list each in the summary with why and your recommendation between `/quest-plan`, which redesigns it or moves it down, and `/quest-delete`.
@@ -34,13 +34,13 @@ Skip a quest whose list runs out, and report each harness's outage once.
 ## Pull requests
 
 Read each open PR, drafts included, with `quest status`, and skip one another session holds by its `hold` or `starter-hold` record, offering to take over only one that looks stale.
-List a draft whose `## Waiting` holds no decision for the user, only outside conditions or actions, once in the summary, pointing to `/quest-unblock`.
+List a draft whose `## Waiting` holds no decision for the user, only outside conditions or actions, once in the summary, pointing to `/quest-complete`.
 Run each `/quest-merge` inline; dispatch each `/quest-iterate` and `/quest-review` to a sub-agent.
 
 Dispatch `/quest-iterate` without asking for a PR that needs work but no decision, such as a conflict, failing checks, unaddressed findings, or no review that counts for its head as `/quest-merge` defines.
 A PR with open decisions, its `## Waiting` section's or an issue you would solve differently, goes to the user: settle them with the grill skill's rounds, then dispatch `/quest-iterate` with the answers in its brief, since a sub-agent cannot prompt.
 A PR you would skip or delete rather than fix, such as a superseded one, gets that question instead.
-Leave a PR whose required checks are still running for a later round; an optional automated reviewer that has not posted, such as one rate-limited or skipping drafts, is not waited on.
+Leave a PR whose required checks are still running for a later round; an automated reviewer is not waited on, since the queue waits for an approval the base requires.
 
 A PR whose author has write access and that changes no user-facing behavior carries a standing `/quest-merge` pick, unless the repository's `CONTRIBUTING.md` opts out: run `/quest-merge` on it without asking, and name it as auto-picked in the summary.
 That covers only tests, benchmarks, CI, internal docs or comments, and behavior-preserving code. Anything users or other repositories get, such as CLI behavior or output, shipped skills or rules, user-facing docs, dependencies, or release artifacts, needs the user's pick, as does adding or expanding quests.
@@ -57,7 +57,7 @@ A `/quest-merge` pick covers the PR until it lands or needs the user: when `/que
 Order merges that would otherwise conflict.
 A PR that left the queue unmerged shows why under `landing-stopped` in `quest status <pr>`.
 Where the queue runs a fixer, such as `quest land`, it hands back only a decision: ask the user, with its handback comment's diagnosis and recommendation.
-Without one, after `merge_conflict` or `failed_checks` the pick holds, even from an earlier session: dispatch `/quest-iterate`. After `checks_timed_out`, run `/quest-merge` again once; a second timeout of the same head is the user's call.
+Without one, after `merge_conflict`, `failed_checks`, `changes_requested`, or `unresolved_conversations` the pick holds, even from an earlier session: dispatch `/quest-iterate`. After `checks_timed_out`, run `/quest-merge` again once; a second timeout of the same head is the user's call.
 Any other reason, such as a person removing it, is the user's call.
 
 ## Loop

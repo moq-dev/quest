@@ -206,7 +206,7 @@ the item; `--maintainer` keeps only the maintainer's, and `--json` prints
 party is the maintainer's. Drafts come from
 the upstream's open PRs, found as for `unblocked --unclaimed`; without the
 remote, off GitHub, or when GitHub cannot be read, it lists the tree's items
-and warns that drafts were skipped. `/quest-unblock` walks you through them.
+and warns that drafts were skipped. `/quest-complete` walks you through them.
 
 ## Claim a quest
 
@@ -279,6 +279,13 @@ detached, so pass the head branch:
 
 The check is a floor, not a review: any edit to the quest passes, so reviewers
 still judge whether a rewrite matches what remains.
+
+`quest check` also compares the repository's skill stubs with the skills its
+binary carries, and reports a missing, outdated, or retired one. A job that
+checks a PR with a binary built from the base passes `--no-stubs`, since that
+binary's skills would reject a PR that changes a stub; the PR's own binary
+checks them in its own `quest check`. This repository's merge queue and the
+`quest-merge` skill's preflight do so.
 
 A link into a submodule that is not checked out, as in a fresh worktree or
 `actions/checkout` by default, resolves at the commit its gitlink pins when a
@@ -497,6 +504,7 @@ comes last, and a missing value prints as `-`:
 | `checks` | `failure` if any check fails, else `pending` if any is pending, else `success`, and `passed=`, `failing=`, `pending=` counts, all from each check's latest run; `-` when the head has no checks. |
 | `check` | `failing` or `pending`, `required` or `optional`, the result, details URL, and name. |
 | `review` | `current` or `stale` against the head, state, reviewer, time, and URL of each reviewer's latest review. |
+| `checkpoint` | Each bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head and its latest verdict there, ignoring plain comments, is neither an approval nor a dismissal, at the end of its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed; a dismissed review counts as one that approves or requests changes. Only printed when due. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
 | `thread` | Node ID, `current` or `outdated`, last commenter, latest comment URL, and `path:line` of each unresolved thread. |
 | `hold` | Label, acquisition token, acquisition time, verified GitHub event API URL, and age; `hold -` when no label holds it. Unknown acquisition facts print as `-` and `unknown age`. |
@@ -511,7 +519,7 @@ own rollup state counts the superseded runs too. A required check
 is one branch protection or a ruleset requires for this PR. `--json` prints the
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
-`landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `reactions`,
+`landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `checkpoints` (`reviewer`, `round`, `url`), `reactions`,
 `threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
 failures exit 1.
@@ -744,11 +752,13 @@ up to floor(log2 n) further PRs that merge cleanly in that order, resolving
 quest links with `quest resolve`. A failed batch halves the next batch's size,
 down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
-additions stay queued. A PR whose required checks are still running stays queued
-and sits out batches until they pass; only each check's latest run counts, as in
-`quest status`. If any are still pending two hours after
+additions stay queued. A PR whose required checks are still running, or that
+still needs an approving review the base requires, stays queued and sits out
+batches until they pass and it is approved; only each check's latest run counts,
+as in `quest status`. If it still waits two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
-naming them, since a required check that never reports would hold it silently. The sandbox checks the tip once, without
+naming what it waits for, since a check that never reports or an approval nobody
+gives would hold it silently. The sandbox checks the tip once, without
 bisection: success lands one commit per PR, as `--method` says. A failure, or a base that
 conflicts with the batch's first PR, parks those PRs for the fixer: they keep their
 auto-merge and place, get no comment, and sit out batches while its
@@ -1016,9 +1026,10 @@ watcher is the base's only writer outside an admin's emergency bypass.
 
 Its picks are those `quest land serve` reads: open PRs whose auto-merge
 `quest merge --land` armed, pinned to their head, in the order they were armed,
-with the same ejections for a moved head, a missing pin, a blocking review, or
-a failing required check. A pick still waiting on its required checks keeps its
-place, and one another session holds waits, armed, until its hold clears.
+with the same ejections for a moved head, a missing pin, a requested change, or
+a failing required check. A pick still waiting on its required checks or a
+required approval keeps its place, and one another session holds waits, armed,
+until its hold clears.
 
 For the oldest pick it merges the base into the picked head with the quest
 merge driver, in the daemon's private repository, and pushes that merge to
@@ -1409,7 +1420,9 @@ reviewer's prompt cache; Claude Code is asked for its 1-hour cache, and Codex
 keeps its default. Each reviewer's session is kept per branch in the clone's
 common Git directory, so any worktree of the clone resumes it, except opencode's,
 which stays in the checkout it started in, so another worktree starts a new one;
-`--new` starts over. `--branch` names the branch instead of the checked-out one, which a
+`--new` starts new sessions, but continues each reviewer's tally of its findings
+on the branch, less those it drops unsettled, unless the saved state is one
+this quest cannot read. `--branch` names the branch instead of the checked-out one, which a
 detached `HEAD` requires, such as a checkout of a branch another worktree
 holds, so its rounds continue that branch's session.
 
@@ -1456,15 +1469,22 @@ finding count, then each finding as its number, severity, `path:line`, and title
 indented body, then `earlier` with the last round's head and its findings, each
 as its number, disposition, severity, `path:line`, and title over its reason; last
 come a `record` line and a `next` line. `--json` prints one object with
-`rounds`, one per reviewer, `record`, and `next`.
+`rounds`, one per reviewer, `tallies`, every reviewer's findings across the
+branch's rounds, `record`, and `next`.
 
 After each round, `quest review` rewrites the `## Review` section of the open PR
 from the branch into the base, found among the upstream's PRs from the
 repository the base's remote pushes to, and prints `record <url>`. The record
 names the reviewed head and the base's short SHA, then for each reviewer its
-harness, model, and effort, the session and round, the score and rationale,
-each finding with its location, and the last round's findings with their
-dispositions. `quest status` takes the last full SHA the section names as the
+harness, model, and effort, the session and round, the score and rationale, its tally, each finding with
+its location, and the last round's findings with their dispositions. The
+tally, as `- Rounds: 3; findings 4 (high 1, medium 3): fixed 3, refuted 1, open 0`,
+counts the reviewer's rounds on the branch and each finding it raised once,
+by its latest severity, however many rounds keep it open. A finding counts
+for the reviewer that raised it when a new size pick's reviewer fixes or
+refutes it, but one that reviewer keeps open becomes its own, since its round
+reports it again. `--new` drops the findings it leaves unsettled from the
+tallies. A reviewer the run left out keeps a block with only its tally. `quest status` takes the last full SHA the section names as the
 reviewed head, so the head appears in full only once no reviewer reports a
 finding, and model text
 appears as inline code, which mentions or links nothing and never holds a full
@@ -1502,7 +1522,7 @@ moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) esti
 
 #569 S merged: quest: finish model routing (quest/m0/model-routing/README)
   implementer: Claude Code, claude-opus-5-5, unknown effort
-  review: Codex, gpt-6.1-sol, medium effort; round 1, score 10/10, 0 open, last round 0 fixed and 0 refuted
+  review: Codex, gpt-6.1-sol, medium effort; round 1, score 10/10; rounds 1, findings 0: fixed 0, refuted 0, open 0
   online review: review (OpenAI), not at the final head; 0 findings: 0 accepted, 0 declined, 0 unclassified, 0 unanswered
   land fixes: codex, gpt-6.1-sol, medium effort
   sessions:
@@ -1522,9 +1542,11 @@ remotes, or, once the checkout is deleted, a Codex log for that exact directory
 names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
 it or Codex marks it a review, implementing when it began before the PR opened,
 and iterating otherwise. An opencode session, whose log quest does not read, is
-the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer's latest `quest review` round's
-reviewer, round, score, open findings, and the last round's findings fixed or
-refuted; the land fixer's fixes; the later PRs that list it under
+the reviewing session of the newest PR whose `## Review` record names it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
+`quest review` record names, with its latest round and score and its tally of
+findings across every round, where a merged PR whose last round left only low
+findings open counts them settled, since `/quest-review` fixes or refutes those
+before merge without another round; the land fixer's fixes; the later PRs that list it under
 `## Caused by`; and each online reviewer's record, read from GitHub.
 
 An online reviewer is any bot account whose review has a body or opens a
@@ -1544,7 +1566,11 @@ a bot resolving its own thread or a later review leaving it out, and as
 unanswered otherwise.
 
 Rollups follow: spend by size, role, harness, model, and effort; accuracy
-by size and implementer, where an `Implementer:` line's own size, as
+by size and implementer, which sums the tallies, so it counts every finding
+caught before merge. Since a branch's tallies span every PR from it, only the
+PR whose record holds its latest tally, by the most rounds and then the newest,
+counts them, and a record written before tallies
+counts as unreviewed. An `Implementer:` line's own size, as
 `(iterate, XS)`, counts over the PR's; and, over the merged PRs, each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. Sessions on no PR here, from any
@@ -1841,10 +1867,9 @@ arrives with the guide sections and other skills it builds on, in one call:
 | `quest-iterate` | Iterate on an open PR to settle its open decisions, fix CI and review findings, and push. |
 | `quest-review` | Review a PR's branch locally with a model other than its latest writer, then mark it ready for review. |
 | `quest-merge` | Queue a PR to land, running `quest-iterate` first when it needs work. |
-| `quest-complete` | Run only `quest-run`'s PR decisions: decide which open PRs to merge, queue them, then plan the follow-ups the run found. |
+| `quest-complete` | Run only `quest-run`'s PR decisions and settle what quests and draft PRs wait on you: decide which open PRs to merge, clear resolved waits, queue the merges, then plan the follow-ups the run found. |
 | `quest-run` | Orchestrate a project from one session: start ready quests and take PRs to merge in a loop, until only your decisions remain, then plan the follow-ups it found. |
 | `quest-afk` | Keep a session such as `quest-run` going while you are away: it acts on its recommendations, defers merges, and walks you through the rest when you return. |
-| `quest-unblock` | Settle what quests and draft PRs wait on you, and clear waits that have resolved. |
 | `quest-delete` | Abandon a quest, deleting it in its own PR. |
 
 Use `/quest-plan` in Claude Code or `$quest-plan` in Codex. Skills coordinate

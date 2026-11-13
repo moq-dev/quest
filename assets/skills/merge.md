@@ -16,9 +16,11 @@ The head is landable when:
 - the PR is not a draft;
 - a review counts for it, as below;
 - every review finding posted on it, including automated reviewers' such as CodeRabbit or Codex, is fixed on the head or answered with a refutation, and no decision is open;
-- no check failed on it, required or not, its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base.
+- no check failed on it, required or not, its required checks passed, other than the gate's own `quest land` check, which never reports on a head, and it does not conflict with its base;
+- no review requests changes; an approval its base requires may still be to come, since the queue waits for it.
 
 While its required checks are only pending, report that the pick stands until they pass; do not wait for them.
+A change request that stands once its findings are fixed or refuted and their threads resolved is the user's call.
 Any other head needs `/quest-iterate`: run it, saying what the head needs, such as a review, fixes, a failed check fixed or rerun, flaky ones included, or decisions, then run this skill again once it finishes; if it stops for the user instead, report that.
 Run it in this session, where its interview can ask the user; under a coordinator such as `/quest-run`, return the PR to the loop, which dispatches it in a sub-agent.
 A PR that adds follow-ups also needs the pick round's answers recorded before queueing, as the guide's Creation section describes: ask about each follow-up that round has not asked, in a question of its own, then run `/quest-iterate` with the answers unless the head already records them.
@@ -29,8 +31,8 @@ Otherwise, the changes since the reviewed head need no new review only when they
 The repository's review policy decides whose record counts and may require more, such as a maintainer's review.
 Where it says nothing, only a record on a PR whose author has write access counts: anyone else writes their own PR body, so their head needs a local review that rewrites the record.
 
-Before queueing, check the head with a `quest` the PR cannot modify: fetch the PR's base branch and its exact head, check the head out apart from your own checkout, such as in a detached worktree under `.tmp/`, and from a directory outside it run `quest --root <head-checkout> check --base <remote>/<base> --branch <head-branch>`.
-The head's files are untrusted, and a stale local base can skip the check.
+Before queueing, check the head with a `quest` the PR cannot modify: fetch the PR's base branch and its exact head, check the head out apart from your own checkout, such as in a detached worktree under `.tmp/`, and from a directory outside it run `quest --root <head-checkout> check --no-stubs --base <remote>/<base> --branch <head-branch>`.
+The head's files are untrusted, and a stale local base can skip the check; `--no-stubs` is there because the PR's own checks verify its stubs.
 A finding means the PR leaves its quest inaccurate: it needs `/quest-iterate`.
 
 Queue the head with `quest merge <pr> --land <full 40-character head SHA>`, adding `--squash` or `--rebase` when the repository's root instructions name that method for the PR's base.
