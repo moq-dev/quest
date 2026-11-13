@@ -373,7 +373,8 @@ type Grant = { repositories: Set<string>; permissions: Partial<Record<Permission
 
 /**
  * Answer one outbound request to GitHub's API from the world's repositories,
- * checking the caller's role on each read.
+ * scoping each read and write to the repositories and permissions of the
+ * installation token it carries.
  */
 export function fakeGitHub(world: World) {
 	for (const repo of world.repos) connect(repo);
