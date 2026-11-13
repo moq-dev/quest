@@ -3,15 +3,8 @@ import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import {
-	GitHub,
-	type GitHubDependencies,
-	type PullRequest,
-	object,
-	remoteRepository,
-	requireRemote,
-	string,
-} from "./github";
+import { remoteRepository, requireRemote } from "./github";
+import { GitHub, type GitHubDependencies, type PullRequest, object, string } from "../github/client";
 import { discoveryEnv } from "./git";
 import { contains, git, gitEnvironment, tryGit } from "./land";
 import { Refusal } from "./start";

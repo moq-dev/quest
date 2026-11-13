@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { GitHub, GitHubDeadline, type GitHubDependencies, GitHubGraphQLError } from "../src/cli/github";
+import { GitHub, GitHubDeadline, type GitHubDependencies, GitHubGraphQLError } from "../src/github/client";
 
 const repo = "/repos/example/project";
 const HEAD = "a".repeat(40);

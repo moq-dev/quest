@@ -4,7 +4,6 @@
 // `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
 import { ACTIVE_LABEL, formatFinding, handedBack, isHoldLabel, latestHold, heldToken, withoutHandBack } from "../core";
 import { cleanAutoMergeRefusal, immediateMerge, lacksApproval, queueHead } from "../github/merge";
-import { repositoryPath } from "./claims";
 import {
 	array,
 	currentChecks,
@@ -16,7 +15,8 @@ import {
 	type PullRequest,
 	requirements,
 	string,
-} from "./github";
+	repositoryPath,
+} from "../github/client";
 import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
 import { QUEUE_CHECK } from "./land-queue";
 import type { LandingCheck } from "./landed";

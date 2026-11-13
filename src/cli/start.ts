@@ -6,21 +6,18 @@ import { randomBytes } from "node:crypto";
 import { questBranch } from "../core";
 import {
 	type ClaimDependencies,
-	type OpenPull,
 	type Target,
 	type Upstream,
 	ensure,
 	held,
-	mergedPull,
-	openPullRequests,
-	pullsFrom,
 	remoteBranches,
-	repositoryPath,
 	upstream,
 	upstreamRefs,
 } from "./claims";
 import { GitError, git } from "./git";
-import { object, requireRemote, string } from "./github";
+import { requireRemote } from "./github";
+import { object, repositoryPath, string } from "../github/client";
+import { type OpenPull, mergedPull, openPullRequests, pullsFrom } from "../github/claims";
 
 /** Someone else holds the quest, or the claim cannot be released; distinct from a failure. */
 export class Refusal extends Error {}

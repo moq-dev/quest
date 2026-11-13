@@ -12,7 +12,7 @@ import {
 	type Repository,
 	requirements,
 	string,
-} from "./github";
+} from "../github/client";
 import {
 	baseRemote,
 	eject,

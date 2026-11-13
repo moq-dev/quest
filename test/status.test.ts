@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import type { GitHubDependencies } from "../src/cli/github";
+import type { GitHubDependencies } from "../src/github/client";
 import { main } from "../src/cli/main";
 import { pullRequestStatus, statusLines } from "../src/cli/status";
 

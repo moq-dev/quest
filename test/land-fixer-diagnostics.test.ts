@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startFixer, collectFixers } from "../src/cli/land-fixer";
-import type { GitHubDependencies } from "../src/cli/github";
+import type { GitHubDependencies } from "../src/github/client";
 import type { Plan } from "../src/cli/land";
 import { created } from "./fixture";
 

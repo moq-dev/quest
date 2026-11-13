@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
 import { type Finding, check, formatFinding, isQuest, remove } from "../core";
-import { repositoryPath } from "./claims";
 import { programEnvironment } from "./program";
 import {
 	GitHub,
@@ -16,7 +15,8 @@ import {
 	currentChecks,
 	requirements,
 	string,
-} from "./github";
+	repositoryPath,
+} from "../github/client";
 import type { WorkflowRun } from "../github/checks";
 import { appOf } from "../github/checks";
 import { classifyCheck, reported, type Needs } from "./status";

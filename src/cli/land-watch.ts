@@ -13,7 +13,7 @@ import {
 	type ObjectValue,
 	type Repository,
 	string,
-} from "./github";
+} from "../github/client";
 import { lacksApproval } from "../github/merge";
 import type { Entry, LandMethod, Plan } from "./land";
 import { authenticatedRead } from "./land-git";

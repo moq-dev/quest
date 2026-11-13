@@ -37,15 +37,8 @@ import {
 import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claims";
 import { PENDING_MS } from "./admission";
 import { gate, QUICK_MS } from "./gate";
-import {
-	gitHubDependencies,
-	GitHubInputError,
-	mergedHolds,
-	pullRequest,
-	readRemote,
-	remoteRepository,
-	type Repository,
-} from "./github";
+import { gitHubDependencies, GitHubInputError, pullRequest, readRemote, remoteRepository } from "./github";
+import { mergedHolds, type Repository } from "../github/client";
 import { type Hold, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "./land";
 import { apply, pushCommand } from "./land-apply";

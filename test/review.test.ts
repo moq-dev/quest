@@ -24,7 +24,7 @@ import {
 	verdict,
 } from "../src/cli/review";
 import { withReview } from "../src/cli/review-record";
-import { implementer, recorded } from "../src/github/models";
+import { implementer, recorded } from "../src/cli/models-record";
 import { tempDir } from "./fixture";
 
 afterEach(() => {

@@ -1,7 +1,7 @@
 // A pull request body's `## Models` record, which names the PR's size and each session that implemented it.
 
 import { SIZES } from "../core";
-import { REVIEWERS, WRITERS } from "../cli/models";
+import { REVIEWERS, WRITERS } from "./models";
 
 const SECTION = /^## Models[ \t]*\r?$/m;
 

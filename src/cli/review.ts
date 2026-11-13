@@ -21,7 +21,7 @@ import { discoveryEnv, git } from "./git";
 import { LIMIT, codexReset } from "./limit";
 import { DEFAULT_SIZE, type Model, REVIEWERS } from "./models";
 import { programEnvironment, requireProgram } from "./program";
-import type { recorded } from "../github/models";
+import type { recorded } from "./models-record";
 import { save } from "./worktree";
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */

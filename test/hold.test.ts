@@ -2,7 +2,7 @@
 
 import { describe, expect, test, vi } from "vitest";
 
-import type { GitHubDependencies, ObjectValue } from "../src/cli/github";
+import type { GitHubDependencies, ObjectValue } from "../src/github/client";
 import { finish, land, release, take } from "../src/cli/hold";
 import { withoutHandBack } from "../src/core";
 import { type Output, main } from "../src/cli/main";

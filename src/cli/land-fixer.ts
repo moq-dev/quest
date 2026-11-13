@@ -17,7 +17,7 @@ import {
 import { constants as osConstants } from "node:os";
 import { basename, join } from "node:path";
 import { reviewSection } from "../core";
-import { GitHub, type GitHubDependencies, object, string } from "./github";
+import { GitHub, type GitHubDependencies, object, string } from "../github/client";
 import {
 	baseRemote,
 	commandEnvironment,

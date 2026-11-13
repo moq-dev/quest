@@ -43,7 +43,7 @@ import { apply, parseResolution, pushCommand, resolutionSection } from "../src/c
 import fixerPrompt from "../assets/land-fix.md";
 import { COMMENT_LIMIT, FLAKY_INPUT, fix, parseBaseFix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
-import { GitHub, type GitHubDependencies } from "../src/cli/github";
+import { GitHub, type GitHubDependencies } from "../src/github/client";
 import {
 	type Plan,
 	type Target,

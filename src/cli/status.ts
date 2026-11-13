@@ -14,7 +14,7 @@ import {
 	requirements,
 	string,
 	workflowKey,
-} from "./github";
+} from "../github/client";
 import { appOf, checksState, contextOutcome } from "../github/checks";
 import { EJECTED, LAND_CHECK, pinned } from "./land";
 import { reviewSection } from "../core";

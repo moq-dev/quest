@@ -9,13 +9,8 @@ import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 import { claims, openDrafts, target } from "../src/cli/claims";
-import {
-	type GitHubDependencies,
-	type ObjectValue,
-	githubRepository,
-	readRemote,
-	remoteRepository,
-} from "../src/cli/github";
+import { githubRepository, readRemote, remoteRepository } from "../src/cli/github";
+import { type GitHubDependencies, type ObjectValue } from "../src/github/client";
 import { type Output, main } from "../src/cli/main";
 import { Refusal, ago, releaseQuest, startQuest } from "../src/cli/start";
 import { EPIC_README, GIT_SETTINGS, TWO, Tree, configure, initRepository, template, tempDir } from "./fixture";

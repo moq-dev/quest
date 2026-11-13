@@ -1,5 +1,5 @@
 // GitHub Actions job logs, and a PR's own checks on a head as the land fixer's context: a signal, never a gate.
-import { array, type GitHub, object, type ObjectValue, string } from "./github";
+import { array, type GitHub, object, type ObjectValue, string } from "../github/client";
 import { redactTokens } from "./land-fixer";
 import { classifyCheck } from "./status";
 

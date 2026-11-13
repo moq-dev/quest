@@ -21,7 +21,7 @@ import {
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
+import { GitHub, type GitHubDependencies, type Repository, object, string } from "../github/client";
 import {
 	finishFallback,
 	forgetHeads,
