@@ -27,8 +27,6 @@ export interface Admission {
 	queued?: boolean;
 	start?: string;
 	cores?: number;
-	/** In the agents' ledger (see admission.ts), the account of the agent this entry admitted, or its harness. */
-	agent?: string;
 }
 
 /** One version of the host's admission ledger and queue. Versions only grow; 0 is the empty ledger. */
@@ -259,8 +257,7 @@ function parse(text: string): Admission[] {
 				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)) &&
 				(entry.queued === undefined || entry.queued === true) &&
 				(entry.start === undefined || typeof entry.start === "string") &&
-				(entry.cores === undefined || (Number.isSafeInteger(entry.cores) && entry.cores >= 0)) &&
-				(entry.agent === undefined || typeof entry.agent === "string"),
+				(entry.cores === undefined || (Number.isSafeInteger(entry.cores) && entry.cores >= 0)),
 		);
 	return valid ? (value as Admission[]) : [];
 }

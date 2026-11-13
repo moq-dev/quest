@@ -1663,7 +1663,7 @@ quest agent start --harness claude --model claude-opus-5-5 --effort high --permi
 quest agent resume --harness claude --model claude-opus-5-5 --effort high --permission-mode auto .worktrees/foo <session> "Take the recommendation."
 quest agent stop .worktrees/foo
 quest agent stop --all
-quest agent admit --harness claude
+quest agent admit
 ```
 
 Codex starts and resumes only in a checkout registered by `quest worktree create`,
@@ -1677,30 +1677,19 @@ pruned dependencies when the next turn needs them. Claude continues to run
 directly in the supplied checkout. Codex desktop threads use the desktop app's
 native archival instead.
 
-Start and resume first wait until the host and the account can carry one more
-agent, before claiming the worktree, and a coordinator runs `quest agent admit
---harness <name>` before it starts or resumes a sub-agent of its own:
-
-- The host has room while `quest gate` would admit a command at once, counting
-  every command queued for it and, as one recent admission each, every agent
-  admitted in the last 5 minutes: an agent adds no gated load until its first
-  build, and three quarters of those that build at all reach it by then. An
-  agent `start` or `resume` runs stops counting when it exits. As in the gate,
-  a host loaded only by work no gate holds still starts one agent at a time.
-- The account has room while, in each usage window its harness reports, the
-  usage spent plus what this agent and the account's agents in flight on this
-  host are expected to spend stays within the window. Codex reports its windows
-  in its session logs, read afresh at each decision; an agent's expected share is the token-weighted mean
-  share of this host's sessions since the window opened, so a host with no
-  history there expects none. Claude Code reports its windows only to an
-  interactive session's status line, so its agents are admitted on the host
-  alone, and each admission says so.
+Start and resume first wait until the host can carry one more agent, before
+claiming the worktree, and a coordinator runs `quest agent admit` before it
+starts or resumes a sub-agent of its own. The host has room while `quest gate`
+would admit a command at once, counting every command queued for it and, as one
+recent admission each, every agent admitted in the last 5 minutes: an agent adds
+no gated load until its first build, and three quarters of those that build at
+all reach it by then. An agent `start` or `resume` runs stops counting when it
+exits. As in the gate, a host loaded only by work no gate holds still starts one
+agent at a time.
 
 Admission only delays the next agent: none already running is paused or
 stopped, and `quest agent stop` does not see a launch still waiting, which ends
-when its command is cancelled. `admit` exits 0 once admitted, and all three exit
-3 at once, naming the reset, when the account cannot cover the agent; start and
-resume then print `outcome limited` and no session.
+when its command is cancelled.
 
 Options go before the worktree, and the prompt or message follows it, so text
 starting with `-` is never read as an option. The agent runs in the worktree
