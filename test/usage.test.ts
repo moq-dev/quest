@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -17,6 +17,15 @@ const OTHER = "961c731d-399c-46c5-81ef-069105f87cc4";
 const OWNED = "f1913a12-44c4-438c-a9d9-06e5b1192c04";
 const GONE = "83a08f0e-6ef1-4b41-ad0c-58b37fc993f8";
 const BOTH = "5d2c7f3e-8a41-4b6e-9f0d-2c6a1e7b4d93";
+
+// Checkouts since deleted: directories the test created and removed, so no host path of the same name is read.
+const removed = () => {
+	const path = tempDir();
+	rmSync(path, { recursive: true });
+	return path;
+};
+const WORK = removed();
+const OTHER_WORK = removed();
 
 const lines = (...records: unknown[]) => `${records.map((r) => JSON.stringify(r)).join("\n")}\n`;
 
@@ -41,7 +50,7 @@ const codexLog = (
 			payload: {
 				id: THREAD,
 				timestamp,
-				cwd: extra.cwd ?? "/work",
+				cwd: extra.cwd ?? WORK,
 				source: extra.source ?? "exec",
 				git: branch ? { branch, repository_url: extra.url ?? "https://github.com/acme/proj.git" } : undefined,
 			},
@@ -415,11 +424,11 @@ describe("usage", () => {
 		// below it, which may be another repository's and so is not charged to this one.
 		writeFileSync(
 			join(claudeHome, "projects", "-work", `${OWNED}.jsonl`),
-			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/work" })),
+			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: WORK })),
 		);
 		writeFileSync(
 			join(claudeHome, "projects", "-work", `${GONE}.jsonl`),
-			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: "/work/nested" })),
+			lines(claude("2026-11-06T14:00:00Z", "quest/m0/a", { cwd: join(WORK, "nested") })),
 		);
 		const codexHome = join(dir, "codex");
 		const day = join(codexHome, "sessions", "2026", "11", "06");
@@ -432,7 +441,10 @@ describe("usage", () => {
 		);
 		writeFileSync(
 			join(day, "rollout-c-22222222-2222-2222-2222-222222222222.jsonl"),
-			codexLog("2026-11-06T13:00:00Z", "quest/m0/a", { url: "https://github.com/other/repo.git", cwd: "/other" }),
+			codexLog("2026-11-06T13:00:00Z", "quest/m0/a", {
+				url: "https://github.com/other/repo.git",
+				cwd: OTHER_WORK,
+			}),
 		);
 
 		const body10 = [
