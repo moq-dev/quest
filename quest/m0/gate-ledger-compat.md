@@ -13,14 +13,16 @@ Found while measuring [moq-dev/quest#673](https://github.com/moq-dev/quest/pull/
 on the maintainer's host: one gated moq check, longer than a minute, failed
 with `gate lost its admission ... from the ledger` while another session ran
 a `quest-0.1.0` gate. That label does not identify the build: the dev
-shell's `quest-pinned` reports 0.1.0 at every revision, and every pin since
+shell's `quest-pinned` reported 0.1.0 at every revision through 7fe97931
+(2026-11-08), and every pin since
 e3b292b7 (2026-11-03) already keeps running admissions
 (`running.has(admission)` in `src/cli/gate.ts`). So the cause is not yet
 known; first reproduce it, such as with two current gates, or a current
 gate beside the pinned one, each running a command over a minute.
 
 The loss is also silent when the dropped command's measured cores stay
-constant: `measure` only rereads the ledger when they change, so the
+constant: `measure` reads the ledger every sample but looks for its own
+admission only when the cores change, so the
 command finishes and the other gates undercount it the whole time.
 
 Open decisions, once the cause is known:
