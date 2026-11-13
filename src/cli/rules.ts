@@ -17,8 +17,6 @@ export const USER_ASKED = "QUEST_USER_ASKED=1";
 
 /** Each checked rule, as `quest hook` gives it when denying a call that breaks it. */
 export const RULES = {
-	busyWait:
-		"Never busy-loop or spin while waiting, such as a `read` fed `/dev/zero` or `yes` into a loop or `/dev/null`: block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.",
 	emDash: "No em dashes in what you write: use a comma, colon, parentheses, or separate sentences. Text quoted from someone else keeps its em dashes on a `>` quote line.",
 	footer: "End every GitHub post you author with a `(Written by <model> with <effort>)` line, naming the running model and its reasoning effort, or `(Written by <model>)` when the harness doesn't report the effort; never guess it.",
 	refspec:
@@ -280,18 +278,6 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 	const { found, scratch } = check;
 	const commands = parse(line);
 	alone &&= commands.length === 1 && !commands[0]!.runs;
-	// A coarse backstop for the context's busy-wait rule, not a full analysis: a line that runs
-	// `read` and redirects from `/dev/zero`, or runs `yes` into nothing or into a loop or `read`.
-	const zero = commands.some(({ redirects }) =>
-		redirects.some(({ op, target }) => ["<", "<>"].includes(op) && target === "/dev/zero"),
-	);
-	const busy = commands.some((simple, at) => {
-		const words = commandWords(simple.argv);
-		if (words?.[0] === "read") return zero;
-		if (words?.[0] !== "yes" || ["--help", "--version"].includes(words[1]!)) return false;
-		return !simple.piped || spins(commands[at + 1]?.argv ?? []);
-	});
-	if (busy) found.add("busyWait");
 	for (const simple of commands) {
 		const env = new Set(inherited);
 		const words = [...simple.argv];
@@ -329,32 +315,6 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		else if (name === "git") git(args, asked, input, check);
 		else if (name === "gh") gh(args, input, literal, check);
 	}
-}
-
-/** The shell keywords that may precede a command in the same simple command, as `parse` leaves them. */
-const KEYWORDS = new Set(["do", "then", "else", "elif", "if", "while", "until", "{", "!", "time"]);
-
-/** The words `argv` runs, past leading keywords, assignments, and wrappers such as `command`, or null when none run. */
-function commandWords(argv: readonly string[]): string[] | null {
-	let at = 0;
-	while (at < argv.length && KEYWORDS.has(argv[at]!)) at++;
-	return unwrap(argv.slice(at), new Set());
-}
-
-/** The command `argv` runs, as `commandWords` finds it. */
-function commandName(argv: readonly string[]): string | undefined {
-	return commandWords(argv)?.[0];
-}
-
-/** Whether a command fed `yes` spins on it: a loop, a group, or a `read`. */
-function spins(argv: readonly string[]): boolean {
-	const first = argv[0];
-	return (
-		first === undefined ||
-		["while", "until", "for", "select", "{", "do"].includes(first) ||
-		commandName(argv) === "read" ||
-		commandName(argv) === undefined
-	);
 }
 
 /**

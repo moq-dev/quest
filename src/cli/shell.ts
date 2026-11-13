@@ -24,8 +24,6 @@ export interface Simple {
 	stdinExpanded?: boolean;
 	/** Whether starting the command runs another: a command substitution in a word, a redirection, or a here-document. */
 	runs?: true;
-	/** Whether a pipe, `|` or `|&`, feeds the command's output to the next. */
-	piped?: true;
 }
 
 /** An expansion the shell performs in a word or an unquoted here-document. */
@@ -163,11 +161,6 @@ export function parse(line: string): Simple[] {
 			i += op.length;
 			redirect = op;
 		} else if (SEPARATORS.has(c)) {
-			// A lone `|` (or `|&`) pipes this command's output into the next.
-			if (c === "|" && line[i + 1] !== "|") {
-				endWord();
-				if (command.argv.length > 0 || command.redirects.length > 0) command.piped = true;
-			}
 			endCommand();
 			i += c !== "\n" && line[i + 1] === c ? 2 : 1;
 			if (c === "\n") i = readHeredocs(i);

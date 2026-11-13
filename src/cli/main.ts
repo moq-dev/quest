@@ -134,12 +134,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"only the raw measures do. The load limit applies only while a gated command still runs. Where a " +
 				"systemd scope owns each running command, the load counts as at least the sum of their peak CPU " +
 				"use in the last minute, and nothing starts while those fill every CPU, so a lull between a " +
-				"command's phases does not free its CPUs. Nested " +
+				"command's phases does not free its CPUs. Leave model calls, such as quest review, and long-running " +
+				"servers out of the gate. Nested gate " +
 				"calls run immediately. Limits come from the host; there is " +
 				"no configuration.\n\n" +
 				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway; pass it only for ` +
 				"cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the environment, as a check " +
-				"that lands PRs should set, the command waits for memory but never for load.\n\n" +
+				"that lands PRs should set, the command waits for memory but never for load, and gets " +
+				"MBX_SCHEDULER_PRIORITY=normal unless it sets its own.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
 				"signal kills them all at once. Linux with a systemd 254+ user manager owns every descendant through " +
 				"a systemd user scope, or inside a Quest scope through a child cgroup of its own. macOS, and Linux " +
@@ -1019,7 +1021,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
 				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_GATE_ADMITTED, QUEST_GATE_PRIORITY, " +
-				"and QUEST_LAND_BASE variable, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"QUEST_LAND_BASE, and MBX_SCHEDULER_PRIORITY when QUEST_GATE_PRIORITY=1, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
 				"Prints `session <id>` as soon as the id is known, then `outcome finished|failed|limited|logged-out|stopped`, " +
 				"a blank line, and the agent's final reply. Exits 0 when the agent finished, 3 when its account hit a " +
 				"usage limit or ran out of credit, 4 when the CLI is logged out (after printing its login command), 2 for " +
@@ -1527,8 +1529,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"The start hooks add `quest context` to each session and Claude Code subagent in a repository that " +
 				"uses Quest, and again after compaction, so agents never run it themselves. PreToolUse blocks tool " +
 				"calls there that break a rule a program can check: em dashes an agent writes, a push without an " +
-				"explicit refspec, a force-push or rebase, a GitHub post without its `(Written by ...)` footer, " +
-				"scratch files in /tmp, and a busy loop: a `read` fed /dev/zero, or `yes` not piped into a single command other than a loop or `read`. Stop and SubagentStop refuse to end an agent's turn while a `quest gate` " +
+				"explicit refspec, a force-push or rebase, a GitHub post without its `(Written by ...)` footer, and " +
+				"scratch files in /tmp. Stop and SubagentStop refuse to end an agent's turn while a `quest gate` " +
 				"command it started runs in the background. Each runs `quest hook`, so `quest` must be on the PATH the agent starts " +
 				"with, and Codex asks to trust its hooks once through /hooks.\n\n" +
 				"With --worktrees, also installs Claude Code's " +
@@ -1563,7 +1565,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"additional context. PreToolUse denies a call that breaks a checked rule, naming the rule: an edit " +
 				"or a commit message or new GitHub post that adds an em dash outside a `>` quote line, a `git push` " +
 				"whose refspecs lack a `:`, a force-push, a `git rebase` or `git pull --rebase`, a new GitHub post " +
-				"whose body lacks a `(Written by ...)` line, a file written under /tmp, or a busy loop: a `read` fed /dev/zero, or `yes` not piped into a single command other than a loop or `read`. A force-push or rebase the " +
+				"whose body lacks a `(Written by ...)` line, or a file written under /tmp. A force-push or rebase the " +
 				`user asked for passes with the \`${USER_ASKED}\` prefix. Stop and SubagentStop refuse to end the ` +
 				"turn, naming each command, while a `quest gate` command the ending agent started runs in Claude " +
 				"Code's background: one whose background ID its transcript holds. Exits 1 on malformed input or an event it " +

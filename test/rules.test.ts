@@ -26,7 +26,7 @@ test("parse splits commands and attaches redirections and here-documents", () =>
 		),
 	).toEqual([
 		{ argv: ["A=1", "git", "push", "a b", 'c"d'], redirects: [] },
-		{ argv: ["echo", "x"], redirects: [], piped: true },
+		{ argv: ["echo", "x"], redirects: [] },
 		{
 			argv: ["tee", "out.log"],
 			redirects: [
@@ -280,40 +280,4 @@ test("docs/context.md is the rules `quest context` prints, for agents without th
 	expect(readFileSync(join(import.meta.dirname, "../docs/context.md"), "utf8")).toBe(
 		`${CONTEXT}\n${CHECKED_CONTEXT}`,
 	);
-});
-
-test("a busy loop is denied", () => {
-	for (const command of [
-		"read -t 1 < /dev/zero",
-		"read line < /dev/zero",
-		"while :; do read -rt 5 <>/dev/zero; done",
-		"while read -t 1 x; do :; done < /dev/zero",
-		"( while read -t 1 x; do :; done ) < /dev/zero",
-		"exec 0</dev/zero; read -t 1",
-		"X=1 read -t 1 < /dev/zero",
-		"command yes > /dev/null",
-		"env FOO=1 yes",
-		"yes > /dev/null",
-		"yes",
-		"yes &> /dev/null &",
-		"yes | while read x; do :; done",
-		"yes | read -t 1",
-		"yes | { read x; }",
-		"sh -c 'yes'",
-	])
-		expect(bash(command), command).toEqual([RULES.busyWait]);
-	for (const command of [
-		"head -c 16 /dev/zero > out.bin",
-		"head -c 32 < /dev/zero > key.bin",
-		"read -t 1 < input.txt",
-		"yes --version",
-		"yes 2> err.log | head -1",
-		"printf '%s %s\\n' read -t1 < /dev/zero",
-		"for i in 1 2; do head -c 16; done < /dev/zero",
-		"gh pr comment 5 --body-file - < /dev/zero",
-		"yes | apt-get install foo",
-		"yes y | ./configure | tee log",
-		"echo yes > answer.txt",
-	])
-		expect(bash(command), command).toEqual([]);
 });
