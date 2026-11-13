@@ -5,7 +5,10 @@
 `quest check` fails on a `Required` entry whose target sits in a later
 milestone than the document listing it, such as an m1 quest requiring an m2
 one. The finding names both documents and their milestones, and says to move
-one of them with `quest mv`. Quests, epic READMEs, and milestone READMEs are
+the later quest or epic earlier with `quest mv`, or remove the link. A
+milestone README cannot move, since milestones are permanent, so when either
+side is one the finding offers only moving the quest or epic on the other
+side, or removing the link. Quests, epic READMEs, and milestone READMEs are
 all covered; the root README, which belongs to no milestone, and links to
 other repositories are not.
 
