@@ -15,9 +15,7 @@ shells and subagents ran. Today that takes matching agent transcripts
 against systemd journal lines, which hold no wait time and exist only on
 Linux.
 
-Non-goals: how the gate admits commands, which
-[moq-dev/quest#667](https://github.com/moq-dev/quest/pull/667) plans
-through mbx's pool; Windows, which
+Non-goals: how the gate admits commands; Windows, which
 [its own quest](/quest/m1/gate-record-windows.md) covers; and any view of
 the record in Quest itself.
 
