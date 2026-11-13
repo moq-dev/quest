@@ -22,14 +22,17 @@ binaries, rejecting npm, which supersedes the 2026-11-06 npm plan. Point to
 the run-once lines its install site serves:
 `curl -LsSf https://max.kixel.ai/run.sh | sh`, and on Windows
 `irm https://max.kixel.ai/run.ps1 | iex`. Neither needs a Rust toolchain or
-a quest wrapper. Still ✅ no npm package now that the `@kixel` npm scope
+a quest wrapper, and each verifies the binary it downloads against the
+release's checksums, as quest's own Windows install does. Still ✅ no npm package now that the `@kixel` npm scope
 exists (rejected: cargo-dist's npm installer for `npx @kixel/token-max`,
 which adds a release channel and a GitHub-hosted publish job that `run.ps1`
 makes unnecessary).
 
 ## Waiting
 
-- kixel-ai/token-max: publish 0.1.0 on crates.io and serve both run-once
-  lines; check that `cargo search token-max --limit 1` shows 0.1.0 or
-  later, and that `curl -LsSf` of `https://max.kixel.ai/run.sh` and of
-  `https://max.kixel.ai/run.ps1` each returns a script, not an HTML page
+- kixel-ai/token-max: release 0.1.0 and serve both run-once lines; check
+  that `cargo info token-max` shows 0.1.0 or later with repository
+  kixel-ai/token-max, that `gh release view -R kixel-ai/token-max --json assets`
+  lists binaries for Linux, macOS and Windows, and that `curl -LsSf` of
+  `https://max.kixel.ai/run.sh` and of `https://max.kixel.ai/run.ps1` each
+  returns a script, not an HTML page
