@@ -206,11 +206,12 @@ describe("PR records", () => {
 		unchanged: false,
 	};
 
+	// The shadow: the pick one effort lower, in its own session.
 	const second: Round = {
 		...round,
-		reviewer: "opencode",
-		model: "opencode-go/deepseek-v4.1-flash",
-		session: "ses_1",
+		shadow: true,
+		effort: "medium",
+		session: "thread-2",
 		round: 1,
 		score: 10,
 		findings: [],
@@ -234,7 +235,7 @@ describe("PR records", () => {
 	});
 	const tallies = [
 		tally("codex", 3, { high: 1, medium: 1, low: 2 }, 2, 1),
-		tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0),
+		{ ...tally("codex", 1, { high: 0, medium: 0, low: 0 }, 0, 0), shadow: true as const },
 		// A left-out reviewer still names its session, so `quest usage` counts that session as reviewing.
 		{ ...tally("claude", 2, { high: 2, medium: 0, low: 0 }, 1, 0), session: CLAUDE },
 	];
@@ -262,11 +263,11 @@ describe("PR records", () => {
 				open: { high: 0, medium: 1, low: 0 },
 			},
 			{
-				harness: "opencode",
-				model: "opencode-go/deepseek-v4.1-flash",
-				effort: "high",
-				shadow: false,
-				session: "ses_1",
+				harness: "Codex",
+				model: "gpt-6.1-sol",
+				effort: "medium",
+				shadow: true,
+				session: "thread-2",
 				round: 1,
 				score: 10,
 				tally: {
@@ -310,7 +311,7 @@ describe("PR records", () => {
 	});
 
 	test("a record written before tallies has none, and a Rounds line that does not add up fails", () => {
-		const record = reviewRecord([second], [tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0)]);
+		const record = reviewRecord([second], [tallies[1]!]);
 		const older = `## Review\n\n${record.replace(/^- Rounds: .*\n/m, "")}\n`;
 		expect(parseReview(older)[0]!.tally).toBeNull();
 		// The settled count `quest usage` prints reads back.
@@ -458,7 +459,8 @@ describe("usage", () => {
 			"- Rounds: 2; findings 2 (high 1, low 1): fixed 1, refuted 1, open 0",
 			"- Findings: none",
 			"",
-			"- Reviewer: opencode, opencode-go/deepseek-v4.1-flash, high effort",
+			// A harness quest review does not run, as a hand-written record may name, reads as any other.
+			"- Reviewer: Gemini CLI, gemini-3-pro, high effort",
 			"- Session: `ses_1`, round 1",
 			"- Score: 8/10, `Fine.`",
 			"- Rounds: 1; findings 0: fixed 0, refuted 0, open 0",
@@ -472,13 +474,9 @@ describe("usage", () => {
 			"- Reviewer: Codex, gpt-6.1-sol, medium effort, shadow",
 			"- Rounds: 1; findings 3 (high 3): fixed 2, refuted 1, open 0",
 		].join("\n");
-		// #9's claim of the same branch named ses_1 before #10 resumed it, so #10, the newer, takes it.
-		// Its record and #10's tally the same branch, so the rollup counts the tally once, from #10.
+		// #9's record and #10's tally the same branch, so the rollup counts the tally once, from #10.
 		const body9 = `${body10.slice(body10.indexOf("## Review"))}\n\n## Models\n\n- Size: L\n- Implementer: Claude Code, claude-opus-5-5, high effort\n`;
-		const fork13 = body10
-			.slice(body10.indexOf("## Review"))
-			.replaceAll(THREAD, "thread-fork")
-			.replaceAll("ses_1", "ses_fork");
+		const fork13 = body10.slice(body10.indexOf("## Review")).replaceAll(THREAD, "thread-fork");
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
 		const pulls = [
@@ -638,7 +636,6 @@ describe("usage", () => {
 				id: "2026/11/06/rollout-c-22222222-2222-2222-2222-222222222222",
 				models: [spent("gpt-6.1-sol", 3)],
 			},
-			{ harness: "opencode", id: "ses_1", models: [spent("deepseek", 4)] },
 			{ harness: "claude", id: OWNED, models: [spent("claude-opus-5-5", 7)] },
 			{ harness: "claude", id: GONE, models: [spent("claude-opus-5-5", 8)] },
 			{ harness: "claude", id: BOTH, models: [spent("claude-opus-5-5", 9)] },
@@ -668,8 +665,6 @@ describe("usage", () => {
 			["claude", CLAUDE, "implementing", "high"],
 			["codex", THREAD, "reviewing", "high"],
 			["codex", "11111111-1111-1111-1111-111111111111", "iterating", "high"],
-			// No log quest reads names opencode's session, but the review record does.
-			["opencode", "ses_1", "reviewing", "high"],
 			["claude", OWNED, "iterating", null],
 		]);
 		expect(ten.fixedBy).toEqual([11]);
@@ -695,7 +690,6 @@ describe("usage", () => {
 			["L", "iterating", "claude", 7],
 			["L", "iterating", "codex", 2],
 			["L", "reviewing", "codex", 1],
-			["L", "reviewing", "opencode", 4],
 		]);
 		const tally = {
 			rounds: 2,

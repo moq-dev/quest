@@ -97,6 +97,10 @@ Baseline from the 2026-11-11 audit, at API list price:
   `[P1]`-`[P3]` findings in its review body. About 40% of those PRs merged
   while its latest review still listed findings.
 
+  The table predates Pullfrog's move to Claude (2026-11-12) and its review
+  replacing the DeepSeek one in `quest review`
+  ([token waste](/quest/m0/token-waste/README.md), 2026-11-13).
+
 ## Waiting
 
 - moq-dev/quest: one week of PRs since both the shadow reviewer

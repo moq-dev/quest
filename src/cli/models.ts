@@ -4,7 +4,6 @@
 // (quest/m1/model-check.md) audits these lists each milestone.
 import { type Doc, SIZES, type Size, onMaintainer, size, waits } from "../core";
 import type { HarnessName } from "./agent";
-import type { Reviewing } from "./review";
 
 /** One harness running one model at one effort. */
 export interface Model {
@@ -38,8 +37,7 @@ export const WRITERS: Record<Size, readonly Model[]> = {
 
 /**
  * Each PR size's reviewers, ranked: the first whose model is not the latest
- * writer's reviews it, so Claude reviews what Sol changed last, while
- * `SECOND_REVIEWER` reviews the same head beside it.
+ * writer's reviews it, so Claude reviews what Sol changed last.
  */
 export const REVIEWERS: Record<Size, readonly Model[]> = {
 	XS: [sol("medium"), opus("low")],
@@ -47,16 +45,6 @@ export const REVIEWERS: Record<Size, readonly Model[]> = {
 	M: [sol("high"), opus("medium")],
 	L: [sol("xhigh"), opus("high")],
 	XL: [sol("xhigh"), opus("xhigh")],
-};
-
-/**
- * The second reviewer of every PR, beside its size's: DeepSeek through opencode, a model family no writer
- * runs, for every size, since a review costs it about $0.05.
- */
-export const SECOND_REVIEWER: Reviewing = {
-	harness: "opencode",
-	model: "opencode-go/deepseek-v4.1-flash",
-	effort: "high",
 };
 
 /**

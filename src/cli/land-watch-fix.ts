@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { basename, join } from "node:path";
 import { isHoldLabel } from "../core";
 import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
-import { type Queued, queueHead } from "../github/merge";
+import { type Queued, lacksApproval, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
 import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
@@ -123,7 +123,7 @@ const JUDGED: Record<Cause, string> = {
 };
 
 const PULL = `query($id: ID!) { node(id: $id) { ... on PullRequest {
-	state baseRefName headRefOid mergeStateStatus mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
+	state baseRefName headRefOid mergeStateStatus reviewDecision mergeQueueEntry { enqueuedAt } autoMergeRequest { enabledAt }
 	labels(first: 100) { nodes { name } }
 	headRepository { nameWithOwner }
 } } }`;
@@ -761,13 +761,13 @@ async function requeue(
 		try {
 			if (queue.kind === "own") await enqueue(github, id, head, queue.method);
 			else
-				await queueHead(
-					(query, variables) => github.graphql(query, variables),
+				await queueHead((query, variables) => github.graphql(query, variables), {
 					id,
 					head,
-					string(pull.mergeStateStatus),
-					"merge",
-				);
+					mergeState: string(pull.mergeStateStatus),
+					unapproved: lacksApproval(pull.reviewDecision),
+					method: "merge",
+				});
 		} catch (error) {
 			if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 				throw error;
