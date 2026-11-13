@@ -804,7 +804,7 @@ const notices: Record<Waiting, string> = {
  * Names a file to which every outermost gate appends one JSON line describing its run, however it
  * ends (see `gate`). A nested gate runs inside a command its outermost gate already covers.
  */
-export const RECORD = "QUEST_GATE_RECORD";
+const RECORD = "QUEST_GATE_RECORD";
 
 /** Open the file `RECORD` names for appending, before anything runs; undefined while it is unset or empty. */
 function recordFile(env: NodeJS.ProcessEnv): { path: string; fd: number } | undefined {
