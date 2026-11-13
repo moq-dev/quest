@@ -146,7 +146,7 @@ checkpoints and outages to count by hand:
   covers all three reviewers: opencode since
   [opencode reviewers](https://github.com/moq-dev/quest/pull/603), on the
   model `QUEST_LIVE_OPENCODE_MODEL` names (default
-  `opencode-go/deepseek-v4.1-flash#high`), with the dev shell's `srt`. Check
+  `opencode/deepseek-v4.1-flash-free#high`), with the dev shell's `srt`. Check
   that opencode's `run` still takes no schema (it took none in 2.2.6, so the
   findings turn's prompt carries it), and that `OPENCODE_DISABLE_PROJECT_CONFIG`
   still skips the checkout's config and `AGENTS.md`.

@@ -51,11 +51,12 @@ export const REVIEWERS: Record<Size, readonly Model[]> = {
 
 /**
  * The second reviewer of every PR, beside its size's: DeepSeek through opencode, a model family no writer
- * runs, for every size, since a review costs it about $0.05.
+ * runs, for every size. It runs on opencode's free tier, since on a paid plan a busy day's reviews
+ * spent its allowance and every review failed until the reset.
  */
 export const SECOND_REVIEWER: Reviewing = {
 	harness: "opencode",
-	model: "opencode-go/deepseek-v4.1-flash",
+	model: "opencode/deepseek-v4.1-flash-free",
 	effort: "high",
 };
 

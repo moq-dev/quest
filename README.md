@@ -1356,9 +1356,10 @@ size. Each size ranks its reviewers, the same for every repository:
 | L | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` high |
 | XL | Codex `gpt-6.1-sol` xhigh | Claude Code `claude-opus-5-5` xhigh |
 
-Beside it, opencode `opencode-go/deepseek-v4.1-flash` at `high` reviews the
+Beside it, opencode `opencode/deepseek-v4.1-flash-free` at `high` reviews the
 same head for every size, in its own session, so each head is read by a model
-family no writer runs, at about $0.05 a review. The shadow, the pick's model
+family no writer runs. It is opencode's free tier of DeepSeek V4.1 Flash, so
+reviews spend no paid allowance. The shadow, the pick's model
 one effort lower (Sol low for an XS PR), reviews it too, in its own session, so
 the routing can be retuned from what each effort step finds over the one below
 it. It is skipped when the pick runs at low or at an `--effort` off the ladder

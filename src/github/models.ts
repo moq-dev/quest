@@ -47,13 +47,14 @@ export function recorded(body: string): {
 }
 
 // Display names and IDs compare alike: `Opus 5.5`, `Claude Opus 5.5`, and `claude-opus-5-5` share a key, as do
-// `DeepSeek V4.1 Flash` and `opencode-go/deepseek-v4.1-flash`.
+// `DeepSeek V4.1 Flash`, `opencode-go/deepseek-v4.1-flash`, and its free tier's `opencode/deepseek-v4.1-flash-free`.
 const key = (name: string) =>
 	name
 		.toLowerCase()
 		.replace(/^.*\//, "")
 		.replace(/[\s.]+/g, "-")
-		.replace(/^claude-/, "");
+		.replace(/^claude-/, "")
+		.replace(/-free$/, "");
 const KNOWN = new Map(
 	[...Object.values(WRITERS), ...Object.values(REVIEWERS), [SECOND_REVIEWER]]
 		.flat()

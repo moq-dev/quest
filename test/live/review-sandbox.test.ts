@@ -44,7 +44,7 @@ import { openSandbox } from "../../src/cli/sandbox";
  * provider/model#variant, or a cheap one OpenCode Go serves.
  */
 const [OPENCODE_MODEL, OPENCODE_EFFORT] = (
-	process.env.QUEST_LIVE_OPENCODE_MODEL ?? "opencode-go/deepseek-v4.1-flash#high"
+	process.env.QUEST_LIVE_OPENCODE_MODEL ?? "opencode/deepseek-v4.1-flash-free#high"
 ).split("#");
 
 /** The model a sizeless review runs on `harness`. */

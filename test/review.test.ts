@@ -192,7 +192,7 @@ const instructions = config && fs.readFileSync(config.instructions[0], "utf8");
 fs.appendFileSync(process.env.FAKE_LOG + ".opencode", JSON.stringify({ argv, stdin, env, config, instructions, cwd: process.cwd() }) + "\\n");
 if (argv[0] === "models") {
 	console.log("opencode/free");
-	if (!process.env.FAKE_OPENCODE_LOGGED_OUT) console.log("opencode-go/deepseek-v4.1-flash\\nopencode-go/kimi");
+	if (!process.env.FAKE_OPENCODE_LOGGED_OUT) console.log("opencode/deepseek-v4.1-flash-free\\nopencode-go/kimi");
 	process.exit(0);
 }
 const session = argv.includes("--session") ? argv[argv.indexOf("--session") + 1] : "ses_1";
@@ -455,7 +455,7 @@ fakes("a quest branch is reviewed at its quest's size on the base, which its own
 	expect(result.stdout).toMatch(/^size L quest\/m0\/big.md\n/);
 	expect(result.stdout).toContain("\nreviewer codex gpt-6.1-sol xhigh\n");
 	// The second reviewer runs at its own effort, whatever the size.
-	expect(result.stdout).toContain("\nreviewer opencode opencode-go/deepseek-v4.1-flash high\n");
+	expect(result.stdout).toContain("\nreviewer opencode opencode/deepseek-v4.1-flash-free high\n");
 
 	// --size overrides the quest's.
 	const sized = await quest("--root", s.repo, "review", "--size", "S", "--new");
@@ -495,16 +495,16 @@ fakes("--exclude-model picks the reviewer from the PR's implementers instead of 
 		"M",
 		"default",
 	]);
-	expect(second.model).toBe("opencode-go/deepseek-v4.1-flash");
+	expect(second.model).toBe("opencode/deepseek-v4.1-flash-free");
 
 	const both = ["--exclude-model", "gpt-6.1-sol", "--exclude-model", "claude-opus-5-5"];
 	const none = await quest("--root", s.repo, "review", ...both, "--new");
 	expect(none.code).toBe(2);
 	expect(none.stderr).toContain("every M reviewer (gpt-6.1-sol, claude-opus-5-5) is avoided");
 	// Nor does the second reviewer review a change it is named as writing.
-	const deepseek = await quest("--root", s.repo, "review", "--exclude-model", "opencode-go/deepseek-v4.1-flash");
+	const deepseek = await quest("--root", s.repo, "review", "--exclude-model", "opencode/deepseek-v4.1-flash-free");
 	expect(deepseek.code).toBe(2);
-	expect(deepseek.stderr).toContain("opencode-go/deepseek-v4.1-flash is avoided; pass --harness");
+	expect(deepseek.stderr).toContain("opencode/deepseek-v4.1-flash-free is avoided; pass --harness");
 });
 
 fakes("an unknown harness is an error, never a same-model review", async () => {
@@ -1039,7 +1039,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 			"  average([3]) is 0.",
 			"",
 			// The second reviewer reviews the same head, its findings numbered after the first's.
-			"reviewer opencode opencode-go/deepseek-v4.1-flash high",
+			"reviewer opencode opencode/deepseek-v4.1-flash-free high",
 			"session ses_1",
 			"round 1",
 			"usage review input 10 cached 0 output 6",
@@ -1107,7 +1107,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	expect(replySchema.properties.earlier).toBeUndefined();
 	const deepseek = s.opencodeCalls().filter((call) => call.argv[0] === "run");
 	expect(deepseek).toHaveLength(2);
-	for (const call of deepseek) expect(call.argv).toContain("opencode-go/deepseek-v4.1-flash#high");
+	for (const call of deepseek) expect(call.argv).toContain("opencode/deepseek-v4.1-flash-free#high");
 });
 
 fakes("--base reviews against another branch, fetched first, with that branch's instructions", async () => {
@@ -1525,7 +1525,7 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 				"- Findings, open until the next round settles them:",
 				"  - High, `src/lib.ts:2`: `Off by one`",
 				"",
-				"- Reviewer: opencode, opencode-go/deepseek-v4.1-flash, high effort",
+				"- Reviewer: opencode, opencode/deepseek-v4.1-flash-free, high effort",
 				"- Session: `ses_1`, round 1",
 				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
 				"- Rounds: 1; findings 1 (high 1): fixed 0, refuted 0, open 1",
@@ -1803,7 +1803,7 @@ test("an Implementer line reads as agents write it", () => {
 	expect(read("Claude Code, Opus 5.5, high effort (iterate, XS, arm B)")).toEqual({ ...opus("high"), size: "XS" });
 	expect(read("unknown, Opus 5.5, high effort")).toEqual(opus("high", "unknown"));
 	expect(read("Claude Code, Fable 5.2, medium effort")?.model).toBe("claude-fable-5-2");
-	expect(read("opencode, DeepSeek V4.1 Flash, high effort")?.model).toBe("opencode-go/deepseek-v4.1-flash");
+	expect(read("opencode, DeepSeek V4.1 Flash, high effort")?.model).toBe("opencode/deepseek-v4.1-flash-free");
 	expect(read("Codex, gpt-6.1-sol, high")?.effort).toBe("high");
 	expect(read("unknown")).toBeNull();
 	// A lone field reads as a listed display name or an ID, keeping the size its notes give.
