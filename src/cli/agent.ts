@@ -24,7 +24,9 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { admission, processAdmission } from "./admission";
 import { discoveryEnv, git } from "./git";
+import { cancelled, interrupts } from "./interrupt";
 import { LIMIT } from "./limit";
 import { alive, programCommand, programEnvironment, requireProgram, signalProcess } from "./program";
 import { systemdScopes } from "./supervise";
@@ -386,13 +388,38 @@ export interface AgentDependencies {
 	base: string;
 	stdout(text: string): void;
 	stderr(text: string): void;
+	/** Wait until the host can carry one more agent, run by process `held` if any (see admission.ts). */
+	admit(signal: AbortSignal, held?: number): Promise<void>;
 }
 
 export const processDependencies = (out: Pick<AgentDependencies, "stdout" | "stderr">): AgentDependencies => ({
 	env: process.env,
 	base: agentDirectory(),
 	...out,
+	admit: (signal, held) =>
+		admission.admit(
+			processAdmission((text) => out.stderr(`quest: ${text}\n`)),
+			signal,
+			held,
+		),
 });
+
+/**
+ * Admit one agent before it starts, for `quest agent admit` and every launch. Returns undefined once
+ * admitted, else the signal's exit status when interrupted while waiting.
+ */
+export async function admitAgent(deps: AgentDependencies, held?: number): Promise<number | undefined> {
+	const cancel = interrupts();
+	try {
+		await deps.admit(cancel.signal, held);
+		return undefined;
+	} catch (error) {
+		if (cancel.signal.aborted) return cancelled(cancel.signal);
+		throw error;
+	} finally {
+		cancel.close();
+	}
+}
 
 /** How much of an agent's output is kept for diagnostics; the rest is read as it streams. */
 const TAIL = 64 * 1024;
@@ -432,7 +459,8 @@ export function boundedLines(limit: number, read: (line: string) => void) {
 }
 
 /**
- * Run one agent turn in the foreground: a new session with `prompt`, or
+ * Run one agent turn in the foreground, once the host can carry it
+ * (see `admitAgent`): a new session with `prompt`, or
  * `session` resumed with it. Prints the session id as soon as it is known,
  * then the outcome and final reply. Returns the exit status.
  */
@@ -467,6 +495,9 @@ export async function runAgent(
 	const program = requireProgram(name, deps.env);
 	const command = checkouts ? undefined : programCommand(program, args, deps.env);
 	const dir = spawnDirectory(deps.base, worktree);
+	// Waited out before the worktree is claimed, so a queued launch holds nothing.
+	const refused = await admitAgent(deps, process.pid);
+	if (refused !== undefined) return refused;
 
 	const reader = harness.reader();
 	// Claude Code takes the id this command assigns; Codex announces its own.
