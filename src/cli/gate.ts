@@ -3,14 +3,24 @@
 // the command's descendants until they stop, and holds nothing else while it runs.
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	linkSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, userInfo } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
-import { questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
+import { type Ceiling, capped, limit, questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
 
 /**
  * One admitted command: a unique id, the wall-clock time it was admitted, and the process ID of
@@ -18,7 +28,9 @@ import { questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
  * (see `processStart`), so a reused process ID holds nothing. `queued` marks a caller still
  * waiting for its turn instead, as of `at`: it holds a place in the queue, the ledger's order of
  * queued entries, and no slot. `cores` is the most CPUs the command kept busy over any
- * SETTLE_MS of the last RECENT_MS, where its gate measures it (see `measure`).
+ * SETTLE_MS of the last RECENT_MS, where its gate measures it (see `measure`). `memory` is the
+ * ceiling its scope holds its memory to, in bytes, where the gate caps it, and `held` what its
+ * command held of that when last sampled (see `ration`).
  */
 export interface Admission {
 	id: string;
@@ -27,6 +39,16 @@ export interface Admission {
 	queued?: boolean;
 	start?: string;
 	cores?: number;
+	memory?: number;
+	held?: number;
+}
+
+/** What the processes in a scope have used. */
+export interface Usage {
+	/** CPU microseconds. */
+	cpu: number;
+	/** Bytes of memory the kernel cannot reclaim from them; undefined where the scope has no memory accounting. */
+	memory?: number;
 }
 
 /** One version of the host's admission ledger and queue. Versions only grow; 0 is the empty ledger. */
@@ -53,8 +75,10 @@ export interface Host {
 	 */
 	publish(base: Ledger, admissions: Admission[]): boolean;
 	sleep(ms: number, signal: AbortSignal): Promise<void>;
-	/** CPU microseconds the processes in systemd scope `unit` have used, or undefined while it does not exist. */
-	usage(unit: string): number | undefined;
+	/** What the processes in systemd scope `unit` have used, or undefined while it does not exist. */
+	usage(unit: string): Usage | undefined;
+	/** Move the memory ceiling of systemd scope `unit`. */
+	cap(unit: string, memory: Ceiling): void;
 }
 
 export interface Limits {
@@ -62,6 +86,31 @@ export interface Limits {
 	load: number;
 	/** The least available memory, in bytes, that still admits a command. */
 	memory: number;
+	/**
+	 * The memory ceiling an admitted command's scope starts with, in bytes, and the least its gate
+	 * raises it by (see `ration`); undefined where no scope caps the command.
+	 */
+	ceiling?: number;
+}
+
+/** A ceiling starts at this fraction of one command's memory, so what a small command never uses stays free. */
+const CEILING_PARTS = 8;
+
+/** How often a gate compares its command's memory with its ceiling. */
+export const CEILING_MS = 1000;
+
+/**
+ * The scope limits for a ceiling of `share` bytes that grows by `step`: the kernel slows the
+ * command a little below the ceiling, so it is held there briefly while its gate looks for room
+ * to raise both, and is killed only once it fills the rest.
+ */
+export function bounds(share: number, step: number): Ceiling {
+	return { high: share - Math.floor(Math.min(step / 4, share / 16)), max: share };
+}
+
+/** What a running command may still take of its ceiling: memory promised to it, so not free for another. */
+function unused(admission: Admission): number {
+	return Math.max(0, (admission.memory ?? 0) - (admission.held ?? 0));
 }
 
 export type Waiting = "load" | "memory" | "queue";
@@ -122,7 +171,7 @@ export function hostLimits(
 ): Limits {
 	return {
 		load: processors,
-		memory: Math.min(COMMAND_MEMORY, memory / 4),
+		memory: Math.floor(Math.min(COMMAND_MEMORY, memory / 4)),
 	};
 }
 
@@ -257,7 +306,9 @@ function parse(text: string): Admission[] {
 				(entry.pid === undefined || (Number.isSafeInteger(entry.pid) && entry.pid > 0)) &&
 				(entry.queued === undefined || entry.queued === true) &&
 				(entry.start === undefined || typeof entry.start === "string") &&
-				(entry.cores === undefined || (Number.isSafeInteger(entry.cores) && entry.cores >= 0)),
+				(entry.cores === undefined || (Number.isSafeInteger(entry.cores) && entry.cores >= 0)) &&
+				(entry.memory === undefined || (Number.isSafeInteger(entry.memory) && entry.memory >= 0)) &&
+				(entry.held === undefined || (Number.isSafeInteger(entry.held) && entry.held >= 0)),
 		);
 	return valid ? (value as Admission[]) : [];
 }
@@ -399,17 +450,30 @@ export function fileHost(directory: string, now = Date.now): Host {
 			if (group === undefined) return undefined;
 			groups.set(unit, group);
 			let stat: string;
+			let memory: number | undefined;
 			try {
 				stat = readFileSync(join(group, "cpu.stat"), "utf8");
+				// File cache counts as the scope's memory, but the kernel reclaims it before it slows or
+				// kills the command.
+				if (existsSync(join(group, "memory.current")))
+					memory = Math.max(
+						0,
+						Number(readFileSync(join(group, "memory.current"), "utf8")) -
+							cgroupStat(group, "active_file") -
+							cgroupStat(group, "inactive_file"),
+					);
 			} catch (error) {
 				// The scope ended, and systemd removed its cgroup.
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+				if (["ENOENT", "ENODEV"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
 				throw error;
 			}
 			const usage = stat.match(/^usage_usec (\d+)$/m)?.[1];
 			if (usage === undefined) throw new Error(`gate cannot read the CPU use of ${unit}`);
-			return Number(usage);
+			if (memory !== undefined && !Number.isFinite(memory))
+				throw new Error(`gate cannot read the memory of ${unit}`);
+			return { cpu: Number(usage), memory };
 		},
+		cap: limit,
 	};
 }
 
@@ -506,7 +570,10 @@ export async function admit(
 		const ahead = kept.slice(0, Math.max(position, 0)).filter((admission) => admission.queued).length;
 		// An admission takes the place of this caller's entry in the queue.
 		const admitted = (at: number) =>
-			host.publish(ledger, [...kept.filter((admission) => admission.id !== place), { id, at, ...self }]);
+			host.publish(ledger, [
+				...kept.filter((admission) => admission.id !== place),
+				{ id, at, ...self, ...(limits.ceiling === undefined ? {} : { memory: limits.ceiling }) },
+			]);
 		// Recorded like any admission, so it still counts against the others' headroom.
 		if (now >= deadline) return admitted(now);
 		// Priority ignores load, whether or not a gated command runs; memory still applies.
@@ -516,7 +583,9 @@ export async function admit(
 			: running.size > 0
 				? Math.max(host.load(), used)
 				: Math.min(host.load(), limits.load);
-		const memory = host.memory();
+		// Running commands' ceilings must fit the host together, so what each may still take of its
+		// own is not free, however long it has run.
+		const memory = host.memory() - [...running].reduce((sum, admission) => sum + unused(admission), 0);
 		let wait = SETTLE_MS;
 		if (load > limits.load || used >= limits.load) waiting?.("load");
 		else if (memory < limits.memory) waiting?.("memory");
@@ -524,7 +593,13 @@ export async function admit(
 			// Every caller queued ahead takes a slot before this one, so it starts first only while
 			// the host has room for them all.
 			const taken = recent.length + ahead;
-			const headroom = load + taken < limits.load && memory - taken * limits.memory >= limits.memory;
+			// A recent command has yet to show its memory, so it counts as one command's, less what
+			// its ceiling already took above.
+			const lagging = recent.reduce(
+				(sum, admission) => sum + Math.max(0, limits.memory - (running.has(admission) ? unused(admission) : 0)),
+				ahead * limits.memory,
+			);
+			const headroom = load + taken < limits.load && memory - lagging >= limits.memory;
 			if (!headroom && ahead > 0) waiting?.("queue");
 			else {
 				const last = Math.max(-Infinity, ...recent.map((admission) => admission.at));
@@ -578,7 +653,7 @@ export async function measure(host: Host, admission: { id: string; unit: string 
 			if (signal.aborted) return;
 			throw error;
 		}
-		const usage = host.usage(admission.unit);
+		const usage = host.usage(admission.unit)?.cpu;
 		const at = host.now();
 		if (usage !== undefined) {
 			// A clock stepped backward yields no rate for its interval.
@@ -593,6 +668,73 @@ export async function measure(host: Host, admission: { id: string; unit: string 
 			const updated = ledger.admissions.map((entry) => (entry === mine ? { ...mine, cores } : entry));
 			if (host.publish(ledger, updated)) recorded = cores;
 		}
+	}
+}
+
+/**
+ * Until `signal` aborts, keep the memory ceiling of the admitted command in systemd scope `unit`
+ * ahead of what it holds, while the host has room. Every CEILING_MS, the admission's `held` is set
+ * to what the command holds, rounded down to half a `step`, so other callers count the rest of its
+ * ceiling as promised. Once the command is within half a `step` of its ceiling, its gate raises the
+ * ceiling by a quarter of it, or by `step` if that is more or all that fits, taken from the
+ * host's available memory less what the other running commands may still take of theirs. Ceilings
+ * therefore never promise more than the host has, and never shrink.
+ *
+ * With no room, the ceiling stays: the kernel slows the command there and kills it once it fills
+ * the rest (see `bounds`), so the command that overran stops, not another. `throttled` is called
+ * with the ceiling each time the command starts being held at one.
+ */
+export async function ration(
+	host: Host,
+	admission: { id: string; unit: string; step: number },
+	signal: AbortSignal,
+	throttled?: (ceiling: number) => void,
+) {
+	const { id, unit, step } = admission;
+	let share = step;
+	let slowed = false;
+	for (;;) {
+		try {
+			await host.sleep(CEILING_MS, signal);
+		} catch (error) {
+			if (signal.aborted) return;
+			throw error;
+		}
+		const memory = host.usage(unit)?.memory;
+		if (memory === undefined) continue;
+		const held = memory - (memory % Math.ceil(step / 2));
+		let grant = 0;
+		for (let ledger = host.ledger(); ; ledger = host.ledger()) {
+			const mine = ledger.admissions.find((entry) => entry.id === id);
+			if (mine === undefined) throw new Error(`gate lost its admission ${id} from the ledger`);
+			grant = 0;
+			if (memory > share - step / 2) {
+				const promised = ledger.admissions
+					.filter((entry) => entry !== mine && !entry.queued && host.running(entry))
+					.reduce((sum, entry) => sum + unused(entry), 0);
+				const room = host.memory() - promised;
+				const wanted = Math.max(step, Math.floor(share / 4));
+				grant = room >= wanted ? wanted : room >= step ? step : 0;
+			}
+			if (grant === 0 && mine.held === held) break;
+			const updated = { ...mine, memory: share + grant, held };
+			if (
+				host.publish(
+					ledger,
+					ledger.admissions.map((entry) => (entry === mine ? updated : entry)),
+				)
+			)
+				break;
+		}
+		if (grant > 0) {
+			// Recorded first, so no other caller counts this memory as free while the scope takes it.
+			share += grant;
+			host.cap(unit, bounds(share, step));
+			slowed = false;
+		} else if (memory >= bounds(share, step).high) {
+			if (!slowed) throttled?.(share);
+			slowed = true;
+		} else slowed = false;
 	}
 }
 
@@ -657,20 +799,27 @@ export const inside: Owner = plain(true);
  * owner's kill stops the gate's scope too, and the gate forwards that owner's signals to it.
  */
 const background =
-	(unit: string, enclosing: string | null): Owner =>
+	(unit: string, enclosing: string | null, memory?: Ceiling): Owner =>
 	(command, env, cancel) =>
 		systemdScopes.run(unit, process.cwd(), command, {
 			env,
 			cancel,
 			within: enclosing,
 			slice: "background.slice",
+			memory,
 		});
 
-/** Run the command in background scope `unit`, a new name, outside any Quest scope (see `background`). */
-export const scope = (unit: string): Owner => background(unit, null);
+/**
+ * Run the command in background scope `unit`, a new name, outside any Quest scope (see
+ * `background`), held to `memory` when given.
+ */
+export const scope = (unit: string, memory?: Ceiling): Owner => background(unit, null, memory);
 
-/** Run the command in background scope `unit`, a new name, bound to the Quest scope `enclosing` (see `background`). */
-export const bound = (unit: string, enclosing: string): Owner => background(unit, enclosing);
+/**
+ * Run the command in background scope `unit`, a new name, bound to the Quest scope `enclosing` (see
+ * `background`), held to `memory` when given.
+ */
+export const bound = (unit: string, enclosing: string, memory?: Ceiling): Owner => background(unit, enclosing, memory);
 
 /**
  * On Windows, run the command under a stub in a kill-on-close Job Object that forbids breakaway
@@ -764,21 +913,37 @@ const TOKEN = 3;
  * call inside a Quest scope runs its command in a background scope bound to it. Linux owns descendants through a systemd scope, and settles for a process group,
  * like macOS, without a systemd user manager. Windows owns them through a Job Object. A systemd
  * scope also lets the gate measure its command's CPU use (see `measure`), so `unit` names it.
+ * Where the user manager can limit memory, the scope starts with a ceiling of `ceiling` bytes, a
+ * fraction of `memory`, one command's, which the gate then raises (see `ration`). A nested call's
+ * command stays in the admitted command's cgroup, under its ceiling; every scope the gate starts
+ * has an admission, and so a ceiling, of its own.
  */
-export function owner(env = process.env, cgroup = "/proc/self/cgroup"): { run: Owner; unit?: string } {
+export function owner(
+	env = process.env,
+	cgroup = "/proc/self/cgroup",
+	memory = hostLimits().memory,
+): { run: Owner; unit?: string; ceiling?: number } {
 	// A Quest scope around this process holds the command too, since it shares the cgroup or an ancestor.
 	const enclosing = process.platform === "linux" ? questScope(cgroup) : undefined;
 	if (env[ADMITTED] === "1") return { run: env[GROUP] === "1" || enclosing ? inside : direct };
 	if (process.platform === "win32") return { run: job };
 	const unit = `quest-gate-${randomUUID()}.scope`;
-	if (enclosing) return { run: bound(unit, enclosing.unit), unit };
+	const held = () => {
+		const ceiling = Math.floor(memory / CEILING_PARTS);
+		return capped() && ceiling > 0 ? { ceiling, limits: bounds(ceiling, ceiling) } : {};
+	};
+	if (enclosing) {
+		const { ceiling, limits } = held();
+		return { run: bound(unit, enclosing.unit, limits), unit, ceiling };
+	}
 	if (process.platform !== "linux") return { run: group };
 	try {
 		systemdScopes.check();
-		return { run: scope(unit), unit };
 	} catch {
 		return { run: group };
 	}
+	const { ceiling, limits } = held();
+	return { run: scope(unit, limits), unit, ceiling };
 }
 
 const notices: Record<Waiting, string> = {
@@ -795,7 +960,8 @@ const notices: Record<Waiting, string> = {
 export async function gate(command: string[], options: { quick?: boolean } = {}): Promise<number> {
 	const cancel = interrupts();
 	try {
-		const { run, unit } = owner();
+		const limits = hostLimits();
+		const { run, unit, ceiling } = owner(process.env, undefined, limits.memory);
 		let admitted: { host: Host; id: string } | undefined;
 		// A nested invocation executes inside the already admitted command.
 		if (process.env[ADMITTED] !== "1") {
@@ -811,7 +977,7 @@ export async function gate(command: string[], options: { quick?: boolean } = {})
 					quick: options.quick,
 				};
 				const host = fileHost(claimDirectory());
-				admitted = { host, id: await admit(hostLimits(), host, cancel.signal, notice, precedence) };
+				admitted = { host, id: await admit({ ...limits, ceiling }, host, cancel.signal, notice, precedence) };
 			} catch (error) {
 				if (cancel.signal.aborted) return cancelled(cancel.signal);
 				throw error;
@@ -819,9 +985,20 @@ export async function gate(command: string[], options: { quick?: boolean } = {})
 		}
 		const stop = new AbortController();
 		// Held as a value until the command ends, so a failure never goes unhandled meanwhile.
+		const { host, id } = admitted ?? {};
+		const throttled = (share: number) =>
+			process.stderr.write(
+				`quest gate: the command is held at its memory ceiling of ${(share / 2 ** 30).toFixed(2)} GiB ` +
+					"until the host has room to raise it\n",
+			);
 		const measuring =
-			admitted !== undefined && unit !== undefined
-				? measure(admitted.host, { id: admitted.id, unit }, stop.signal).then(
+			host !== undefined && id !== undefined && unit !== undefined
+				? Promise.all([
+						measure(host, { id, unit }, stop.signal),
+						ceiling === undefined
+							? undefined
+							: ration(host, { id, unit, step: ceiling }, stop.signal, throttled),
+					]).then(
 						() => undefined,
 						(error: unknown) => ({ error }),
 					)

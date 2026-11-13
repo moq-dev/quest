@@ -20,6 +20,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
 	admit,
 	alive,
+	bounds,
+	ration,
 	COMMAND_MEMORY,
 	claimDirectory,
 	direct,
@@ -43,7 +45,7 @@ import {
 } from "../src/cli/gate";
 import { forwards, foregroundStat, statProcess } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
-import { alive as ownerAlive, questScope } from "../src/cli/supervise";
+import { capped, Exhausted, alive as ownerAlive, questScope } from "../src/cli/supervise";
 import { created, onTerminal, run, signalled, tempDir } from "./fixture";
 
 // Linux reports a /proc read that races a process's exit as ESRCH rather than ENOENT, so fail
@@ -244,7 +246,7 @@ async function measured(busy: (number | undefined)[]) {
 	host.publish(host.ledger(), [{ id: "build", at: 0, ...me }]);
 	let usage: number | undefined;
 	let total = 0;
-	host.usage = () => usage;
+	host.usage = () => (usage === undefined ? undefined : { cpu: usage });
 	const published: string[] = [];
 	const publish = host.publish;
 	host.publish = (base, admissions) => {
@@ -279,6 +281,117 @@ test("a gate records the most CPUs its command kept busy in the last minute", as
 test("a gate records its command's burst before the first sample", async () => {
 	const { published } = await measured([4, ...Array(RECENT_MS / SETTLE_MS).fill(0)]);
 	expect(published).toEqual([`4 at ${SETTLE_MS}`, `0 at ${SETTLE_MS + RECENT_MS}`]);
+});
+
+test("what running commands may still take of their ceilings is not free, however long they have run", async () => {
+	const events: string[] = [];
+	const state = { now: 0, load: 0, memory: 6 * GiB };
+	const host = testHost(tempDir(), state, events);
+	// Two builds admitted long ago hold 1 GiB of the 6 GiB ceilings between them.
+	const builds = ["a", "b"].map((id) => ({ id, at: -10 * RECENT_MS, ...me, memory: 3 * GiB, held: GiB / 2 }));
+	expect(host.publish(host.ledger(), builds)).toBe(true);
+	const sleep = host.sleep;
+	host.sleep = async (ms, signal) => {
+		await sleep(ms, signal);
+		// One of them ends, so its ceiling is free again.
+		host.publish(host.ledger(), [builds[0]]);
+	};
+	const limits = { load: 4, memory: 2 * GiB, ceiling: GiB / 4 };
+	await admit(limits, host, signal, (reason) => events.push(reason));
+	// 6 GiB less the 5 GiB promised leaves no command's memory; less 2.5 GiB does.
+	expect(events).toEqual(["memory", `sleep ${SETTLE_MS}`]);
+	// The new command starts with a ceiling of its own.
+	expect(host.ledger().admissions).toEqual([
+		builds[0],
+		{ id: expect.any(String), at: SETTLE_MS, ...me, memory: GiB / 4 },
+	]);
+	// It is recent, so it still counts as one command's memory, not as its small ceiling alone:
+	// 6 - 2.5 - 0.25 GiB has room for one more only after the spacing.
+	events.length = 0;
+	host.sleep = sleep;
+	await admit(limits, host, signal, (reason) => events.push(reason));
+	expect(events).toEqual([`sleep ${SETTLE_MS}`]);
+});
+
+/**
+ * Run `ration` for a command with a 1 GiB ceiling that grows by as much, over `samples`: what the
+ * command holds and what the host has available at each CEILING_MS. Returns each ceiling the scope
+ * was moved to, each one it was held at, and its admission.
+ */
+async function rationed(samples: { held: number; available: number }[], others: Admission[] = []) {
+	const state = { now: 0, load: 0, memory: Infinity };
+	const host = testHost(tempDir(), state);
+	host.publish(host.ledger(), [{ id: "build", at: 0, ...me, memory: GiB }, ...others]);
+	let held = 0;
+	host.usage = () => ({ cpu: 0, memory: held });
+	const caps: number[] = [];
+	host.cap = (_unit, { high, max }) => {
+		expect(high).toBeLessThan(max);
+		caps.push(max / GiB);
+	};
+	const stop = new AbortController();
+	host.sleep = async () => {
+		const sample = samples.shift();
+		if (sample === undefined) {
+			stop.abort();
+			throw stop.signal.reason;
+		}
+		held = sample.held * GiB;
+		state.memory = sample.available * GiB;
+	};
+	const throttled: number[] = [];
+	await ration(host, { id: "build", unit: "quest-gate-build.scope", step: GiB }, stop.signal, (ceiling) =>
+		throttled.push(ceiling / GiB),
+	);
+	return { caps, throttled, mine: host.ledger().admissions[0] };
+}
+
+test("a gate raises its command's ceiling ahead of what it holds while the host has room", async () => {
+	const { caps, throttled, mine } = await rationed([
+		{ held: 0.25, available: 8 },
+		// Within half a step of the ceiling: one more step.
+		{ held: 0.75, available: 8 },
+		{ held: 1.25, available: 8 },
+		{ held: 1.9, available: 8 },
+		{ held: 2.75, available: 8 },
+		{ held: 3.8, available: 8 },
+		// Past 4 GiB, a quarter of the ceiling is more than a step.
+		{ held: 4.9, available: 8 },
+		// It never shrinks.
+		{ held: 0.5, available: 8 },
+	]);
+	expect(caps).toEqual([2, 3, 4, 5, 6.25]);
+	expect(throttled).toEqual([]);
+	expect(mine).toEqual({ id: "build", at: 0, ...me, memory: 6.25 * GiB, held: GiB / 2 });
+});
+
+test("with no room, a ceiling stays until other commands free memory", async () => {
+	// Another command may still take 3 GiB of its ceiling, which is not this one's to grow into.
+	const other = { id: "other", at: 0, ...me, memory: 4 * GiB, held: GiB };
+	const { caps, throttled, mine } = await rationed(
+		[
+			{ held: 0.75, available: 3.5 },
+			// Held where the kernel slows it: reported once, not at every sample.
+			{ held: 0.95, available: 3.5 },
+			{ held: 0.96, available: 3.5 },
+			// A step now fits, though a queued caller's place and a finished command hold nothing.
+			{ held: 0.96, available: 4 },
+			{ held: 1.99, available: 3.9 },
+		],
+		[
+			other,
+			{ id: "queued", at: 0, ...me, queued: true },
+			{ id: "gone", at: 0, pid: 2 ** 22 + 1, memory: 64 * GiB },
+		],
+	);
+	expect(caps).toEqual([2]);
+	expect(throttled).toEqual([1, 2]);
+	expect(mine).toMatchObject({ memory: 2 * GiB, held: 1.5 * GiB });
+});
+
+test("a ceiling slows its command just below where it is killed", () => {
+	expect(bounds(GiB, GiB)).toEqual({ high: GiB - GiB / 16, max: GiB });
+	expect(bounds(8 * GiB, GiB)).toEqual({ high: 8 * GiB - GiB / 4, max: 8 * GiB });
 });
 
 test("a priority caller waits for memory, never for load, even while a gated command runs", async () => {
@@ -1095,11 +1208,85 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 		expect(host.usage(unit)).toBeUndefined();
 		const spin = ["/bin/sh", "-c", `while [ ! -e ${quote(done)} ]; do :; done`];
 		const result = scope(unit)(spin, process.env, cancellation().cancel);
-		await until(() => (host.usage(unit) ?? 0) > 0);
+		await until(() => (host.usage(unit)?.cpu ?? 0) > 0);
 		writeFileSync(done, "");
 		expect(await result).toBe(0);
 		await until(() => host.usage(unit) === undefined);
 	});
+
+	const MiB = 2 ** 20;
+	/** Hold `megabytes` of memory the kernel cannot reclaim, a megabyte at a time, then `then`. */
+	const hog = (megabytes: number, then: string) => [
+		process.execPath,
+		"-e",
+		`const held = []; for (let i = 0; i < ${megabytes}; i++) held.push(Buffer.alloc(${MiB}, 1)); ${then}`,
+	];
+
+	test.runIf(capped())("holds its command to a memory ceiling the gate can raise", async () => {
+		const host = fileHost(tempDir());
+		const unit = `quest-gate-${randomUUID()}.scope`;
+		const dir = tempDir();
+		const report = join(dir, "limits");
+		const raised = join(dir, "raised");
+		const wait = `until [ -e ${quote(raised)} ]; do sleep 0.05; done`;
+		const limits = `cd /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup) && cat memory.high memory.max memory.swap.max memory.oom.group`;
+		const result = scope(unit, { high: 192 * MiB, max: 256 * MiB })(
+			["/bin/sh", "-c", `${limits} > ${quote(report)}; ${wait}; ${limits} >> ${quote(report)}`],
+			process.env,
+			cancellation().cancel,
+		);
+		await until(() => existsSync(report) && readFileSync(report, "utf8").split("\n").length > 4);
+		expect(host.usage(unit)?.memory).toBeLessThan(192 * MiB);
+		host.cap(unit, { high: 448 * MiB, max: 512 * MiB });
+		writeFileSync(raised, "");
+		expect(await result).toBe(0);
+		expect(readFileSync(report, "utf8").trim().split("\n").map(Number)).toEqual([
+			...[192 * MiB, 256 * MiB, 0, 1],
+			...[448 * MiB, 512 * MiB, 0, 1],
+		]);
+		// A scope that already ended has no ceiling to move.
+		host.cap(unit, { high: 448 * MiB, max: 512 * MiB });
+	});
+
+	test.runIf(capped())(
+		"a command that fills its ceiling is killed whole, and nothing outside its scope",
+		async () => {
+			const dir = tempDir();
+			const pid = join(dir, "pid");
+			const ready = join(dir, "ready");
+			// A neighbour in a scope of its own holds memory beside it, and a wrapper waits on the hog.
+			const beside = cancellation();
+			const neighbour = scoped(
+				hog(64, `require("node:fs").writeFileSync(${quote(ready)}, ""); setInterval(() => {}, 1000)`),
+				process.env,
+				beside.cancel,
+			);
+			const stop = cancellation();
+			await until(() => existsSync(ready));
+			const run = scope(`quest-gate-${randomUUID()}.scope`, { high: 255 * MiB, max: 256 * MiB })(
+				[
+					"/bin/sh",
+					"-c",
+					`sleep 1000 & echo $! > ${quote(pid)}; ${hog(1024, "").map(quote).join(" ")}; exit 0`,
+				],
+				process.env,
+				stop.cancel,
+			);
+			await expect(run).rejects.toThrow(
+				/ran out of memory: the kernel killed its command at a ceiling of 0\.25 GiB/,
+			);
+			await expect(run).rejects.toBeInstanceOf(Exhausted);
+			// The wrapper and its other child died with the hog, and the scope beside it still runs.
+			await until(() => stopped(Number(readFileSync(pid, "utf8"))));
+			const state = await Promise.race([
+				neighbour,
+				new Promise((resolve) => setTimeout(resolve, 100, "running")),
+			]);
+			expect(state).toBe("running");
+			beside.kill.abort();
+			await neighbour;
+		},
+	);
 });
 
 /**

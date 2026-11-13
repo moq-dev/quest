@@ -73,6 +73,17 @@ export interface RunOptions {
 	within?: string | null;
 	/** The slice the scope runs in; the user manager's default, `app.slice`, when omitted. */
 	slice?: string;
+	/** The memory ceiling the scope starts with; none when omitted. */
+	memory?: Ceiling;
+}
+
+/**
+ * The most memory a scope's processes may hold together, in bytes, with no swap beyond it. Above
+ * `high` the kernel slows them and reclaims their file cache; at `max` it kills them all.
+ */
+export interface Ceiling {
+	high: number;
+	max: number;
 }
 
 export interface Scopes {
@@ -87,13 +98,20 @@ export interface Scopes {
 	 * cancellation signalled the whole scope, once the scope empties or the run is killed, so each
 	 * process can finish its own cleanup. Resolves with the command's exit status, or the cancelled
 	 * status once asked to stop, only once the scope is empty. Rejects with `Retained` when that
-	 * cannot be confirmed, and otherwise only when the command never started.
+	 * cannot be confirmed, with `Exhausted` when the kernel killed the scope at its memory ceiling,
+	 * and otherwise only when the command never started.
 	 */
 	run(unit: string, cwd: string, command: string[], options?: RunOptions): Promise<number>;
 }
 
 /** The command may have started and its scope may still hold processes, so its run stays recorded. */
 export class Retained extends Error {}
+
+/** The kernel killed every process in the scope, since they held its whole memory ceiling. */
+export class Exhausted extends Error {}
+
+/** The systemd properties that hold a scope to `memory`. */
+const ceiling = ({ high, max }: Ceiling) => [`MemoryHigh=${high}`, `MemoryMax=${max}`];
 
 export const UNSUPPORTED =
 	"quest worktree run needs Linux 5.14 or later with a systemd user manager (systemd 254 or later) and unified cgroup v2";
@@ -252,6 +270,33 @@ async function stopBound(unit: string): Promise<void> {
 	for (const bound of boundTo(unit)) await systemdScopes.stop(bound);
 }
 
+/** Whether the user manager may limit a scope's memory: the memory controller is delegated to it. */
+export function capped(): boolean {
+	try {
+		const manager = execFileSync("systemctl", ["--user", "show", "--property=ControlGroup", "--value"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+		return readFileSync(join("/sys/fs/cgroup", manager, "cgroup.controllers"), "utf8")
+			.trim()
+			.split(" ")
+			.includes("memory");
+	} catch {
+		return false;
+	}
+}
+
+/** Move a running scope's memory ceiling. A scope that already ended has none to move. */
+export function limit(unit: string, memory: Ceiling): void {
+	try {
+		execFileSync("systemctl", ["--user", "set-property", "--runtime", unit, ...ceiling(memory)], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	} catch (error) {
+		if (scopeGroup(unit) !== undefined) throw error;
+	}
+}
+
 export const systemdScopes: Scopes = {
 	check() {
 		if (process.platform !== "linux" || !killable()) throw new Error(UNSUPPORTED);
@@ -289,6 +334,13 @@ export const systemdScopes: Scopes = {
 		// Once the enclosing owner kills everything it holds, systemd kills this scope too.
 		const enclosing = options.within === undefined ? questScope()?.unit : options.within;
 		const bound = enclosing ? [`--property=BindsTo=${enclosing}`, "--property=KillSignal=SIGKILL"] : [];
+		// Swap would let the scope hold more than its ceiling, and one process killed there would
+		// leave the rest of the command running without it.
+		const capped = options.memory
+			? [...ceiling(options.memory), "MemorySwapMax=0", "OOMPolicy=kill"].map(
+					(property) => `--property=${property}`,
+				)
+			: [];
 		return contain(
 			[
 				"systemd-run",
@@ -298,6 +350,7 @@ export const systemdScopes: Scopes = {
 				"--collect",
 				`--unit=${unit}`,
 				...bound,
+				...capped,
 				...(options.slice ? [`--slice=${options.slice}`] : []),
 				"--expand-environment=no",
 				"--",
@@ -367,6 +420,20 @@ function contain(
 		let admitted = false;
 		let interrupted = 0;
 		let failure: Error | undefined;
+		// The scope's ceiling in bytes, once the kernel killed a process there for lack of memory.
+		let exhausted: string | undefined;
+		let events: ReturnType<typeof watch> | undefined;
+		const starved = () => {
+			if (exhausted !== undefined) return;
+			try {
+				if (/^oom_kill [1-9]/m.test(readFileSync(join(group!, "memory.events"), "utf8")))
+					exhausted = readFileSync(join(group!, "memory.max"), "utf8").trim();
+			} catch (error) {
+				// The scope ended, and systemd removed its cgroup.
+				if (!["ENOENT", "ENODEV"].includes((error as NodeJS.ErrnoException).code ?? ""))
+					failure = error as Error;
+			}
+		};
 		// Set once every process in the cgroup was asked to stop; aborted once they no longer get time to.
 		let signalled = false;
 		const drain = new AbortController();
@@ -418,6 +485,12 @@ function contain(
 				return;
 			}
 			group = join("/sys/fs/cgroup", path);
+			if (options.memory) {
+				// The kernel notifies memory.events as it kills, while the cgroup still holds the dying
+				// processes; systemd removes the cgroup, and the count with it, once they are gone.
+				events = watch(join(group, "memory.events"), starved);
+				events.on("error", () => {});
+			}
 			if (interrupted) return;
 			admitted = true;
 			admission.end("admitted\n");
@@ -435,6 +508,8 @@ function contain(
 			try {
 				// Descendants that outlive the command are orphans of this run: stop them.
 				if (group) {
+					if (events) starved();
+					events?.close();
 					try {
 						// Every process got the signal, so let each finish its own cleanup, even one that
 						// outlives the wrappers that exited first, until a second signal kills them.
@@ -449,6 +524,11 @@ function contain(
 					}
 				}
 				if (failure) throw failure;
+				if (exhausted !== undefined && !interrupted)
+					throw new Exhausted(
+						`${describe.name} ran out of memory: the kernel killed its command at a ceiling of ` +
+							`${(Number(exhausted) / 2 ** 30).toFixed(2)} GiB, which its gate raises only while the host has free memory`,
+					);
 				if (!admitted && !interrupted)
 					throw new Error(
 						`${describe.unsupported}: ${describe.launcher} exited with ${code ?? signal} before the command started`,
