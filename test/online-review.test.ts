@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 
-import type { GitHub, Repository } from "../src/cli/github";
-import { type Activity, bodyFindings, classify, onlineReviews, readActivity } from "../src/cli/online-review";
-import { readSignals } from "../src/cli/signals";
+import type { GitHub, Repository } from "../src/github/client";
+import { type Activity, bodyFindings, classify, onlineReviews, readActivity } from "../src/github/online-review";
+import { readSignals } from "../src/github/signals";
 
 const HEAD = "h".repeat(40);
 const bot = (login: string) => ({ __typename: "Bot", login });

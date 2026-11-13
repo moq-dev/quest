@@ -21,7 +21,7 @@ import {
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
+import { GitHub, type GitHubDependencies, type Repository, object, string } from "../github/client";
 import {
 	finishFallback,
 	forgetHeads,
@@ -45,8 +45,8 @@ import {
 	type Overlap,
 	type RemoteRead,
 	type Plan,
-	type Reason,
 } from "./land";
+import { type Reason } from "../github/land";
 
 export interface ServeOptions {
 	base?: string;

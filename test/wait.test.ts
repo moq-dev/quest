@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { main } from "../src/cli/main";
-import { type GitHubDependencies, GitHubInputError, pullRequest } from "../src/cli/github";
+import { GitHubInputError, pullRequest } from "../src/cli/github";
+import { type GitHubDependencies } from "../src/github/client";
 import { waitForActivity, WaitTimeout } from "../src/cli/wait";
 
 const A = "a".repeat(40);

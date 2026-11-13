@@ -1,0 +1,10 @@
+{
+	// Like the core, these readers run in Workers: no ambient Node types here, so a stray
+	// `process` or `node:` import fails to type-check. The web worker library supplies `fetch`.
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"lib": ["ES2022", "WebWorker"],
+		"types": []
+	},
+	"include": ["."]
+}

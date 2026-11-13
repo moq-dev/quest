@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
 
-import type { GitHubDependencies } from "../src/cli/github";
+import type { GitHubDependencies } from "../src/github/client";
 import { main } from "../src/cli/main";
-import { pullRequestStatus, statusLines } from "../src/cli/status";
+import { statusLines } from "../src/cli/status";
+import { pullRequestStatus } from "../src/github/status";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);

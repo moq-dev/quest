@@ -1,10 +1,12 @@
 // `quest review` rewrites the `## Review` section of its branch's open PR after each round, so the head
 // it reviewed counts without an agent copying the round into the body by hand.
 import { reviewSection } from "../core";
-import { recorded } from "../github/models";
-import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
+import { recorded } from "./models-record";
+import { type ClaimDependencies, upstream } from "./claims";
+import { repositoryPath } from "../github/client";
 import { git } from "./git";
-import { requireRemote, string } from "./github";
+import { requireRemote } from "./github";
+import { string } from "../github/client";
 import { type PullModels, type Round, SEVERITIES, type Tally, located, parseBase, sameSeat } from "./review";
 
 const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex" };

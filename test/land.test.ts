@@ -46,20 +46,19 @@ import { apply, parseResolution, pushCommand, resolutionSection } from "../src/c
 import fixerPrompt from "../assets/land-fix.md";
 import { COMMENT_LIMIT, FLAKY_INPUT, fix, parseBaseFix, parseFixResult } from "../src/cli/land-fix";
 import { resolvePreparedQueue, prepareHead, finishFallback } from "../src/cli/land-head";
-import { GitHub, type GitHubDependencies } from "../src/cli/github";
+import { GitHub, type GitHubDependencies } from "../src/github/client";
 import {
 	type Plan,
 	type Target,
 	commandEnvironment,
-	EJECTED,
 	UPHELD,
 	UPHELD_CLASSIC,
 	build,
 	mergeBase,
-	pin,
 	readRemote,
 	resolveQueue,
 } from "../src/cli/land";
+import { EJECTED, pin } from "../src/github/land";
 import { type OwnQueue, ownPass, QUEUE_CHECK, queueBranch } from "../src/cli/land-queue";
 import { ownQueue, readRemoval, watchPermissions } from "../src/cli/land-watch";
 import type { FixContext } from "../src/cli/land-watch-fix";

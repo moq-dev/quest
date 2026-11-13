@@ -1,46 +1,18 @@
-// Who holds a quest: its claim branch upstream, unless that branch is a merged
-// PR's head, or an open PR from a branch of that name in any repository.
-// Commands that must not disturb held work look here first, and `quest start`
-// records a claim the same way, judging readiness by the upstream tree.
-import { handedBack, landed } from "../core";
+// Finding where a checkout's claims live, through its git remotes, and reading them there as
+// `src/github/claims.ts` decides them. Commands that must not disturb held work look here first,
+// and `quest start` records a claim the same way, judging readiness by the upstream tree.
 import { git } from "./git";
+import { type Remote, readRemote, remoteRepository, requireRemote } from "./github";
+import { type GitHubDependencies, type Repository, GitHub, object, repositoryPath, string } from "../github/client";
 import {
-	type GitHubDependencies,
-	type Repository,
-	type Remote,
-	GitHub,
-	object,
-	readRemote,
-	remoteRepository,
-	requireRemote,
-	string,
-} from "./github";
+	type Claim,
+	type Holdings,
+	type OpenPull,
+	held as githubHeld,
+	openPullRequests,
+	questBranches,
+} from "../github/claims";
 import { type Snapshot, snapshot } from "./tree";
-
-/** An open PR, from any head repository, as the claim checks read it. */
-export interface OpenPull {
-	number: number;
-	url: string;
-	branch: string;
-	/** The head repository as `owner/repo`, or `null` once a fork is deleted. */
-	head: string | null;
-	draft: boolean;
-	/** Epoch milliseconds. The earliest open PR on a branch holds the claim. */
-	created: number;
-	/** Epoch milliseconds of the last push, comment, or edit. */
-	updated: number;
-	/** Its body has a `## Waiting` section, so it waits on the maintainer. */
-	handedBack: boolean;
-	body: string;
-}
-
-/** A held quest branch, and the open PR from it if there is one. */
-export interface Claim {
-	branch: string;
-	/** The PR holding the claim: the earliest open one. */
-	url: string | null;
-	pull: OpenPull | null;
-}
 
 export interface ClaimDependencies {
 	/** Called only when the remote is on GitHub, so other forges need no token. */
@@ -141,11 +113,6 @@ function same(a: Repository, b: Repository): boolean {
 	return a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
 }
 
-/** The REST path of a repository. */
-export function repositoryPath(repository: Repository): string {
-	return `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
-}
-
 /** The `quest/*` branches on `remote` (a name or URL), with their tips. Plain git, so it works with any forge. */
 export function remoteBranches(root: string, remote: string): Map<string, string> {
 	return questBranches(listRemote(root, remote, ["refs/heads/quest/*"]));
@@ -160,39 +127,6 @@ function listRemote(root: string, remote: string, patterns: string[]): Map<strin
 		refs.set(ref, sha);
 	}
 	return refs;
-}
-
-/** The `quest/*` branches among `refs`, by branch name. */
-function questBranches(refs: Map<string, string>): Map<string, string> {
-	const branches = new Map<string, string>();
-	for (const [ref, sha] of refs)
-		if (ref.startsWith("refs/heads/quest/")) branches.set(ref.slice("refs/heads/".length), sha);
-	return branches;
-}
-
-/** Every open PR in `repository`, from any head repository. */
-export async function openPullRequests(github: GitHub, repository: Repository): Promise<OpenPull[]> {
-	const rows = await github.all(`${repositoryPath(repository)}/pulls?state=open&per_page=100`);
-	return rows.map((row) => {
-		const head = object(row.head);
-		const repo = head.repo === null || head.repo === undefined ? null : object(head.repo);
-		return {
-			number: Number(row.number),
-			url: string(row.html_url),
-			branch: string(head.ref),
-			head: repo === null ? null : string(repo.full_name),
-			draft: row.draft === true,
-			created: Date.parse(string(row.created_at)),
-			updated: Date.parse(string(row.updated_at)),
-			handedBack: typeof row.body === "string" && handedBack(row.body),
-			body: typeof row.body === "string" ? row.body : "",
-		};
-	});
-}
-
-/** The open PRs from `branch`, earliest first: the first one holds the claim. */
-export function pullsFrom(pulls: OpenPull[], branch: string): OpenPull[] {
-	return pulls.filter((pull) => pull.branch === branch).sort((a, b) => a.created - b.created || a.number - b.number);
 }
 
 /**
@@ -226,6 +160,36 @@ export async function reach(root: string, name: string, deps: ClaimDependencies)
 }
 
 /**
+ * Which of `branches` someone holds, as {@link githubHeld} decides it on GitHub. `tips` are the
+ * upstream's `quest/*` branches, when already read; the fork's are read through git too. Off GitHub,
+ * every branch pushed upstream holds its quest.
+ */
+export async function held(
+	root: string,
+	up: Upstream,
+	branches: string[],
+	tips: Map<string, string> = remoteBranches(root, up.git),
+): Promise<Holdings> {
+	if (up.github === null)
+		return {
+			claims: [...new Set(branches)]
+				.sort()
+				.filter((branch) => tips.has(branch))
+				.map((branch) => ({ branch, url: null, pull: null })),
+			landed: new Map(),
+		};
+	const { client, repository, head } = up.github;
+	return githubHeld(
+		client,
+		{
+			upstream: { repository, tips },
+			...(same(head, repository) ? {} : { fork: { repository: head, tips: remoteBranches(root, up.push) } }),
+		},
+		branches,
+	);
+}
+
+/**
  * The open drafts in the upstream of the remote `name`, from any head
  * repository. Reading them needs GitHub, so without the remote, off GitHub,
  * or when GitHub cannot be reached or refuses, it warns that they were
@@ -249,89 +213,6 @@ export async function openDrafts(root: string, name: string, deps: ClaimDependen
 		deps.warn(`draft PRs were skipped: ${error instanceof Error ? error.message : String(error)}`);
 		return [];
 	}
-}
-
-/** Which branches someone holds, and which landed branches a new claim replaces. */
-export interface Holdings {
-	/** Sorted by branch. */
-	claims: Claim[];
-	/**
-	 * Branches where the remote pushes whose tip is the head of a merged PR,
-	 * by that tip. Their work landed, so they hold nothing and a claim may replace them.
-	 */
-	landed: Map<string, string>;
-}
-
-/**
- * Which of `branches` someone holds. `tips` are the upstream's `quest/*`
- * branches, when already read. A fork's own branches and PRs count too,
- * so a claim pushed there is seen before its PR opens. On GitHub, a branch
- * whose tip is a merged PR's head holds nothing: its work landed. A closed,
- * unmerged PR's branch still holds its quest, since that work may be wanted back.
- */
-export async function held(
-	root: string,
-	up: Upstream,
-	branches: string[],
-	tips: Map<string, string> = remoteBranches(root, up.git),
-): Promise<Holdings> {
-	// Where claim branches live: upstream, then the fork the remote pushes to.
-	const sources: { repository: Repository | null; tips: Map<string, string> }[] = [
-		{ repository: up.github?.repository ?? null, tips },
-	];
-	const pulls: OpenPull[] = [];
-	if (up.github) {
-		pulls.push(...(await openPullRequests(up.github.client, up.github.repository)));
-		const { head, repository } = up.github;
-		if (head.owner !== repository.owner || head.repo !== repository.repo) {
-			sources.push({ repository: head, tips: remoteBranches(root, up.push) });
-			pulls.push(...(await openPullRequests(up.github.client, head)));
-		}
-	}
-	const pushTo = sources[sources.length - 1];
-	const landed = new Map<string, string>();
-	const holds = async (branch: string): Promise<Claim | null> => {
-		const pull = pullsFrom(pulls, branch)[0] ?? null;
-		if (pull !== null) return { branch, url: pull.url, pull };
-		let holding = false;
-		for (const source of sources) {
-			const tip = source.tips.get(branch);
-			if (tip === undefined) continue;
-			if (
-				up.github &&
-				source.repository &&
-				(await mergedPull(up.github.client, up.github.repository, source.repository, branch, tip)) !== null
-			) {
-				if (source === pushTo) landed.set(branch, tip);
-			} else {
-				holding = true;
-			}
-		}
-		return holding ? { branch, url: null, pull: null } : null;
-	};
-	const found = await Promise.all([...new Set(branches)].sort().map(holds));
-	return { claims: found.filter((claim): claim is Claim => claim !== null), landed };
-}
-
-/** The URL of the PR from `head`'s `branch` that merged into `repository` with `tip` as its head, or `null`. */
-export async function mergedPull(
-	github: GitHub,
-	repository: Repository,
-	head: Repository,
-	branch: string,
-	tip: string,
-): Promise<string | null> {
-	const query = new URLSearchParams({ state: "closed", head: `${head.owner}:${branch}`, per_page: "100" });
-	const rows = await github.all(`${repositoryPath(repository)}/pulls?${query}`);
-	const pull = landed(
-		tip,
-		rows.map((row) => ({
-			head: string(object(row.head).sha),
-			merged: typeof row.merged_at === "string",
-			url: string(row.html_url),
-		})),
-	);
-	return pull?.url ?? null;
 }
 
 /** Where a claim lands: the remote, its upstream, and the upstream default branch's tip and quest tree. */
