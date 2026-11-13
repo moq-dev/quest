@@ -36,12 +36,14 @@ afterEach(async () => {
 if (process.platform === "linux")
 	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as const)
 		process.once(signal, () => {
-			try {
-				for (const unit of live) {
+			for (const unit of live) {
+				// One scope that cannot be killed must not spare the rest, nor keep the run alive.
+				try {
 					const group = supervise!.scopeGroup(unit);
 					if (group) supervise!.kill(group);
+				} catch (error) {
+					process.stderr.write(`cannot kill test scope ${unit}: ${error}\n`);
 				}
-			} finally {
-				process.kill(process.pid, signal);
 			}
+			process.kill(process.pid, signal);
 		});
