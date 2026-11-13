@@ -166,7 +166,7 @@ export interface Waiting {
 	enabledAt: string;
 	/** The pinned head it waits on. */
 	head: string;
-	/** The required checks, and required workflows by {@link workflowKey}, still pending on its head. */
+	/** The required checks, and required workflows as `owner/name:path`, still pending on its head. */
 	pending: string[];
 	/** It still needs an approving review its base requires, which an automated reviewer may give. */
 	approval: boolean;
