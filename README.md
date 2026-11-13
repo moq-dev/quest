@@ -1303,8 +1303,8 @@ command waits its turn for as long as the host stays busy.
 A process that starts an agent, such as a job runner or a CPU audit, can read
 back what the agent's gated commands waited for by setting `QUEST_GATE_RECORD`
 in the agent's environment to an absolute path. Every outermost `quest gate`
-run, including those the agent's parallel shells and subagents start, then
-appends one JSON line to that file, however the run ends:
+run on Linux or macOS, including those the agent's parallel shells and
+subagents start, then appends one JSON line to that file, however the run ends:
 
 ```json
 {"command":["cargo","test"],"directory":"/home/me/src/app","started":"2026-11-12T19:40:01.120Z","admitted":"2026-11-12T19:40:31.452Z","unit":"quest-gate-0d6c3f9e-5a51-4c1b-9d0e-2f4b8a7c6e10.scope","exit":0,"cancelled":false,"error":null}
@@ -1313,7 +1313,7 @@ appends one JSON line to that file, however the run ends:
 - `started` and `admitted` give the wait. A run cancelled before admission has
   a null `admitted`.
 - `unit` is the command's systemd user scope, null where the gate owns it
-  another way, such as on macOS or Windows. Once the scope ends, systemd logs
+  another way, such as on macOS. Once the scope ends, systemd logs
   `<unit>: Consumed 1.386s CPU time over 1.357s wall clock time, 8.1M memory
   peak.` to the user journal (`journalctl --user -u <unit>`), but only when the
   scope used a notable amount, such as a second of CPU; a run with no such line
@@ -1329,6 +1329,7 @@ An unset or empty variable writes nothing, a relative path or a symlink is
 refused, and a file the gate cannot open fails it before the command runs. A
 new file is readable only by its user. A line it cannot write fails the gate
 too, except that a cancelled run exits as it would have without the record.
+Windows refuses the variable, since it cannot refuse a symlink atomically.
 The agent's own processes write the file, so a record is only as trustworthy
 as the agent.
 

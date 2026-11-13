@@ -810,6 +810,8 @@ const RECORD = "QUEST_GATE_RECORD";
 function recordFile(env: NodeJS.ProcessEnv): { path: string; fd: number } | undefined {
 	const path = env[RECORD];
 	if (!path) return undefined;
+	// Windows has no O_NOFOLLOW, and no reader there yet.
+	if (process.platform === "win32") throw new Error(`gate cannot record its run on Windows (${RECORD})`);
 	// The command's shells change directory, so a relative path would scatter one reader's lines.
 	if (!isAbsolute(path)) throw new Error(`${RECORD} must be an absolute path: ${path}`);
 	try {

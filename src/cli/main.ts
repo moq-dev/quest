@@ -149,10 +149,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"descendant that leaves the group or session escapes. Windows owns every descendant through a " +
 				"kill-on-close Job Object. Exits with the command's status, or 128 plus the signal's number once " +
 				"cancelled.\n\n" +
-				"With QUEST_GATE_RECORD naming an absolute path, an outermost gate appends one JSON line per run to " +
-				"that file, however the run ends: its command, directory, when it started and was admitted, its " +
-				"systemd scope, whose journal holds its CPU time and peak memory, and its exit status. A file it " +
-				"cannot write fails the gate.",
+				"With QUEST_GATE_RECORD naming an absolute path, an outermost gate on Linux or macOS appends one JSON " +
+				"line per run to that file, however the run ends: its command, directory, when it started and was " +
+				"admitted, its systemd scope, whose journal holds its CPU time and peak memory, and its exit status. " +
+				"A file it cannot write fails the gate.",
 		)
 		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
 		.argument("<command>", "Executable to run")
