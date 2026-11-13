@@ -15,7 +15,7 @@ import { CHECK_LOG } from "../src/cli/land-checks";
 import { COLLECTION_ATTEMPTS, REQUEUE_LIMIT, carriedBy, history } from "../src/cli/land-fixer";
 import { privateRepository } from "../src/cli/land-serve";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
-import { type FixContext, HELD } from "../src/cli/land-watch-fix";
+import { endPick, type FixContext, HELD } from "../src/cli/land-watch-fix";
 import {
 	type FlakyTest,
 	flakyName,
@@ -1381,6 +1381,10 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		// The handed-back fix still carries the dropped head, should anyone pick it again unanswered.
 		const pushed = git(repo.origin, "rev-parse", "refs/heads/branch-5");
 		expect(pushed).not.toBe(head);
+		expect(carriedBy(state, 5, pushed)?.heads).toEqual([head]);
+		// Ending the pick, as a hold or a person's removal does, leaves it too.
+		endPick(state, 5, history(state, 5)!.pick);
+		expect(history(state, 5)).toBeUndefined();
 		expect(carriedBy(state, 5, pushed)?.heads).toEqual([head]);
 	});
 

@@ -36,6 +36,7 @@ import {
 	history,
 	historyPath,
 	redactTokens,
+	saveRound,
 	type Round,
 	stopReason,
 	stopRule,
@@ -3332,6 +3333,23 @@ fi`);
 		// Collateral is never a round of its pick, however often it shares a broken batch.
 		expect(history(fixture.state.state, 2)!.rounds).toEqual([]);
 	});
+	test("a fix of collateral, which records no round, still carries the head it replaced", async () => {
+		const fixture = await fixerFixture(
+			`git checkout -q pr-2
+printf 'tidier\\n' > other.txt
+git add other.txt
+git commit -qm 'tidy'
+printf '[{"number":1,"action":"handback","diagnosis":"breaks the check","recommendation":"run quest-iterate","blame":true,"log":[1,1]},{"number":2,"action":"fixed","head":"%s","reason":"tidy"}]' "$(git rev-parse HEAD)" > quest-land-result.json`,
+			{ collateral: true },
+		);
+		await fixture.finished;
+		const before = fixture.collateral!.head!;
+		expect(await fixture.collect()).toEqual(["handback 1", "requeued 2"]);
+		const after = fixture.collateral!.head!;
+		expect(after).not.toBe(before);
+		expect(history(fixture.state.state, 2)!.rounds).toEqual([]);
+		expect(carriedBy(fixture.state.state, 2, after)?.heads).toEqual([before]);
+	});
 	test("a PR merged while the fixer ran is left alone, and the rest of its batch is still collected", async () => {
 		const fixture = await fixerFixture(
 			`printf '[{"number":1,"action":"handback","diagnosis":"breaks the check","recommendation":"run quest-iterate","blame":true,"log":[1,1]},{"number":2,"action":"requeue","reason":"collateral: shared the batch with 1"}]' > quest-land-result.json`,
@@ -4484,27 +4502,37 @@ describe("land fixer stop rules", () => {
 
 test("a fixed head carries the heads its pick's rounds replaced", () => {
 	const state = tempDir();
-	const save = (record: object) => writeFileSync(historyPath(state, 5), JSON.stringify(record));
-	const round = (before: string, after?: string): Round => ({
-		job: before,
+	const round = (job: string, before: string, after?: string, pin?: string): Round => ({
+		job,
 		outcome: after ? "fixed" : "handback",
 		before,
 		failure: "f",
 		...(after ? { after } : {}),
+		...(pin ? { pin } : {}),
 	});
 	const pick = "2026-11-10T17:00:00Z";
 	expect(carriedBy(state, 5, "b")).toBeUndefined();
-	save({ pick, rounds: [round("a", "b"), round("b", "c")] });
-	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["a", "b"], picked: pick });
-	expect(carriedBy(state, 5, "b")).toEqual({ heads: ["a"], picked: pick });
+	let record = saveRound(state, 5, { pick, rounds: [] }, round("1", "m", "b", "a"));
+	record = saveRound(state, 5, record, round("2", "b", "c"));
+	expect(carriedBy(state, 5, "b")).toEqual({ heads: ["m", "a"], picked: pick });
+	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["m", "a", "b"], picked: pick });
 	// A head no round put back, such as a writer's push, carries nothing.
 	expect(carriedBy(state, 5, "d")).toBeUndefined();
-	// A handback leaves it, and a gate merge's pin is carried with it.
-	save({ pick, rounds: [{ ...round("m", "b"), pin: "a" }, round("b")] });
-	expect(carriedBy(state, 5, "b")).toEqual({ heads: ["m", "a"], picked: pick });
-	// A pick that is not a time cannot bound decisions.
-	save({ pick: "f".repeat(40), rounds: [round("a", "b")] });
-	expect(carriedBy(state, 5, "b")).toBeUndefined();
+	// A handback that drops `after`, even re-saving the round that set it, and the history's end leave it.
+	record = saveRound(state, 5, record, round("2", "b"));
+	rmSync(historyPath(state, 5));
+	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["m", "a", "b"], picked: pick });
+	// A later pick of the carried head keeps the earlier pick's time and heads, and never rewrites the record.
+	const later = "2026-11-11T17:00:00Z";
+	record = saveRound(state, 5, { pick: later, rounds: [] }, round("3", "c", "e"));
+	expect(carriedBy(state, 5, "e")).toEqual({ heads: ["m", "a", "b", "c"], picked: pick });
+	saveRound(state, 5, { pick: later, rounds: [] }, round("4", "x", "c"));
+	expect(carriedBy(state, 5, "c")).toEqual({ heads: ["m", "a", "b"], picked: pick });
+	// An unchanged requeue carries nothing new, and a pick that is not a time cannot bound decisions.
+	saveRound(state, 5, { pick, rounds: [] }, round("5", "f", "f"));
+	saveRound(state, 5, { pick: "f".repeat(40), rounds: [] }, round("6", "g", "h"));
+	expect(carriedBy(state, 5, "f")).toBeUndefined();
+	expect(carriedBy(state, 5, "h")).toBeUndefined();
 });
 
 /** The test commit the own queue pushed for PR `number`, if its branch exists. */

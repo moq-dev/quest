@@ -209,22 +209,32 @@ export function history(state: string, number: number): History | undefined {
 	const record = JSON.parse(readFileSync(path, "utf8")) as Omit<History, "rounds"> & { rounds?: Round[] };
 	return { ...record, rounds: record.rounds ?? [] };
 }
+const carryPath = (state: string, number: number, head: string) => join(state, `carry-${number}-${head}.json`);
 /**
- * What the fixer's `head` of PR `number` carries from the pick it replaces: the heads its rounds replaced up to the
- * round that put `head` back in the queue, with the pins the gate's base merges stood on, and when the pick was made.
- * A handback leaves the carry, since the person who picks the head again has answered nothing; a head no round put
- * back, such as a writer's push, carries nothing.
+ * What the fixer's `head` of PR `number` carries from the pick it replaces: the heads its rounds replaced, with the
+ * pins the gate's base merges stood on, and when the pick was made. Its own record, written once when a round puts the
+ * head back, outlives handbacks, holds, and removals, since the person who picks the head again has answered nothing;
+ * a head no round put back, such as a writer's push, carries nothing.
  */
 export function carriedBy(state: string, number: number, head: string): Carried | undefined {
-	const record = history(state, number);
-	if (!record || !Number.isFinite(Date.parse(record.pick))) return undefined;
-	let end = record.rounds.length;
-	while (end > 0 && record.rounds[end - 1]!.after !== head) end--;
-	if (end === 0) return undefined;
-	return {
-		heads: record.rounds.slice(0, end).flatMap((round) => (round.pin ? [round.before, round.pin] : [round.before])),
-		picked: record.pick,
-	};
+	const path = carryPath(state, number, head);
+	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Carried) : undefined;
+}
+/** Record what the head `round` put back carries, unless a record already holds it: a carry is never rewritten. */
+export function saveCarry(
+	state: string,
+	number: number,
+	pick: string,
+	round: Pick<Round, "before" | "after" | "pin">,
+): void {
+	if (!round.after || round.after === round.before || !Number.isFinite(Date.parse(pick))) return;
+	const path = carryPath(state, number, round.after);
+	if (existsSync(path)) return;
+	// The head it replaced may carry an earlier pick's signals, which picking it again answered none of.
+	const earlier = carriedBy(state, number, round.before);
+	const heads = [...(earlier?.heads ?? []), round.before, ...(round.pin ? [round.pin] : [])];
+	const picked = earlier && Date.parse(earlier.picked) < Date.parse(pick) ? earlier.picked : pick;
+	save(path, { heads: [...new Set(heads)], picked } satisfies Carried);
 }
 /** What each of `pulls`' heads carries from a pick the land fixer replaced, by number. */
 export function carriedOf(state: string, pulls: ObjectValue[]): Map<number, Carried> {
@@ -239,6 +249,7 @@ export function carriedOf(state: string, pulls: ObjectValue[]): Map<number, Carr
 /** Record `round` in `record`, replacing the same job's earlier one, and save it as PR `number`'s history. */
 export function saveRound(state: string, number: number, record: History, round: Round): History {
 	const next = { ...record, rounds: [...record.rounds.filter((item) => item.job !== round.job), round] };
+	saveCarry(state, number, record.pick, round);
 	save(historyPath(state, number), next);
 	return next;
 }
@@ -1145,6 +1156,13 @@ async function collectJob(
 						standing,
 						deps.warn,
 					);
+				// Before the head moves, and for a fix of collateral too, which records no round.
+				const pinned = [entry.approved, entry.head].find((pin) => pin !== standing);
+				saveCarry(state, number, previous.pick, {
+					before: standing,
+					after: head,
+					...(pinned ? { pin: pinned } : {}),
+				});
 				if (!job.published.includes(number)) {
 					job.published.push(number);
 					save(path, job);
@@ -1206,7 +1224,6 @@ async function collectJob(
 		const handback = error !== undefined || result?.action === "handback";
 		// A refused fix or requeue ends the round in a handback after all.
 		if (handback && round && round.outcome !== "handback") {
-			// It keeps `after`: a head it published carries this pick's signals when picked again.
 			saveRound(state, number, history(state, number)!, { ...round, outcome: "handback" });
 		}
 		if (error) {

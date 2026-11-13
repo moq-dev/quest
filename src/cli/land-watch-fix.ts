@@ -685,7 +685,6 @@ async function collect(
 	// Every handback ends the pick with a round of its own, a crash's or a timeout's too, so the App's
 	// next enqueue of a head this pick put back starts a new pick.
 	if (round?.outcome !== "handback") {
-		// It keeps `after`: a head it published carries this pick's signals when picked again.
 		saveRound(state, number, history(state, number)!, {
 			...(round ?? { job: name, before: entry.head, failure }),
 			outcome: "handback",
