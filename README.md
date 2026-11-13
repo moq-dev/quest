@@ -771,7 +771,8 @@ down to one PR, and each batch that lands grows it back by one; the order and
 size persist in the state directory. Conflicting
 additions stay queued. A PR whose required checks are still running, or that
 still needs an approving review the base requires, stays queued and sits out
-batches until they pass and it is approved; checks count as in `quest status`. If it still waits two hours after
+batches until they pass and it is approved; checks count as in `quest status`,
+except that a required workflow also waits until its run finishes. If it still waits two hours after
 its pick (twice the default `--timeout`), the daemon comments once on that pick,
 naming what it waits for, since a check that never reports or an approval nobody
 gives would hold it silently. The sandbox checks the tip once, without

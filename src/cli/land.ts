@@ -516,8 +516,8 @@ export async function requiredChecks(
 
 /**
  * The required checks a head failed, and those pending or not yet reported, each from its app, and the
- * required workflows any job of which failed or is pending, or that nothing reports, as `quest status`
- * counts them. Only the head's current checks count, from {@link currentChecks}: each check's latest run, as
+ * required workflows any job of which failed, or that nothing reports or whose run is still going, since it
+ * may still create a failing job; `quest status` reads only the jobs. Only the head's current checks count, from {@link currentChecks}: each check's latest run, as
  * for GitHub's mergeability, so a rerun supersedes a cancelled or failed run, without a cancelled run a newer
  * one replaced.
  */
