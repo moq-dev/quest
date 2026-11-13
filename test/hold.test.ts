@@ -361,10 +361,12 @@ describe("merge --land", () => {
 		});
 		pull.checks = [run(1, "Tests (${{ matrix.os }})", "CANCELLED", 10), run(2, "Tests (macos-15)", "SUCCESS", 20)];
 		pull.runs = [{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" }];
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain("Tests (${{ matrix.os }})");
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
+			"Tests (${{ matrix.os }})",
+		);
 		expect(pull.writes).toEqual([]);
 		pull.runs.push({ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: "2026-11-12T23:42:56Z" });
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes).not.toEqual([]);
 	});
 
