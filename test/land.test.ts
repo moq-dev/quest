@@ -1252,7 +1252,8 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 				name: "CI",
 				head_branch: replaced.branch ?? "",
 				head_sha: replaced.head!,
-				path: CI,
+				// A required workflow from another repository runs here, under its own path form.
+				path: `org/.github/${CI}@refs/heads/main`,
 				repository: { full_name: "upstream/project" },
 				status,
 				conclusion: status === "queued" ? null : "cancelled",

@@ -16,7 +16,6 @@ import {
 	currentChecks,
 	requirements,
 	string,
-	workflowKey,
 } from "./github";
 import type { WorkflowRun } from "../github/checks";
 import { appOf } from "../github/checks";
@@ -539,11 +538,9 @@ function checks(
 					classifyCheck(context).outcome === "pending" ||
 					(context.checkSuite != null && object(context.checkSuite).status !== "COMPLETED"),
 			) ||
-			runs.some(
-				(run) =>
-					run.status !== "completed" &&
-					workflowKey(string(object(run.repository).full_name), string(run.path)) === key,
-			);
+			// A run's REST repository and path name where it runs, not its workflow file, so as `quest wait` does,
+			// any unfinished run read after a cancelled check may be the replacement.
+			runs.some((run) => run.status !== "completed");
 		if (failed.length > 0)
 			failing.push(`${key} (${failed.map((context) => classifyCheck(context).check.name).join(", ")})`);
 		else if (going) pending.push(key);
