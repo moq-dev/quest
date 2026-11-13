@@ -503,7 +503,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"The head's first failing required check prints as checks:failed, and every required check passing as checks:passed, " +
 				"each once per head, with the required check's name as the actor and its details URL. " +
 				"Results count as quest status counts them, so neutral and skipped results pass. " +
-				"checks:passed waits until no check is pending, no GitHub Actions run is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
+				"checks:passed waits until no check is pending, no GitHub Actions run read to replace a cancelled check is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
 				"Optional failures print separately as check:failed; a base branch requiring no checks requires them all. " +
 				"When auto-merge stays enabled on a head other than the current one, which GitHub allows across a writer's push, " +
 				"auto-merge:moved prints once per head, with the account that enabled it as the actor and a URL naming the head it " +

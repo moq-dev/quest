@@ -415,8 +415,8 @@ this command's scope.
 
 CI results are read for the current head. The first required check to fail
 prints `checks:failed` right away. `checks:passed` prints once nothing on the
-head is still going (no pending check and no unfinished GitHub Actions run, which
-may still create jobs), every check and workflow the base branch names is
+head is still going (no pending check and, once a cancelled check makes it read
+the head's GitHub Actions runs, no unfinished run, which may still create jobs), every check and workflow the base branch names is
 present (except `quest land`'s, which no head carries), each required check
 from the app its requirement names, if any, and every required
 check passed; it names the last required check that passed and is dated when

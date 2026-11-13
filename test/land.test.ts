@@ -1197,6 +1197,41 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[2, "failed_checks"]]);
 	});
 
+	test("counts every job of a required workflow, and waits on one nothing reports", async () => {
+		const forge = new Forge();
+		const CI = ".github/workflows/ci.yml";
+		forge.repo.rules = [
+			{ type: "workflows", ruleset_id: 4, parameters: { workflows: [{ path: CI, repository_id: 10 }] } },
+		];
+		const runs = (...jobs: { name: string; conclusion: string; workflow?: string }[]) => ({
+			pull: {
+				runs: [{ name: "test", conclusion: "SUCCESS", url: "u" }, ...jobs.map((job) => ({ url: "u", ...job }))],
+			},
+		});
+		forge.pull("Ran", { "1.txt": "1\n" }, runs({ name: "build", conclusion: "SUCCESS", workflow: CI }));
+		forge.pull("Never ran", { "2.txt": "2\n" }, runs());
+		forge.pull(
+			"Other workflow",
+			{ "3.txt": "3\n" },
+			runs({ name: "build", conclusion: "SUCCESS", workflow: ".github/workflows/other.yml" }),
+		);
+		forge.pull(
+			"Failed",
+			{ "4.txt": "4\n" },
+			runs(
+				{ name: "build", conclusion: "SUCCESS", workflow: CI },
+				{ name: "lint", conclusion: "FAILURE", workflow: CI },
+			),
+		);
+		const plan = await resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
+		expect(plan.queue.map((entry) => entry.number)).toEqual([1]);
+		expect(plan.waiting?.map(({ number, pending }) => [number, pending])).toEqual([
+			[2, [`upstream/project:${CI}`]],
+			[3, [`upstream/project:${CI}`]],
+		]);
+		expect(plan.eject.map((ejected) => [ejected.number, ejected.reason])).toEqual([[4, "failed_checks"]]);
+	});
+
 	test("counts a required check only from the app its rule names", async () => {
 		const forge = new Forge();
 		forge.repo.rules = [
@@ -1262,9 +1297,9 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		).toHaveLength(1);
 		forge.repo.rules.push(
 			{
-				type: "workflows",
+				type: "update",
 				ruleset_id: 4,
-				parameters: { workflows: [{ path: ".github/workflows/ci.yml", repository_id: 10 }] },
+				parameters: null,
 			},
 			{
 				type: "pull_request",
@@ -1274,7 +1309,7 @@ describe.skipIf(process.platform === "win32")("quest land", () => {
 		);
 		const refused = resolveQueue(REPOSITORY, { base: "main", method: "squash" }, await forge.deps());
 		await expect(refused).rejects.toThrow(
-			"workflows from ruleset 4; pull_request (allowed_merge_methods without squash) from ruleset 5",
+			"update from ruleset 4; pull_request (allowed_merge_methods without squash) from ruleset 5",
 		);
 		await expect(refused).rejects.toThrow(`It upholds only ${Object.keys(UPHELD).join(", ")}`);
 		expect(forge.repo.pulls[0].landing).toBe(true);

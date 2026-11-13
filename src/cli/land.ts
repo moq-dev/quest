@@ -18,7 +18,7 @@ import {
 	string,
 } from "./github";
 import { appOf } from "../github/checks";
-import { classifyCheck } from "./status";
+import { classifyCheck, reported, type Needs } from "./status";
 import type { Method } from "./hold";
 import { committedSources, snapshot } from "./tree";
 
@@ -215,6 +215,7 @@ export const UPHELD: Record<string, string> = {
 	pull_request:
 		"each PR's review decision must not block it, and its review threads must be resolved if the rule says so",
 	required_status_checks: "each required check must pass on each PR's head, from the app the rule names",
+	workflows: "each job of each required workflow must pass on each PR's head, which waits until the workflow reports",
 	copilot_code_review: "it requests a review and blocks nothing",
 };
 
@@ -362,7 +363,10 @@ export async function resolveQueue(
 				rule.parameters != null &&
 				object(rule.parameters).required_review_thread_resolution === true,
 		);
-	const required = needs.checks.filter((check) => check.name !== LAND_CHECK);
+	const required: Needs = {
+		checks: needs.checks.filter((check) => check.name !== LAND_CHECK),
+		workflows: needs.workflows,
+	};
 
 	let sha: string | undefined;
 	const nodes: ObjectValue[] = [];
@@ -491,28 +495,40 @@ export async function contexts(
 	}
 }
 
-/** The checks of `required` that commit `sha` failed, and those still pending or not yet reported. */
+/**
+ * The checks of `required` that commit `sha` failed, and those still pending or not yet reported. A queue
+ * build's commit is no PR head, so the workflows a ruleset runs only on PRs are not asked of it.
+ */
 export async function requiredChecks(
 	github: GitHub,
 	repository: Repository,
 	sha: string,
 	required: RequiredCheck[],
 ): Promise<{ failing: string[]; pending: string[] }> {
-	return checks(
-		(await currentChecks(github, repository, sha, await contexts(github, repository, sha))).checks,
-		required,
-	);
+	return checks((await currentChecks(github, repository, sha, await contexts(github, repository, sha))).checks, {
+		checks: required,
+		workflows: [],
+	});
 }
 
 /**
- * The required checks a head failed, and those pending or not yet reported, each from its app. Only the
- * head's current checks count, from {@link currentChecks}: each check's latest run, as for GitHub's
- * mergeability, so a rerun supersedes a cancelled or failed run, without a cancelled run a newer one replaced.
+ * The required checks a head failed, and those pending or not yet reported, each from its app, and the
+ * required workflows any job of which failed or is pending, or that nothing reports, as `quest status`
+ * counts them. Only the head's current checks count, from {@link currentChecks}: each check's latest run, as
+ * for GitHub's mergeability, so a rerun supersedes a cancelled or failed run, without a cancelled run a newer
+ * one replaced.
  */
-function checks(latest: ObjectValue[], required: RequiredCheck[]): { failing: string[]; pending: string[] } {
+function checks(latest: ObjectValue[], required: Needs): { failing: string[]; pending: string[] } {
 	const failing: string[] = [];
 	const pending: string[] = [];
-	for (const need of required) {
+	for (const key of required.workflows) {
+		const outcomes = latest
+			.filter((context) => reported(context).workflow === key)
+			.map((context) => classifyCheck(context).outcome);
+		if (outcomes.includes("failing")) failing.push(key);
+		else if (outcomes.length === 0 || outcomes.includes("pending")) pending.push(key);
+	}
+	for (const need of required.checks) {
 		let result: "passed" | "failing" | "pending" = "pending";
 		let reported = false;
 		for (const context of latest) {
