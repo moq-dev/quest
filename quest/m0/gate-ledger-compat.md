@@ -25,13 +25,12 @@ constant: `measure` reads the ledger every sample but looks for its own
 admission only when the cores change, so the
 command finishes and the other gates undercount it the whole time.
 
-Open decisions, once the cause is known:
+Decisions:
 
-- If an older build drops entries it cannot recognize as running: version
-  the ledger's path or format so such builds never share it (recommended if
-  the cause is a format disagreement), or only bump `quest-pinned`, which
-  leaves any other old install exposed.
-- Should a gate whose admission vanished re-record it and keep its command
-  running, rather than fail or keep going unnoticed? Recommended: re-record
-  it with a warning, and check for it on every sample, not only when the
-  cores change.
+- ✅ Keep this quest. Rejected: dropping it until the loss is seen again.
+- ✅ Once the cause is known, version the ledger's path or format, so
+  builds that disagree never share one file. Rejected: bumping only
+  `quest-pinned`; deciding after the reproduction.
+- ✅ A running gate that finds its admission missing re-records it with a
+  warning, checking on every sample, not only when the cores change.
+  Rejected: failing the command; carrying on silently.
