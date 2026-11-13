@@ -29,7 +29,7 @@ makes unnecessary).
 
 ## Waiting
 
-- kixel-ai/token-max: publish 0.1.0 and serve both run-once lines; check
-  `gh release view -R kixel-ai/token-max` for 0.1.0 or later and that
-  `curl -fsSI` succeeds for both `https://max.kixel.ai/run.sh` and
-  `https://max.kixel.ai/run.ps1`
+- kixel-ai/token-max: publish 0.1.0 on crates.io and serve both run-once
+  lines; check that `cargo search token-max --limit 1` shows 0.1.0 or
+  later, and that `curl -LsSf` of `https://max.kixel.ai/run.sh` and of
+  `https://max.kixel.ai/run.ps1` each returns a script, not an HTML page
