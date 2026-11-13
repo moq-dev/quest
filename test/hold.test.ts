@@ -414,13 +414,13 @@ describe("merge --land", () => {
 				],
 			},
 		};
-		expect(await refused(land(PR, HEAD, "merge", pull.deps()))).toContain(
+		expect(await refused(land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps()))).toContain(
 			`head ${HEAD} is held by decision by maintainer: Maintainer decision: add the timeout. (${decision})`,
 		);
 		expect(pull.writes).toEqual([]);
 		// A head committed after it may apply it.
 		pull.committed = "2026-10-21T11:45:00Z";
-		await land(PR, HEAD, "merge", pull.deps());
+		await land(PR, { sha: HEAD, method: "merge", check: clean }, pull.deps());
 		expect(pull.writes).not.toEqual([]);
 	});
 
@@ -444,7 +444,9 @@ describe("merge --land", () => {
 				},
 			};
 		};
-		expect(await refused(land(PR, HEAD, "merge", pull.deps(), true))).toContain("Maintainer decision: late.");
+		expect(
+			await refused(land(PR, { sha: HEAD, method: "merge", direct: true, check: clean }, pull.deps())),
+		).toContain("Maintainer decision: late.");
 		expect(pull.writes).toEqual([]);
 	});
 

@@ -5043,6 +5043,7 @@ describe.skipIf(process.platform === "win32")("the watcher's own queue", () => {
 			fixer: wrapper,
 			jobs: 1,
 			effort: "medium",
+			branches: [],
 			tags: [],
 			timeout: 60,
 			token: queue.token,
