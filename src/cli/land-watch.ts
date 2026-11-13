@@ -882,8 +882,8 @@ const same = (a: Repository, b: Repository) =>
 /**
  * The installation token permissions the watcher asks for. On GitHub's merge queue, `api` reads the
  * queue's events, comments, and the `merge_group` logs (`actions: read`), and enqueues the armed picks
- * GitHub left out of the queue, which `enqueuePullRequest` needs `merge_queues: write` for; with a fixer
- * it also re-enqueues, which needs `contents: write` for arming auto-merge, edits the PR body's Review,
+ * GitHub left out of the queue, which `enqueuePullRequest` needs `merge_queues: write` for, and disarms a
+ * signaled PR's auto-merge, which needs `contents: write`; with a fixer it also re-enqueues, edits the PR body's Review,
  * and reads the PR's own checks for the fixer (`checks: read` and `statuses: read`). The `own` queue
  * also disarms and arms auto-merge, cancels a build's runs (`actions: write`), posts each pick's queue
  * check (`checks: write`), and reads the base's classic protection (`administration: read`), as
