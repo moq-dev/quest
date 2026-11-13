@@ -1315,9 +1315,9 @@ subagents start, then appends one JSON line to that file, however the run ends:
 - `unit` is the command's systemd user scope, null where the gate owns it
   another way, such as on macOS. Once the scope ends, systemd logs
   `<unit>: Consumed 1.386s CPU time over 1.357s wall clock time, 8.1M memory
-  peak.` to the user journal (`journalctl --user -u <unit>`), but only when the
-  scope used a notable amount, such as a second of CPU; a run with no such line
-  used less.
+  peak.` to the user journal (`journalctl --user -u <unit>`) at info level when
+  the scope used a notable amount, such as a second of CPU, and at debug level
+  otherwise. The memory peak needs systemd 255 and Linux 5.19.
 - `exit` is the status the gate returns, `cancelled` whether it was cancelled,
   and `error` the gate's own failure, such as a scope it cannot confirm
   stopped.
