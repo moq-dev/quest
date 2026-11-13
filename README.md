@@ -510,6 +510,7 @@ comes last, and a missing value prints as `-`:
 | `checkpoint` | Each bot reviewer that approves or requests changes, such as one whose approval the base requires, its round, and its review's URL, when that review is of the head and its latest verdict there, ignoring plain comments, is neither an approval nor a dismissal, at the end of its third, sixth, ... round: [`/quest-review`'s design checkpoint](#review-locally) for an online reviewer. A round is one commit it reviewed; a dismissed review counts as one that approves or requests changes. Only printed when due. |
 | `reacted:<content>` | Actor, time, and the PR or review reacted to, as `quest wait` names reactions. |
 | `thread` | Node ID, `current` or `outdated`, last commenter, latest comment URL, and `path:line` of each unresolved thread. |
+| `signal` | `finding` or `decision`, its URL, who posted it, and its text, for each [signal](#signals-that-hold-a-head) holding the head. |
 | `hold` | Label, acquisition token, acquisition time, verified GitHub event API URL, and age; `hold -` when no label holds it. Unknown acquisition facts print as `-` and `unknown age`. |
 | `starter-hold` | A draft its starter owns: last activity time, PR URL, and `last active` age. Last activity is not when ownership began. |
 
@@ -533,7 +534,7 @@ requirement names one, its app, as GitHub and `quest land` do, and leaves out
 same facts as one object with the fields `url`, `state`, `draft`, `head`,
 `mergeable`, `mergeState`, `reviewDecision`, `autoMerge`, `mergeQueue`,
 `landingStopped`, `checks` (`state`, `passed`, `failing`, `pending`), `reviews`, `checkpoints` (`reviewer`, `round`, `url`), `reactions`,
-`threads`, `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
+`threads`, `signals` (`kind`, `url`, `author`, `text`), `holds` (`label`, `token`, `takenAt`, `age`, `eventUrl`), and `starterHold` (`lastActive`, `age`, `url`, or null). Ownership uses the state commands' shared reader without changing labels, and event links match the opaque acquisition token against GitHub's event listing. Long lists are paged; reactions are the newest 100 per PR or review,
 as in `quest wait`. Any PR state exits 0, invalid arguments exit 2, and other
 failures exit 1.
 
@@ -584,7 +585,10 @@ quests skips it. While the base requires an approval the PR lacks, such as an
 online reviewer's that a ruleset requires (GitHub's review decision is
 `review_required` or `changes_requested`), it only arms auto-merge, which waits
 for the approval, and refuses where nothing would wait, since an admin's token
-would merge or enqueue past the requirement. It enables auto-merge bound to that SHA, or merges at once when nothing is
+would merge or enqueue past the requirement.
+It also refuses while a [signal](#signals-that-hold-a-head) holds the head,
+naming each.
+It enables auto-merge bound to that SHA, or merges at once when nothing is
 left to wait for. `--squash` or `--rebase` picks the method, and it refuses one
 the repository disallows; otherwise it uses the only method the repository
 allows, or else a merge commit, and refuses when merge commits are off and more
@@ -889,6 +893,35 @@ backoff. Grant the App the base ruleset's bypass and the read permissions needed
 to inspect branch protection. The bypass actor's API merge of a pinned PR with
 the unreported required `quest land` check must be verified on the live host.
 
+### Signals that hold a head
+
+A signal holds a PR's head from landing until it is fixed or answered, since
+the review its pick relied on predates it. `quest merge --land` refuses while
+one holds, `quest status` lists each as a `signal` line, and a queue takes a
+PR that draws one out, ejecting it as `unanswered_signal`, even while it waits
+to merge. Nothing waits for a reviewer: a signal the queue reads before the
+merge ends the pick. There are two kinds:
+
+- `finding`: an online reviewer's (a bot's, or a review whose body opens
+  `Automated review by <name>`) on the head. A review thread it opened holds
+  until it is resolved or a writer other than the reviewer replies. A `[P<n>]`
+  line in its latest review over the head, counting one that only opens
+  threads, holds until a writer's later comment links that review.
+- `decision`: a writer's comment that opens with `Maintainer decision`, not in
+  a quote or code block, posted after the head's commit, which therefore cannot apply it. A
+  newer commit answers it, as does a writer's later comment that links it.
+
+The land fixer's commit reads neither kind, so it answers none: a head the
+fixer put back in the queue still counts the findings on every head its pick's
+rounds replaced, and the decisions posted since that pick, wherever the queue
+judges it (the fixer's re-enqueue, `quest land watch`'s dequeue, and `quest land
+serve`'s queue), however the head got queued. The carry is its own record, written
+before the fixer publishes the head and kept through handbacks, holds, removals,
+and later picks, so only a writer's push, which moves the head away, ends it.
+
+A writer can push to the repository: an owner, or a member or collaborator
+whose permission GitHub reports as write or higher. A bot is never one.
+
 ## Watch the merge queue with quest land watch
 
 `quest land watch` runs on a maintainer's host, one process per base branch of a repository,
@@ -900,7 +933,10 @@ which offers no merge queue. Each pass reads the base's rules
 GitHub's queue on a repository switches its watcher with no host change; a
 pass that cannot read them does nothing. It reads them with a `contents: read`
 token, so an installation granted only one mode's permissions runs it. On GitHub's queue it tells each PR the queue
-drops unmerged why. With `--fixer`, it also runs the land fixer on each PR the
+drops unmerged why, and takes a queued or armed PR whose head draws a
+[signal](#signals-that-hold-a-head) out of the queue, disarming its auto-merge
+and saying why, even one another session holds, since GitHub's queue ignores
+hold labels. With `--fixer`, it also runs the land fixer on each PR the
 queue dropped for a failure or a conflict, and puts it back at the back of the
 queue. It polls; the host needs no public endpoint. Its base is resolved once at
 startup, from `--base` or the default branch, so a renamed default branch needs a
@@ -1034,10 +1070,11 @@ pull request GitHub refuses to enqueue says so and waits for a maintainer.
 
 It shares `quest land serve`'s App key, state directory, private repository,
 and locks, so the two never run for the same repository at once. Without a
-fixer its token asks for `contents: read`, `pull_requests: write`,
-`actions: read`, which the App needs for the logs, and `merge_queues: write`,
-which `enqueuePullRequest` needs. With one it also asks for `contents: write`,
-for arming auto-merge and pushing fixes, and `checks: read` and `statuses: read`,
+fixer its token asks for `contents: write`, which disarming a signaled pull
+request's auto-merge needs, `pull_requests: write`, `actions: read`, which
+the App needs for the logs, and `merge_queues: write`, which
+`enqueuePullRequest` needs. With one, which also arms auto-merge and pushes
+fixes, it also asks for `checks: read` and `statuses: read`,
 for the PR's own checks the fixer reads; a push that carries a workflow change
 asks for `workflows: write`.
 

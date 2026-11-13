@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 
-import { type Activity, bodyFindings, classify, onlineReviews } from "../src/cli/online-review";
+import type { GitHub, Repository } from "../src/cli/github";
+import { type Activity, bodyFindings, classify, onlineReviews, readActivity } from "../src/cli/online-review";
+import { readSignals } from "../src/cli/signals";
 
 const HEAD = "h".repeat(40);
 const bot = (login: string) => ({ __typename: "Bot", login });
@@ -21,6 +23,7 @@ const thread = (comments: object[], resolvedBy: object | null = null) => ({
 });
 const activity = (pull: Partial<Activity>): Activity => ({
 	head: HEAD,
+	committed: "2026-11-06T00:00:00Z",
 	reviews: [],
 	reviewThreads: [],
 	comments: [],
@@ -40,7 +43,10 @@ describe("classify", () => {
 
 describe("bodyFindings", () => {
 	test("two findings that share a title in one body stay two", () => {
-		expect(bodyFindings("[P1] Guard null (GET)\n[P2] Guard null (POST)")).toEqual(["guard null", "guard null #2"]);
+		expect(bodyFindings("[P1] Guard null (GET)\n[P2] Guard null (POST)").map((finding) => finding.key)).toEqual([
+			"guard null",
+			"guard null #2",
+		]);
 	});
 
 	test("reads bracketed and dashed markers, keyed by title", () => {
@@ -53,7 +59,7 @@ describe("bodyFindings", () => {
 			"The previous P2 is fixed.",
 			"P2 is a prose word here.",
 		].join("\n");
-		expect(bodyFindings(body)).toEqual([
+		expect(bodyFindings(body).map((finding) => finding.key)).toEqual([
 			"keep sampling when unavailable",
 			"src/b.ts:10–12",
 			"restore the hierarchy",
@@ -155,4 +161,87 @@ describe("onlineReviews", () => {
 			},
 		]);
 	});
+});
+
+test("a head pushed while later pages are read marks the read moved, which fails a signal read", async () => {
+	const page = (nodes: object[], next: boolean) => ({
+		pageInfo: { hasNextPage: next, endCursor: next ? "1" : null },
+		nodes,
+	});
+	const client = (moved: boolean) =>
+		({
+			graphql: async (query: string) => {
+				if (query.includes("$reviews"))
+					return {
+						repository: {
+							pullRequest: {
+								headRefOid: moved ? "m".repeat(40) : HEAD,
+								reviews: page([review("r2", bot("rabbit"), "[P1] New", "2026-11-10T17:06:00Z")], false),
+							},
+						},
+					};
+				return {
+					repository: {
+						p1: {
+							headRefOid: HEAD,
+							commits: { nodes: [{ commit: { oid: HEAD, committedDate: "2026-11-10T17:00:00Z" } }] },
+							reviews: page([review("r1", bot("rabbit"), "Ok.", "2026-11-10T17:05:00Z")], true),
+							reviewThreads: page([], false),
+							comments: page([], false),
+						},
+					},
+				};
+			},
+		}) as unknown as GitHub;
+	const repository = { owner: "acme", repo: "proj" } as Repository;
+	const still = (await readActivity(client(false), repository, [1])).get(1)!;
+	expect([still.reviews.length, still.moved]).toEqual([2, undefined]);
+	// Usage tallies take the mixed read; a signal read, which judges findings by the head, refuses it.
+	expect((await readActivity(client(true), repository, [1])).get(1)!.moved).toBe(true);
+	await expect(readSignals(client(true), repository, [1])).rejects.toThrow("head of PR #1 changed while it was read");
+	expect((await readSignals(client(false), repository, [1])).get(1)!.signals.map((signal) => signal.text)).toEqual([
+		"new",
+	]);
+});
+
+test("a head pushed while a long thread's later comments are read marks the read moved", async () => {
+	const read = async (moved: boolean) => {
+		const client = {
+			graphql: async (query: string) =>
+				query.includes("PullRequestReviewThread")
+					? {
+							node: {
+								pullRequest: { headRefOid: moved ? "m".repeat(40) : HEAD },
+								comments: { pageInfo: { hasNextPage: false }, nodes: [{ body: "Later." }] },
+							},
+						}
+					: {
+							repository: {
+								p1: {
+									headRefOid: HEAD,
+									commits: {
+										nodes: [{ commit: { oid: HEAD, committedDate: "2026-11-10T17:00:00Z" } }],
+									},
+									reviews: { pageInfo: { hasNextPage: false }, nodes: [] },
+									reviewThreads: {
+										pageInfo: { hasNextPage: false },
+										nodes: [
+											{
+												id: "t1",
+												comments: {
+													pageInfo: { hasNextPage: true, endCursor: "1" },
+													nodes: [{ body: "First." }],
+												},
+											},
+										],
+									},
+									comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+								},
+							},
+						},
+		} as unknown as GitHub;
+		return (await readActivity(client, { owner: "acme", repo: "proj" } as Repository, [1])).get(1)!.moved;
+	};
+	expect(await read(false)).toBeUndefined();
+	expect(await read(true)).toBe(true);
 });
