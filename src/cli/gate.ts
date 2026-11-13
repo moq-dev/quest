@@ -10,6 +10,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	openSync,
+	readlinkSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
@@ -227,19 +228,42 @@ export function accountHome(): string | null {
 }
 
 /**
- * Every caller of one user on one host shares this directory, whatever its
- * environment or login sessions. It is named for the host, since a home
- * directory may be shared between machines. An account missing from the user
- * database, as in arbitrary-UID containers, has no home of its own, so it
- * shares one in `tmp` keyed by its UID.
+ * The Linux PID namespace this process runs in, such as a sandbox's own, or undefined elsewhere.
+ * A gate only sees the process IDs of its namespace, so it cannot tell whether a gate in another
+ * one still runs, and would drop that gate's admission a minute after it was admitted.
+ */
+export function pidNamespace(): string | undefined {
+	if (process.platform !== "linux") return undefined;
+	try {
+		return /^pid:\[(\d+)\]$/.exec(readlinkSync("/proc/self/ns/pid"))?.[1];
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The ledger's format version, part of its path, so builds whose ledgers disagree never share one.
+ * Bump it with any change to what an admission records or how a gate keeps one.
+ */
+export const LEDGER_VERSION = 2;
+
+/**
+ * Every caller of one user on one host and PID namespace shares this directory, whatever its
+ * environment or login sessions. It is named for the host, since a home directory may be shared
+ * between machines, and for the namespace, since a gate judges another's admission by its
+ * process ID (see `pidNamespace`). An account missing from the user database, as in arbitrary-UID
+ * containers, has no home of its own, so it shares one in `tmp` keyed by its UID.
  */
 export function claimDirectory(
 	home = accountHome(),
 	host = hostname(),
 	uid = process.getuid?.(),
 	tmp = "/tmp",
+	namespace: string | null = pidNamespace() ?? null,
 ): string {
-	if (home !== null) return join(home, ".cache", "quest", "admissions", host);
+	const name = namespace === null ? host : `${host}-pid${namespace}`;
+	const ledger = `admissions-v${LEDGER_VERSION}`;
+	if (home !== null) return join(home, ".cache", "quest", ledger, name);
 	// Other users can create this name first, so it must be a directory only this UID can write.
 	const root = join(tmp, `quest-${uid}`);
 	try {
@@ -250,7 +274,7 @@ export function claimDirectory(
 	const stat = lstatSync(root);
 	if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o022) !== 0)
 		throw new Error(`gate cannot trust ${root}: it must be a directory that only UID ${uid} can write`);
-	return join(root, "admissions", host);
+	return join(root, ledger, name);
 }
 
 /** A version cut short, as by power loss, is read as empty: its commands ended with the host. */
@@ -611,11 +635,17 @@ export async function admit(
  * SETTLE_MS, and keep its admission's `cores` at the most CPUs it kept busy over one sample in the
  * last RECENT_MS, rounded, so other callers count it at its busiest rather than at a lull.
  */
-export async function measure(host: Host, admission: { id: string; unit: string }, signal: AbortSignal) {
+export async function measure(
+	host: Host,
+	admission: { id: string; unit: string },
+	signal: AbortSignal,
+	lost?: (id: string) => void,
+) {
 	const samples: { at: number; cores: number }[] = [];
 	// The command's scope starts with no CPU use, so a burst before the first sample still counts.
 	let previous = { at: host.now(), usage: 0 };
-	let recorded = 0;
+	// The admission as last read, to record again should another gate drop it.
+	let known: Admission = { id: admission.id, at: host.now(), pid: process.pid, start: processStart(process.pid) };
 	for (;;) {
 		try {
 			await host.sleep(SETTLE_MS, signal);
@@ -632,11 +662,19 @@ export async function measure(host: Host, admission: { id: string; unit: string 
 		}
 		while (samples.length > 0 && samples[0].at <= at - RECENT_MS) samples.shift();
 		const cores = Math.round(Math.max(0, ...samples.map((sample) => sample.cores)));
-		for (let ledger = host.ledger(); cores !== recorded; ledger = host.ledger()) {
+		// Checked every sample, so an admission another gate dropped counts again within one.
+		for (let ledger = host.ledger(); ; ledger = host.ledger()) {
 			const mine = ledger.admissions.find(({ id }) => id === admission.id);
-			if (mine === undefined) throw new Error(`gate lost its admission ${admission.id} from the ledger`);
-			const updated = ledger.admissions.map((entry) => (entry === mine ? { ...mine, cores } : entry));
-			if (host.publish(ledger, updated)) recorded = cores;
+			if (mine !== undefined) known = mine;
+			if (mine !== undefined && (mine.cores ?? 0) === cores) break;
+			const updated =
+				mine === undefined
+					? [...ledger.admissions, { ...known, cores }]
+					: ledger.admissions.map((other) => (other === mine ? { ...mine, cores } : other));
+			if (host.publish(ledger, updated)) {
+				if (mine === undefined) lost?.(admission.id);
+				break;
+			}
 		}
 	}
 }
@@ -972,7 +1010,9 @@ async function gated(
 	// Held as a value until the command ends, so a failure never goes unhandled meanwhile.
 	const measuring =
 		admitted !== undefined && unit !== undefined
-			? measure(admitted.host, { id: admitted.id, unit }, stop.signal).then(
+			? measure(admitted.host, { id: admitted.id, unit }, stop.signal, (id) =>
+					process.stderr.write(`quest gate: recorded admission ${id} again after another gate dropped it\n`),
+				).then(
 					() => undefined,
 					(error: unknown) => ({ error }),
 				)
