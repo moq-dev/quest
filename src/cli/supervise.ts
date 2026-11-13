@@ -73,13 +73,6 @@ export interface RunOptions {
 	within?: string | null;
 	/** The slice the scope runs in; the user manager's default, `app.slice`, when omitted. */
 	slice?: string;
-	/** The most CPUs every process in the scope may keep busy together (`CPUQuota`); unbounded when omitted. */
-	cpus?: number;
-	/**
-	 * Hands the command a report pipe on descriptor 5 and a reply pipe on descriptor 6, for a
-	 * handshake of the caller's own with whatever the command starts.
-	 */
-	channel?(report: Readable, reply: Writable): void;
 }
 
 export interface Scopes {
@@ -306,7 +299,6 @@ export const systemdScopes: Scopes = {
 				`--unit=${unit}`,
 				...bound,
 				...(options.slice ? [`--slice=${options.slice}`] : []),
-				...(options.cpus ? [`--property=CPUQuota=${options.cpus * 100}%`] : []),
 				"--expand-environment=no",
 				"--",
 				"/bin/sh",
@@ -366,11 +358,9 @@ function contain(
 		const child = spawn(launch[0], [...launch.slice(1), ...command], {
 			cwd,
 			env: options.env,
-			stdio: [pipe, pipe, pipe, "pipe", "pipe", ...(options.channel ? (["pipe", "pipe"] as const) : [])],
+			stdio: [pipe, pipe, pipe, "pipe", "pipe"],
 		});
 		options.spawned?.(child as ChildProcessWithoutNullStreams);
-		const streams = child.stdio as unknown as (Readable | Writable | null)[];
-		if (options.channel) options.channel(streams[5] as Readable, streams[6] as Writable);
 		const report = child.stdio[3] as Readable;
 		const admission = (child.stdio as unknown as (Writable | null)[])[4]!;
 		let group: string | undefined;

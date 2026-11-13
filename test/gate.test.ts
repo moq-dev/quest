@@ -21,35 +21,25 @@ import {
 	admit,
 	alive,
 	COMMAND_MEMORY,
-	cappable,
 	claimDirectory,
-	commandKey,
 	direct,
 	fileHost,
-	firstShare,
 	gate,
 	group,
 	inside,
 	type Admission,
 	type Host,
 	hostLimits,
-	learn,
 	linuxMemory,
-	mbxPool,
 	measure,
 	type Owner,
 	owner,
 	processStart,
 	QUICK_MS,
 	RECENT_MS,
-	reserve,
 	SETTLE_MS,
-	SHARE_MS,
 	job,
 	scope,
-	shares,
-	sharesDirectory,
-	workspaceScheduler,
 } from "../src/cli/gate";
 import { forwards, foregroundStat, statProcess } from "../src/cli/interrupt";
 import { gateBoundary, main } from "../src/cli/main";
@@ -254,7 +244,7 @@ async function measured(busy: (number | undefined)[]) {
 	host.publish(host.ledger(), [{ id: "build", at: 0, ...me }]);
 	let usage: number | undefined;
 	let total = 0;
-	host.usage = () => (usage === undefined ? undefined : { usage, throttled: 0 });
+	host.usage = () => usage;
 	const published: string[] = [];
 	const publish = host.publish;
 	host.publish = (base, admissions) => {
@@ -313,52 +303,6 @@ test("a priority caller waits for memory, never for load, even while a gated com
 	const ordinary: string[] = [];
 	await admit(limits, testHost(directory, state, ordinary), signal, (reason) => ordinary.push(reason));
 	expect(ordinary).toEqual([`sleep ${SETTLE_MS}`]);
-});
-
-test("a quick caller's deadline counts from when it began waiting", async () => {
-	const state = { now: 0, load: 99, memory: 0 };
-	const events: string[] = [];
-	const host = testHost(tempDir(), state, events);
-	host.publish(host.ledger(), [{ id: "build", at: -10 * RECENT_MS, ...me }]);
-	// It already waited out most of its minute for mbx before asking for memory.
-	await admit({ load: 4, memory: GiB }, host, signal, undefined, { quick: true, since: SETTLE_MS - QUICK_MS });
-	expect(events).toEqual([`sleep ${SETTLE_MS}`]);
-});
-
-test("a caller mbx's pool admits waits for memory alone, outside the queue", async () => {
-	const state = { now: 0, load: 99, memory: 0 };
-	const events: string[] = [];
-	const host = testHost(tempDir(), state, events);
-	const build = { id: "build", at: -10 * RECENT_MS, ...me, cores: 99 };
-	host.publish(host.ledger(), [build]);
-	const sleep = host.sleep;
-	host.sleep = async (ms, signal) => {
-		await sleep(ms, signal);
-		state.memory = 8 * GiB;
-	};
-	await admit({ load: 4, memory: GiB }, host, signal, (reason) => events.push(reason), { pooled: true });
-	expect(events).toEqual(["memory", `sleep ${SETTLE_MS}`]);
-	expect(host.ledger().admissions).toEqual([build, { id: expect.any(String), at: SETTLE_MS, ...me }]);
-});
-
-test("a gate counts none of the CPU its scope used before the command started", async () => {
-	const state = { now: 0, load: 0, memory: Infinity };
-	const host = testHost(tempDir(), state);
-	host.publish(host.ledger(), [{ id: "build", at: 0, ...me }]);
-	// mbx polled for a reservation before the command started, then the command kept one CPU busy.
-	const before = 30 * 1000 * 1000;
-	host.usage = () => ({ usage: before + state.now * 1000, throttled: 2 });
-	const stop = new AbortController();
-	let samples = 0;
-	host.sleep = async (ms) => {
-		if (samples++ === 2) {
-			stop.abort();
-			throw stop.signal.reason;
-		}
-		state.now += ms;
-	};
-	const run = await measure(host, { id: "build", unit: "quest-gate-build.scope", usage: before }, stop.signal);
-	expect(run).toEqual({ peak: 1, throttled: true });
 });
 
 test("a quick caller starts after at most QUICK_MS, and its admission is recorded", async () => {
@@ -1139,7 +1083,7 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 		expect(host.usage(unit)).toBeUndefined();
 		const spin = ["/bin/sh", "-c", `while [ ! -e ${quote(done)} ]; do :; done`];
 		const result = scope(unit)(spin, process.env, cancellation().cancel);
-		await until(() => (host.usage(unit)?.usage ?? 0) > 0);
+		await until(() => (host.usage(unit) ?? 0) > 0);
 		writeFileSync(done, "");
 		expect(await result).toBe(0);
 		await until(() => host.usage(unit) === undefined);
@@ -1546,272 +1490,4 @@ test("gate rejects unknown options before the executable and forwards flags afte
 	expect(result.stderr).toContain("unknown option '--host'");
 	expect(gateBoundary(["gate", "--unknown", "ls"])).toEqual(["gate", "--unknown", "ls"]);
 	expect(gateBoundary(["gate", "--", "-command"])).toEqual(["gate", "--", "-command"]);
-});
-
-describe("a learned share of mbx's pool", () => {
-	const pool = { cpus: 18 };
-
-	test("starts at half the pool, at least one core", () => {
-		expect(firstShare(pool)).toBe(9);
-		expect(firstShare({ cpus: 3 })).toBe(2);
-		expect(firstShare({ cpus: 1 })).toBe(1);
-	});
-
-	test("doubles after a throttled run, up to the pool", () => {
-		expect(learn(9, { peak: 9, throttled: true }, pool)).toBe(18);
-		expect(learn(12, { peak: 12, throttled: true }, pool)).toBe(18);
-	});
-
-	test("moves halfway down to an unthrottled run's peak, never below one core", () => {
-		expect(learn(9, { peak: 2.1, throttled: false }, pool)).toBe(6);
-		expect(learn(6, { peak: 2.1, throttled: false }, pool)).toBe(5);
-		// A run that kept its whole share busy keeps it.
-		expect(learn(4, { peak: 3.9, throttled: false }, pool)).toBe(4);
-		expect(learn(1, { peak: 0, throttled: false }, pool)).toBe(1);
-		// A smaller pool than when the share was learned caps it.
-		expect(learn(18, { peak: 18, throttled: false }, { cpus: 8 })).toBe(8);
-	});
-
-	test("is kept per command beside the ledger, which never prunes it", () => {
-		const claims = join(tempDir(), "admissions", "host");
-		const directory = sharesDirectory(claims);
-		expect(directory).toBe(join(claims, "..", "..", "shares", "host"));
-		const learned = shares(directory);
-		expect(learned.read("key")).toBeUndefined();
-		learned.write("key", 6);
-		expect(learned.read("key")).toBe(6);
-		// A file cut short, or holding anything but a share, holds nothing learned.
-		for (const text of ['{"cor', "null", '{"cores":0}']) {
-			writeFileSync(join(directory, "key"), text);
-			expect(learned.read("key")).toBeUndefined();
-		}
-	});
-
-	test("forgets a command not measured for SHARE_MS", () => {
-		const directory = tempDir();
-		const learned = shares(directory);
-		learned.write("old", 3);
-		const now = Date.now();
-		const stale = (now - SHARE_MS - 1000) / 1000;
-		utimesSync(join(directory, "old"), stale, stale);
-		expect(learned.read("old", now)).toBeUndefined();
-		learned.write("new", 4, now);
-		expect(readdirSync(directory)).toEqual(["new"]);
-	});
-
-	test("is keyed by repository, directory inside it, and argv, across worktrees", () => {
-		const repo = tempDir();
-		const git = (...args: string[]) => {
-			const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
-			expect(result.status, result.stderr).toBe(0);
-		};
-		git("init", "-q");
-		git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");
-		const worktree = join(tempDir(), "worktree");
-		git("worktree", "add", "-q", "--detach", worktree);
-		mkdirSync(join(repo, "sub"));
-		const key = commandKey(["just", "check"], repo);
-		expect(commandKey(["just", "check"], worktree)).toBe(key);
-		expect(commandKey(["just", "test"], repo)).not.toBe(key);
-		expect(commandKey(["just", "check"], join(repo, "sub"))).not.toBe(key);
-		// Outside a repository, the directory itself.
-		const outside = tempDir();
-		expect(commandKey(["just", "check"], outside)).not.toBe(commandKey(["just", "check"], tempDir()));
-	});
-});
-
-describe.skipIf(process.platform === "win32")("mbx's pool", () => {
-	/** A PATH whose `mbx` reports `version` and answers `mbx settings get` from `settings`. */
-	function fakeMbx(version: string, settings: Record<string, string>, status = 0): NodeJS.ProcessEnv {
-		const bin = tempDir();
-		const cases = Object.entries(settings)
-			.map(([key, value]) => `  ${key}) echo ${quote(value)} ;;`)
-			.join("\n");
-		writeFileSync(
-			join(bin, "mbx"),
-			`#!/bin/sh
-[ ${status} -eq 0 ] || { echo broken >&2; exit ${status}; }
-[ "$1" = --version ] && { echo ${quote(version)}; exit 0; }
-[ "$1 $2" = "settings get" ] || exit 2
-case "$3" in
-${cases}
-  *) echo "" ;;
-esac
-`,
-		);
-		chmodSync(join(bin, "mbx"), 0o755);
-		const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-		for (const name of ["MBX_SCHED_DISABLE", "MBX_SCHED_DIR", "MBX_SCHEDULER"]) delete env[name];
-		return env;
-	}
-
-	const enabled = { "scheduler.enabled": "true", "scheduler.cpus": "24", "scheduler.reserve_cpus": "6" };
-
-	test("is the configured CPUs less the reserve, at least one", () => {
-		const cwd = tempDir();
-		expect(mbxPool(cwd, fakeMbx("mbx 1.30.0", enabled))).toEqual({ cpus: 18, total: 24 });
-		expect(mbxPool(cwd, fakeMbx("mbx 2.0.1", { ...enabled, "scheduler.reserve_cpus": "30" }))).toEqual({
-			cpus: 1,
-			total: 24,
-		});
-		// An unset reserve withholds nothing.
-		const reserveless = fakeMbx("mbx 1.30.0", { ...enabled, "scheduler.reserve_cpus": "" });
-		expect(mbxPool(cwd, reserveless)).toEqual({ cpus: 24, total: 24 });
-		const unset = fakeMbx("mbx 1.31.0", { ...enabled, "scheduler.cpus": "", "scheduler.reserve_cpus": "0" });
-		expect(mbxPool(cwd, unset)?.cpus).toBeGreaterThan(0);
-	});
-
-	test("is absent without mbx, before 1.30.0, with its scheduler off, or inside a reservation", () => {
-		const cwd = tempDir();
-		expect(mbxPool(cwd, { ...process.env, PATH: tempDir() })).toBeUndefined();
-		expect(mbxPool(cwd, fakeMbx("mbx 1.29.9", enabled))).toBeUndefined();
-		expect(mbxPool(cwd, fakeMbx("mbx 0.31.0", enabled))).toBeUndefined();
-		expect(mbxPool(cwd, fakeMbx("mbx 1.30.0", { ...enabled, "scheduler.enabled": "false" }))).toBeUndefined();
-		expect(mbxPool(cwd, { ...fakeMbx("mbx 1.30.0", enabled), MBX_SCHED_DISABLE: "1" })).toBeUndefined();
-		expect(mbxPool(cwd, { ...fakeMbx("mbx 1.30.0", enabled), MBX_SCHED_DIR: "" })).toBeUndefined();
-	});
-
-	test("is absent where the Cargo workspace's .mbx.toml switches the scheduler off, unless the environment wins", () => {
-		// mbx's workspace root is the outermost directory with a Cargo.lock, whatever lies between.
-		const root = tempDir();
-		const crate = join(root, "crates", "one");
-		mkdirSync(crate, { recursive: true });
-		writeFileSync(join(root, "Cargo.lock"), "");
-		writeFileSync(join(crate, "Cargo.toml"), "");
-		writeFileSync(join(crate, ".mbx.toml"), "[scheduler]\nenabled = true\n");
-		writeFileSync(join(root, ".mbx.toml"), "[scheduler]\nenabled = false\n");
-		const env = fakeMbx("mbx 1.30.0", enabled);
-		expect(workspaceScheduler(crate)).toBe(false);
-		expect(mbxPool(crate, env)).toBeUndefined();
-		expect(mbxPool(crate, { ...env, MBX_SCHEDULER: "1" })).toEqual({ cpus: 18, total: 24 });
-		// Outside any Cargo workspace, the directory itself is the root.
-		const plain = tempDir();
-		expect(workspaceScheduler(plain)).toBeUndefined();
-		writeFileSync(join(plain, ".mbx.toml"), "scheduler = { enabled = false }\n");
-		expect(workspaceScheduler(plain)).toBe(false);
-	});
-
-	test("fails loud on a broken mbx or a malformed setting", () => {
-		const cwd = tempDir();
-		expect(() => mbxPool(cwd, fakeMbx("mbx 1.30.0", enabled, 3))).toThrow("broken");
-		expect(() => mbxPool(cwd, fakeMbx("mbx 1.30.0", { ...enabled, "scheduler.cpus": "many" }))).toThrow(
-			"scheduler.cpus",
-		);
-		writeFileSync(join(cwd, ".mbx.toml"), "[scheduler]\nenabled = 'no'\n");
-		expect(() => mbxPool(cwd, fakeMbx("mbx 1.30.0", enabled))).toThrow("must be a boolean");
-		writeFileSync(join(cwd, ".mbx.toml"), "[scheduler\n");
-		expect(() => workspaceScheduler(cwd)).toThrow("cannot parse");
-	});
-});
-
-/** Whether this host's systemd user manager can cap a scope's CPU; false without one. */
-const capped = (() => {
-	if (process.platform !== "linux") return false;
-	try {
-		return cappable();
-	} catch {
-		return false;
-	}
-})();
-
-describe.runIf(capped)("a reservation in mbx's pool", () => {
-	/**
-	 * A PATH whose `mbx reserve` records its arguments and pool size, then grants once `grant`
-	 * exists, or exits with `refuse` instead, and runs its command as the real one does, with mbx's
-	 * scheduling off.
-	 */
-	function fakeReserve(dir: string, refuse?: number) {
-		const bin = join(dir, "bin");
-		mkdirSync(bin);
-		writeFileSync(
-			join(bin, "mbx"),
-			`#!/bin/sh
-[ "$1" = reserve ] || exit 2
-echo "$MBX_SCHEDULER_CPUS $@" > ${quote(join(dir, "args"))}
-${refuse === undefined ? "" : `exit ${refuse}`}
-while [ "$1" != -- ]; do shift; done; shift
-while [ ! -e ${quote(join(dir, "grant"))} ]; do sleep 0.02; done
-touch ${quote(join(dir, "granted"))}
-MBX_SCHED_DISABLE=1 exec "$@"
-`,
-		);
-		chmodSync(join(bin, "mbx"), 0o755);
-		return { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-	}
-
-	/** A command that records its scope's CPU cap and mbx's switch, then exits 7. */
-	const record = (dir: string) => [
-		"/bin/sh",
-		"-c",
-		`g=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup); { cat $g/cpu.max; echo "$MBX_SCHED_DISABLE"; } > ${quote(join(dir, "ran"))}; exit 7`,
-	];
-
-	const reserved = (dir: string, env: NodeJS.ProcessEnv, cancel = cancellation().cancel) =>
-		reserve({
-			unit: `quest-gate-${randomUUID()}.scope`,
-			enclosing: null,
-			cores: 3,
-			pool: { cpus: 18, total: 24 },
-			command: record(dir),
-			env,
-			cancel,
-		});
-
-	test("holds its cores at low priority from the host's pool, and caps its scope at them", async () => {
-		const dir = tempDir();
-		const reservation = reserved(dir, fakeReserve(dir));
-		let granted = false;
-		void reservation.granted.then(() => (granted = true));
-		await until(() => existsSync(join(dir, "args")));
-		// mbx inside the capped scope is told the host's CPUs, not the cap's.
-		expect(readFileSync(join(dir, "args"), "utf8")).toMatch(/^24 reserve --cpus 3 --priority low -- \/bin\/sh /);
-		expect(granted).toBe(false);
-		writeFileSync(join(dir, "grant"), "");
-		await reservation.granted;
-		// Granted, the command waits for the gate's start.
-		expect(existsSync(join(dir, "ran"))).toBe(false);
-		reservation.start();
-		expect(await reservation.done).toBe(7);
-		expect(readFileSync(join(dir, "ran"), "utf8")).toBe("300000 100000\n1\n");
-		expect(await reservation.abandon()).toBe(false);
-	});
-
-	test("abandoned before mbx grants it, never runs its command", async () => {
-		const dir = tempDir();
-		const reservation = reserved(dir, fakeReserve(dir));
-		await until(() => existsSync(join(dir, "args")));
-		const abandoned = reservation.abandon();
-		// A grant that arrives meanwhile still finds the gate gone.
-		writeFileSync(join(dir, "grant"), "");
-		expect(await abandoned).toBe(true);
-		expect(existsSync(join(dir, "ran"))).toBe(false);
-	});
-
-	test("abandoned once granted but before it starts, never runs its command", async () => {
-		const dir = tempDir();
-		const reservation = reserved(dir, fakeReserve(dir));
-		writeFileSync(join(dir, "grant"), "");
-		await reservation.granted;
-		expect(await reservation.abandon()).toBe(true);
-		expect(existsSync(join(dir, "granted"))).toBe(true);
-		expect(existsSync(join(dir, "ran"))).toBe(false);
-		expect(() => reservation.start()).toThrow("abandoned");
-	});
-
-	test("rejects when mbx exits without granting it", async () => {
-		const dir = tempDir();
-		await expect(reserved(dir, fakeReserve(dir, 4)).done).rejects.toThrow(
-			"mbx reserve exited with 4 before it granted 3 cores",
-		);
-	});
-
-	test("cancelled while it waits, stops mbx and never runs its command", async () => {
-		const dir = tempDir();
-		const { stop, cancel } = cancellation();
-		const reservation = reserved(dir, fakeReserve(dir), cancel);
-		await until(() => existsSync(join(dir, "args")));
-		stop.abort("SIGTERM");
-		expect(await reservation.done).toBe(128 + constants.signals.SIGTERM);
-		expect(existsSync(join(dir, "ran"))).toBe(false);
-	});
 });

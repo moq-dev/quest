@@ -13,10 +13,11 @@ import {
 	type Repository,
 	type RequiredCheck,
 	array,
+	currentChecks,
 	requirements,
 	string,
 } from "./github";
-import { appOf, latestContexts } from "../github/checks";
+import { appOf } from "../github/checks";
 import { classifyCheck } from "./status";
 import type { Method } from "./hold";
 import { committedSources, snapshot } from "./tree";
@@ -174,7 +175,7 @@ export interface Waiting {
 const CONTEXTS = `pageInfo { hasNextPage endCursor }
 	nodes {
 		__typename
-		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { databaseId app { databaseId } } }
+		... on CheckRun { databaseId name status conclusion detailsUrl checkSuite { databaseId app { databaseId } workflowRun { file { path repositoryName } } } }
 		... on StatusContext { context state createdAt targetUrl }
 	}`;
 
@@ -432,7 +433,8 @@ export async function resolveQueue(
 			// The queue's first page holds the head's checks, unless the head moved from the pin since.
 			const commit = object(object(array(object(node.commits).nodes)[0]).commit);
 			const rollup = commit.oid === approved ? commit.statusCheckRollup : undefined;
-			const unmet = checks(await contexts(github, repository, approved, rollup), required);
+			const found = await contexts(github, repository, approved, rollup);
+			const unmet = checks((await currentChecks(github, repository, approved, found)).checks, required);
 			// An approval can still arrive on the pinned head, such as an automated reviewer's, so it waits like a check.
 			const approval = node.reviewDecision === "REVIEW_REQUIRED";
 			if (unmet.failing.length > 0) {
@@ -496,18 +498,20 @@ export async function requiredChecks(
 	sha: string,
 	required: RequiredCheck[],
 ): Promise<{ failing: string[]; pending: string[] }> {
-	return checks(await contexts(github, repository, sha), required);
+	return checks(
+		(await currentChecks(github, repository, sha, await contexts(github, repository, sha))).checks,
+		required,
+	);
 }
 
 /**
- * The required checks a head failed, and those pending or not yet reported, each from its app. Only
- * each check's latest run counts, as for GitHub's mergeability, so a rerun supersedes a cancelled or
- * failed run.
+ * The required checks a head failed, and those pending or not yet reported, each from its app. Only the
+ * head's current checks count, from {@link currentChecks}: each check's latest run, as for GitHub's
+ * mergeability, so a rerun supersedes a cancelled or failed run, without a cancelled run a newer one replaced.
  */
-function checks(contexts: ObjectValue[], required: RequiredCheck[]): { failing: string[]; pending: string[] } {
+function checks(latest: ObjectValue[], required: RequiredCheck[]): { failing: string[]; pending: string[] } {
 	const failing: string[] = [];
 	const pending: string[] = [];
-	const latest = latestContexts(contexts);
 	for (const need of required) {
 		let result: "passed" | "failing" | "pending" = "pending";
 		let reported = false;
