@@ -7,7 +7,7 @@ import { git } from "./git";
 import { requireRemote, string } from "./github";
 import { type PullModels, type Round, SEVERITIES, type Tally, located, parseBase, sameSeat } from "./review";
 
-const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex", opencode: "opencode" };
+const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex" };
 
 /**
  * Model text as one inline code span, so a mention, issue reference, or Markdown in it renders as text.

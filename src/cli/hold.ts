@@ -3,7 +3,7 @@
 // that added the label is its hold token, since sessions often share an account.
 // `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
 import { ACTIVE_LABEL, formatFinding, handedBack, isHoldLabel, latestHold, heldToken, withoutHandBack } from "../core";
-import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../github/merge";
+import { cleanAutoMergeRefusal, immediateMerge, lacksApproval, queueHead } from "../github/merge";
 import { repositoryPath } from "./claims";
 import {
 	array,
@@ -29,7 +29,7 @@ export type Method = "merge" | "squash" | "rebase";
 const READ = `query HoldOwnership($owner: String!, $repo: String!, $number: Int!) {
 	repository(owner: $owner, name: $repo) {
 		pullRequest(number: $number) {
-			id url state isDraft body updatedAt baseRefName baseRefOid headRefName headRefOid mergeStateStatus isMergeQueueEnabled isInMergeQueue
+			id url state isDraft body updatedAt baseRefName baseRefOid headRefName headRefOid mergeStateStatus reviewDecision isMergeQueueEnabled isInMergeQueue
 			labels(first: 100) { nodes { name } }
 			timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
 				nodes { __typename ... on LabeledEvent { id createdAt label { name } } }
@@ -59,6 +59,11 @@ interface Snapshot {
 	branch: string;
 	head: string;
 	mergeState: string;
+	/**
+	 * The base requires an approval the PR lacks, such as an online reviewer's that a ruleset requires. An admin's
+	 * token may merge or enqueue past it, so only auto-merge, which waits for it, may pick such a head.
+	 */
+	unapproved: boolean;
 	queue: boolean;
 	/** Whether the PR is in its base's merge queue. */
 	queued: boolean;
@@ -251,6 +256,8 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		if (fresh.base !== snapshot.base) {
 			throw new Refusal(`${snapshot.url} was retargeted from ${snapshot.base} to ${fresh.base}; land it again`);
 		}
+		// An approval dismissed or a change requested since the first read decides how it may land.
+		return { ...snapshot, unapproved: fresh.unapproved };
 	};
 	await passing(labels.github, pr, snapshot.url, sha);
 	const findings = await request.check({
@@ -279,8 +286,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 	if (snapshot.queue) {
 		if (named !== undefined && named !== "merge")
 			deps.warn(`${snapshot.url} lands through a merge queue, which applies its own merge method`);
-		await unchanged();
-		await pick(labels, snapshot, named ?? "merge");
+		await pick(labels, await unchanged(), named ?? "merge");
 		return;
 	}
 	const repository = object(await (await labels.github.request(repositoryPath(pr))).json());
@@ -311,7 +317,11 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 			`${snapshot.url} head ${snapshot.head} does not contain ${snapshot.base} at ${base}; merge the base and rerun the repository's checks before landing`,
 		);
 	}
-	await unchanged();
+	const { unapproved } = await unchanged();
+	if (unapproved && repository.allow_auto_merge !== true)
+		throw new Refusal(
+			`${snapshot.url} lacks the approval its base requires, which a merge now would bypass; land it once it is approved`,
+		);
 	const submit = (mutation: "mergePullRequest" | "enablePullRequestAutoMerge") =>
 		labels.github.graphql(
 			`mutation($id: ID!, $sha: GitObjectID!, $method: PullRequestMergeMethod!) {
@@ -320,7 +330,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 			{ id: snapshot.id, sha: snapshot.head, method: method.toUpperCase() },
 		);
 	// Only --direct reaches here without auto-merge on; it merges at once rather than arm what GitHub refuses.
-	if (repository.allow_auto_merge !== true || immediateMerge(snapshot.mergeState, snapshot.queue)) {
+	if (!unapproved && (repository.allow_auto_merge !== true || immediateMerge(snapshot.mergeState, snapshot.queue))) {
 		await submit("mergePullRequest");
 		return;
 	}
@@ -335,6 +345,7 @@ export async function land(pr: PullRequest, request: LandRequest, deps: GitHubDe
 		if (
 			fresh.state !== "OPEN" ||
 			fresh.draft ||
+			fresh.unapproved ||
 			fresh.base !== snapshot.base ||
 			!immediateMerge(fresh.mergeState, fresh.queue) ||
 			(await requirements(labels.github, pr, fresh.base)).checks.some((check) => check.name === LAND_CHECK)
@@ -373,13 +384,13 @@ export const UNREFUSED = ["FORBIDDEN", "NOT_FOUND", "INSUFFICIENT_SCOPES", "INTE
  */
 async function pick(labels: Labels, snapshot: Snapshot, method: Method): Promise<void> {
 	try {
-		await queueHead(
-			(query, variables) => labels.github.graphql(query, variables),
-			snapshot.id,
-			snapshot.head,
-			snapshot.mergeState,
+		await queueHead((query, variables) => labels.github.graphql(query, variables), {
+			id: snapshot.id,
+			head: snapshot.head,
+			mergeState: snapshot.mergeState,
+			unapproved: snapshot.unapproved,
 			method,
-		);
+		});
 	} catch (error) {
 		if (!(error instanceof GitHubGraphQLError) || error.types.some((type) => UNREFUSED.includes(type ?? "")))
 			throw error;
@@ -546,6 +557,7 @@ class Labels {
 			branch: string(row.headRefName),
 			head: string(row.headRefOid),
 			mergeState: string(row.mergeStateStatus),
+			unapproved: lacksApproval(row.reviewDecision),
 			queue: row.isMergeQueueEnabled === true,
 			queued: row.isInMergeQueue === true,
 			labels: array(object(row.labels).nodes)

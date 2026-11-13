@@ -35,6 +35,8 @@ class FakePull {
 	body = "Summary.";
 	head = HEAD;
 	mergeState = "BLOCKED";
+	/** GitHub's review decision, null when the base requires no review. */
+	reviewDecision: string | null = null;
 	queue = false;
 	allowAutoMerge: boolean | null = true;
 	/** The repository's merge method settings, hidden from the token when null. */
@@ -198,6 +200,7 @@ class FakePull {
 						headRefName: "quest/m0/example",
 						headRefOid: this.head,
 						mergeStateStatus: this.mergeState,
+						reviewDecision: this.reviewDecision,
 						isMergeQueueEnabled: this.queue,
 						autoMergeRequest: this.autoMerge,
 						mergeQueueEntry: this.queueEntry,
@@ -854,4 +857,71 @@ test("iterate and release exit 0 when stdout returns a value", async () => {
 		vi.unstubAllEnvs();
 		vi.unstubAllGlobals();
 	}
+});
+
+describe("merge --land on a base that requires an approval the head lacks", () => {
+	// An admin's token sees such a PR as mergeable past the requirement, so only auto-merge may pick it.
+	test.each(["REVIEW_REQUIRED", "CHANGES_REQUESTED"])(
+		"arms auto-merge in a merge queue, never enqueueing (%s)",
+		async (decision) => {
+			const pull = new FakePull();
+			pull.queue = true;
+			pull.mergeState = "CLEAN";
+			pull.reviewDecision = decision;
+			await land(PR, { sha: HEAD, check: clean }, pull.deps());
+			expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
+			pull.reviewDecision = "APPROVED";
+			pull.autoMerge = null;
+			pull.writes.length = 0;
+			await land(PR, { sha: HEAD, check: clean }, pull.deps());
+			expect(pull.writes).toEqual([`enqueuePullRequest ${HEAD}`]);
+		},
+	);
+
+	test("never enqueues when GitHub refuses auto-merge as clean, which an admin's enqueue would bypass", async () => {
+		const pull = new FakePull();
+		pull.queue = true;
+		pull.reviewDecision = "REVIEW_REQUIRED";
+		pull.beforeAutoMerge = () => "Pull request is in clean status";
+		expect(await refused(land(PR, { sha: HEAD, check: clean }, pull.deps()))).toContain(
+			"GitHub refused to enqueue",
+		);
+		// The refused attempt is all: no enqueue follows.
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} MERGE`]);
+	});
+
+	test("decides on the last read, so an approval dismissed while it checks still holds", async () => {
+		const pull = new FakePull();
+		pull.mergeState = "CLEAN";
+		pull.reviewDecision = "APPROVED";
+		pull.afterRead = () => {
+			pull.reviewDecision = "REVIEW_REQUIRED";
+		};
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH`]);
+		expect(pull.state).toBe("OPEN");
+	});
+
+	test("arms auto-merge rather than merging at once", async () => {
+		const pull = new FakePull();
+		pull.mergeState = "CLEAN";
+		pull.reviewDecision = "REVIEW_REQUIRED";
+		await land(PR, { sha: HEAD, method: "squash", check: clean }, pull.deps());
+		expect(pull.writes).toEqual([`enablePullRequestAutoMerge ${HEAD} SQUASH`]);
+		expect(pull.state).toBe("OPEN");
+	});
+
+	test("refuses --direct with auto-merge off, which would merge past it", async () => {
+		const pull = new FakePull();
+		pull.allowAutoMerge = false;
+		pull.mergeState = "CLEAN";
+		pull.reviewDecision = "REVIEW_REQUIRED";
+		expect(await refused(land(PR, { sha: HEAD, method: "squash", direct: true, check: clean }, pull.deps()))).toBe(
+			`${URL_} lacks the approval its base requires, which a merge now would bypass; land it once it is approved`,
+		);
+		expect(pull.writes).toEqual([]);
+		pull.reviewDecision = "APPROVED";
+		await land(PR, { sha: HEAD, method: "squash", direct: true, check: clean }, pull.deps());
+		expect(pull.state).toBe("MERGED");
+	});
 });
