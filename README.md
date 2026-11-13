@@ -1143,7 +1143,7 @@ started with. Quest never loads the working directory's `.env` files, as Bun
 otherwise would, so a repository's `.env.development` cannot override the
 variables a gated build was given.
 
-Admission is sized from the host, with no configuration. Unless mbx's pool
+Admission is sized from the host, with no configuration of Quest's own. Unless mbx's pool
 admits the command (see below), every platform waits while the host-wide 1-minute load average exceeds the host's CPU count, or while
 available memory is below one command's budget: 4 GiB, or a quarter of RAM on
 smaller hosts, where RAM is capped by any container memory limit. On Linux,
@@ -1185,16 +1185,19 @@ scope's CPU (the cpu controller is delegated to it, as systemd 254 does by
 default), and [mbx](https://github.com/jdx/mr-boxington) 1.30.0 or later
 would schedule a build in the command's directory, mbx's machine-wide pool
 admits the command instead of the load average, so gated work shares one CPU
-budget with every Cargo build on the host. The gate still waits for memory,
-then runs the command under `mbx reserve --priority low`, holding its share of
-the pool, `scheduler.cpus` less `scheduler.reserve_cpus`, and caps its scope at
-that many CPUs (`CPUQuota`), which bounds every tool inside it, Cargo or not.
-mbx switches its own scheduling off inside a reservation, so the command's
-compiles take no further permits. A command's first run holds half the pool.
+budget with every Cargo build on the host. The gate runs the command under
+`mbx reserve --priority low`, holding its share of the pool, `scheduler.cpus`
+(the host's logical CPUs when unset) less `scheduler.reserve_cpus`, and caps
+its scope at that many CPUs (`CPUQuota`), which bounds every tool inside it,
+Cargo or not. Once mbx grants the reservation, the gate waits for memory as
+usual, and only then starts the command. mbx switches its own scheduling off
+inside a reservation, so the command's compiles take no further permits. A
+command's first run holds half the pool.
 Each later run of the same argv, in the same directory of any worktree of the
 same repository, holds a share learned from the last: double after a run the
 cap throttled, otherwise halfway down to the run's busiest 5 seconds. Shares
-are kept under `~/.cache/quest/shares/<hostname>`. A low-priority reservation
+are kept under `~/.cache/quest/shares/<hostname>`, and a command's is forgotten
+30 days after its last measured run. A low-priority reservation
 above three quarters of the pool cannot fit beside the quarter mbx keeps for
 normal-priority builds, so it waits for those to finish.
 
