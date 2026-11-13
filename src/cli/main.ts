@@ -505,7 +505,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"The head's first failing required check prints as checks:failed, and every required check passing as checks:passed, " +
 				"each once per head, with the required check's name as the actor and its details URL. " +
 				"Results count as quest status counts them, so neutral and skipped results pass. " +
-				"checks:passed waits until no check is pending, no GitHub Actions run is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
+				"checks:passed waits until no check is pending, no finished job's GitHub Actions run is still going, no run read to replace a cancelled check is unfinished, and every check and workflow the base branch names is present, then names the last required check that passed. " +
 				"Optional failures print separately as check:failed; a base branch requiring no checks requires them all. " +
 				"When auto-merge stays enabled on a head other than the current one, which GitHub allows across a writer's push, " +
 				"auto-merge:moved prints once per head, with the account that enabled it as the actor and a URL naming the head it " +
@@ -802,11 +802,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option(
 			"--fixer-tag <pattern>",
 			"Fetch the tags matching this pattern (repeatable), such as `deploy-*`, from GitHub into each fixer checkout, so checks that read them, such as which commit is deployed, run there as in the queue's build",
-			(value: string, previous: string[]) => {
-				if (!/^[\w.*/-]+$/.test(value) || value.startsWith("-") || value.includes(".."))
-					throw new InvalidArgumentError("expected a tag name pattern, such as deploy-*");
-				return [...previous, value];
-			},
+			refPattern("tag", "deploy-*", 1),
+			[] as string[],
+		)
+		.option(
+			"--fixer-branch <pattern>",
+			"Fetch the branches matching this pattern (repeatable), such as `release`, from GitHub into each fixer checkout as `origin/<branch>`, so checks that diff against them run there as in the queue's build; the base is always there as `origin/<base>`",
+			refPattern("branch", "release"),
 			[] as string[],
 		)
 		.option(
@@ -1666,6 +1668,23 @@ export function gateBoundary(argv: string[]): string[] {
 	const command = skip(index + 1, ["--quick"]);
 	if (!argv[command] || argv[command].startsWith("-")) return argv;
 	return [...argv.slice(0, command), "--", ...argv.slice(command)];
+}
+
+/**
+ * Collect a repeatable ref name pattern, such as `deploy-*`, refusing one that could read as an option or escape its
+ * namespace, or that holds more `*` than `stars`: a pattern that becomes a fetch refspec may hold only one.
+ */
+function refPattern(kind: string, example: string, stars = Infinity) {
+	return (value: string, previous: string[]) => {
+		if (
+			!/^[\w.*/-]+$/.test(value) ||
+			value.startsWith("-") ||
+			value.includes("..") ||
+			value.split("*").length > stars + 1
+		)
+			throw new InvalidArgumentError(`expected a ${kind} name pattern, such as ${example}`);
+		return [...previous, value];
+	};
 }
 
 /** Parses a positive, safe integer option named `name`. */

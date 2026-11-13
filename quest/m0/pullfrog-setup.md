@@ -10,8 +10,8 @@ their absence.
 
 ## Plan
 
-Decided 2026-11-12 (user, /quest-plan): ✅ both a reference-line fallback
-([no-cli-context](/quest/m0/no-cli-context.md)) and a setup step here
+Decided 2026-11-12 (user, /quest-plan): ✅ both a reference-line fallback to
+the rules on GitHub, now in `quest init`, and a setup step here
 (rejected: only the fallback; only this setup step).
 
 Pullfrog reviews with Claude since 2026-11-12, its model access configured in

@@ -1,7 +1,5 @@
 // `quest init`'s file plan: which files installing Quest writes or removes in
 // a repository, computed from what the repository holds without writing any.
-// The CLI applies it to a checkout and the Worker publishes it as a setup
-// pull request, so both install the same files.
 //
 // The plan touches only skill stubs (writing missing or outdated ones and
 // removing those of retired skills), one reference line in the root agent
@@ -24,14 +22,7 @@ export const REFERENCE_MARKER = "Quests: ";
  * whose `quest setup` hook already printed the rules skips the command.
  */
 export const REFERENCE_LINE =
-	"Quests: before any work, run `quest context` and follow it, unless this session already holds its rules.";
-
-/** Earlier releases' default reference lines, which init upgrades in place; a reworded line stays. */
-const OLD_REFERENCE_LINES: readonly string[] = [
-	"Quests: before starting work, run `quest guide` and follow it.",
-	"Quests: before starting work, run `quest context` and `quest guide`, and follow both.",
-	"Quests: before any work, run `quest context` and follow it.",
-];
+	"Quests: before any work, run `quest context` and follow it, or read https://github.com/moq-dev/quest/blob/main/docs/context.md where `quest` is not installed, unless this session already holds its rules.";
 
 /**
  * The skill directories Claude Code and other agents (Codex) read, each with
@@ -144,11 +135,11 @@ export function planInit(repo: Checkout, stubs: readonly Stub[], options: { goal
 
 	const changes: InitChange[] = [...written, ...retired.map((dir) => ({ path: `${dir}/SKILL.md`, content: null }))];
 	if (repo.lstat(readme) === null) changes.push({ path: readme, content: questReadme(options.goal) });
-	for (const [path, marker, line, old] of [
-		[instructions, REFERENCE_MARKER, REFERENCE_LINE, OLD_REFERENCE_LINES],
-		[".gitattributes", ATTRIBUTES_LINE, ATTRIBUTES_LINE, []],
+	for (const [path, marker, line] of [
+		[instructions, REFERENCE_MARKER, REFERENCE_LINE],
+		[".gitattributes", ATTRIBUTES_LINE, ATTRIBUTES_LINE],
 	] as const) {
-		const content = appendLine(repo.stat(path) === "file" ? repo.read(path) : "", marker, line, old);
+		const content = appendLine(repo.stat(path) === "file" ? repo.read(path) : "", marker, line);
 		if (content !== null) changes.push({ path, content });
 	}
 	return changes;
@@ -253,14 +244,10 @@ export function lines(content: string): string[] {
 
 /**
  * `content` with `line` appended, separated from existing content by a blank
- * line, or null when a line already starts with `marker`. A line matching one
- * of `old` exactly is replaced with `line` instead.
+ * line, or null when a line already starts with `marker`.
  */
-function appendLine(content: string, marker: string, line: string, old: readonly string[]): string | null {
-	const existing = lines(content);
-	const outdated = existing.find((l) => old.includes(l));
-	if (outdated !== undefined) return content.replace(outdated, line);
-	if (existing.some((l) => l.startsWith(marker))) return null;
+function appendLine(content: string, marker: string, line: string): string | null {
+	if (lines(content).some((l) => l.startsWith(marker))) return null;
 	const eol = newline(content);
 	if (content !== "") {
 		if (!content.endsWith("\n")) content += eol;
