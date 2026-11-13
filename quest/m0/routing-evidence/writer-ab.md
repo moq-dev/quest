@@ -48,7 +48,7 @@ Agent's choices, for the implementer to revisit:
   `quest unblocked --json` rather than drawing again.
 - Record it on the Implementer line beside the size an iterate already
   records, such as `(arm B)` or `(iterate, S, arm B)`, and extend
-  `implementer()` in `src/github/models.ts` to parse both, since today it
+  `implementer()` in `src/cli/models-record.ts` to parse both, since today it
   accepts only `(XS)` and `(iterate, XS)`. A writer that ran off its arm,
   such as a fallback to Sol, counts in neither arm.
 - `quest models` takes only a size, so an iterate's entry comes from the
