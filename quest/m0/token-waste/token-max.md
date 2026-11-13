@@ -37,4 +37,4 @@ line.
 
 ## Waiting
 
-- kixel-ai/token-max: publish 0.1.0 and serve `run.sh`; check `curl -fsS https://crates.io/api/v1/crates/token-max | jq '.crate | {max_version, repository}'` shows 0.1.0 from `https://github.com/kixel-ai/token-max`, and `curl -fsSI https://max.kixel.ai/run.sh` succeeds
+- kixel-ai/token-max: publish 0.1.0 and serve `run.sh`; check `curl -fsS -A quest https://crates.io/api/v1/crates/token-max/0.1.0 | jq .version.repository` prints `"https://github.com/kixel-ai/token-max"`, and `curl -fsSI https://max.kixel.ai/run.sh` succeeds
