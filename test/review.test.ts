@@ -493,9 +493,13 @@ fakes.each([
 		const result = await quest("--root", s.repo, "review");
 		expect(result.stderr).toContain(message);
 		expect(result.code).toBe(2);
-		// Both seats' status checks passed, and the first turn to fail stopped the other's before it resumed.
+		// The failing seat's status check passed, and the first turn to fail stopped the other seat before it
+		// resumed. That seat runs its own status check concurrently, so the abort may stop it before its CLI
+		// logs, or before it spawns at all.
 		const calls = s.calls();
-		expect(calls.filter((c) => effortOf(c) === null)).toHaveLength(2);
+		const checks = calls.filter((c) => effortOf(c) === null).length;
+		expect(checks).toBeGreaterThanOrEqual(1);
+		expect(checks).toBeLessThanOrEqual(2);
 		const turns = calls.filter((c) => effortOf(c) !== null);
 		expect(turns.length).toBeGreaterThanOrEqual(1);
 		expect(turns.every((c) => !c.argv.includes("--resume") && !c.argv.includes("resume"))).toBe(true);
