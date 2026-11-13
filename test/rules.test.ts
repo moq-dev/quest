@@ -281,3 +281,13 @@ test("docs/context.md is the rules `quest context` prints, for agents without th
 		`${CONTEXT}\n${CHECKED_CONTEXT}`,
 	);
 });
+
+test("reading stdin from /dev/zero is a busy wait", () => {
+	expect(bash("read -t 1 < /dev/zero")).toEqual([RULES.busyWait]);
+	expect(bash("while :; do read -t 5 <>/dev/zero; done")).toEqual([RULES.busyWait]);
+	expect(bash("while read -t 1 x; do :; done < /dev/zero")).toEqual([RULES.busyWait]);
+	expect(bash("read -u 3 -t 1 3</dev/zero")).toEqual([RULES.busyWait]);
+	expect(bash("head -c 16 /dev/zero > out.bin")).toEqual([]);
+	expect(bash("read -t 1 < input.txt")).toEqual([]);
+	expect(bash("od -An -N4 < /dev/zero")).toEqual([]);
+});
