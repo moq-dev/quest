@@ -297,6 +297,21 @@ export function limit(unit: string, memory: Ceiling): void {
 	}
 }
 
+/**
+ * Why systemd counts the ended scope as failed, such as `oom-kill`, forgetting the unit; undefined
+ * for one that ended normally. systemd records an out-of-memory kill before it handles this
+ * request, since it reads the kernel's notice of one ahead of its bus.
+ */
+function failed(unit: string): string | undefined {
+	const result = execFileSync("systemctl", ["--user", "show", "--property=Result", "--value", unit], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	}).trim();
+	if (result === "success") return undefined;
+	execFileSync("systemctl", ["--user", "reset-failed", unit], { stdio: ["ignore", "pipe", "pipe"] });
+	return result;
+}
+
 export const systemdScopes: Scopes = {
 	check() {
 		if (process.platform !== "linux" || !killable()) throw new Error(UNSUPPORTED);
@@ -347,7 +362,8 @@ export const systemdScopes: Scopes = {
 				"--user",
 				"--scope",
 				"--quiet",
-				"--collect",
+				// A scope the kernel killed at its ceiling stays loaded as failed, so its run can ask why it ended.
+				...(options.memory ? [] : ["--collect"]),
 				`--unit=${unit}`,
 				...bound,
 				...capped,
@@ -365,6 +381,7 @@ export const systemdScopes: Scopes = {
 				unsupported: UNSUPPORTED,
 				launcher: "systemd-run",
 				emptied: () => stopBound(unit),
+				exhausted: () => options.memory !== undefined && failed(unit) === "oom-kill",
 				bound: Boolean(enclosing),
 			},
 			cwd,
@@ -384,6 +401,8 @@ interface Containment {
 	launcher: string;
 	/** Stop what the cgroup's end leaves to systemd, once the cgroup is empty. */
 	emptied(): Promise<void>;
+	/** Whether the kernel killed the cgroup's processes at its memory ceiling, asked once they are gone. */
+	exhausted(): boolean;
 	/**
 	 * Whether an enclosing Quest owner kills this cgroup at its own second signal, so a repeated
 	 * signal this process receives, which may be a copy of that owner's, leaves the kill to it.
@@ -420,20 +439,6 @@ function contain(
 		let admitted = false;
 		let interrupted = 0;
 		let failure: Error | undefined;
-		// The scope's ceiling in bytes, once the kernel killed a process there for lack of memory.
-		let exhausted: string | undefined;
-		let events: ReturnType<typeof watch> | undefined;
-		const starved = () => {
-			if (exhausted !== undefined) return;
-			try {
-				if (/^oom_kill [1-9]/m.test(readFileSync(join(group!, "memory.events"), "utf8")))
-					exhausted = readFileSync(join(group!, "memory.max"), "utf8").trim();
-			} catch (error) {
-				// The scope ended, and systemd removed its cgroup.
-				if (!["ENOENT", "ENODEV"].includes((error as NodeJS.ErrnoException).code ?? ""))
-					failure = error as Error;
-			}
-		};
 		// Set once every process in the cgroup was asked to stop; aborted once they no longer get time to.
 		let signalled = false;
 		const drain = new AbortController();
@@ -485,12 +490,6 @@ function contain(
 				return;
 			}
 			group = join("/sys/fs/cgroup", path);
-			if (options.memory) {
-				// The kernel notifies memory.events as it kills, while the cgroup still holds the dying
-				// processes; systemd removes the cgroup, and the count with it, once they are gone.
-				events = watch(join(group, "memory.events"), starved);
-				events.on("error", () => {});
-			}
 			if (interrupted) return;
 			admitted = true;
 			admission.end("admitted\n");
@@ -508,8 +507,6 @@ function contain(
 			try {
 				// Descendants that outlive the command are orphans of this run: stop them.
 				if (group) {
-					if (events) starved();
-					events?.close();
 					try {
 						// Every process got the signal, so let each finish its own cleanup, even one that
 						// outlives the wrappers that exited first, until a second signal kills them.
@@ -524,10 +521,10 @@ function contain(
 					}
 				}
 				if (failure) throw failure;
-				if (exhausted !== undefined && !interrupted)
+				if (code !== 0 && !interrupted && describe.exhausted())
 					throw new Exhausted(
-						`${describe.name} ran out of memory: the kernel killed its command at a ceiling of ` +
-							`${(Number(exhausted) / 2 ** 30).toFixed(2)} GiB, which its gate raises only while the host has free memory`,
+						`${describe.name} ran out of memory: the kernel killed its command at its memory ceiling, ` +
+							"which its gate raises only while the host has free memory",
 					);
 				if (!admitted && !interrupted)
 					throw new Error(

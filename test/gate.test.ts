@@ -314,9 +314,10 @@ test("what running commands may still take of their ceilings is not free, howeve
 });
 
 /**
- * Run `ration` for a command with a 1 GiB ceiling that grows by as much, over `samples`: what the
- * command holds and what the host has available at each CEILING_MS. Returns each ceiling the scope
- * was moved to, each one it was held at, and its admission.
+ * Run `ration` for a command with a 1 GiB ceiling that moves by as much, on a host that keeps
+ * 1 GiB free, over `samples`: what the command holds and what the host has available at each
+ * CEILING_MS. Returns each ceiling the scope was moved to, each one it was held at, and its
+ * admission.
  */
 async function rationed(samples: { held: number; available: number }[], others: Admission[] = []) {
 	const state = { now: 0, load: 0, memory: Infinity };
@@ -326,7 +327,9 @@ async function rationed(samples: { held: number; available: number }[], others: 
 	host.usage = () => ({ cpu: 0, memory: held });
 	const caps: number[] = [];
 	host.cap = (_unit, { high, max }) => {
-		expect(high).toBeLessThan(max);
+		expect(high).toBe(max - max / 8);
+		// The ledger already promises a raised ceiling, and still promises a lowered one.
+		expect(host.ledger().admissions[0].memory).toBeGreaterThanOrEqual(max);
 		caps.push(max / GiB);
 	};
 	const stop = new AbortController();
@@ -340,29 +343,34 @@ async function rationed(samples: { held: number; available: number }[], others: 
 		state.memory = sample.available * GiB;
 	};
 	const throttled: number[] = [];
-	await ration(host, { id: "build", unit: "quest-gate-build.scope", step: GiB }, stop.signal, (ceiling) =>
-		throttled.push(ceiling / GiB),
+	await ration(
+		host,
+		{ id: "build", unit: "quest-gate-build.scope", step: GiB, reserve: GiB },
+		stop.signal,
+		(ceiling) => throttled.push(ceiling / GiB),
 	);
 	return { caps, throttled, mine: host.ledger().admissions[0] };
 }
 
-test("a gate raises its command's ceiling ahead of what it holds while the host has room", async () => {
+test("a gate keeps its command's ceiling ahead of what it holds while the host has room", async () => {
 	const { caps, throttled, mine } = await rationed([
-		{ held: 0.25, available: 8 },
-		// Within half a step of the ceiling: one more step.
-		{ held: 0.75, available: 8 },
-		{ held: 1.25, available: 8 },
-		{ held: 1.9, available: 8 },
-		{ held: 2.75, available: 8 },
-		{ held: 3.8, available: 8 },
+		{ held: 0.25, available: 9 },
+		// Three quarters of the ceiling: one more step.
+		{ held: 0.8, available: 9 },
+		{ held: 1.6, available: 9 },
+		{ held: 2.4, available: 9 },
+		{ held: 3.2, available: 9 },
 		// Past 4 GiB, a quarter of the ceiling is more than a step.
-		{ held: 4.9, available: 8 },
-		// It never shrinks.
-		{ held: 0.5, available: 8 },
+		{ held: 4, available: 9 },
+		// Half of it is no reason to move.
+		{ held: 3.2, available: 9 },
+		// Less is: a step above what it holds.
+		{ held: 1.2, available: 9 },
+		{ held: 0.1, available: 9 },
 	]);
-	expect(caps).toEqual([2, 3, 4, 5, 6.25]);
+	expect(caps).toEqual([2, 3, 4, 5, 6.25, 3, 2]);
 	expect(throttled).toEqual([]);
-	expect(mine).toEqual({ id: "build", at: 0, ...me, memory: 6.25 * GiB, held: GiB / 2 });
+	expect(mine).toEqual({ id: "build", at: 0, ...me, memory: 2 * GiB, held: 0 });
 });
 
 test("with no room, a ceiling stays until other commands free memory", async () => {
@@ -370,13 +378,14 @@ test("with no room, a ceiling stays until other commands free memory", async () 
 	const other = { id: "other", at: 0, ...me, memory: 4 * GiB, held: GiB };
 	const { caps, throttled, mine } = await rationed(
 		[
-			{ held: 0.75, available: 3.5 },
+			// 4.7 GiB less the 3 GiB promised, the 1 GiB kept free, and its own 0.2 GiB left: no step.
+			{ held: 0.8, available: 4.7 },
 			// Held where the kernel slows it: reported once, not at every sample.
-			{ held: 0.95, available: 3.5 },
-			{ held: 0.96, available: 3.5 },
+			{ held: 0.9, available: 4.6 },
+			{ held: 0.95, available: 4.6 },
 			// A step now fits, though a queued caller's place and a finished command hold nothing.
-			{ held: 0.96, available: 4 },
-			{ held: 1.99, available: 3.9 },
+			{ held: 0.95, available: 5.1 },
+			{ held: 1.9, available: 4.2 },
 		],
 		[
 			other,
@@ -389,9 +398,8 @@ test("with no room, a ceiling stays until other commands free memory", async () 
 	expect(mine).toMatchObject({ memory: 2 * GiB, held: 1.5 * GiB });
 });
 
-test("a ceiling slows its command just below where it is killed", () => {
-	expect(bounds(GiB, GiB)).toEqual({ high: GiB - GiB / 16, max: GiB });
-	expect(bounds(8 * GiB, GiB)).toEqual({ high: 8 * GiB - GiB / 4, max: 8 * GiB });
+test("a ceiling slows its command over the last eighth before it is killed", () => {
+	expect(bounds(GiB)).toEqual({ high: GiB - GiB / 8, max: GiB });
 });
 
 test("a priority caller waits for memory, never for load, even while a gated command runs", async () => {
@@ -789,6 +797,13 @@ test("Linux memory reads the container cgroup mounted as the root", () => {
 	// A cgroup outside the namespace is not mounted, so nothing visible bounds it.
 	writeFileSync(join(proc, "self/cgroup"), "0::/../sibling\n");
 	expect(linuxMemory(proc, cgroups)).toEqual({ total: 64 * GiB, available: 24 * GiB });
+	// A gate's ceiling around the caller does not bound a command that gets a scope of its own.
+	const gated = "background.slice/quest-gate-0f18849e-1c60-4b6e-9d2a-7a1c2b3d4e5f.scope";
+	mkdirSync(join(cgroups, gated), { recursive: true });
+	writeFileSync(join(cgroups, gated, "memory.max"), String(GiB));
+	writeFileSync(join(cgroups, gated, "memory.current"), String(GiB));
+	writeFileSync(join(proc, "self/cgroup"), `0::/${gated}\n`);
+	expect(linuxMemory(proc, cgroups)).toEqual(limited);
 });
 
 test("every caller on this host shares one ledger, whatever its environment or sessions", () => {
@@ -1257,34 +1272,33 @@ describe.runIf(process.platform === "linux")("a systemd scope", () => {
 			// A neighbour in a scope of its own holds memory beside it, and a wrapper waits on the hog.
 			const beside = cancellation();
 			const neighbour = scoped(
-				hog(64, `require("node:fs").writeFileSync(${quote(ready)}, ""); setInterval(() => {}, 1000)`),
+				hog(
+					64,
+					`require("node:fs").writeFileSync(${quote(ready)}, String(process.pid)); setInterval(() => {}, 1000)`,
+				),
 				process.env,
 				beside.cancel,
 			);
-			const stop = cancellation();
-			await until(() => existsSync(ready));
-			const run = scope(`quest-gate-${randomUUID()}.scope`, { high: 255 * MiB, max: 256 * MiB })(
-				[
-					"/bin/sh",
-					"-c",
-					`sleep 1000 & echo $! > ${quote(pid)}; ${hog(1024, "").map(quote).join(" ")}; exit 0`,
-				],
-				process.env,
-				stop.cancel,
-			);
-			await expect(run).rejects.toThrow(
-				/ran out of memory: the kernel killed its command at a ceiling of 0\.25 GiB/,
-			);
-			await expect(run).rejects.toBeInstanceOf(Exhausted);
-			// The wrapper and its other child died with the hog, and the scope beside it still runs.
-			await until(() => stopped(Number(readFileSync(pid, "utf8"))));
-			const state = await Promise.race([
-				neighbour,
-				new Promise((resolve) => setTimeout(resolve, 100, "running")),
-			]);
-			expect(state).toBe("running");
-			beside.kill.abort();
-			await neighbour;
+			try {
+				await until(() => existsSync(ready));
+				const run = scope(`quest-gate-${randomUUID()}.scope`, { high: 255 * MiB, max: 256 * MiB })(
+					[
+						"/bin/sh",
+						"-c",
+						`sleep 1000 & echo $! > ${quote(pid)}; ${hog(1024, "").map(quote).join(" ")}; exit 0`,
+					],
+					process.env,
+					cancellation().cancel,
+				);
+				await expect(run).rejects.toThrow(/ran out of memory: the kernel killed its command/);
+				await expect(run).rejects.toBeInstanceOf(Exhausted);
+				// The wrapper and its other child died with the hog, and the scope beside it still runs.
+				await until(() => stopped(Number(readFileSync(pid, "utf8"))));
+				expect(stopped(Number(readFileSync(ready, "utf8")))).toBe(false);
+			} finally {
+				beside.kill.abort();
+				await neighbour;
+			}
 		},
 	);
 });

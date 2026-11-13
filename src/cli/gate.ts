@@ -15,7 +15,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, userInfo } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
@@ -100,12 +100,12 @@ const CEILING_PARTS = 8;
 export const CEILING_MS = 1000;
 
 /**
- * The scope limits for a ceiling of `share` bytes that grows by `step`: the kernel slows the
- * command a little below the ceiling, so it is held there briefly while its gate looks for room
- * to raise both, and is killed only once it fills the rest.
+ * The scope limits for a ceiling of `share` bytes: the kernel slows the command over the last
+ * eighth below it, ever harder the nearer it gets, so its gate has time to raise both while the
+ * host has room, and kills it only once it fills the rest.
  */
-export function bounds(share: number, step: number): Ceiling {
-	return { high: share - Math.floor(Math.min(step / 4, share / 16)), max: share };
+export function bounds(share: number): Ceiling {
+	return { high: share - Math.floor(share / 8), max: share };
 }
 
 /** What a running command may still take of its ceiling: memory promised to it, so not free for another. */
@@ -186,7 +186,10 @@ function cgroupStat(group: string, key: string): number {
 	}
 }
 
-/** Count reclaimable host cache and the headroom of every enclosing memory cgroup. */
+/** A gate scope's cgroup directory name. */
+const GATE_SCOPE = /^quest-gate-[0-9a-f-]+\.scope$/;
+
+/** Count reclaimable host cache and the headroom of every enclosing memory cgroup, except a gate's own ceiling. */
 export function linuxMemory(proc = "/proc", cgroups = "/sys/fs/cgroup"): { total: number; available: number } {
 	const meminfo = readFileSync(join(proc, "meminfo"), "utf8");
 	const bytes = (key: string) => {
@@ -218,7 +221,8 @@ export function linuxMemory(proc = "/proc", cgroups = "/sys/fs/cgroup"): { total
 		const inside = relative(root, start);
 		if (inside === ".." || inside.startsWith(`..${sep}`)) continue;
 		for (let group = start; ; group = dirname(group)) {
-			for (const file of limits) {
+			// A gate's ceiling binds its own scope, not the scope of its own a command started here gets.
+			for (const file of GATE_SCOPE.test(basename(group)) ? [] : limits) {
 				try {
 					const limit = Number(readFileSync(join(group, file), "utf8").trim());
 					if (!Number.isFinite(limit) || limit <= 0) continue; // "max", or an unset v1 soft limit.
@@ -675,10 +679,15 @@ export async function measure(host: Host, admission: { id: string; unit: string 
  * Until `signal` aborts, keep the memory ceiling of the admitted command in systemd scope `unit`
  * ahead of what it holds, while the host has room. Every CEILING_MS, the admission's `held` is set
  * to what the command holds, rounded down to half a `step`, so other callers count the rest of its
- * ceiling as promised. Once the command is within half a `step` of its ceiling, its gate raises the
- * ceiling by a quarter of it, or by `step` if that is more or all that fits, taken from the
- * host's available memory less what the other running commands may still take of theirs. Ceilings
- * therefore never promise more than the host has, and never shrink.
+ * ceiling as promised:
+ *
+ * - Once the command holds three quarters of its ceiling, its gate raises the ceiling by a quarter
+ *   of it, or by `step` if that is more or all that fits. The raise comes from the host's available
+ *   memory, less what the other running commands may still take of their ceilings and less
+ *   `reserve`, which stays free for everything outside the gate. Ceilings therefore never promise
+ *   more than the host has.
+ * - Once it holds less than half, the ceiling falls to a `step` above what it holds, so a peak the
+ *   command has left is free for others.
  *
  * With no room, the ceiling stays: the kernel slows the command there and kills it once it fills
  * the rest (see `bounds`), so the command that overran stops, not another. `throttled` is called
@@ -686,11 +695,11 @@ export async function measure(host: Host, admission: { id: string; unit: string 
  */
 export async function ration(
 	host: Host,
-	admission: { id: string; unit: string; step: number },
+	admission: { id: string; unit: string; step: number; reserve: number },
 	signal: AbortSignal,
 	throttled?: (ceiling: number) => void,
 ) {
-	const { id, unit, step } = admission;
+	const { id, unit, step, reserve } = admission;
 	let share = step;
 	let slowed = false;
 	for (;;) {
@@ -703,21 +712,28 @@ export async function ration(
 		const memory = host.usage(unit)?.memory;
 		if (memory === undefined) continue;
 		const held = memory - (memory % Math.ceil(step / 2));
-		let grant = 0;
+		const fitted = Math.max(step, Math.ceil(memory / step) * step + step);
+		// Lowered before it is recorded, and raised after, so the ledger never promises less than the scope allows.
+		if (memory < share / 2 && fitted < share) {
+			share = fitted;
+			host.cap(unit, bounds(share));
+		}
+		let next = share;
 		for (let ledger = host.ledger(); ; ledger = host.ledger()) {
 			const mine = ledger.admissions.find((entry) => entry.id === id);
 			if (mine === undefined) throw new Error(`gate lost its admission ${id} from the ledger`);
-			grant = 0;
-			if (memory > share - step / 2) {
+			next = share;
+			if (memory > share - share / 4) {
 				const promised = ledger.admissions
 					.filter((entry) => entry !== mine && !entry.queued && host.running(entry))
 					.reduce((sum, entry) => sum + unused(entry), 0);
-				const room = host.memory() - promised;
+				// This command's own unused ceiling is already promised to it.
+				const room = host.memory() - promised - reserve - Math.max(0, share - memory);
 				const wanted = Math.max(step, Math.floor(share / 4));
-				grant = room >= wanted ? wanted : room >= step ? step : 0;
+				next += room >= wanted ? wanted : room >= step ? step : 0;
 			}
-			if (grant === 0 && mine.held === held) break;
-			const updated = { ...mine, memory: share + grant, held };
+			if (mine.memory === next && mine.held === held) break;
+			const updated = { ...mine, memory: next, held };
 			if (
 				host.publish(
 					ledger,
@@ -726,12 +742,11 @@ export async function ration(
 			)
 				break;
 		}
-		if (grant > 0) {
-			// Recorded first, so no other caller counts this memory as free while the scope takes it.
-			share += grant;
-			host.cap(unit, bounds(share, step));
+		if (next > share) {
+			share = next;
+			host.cap(unit, bounds(share));
 			slowed = false;
-		} else if (memory >= bounds(share, step).high) {
+		} else if (memory >= bounds(share).high) {
 			if (!slowed) throttled?.(share);
 			slowed = true;
 		} else slowed = false;
@@ -930,7 +945,7 @@ export function owner(
 	const unit = `quest-gate-${randomUUID()}.scope`;
 	const held = () => {
 		const ceiling = Math.floor(memory / CEILING_PARTS);
-		return capped() && ceiling > 0 ? { ceiling, limits: bounds(ceiling, ceiling) } : {};
+		return capped() && ceiling > 0 ? { ceiling, limits: bounds(ceiling) } : {};
 	};
 	if (enclosing) {
 		const { ceiling, limits } = held();
@@ -997,7 +1012,7 @@ export async function gate(command: string[], options: { quick?: boolean } = {})
 						measure(host, { id, unit }, stop.signal),
 						ceiling === undefined
 							? undefined
-							: ration(host, { id, unit, step: ceiling }, stop.signal, throttled),
+							: ration(host, { id, unit, step: ceiling, reserve: limits.memory }, stop.signal, throttled),
 					]).then(
 						() => undefined,
 						(error: unknown) => ({ error }),
