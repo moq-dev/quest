@@ -60,6 +60,7 @@ const NULL_BODY = [204, 205, 304];
  */
 export type Repeat = boolean | ((started: number) => Promise<Response | undefined>);
 
+/** How {@link GitHub.request} sends a request and which refusals it returns rather than throws. */
 export interface RequestOptions {
 	etag?: string;
 	body?: unknown;
@@ -547,22 +548,26 @@ export function actor(value: unknown): string {
 			: "-";
 }
 
+/** `value` as a JSON object, or a thrown invalid-response error. */
 export function object(value: unknown): ObjectValue {
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		throw new Error("invalid GitHub response: expected an object");
 	return value as ObjectValue;
 }
 
+/** `value` as an array of JSON objects, or a thrown invalid-response error. */
 export function array(value: unknown): ObjectValue[] {
 	if (!Array.isArray(value)) throw new Error("invalid GitHub response: expected an array");
 	return value.map(object);
 }
 
+/** `value` as a nonempty string, or a thrown invalid-response error. */
 export function string(value: unknown): string {
 	if (typeof value !== "string" || !value) throw new Error("invalid GitHub response: expected a nonempty string");
 	return value;
 }
 
+/** The URL a response's `Link` header gives for `relation`, such as the next page. */
 export function link(response: Response, relation: string): string | undefined {
 	return response.headers
 		.get("link")

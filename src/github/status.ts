@@ -69,6 +69,7 @@ const STATUS = `query($owner: String!, $repo: String!, $number: Int!,
 }
 fragment reaction on Reaction { content createdAt user { login } }`;
 
+/** A check run or commit status on the head, as `quest status` prints it. */
 export interface Check {
 	name: string;
 	required: boolean;
@@ -77,6 +78,7 @@ export interface Check {
 	url: string | null;
 }
 
+/** A reviewer's latest submitted review. */
 export interface Review {
 	reviewer: string;
 	/** approved, changes_requested, commented, or dismissed. */
@@ -88,6 +90,7 @@ export interface Review {
 	url: string;
 }
 
+/** A reaction on the PR or one of its reviews. */
 export interface Reaction {
 	content: string;
 	actor: string;
@@ -96,6 +99,7 @@ export interface Reaction {
 	url: string;
 }
 
+/** An unresolved review thread. */
 export interface Thread {
 	id: string;
 	path: string;
@@ -118,6 +122,7 @@ export interface ReviewRecord {
 	head: string;
 }
 
+/** Everything `quest status` reports about a PR. */
 export interface Status {
 	url: string;
 	state: "open" | "closed" | "merged";

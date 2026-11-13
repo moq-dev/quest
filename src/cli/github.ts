@@ -120,6 +120,7 @@ export function githubRepository(url: string): Repository | null {
 	return match ? { owner: match[1], repo: match[2] } : null;
 }
 
+/** The CLI's client dependencies: global `fetch`, a token from `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`, and `warn`. */
 export function gitHubDependencies(warn: (message: string) => void): GitHubDependencies {
 	let token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 	if (!token) {
