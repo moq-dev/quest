@@ -103,8 +103,11 @@ export async function held(github: GitHub, sources: Sources, branches: string[])
 		repository: source.repository,
 		tips: source.tips ?? (await claimBranches(github, source.repository)),
 	});
-	const all = [await read(upstream), ...(fork ? [await read(fork)] : [])];
-	const pulls = (await Promise.all(all.map((source) => openPullRequests(github, source.repository)))).flat();
+	const listed = fork ? [upstream, fork] : [upstream];
+	const [all, pulls] = await Promise.all([
+		Promise.all(listed.map(read)),
+		Promise.all(listed.map((source) => openPullRequests(github, source.repository))).then((each) => each.flat()),
+	]);
 	const pushTo = all[all.length - 1];
 	const landed = new Map<string, string>();
 	const holds = async (branch: string): Promise<Claim | null> => {
