@@ -36,8 +36,9 @@ draft [kixelated/nixos#36](https://github.com/kixelated/nixos/pull/36).
   dependency bumps; a quest bump is the exception).
 - Which repositories? ✅ Every other repository moq-bot is installed on whose
   `flake.lock` locks quest through exactly one root input. quest's own
-  `quest-pinned` input is the merge driver's, which `quest check` keeps
-  current; bumping it would cut a release that triggers another bump (rejected: a `--bump` list in the host's
+  `quest-pinned` input, the merge driver's, stays on Dependabot's weekly nix
+  update (`flake.nix`); bumping it here would cut a release, since it changes
+  the flake, which would trigger another bump (rejected: a `--bump` list in the host's
   configuration, since #36's list went stale within five days).
 
 Turning it on is the host's work, planned in kixelated/nixos's tree.

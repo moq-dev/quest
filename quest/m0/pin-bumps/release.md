@@ -28,9 +28,11 @@ before the checks this needs to pass first). So:
 
 - Every run, on each push to `main` and on a daily schedule, compares `main`
   with the latest published release and cuts one when that range touches
-  what ships: the paths Release's pull request filter already lists as
-  building the binaries, plus every file it publishes, such as
-  `scripts/installer.sh`. One predicate serves both, so they cannot drift. A
+  what ships: everything the binaries or the flake package build from,
+  `assets/` (bundled into the binary) and `nix/` included, plus every file
+  Release publishes, such as `scripts/installer.sh`. Release's pull request
+  path filter, which misses `assets/` and `nix/` today, uses the same
+  predicate, so the two cannot drift. A
   cancelled or failed run then needs no recovery: the next run sees the same
   unreleased range. Runs on `main` queue rather than cancel each other.
 - A run builds every binary and passes the lifecycle and archive install
@@ -51,7 +53,9 @@ before the checks this needs to pass first). So:
   `src/cli/hooks.ts`), `nix/package.nix`, `scripts/lifecycle-check.mjs`, the
   tests, and the workflows' version checks and Windows fallback tag. A
   release binary embeds its tag; a flake build, which cannot see tags, embeds
-  its commit.
+  its commit, which `flake.nix` passes to `nix/package.nix`. It also builds
+  `quest-pinned` from that input's own, older `nix/package.nix`, so the new
+  argument must not break that call.
 - Update CONTRIBUTING.md's Releases section and SETUP.md's pinning advice.
 - The first automated release exists only after the implementing PR merges.
   That PR rewrites this quest to its checks, with a `## Waiting` item on the
