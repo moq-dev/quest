@@ -14,7 +14,7 @@ import {
 	requirements,
 	string,
 	workflowRuns,
-} from "./github";
+} from "../github/client";
 import { land } from "./hold";
 import { commandEnvironment, contexts, git, type RemoteRead } from "./land";
 import { push, remoteHead } from "./land-head";

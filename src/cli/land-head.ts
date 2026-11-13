@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFil
 import { join } from "node:path";
 import { carriedBy } from "./land-fixer";
 import { gitAuthentication } from "./land-git";
-import { GitHub, type GitHubDependencies, type Repository, object, string } from "./github";
+import { GitHub, type GitHubDependencies, type Repository, object, string } from "../github/client";
 import {
 	baseRemote,
 	type LandMethod,

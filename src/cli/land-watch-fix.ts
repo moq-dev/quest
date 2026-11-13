@@ -3,10 +3,18 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { isHoldLabel } from "../core";
-import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
+import {
+	array,
+	GitHub,
+	type GitHubDependencies,
+	GitHubGraphQLError,
+	object,
+	type ObjectValue,
+	string,
+} from "../github/client";
 import { type Queued, lacksApproval, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
-import { type Carried, describe, readSignals } from "./signals";
+import { type Carried, describe, readSignals } from "../github/signals";
 import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";

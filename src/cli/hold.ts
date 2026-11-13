@@ -2,11 +2,9 @@
 // a time. It holds the `quest:active` label, and the ID of the timeline event
 // that added the label is its hold token, since sessions often share an account.
 // `quest merge` takes no label: the pinned auto-merge or merge-queue entry it creates is the queue signal.
-import { ACTIVE_LABEL, formatFinding, handedBack, isHoldLabel, latestHold, heldToken, withoutHandBack } from "../core";
-import { cleanAutoMergeRefusal, immediateMerge, lacksApproval, queueHead } from "../github/merge";
-import { repositoryPath } from "./claims";
+import { ACTIVE_LABEL, formatFinding, handedBack, latestHold, heldToken, withoutHandBack } from "../core";
+import { cleanAutoMergeRefusal, immediateMerge, queueHead } from "../github/merge";
 import {
-	array,
 	currentChecks,
 	GitHub,
 	type GitHubDependencies,
@@ -16,125 +14,23 @@ import {
 	type PullRequest,
 	requirements,
 	string,
-} from "./github";
-import { ALLOWS, LAND_CHECK, METHOD_NAMES, contexts, enqueue } from "./land";
+	repositoryPath,
+} from "../github/client";
+import { ALLOWS, METHOD_NAMES, contexts, enqueue } from "./land";
+import { LAND_CHECK } from "../github/land";
 import { QUEUE_CHECK } from "./land-queue";
 import type { LandingCheck } from "./landed";
-import { classifyCheck } from "./status";
-import { describe, readSignals } from "./signals";
-import { Refusal, ago } from "./start";
+import { classifyCheck } from "../github/status";
+import { Refusal } from "./start";
+import { type Snapshot, ago, readSnapshot, starterHeld } from "../github/hold";
+import { describe, readSignals } from "../github/signals";
 
 export type Method = "merge" | "squash" | "rebase";
-
-/** The PR, its `quest:*` labels, and the timeline events that add a label. */
-const READ = `query HoldOwnership($owner: String!, $repo: String!, $number: Int!) {
-	repository(owner: $owner, name: $repo) {
-		pullRequest(number: $number) {
-			id url state isDraft body updatedAt baseRefName baseRefOid headRefName headRefOid mergeStateStatus reviewDecision isMergeQueueEnabled isInMergeQueue
-			labels(first: 100) { nodes { name } }
-			timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
-				nodes { __typename ... on LabeledEvent { id createdAt label { name } } }
-			}
-		}
-	}
-}`;
-
-interface Event {
-	id: string;
-	time: number;
-	/** The label it added; `null` for any other event. */
-	label: string | null;
-}
-
-interface Snapshot {
-	id: string;
-	url: string;
-	state: "OPEN" | "CLOSED" | "MERGED";
-	draft: boolean;
-	body: string;
-	updatedAt: string;
-	base: string;
-	/** The commit the base branch points at. */
-	baseSha: string;
-	/** The head branch's name. */
-	branch: string;
-	head: string;
-	mergeState: string;
-	/**
-	 * The base requires an approval the PR lacks, such as an online reviewer's that a ruleset requires. An admin's
-	 * token may merge or enqueue past it, so only auto-merge, which waits for it, may pick such a head.
-	 */
-	unapproved: boolean;
-	queue: boolean;
-	/** Whether the PR is in its base's merge queue. */
-	queued: boolean;
-	/** The hold labels on the PR. */
-	labels: string[];
-	/** Oldest first. */
-	events: Event[];
-}
 
 /** A session's hold: its label and the token naming the event that added it. */
 export interface Hold {
 	label: string;
 	token: string;
-}
-
-export interface HoldFact {
-	label: string;
-	/** Null when the acquisition is older than the available timeline. */
-	token: string | null;
-	takenAt: string | null;
-	age: string | null;
-	/** GitHub's verified event URL; the opaque GraphQL token is not a browser anchor. */
-	eventUrl: string | null;
-}
-export interface HoldReport {
-	head: string;
-	holds: HoldFact[];
-	starter: { lastActive: string; age: string; url: string } | null;
-}
-
-/** Read ownership facts through the state commands' reader, without changing labels. */
-export async function readHoldStatus(pr: PullRequest, deps: GitHubDependencies): Promise<HoldReport> {
-	const labels = new Labels(pr, deps);
-	const snapshot = await labels.read();
-	const holds =
-		snapshot.state !== "OPEN"
-			? []
-			: snapshot.labels.map((label): HoldFact => {
-					const event = latestHold(snapshot.events, label);
-					return {
-						label,
-						token: event?.id ?? null,
-						takenAt: event ? new Date(event.time).toISOString() : null,
-						age: event ? ago(deps.now(), event.time) : null,
-						eventUrl: null,
-					};
-				});
-	if (holds.some((hold) => hold.token !== null)) {
-		// REST publishes event URLs and the same node IDs the ownership tokens use.
-		for (const event of await labels.github.all(`${repositoryPath(pr)}/issues/${pr.number}/events?per_page=100`)) {
-			const hold = holds.find((hold) => hold.token === event.node_id);
-			if (hold && event.event === "labeled" && object(event.label).name === hold.label)
-				hold.eventUrl = string(event.url);
-		}
-	}
-	return {
-		head: snapshot.head,
-		holds,
-		starter: starterHeld(snapshot)
-			? {
-					lastActive: snapshot.updatedAt,
-					age: ago(deps.now(), Date.parse(snapshot.updatedAt)),
-					url: snapshot.url,
-				}
-			: null,
-	};
-}
-
-function starterHeld(snapshot: Snapshot): boolean {
-	return snapshot.state === "OPEN" && snapshot.draft && !handedBack(snapshot.body);
 }
 
 /** Take `pr`, or keep the hold `token` names. Prints nothing; returns the hold. */
@@ -555,39 +451,8 @@ class Labels {
 		this.issue = `${repositoryPath(pr)}/issues/${pr.number}`;
 	}
 
-	async read(): Promise<Snapshot> {
-		const data = await this.github.graphql(READ, {
-			owner: this.pr.owner,
-			repo: this.pr.repo,
-			number: this.pr.number,
-		});
-		const repository = data.repository;
-		if (repository === null) {
-			throw new Error(`cannot read ${this.pr.owner}/${this.pr.repo}; check the repository and token`);
-		}
-		const pull = object(repository).pullRequest;
-		if (pull === null) throw new Error(`${this.pr.owner}/${this.pr.repo}#${this.pr.number} is not a pull request`);
-		const row = object(pull);
-		return {
-			id: string(row.id),
-			url: string(row.url),
-			state: string(row.state) as Snapshot["state"],
-			draft: row.isDraft === true,
-			body: typeof row.body === "string" ? row.body : "",
-			updatedAt: string(row.updatedAt),
-			base: string(row.baseRefName),
-			baseSha: string(row.baseRefOid),
-			branch: string(row.headRefName),
-			head: string(row.headRefOid),
-			mergeState: string(row.mergeStateStatus),
-			unapproved: lacksApproval(row.reviewDecision),
-			queue: row.isMergeQueueEnabled === true,
-			queued: row.isInMergeQueue === true,
-			labels: array(object(row.labels).nodes)
-				.map((label) => string(label.name))
-				.filter(isHoldLabel),
-			events: array(object(row.timelineItems).nodes).map(event),
-		};
+	read(): Promise<Snapshot> {
+		return readSnapshot(this.github, this.pr);
 	}
 
 	async add(label: string): Promise<void> {
@@ -601,13 +466,4 @@ class Labels {
 			allow: [404],
 		});
 	}
-}
-
-function event(row: ObjectValue): Event {
-	const labeled = row.__typename === "LabeledEvent";
-	return {
-		id: string(row.id),
-		time: Date.parse(string(row.createdAt)),
-		label: labeled ? string(object(row.label).name) : null,
-	};
 }

@@ -1,7 +1,7 @@
 // A halted queue: the base fails its check alone, so nothing lands until a check of it passes.
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { GitHub, object } from "./github";
+import { GitHub, object } from "../github/client";
 import type { Plan } from "./land";
 
 /**

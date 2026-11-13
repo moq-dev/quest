@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { move, remove } from "../src/core";
-import { openPullRequests } from "../src/cli/claims";
-import { GitHub, type GitHubDependencies } from "../src/cli/github";
+import { openPullRequests } from "../src/github/claims";
+import { GitHub, type GitHubDependencies } from "../src/github/client";
 import { main } from "../src/cli/main";
 import { EPIC_README, M0_README, ROOT_README, TWO, Tree, initRepository, tempDir } from "./fixture";
 

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { implementer } from "../src/github/models";
+import { implementer } from "../src/cli/models-record";
 import { fixes } from "../src/cli/land-fixer";
 import type { Round, Tally } from "../src/cli/review";
 import { parseReview, reviewRecord } from "../src/cli/review-record";

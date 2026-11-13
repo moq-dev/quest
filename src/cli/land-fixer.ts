@@ -17,18 +17,9 @@ import {
 import { constants as osConstants } from "node:os";
 import { basename, join } from "node:path";
 import { reviewSection } from "../core";
-import { GitHub, type GitHubDependencies, type ObjectValue, object, string } from "./github";
-import {
-	baseRemote,
-	commandEnvironment,
-	contains,
-	git,
-	tryGit,
-	enqueue,
-	type Entry,
-	type Plan,
-	type Reason,
-} from "./land";
+import { GitHub, type GitHubDependencies, type ObjectValue, object, string } from "../github/client";
+import { baseRemote, commandEnvironment, contains, git, tryGit, enqueue, type Entry, type Plan } from "./land";
+import { type Reason } from "../github/land";
 import { COMMENT_LIMIT, resolution, resolutionSection, type Resolution } from "./land-apply";
 import {
 	CAUSES,
@@ -47,7 +38,7 @@ import { isPrepared, push, remoteHead } from "./land-head";
 import { BASE_JOB, type Halt, haltNotice, readHalt, saveHalt } from "./land-halt";
 import { isParked, parked } from "./land-park";
 import { excerpt, type Failure } from "./land-serve";
-import { type Carried, describe, readSignals } from "./signals";
+import { type Carried, describe, readSignals } from "../github/signals";
 
 /**
  * Why a fixer's result cannot be published, which hands its PR back. A push GitHub refused, or a fix

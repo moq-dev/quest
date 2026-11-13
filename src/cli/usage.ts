@@ -3,13 +3,15 @@
 // named; quest ties each to a PR by the branches and repositories token-max exports for it.
 import { spawnSync } from "node:child_process";
 import { type Size, SIZES, handedBack, questBranch } from "../core";
-import { recorded } from "../github/models";
-import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
+import { recorded } from "./models-record";
+import { type ClaimDependencies, upstream } from "./claims";
+import { repositoryPath } from "../github/client";
 import { git } from "./git";
 import { fixes } from "./land-fixer";
 import { MERGER } from "./land-watch-fix";
-import { type GitHub, type ObjectValue, type Repository, githubRepository, link, requireRemote } from "./github";
-import { type OnlineReview, readOnlineReviews } from "./online-review";
+import { githubRepository, requireRemote } from "./github";
+import { type GitHub, type ObjectValue, type Repository, link } from "../github/client";
+import { type OnlineReview, readOnlineReviews } from "../github/online-review";
 import { type Counts, type ReviewSummary, findingsText, parseReview } from "./review-record";
 import { SEVERITIES } from "./review";
 
