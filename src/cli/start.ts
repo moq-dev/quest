@@ -17,6 +17,7 @@ import {
 import { GitError, git } from "./git";
 import { requireRemote } from "./github";
 import { object, repositoryPath, string } from "../github/client";
+import { ago } from "../github/hold";
 import { type OpenPull, mergedPull, openPullRequests, pullsFrom } from "../github/claims";
 
 /** Someone else holds the quest, or the claim cannot be released; distinct from a failure. */
@@ -263,19 +264,6 @@ export async function releaseQuest(
 	deleteBranch(root, remote, branch, tip);
 	for (const pull of pulls) await close(up, pull.number);
 	return { branch, closed: pulls.map((pull) => pull.url) };
-}
-
-/** How long ago `time` was, roughly: just now, minutes, hours, then days. */
-export function ago(now: number, time: number): string {
-	const minutes = Math.max(0, Math.round((now - time) / 60_000));
-	if (minutes === 0) return "just now";
-	const [count, unit] =
-		minutes < 60
-			? [minutes, "minute"]
-			: minutes < 48 * 60
-				? [Math.round(minutes / 60), "hour"]
-				: [Math.round(minutes / 1440), "day"];
-	return `${count} ${unit}${count === 1 ? "" : "s"} ago`;
 }
 
 /** A claim for a person deciding whether to wait, take it over, or pick other work. */

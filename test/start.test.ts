@@ -12,7 +12,8 @@ import { claims, openDrafts, target } from "../src/cli/claims";
 import { githubRepository, readRemote, remoteRepository } from "../src/cli/github";
 import { type GitHubDependencies, type ObjectValue } from "../src/github/client";
 import { type Output, main } from "../src/cli/main";
-import { Refusal, ago, releaseQuest, startQuest } from "../src/cli/start";
+import { Refusal, releaseQuest, startQuest } from "../src/cli/start";
+import { ago } from "../src/github/hold";
 import { EPIC_README, GIT_SETTINGS, TWO, Tree, configure, initRepository, template, tempDir } from "./fixture";
 
 const ONE = "quest/m0/epic/one.md";

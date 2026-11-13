@@ -45,8 +45,8 @@ import {
 	type Overlap,
 	type RemoteRead,
 	type Plan,
-	type Reason,
 } from "./land";
+import { type Reason } from "../github/land";
 
 export interface ServeOptions {
 	base?: string;

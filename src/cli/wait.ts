@@ -23,7 +23,7 @@ import {
 	reported,
 	requiredOf,
 	unreported,
-} from "./status";
+} from "../github/status";
 
 const POLL = 5 * 60_000;
 /**

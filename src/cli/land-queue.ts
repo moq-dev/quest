@@ -19,7 +19,6 @@ import {
 	ejection,
 	type Entry,
 	git,
-	LAND_CHECK,
 	type LandMethod,
 	mergeBase,
 	type Plan,
@@ -27,6 +26,7 @@ import {
 	requiredChecks,
 	tryGit,
 } from "./land";
+import { LAND_CHECK } from "../github/land";
 import { post } from "./land-fixer";
 import { gitAuthentication } from "./land-git";
 import {

@@ -8,7 +8,8 @@
 	"private": true,
 	"type": "module",
 	"exports": {
-		"./core": "./src/core/index.ts"
+		"./core": "./src/core/index.ts",
+		"./github": "./src/github/index.ts"
 	},
 	"bin": {
 		"quest": "dist/quest.js"
@@ -18,7 +19,7 @@
 		"build": "bun build src/cli/bin.ts --target=bun --banner \"#!/usr/bin/env -S bun --no-env-file\" --outfile dist/quest.js && bun scripts/executable.mjs dist/quest.js",
 		"compile": "bun build src/cli/bin.ts --compile --no-compile-autoload-dotenv --outfile dist/quest",
 		"quest": "bun src/cli/bin.ts",
-		"check": "tsc && tsc -p src/core && prettier --check .",
+		"check": "tsc && tsc -p src/core && tsc -p src/github && prettier --check .",
 		"test": "vitest run",
 		"fix": "prettier --write ."
 	},

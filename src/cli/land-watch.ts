@@ -44,7 +44,7 @@ import {
 import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
 import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools } from "./land-bump";
 import { pruneLogs } from "./land-prune";
-import { enabledHead, headBefore } from "./status";
+import { enabledHead, headBefore } from "../github/status";
 
 export { readRemoval } from "./land-watch-fix";
 

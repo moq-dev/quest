@@ -48,15 +48,14 @@ import {
 	type Plan,
 	type Target,
 	commandEnvironment,
-	EJECTED,
 	UPHELD,
 	UPHELD_CLASSIC,
 	build,
 	mergeBase,
-	pin,
 	readRemote,
 	resolveQueue,
 } from "../src/cli/land";
+import { EJECTED, pin } from "../src/github/land";
 import { type OwnQueue, ownPass, QUEUE_CHECK, queueBranch } from "../src/cli/land-queue";
 import { ownQueue, readRemoval, watchPermissions } from "../src/cli/land-watch";
 import type { FixContext } from "../src/cli/land-watch-fix";

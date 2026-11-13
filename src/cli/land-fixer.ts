@@ -18,17 +18,8 @@ import { constants as osConstants } from "node:os";
 import { basename, join } from "node:path";
 import { reviewSection } from "../core";
 import { GitHub, type GitHubDependencies, object, string } from "../github/client";
-import {
-	baseRemote,
-	commandEnvironment,
-	contains,
-	git,
-	tryGit,
-	enqueue,
-	type Entry,
-	type Plan,
-	type Reason,
-} from "./land";
+import { baseRemote, commandEnvironment, contains, git, tryGit, enqueue, type Entry, type Plan } from "./land";
+import { type Reason } from "../github/land";
 import { COMMENT_LIMIT, resolution, resolutionSection, type Resolution } from "./land-apply";
 import {
 	CAUSES,
