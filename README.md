@@ -1305,8 +1305,10 @@ however the run ends:
   when the gate learned that the command's own process exited, within
   milliseconds, before it stopped what the command left behind. A run cancelled
   before admission has a null `admitted`.
-- `cpuMs` and `peakMemory` (bytes) are null when the command never ran, and
-  `peakMemory` also where the host cannot say. `measured` names what they
+- `cpuMs` and `peakMemory` (bytes) are null when the gate never started the
+  command, as when cancelled before admission, and `peakMemory` also where the
+  host cannot say. A command that cannot be found still counts the little its
+  launch used. `measured` names what they
   count:
   - `cgroup`: a child cgroup of the command's systemd scope, so every process
     the command started. Peak memory is its `memory.peak`, which needs Linux
@@ -1325,8 +1327,8 @@ leave only whole lines; give each agent its own file to tell them apart. Nested
 gates write nothing, since their outermost gate already counts their command.
 An unset or empty variable writes nothing, a relative path or a symlink is
 refused, and a file the gate cannot open fails it before the command runs. A
-new file is readable only by its user. A line it cannot
-write fails the gate too, though a cancelled run keeps its cancelled status.
+new file is readable only by its user. A line it cannot write fails the gate
+too, except that a cancelled run exits as it would have without the record.
 Windows refuses the variable for now. The agent's own processes write the
 file, so a record is only as trustworthy as the agent.
 

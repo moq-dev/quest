@@ -923,8 +923,10 @@ export async function gate(command: string[], options: GateOptions = {}): Promis
 				if (written !== bytes.length) throw new Error(`wrote ${written} of ${bytes.length} bytes`);
 			} catch (error) {
 				const unrecorded = `gate cannot record its run in ${record.path}: ${message(error)}`;
-				if (failure === undefined && cancel.signal.aborted) {
+				// A cancelled run exits as it would have, recorded or not.
+				if (cancel.signal.aborted) {
 					process.stderr.write(`quest ${unrecorded}\n`);
+					if (failure !== undefined) throw failure;
 					return status;
 				}
 				throw new Error(failure === undefined ? unrecorded : `${message(failure)}; ${unrecorded}`);
