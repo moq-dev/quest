@@ -1637,8 +1637,9 @@ for it on its own host name, or, once its checkout is deleted, those resolved
 there for another session in that exact directory, as a Codex log records
 (never a parent's, which a nested clone may not share); otherwise it stays
 unattributed. A session is reviewing when the PR's `## Review` record names
-it or Codex marks it a review, implementing when it began before the PR opened,
-and iterating otherwise. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
+it or Codex marks it a review, implementing when its first request since
+`--since` came before the PR opened, and iterating otherwise, so a session
+that opened a PR before `--since` and kept working on it reads as iterating. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
 findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
 findings open counts them settled, since `/quest-review` fixes or refutes those

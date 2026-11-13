@@ -214,6 +214,9 @@ export function parseSessions(text: string): Session[] {
 			if (repositories !== null && !Array.isArray(repositories)) fail("a repository list");
 			const branches = Array.isArray(row.branches) ? row.branches : fail("a branch list");
 			const models = Array.isArray(row.models) ? row.models : fail("a model list");
+			// A session's unreadable or unfinished lines may hide any model's requests, so each model's cost is then
+			// a lower bound too, though token-max marks only the session.
+			const complete = flag(row.complete, "its completeness");
 			return {
 				host: optional(row.host, "a host"),
 				harness: word(row.harness, "a harness"),
@@ -242,10 +245,10 @@ export function parseSessions(text: string): Session[] {
 					cacheRead: count(m.cacheReadTokens, "a cache read token count"),
 					output: count(m.outputTokens, "an output token count"),
 					cost: count(m.costUsd, "a model's cost"),
-					complete: flag(m.complete, "a model's completeness"),
+					complete: flag(m.complete, "a model's completeness") && complete,
 				})),
 				cost: count(row.costUsd, "a cost"),
-				complete: flag(row.complete, "its completeness"),
+				complete,
 				skippedLines: count(row.skippedLines, "a skipped line count"),
 			};
 		});
@@ -426,11 +429,14 @@ function owners(sessions: Session[]): (session: Session) => string[] | null {
 /**
  * Attribute each session to the PR whose head branch it last named, among those still open when the session
  * reached the branch and headed from a repository its host resolved for it, and give it a role: reviewing when a
- * PR's review record names it or Codex marks it a review, implementing when it began before its PR opened, and
- * iterating otherwise. Returns the sessions it gave a PR in `rows`, and those on no PR here.
+ * PR's review record names it or Codex marks it a review, implementing when its first request in the window came
+ * before its PR opened, and iterating otherwise. `evidence` holds every exported copy, folded ones included, since a
+ * dropped copy may be the only one naming its directory's repository. Returns the sessions it gave a PR in `rows`,
+ * and those on no PR here.
  */
 function attribute(
 	sessions: Session[],
+	evidence: Session[],
 	pulls: Pull[],
 	rows: Map<number, PullRow>,
 	reviewers: Set<string>,
@@ -440,7 +446,7 @@ function attribute(
 		byBranch.set(each.branch, [...(byBranch.get(each.branch) ?? []), each]);
 	const attributed: Session[] = [];
 	const unattributed: Session[] = [];
-	const owned = owners(sessions);
+	const owned = owners(evidence);
 	for (const session of sessions) {
 		// Another repository may use the same branch name, so a session counts only where its repository is known.
 		const known = owned(session);
@@ -674,7 +680,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	if (exported !== null) {
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
 		const reviewers = new Set(allRows.flatMap((row) => row.review.flatMap((review) => review.session ?? [])));
-		const { attributed, unattributed: left } = attribute(kept, all, byNumber, reviewers);
+		const { attributed, unattributed: left } = attribute(kept, exported ?? [], all, byNumber, reviewers);
 		const reported = narrowed ? attributed : [...attributed, ...left];
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };

@@ -1162,8 +1162,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"price; its sub-agents are sessions of their own. Each Claude Code or Codex session belongs to the PR whose " +
 				"head branch it last names, when a repository token-max resolved for it on its own host, or for another " +
 				"session in the same directory there, is this one; no prompt or reply is read out. Its role is " +
-				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when it began " +
-				"before the PR opened, and iterating otherwise. A session found on several hosts counts once, at its " +
+				"reviewing when the PR's ## Review record names it or Codex marks it a review, implementing when its first " +
+				"request since --since came before the PR opened, and iterating otherwise. A session found on several hosts counts once, at its " +
 				"costliest copy, and the report says how many copies it folded from which hosts; a session with a request " +
 				"token-max could not price or a line it could not read is listed, its cost a lower bound. A host that fails fails the report. " +
 				"Each PR also shows its ## Models size and implementers, and as unread each Implementer line it cannot read, " +

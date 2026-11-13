@@ -399,7 +399,11 @@ describe("usage", () => {
 			// another repository's branch of the same name.
 			exported(THREAD, "gpt-6.1-sol", "high", 1, { start: "2026-11-06T12:00:00Z" }),
 			exported(ITERATE, "gpt-6.1-sol", "high", 2, { start: "2026-11-06T13:00:00Z" }),
-			exported(ITERATE, "gpt-6.1-sol", "high", 1, { start: "2026-11-06T13:00:00Z", host: "box" }),
+			exported(ITERATE, "gpt-6.1-sol", "high", 1, {
+				start: "2026-11-06T13:00:00Z",
+				host: "box",
+				repositories: null,
+			}),
 			exported("22222222-2222-2222-2222-222222222222", "gpt-6.1-sol", "high", 3, {
 				cwd: "/other",
 				repositories: ["https://github.com/other/repo.git"],
@@ -765,6 +769,29 @@ describe("usage", () => {
 		expect(text).toContain(`  local  claude  ${GONE}  2 unreadable lines`);
 		expect(text).not.toContain("SECRET");
 		expect(JSON.stringify(report)).not.toContain("SECRET");
+	});
+
+	test("a folded copy still names its directory's repository, and a session's gaps reach each model", async () => {
+		const { root, deps } = setup();
+		// On `box`, a deleted checkout's only repository evidence is a copy that folds into this host's costlier one.
+		const sessions = parse(
+			exported(THREAD, "gpt-6.1-sol", "high", 2, { cwd: "/gone", branches: [] }),
+			exported(THREAD, "gpt-6.1-sol", "high", 1, { cwd: "/gone", branches: [], host: "box" }),
+			exported(OWNED, "claude-opus-5-5", "high", 7, {
+				cwd: "/gone",
+				host: "box",
+				repositories: null,
+				start: "2026-11-06T14:00:00Z",
+				complete: false,
+			}),
+		);
+		expect(sessions[2]!.models[0]!.complete).toBe(false);
+		const report = await usage(root, { since: "2026-11-05", pr: 10 }, deps(sessions));
+		expect(report.folded).toEqual({ copies: 1, hosts: ["box"] });
+		expect(report.pulls[0]!.sessions.map((s) => [s.host, s.session, s.role])).toEqual([
+			["box", OWNED, "iterating"],
+		]);
+		expect(usageLines(report).join("\n")).toContain("~$7.00 or more");
 	});
 
 	test("narrows to one PR, and reports the records alone without token-max", async () => {
