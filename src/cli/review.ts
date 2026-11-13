@@ -329,6 +329,7 @@ export interface Reviewed {
  */
 interface State {
 	branch: string;
+	/** As read, these may include a retired reviewer's, which a run only numbers past; see `runs`. */
 	sessions: Session[];
 	tallies: Tally[];
 }
@@ -1278,11 +1279,16 @@ export function parseState(value: unknown): State {
 		) &&
 		state.sessions.filter((session) => session.shadow).length <= 1;
 	if (!valid) throw new ReviewInputError("the saved review sessions are not ones quest review reads; pass --new");
-	// A reviewer this quest no longer runs has no CLI to resume its session or settle its findings, so its tally and
-	// session are dropped, open findings included: the routed reviewer reviews the whole branch.
-	const runs = (seat: { reviewer: string }) => (HARNESSES as readonly string[]).includes(seat.reviewer);
-	return { ...state, sessions: state.sessions!.filter(runs), tallies: state.tallies!.filter(runs) } as State;
+	// A retired reviewer's tally is dropped, so the record never names it. Its session stays only until the run numbers
+	// the last round's findings as that round printed them, so the author's responses keep their numbers.
+	return { ...state, tallies: state.tallies!.filter(runs) } as State;
 }
+
+/**
+ * Whether quest still runs `seat`'s reviewer. A retired one has no CLI to resume its session or settle its findings,
+ * so its session is dropped, open findings included, and the routed reviewer reviews the whole branch.
+ */
+const runs = (seat: { reviewer: string }) => (HARNESSES as readonly string[]).includes(seat.reviewer);
 
 /**
  * The branch whose session a round continues: `name`, checked as a branch
@@ -1407,14 +1413,16 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	const dir = dirname(statePath);
 	mkdirSync(dir, { recursive: true });
 	const saved = savedState(statePath, options.fresh);
-	const sessions = options.fresh || saved === undefined ? [] : saved.sessions;
-	// The last run numbered each session's findings after those of the sessions before it.
+	const all = options.fresh || saved === undefined ? [] : saved.sessions;
+	// The last run numbered each session's findings after those of the sessions before it, a retired reviewer's
+	// included, which are then dropped.
 	const firsts = new Map<Session, number>();
 	let next = 1;
-	for (const session of sessions) {
+	for (const session of all) {
 		firsts.set(session, next);
 		next += session.rounds.at(-1)!.findings.length;
 	}
+	const sessions = all.filter(runs);
 	const seated = (session: Session | undefined) => ({
 		session,
 		first: session === undefined ? 1 : firsts.get(session)!,
@@ -1544,7 +1552,7 @@ function savedState(path: string, fresh: boolean | undefined): State | undefined
  */
 function dropped(saved: State | undefined): Tally[] {
 	const tallies = (saved?.tallies ?? []).map((tally) => ({ ...tally, findings: { ...tally.findings } }));
-	for (const session of saved?.sessions ?? []) {
+	for (const session of (saved?.sessions ?? []).filter(runs)) {
 		const tally = tallies.find((each) => sameSeat(each, session))!;
 		for (const finding of session.rounds.at(-1)!.findings) tally.findings[finding.severity]--;
 	}

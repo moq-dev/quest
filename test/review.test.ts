@@ -1846,15 +1846,15 @@ test("saved sessions are read only in the current format, or refused naming --ne
 		tallies: [tally, { ...tally, shadow: true }],
 	};
 	expect(parseState(shadowed)).toEqual(shadowed);
-	// A retired reviewer's session and tally, open findings included, are dropped rather than recorded or held.
-	const retired = { reviewer: "opencode", model: "opencode-go/deepseek-v4.1-flash", effort: "high" };
+	// A retired reviewer's tally is dropped so the record never names it; its session stays for the run's numbering.
+	const retired = { ...session, reviewer: "opencode", session: "ses_1" };
 	expect(
 		parseState({
 			branch: "feature",
-			sessions: [session, { ...session, ...retired, session: "ses_1" }],
-			tallies: [tally, { ...tally, ...retired }],
+			sessions: [session, retired],
+			tallies: [tally, { ...tally, reviewer: "opencode" }],
 		}),
-	).toEqual(current);
+	).toEqual({ ...current, sessions: [session, retired] });
 	for (const older of [
 		null,
 		// One reviewer's session alone, outside a sessions list.
@@ -1874,6 +1874,39 @@ test("saved sessions are read only in the current format, or refused naming --ne
 		{ ...shadowed, sessions: [...shadowed.sessions, { ...session, shadow: true }] },
 	])
 		expect(() => parseState(older)).toThrow(/--new/);
+});
+
+fakes("a retired reviewer's open findings are dropped, keeping the numbers of the rest", async () => {
+	const s = setup();
+	expect((await quest("--root", s.repo, "review")).code).toBe(0);
+	// An opencode session from before its removal, numbered between the pick's finding and the shadow's.
+	const path = sessionFile(join(s.repo, ".git"), "feature");
+	const saved = JSON.parse(readFileSync(path, "utf8"));
+	const [pick, shadow] = saved.sessions;
+	const opencode = { ...pick, reviewer: "opencode", session: "ses_1" };
+	writeFileSync(
+		path,
+		JSON.stringify({
+			...saved,
+			sessions: [pick, opencode, shadow],
+			tallies: [...saved.tallies, { ...saved.tallies[0], reviewer: "opencode" }],
+		}),
+	);
+
+	write(s.repo, "src/lib.ts", "export const x = 4;\n");
+	git(s.repo, "commit", "-qam", "fix");
+	write(s.repo, ".tmp/responses.md", "1. Fixed at src/lib.ts:1.\n2. Refuted.\n3. Fixed at src/lib.ts:1.\n");
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	const later = await quest("--root", s.repo, "review", "--responses", join(s.repo, ".tmp", "responses.md"));
+	expect(later.code, later.stderr).toBe(0);
+	// The shadow settles its finding by the number the author answered, not by #2, the dropped one's.
+	expect(at(s.calls(), "medium").at(-1)!.stdin).toContain(
+		"<earlier-findings>\n3. high src/lib.ts:2 Off by one\n</earlier-findings>",
+	);
+	expect(later.stdout).not.toContain("opencode");
+	const after = JSON.parse(readFileSync(path, "utf8"));
+	expect(after.sessions.map((each: { reviewer: string }) => each.reviewer)).toEqual(["codex", "codex"]);
+	expect(after.tallies.map((each: { reviewer: string }) => each.reviewer)).not.toContain("opencode");
 });
 
 fakes("a session saved by an older quest is refused before the reviewer runs", async () => {
