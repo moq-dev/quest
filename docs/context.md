@@ -46,7 +46,7 @@ Finish with a clean checkout: intended changes committed and pushed, incidental 
 Run CPU-heavy commands, such as builds, test suites, model checkers, and browsers, through `quest gate <command>`, which queues, however long, until the host has room.
 Never work around the queue by polling the load average or capping agents yourself; cancel a gated command only when you no longer need its result.
 Run it in the foreground and read its exit code directly, not through a pipe.
-Never end a turn or report while your background work runs, and never poll it with `sleep` or status checks: block on it with the harness's own wait for that task, at the longest interval it allows, saying nothing between waits.
+Never end a turn or report while your background work runs, and never poll it with `sleep`, status checks, or any busy loop: block on it with the harness's own wait for that task, at the longest interval it allows, saying nothing between waits.
 To wait on a PR's CI or reviews, use `quest wait`, re-running one that times out with the `--since` it printed, so activity during the first wait is still reported.
 A sub-agent ends its turn only with a final result or a question. Its final report holds only what its caller acts on, such as its PR's URL, state, and head, and each decision it needs with a recommendation; details go in the PR body.
 Back out when progress stalls rather than burn tokens; a gate's queue or a long command still running is not a stall.
@@ -88,7 +88,7 @@ When the repository has a `quest/` directory, it plans work as quests: Markdown 
 
 ## Checked
 
-- Never wait with a timed `read` on `/dev/zero`, as in `read -t 1 < /dev/zero`: it never blocks, so it spins a CPU core for the whole timeout. Block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.
+- Never busy-loop or spin while waiting, such as a `read` fed `/dev/zero` or `yes` into a loop or `/dev/null`: block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.
 - No em dashes in what you write: use a comma, colon, parentheses, or separate sentences. Text quoted from someone else keeps its em dashes on a `>` quote line.
 - End every GitHub post you author with a `(Written by <model> with <effort>)` line, naming the running model and its reasoning effort, or `(Written by <model>)` when the harness doesn't report the effort; never guess it.
 - Push with an explicit refspec, `git push <remote> refs/heads/<branch>:refs/heads/<branch>`: a bare branch name can push to the base instead, as under `push.default=upstream` when the branch tracks it.

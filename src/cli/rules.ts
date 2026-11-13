@@ -18,7 +18,7 @@ export const USER_ASKED = "QUEST_USER_ASKED=1";
 /** Each checked rule, as `quest hook` gives it when denying a call that breaks it. */
 export const RULES = {
 	busyWait:
-		"Never wait with a timed `read` on `/dev/zero`, as in `read -t 1 < /dev/zero`: it never blocks, so it spins a CPU core for the whole timeout. Block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.",
+		"Never busy-loop or spin while waiting, such as a `read` fed `/dev/zero` or `yes` into a loop or `/dev/null`: block on the harness's own wait for the task, `quest wait` for a PR, or the command itself.",
 	emDash: "No em dashes in what you write: use a comma, colon, parentheses, or separate sentences. Text quoted from someone else keeps its em dashes on a `>` quote line.",
 	footer: "End every GitHub post you author with a `(Written by <model> with <effort>)` line, naming the running model and its reasoning effort, or `(Written by <model>)` when the harness doesn't report the effort; never guess it.",
 	refspec:
@@ -280,22 +280,32 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 	const { found, scratch } = check;
 	const commands = parse(line);
 	alone &&= commands.length === 1 && !commands[0]!.runs;
-	// A timed `read` fed `/dev/zero` never blocks, so it spins a core for its whole timeout, whether
-	// the redirect sits on it, on its loop or group, or on an `exec`. One that stops at a byte count or
-	// delimiter returns at once instead.
-	const timed = commands.some(({ argv }) => {
-		const at = argv.indexOf("read");
-		if (at === -1) return false;
-		const options = argv.slice(at + 1).filter((arg) => arg.startsWith("-"));
-		return options.some((arg) => /^-[a-zA-Z]*t/.test(arg)) && !options.some((arg) => /^-[a-zA-Z]*[nNd]/.test(arg));
+	// A `read` fed `/dev/zero` never blocks, so it spins: unbounded, or for its whole timeout in a loop.
+	// One that stops at a byte count or a NUL delimiter, or reads another descriptor, returns at once.
+	const zeroRead = commands.some(({ argv }) => {
+		const options = readOptions(argv);
+		if (options === null) return false;
+		if (options.some((arg) => /^-[a-zA-Z]*[nNu]/.test(arg))) return false;
+		const delimiter = options.findIndex((arg) => /^-[a-zA-Z]*d/.test(arg));
+		return delimiter === -1 || (options[delimiter]!.endsWith("d") ? options[delimiter + 1] !== "" : true);
 	});
+	const busy = commands.some(
+		(simple, at) =>
+			commandName(simple.argv) === "yes" &&
+			(!simple.piped ||
+				simple.redirects.some(
+					({ op, fd }) => [">", ">|", ">>", "&>", "&>>"].includes(op) && (!fd || fd === 1),
+				) ||
+				spins(commands[at + 1]?.argv ?? [])),
+	);
+	if (busy) found.add("busyWait");
 	for (const simple of commands) {
 		const env = new Set(inherited);
 		const words = [...simple.argv];
 		const argv = unwrap(simple.argv, env);
 		for (const { op, target, fd } of simple.redirects)
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
-			else if (timed && ["<", "<>"].includes(op) && !fd && target === "/dev/zero") found.add("busyWait");
+			else if (zeroRead && ["<", "<>"].includes(op) && !fd && target === "/dev/zero") found.add("busyWait");
 		if (argv === null) continue;
 		const [name, ...args] = argv;
 		// A wrapper such as `env --chdir` moves where the command reads a relative path from.
@@ -327,6 +337,33 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 		else if (name === "git") git(args, asked, input, check);
 		else if (name === "gh") gh(args, input, literal, check);
 	}
+}
+
+/** The shell keywords that may precede a command in the same simple command, as `parse` leaves them. */
+const KEYWORDS = new Set(["do", "then", "else", "elif", "if", "while", "until", "{", "!", "time"]);
+
+/** The command `argv` runs, past leading keywords and `command` or `builtin`. */
+function commandName(argv: readonly string[]): string | undefined {
+	let at = 0;
+	while (at < argv.length && (KEYWORDS.has(argv[at]!) || ["command", "builtin"].includes(argv[at]!))) at++;
+	return argv[at];
+}
+
+/** The words after `read` when `argv` runs it as its command, or null. */
+function readOptions(argv: readonly string[]): string[] | null {
+	if (commandName(argv) !== "read") return null;
+	return argv.slice(argv.indexOf("read") + 1);
+}
+
+/** Whether a command fed `yes` spins on it: a loop, a group, or a `read`. */
+function spins(argv: readonly string[]): boolean {
+	const first = argv[0];
+	return (
+		first === undefined ||
+		["while", "until", "for", "select", "{", "do"].includes(first) ||
+		commandName(argv) === "read" ||
+		commandName(argv) === undefined
+	);
 }
 
 /**

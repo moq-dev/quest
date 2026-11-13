@@ -26,7 +26,7 @@ test("parse splits commands and attaches redirections and here-documents", () =>
 		),
 	).toEqual([
 		{ argv: ["A=1", "git", "push", "a b", 'c"d'], redirects: [] },
-		{ argv: ["echo", "x"], redirects: [] },
+		{ argv: ["echo", "x"], redirects: [], piped: true },
 		{
 			argv: ["tee", "out.log"],
 			redirects: [
@@ -282,23 +282,36 @@ test("docs/context.md is the rules `quest context` prints, for agents without th
 	);
 });
 
-test("a timed read on /dev/zero is a busy wait", () => {
+test("a busy loop is denied", () => {
 	for (const command of [
 		"read -t 1 < /dev/zero",
+		"read line < /dev/zero",
 		"while :; do read -rt 5 <>/dev/zero; done",
 		"while read -t 1 x; do :; done < /dev/zero",
 		"( while read -t 1 x; do :; done ) < /dev/zero",
 		"exec 0</dev/zero; read -t 1",
+		"read -t 1 -d x < /dev/zero",
+		"yes > /dev/null",
+		"yes",
+		"yes &> /dev/null &",
+		"yes | while read x; do :; done",
+		"yes | read -t 1",
+		"yes | { read x; }",
 	])
-		expect(bash(command)).toEqual([RULES.busyWait]);
+		expect(bash(command), command).toEqual([RULES.busyWait]);
 	for (const command of [
 		"head -c 16 /dev/zero > out.bin",
 		"read -t 1 < input.txt",
 		"read -t 1 3</dev/zero",
+		"read -t 1 -u 3 3</dev/zero",
 		"read -t 1 -N 4 x < /dev/zero",
 		"read -r -d '' x < /dev/zero",
+		"printf '%s %s\\n' read -t1 < /dev/zero",
 		"for i in 1 2; do head -c 16; done < /dev/zero",
 		"gh pr comment 5 --body-file - < /dev/zero",
+		"yes | apt-get install foo",
+		"yes y | ./configure | tee log",
+		"echo yes > answer.txt",
 	])
-		expect(bash(command)).toEqual([]);
+		expect(bash(command), command).toEqual([]);
 });
