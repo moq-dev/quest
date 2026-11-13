@@ -53,7 +53,8 @@ Agent's choices, for the implementer to revisit:
 - One line per run: `command` (argv), `directory` (absolute), `started`,
   `admitted` (null when the run never was), and `ended` as ISO
   timestamps, `cpuMs`, `peakMemory` in bytes (null when the host cannot
-  say), `measured` (`cgroup` or `children`, naming the source above),
+  say), `measured` (`cgroup` or `children`, naming the source above; the
+  Windows quest adds `job`),
   `exit` (the status the gate returns, 128 plus the signal's number for
   a signalled command, as the owners already map it), `cancelled`, and
   `error` (the gate's own failure, such as a command that cannot start
@@ -75,7 +76,9 @@ Agent's choices, for the implementer to revisit:
   The owner stops the command's leftovers with the child's
   `cgroup.kill`, reads the scope's counters while the holder keeps it
   populated, then releases the holder and returns the counters with the
-  exit status. An implementer may prove another way instead, such as
+  exit status. The holder writes the command's exit status and the time
+  it exited to the handshake's report pipe as soon as the command exits,
+  since the owner otherwise sees only the holder's exit, after cleanup. An implementer may prove another way instead, such as
   holding a D-Bus reference to the unit and reading systemd's
   `CPUUsageNSec` and `MemoryPeak`; the short-command test below decides.
   `memory.peak` needs Linux 5.19, so on 5.14 to 5.18 `peakMemory` is
