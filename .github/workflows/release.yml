@@ -60,7 +60,7 @@ jobs:
           release=false
           if [[ $EVENT == pull_request ]]; then
             build=false
-            if git diff --name-only "$BASE...$HEAD" | bash scripts/release-plan.sh ships; then build=true; fi
+            if git diff --name-only --no-renames "$BASE...$HEAD" | bash scripts/release-plan.sh ships; then build=true; fi
           elif [[ $GITHUB_REF == refs/heads/main ]]; then
             release=$ships
             build=$ships

@@ -74,6 +74,12 @@ expect $'version=1.4.3\nrelease=true' next v1.4.2 HEAD
 commit nix/package.nix 'build(nix)!: change'
 expect $'version=2.0.0\nrelease=true' next v1.4.2 HEAD
 
+# Moving a file out of a shipping path ships, though git would report only the destination.
+git tag v2.0.0
+mkdir -p docs && git mv src/c.ts docs/c.ts
+git commit --quiet -m 'docs: move'
+expect $'version=2.0.1\nrelease=true' next v2.0.0 HEAD
+
 if bash "$plan" next v1.4.2 2>/dev/null; then fail 'a missing head should be a usage error'; fi
 
 echo 'release plan: shipping paths and next versions passed'

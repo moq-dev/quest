@@ -44,7 +44,7 @@ next() {
         patch=$((patch + 1))
     fi
     echo "version=$major.$minor.$patch"
-    if git log --format= --name-only "$range" | ships; then
+    if git log --format= --name-only --no-renames "$range" | ships; then
         echo release=true
     else
         echo release=false
