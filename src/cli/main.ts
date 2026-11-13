@@ -800,7 +800,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option(
 			"--fixer-tag <pattern>",
 			"Fetch the tags matching this pattern (repeatable), such as `deploy-*`, from GitHub into each fixer checkout, so checks that read them, such as which commit is deployed, run there as in the queue's build",
-			refPattern("tag", "deploy-*"),
+			refPattern("tag", "deploy-*", 1),
 			[] as string[],
 		)
 		.option(
@@ -1668,10 +1668,18 @@ export function gateBoundary(argv: string[]): string[] {
 	return [...argv.slice(0, command), "--", ...argv.slice(command)];
 }
 
-/** Collect a repeatable ref name pattern, such as `deploy-*`, refusing one that could read as an option, escape its namespace, or hold more than the one `*` a refspec allows. */
-function refPattern(kind: string, example: string) {
+/**
+ * Collect a repeatable ref name pattern, such as `deploy-*`, refusing one that could read as an option or escape its
+ * namespace, or that holds more `*` than `stars`: a pattern that becomes a fetch refspec may hold only one.
+ */
+function refPattern(kind: string, example: string, stars = Infinity) {
 	return (value: string, previous: string[]) => {
-		if (!/^[\w.*/-]+$/.test(value) || value.startsWith("-") || value.includes("..") || value.split("*").length > 2)
+		if (
+			!/^[\w.*/-]+$/.test(value) ||
+			value.startsWith("-") ||
+			value.includes("..") ||
+			value.split("*").length > stars + 1
+		)
 			throw new InvalidArgumentError(`expected a ${kind} name pattern, such as ${example}`);
 		return [...previous, value];
 	};
