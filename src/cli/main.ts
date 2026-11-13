@@ -41,7 +41,7 @@ import { apply, pushCommand } from "./land-apply";
 import { EFFORT_VARIABLE, EFFORTS, fix, FixerAgentError } from "./land-fix";
 import { serve, type ServeOptions } from "./land-serve";
 import { watch, type WatchOptions } from "./land-watch";
-import { landed } from "./landed";
+import { landed, landingCheck } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
 import { hosts } from "../core/doc";
@@ -203,7 +203,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			}
 			const tree = checkout(root(), warn);
 			const findings = check(tree.docs, tree.exists);
-			if (options.base !== undefined) findings.push(...landed(root(), options.base, options.branch));
+			if (options.base !== undefined) findings.push(...landed(root(), options.base, { branch: options.branch }));
 			// A tree nested in another checkout, such as an example, has no stubs of its own.
 			const stubs = options.stubs && questRoot(resolve(root())) === resolve(root()) ? stubFindings(root()) : [];
 			if (findings.length === 0 && stubs.length === 0) {
@@ -623,7 +623,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"once when nothing is left to wait for. It takes no label: the auto-merge or merge-queue entry it " +
 				"creates is the queue signal. It refuses while a session holds the PR, so release your own hold " +
 				"first, once the head has moved, and while the latest run of any check on the head failed, required " +
-				"or not, naming each; a pending or absent check does not block. It uses the method --squash or --rebase names, refusing one " +
+				"or not, naming each; a pending or absent check does not block. It refuses a head on which quest check " +
+				"--no-stubs --base <base> --branch <head branch> finds anything, read from git objects fetched from the base repository, " +
+				"so nothing from the head runs, except findings the base already has; a base without quests skips it. It uses the method --squash or --rebase names, refusing one " +
 				"the repository disallows; otherwise the only method the repository allows, or else a merge commit. " +
 				"On a base with GitHub's merge queue, which applies its own method, it enqueues that head, or arms " +
 				"auto-merge bound to it while required checks may be pending; a head behind the base is enqueued as " +
@@ -647,7 +649,14 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const pr = pullRequest(value, root());
 			if (!/^[\da-f]{40}$/i.test(options.land)) throw new UsageError("--land needs a full 40-character SHA");
 			const method = options.squash ? "squash" : options.rebase ? "rebase" : undefined;
-			settle(land(pr, options.land, method, gitHubDependencies(warn), options.direct), () => undefined);
+			settle(
+				land(
+					pr,
+					{ sha: options.land, method, direct: options.direct, check: landingCheck(root()) },
+					gitHubDependencies(warn),
+				),
+				() => undefined,
+			);
 		});
 
 	const landCommand = program.command("land").summary("Land queued PRs through a host daemon");

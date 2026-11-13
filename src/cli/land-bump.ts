@@ -453,7 +453,8 @@ async function settle(target: Repository, record: Bump, connection: BumpConnecti
 		direct = object(await (await github.request(path)).json()).allow_auto_merge !== true;
 	}
 	try {
-		await land({ ...target, number: pr }, head, undefined, connection.deps, direct);
+		// The bump PR is this process's own commit of version files, so it has no quest to check.
+		await land({ ...target, number: pr }, { sha: head, direct, check: async () => [] }, connection.deps);
 	} catch (error) {
 		if (!(error instanceof Refusal)) throw error;
 		return fail(`landing it was refused: ${error.message}`);
