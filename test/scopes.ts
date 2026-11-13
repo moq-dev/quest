@@ -67,12 +67,24 @@ export async function sweep(own?: string): Promise<void> {
 	if (failed.length) throw new AggregateError(failed, `cannot stop ${failed.length} test scopes`);
 }
 
+/** Whether a user manager answers; without one, no test can start a scope, and none was left. */
+function managed(): boolean {
+	try {
+		execFileSync("systemctl", ["--user", "show", "--property=Version", "--value"], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** Vitest's global setup: marks the run, clears what dead runs left, and stops this run's scopes when it ends. */
 export default async function setup(): Promise<(() => Promise<void>) | undefined> {
 	if (process.platform !== "linux") return undefined;
 	const own = `${process.pid}:${startTime(process.pid)}`;
 	// Set before the workers start, so they and everything they spawn inherit it.
 	process.env[RUN] = own;
+	// Such as in a container: the tests that start scopes fail there on their own, and the rest still run.
+	if (!managed()) return undefined;
 	// A run killed outright, such as by SIGKILL, never reached its teardown.
 	await sweep();
 	// A signalled run never reaches its teardown either.
