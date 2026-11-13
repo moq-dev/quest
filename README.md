@@ -1961,7 +1961,8 @@ hook on shell commands and file edits denies, with the rule as the reason:
   `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit;
 - a busy loop that spins a CPU core instead of waiting: a `read` fed
   `/dev/zero`, such as `read -t 1 < /dev/zero`, or `yes` that is not piped
-  into a single command, such as `yes > /dev/null` or `yes | while read x`.
+  into a single command other than a loop or `read`, such as
+  `yes > /dev/null` or `yes | while read x`.
 
 For Claude Code, `Stop` and `SubagentStop` hooks refuse to end an agent's turn
 while a `quest gate` command it started still runs in the background, naming

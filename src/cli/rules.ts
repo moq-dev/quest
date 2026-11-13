@@ -280,32 +280,32 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 	const { found, scratch } = check;
 	const commands = parse(line);
 	alone &&= commands.length === 1 && !commands[0]!.runs;
-	// A `read` fed `/dev/zero` never blocks, so it spins: unbounded, or for its whole timeout in a loop.
-	// One that stops at a byte count or a NUL delimiter, or reads another descriptor, returns at once.
-	const zeroRead = commands.some(({ argv }) => {
-		const options = readOptions(argv);
-		if (options === null) return false;
-		if (options.some((arg) => /^-[a-zA-Z]*[nNu]/.test(arg))) return false;
-		const delimiter = options.findIndex((arg) => /^-[a-zA-Z]*d/.test(arg));
-		return delimiter === -1 || (options[delimiter]!.endsWith("d") ? options[delimiter + 1] !== "" : true);
+	// A `read` fed `/dev/zero` never blocks, or returns at once, so waiting on it spins a core. The
+	// redirect counts on the `read`, on the loop or group around it, or on an `exec`.
+	const reads = commands.some(({ argv }) => commandName(argv) === "read");
+	const feedsRead = ({ argv }: { argv: string[] }) =>
+		["read", undefined].includes(commandName(argv)) || ["done", "}", "exec"].includes(argv[0]!);
+	const busy = commands.some((simple, at) => {
+		const words = commandWords(simple.argv);
+		if (words?.[0] !== "yes" || ["--help", "--version"].includes(words[1]!)) return false;
+		return (
+			!simple.piped ||
+			simple.redirects.some(
+				({ op, fd }) =>
+					["&>", "&>>"].includes(op) || ([">", ">|", ">>"].includes(op) && (fd === undefined || fd === 1)),
+			) ||
+			spins(commands[at + 1]?.argv ?? [])
+		);
 	});
-	const busy = commands.some(
-		(simple, at) =>
-			commandName(simple.argv) === "yes" &&
-			(!simple.piped ||
-				simple.redirects.some(
-					({ op, fd }) => [">", ">|", ">>", "&>", "&>>"].includes(op) && (!fd || fd === 1),
-				) ||
-				spins(commands[at + 1]?.argv ?? [])),
-	);
 	if (busy) found.add("busyWait");
 	for (const simple of commands) {
 		const env = new Set(inherited);
 		const words = [...simple.argv];
 		const argv = unwrap(simple.argv, env);
-		for (const { op, target, fd } of simple.redirects)
+		for (const { op, target } of simple.redirects)
 			if ([">", ">>", ">|", "&>", "&>>"].includes(op) && scratch(target)) found.add("tmp");
-			else if (zeroRead && ["<", "<>"].includes(op) && !fd && target === "/dev/zero") found.add("busyWait");
+			else if (reads && ["<", "<>"].includes(op) && target === "/dev/zero" && feedsRead(simple))
+				found.add("busyWait");
 		if (argv === null) continue;
 		const [name, ...args] = argv;
 		// A wrapper such as `env --chdir` moves where the command reads a relative path from.
@@ -342,17 +342,16 @@ function shell(line: string, check: Check, inherited: ReadonlySet<string> = new 
 /** The shell keywords that may precede a command in the same simple command, as `parse` leaves them. */
 const KEYWORDS = new Set(["do", "then", "else", "elif", "if", "while", "until", "{", "!", "time"]);
 
-/** The command `argv` runs, past leading keywords and `command` or `builtin`. */
-function commandName(argv: readonly string[]): string | undefined {
+/** The words `argv` runs, past leading keywords, assignments, and wrappers such as `command`, or null when none run. */
+function commandWords(argv: readonly string[]): string[] | null {
 	let at = 0;
-	while (at < argv.length && (KEYWORDS.has(argv[at]!) || ["command", "builtin"].includes(argv[at]!))) at++;
-	return argv[at];
+	while (at < argv.length && KEYWORDS.has(argv[at]!)) at++;
+	return unwrap(argv.slice(at), new Set());
 }
 
-/** The words after `read` when `argv` runs it as its command, or null. */
-function readOptions(argv: readonly string[]): string[] | null {
-	if (commandName(argv) !== "read") return null;
-	return argv.slice(argv.indexOf("read") + 1);
+/** The command `argv` runs, as `commandWords` finds it. */
+function commandName(argv: readonly string[]): string | undefined {
+	return commandWords(argv)?.[0];
 }
 
 /** Whether a command fed `yes` spins on it: a loop, a group, or a `read`. */
