@@ -35,9 +35,10 @@ problem. Until that PR merges, rind's `main` still has the submodules.
 
 Remaining:
 
-- Rind: once its PR merges, dispatch one Pullfrog review
-  (`gh workflow run pullfrog.yml -R kixel-ai/rind`) and check its log for
-  passing tests. Rind is done when that run passes, and needs this quest's
+- Rind: once its PR merges, dispatch one Pullfrog run that runs rind's
+  tests (`gh workflow run pullfrog.yml -R kixel-ai/rind -f prompt='Run cargo
+  test --workspace on main and report any failure'`; the workflow takes its
+  task only from `prompt`) and check its log for passing tests. Rind is done when that run passes, and needs this quest's
   setup work only if it shows another gap.
 - Studio, rust2, quest, and web-transport, whose gaps are tools, not
   files. Prefer making the bot need no tool it lacks, as rind did, over
