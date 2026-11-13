@@ -320,10 +320,8 @@ describe("bumpPass", () => {
 		expect(target.pulls[0].body).toContain("changed `stub.md`");
 		expect(landed).toHaveBeenCalledExactlyOnceWith(
 			{ ...target.target, number: 7 },
-			head,
-			undefined,
+			{ sha: head, direct: false, check: expect.any(Function) },
 			expect.anything(),
-			false,
 		);
 
 		// The next pass at the same commit asks GitHub nothing.
@@ -396,10 +394,8 @@ describe("bumpPass", () => {
 		expect(await bumpPass(ctx, NEW)).toEqual(["bump landing moq-dev/widget 7"]);
 		expect(landed).toHaveBeenCalledExactlyOnceWith(
 			{ ...target.target, number: 7 },
-			head,
-			undefined,
+			{ sha: head, direct: true, check: expect.any(Function) },
 			expect.anything(),
-			true,
 		);
 	});
 

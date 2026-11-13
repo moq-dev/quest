@@ -37,6 +37,8 @@ function pull(
 					body: "Summary.",
 					updatedAt: "2026-10-07T12:00:00Z",
 					baseRefName: "main",
+					baseRefOid: "b".repeat(40),
+					headRefName: "quest/m0/example",
 					isMergeQueueEnabled: false,
 					labels: { nodes: [] },
 					state: "OPEN",
