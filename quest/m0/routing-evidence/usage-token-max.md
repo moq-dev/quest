@@ -32,7 +32,7 @@ Decided 2026-11-11 (user, /quest-plan,
     it into quest-specific reporting; fixing quest's own reader and keeping
     ccusage
 - Pin token-max as a flake input, the way the other consumers pin quest,
-  until its npm release.
+  until its crates.io release.
 
 Decided 2026-11-12 (user, /quest-plan, asked whether the CLIProxyAPI
 gateway's request history could replace reading transcripts on each host):

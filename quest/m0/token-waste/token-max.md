@@ -15,16 +15,21 @@ quest wrapper. Its plan, survey, and checks moved to kixel-ai/token-max's
 own quest tree ([kixel-ai/token-max#1](https://github.com/kixel-ai/token-max/pull/1)),
 so this quest keeps only quest's side.
 
-Amended 2026-11-06 (maintainer, /quest-plan in token-max): first use should
-be one command. The maintainer delegated packaging and allowed TypeScript;
-token-max now plans Node-compatible TypeScript and npm distribution
-([kixel-ai/token-max#2](https://github.com/kixel-ai/token-max/pull/2)).
-Use `npx --yes @kixelated/token-max@latest`, or `bunx --bun @kixelated/token-max@latest` for
-Bun-only execution. This supersedes the crates.io release dependency; it
-does not require a quest wrapper or Rust toolchain. The scoped package
-keeps the `token-max` command while avoiding reliance on the unverified
-unscoped npm name.
+Amended 2026-11-12 (maintainer, /quest-plan,
+[moq-dev/quest#669](https://github.com/moq-dev/quest/pull/669)): token-max
+was rewritten in Rust on 2026-11-08 and ships on crates.io with prebuilt
+binaries, rejecting npm, which supersedes the 2026-11-06 npm plan. Point to
+the run-once lines its install site serves:
+`curl -LsSf https://max.kixel.ai/run.sh | sh`, and on Windows
+`irm https://max.kixel.ai/run.ps1 | iex`. Neither needs a Rust toolchain or
+a quest wrapper. Still ✅ no npm package now that the `@kixel` npm scope
+exists (rejected: cargo-dist's npm installer for `npx @kixel/token-max`,
+which adds a release channel and a GitHub-hosted publish job that `run.ps1`
+makes unnecessary).
 
 ## Waiting
 
-- kixel-ai/token-max: publish 0.1.0 on npm; check `npm view @kixelated/token-max@0.1.0 version repository.url` for that version and the kixel-ai/token-max repository
+- kixel-ai/token-max: publish 0.1.0 and serve both run-once lines; check
+  `gh release view -R kixel-ai/token-max` for 0.1.0 or later and that
+  `curl -fsSI` succeeds for both `https://max.kixel.ai/run.sh` and
+  `https://max.kixel.ai/run.ps1`
