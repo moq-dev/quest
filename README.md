@@ -1370,7 +1370,10 @@ answered, and settled like any reviewer's. A pick with no step below it seats
 a shadow at its own effort while the old shadow still has findings, so none
 is left unanswered. The reviewers run at once;
 the first to fail, such as on a usage limit, stops the others, and the round
-saves none.
+saves none. The one exception is the opencode reviewer's usage limit while it
+has no findings of its own to settle: it is left out, as a `skipped` line and
+a `Skipped:` line in the record, and the other reviewers' rounds count, so an
+outage of the second reviewer never holds a head.
 
 A quest branch takes its quest's size, read from the base branch's tip so a
 change cannot lower its own review; any other PR, such as a skill's own, takes

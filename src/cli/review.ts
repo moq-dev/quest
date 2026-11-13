@@ -43,8 +43,7 @@ export class ReviewLimitError extends Error {
 		readonly until: number | null,
 		readonly model: string,
 	) {
-		const resets = until === null ? "unknown" : new Date(until).toISOString().replace(/\.\d{3}Z$/, "Z");
-		super(`${harness} hit its usage limit; resets ${resets}`);
+		super(`${harness} hit its usage limit; resets ${resetText(until)}`);
 	}
 }
 
@@ -324,10 +323,22 @@ export interface Tally {
 	refuted: number;
 }
 
-/** What a run of `quest review` gives: each reviewer's round, and every tally on the branch, the run's first. */
+/** The second reviewer, left out of a run because its account hit its usage limit, which resets at `until`. */
+export interface Skipped {
+	reviewer: ReviewHarness;
+	model: string;
+	effort: string;
+	until: number | null;
+}
+
+/**
+ * What a run of `quest review` gives: each reviewer's round, every tally on the branch, the run's first, and the
+ * second reviewer when its usage limit left it out.
+ */
 export interface Reviewed {
 	rounds: Round[];
 	tallies: Tally[];
+	skipped: Skipped[];
 }
 
 /**
@@ -1724,9 +1735,21 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		env: deps.env,
 		signal,
 	};
+	// The second reviewer's spent usage limit leaves it out rather than failing the run, so an outage of the
+	// optional reviewer never blocks a head the size's pick reviewed. It still fails the run while it has findings
+	// of its own to settle, since only it can settle them.
+	const skippable = (seat: Seat, error: unknown): error is ReviewLimitError =>
+		error instanceof ReviewLimitError &&
+		seat.reviewer === SECOND_REVIEWER &&
+		!seat.shadow &&
+		(seat.session?.rounds.at(-1)!.findings.length ?? 0) === 0;
 	const results = await Promise.allSettled(
 		seats.map((seat) =>
-			reviewWith(shared, seat, options.responses).catch((error: unknown) => {
+			reviewWith(shared, seat, options.responses).catch((error: unknown): Skipped => {
+				if (skippable(seat, error)) {
+					const { harness: reviewer, model, effort } = seat.reviewer;
+					return { reviewer, model, effort, until: error.until };
+				}
 				controller.abort(error);
 				throw error;
 			}),
@@ -1734,13 +1757,24 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 	);
 	// The first failure stopped the others, so it is the one to report.
 	if (controller.signal.aborted) throw controller.signal.reason;
-	const done = results.map((result) => (result as PromiseFulfilledResult<Seated>).value);
+	const settled = results.map((result) => (result as PromiseFulfilledResult<Seated | Skipped>).value);
+	const ran = seats.flatMap((seat, i) => {
+		const value = settled[i]!;
+		return "round" in value ? [{ seat, done: value }] : [];
+	});
+	const skipped = settled.filter((value): value is Skipped => !("round" in value));
+	// A skipped reviewer's session, with nothing left to settle, waits for its next run.
+	const waiting = seats.flatMap((seat, i) => ("round" in settled[i]! || !seat.session ? [] : [seat.session]));
 	const tallies = tallied(
 		options.fresh ? dropped(saved) : (saved?.tallies ?? []),
-		done.map((each, i) => ({ round: each.round, settles: seats[i]!.session })),
+		ran.map(({ seat, done }) => ({ round: done.round, settles: seat.session })),
 	);
-	save(statePath, { branch, sessions: [...done.map((each) => each.session), ...kept], tallies } satisfies State);
-	return { rounds: done.map((each) => each.round), tallies };
+	save(statePath, {
+		branch,
+		sessions: [...ran.map(({ done }) => done.session), ...waiting, ...kept],
+		tallies,
+	} satisfies State);
+	return { rounds: ran.map(({ done }) => done.round), tallies, skipped };
 }
 
 /**
@@ -1995,7 +2029,7 @@ export function nextStep(rounds: Round[]): string {
  * The plain report: the size, base, and head the reviewers share, then each reviewer's round, one record per
  * line, and its findings, numbered across the reviewers in order, each with its body indented.
  */
-export function roundLines(rounds: Round[]): string[] {
+export function roundLines(rounds: Round[], skipped: Skipped[] = []): string[] {
 	const [shared] = rounds;
 	const lines = [
 		`size ${shared!.size} ${shared!.sizeFrom}`,
@@ -2033,5 +2067,15 @@ export function roundLines(rounds: Round[]): string[] {
 			);
 		}
 	}
+	for (const each of skipped)
+		lines.push(
+			"",
+			`skipped ${each.reviewer} ${each.model} ${each.effort} usage limit; resets ${resetText(each.until)}`,
+		);
 	return lines;
+}
+
+/** A usage limit's reset as `ReviewLimitError` names it: an ISO 8601 UTC time to the second, or `unknown`. */
+export function resetText(until: number | null): string {
+	return until === null ? "unknown" : new Date(until).toISOString().replace(/\.\d{3}Z$/, "Z");
 }

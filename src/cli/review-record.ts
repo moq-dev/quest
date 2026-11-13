@@ -5,7 +5,17 @@ import { recorded } from "../github/models";
 import { type ClaimDependencies, repositoryPath, upstream } from "./claims";
 import { git } from "./git";
 import { requireRemote, string } from "./github";
-import { type PullModels, type Round, SEVERITIES, type Tally, located, parseBase, sameSeat } from "./review";
+import {
+	type PullModels,
+	type Round,
+	SEVERITIES,
+	type Skipped,
+	type Tally,
+	located,
+	parseBase,
+	resetText,
+	sameSeat,
+} from "./review";
 
 const HARNESSES: Record<Round["reviewer"], string> = { claude: "Claude Code", codex: "Codex", opencode: "opencode" };
 
@@ -58,9 +68,10 @@ const counted = (tally: Tally): Counts => ({
 
 /**
  * The `## Review` section's text for a run's `rounds` of the same head, without its heading, with every tally
- * on the branch: each round's reviewer's beside its round, and a reviewer the run left out on its own.
+ * on the branch: each round's reviewer's beside its round, and a reviewer the run left out on its own, with a
+ * `Skipped:` line when its usage limit left it out.
  */
-export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
+export function reviewRecord(rounds: Round[], tallies: Tally[], skipped: Skipped[] = []): string {
 	const [shared] = rounds;
 	// A reviewer the run left out may still hold open findings, which keep the head from passing too.
 	const clean =
@@ -93,6 +104,10 @@ export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 				`  - ${capitalized(finding.disposition)}: ${finding.severity}, ${code(located(finding))}: ${code(finding.title)}; ${code(finding.reason)}`,
 			);
 	}
+	const skip = (seat: Pick<Tally, "reviewer" | "shadow">) => {
+		const found = skipped.find((each) => sameSeat(seat, each));
+		return found === undefined ? [] : [`- Skipped: usage limit; resets ${resetText(found.until)}`];
+	};
 	for (const tally of tallies.filter((each) => !rounds.some((round) => sameSeat(round, each))))
 		lines.push(
 			"",
@@ -100,6 +115,15 @@ export function reviewRecord(rounds: Round[], tallies: Tally[]): string {
 			// Its session, still named so `quest usage` counts it as reviewing.
 			...(tally.session === undefined ? [] : [`- Session: ${code(tally.session)}`]),
 			`- Rounds: ${tally.rounds}; ${findingsText(counted(tally))}`,
+			...skip(tally),
+		);
+	// A reviewer skipped before its first round has no tally yet.
+	for (const each of skipped.filter((seat) => !tallies.some((tally) => sameSeat(tally, seat))))
+		lines.push(
+			"",
+			reviewerLine(each),
+			`- Rounds: 0; ${findingsText({ findings: { high: 0, medium: 0, low: 0 }, fixed: 0, refuted: 0, settled: 0, open: 0 })}`,
+			...skip(each),
 		);
 	return lines.join("\n");
 }
@@ -268,12 +292,13 @@ export async function recordRounds(
 	root: string,
 	rounds: Round[],
 	tallies: Tally[],
+	skipped: Skipped[],
 	deps: ClaimDependencies,
 ): Promise<Recorded> {
 	const [shared] = rounds;
 	const pull = await openPull(root, shared!.base.ref, shared!.branch, deps);
 	if ("skipped" in pull) return pull;
-	const next = withReview(pull.body, reviewRecord(rounds, tallies));
+	const next = withReview(pull.body, reviewRecord(rounds, tallies, skipped));
 	if (next !== pull.body) await pull.client.request(pull.path, { method: "PATCH", body: { body: next } });
 	return { url: pull.url };
 }

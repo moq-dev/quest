@@ -1217,7 +1217,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"--effort override that reviewer's, or without --harness, the size pick's; a repository whose AGENTS.md names other reviewers " +
 				"passes them. opencode is no size's pick: --harness opencode needs --model, as provider/model, and " +
 				"--effort, its variant. A --harness run keeps the other reviewers' sessions for the next run of the pair, and refuses while one has findings to settle, as a run of the pair does while a reviewer only --harness runs has some. When the latest writer changes the size's pick to one with no session on the branch, its first session settles the open findings of the reviewer it replaces. The reviewers run at once, and the first to fail stops the others and fails the " +
-				"run, saving no round. The " +
+				"run, saving no round, except the opencode reviewer's usage limit while it has no findings of its own to settle: " +
+				"that leaves it out, printed as a `skipped` line and in the record's `Skipped:` line, and the other rounds count. The " +
 				"size is --size, else the size of the quest a quest/ branch names, read from the base's tip so a " +
 				`change cannot lower its own review, else the PR record's Size line, else ${DEFAULT_SIZE}. ` +
 				"The reviewer reaches its model as the user's own CLI " +
@@ -1339,19 +1340,27 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					},
 				);
 				pending = run.then(
-					async ({ rounds, tallies }) => {
+					async ({ rounds, tallies, skipped }) => {
 						// The rounds are saved in their sessions either way, so their report prints before a failed record.
 						let record: Recorded | undefined;
 						let failure: unknown;
 						try {
-							record = await recordRounds(root(), rounds, tallies, github);
+							record = await recordRounds(root(), rounds, tallies, skipped, github);
 						} catch (error) {
 							failure = error;
 						}
 						if (options.json)
-							print(JSON.stringify({ rounds, tallies, record: record ?? null, next: nextStep(rounds) }));
+							print(
+								JSON.stringify({
+									rounds,
+									tallies,
+									skipped,
+									record: record ?? null,
+									next: nextStep(rounds),
+								}),
+							);
 						else {
-							for (const line of roundLines(rounds)) print(line);
+							for (const line of roundLines(rounds, skipped)) print(line);
 							if (record !== undefined)
 								print("url" in record ? `record ${record.url}` : `record skipped: ${record.skipped}`);
 							print(nextStep(rounds));

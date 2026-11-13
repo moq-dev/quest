@@ -41,7 +41,8 @@ Step back before another patch: state the problem the PR solves without referenc
 Report that comparison, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
-Either reviewer out of quota or logged out is an outage, not a skip: stop reviewing rather than go on with the other alone, keep the PR a draft, hand it back, and report the outage.
+A reviewer out of quota or logged out is an outage, not a skip: stop reviewing rather than go on with the other alone, keep the PR a draft, hand it back, and report the outage.
+The exception is the second reviewer's usage limit, which `quest review` reports as a `skipped` line and records itself: the other rounds count, so mention the skip in your summary and go on.
 Its `## Waiting` item names the reviewer, its error, and the check, such as `Codex: out of quota until 2026-11-03 15:00 UTC; check that quest review runs`, with the reset time `quest review` prints when it exits 3 on a usage limit; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
 Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
 

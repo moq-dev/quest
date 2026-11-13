@@ -2126,14 +2126,54 @@ fakes("a session saved by an older quest is refused before the reviewer runs", a
 	expect((await quest("--root", s.repo, "review", "--new")).code).toBe(0);
 });
 
-fakes("a reviewer's failure stops the other and saves neither round", async () => {
+fakes("the second reviewer's usage limit leaves it out, and the size's pick's round counts", async () => {
 	const s = setup();
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
 	vi.stubEnv("FAKE_OPENCODE_LIMITED", "reset");
 	const result = await quest("--root", s.repo, "review");
+	expect(result.code, result.stderr).toBe(0);
+	expect(result.stdout).not.toContain("\nreviewer opencode ");
+	expect(result.stdout).toContain(
+		"\nskipped opencode opencode/deepseek-v4.1-flash-free high usage limit; resets 2030-03-17T17:46:40Z\n",
+	);
+	expect(result.stdout).toContain("next done: no findings remain on this head");
+	vi.stubEnv("FAKE_OPENCODE_LIMITED", undefined);
+	// Once its limit resets, it reviews the head beside the pick again.
+	const back = await quest("--root", s.repo, "review");
+	expect(back.code, back.stderr).toBe(0);
+	expect(back.stdout).toContain("\nreviewer opencode opencode/deepseek-v4.1-flash-free high\n");
+});
+
+fakes("the second reviewer's usage limit still fails the run while it has findings to settle", async () => {
+	const s = setup();
+	const found = await quest("--root", s.repo, "review");
+	expect(found.code, found.stderr).toBe(0);
+	const state = JSON.parse(readFileSync(sessionFile(join(s.repo, ".git"), "feature"), "utf8"));
+	const own = state.sessions.find((each: { reviewer: string }) => each.reviewer === "opencode");
+	expect(own.rounds.at(-1).findings.length).toBeGreaterThan(0);
+	const numbers = state.sessions.flatMap(
+		(each: { rounds: { findings: unknown[] }[] }) => each.rounds.at(-1)!.findings,
+	);
+	const responses = join(s.repo, "..", "responses.json");
+	writeFileSync(
+		responses,
+		JSON.stringify(
+			numbers.map((_: unknown, i: number) => ({ finding: i + 1, disposition: "fixed", reason: "Fixed." })),
+		),
+	);
+	vi.stubEnv("FAKE_OPENCODE_LIMITED", "reset");
+	const result = await quest("--root", s.repo, "review", "--responses", responses);
 	expect(result.stderr).toBe("error: opencode hit its usage limit; resets 2030-03-17T17:46:40Z\n");
 	expect(result.code).toBe(3);
+});
+
+fakes("a reviewer's failure stops the other and saves neither round", async () => {
+	const s = setup();
+	vi.stubEnv("FAKE_OPENCODE_REJECTED", "1");
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code).not.toBe(0);
 	expect(existsSync(sessionFile(join(s.repo, ".git"), "feature"))).toBe(false);
-	vi.stubEnv("FAKE_OPENCODE_LIMITED", undefined);
+	vi.stubEnv("FAKE_OPENCODE_REJECTED", undefined);
 	// No round was saved, so the next one needs no responses.
 	expect((await quest("--root", s.repo, "review")).code).toBe(0);
 });

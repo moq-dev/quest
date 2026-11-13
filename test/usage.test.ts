@@ -309,6 +309,36 @@ describe("PR records", () => {
 		expect(fixes(body)).toEqual(["codex, gpt-6.1-sol, medium effort"]);
 	});
 
+	test("a reviewer its usage limit left out is recorded with its reset, with or without a tally", () => {
+		const clean = { ...second, reviewer: "codex" as const, model: "gpt-6.1-sol" };
+		const until = Date.UTC(2030, 2, 17, 17, 46, 40);
+		const skipped = [
+			{ reviewer: "opencode" as const, model: "opencode/deepseek-v4.1-flash-free", effort: "high", until },
+		];
+		const first = reviewRecord([clean], [tally("codex", 1, { high: 0, medium: 0, low: 0 }, 0, 0)], skipped);
+		expect(first).toContain(
+			"\n- Reviewer: opencode, opencode/deepseek-v4.1-flash-free, high effort\n- Rounds: 0; findings 0: fixed 0, refuted 0, open 0\n- Skipped: usage limit; resets 2030-03-17T17:46:40Z",
+		);
+		// It reports no finding, so the head the pick passed is named in full.
+		expect(first).toContain(`- Head: ${clean.head}\n`);
+		const later = reviewRecord(
+			[clean],
+			[
+				tally("codex", 2, { high: 0, medium: 0, low: 0 }, 0, 0),
+				{ ...tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0), session: "ses_1" },
+			],
+			[{ ...skipped[0]!, until: null }],
+		);
+		expect(later).toContain(
+			"- Session: `ses_1`\n- Rounds: 1; findings 0: fixed 0, refuted 0, open 0\n- Skipped: usage limit; resets unknown",
+		);
+		for (const record of [first, later])
+			expect(parseReview(`## Review\n\n${record}\n`).map((each) => [each.harness, each.round])).toEqual([
+				["Codex", 1],
+				["opencode", null],
+			]);
+	});
+
 	test("a record written before tallies has none, and a Rounds line that does not add up fails", () => {
 		const record = reviewRecord([second], [tally("opencode", 1, { high: 0, medium: 0, low: 0 }, 0, 0)]);
 		const older = `## Review\n\n${record.replace(/^- Rounds: .*\n/m, "")}\n`;
