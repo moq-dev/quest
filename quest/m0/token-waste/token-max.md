@@ -33,7 +33,8 @@ and was rewritten in Rust, superseding the 2026-11-06 npm plan and its
 binaries on its GitHub Release, and
 `curl -LsSf https://max.kixel.ai/run.sh | sh` downloads one and runs
 `token-max doctor` once, with no Rust toolchain; point `SETUP.md` at that
-line.
+line. For native Windows, where `SETUP.md` avoids shell installers, point it
+at the PowerShell installer the same GitHub Release attaches.
 
 ## Waiting
 
