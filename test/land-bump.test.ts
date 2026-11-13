@@ -6,7 +6,7 @@ import { delimiter, join } from "node:path";
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { type GitHubDependencies, requirements } from "../src/cli/github";
+import { type GitHubDependencies, requirements } from "../src/github/client";
 import { land } from "../src/cli/hold";
 import { readRemote } from "../src/cli/land";
 import {
@@ -306,7 +306,8 @@ describe("requirements", () => {
 	test("reads no rules from a private repository on GitHub Free", async () => {
 		const free = world({ rules: "free" });
 		expect(
-			(await requirements(new (await import("../src/cli/github")).GitHub(deps(free)), free.target, "main")).rules,
+			(await requirements(new (await import("../src/github/client")).GitHub(deps(free)), free.target, "main"))
+				.rules,
 		).toEqual([]);
 	});
 });

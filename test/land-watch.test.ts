@@ -8,12 +8,12 @@ import { fileURLToPath } from "node:url";
 
 import { beforeEach, describe, expect, test } from "vitest";
 
-import type { GitHubDependencies } from "../src/cli/github";
+import type { GitHubDependencies } from "../src/github/client";
 import { readRemote } from "../src/cli/land";
 import { parseResolution } from "../src/cli/land-apply";
 import { CHECK_LOG } from "../src/cli/land-checks";
 import { COLLECTION_ATTEMPTS, REQUEUE_LIMIT, carriedBy, history } from "../src/cli/land-fixer";
-import { privateRepository } from "../src/cli/land-serve";
+import { privateRepository } from "../src/cli/land-daemon";
 import { jobsSection, readRemoval, SETTLE, watchPass, watchPermissions } from "../src/cli/land-watch";
 import { endPick, type FixContext, HELD } from "../src/cli/land-watch-fix";
 import {
@@ -511,11 +511,7 @@ test("a failed merge_group build is commented with its failing job's log and rec
 	});
 	expect(removal.failure).toMatchObject({
 		plan: { repository: "upstream/project", base: { ref: "main", sha: BUILT } },
-		numbers: [5],
-		blame: [5],
-		tip: HEAD,
 		reason: "failed_checks",
-		log: removal.log,
 	});
 	expect(removal.failure!.plan.queue[0]).toMatchObject({ number: 5, head: HEAD, enabledAt: at(1) });
 	expect(readFileSync(removal.log, "utf8")).toContain("== Check / test: failure at step just test");

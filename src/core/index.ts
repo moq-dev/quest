@@ -16,6 +16,8 @@ export {
 	entries,
 	has,
 	holds,
+	type Host,
+	hosts,
 	isQuest,
 	isEpic,
 	owner,

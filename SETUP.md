@@ -12,6 +12,8 @@ line in its root instructions.
 ## Install and pin
 
 Pin the latest [release](https://github.com/moq-dev/quest/releases) tag.
+Every merge that changes what Quest ships becomes a release, so a release tag
+is never far behind `main`; prefer it to pinning a commit.
 Releases ship binaries for macOS, Linux, and native Windows on arm64 and x64.
 Check that the chosen release includes the Windows archives and the
 `quest worktree hook` command that `quest init`'s Claude Code hooks call;

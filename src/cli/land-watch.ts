@@ -13,9 +13,10 @@ import {
 	type ObjectValue,
 	type Repository,
 	string,
-} from "./github";
+} from "../github/client";
 import { lacksApproval } from "../github/merge";
 import type { Entry, LandMethod, Plan } from "./land";
+import type { Reason } from "../github/land";
 import { authenticatedRead } from "./land-git";
 import { jobLog } from "./land-checks";
 import { COLLECTION_ATTEMPTS, carriedOf, fixerText, post } from "./land-fixer";
@@ -25,13 +26,12 @@ import {
 	defaultBranch,
 	EXCERPT,
 	excerpt,
-	type Failure,
 	installationToken,
 	installations,
 	privateRepository,
 	save,
 	startDaemon,
-} from "./land-serve";
+} from "./land-daemon";
 import {
 	advanceFixes,
 	endPick,
@@ -45,8 +45,8 @@ import {
 import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
 import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools } from "./land-bump";
 import { pruneLogs } from "./land-prune";
-import { enabledHead, headBefore } from "./status";
-import { describe, readSignals } from "./signals";
+import { enabledHead, headBefore } from "../github/status";
+import { describe, readSignals } from "../github/signals";
 
 export { readRemoval } from "./land-watch-fix";
 
@@ -56,7 +56,7 @@ export interface WatchOptions {
 	method: LandMethod;
 	/** Minutes an own-queue build may run before it is dropped as timed out. */
 	timeout: number;
-	/** Empty for the default, `defaultState`, which `quest land serve` shares. */
+	/** Empty for the default, `defaultState`. */
 	state: string;
 	appId: string;
 	/** The credential-free fixer wrapper; without one, removals are only recorded. */
@@ -128,7 +128,11 @@ export interface Removal {
 }
 
 /** A dropped PR's failure for the fixer. The merge queue applies its own method, so its plan names none. */
-type QueueFailure = Omit<Failure, "plan"> & { plan: Omit<Plan, "method"> };
+interface QueueFailure {
+	/** The dropped head as the pick's one entry, on the base it was built on. */
+	plan: Omit<Plan, "method">;
+	reason: Reason;
+}
 
 /** The watcher's progress, in `watch.json`. */
 interface Progress {
@@ -742,12 +746,7 @@ async function handle(
 			? {
 					failure: {
 						plan: { repository, base: { ref: base.ref, sha: built }, queue: [entry], eject: [] },
-						ejections: [],
-						numbers: [number],
-						log,
-						tip: head,
 						reason: reason === "merge_conflict" ? "merge_conflict" : "failed_checks",
-						blame: [number],
 					} satisfies QueueFailure,
 				}
 			: {}),
@@ -889,8 +888,7 @@ type Permissions = Record<string, "read" | "write">;
  * signaled PR's auto-merge, which needs `contents: write`; with a fixer it also re-enqueues, edits the PR body's Review,
  * and reads the PR's own checks for the fixer (`checks: read` and `statuses: read`). The `own` queue
  * also disarms and arms auto-merge, cancels a build's runs (`actions: write`), posts each pick's queue
- * check (`checks: write`), and reads the base's classic protection (`administration: read`), as
- * `quest land serve` does. `push` lease-pushes a fix, a merge, a queue branch, or a landing, and
+ * check (`checks: write`), and reads the base's classic protection (`administration: read`). `push` lease-pushes a fix, a merge, a queue branch, or a landing, and
  * `pushWorkflows` one that carries a workflow change; `read` fetches.
  */
 export function watchPermissions(

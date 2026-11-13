@@ -14,12 +14,12 @@ import {
 	requirements,
 	string,
 	workflowRuns,
-} from "./github";
+} from "../github/client";
 import { land } from "./hold";
 import { commandEnvironment, contexts, git, type RemoteRead } from "./land";
 import { push, remoteHead } from "./land-head";
 import { Refusal } from "./start";
-import { excerpt, save } from "./land-serve";
+import { excerpt, save } from "./land-daemon";
 
 /** The one branch each target's bump PR uses. */
 export const BUMP_BRANCH = "quest-bump";

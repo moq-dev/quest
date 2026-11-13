@@ -4,14 +4,18 @@ import { basename, dirname, join, resolve } from "node:path";
 /** How long a finished log stays, so a person can still read what a recent comment cites. */
 export const LOG_RETENTION = 7 * 24 * 3_600_000;
 
-/** Every log either land daemon writes to its state directory's top level, by whole name. */
+/**
+ * Every log the watcher writes to its state directory's top level, by whole name, and those the
+ * retired `quest land serve` left there (`base-`, `check-`, `batch-`, `fix-job-` and `fix-base-`),
+ * so they still expire.
+ */
 const LOG =
 	/^(?:base-\d+-[0-9a-f]+|check-\d+-\d+|batch-\d+-\d+|removal-\d+-[0-9TZ]+|conflict-\d+-[0-9a-f]+|fixer-input-\d+-[0-9a-z]+|(?:fix-job|fix-base|watch-job)-[^/]+\.json)\.log$/;
-/** The job records a later pass reads a log from; each also owns `<record>.log`. */
-const JOB = /^(?:fix-job|fix-base|watch-job)-[^/]+\.json$/;
+/** The watcher's job records a later pass reads a log from; each also owns `<record>.log`. */
+const JOB = /^watch-job-[^/]+\.json$/;
 const REMOVAL = /^removal-(\d+)\.json$/;
 
-/** The logs a record in `state` still reads: a job's, a removal's waiting for a fixer slot, or `failure.json`'s. */
+/** The logs a record in `state` still reads: a job's, or a removal's waiting for a fixer slot. */
 function inUse(state: string, names: string[]): Set<string> {
 	const used = new Set<string>();
 	const cite = (path: unknown) => {
@@ -22,8 +26,6 @@ function inUse(state: string, names: string[]): Set<string> {
 	for (const name of names) {
 		if (JOB.test(name)) {
 			used.add(`${name}.log`);
-			cite(read(name).log);
-		} else if (name === "failure.json") {
 			cite(read(name).log);
 		} else {
 			const removal = REMOVAL.exec(name);
@@ -40,8 +42,7 @@ function inUse(state: string, names: string[]): Set<string> {
 
 /**
  * Delete the land daemons' logs in `state` that no record reads and that were last written over
- * `LOG_RETENTION` before `now`. Both daemons share the directory, so either prunes every family.
- * Returns the names deleted. Failing to prune, such as on an unreadable record, warns and deletes
+ * `LOG_RETENTION` before `now`. Returns the names deleted. Failing to prune, such as on an unreadable record, warns and deletes
  * nothing, so it never blocks the queue.
  */
 export function pruneLogs(state: string, now: number, warn: (message: string) => void): string[] {

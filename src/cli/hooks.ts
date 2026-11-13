@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { version } from "../../package.json";
+import { version } from "./version";
 import { type StopInput, broken, questRoot, runningGates, usesQuest } from "./rules";
 import { stubFindings } from "./setup";
 import { CONTEXT } from "./skills";

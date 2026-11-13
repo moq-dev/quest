@@ -30,6 +30,7 @@ import {
 	type Admission,
 	type Host,
 	hostLimits,
+	LEDGER_VERSION,
 	linuxMemory,
 	measure,
 	type Owner,
@@ -279,6 +280,31 @@ test("a gate records the most CPUs its command kept busy in the last minute", as
 test("a gate records its command's burst before the first sample", async () => {
 	const { published } = await measured([4, ...Array(RECENT_MS / SETTLE_MS).fill(0)]);
 	expect(published).toEqual([`4 at ${SETTLE_MS}`, `0 at ${SETTLE_MS + RECENT_MS}`]);
+});
+
+test("a gate records its admission again once another gate drops it, even while its cores hold", async () => {
+	const state = { now: 0, load: 0, memory: Infinity };
+	const host = testHost(tempDir(), state);
+	host.publish(host.ledger(), [{ id: "build", at: 0, ...me }]);
+	host.usage = () => 0;
+	const stop = new AbortController();
+	let samples = 3;
+	host.sleep = async () => {
+		if (samples-- === 0) {
+			stop.abort();
+			throw stop.signal.reason;
+		}
+		state.now += SETTLE_MS;
+		// Before the second sample, a gate in another PID namespace drops it as gone.
+		if (samples === 1) host.publish(host.ledger(), [{ id: "other", at: state.now, ...me }]);
+	};
+	const lost: string[] = [];
+	await measure(host, { id: "build", unit: "quest-gate-build.scope" }, stop.signal, (id) => lost.push(id));
+	expect(lost).toEqual(["build"]);
+	expect(host.ledger().admissions).toEqual([
+		{ id: "other", at: 2 * SETTLE_MS, ...me },
+		{ id: "build", at: 0, ...me, cores: 0 },
+	]);
 });
 
 test("a priority caller waits for memory, never for load, even while a gated command runs", async () => {
@@ -680,8 +706,11 @@ test("Linux memory reads the container cgroup mounted as the root", () => {
 
 test("every caller on this host shares one ledger, whatever its environment or sessions", () => {
 	// A home directory shared between machines keeps each host's admissions apart.
-	expect(claimDirectory("/home/u", "a")).toBe(join("/home/u", ".cache", "quest", "admissions", "a"));
+	const ledger = `admissions-v${LEDGER_VERSION}`;
+	expect(claimDirectory("/home/u", "a", 1, "/tmp", null)).toBe(join("/home/u", ".cache", "quest", ledger, "a"));
 	expect(claimDirectory("/home/u", "b")).not.toBe(claimDirectory("/home/u", "a"));
+	// So does a PID namespace, such as a sandbox's, whose gates cannot see the others' processes.
+	expect(claimDirectory("/home/u", "a", 1, "/tmp", "7")).toBe(join("/home/u", ".cache", "quest", ledger, "a-pid7"));
 	// A login session's runtime directory comes and goes; an overridden HOME is still this
 	// account. Runtimes may read both once at startup, so each caller is a new process.
 	const gate = fileURLToPath(new URL("../src/cli/gate.ts", import.meta.url));
@@ -702,9 +731,9 @@ test.skipIf(process.platform === "win32")("an account without a home shares a pr
 	const uid = process.getuid!();
 	const tmp = tempDir();
 	const root = join(tmp, `quest-${uid}`);
-	expect(claimDirectory(null, "a", uid, tmp)).toBe(join(root, "admissions", "a"));
+	expect(claimDirectory(null, "a", uid, tmp, null)).toBe(join(root, `admissions-v${LEDGER_VERSION}`, "a"));
 	expect(statSync(root).mode & 0o777).toBe(0o700);
-	expect(claimDirectory(null, "a", uid, tmp)).toBe(join(root, "admissions", "a"));
+	expect(claimDirectory(null, "a", uid, tmp, null)).toBe(join(root, `admissions-v${LEDGER_VERSION}`, "a"));
 	// Another user may create the name first, writable by them or owned by them.
 	chmodSync(root, 0o777);
 	expect(() => claimDirectory(null, "a", uid, tmp)).toThrow("only UID");
