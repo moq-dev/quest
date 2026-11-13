@@ -46,7 +46,7 @@ Finish with a clean checkout: intended changes committed and pushed, incidental 
 Run CPU-heavy commands, such as builds, tests, model checkers, and browsers, through `quest gate <command>`, which queues until the host has room; model calls like `quest review` and servers stay out.
 Never work around the queue by polling the load or capping agents, `quest agent admit`'s job; cancel a gated command only once its result is unneeded.
 Run it in the foreground and read its exit code directly, not through a pipe.
-Never end a turn or report while your background work runs, and never poll it with `sleep` or status checks: block on it with the harness's own wait for that task, at the longest interval it allows, saying nothing between waits.
+Never end a turn or report while your background work runs, and never poll it with `sleep`, status checks, or busy loops: block on the harness's own wait for that task, at its longest interval, saying nothing between waits.
 To wait on a PR's CI or reviews, use `quest wait`, re-running one that times out with the `--since` it printed, so activity during the first wait is still reported.
 A sub-agent ends its turn only with a final result or a question. Its final report holds only what its caller acts on, such as its PR's URL, state, and head, and each decision it needs with a recommendation; details go in the PR body.
 Back out when progress stalls rather than burn tokens; a gate's queue or a long command still running is not a stall.
