@@ -974,10 +974,16 @@ carries a workflow change.
 
 ### Pin bumps
 
-With `--bump <owner/repo>`, repeatable, the watcher keeps each named
-repository's flake input on the watched repository at the watched base, so
-every push to the base reaches those repositories with no one touching them.
-It needs `nix` on `PATH`. Once a pass sees the base at a commit a target does
+With `--bump`, the watcher keeps the flake input on the watched repository at
+the watched base in every other repository the App is installed on, so every
+push to the base reaches those repositories with no one touching them.
+Installing the App on a repository enrolls it and uninstalling it stops its
+bumps; there is no list to keep. Each time the base moves, a pass lists every
+installation's repositories, reads each one's `flake.lock` on its default
+branch without cloning it, and keeps those that lock the watched repository
+through exactly one root input as targets; a repository locking it through
+several is reported and skipped. Discovery needs the installations to grant
+`contents: read`. It needs `nix` on `PATH`. Once a pass sees the base at a commit a target does
 not pin yet, it opens or updates that target's one `quest-bump` PR as the App:
 
 1. It reads the target's `flake.lock` on its default branch for the one root

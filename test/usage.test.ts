@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -20,6 +20,15 @@ const BOTH = "5d2c7f3e-8a41-4b6e-9f0d-2c6a1e7b4d93";
 const REMOTE = "a1c2e3f4-0000-4000-8000-000000000001";
 const ITERATE = "11111111-1111-1111-1111-111111111111";
 
+// Checkouts since deleted: directories the test created and removed, so no host path of the same name is read.
+const removed = () => {
+	const path = tempDir();
+	rmSync(path, { recursive: true });
+	return path;
+};
+const WORK = removed();
+const OTHER_WORK = removed();
+
 /** A session as `token-max sessions` prints it, on one model and effort. */
 const exported = (session: string, model: string, effort: string, cost: number, extra: object = {}) => ({
 	host: null,
@@ -27,7 +36,7 @@ const exported = (session: string, model: string, effort: string, cost: number, 
 	session,
 	parent: null,
 	review: false,
-	cwd: "/work",
+	cwd: WORK,
 	repositories: ["https://github.com/acme/proj.git"],
 	repositoriesSource: "checkout",
 	branches: [{ name: "quest/m0/a", first: "2026-11-06T10:05:00Z", last: "2026-11-06T10:06:00Z" }],
@@ -68,7 +77,7 @@ describe("parseSessions", () => {
 			harness: "codex",
 			id: THREAD,
 			review: false,
-			cwd: "/work",
+			cwd: WORK,
 			repositories: ["acme/proj"],
 			branches: [
 				{
@@ -392,7 +401,7 @@ describe("usage", () => {
 			}),
 			// A session in a checkout of another repository, on a branch of the same name.
 			exported(OTHER, "claude-opus-5-5", "high", 6, {
-				cwd: "/other/sub",
+				cwd: join(OTHER_WORK, "sub"),
 				repositories: ["git@github.com:other/repo.git"],
 			}),
 			// The reviewer, named by #10's record; an iterate on #10, with a cheaper copy on another host; one on
@@ -405,7 +414,7 @@ describe("usage", () => {
 				repositories: null,
 			}),
 			exported("22222222-2222-2222-2222-222222222222", "gpt-6.1-sol", "high", 3, {
-				cwd: "/other",
+				cwd: OTHER_WORK,
 				repositories: ["https://github.com/other/repo.git"],
 				start: "2026-11-06T13:00:00Z",
 			}),
@@ -418,7 +427,7 @@ describe("usage", () => {
 			}),
 			{
 				...exported(GONE, "claude-opus-5-5", "high", 8, {
-					cwd: "/work/nested",
+					cwd: join(WORK, "nested"),
 					repositories: null,
 					start: "2026-11-06T14:00:00Z",
 					complete: false,
