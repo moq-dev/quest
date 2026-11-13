@@ -65,7 +65,7 @@ export interface FixContext {
 	timeout: number;
 	/** Patterns of tags, such as `deploy-*`, fetched from GitHub into each fixer checkout so its checks can read them. */
 	tags: string[];
-	/** Patterns of branches, such as `release`, fetched from GitHub into each fixer checkout as `refs/remotes/origin/<branch>`, as a CI checkout has them. */
+	/** Patterns of branches, such as `release`, fetched from GitHub into each fixer checkout as `refs/remotes/origin/<branch>`, beside its base's, as a CI checkout has them. */
 	branches: string[];
 	token: (workflows: boolean) => Promise<string>;
 	read: RemoteRead;
@@ -358,21 +358,37 @@ async function take(
 	if (history(state, number)?.pick !== entry.enabledAt)
 		save(historyPath(state, number), { pick: entry.enabledAt, rounds: [] } satisfies History);
 	const tags = context.tags.map((pattern) => `+refs/tags/${pattern}:refs/tags/${pattern}`);
-	// The daemon's repository keeps each branch under the remote-tracking name the checkout gets.
-	const branches = context.branches.map(
-		(pattern) => `+refs/remotes/origin/${pattern}:refs/remotes/origin/${pattern}`,
-	);
-	// Pruning drops a tag or branch GitHub no longer has, so a check never reads one deleted there.
+	const remote = baseRemote({ repository });
+	// Listing first lets an exact name GitHub lacks match nothing, as a pattern does, rather than fail the fetch.
+	const branches = context.branches.length
+		? (
+				await context.read(context.root, [
+					"ls-remote",
+					"--heads",
+					remote,
+					...context.branches.map((p) => `refs/heads/${p}`),
+				])
+			)
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => {
+					const [sha, ref] = line.split("\t");
+					return { sha, name: ref.slice("refs/heads/".length) };
+				})
+				// The base stays the commit the round is built on, not GitHub's current one.
+				.filter((branch) => branch.name !== base.ref)
+		: [];
+	// Pruning drops a tag GitHub no longer has, so a check never reads one deleted there.
 	await context.read(context.root, [
 		"fetch",
 		"--quiet",
 		"--no-tags",
 		"--prune",
-		baseRemote({ repository }),
+		remote,
 		base.sha,
 		removal.head,
 		...tags,
-		...context.branches.map((pattern) => `+refs/heads/${pattern}:refs/remotes/origin/${pattern}`),
+		...branches.map((branch) => branch.sha),
 	]);
 	let log = removal.log;
 	if (conflict) {
@@ -435,7 +451,9 @@ async function take(
 				`${base.sha}:refs/heads/base`,
 				`${removal.head}:refs/heads/pr-${number}`,
 				...tags,
-				...branches,
+				// Remote-tracking branches, as a CI checkout has them, with the base at the commit it was built on.
+				`${base.sha}:refs/remotes/origin/${base.ref}`,
+				...branches.map((branch) => `${branch.sha}:refs/remotes/origin/${branch.name}`),
 			],
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
 			base.sha,
