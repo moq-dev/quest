@@ -25,6 +25,9 @@ test("prunes expired logs of both daemons and keeps every cited or unrelated fil
 			"fixer-input-7-abc123.log",
 			"fix-job-fix-AAAAAA.json.log",
 			"watch-job-old-7.json.log",
+			// Records serve left no longer keep their logs, since nothing reads them.
+			"base-1730000000001-aaaaaaaaaaaa.log",
+			"batch-1730000000002-3.log",
 		];
 		for (const name of gone) write(name);
 		json("removal-7.json", { failure: "x", taken: 1, log: join(state, "removal-7-20261101T000000Z.log") });
@@ -41,9 +44,6 @@ test("prunes expired logs of both daemons and keeps every cited or unrelated fil
 		json("watch-job-live-9.json", { log: join(state, "fixer-input-9-xyz.log") });
 		write("watch-job-live-9.json.log");
 		json("fix-base-fix-BBBBBB.json", { log: join(state, "base-1730000000001-aaaaaaaaaaaa.log") });
-		write("base-1730000000001-aaaaaaaaaaaa.log");
-		// serve's failure.json, which a restart replays.
-		write("batch-1730000000002-3.log");
 		json("failure.json", { log: join(state, "batch-1730000000002-3.log") });
 		// Recent, unrelated, or not a regular file.
 		writeFileSync(join(state, "check-1730000000003-4.log"), "");
@@ -63,8 +63,6 @@ test("prunes expired logs of both daemons and keeps every cited or unrelated fil
 			"conflict-8-fedcba987654.log",
 			"fixer-input-9-xyz.log",
 			"watch-job-live-9.json.log",
-			"base-1730000000001-aaaaaaaaaaaa.log",
-			"batch-1730000000002-3.log",
 			"check-1730000000003-4.log",
 			"notes.log",
 			"removal-7-x.log.bak",
@@ -85,7 +83,7 @@ test("an unreadable record warns and deletes nothing", () => {
 	try {
 		writeFileSync(join(state, "check-1730000000000-12.log"), "");
 		utimesSync(join(state, "check-1730000000000-12.log"), 0, 0);
-		writeFileSync(join(state, "fix-job-fix-AAAAAA.json"), "{");
+		writeFileSync(join(state, "watch-job-fix-AAAAAA.json"), "{");
 		const warnings: string[] = [];
 		expect(pruneLogs(state, Date.now(), (message) => warnings.push(message))).toEqual([]);
 		expect(warnings).toHaveLength(1);

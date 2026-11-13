@@ -369,8 +369,8 @@ export async function mergePinned(
 			body: { merge_method: method, sha: head },
 			allow: [403, 405, 409],
 		});
-		// The client waits out a rate limit; any other 403 is GitHub refusing this PR, which stops this PR
-		// alone rather than failing the whole batch on every retry.
+		// The client waits out a rate limit; any other 403 is GitHub refusing this PR, which ends its
+		// landing rather than retrying.
 		const result = object(await response.json());
 		if (response.ok && result.merged === true) return { sha: string(result.sha) };
 		const pull = object(await (await github.request(path)).json());
