@@ -8,16 +8,13 @@ killed as a whole group, instead of the kernel's OOM killer picking a
 victim elsewhere on the host. Other gated commands, agent sessions, and
 host services keep running.
 
-Non-goals: how the gate admits commands by memory, which stays as
-[gate-mbx-pool](/quest/m0/gate-mbx-pool.md) leaves it, and host-wide
-swap or oomd settings, which the maintainer's host repository plans.
+Non-goals: host-wide swap or oomd settings, which kixelated/nixos's
+quest tree plans for the maintainer's host.
 
 ## Plan
 
 Found 2026-11-12 in read-only audits of the maintainer's three Linux
-hosts (measurement record:
-[moq-dev/kixel.quest#9](https://github.com/moq-dev/kixel.quest/pull/9)):
-the kernel OOM killer fired 5 times in 10 days on one host, killing a
+hosts: the kernel OOM killer fired 5 times in 10 days on one host, killing a
 47 GB `rust2-ts` inside a gate scope, a 36 GB `lean`, and a 38 GB gated
 `java` while a different process was the one allocating. earlyoom killed
 34 processes in a week on another, including HOL Light, lean, and an
@@ -32,18 +29,34 @@ Decided 2026-11-12 (maintainer, /quest-plan):
   heaps themselves).
 - Milestone: ✅ m0 (rejected: m1).
 
+What the decision requires, found in review:
+
+- The ceilings of commands running at once must fit the host together:
+  per-command ceilings each sized from the memory available at admission
+  overcommit, since several commands admitted together each see the same
+  free memory. Partition one host budget (memory less a reserve for
+  sessions and services) across admitted commands, as the gate's memory
+  admission already counts each command's share (`COMMAND_MEMORY` in
+  `src/cli/gate.ts`), and admit a command only when its ceiling fits.
+- A nested gate's scope is a sibling bound to its enclosing scope
+  (`BindsTo`), not a child cgroup, so it does not inherit the parent's
+  limit: its usage must come out of the enclosing command's share.
+
 Agent's choices, for the implementer to revisit:
 
 - Set `MemoryHigh` below `MemoryMax`, so a command slows under reclaim
   before it is killed, and `OOMPolicy=kill`, so an OOM kill inside the
   scope stops the whole command rather than leaving its wrappers running.
-- Derive the ceiling from the host at admission, such as the memory
-  available then minus a reserve for the rest of the host, rather than a
-  constant; a command that needs more fails loud with the scope's OOM
-  event in the gate's error, so the agent learns why.
-- A nested gate inherits its enclosing scope's ceiling.
+- Size a command's share from its measured peak once the gate has seen
+  it, as gate-mbx-pool plans for CPU, rather than a constant; a command
+  that needs more fails loud with the scope's OOM event in the gate's
+  error, so the agent learns why.
+
+## Hosts
+
+- linux - systemd scopes carry the memory limits
 
 ## Related
 
-- [The gate admits work through mbx's pool](/quest/m0/gate-mbx-pool.md) - keeps the memory admission this builds beside
+- [The gate admits work through mbx's pool](/quest/m0/gate-mbx-pool.md) - plans the learned per-command CPU peak this mirrors for memory; it leaves the memory budget as is
 - [Coordinators start an agent only when the host and the account can carry it](/quest/m0/agent-admission.md) - the agent-level half of host admission

@@ -21,3 +21,7 @@ Decided 2026-11-12 (maintainer, /quest-plan): ✅ plan it in m0
 Fix it at the root: a leaked scope means some path, a failed or
 timed-out test included, ends without stopping the scope it bound, which
 may also leak in real nested gates outside the tests.
+
+## Hosts
+
+- linux - only systemd scopes can leak

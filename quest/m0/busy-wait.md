@@ -23,11 +23,11 @@ Decided 2026-11-12 (maintainer, /quest-plan): ✅ plan it in m0
 Agent's choices, for the implementer to revisit:
 
 - Prefer a check over prose, per [token-waste](/quest/m0/token-waste/README.md)'s
-  decision that mechanical rules become hooks or lint: a Claude Code
-  `PreToolUse` hook, beside the ones `quest hook` already runs, that refuses
-  a shell command reading `/dev/zero` in a loop or with `read -t`, and names
-  the wait to use instead.
+  decision that mechanical rules become hooks or lint: a rule in `quest
+  hook`'s `PreToolUse` handler, which both Claude Code and Codex already
+  run on shell commands (`src/cli/hooks.ts`), that refuses a command
+  reading `/dev/zero` with `read -t` or in a loop, and names the wait to
+  use instead.
 - If prose is still needed, make the existing rule say polling in any
   form, not only `sleep`, rather than adding a new rule, since
   `assets/CONTEXT.md` must stay under 10,000 characters.
-- Check the Codex transcripts too, since Codex has no such hook.
