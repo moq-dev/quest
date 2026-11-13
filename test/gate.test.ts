@@ -750,6 +750,8 @@ test("a nested gate runs at once and keeps the exact exit status", async () => {
 
 test("a priority gate schedules mbx at normal priority unless the command sets its own", async () => {
 	vi.stubEnv("QUEST_GATE_ADMITTED", "1");
+	vi.stubEnv("QUEST_GATE_PRIORITY", undefined);
+	vi.stubEnv("MBX_SCHEDULER_PRIORITY", undefined);
 	const exits = "process.exit({ normal: 3, low: 4 }[process.env.MBX_SCHEDULER_PRIORITY] ?? 5)";
 	expect(await gate([process.execPath, "-e", exits])).toBe(5);
 	vi.stubEnv("QUEST_GATE_PRIORITY", "1");

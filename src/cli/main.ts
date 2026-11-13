@@ -1021,7 +1021,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"a batch shim such as npm's claude.cmd runs through System32's cmd.exe, and stop ends the agent's process tree at once.\n\n" +
 				"The agent runs in <worktree> with the user's environment minus every CLAUDE* (except CLAUDE_CONFIG_DIR), " +
 				"ANTHROPIC*, CODEX_* (except CODEX_HOME), OP_*, OPENAI_API_KEY, QUEST_GATE_ADMITTED, QUEST_GATE_PRIORITY, " +
-				"and QUEST_LAND_BASE variable, and of MBX_SCHEDULER_PRIORITY when QUEST_GATE_PRIORITY=1, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
+				"QUEST_LAND_BASE, and MBX_SCHEDULER_PRIORITY when QUEST_GATE_PRIORITY=1, so it uses the CLI's stored login rather than the coordinating session's.\n\n" +
 				"Prints `session <id>` as soon as the id is known, then `outcome finished|failed|limited|logged-out|stopped`, " +
 				"a blank line, and the agent's final reply. Exits 0 when the agent finished, 3 when its account hit a " +
 				"usage limit or ran out of credit, 4 when the CLI is logged out (after printing its login command), 2 for " +
