@@ -143,8 +143,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Nested " +
 				"calls run immediately. Limits come from the host and, on the mbx path, mbx's own settings; Quest " +
 				"has no configuration.\n\n" +
-				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway, outside any mbx ` +
-				"reservation; pass it only for cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the " +
+				`--quick waits at most ${QUICK_MS / 1000} seconds, then starts the command anyway: inside its mbx ` +
+				"reservation once granted, else outside it, with the pending reservation stopped first; pass it only " +
+				"for cheap commands such as formatters. With QUEST_GATE_PRIORITY=1 in the " +
 				"environment, as a check that lands PRs should set, the command waits for memory but never for load " +
 				"or mbx's pool, and mbx schedules its compiles at normal priority.\n\n" +
 				"Once the command exits, or is cancelled and exits, its remaining descendants are killed; a second " +
