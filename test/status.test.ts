@@ -654,6 +654,53 @@ test("a required workflow counts as reported when another workflow's same-named 
 	expect((await pullRequestStatus(pr, fixture.deps)).checks.state).toBe("success");
 });
 
+test("a required workflow's failed job still fails when another workflow's same-named job passed later", async () => {
+	const build = (databaseId: number, path: string, conclusion: string) => ({
+		...run("build", "COMPLETED", conclusion, false),
+		databaseId,
+		checkSuite: {
+			databaseId: databaseId * 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path, repositoryName: "example/project" } },
+		},
+	});
+	const fixture = setup(
+		[
+			pull({
+				checks: page([build(1, CI, "FAILURE"), build(2, ".github/workflows/docs.yml", "SUCCESS")]),
+				reviews: page([]),
+				threads: page([]),
+			}),
+		],
+		{ rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 1 }] } }] },
+	);
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks.state).toBe("failure");
+	expect(status.checks.failing.map((check) => [check.name, check.required])).toEqual([["build", true]]);
+});
+
+test("a required workflow whose only job a queued run replaced is pending", async () => {
+	const build = {
+		...run("build", "COMPLETED", "CANCELLED", false),
+		databaseId: 1,
+		checkSuite: {
+			databaseId: 10,
+			app: { databaseId: 15368 },
+			workflowRun: { file: { path: CI, repositoryName: "example/project" } },
+		},
+	};
+	const fixture = setup([pull({ checks: page([build]), reviews: page([]), threads: page([]) })], {
+		rules: [{ type: "workflows", parameters: { workflows: [{ path: CI, repository_id: 1 }] } }],
+		runs: [
+			{ id: 1, workflow_id: 7, check_suite_id: 10, run_started_at: "2026-11-12T23:42:53Z" },
+			{ id: 2, workflow_id: 7, check_suite_id: 20, run_started_at: null, created_at: "2026-11-12T23:42:56Z" },
+		],
+	});
+	const status = await pullRequestStatus(pr, fixture.deps);
+	expect(status.checks.state).toBe("pending");
+	expect(status.checks.pending.map((check) => check.name)).toEqual([`example/project:${CI}`]);
+});
+
 test("a job in a required workflow counts as required", async () => {
 	const fixture = setup(
 		[

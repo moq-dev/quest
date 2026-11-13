@@ -15,9 +15,18 @@ export function appOf(context: RollupContext): number | null {
 	return app?.databaseId == null ? null : Number(app.databaseId);
 }
 
+/** The repository and path of the workflow file a check run's job runs in, when the query asked for them. */
+function workflowOf(context: RollupContext): [unknown, unknown] | null {
+	const suite = context.checkSuite as
+		{ workflowRun?: { file?: { repositoryName?: unknown; path?: unknown } | null } | null } | null | undefined;
+	const file = suite?.workflowRun?.file;
+	return file ? [file.repositoryName ?? null, file.path ?? null] : null;
+}
+
 /**
  * Each check's latest report on the head, in rollup order. A check run is keyed by its app and name,
- * as a required check is, and the latest is the one created last: the highest `databaseId`. A commit
+ * as a required check is, and by the workflow file a GitHub Actions job runs in, so a required workflow's
+ * job never loses to another workflow's same-named job; and the latest is the one created last: the highest `databaseId`. A commit
  * status is keyed by its context, and the latest is the newest `createdAt`, or on a tie the one listed
  * later. A check run and a status with the same name stay apart, since GitHub requires both.
  * Queries must ask for a check run's `databaseId name checkSuite { app { databaseId } }` and a
@@ -26,7 +35,7 @@ export function appOf(context: RollupContext): number | null {
 export function latestContexts<T extends RollupContext>(contexts: T[]): T[] {
 	const key = (context: T) =>
 		context.__typename === "CheckRun"
-			? JSON.stringify(["run", appOf(context), context.name])
+			? JSON.stringify(["run", appOf(context), context.name, workflowOf(context)])
 			: JSON.stringify(["status", context.context]);
 	const newer = (context: T, seen: T) =>
 		context.__typename === "CheckRun"

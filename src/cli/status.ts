@@ -210,7 +210,7 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 		first!.state === "OPEN"
 			? await requiredOf(github, pr, string(first!.baseRefName))
 			: { checks: [], workflows: [] };
-	const status = summarize(first!, rollup, current, contexts, needs, reviewNodes, threadNodes);
+	const status = summarize(first!, rollup, current, needs, reviewNodes, threadNodes);
 	status.reviewRecord = await reviewRecord(github, pr, first!, deps.warn);
 	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
@@ -361,10 +361,8 @@ export function reported(context: ObjectValue): Reported {
 /**
  * The required checks and workflows nothing on the head reports yet: a check by its name, from its app when
  * the requirement names one, as GitHub and `quest land` match it, and a workflow by its repository and path.
- * `ran` holds every current report, before keeping one per name and app, so a required workflow's job still
- * counts when a same-named job from another workflow replaced it in `found`.
  */
-export function unreported(found: Reported[], needs: Needs, ran: Reported[] = found): string[] {
+export function unreported(found: Reported[], needs: Needs): string[] {
 	return [
 		...needs.checks
 			.filter(
@@ -372,7 +370,7 @@ export function unreported(found: Reported[], needs: Needs, ran: Reported[] = fo
 					!found.some((entry) => entry.name === need.name && (need.app === null || entry.app === need.app)),
 			)
 			.map((need) => (need.app === null ? need.name : `${need.name} (from app ${need.app})`)),
-		...needs.workflows.filter((key) => !ran.some((entry) => entry.workflow === key)),
+		...needs.workflows.filter((key) => !found.some((entry) => entry.workflow === key)),
 	];
 }
 
@@ -384,14 +382,13 @@ function summarize(
 	pull: ObjectValue,
 	rollup: ObjectValue | null,
 	current: ObjectValue[],
-	ran: ObjectValue[],
 	needs: Needs,
 	reviewNodes: ObjectValue[],
 	threadNodes: ObjectValue[],
 ): Status {
 	const head = string(pull.headRefOid);
 	const url = string(pull.url);
-	const missing = unreported(current.map(reported), needs, ran.map(reported));
+	const missing = unreported(current.map(reported), needs);
 	// The rollup's own state counts runs a newer run of the same check replaced.
 	const state = checksState(current);
 	const checks = {

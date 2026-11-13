@@ -419,12 +419,11 @@ head is still going (no pending check and no unfinished GitHub Actions run, whic
 may still create jobs), every check and workflow the base branch names is
 present (except `quest land`'s, which no head carries), each required check
 from the app its requirement names, if any, and every required
-check passed; it names the last required check that passed, or the last check
-when a required workflow's only job lost to another workflow's same-named job,
-and is dated when the head went idle. Each prints once per head, with the check's name
+check passed; it names the last required check that passed and is dated when
+the head went idle. Each prints once per head, with the check's name
 (spaces as `_`) in the actor field and its details URL. Results count as
 `quest status` counts them, so neutral and skipped results pass, a rerun
-supersedes an earlier run of the same check, and a cancelled check a newer run
+supersedes an earlier run of the same check from the same workflow, and a cancelled check a newer run
 of its workflow replaced is dropped. Each job of a
 workflow a ruleset requires is required.
 Requiredness comes from the base branch's protection and rulesets, readable
@@ -517,7 +516,7 @@ The node ID is what GraphQL's `addPullRequestReviewThreadReply` and
 `resolveReviewThread` take. Neutral and skipped checks pass. Only each check's
 latest run counts, as for GitHub's mergeability: a rerun, or the same workflow
 run again on the head, supersedes an earlier run of that name from the same
-app, and a newer commit status supersedes an older one of its context. A check
+app and workflow file, and a newer commit status supersedes an older one of its context. A check
 that reported `cancelled` also stops counting once a newer GitHub Actions run of
 its workflow exists on the head, from any event, as when `cancel-in-progress`
 cancels a run whose jobs, such as a matrix job under its unexpanded name, the
