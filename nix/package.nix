@@ -1,11 +1,14 @@
-# The `quest` CLI built from source: the same Bun bundle `bun run build` makes.
+# The `quest` CLI built from source: the same Bun bundle `bun run build` makes,
+# reporting `rev`, the commit the flake passes, as its version.
 {
   lib,
   stdenvNoCC,
   bun,
   fetchurl,
+  rev ? null,
 }:
 let
+  version = if rev == null then "dev" else rev;
   manifest = lib.importJSON ../package.json;
   # bun.lock is JSON with trailing commas.
   lock = builtins.fromJSON (
@@ -79,7 +82,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = manifest.name;
-  inherit (manifest) version;
+  inherit version;
 
   src = lib.fileset.toSource {
     root = ../.;
@@ -88,7 +91,6 @@ stdenvNoCC.mkDerivation {
       ../bunfig.toml
       ../tsconfig.json
       ../src
-      ../scripts/executable.mjs
       ../assets
     ];
   };
@@ -104,7 +106,7 @@ stdenvNoCC.mkDerivation {
   buildPhase = ''
     runHook preBuild
     export HOME=$TMPDIR
-    bun run build
+    bun run bundle --define ${lib.escapeShellArg "QUEST_VERSION=${builtins.toJSON version}"}
     runHook postBuild
   '';
 

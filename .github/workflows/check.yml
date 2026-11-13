@@ -66,7 +66,8 @@ jobs:
         run: nix build --out-link "$RUNNER_TEMP/quest-lifecycle-install" .#quest
       - name: Verify the installed CLI lifecycle
         shell: bash
-        run: nix develop --command bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest-lifecycle-install/bin/quest"
+        # A flake build reports its commit, as Nix abbreviates it.
+        run: nix develop --command bash scripts/lifecycle-check.sh "$RUNNER_TEMP/quest-lifecycle-install/bin/quest" "${GITHUB_SHA::7}"
       # Work outside the job holds a fresh macOS runner's load above its CPUs.
       - name: Check that the gate admits and owns its command's descendants
         shell: bash

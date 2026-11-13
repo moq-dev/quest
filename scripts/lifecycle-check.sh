@@ -2,7 +2,8 @@
 # Exercise an installed CLI in fresh repositories without remote writes.
 set -euo pipefail
 
-binary=${1:?usage: lifecycle-check.sh /absolute/path/to/quest}
+binary=${1:?usage: lifecycle-check.sh /absolute/path/to/quest expected-version}
+version=${2:?usage: lifecycle-check.sh /absolute/path/to/quest expected-version}
 case "$binary" in
     /*) ;;
     *)
@@ -18,7 +19,7 @@ trap 'rm -rf "$work"' EXIT
 # binary in place, so give it a path with spaces.
 mkdir "$work/tool bin"
 cp "$binary" "$work/tool bin/"
-bun "$(dirname -- "${BASH_SOURCE[0]}")/lifecycle-check.mjs" "$work/tool bin/$(basename -- "$binary")"
+bun "$(dirname -- "${BASH_SOURCE[0]}")/lifecycle-check.mjs" "$work/tool bin/$(basename -- "$binary")" "$version"
 
 # A reader that closes stdout early, like `quest unblocked | head -1`, ends the
 # command quietly. The writer waits on a FIFO until the reader has closed, so
